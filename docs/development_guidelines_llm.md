@@ -423,3 +423,574 @@ cd /Users/evgenyl/dev/ml-llm/workflow-runner-core
 source backend/.venv/bin/activate
 bash scripts/generate-client.sh
 ```
+
+## UI Implementation Patterns: Cards vs Tables
+
+### When to Use Each Pattern
+
+**Use Card-Based Grid Layout**:
+- Visual, browsable content (credentials, agents, projects)
+- Emphasis on individual items
+- Less than 50-100 items typically
+- Rich metadata per item (icons, badges, descriptions)
+- Mobile-friendly experience needed
+
+**Use DataTable Layout**:
+- Large datasets (100+ items)
+- Emphasis on sorting, filtering, searching
+- Tabular data with many columns
+- Need for bulk operations
+- Export/reporting functionality
+
+### Card-Based UI Implementation (Reference: Credentials, Agents)
+
+#### 1. Route Structure
+
+**CRITICAL Pattern**: Use nested route structure for detail pages
+
+```
+frontend/src/routes/_layout/
+├── entities.tsx                  # List page (card grid)
+└── entity/
+    └── $entityId.tsx             # Detail page
+```
+
+❌ **WRONG**: `entities.$id.tsx` - Causes routing issues with TanStack Router
+✅ **CORRECT**: `entity/$entityId.tsx` - Works properly with TanStack Router
+
+**Example from credentials implementation**:
+```
+frontend/src/routes/_layout/
+├── credentials.tsx               # Card grid
+└── credential/
+    └── $credentialId.tsx         # Detail form
+```
+
+#### 2. Card Component Pattern
+
+**File**: `frontend/src/components/Entities/EntityCard.tsx`
+
+```typescript
+import { Link } from "@tanstack/react-router"
+import { Icon } from "lucide-react"
+
+import type { EntityPublic } from "@/client"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+
+interface EntityCardProps {
+  entity: EntityPublic
+}
+
+export function EntityCard({ entity }: EntityCardProps) {
+  return (
+    <Card className="relative transition-all hover:shadow-md hover:-translate-y-0.5">
+      <Link
+        to="/entity/$entityId"
+        params={{ entityId: entity.id }}
+        className="block"
+      >
+        <CardHeader className="pb-3">
+          <div className="flex items-start gap-3 mb-2">
+            <div className="rounded-lg bg-primary/10 p-2 text-primary">
+              <Icon className="h-5 w-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <CardTitle className="text-lg break-words">
+                {entity.name}
+              </CardTitle>
+            </div>
+          </div>
+          {entity.description && (
+            <CardDescription className="line-clamp-2 min-h-[2.5rem]">
+              {entity.description}
+            </CardDescription>
+          )}
+        </CardHeader>
+
+        <CardContent>
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary">{entity.type}</Badge>
+          </div>
+        </CardContent>
+      </Link>
+    </Card>
+  )
+}
+```
+
+**Key patterns**:
+- ✅ Entire card wrapped in `<Link>` for clickability
+- ✅ `break-words` on title (not `truncate`) - allows text to wrap
+- ✅ Conditional rendering for optional fields (no "No description" text)
+- ✅ Hover effects: `hover:shadow-md hover:-translate-y-0.5`
+- ✅ Icon with colored background: `bg-primary/10 p-2 text-primary`
+- ✅ `line-clamp-2` for descriptions with min height
+- ❌ NO dropdown menu on cards - use detail page for actions
+
+#### 3. List Page with Card Grid
+
+**File**: `frontend/src/routes/_layout/entities.tsx`
+
+```typescript
+import { useQuery } from "@tanstack/react-query"
+import { createFileRoute } from "@tanstack/react-router"
+import { Icon } from "lucide-react"
+
+import { EntitiesService } from "@/client"
+import AddEntity from "@/components/Entities/AddEntity"
+import { EntityCard } from "@/components/Entities/EntityCard"
+import PendingItems from "@/components/Pending/PendingItems"
+
+export const Route = createFileRoute("/_layout/entities")({
+  component: Entities,
+})
+
+function EntitiesGrid() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["entities"],
+    queryFn: async () => {
+      const response = await EntitiesService.readEntities({
+        skip: 0,
+        limit: 100,
+      })
+      return response
+    },
+  })
+
+  if (isLoading) {
+    return <PendingItems />
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12">
+        <p className="text-destructive">
+          Error loading entities: {(error as Error).message}
+        </p>
+      </div>
+    )
+  }
+
+  const entities = data?.data || []
+
+  if (entities.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center text-center py-12">
+        <div className="rounded-full bg-muted p-4 mb-4">
+          <Icon className="h-8 w-8 text-muted-foreground" />
+        </div>
+        <h3 className="text-lg font-semibold">
+          You don't have any entities yet
+        </h3>
+        <p className="text-muted-foreground">Add a new entity to get started</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+      {entities.map((entity) => (
+        <EntityCard key={entity.id} entity={entity} />
+      ))}
+    </div>
+  )
+}
+
+function Entities() {
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Entities</h1>
+          <p className="text-muted-foreground">
+            Manage your entities
+          </p>
+        </div>
+        <AddEntity />
+      </div>
+      <EntitiesGrid />
+    </div>
+  )
+}
+```
+
+**Key patterns**:
+- ✅ Use `useQuery` (NOT `useSuspenseQuery`) for better control
+- ✅ Explicit loading, error, and empty states
+- ✅ Responsive grid: `grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4`
+- ✅ Separate `EntitiesGrid` component for data fetching
+- ✅ Empty state with icon and helpful message
+
+#### 4. Detail Page Pattern
+
+**File**: `frontend/src/routes/_layout/entity/$entityId.tsx`
+
+```typescript
+import { zodResolver } from "@hookform/resolvers/zod"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { createFileRoute, useNavigate } from "@tanstack/react-router"
+import { ArrowLeft, Trash2 } from "lucide-react"
+import { useEffect, useState } from "react"
+import { useForm } from "react-hook-form"
+import { z } from "zod"
+
+import { EntitiesService } from "@/client"
+import PendingItems from "@/components/Pending/PendingItems"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form"
+import { Input } from "@/components/ui/input"
+import { LoadingButton } from "@/components/ui/loading-button"
+import useCustomToast from "@/hooks/useCustomToast"
+import { handleError } from "@/utils"
+import DeleteEntity from "@/components/Entities/DeleteEntity"
+
+const formSchema = z.object({
+  name: z.string().min(1, { message: "Name is required" }),
+  description: z.string().optional(),
+})
+
+type FormData = z.infer<typeof formSchema>
+
+export const Route = createFileRoute("/_layout/entity/$entityId")({
+  component: EntityDetail,
+})
+
+function EntityDetail() {
+  const { entityId } = Route.useParams()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false)
+
+  const { data: entity, isLoading, error } = useQuery({
+    queryKey: ["entity", entityId],
+    queryFn: () => EntitiesService.readEntity({ id: entityId }),
+    enabled: !!entityId,
+  })
+
+  const form = useForm<FormData>({
+    resolver: zodResolver(formSchema),
+    mode: "onBlur",
+    criteriaMode: "all",
+    defaultValues: {
+      name: "",
+      description: "",
+    },
+  })
+
+  useEffect(() => {
+    if (entity) {
+      form.reset({
+        name: entity.name,
+        description: entity.description ?? undefined,
+      })
+    }
+  }, [entity, form])
+
+  const mutation = useMutation({
+    mutationFn: (data: FormData) =>
+      EntitiesService.updateEntity({ id: entityId, requestBody: data }),
+    onSuccess: () => {
+      showSuccessToast("Entity updated successfully")
+    },
+    onError: handleError.bind(showErrorToast),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["entities"] })
+      queryClient.invalidateQueries({ queryKey: ["entity", entityId] })
+    },
+  })
+
+  const onSubmit = (data: FormData) => {
+    mutation.mutate(data)
+  }
+
+  const handleDeleteSuccess = () => {
+    navigate({ to: "/entities" })
+  }
+
+  if (isLoading) {
+    return <PendingItems />
+  }
+
+  if (error || !entity) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12">
+        <p className="text-destructive">Error loading entity details</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => navigate({ to: "/entities" })}
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </Button>
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">
+              {entity.name}
+            </h1>
+            <p className="text-muted-foreground">{entity.type}</p>
+          </div>
+        </div>
+        <DeleteEntity
+          entity={entity}
+          onSuccess={handleDeleteSuccess}
+          isOpen={isDeleteOpen}
+          setIsOpen={setIsDeleteOpen}
+        >
+          <Button variant="destructive" size="sm">
+            <Trash2 className="mr-2 h-4 w-4" />
+            Delete
+          </Button>
+        </DeleteEntity>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Entity Details</CardTitle>
+          <CardDescription>
+            Update your entity information below.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+              <FormField
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      Name <span className="text-destructive">*</span>
+                    </FormLabel>
+                    <FormControl>
+                      <Input placeholder="My Entity" type="text" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="description"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Description</FormLabel>
+                    <FormControl>
+                      <Input placeholder="Description..." {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <div className="flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => navigate({ to: "/entities" })}
+                  disabled={mutation.isPending}
+                >
+                  Cancel
+                </Button>
+                <LoadingButton type="submit" loading={mutation.isPending}>
+                  Save Changes
+                </LoadingButton>
+              </div>
+            </form>
+          </Form>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+```
+
+**Key patterns**:
+- ✅ Use `useQuery` (NOT `useSuspenseQuery`)
+- ✅ Use `Route.useParams()` to get route parameters
+- ✅ `enabled: !!entityId` to prevent query when param is undefined
+- ✅ Header with back button, title, and delete button
+- ✅ Form inside Card component
+- ✅ `useEffect` to reset form when data loads
+- ✅ Navigate to list page after deletion
+- ✅ Invalidate both list and detail queries on update
+- ✅ Explicit loading and error states
+
+#### 5. Navigation After Creation
+
+**Pattern for AddEntity dialog**:
+
+```typescript
+const mutation = useMutation({
+  mutationFn: (data: EntityCreate) =>
+    EntitiesService.createEntity({ requestBody: data }),
+  onSuccess: (entity) => {
+    showSuccessToast("Entity created successfully")
+    form.reset()
+    setIsOpen(false)
+    // Navigate to detail page
+    navigate({ to: "/entity/$entityId", params: { entityId: entity.id } })
+  },
+  onError: handleError.bind(showErrorToast),
+  onSettled: () => {
+    queryClient.invalidateQueries({ queryKey: ["entities"] })
+  },
+})
+```
+
+**Key pattern**:
+- ✅ After creation, navigate to detail page (not back to list)
+- ✅ Detail page shows empty form ready for user to fill
+- ✅ Matches flow: Create placeholder → Fill details
+
+### useQuery vs useSuspenseQuery Decision Matrix
+
+**Use `useQuery`**:
+- ✅ Card grid list pages
+- ✅ Detail pages
+- ✅ When you need explicit control over loading/error states
+- ✅ When route parameters might be undefined
+- ✅ When you want to show custom loading UI
+
+**Use `useSuspenseQuery`**:
+- ✅ DataTable list pages (with Suspense boundary)
+- ✅ When using React Suspense pattern
+- ❌ NOT for detail pages with route params (causes routing issues)
+
+### Common Pitfalls
+
+❌ **Route structure**: `entities.$id.tsx`
+- Causes issues where URL changes but component doesn't render
+- List page remains visible instead of detail page
+
+✅ **Correct route structure**: `entity/$entityId.tsx`
+- Clean separation between list and detail routes
+- TanStack Router handles navigation properly
+
+❌ **useSuspenseQuery in detail pages**
+- Can cause routing and rendering issues
+- Harder to control loading states
+
+✅ **useQuery in detail pages**
+- Explicit loading/error handling
+- Works reliably with route parameters
+
+❌ **Dropdown menu on cards**
+- Cluttered UI
+- Not mobile-friendly
+- Redundant with detail page
+
+✅ **Actions on detail page only**
+- Cleaner card design
+- All actions in one place
+- Better mobile experience
+
+❌ **"No description" placeholder text**
+```typescript
+{entity.notes || "No description provided"}
+```
+
+✅ **Conditional rendering**
+```typescript
+{entity.notes && (
+  <CardDescription>{entity.notes}</CardDescription>
+)}
+```
+
+❌ **Truncated card titles**
+```typescript
+<CardTitle className="text-lg truncate">
+```
+
+✅ **Wrapping card titles**
+```typescript
+<CardTitle className="text-lg break-words">
+```
+
+### Component Structure Checklist
+
+For card-based UI implementation:
+
+```
+components/Entities/
+├── EntityCard.tsx          # ✅ Card component (clickable, no menu)
+├── AddEntity.tsx           # ✅ Create dialog (navigates to detail after)
+├── DeleteEntity.tsx        # ✅ Delete confirmation (used in detail page)
+└── EditEntity.tsx          # ❌ NOT NEEDED (use detail page form)
+
+routes/_layout/
+├── entities.tsx            # ✅ Card grid with useQuery
+└── entity/
+    └── $entityId.tsx       # ✅ Detail form with useQuery
+```
+
+### Responsive Grid Configuration
+
+```typescript
+// Adjust columns based on content size
+<div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+
+// For larger cards
+<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+
+// For very detailed cards
+<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+```
+
+### Summary: Card-Based UI Recipe
+
+1. **List page** (`entities.tsx`):
+   - Use `useQuery` for data fetching
+   - Responsive grid layout
+   - Card components for each item
+   - Add button in header
+
+2. **Card component** (`EntityCard.tsx`):
+   - Wrapped in `<Link>` to detail page
+   - Icon, title (with `break-words`), optional description
+   - Badges for metadata
+   - Hover effects
+   - NO dropdown menu
+
+3. **Detail page** (`entity/$entityId.tsx`):
+   - Use `useQuery` with `enabled: !!entityId`
+   - Header with back button, title, delete button
+   - Form in Card component
+   - Cancel/Save buttons
+   - Navigate to list after delete
+
+4. **Create flow**:
+   - Dialog with name and type only
+   - Navigate to detail page after creation
+   - User fills remaining fields on detail page
+
+This pattern ensures clean, mobile-friendly UI with proper routing behavior.
