@@ -45,6 +45,7 @@ class User(UserBase, table=True):
     hashed_password: str | None = None
     google_id: str | None = Field(default=None, max_length=255, unique=True, index=True)
     items: list["Item"] = Relationship(back_populates="owner", cascade_delete=True)
+    agents: list["Agent"] = Relationship(back_populates="owner", cascade_delete=True)
 
 
 # Properties to return via API, id is always required
@@ -92,6 +93,43 @@ class ItemPublic(ItemBase):
 
 class ItemsPublic(SQLModel):
     data: list[ItemPublic]
+    count: int
+
+
+# Shared properties
+class AgentBase(SQLModel):
+    name: str = Field(min_length=1, max_length=255)
+    workflow_prompt: str | None = Field(default=None)
+    entrypoint_prompt: str | None = Field(default=None)
+
+
+# Properties to receive on agent creation
+class AgentCreate(AgentBase):
+    pass
+
+
+# Properties to receive on agent update
+class AgentUpdate(AgentBase):
+    name: str | None = Field(default=None, min_length=1, max_length=255)  # type: ignore
+
+
+# Database model, database table inferred from class name
+class Agent(AgentBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    owner_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    owner: User | None = Relationship(back_populates="agents")
+
+
+# Properties to return via API, id is always required
+class AgentPublic(AgentBase):
+    id: uuid.UUID
+    owner_id: uuid.UUID
+
+
+class AgentsPublic(SQLModel):
+    data: list[AgentPublic]
     count: int
 
 
