@@ -1,10 +1,22 @@
 import uuid
 from typing import Any
+import json
 
 from sqlmodel import Session, select
 
-from app.core.security import get_password_hash, verify_password
-from app.models import Agent, AgentCreate, Item, ItemCreate, User, UserCreate, UserUpdate
+from app.core.security import get_password_hash, verify_password, encrypt_field, decrypt_field
+from app.models import (
+    Agent,
+    AgentCreate,
+    Item,
+    ItemCreate,
+    User,
+    UserCreate,
+    UserUpdate,
+    Credential,
+    CredentialCreate,
+    CredentialUpdate,
+)
 
 
 def create_user(*, session: Session, user_create: UserCreate) -> User:
@@ -105,3 +117,54 @@ def create_agent(*, session: Session, agent_in: AgentCreate, owner_id: uuid.UUID
     session.commit()
     session.refresh(db_agent)
     return db_agent
+
+
+def create_credential(
+    *, session: Session, credential_in: CredentialCreate, owner_id: uuid.UUID
+) -> Credential:
+    """Create a new credential with encrypted data."""
+    # Encrypt the credential_data (use empty dict if None)
+    credential_data = credential_in.credential_data if credential_in.credential_data is not None else {}
+    credential_data_json = json.dumps(credential_data)
+    encrypted_data = encrypt_field(credential_data_json)
+
+    # Create credential without credential_data field
+    db_credential = Credential(
+        name=credential_in.name,
+        type=credential_in.type,
+        notes=credential_in.notes,
+        encrypted_data=encrypted_data,
+        owner_id=owner_id,
+    )
+    session.add(db_credential)
+    session.commit()
+    session.refresh(db_credential)
+    return db_credential
+
+
+def get_credential_with_data(*, session: Session, credential: Credential) -> dict:
+    """Get credential and decrypt its data."""
+    decrypted_json = decrypt_field(credential.encrypted_data)
+    credential_data = json.loads(decrypted_json)
+    return credential_data
+
+
+def update_credential(
+    *, session: Session, db_credential: Credential, credential_in: CredentialUpdate
+) -> Credential:
+    """Update a credential, re-encrypting data if provided."""
+    update_dict = credential_in.model_dump(exclude_unset=True)
+
+    # Handle credential_data separately for encryption
+    if "credential_data" in update_dict:
+        credential_data_json = json.dumps(update_dict["credential_data"])
+        encrypted_data = encrypt_field(credential_data_json)
+        update_dict.pop("credential_data")
+        db_credential.encrypted_data = encrypted_data
+
+    # Update other fields
+    db_credential.sqlmodel_update(update_dict)
+    session.add(db_credential)
+    session.commit()
+    session.refresh(db_credential)
+    return db_credential

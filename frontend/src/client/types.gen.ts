@@ -34,6 +34,49 @@ export type Body_login_login_access_token = {
     client_secret?: (string | null);
 };
 
+export type CredentialCreate = {
+    name: string;
+    type: CredentialType;
+    notes?: (string | null);
+    credential_data?: ({
+    [key: string]: unknown;
+} | null);
+};
+
+export type CredentialPublic = {
+    name: string;
+    type: CredentialType;
+    notes?: (string | null);
+    id: string;
+    owner_id: string;
+};
+
+export type CredentialsPublic = {
+    data: Array<CredentialPublic>;
+    count: number;
+};
+
+export type CredentialType = 'email_imap' | 'odoo' | 'gmail_oauth';
+
+export type CredentialUpdate = {
+    name?: (string | null);
+    notes?: (string | null);
+    credential_data?: ({
+    [key: string]: unknown;
+} | null);
+};
+
+export type CredentialWithData = {
+    name: string;
+    type: CredentialType;
+    notes?: (string | null);
+    id: string;
+    owner_id: string;
+    credential_data: {
+        [key: string]: unknown;
+    };
+};
+
 export type GoogleCallbackRequest = {
     code: string;
     state: string;
@@ -178,6 +221,44 @@ export type AgentsDeleteAgentData = {
 };
 
 export type AgentsDeleteAgentResponse = (Message);
+
+export type CredentialsReadCredentialsData = {
+    limit?: number;
+    skip?: number;
+};
+
+export type CredentialsReadCredentialsResponse = (CredentialsPublic);
+
+export type CredentialsCreateCredentialData = {
+    requestBody: CredentialCreate;
+};
+
+export type CredentialsCreateCredentialResponse = (CredentialPublic);
+
+export type CredentialsReadCredentialData = {
+    id: string;
+};
+
+export type CredentialsReadCredentialResponse = (CredentialPublic);
+
+export type CredentialsUpdateCredentialData = {
+    id: string;
+    requestBody: CredentialUpdate;
+};
+
+export type CredentialsUpdateCredentialResponse = (CredentialPublic);
+
+export type CredentialsDeleteCredentialData = {
+    id: string;
+};
+
+export type CredentialsDeleteCredentialResponse = (Message);
+
+export type CredentialsReadCredentialWithDataData = {
+    id: string;
+};
+
+export type CredentialsReadCredentialWithDataResponse = (CredentialWithData);
 
 export type ItemsReadItemsData = {
     limit?: number;
