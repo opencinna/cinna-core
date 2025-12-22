@@ -6,6 +6,10 @@ export type AgentCreate = {
     entrypoint_prompt?: (string | null);
 };
 
+export type AgentCredentialLinkRequest = {
+    credential_id: string;
+};
+
 export type AgentPublic = {
     name: string;
     workflow_prompt?: (string | null);
@@ -221,6 +225,26 @@ export type AgentsDeleteAgentData = {
 };
 
 export type AgentsDeleteAgentResponse = (Message);
+
+export type AgentsReadAgentCredentialsData = {
+    id: string;
+};
+
+export type AgentsReadAgentCredentialsResponse = (CredentialsPublic);
+
+export type AgentsAddCredentialToAgentData = {
+    id: string;
+    requestBody: AgentCredentialLinkRequest;
+};
+
+export type AgentsAddCredentialToAgentResponse = (Message);
+
+export type AgentsRemoveCredentialFromAgentData = {
+    credentialId: string;
+    id: string;
+};
+
+export type AgentsRemoveCredentialFromAgentResponse = (Message);
 
 export type CredentialsReadCredentialsData = {
     limit?: number;

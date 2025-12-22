@@ -26,15 +26,12 @@ import {
   FormMessage,
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
 import { LoadingButton } from "@/components/ui/loading-button"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 
 const formSchema = z.object({
   name: z.string().min(1, { message: "Name is required" }),
-  workflow_prompt: z.string().optional(),
-  entrypoint_prompt: z.string().optional(),
 })
 
 type FormData = z.infer<typeof formSchema>
@@ -55,8 +52,6 @@ const EditAgent = ({ agent, onSuccess }: EditAgentProps) => {
     criteriaMode: "all",
     defaultValues: {
       name: agent.name,
-      workflow_prompt: agent.workflow_prompt ?? undefined,
-      entrypoint_prompt: agent.entrypoint_prompt ?? undefined,
     },
   })
 
@@ -71,6 +66,7 @@ const EditAgent = ({ agent, onSuccess }: EditAgentProps) => {
     onError: handleError.bind(showErrorToast),
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["agents"] })
+      queryClient.invalidateQueries({ queryKey: ["agent", agent.id] })
     },
   })
 
@@ -87,13 +83,13 @@ const EditAgent = ({ agent, onSuccess }: EditAgentProps) => {
         <Pencil />
         Edit Agent
       </DropdownMenuItem>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-md">
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)}>
             <DialogHeader>
               <DialogTitle>Edit Agent</DialogTitle>
               <DialogDescription>
-                Update the agent details below.
+                Update the agent name below.
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
@@ -106,41 +102,7 @@ const EditAgent = ({ agent, onSuccess }: EditAgentProps) => {
                       Name <span className="text-destructive">*</span>
                     </FormLabel>
                     <FormControl>
-                      <Input placeholder="Agent name" type="text" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="workflow_prompt"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Workflow Prompt</FormLabel>
-                    <FormControl>
-                      <Textarea
-                        placeholder="Enter workflow prompt..."
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="entrypoint_prompt"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Entrypoint Prompt</FormLabel>
-                    <FormControl>
-                      <Textarea
-                        placeholder="Enter entrypoint prompt..."
-                        {...field}
-                      />
+                      <Input placeholder="My Agent" type="text" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

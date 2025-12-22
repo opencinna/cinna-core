@@ -36,6 +36,19 @@ export const AgentCreateSchema = {
     title: 'AgentCreate'
 } as const;
 
+export const AgentCredentialLinkRequestSchema = {
+    properties: {
+        credential_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Credential Id'
+        }
+    },
+    type: 'object',
+    required: ['credential_id'],
+    title: 'AgentCredentialLinkRequest'
+} as const;
+
 export const AgentPublicSchema = {
     properties: {
         name: {

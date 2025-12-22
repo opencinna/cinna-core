@@ -5,7 +5,19 @@ from fastapi import APIRouter, HTTPException
 from sqlmodel import func, select
 
 from app.api.deps import CurrentUser, SessionDep
-from app.models import Agent, AgentCreate, AgentPublic, AgentsPublic, AgentUpdate, Message
+from app.models import (
+    Agent,
+    AgentCreate,
+    AgentPublic,
+    AgentsPublic,
+    AgentUpdate,
+    AgentCredentialLinkRequest,
+    Message,
+    Credential,
+    CredentialPublic,
+    CredentialsPublic,
+)
+from app import crud
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -107,3 +119,69 @@ def delete_agent(
     session.delete(agent)
     session.commit()
     return Message(message="Agent deleted successfully")
+
+
+@router.get("/{id}/credentials", response_model=CredentialsPublic)
+def read_agent_credentials(
+    session: SessionDep, current_user: CurrentUser, id: uuid.UUID
+) -> Any:
+    """
+    Get all credentials linked to an agent.
+    """
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    credentials = crud.get_agent_credentials(session=session, agent_id=id)
+    return CredentialsPublic(data=credentials, count=len(credentials))
+
+
+@router.post("/{id}/credentials", response_model=Message)
+def add_credential_to_agent(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+    link_request: AgentCredentialLinkRequest,
+) -> Any:
+    """
+    Link a credential to an agent.
+    """
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    # Verify credential exists and user owns it
+    credential = session.get(Credential, link_request.credential_id)
+    if not credential:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    if not current_user.is_superuser and (credential.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    crud.add_credential_to_agent(
+        session=session, agent_id=id, credential_id=link_request.credential_id
+    )
+    return Message(message="Credential linked successfully")
+
+
+@router.delete("/{id}/credentials/{credential_id}", response_model=Message)
+def remove_credential_from_agent(
+    session: SessionDep, current_user: CurrentUser, id: uuid.UUID, credential_id: uuid.UUID
+) -> Any:
+    """
+    Unlink a credential from an agent.
+    """
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    crud.remove_credential_from_agent(
+        session=session, agent_id=id, credential_id=credential_id
+    )
+    return Message(message="Credential unlinked successfully")

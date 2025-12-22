@@ -8,6 +8,7 @@ from app.core.security import get_password_hash, verify_password, encrypt_field,
 from app.models import (
     Agent,
     AgentCreate,
+    AgentCredentialLink,
     Item,
     ItemCreate,
     User,
@@ -168,3 +169,47 @@ def update_credential(
     session.commit()
     session.refresh(db_credential)
     return db_credential
+
+
+def add_credential_to_agent(
+    *, session: Session, agent_id: uuid.UUID, credential_id: uuid.UUID
+) -> None:
+    """Link a credential to an agent."""
+    # Check if link already exists
+    statement = select(AgentCredentialLink).where(
+        AgentCredentialLink.agent_id == agent_id,
+        AgentCredentialLink.credential_id == credential_id,
+    )
+    existing_link = session.exec(statement).first()
+    if existing_link:
+        return  # Link already exists, nothing to do
+
+    # Create new link
+    link = AgentCredentialLink(agent_id=agent_id, credential_id=credential_id)
+    session.add(link)
+    session.commit()
+
+
+def remove_credential_from_agent(
+    *, session: Session, agent_id: uuid.UUID, credential_id: uuid.UUID
+) -> None:
+    """Unlink a credential from an agent."""
+    statement = select(AgentCredentialLink).where(
+        AgentCredentialLink.agent_id == agent_id,
+        AgentCredentialLink.credential_id == credential_id,
+    )
+    link = session.exec(statement).first()
+    if link:
+        session.delete(link)
+        session.commit()
+
+
+def get_agent_credentials(*, session: Session, agent_id: uuid.UUID) -> list[Credential]:
+    """Get all credentials linked to an agent."""
+    statement = (
+        select(Credential)
+        .join(AgentCredentialLink)
+        .where(AgentCredentialLink.agent_id == agent_id)
+    )
+    credentials = session.exec(statement).all()
+    return list(credentials)
