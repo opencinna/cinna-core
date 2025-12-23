@@ -6,11 +6,51 @@ This document contains project-specific patterns, commands, and pitfalls for LLM
 
 ```
 workflow-runner-core/
-├── backend/           # FastAPI backend (working dir: /Users/evgenyl/dev/ml-llm/workflow-runner-core/backend)
-└── frontend/          # React frontend
+├── backend/                      # FastAPI backend
+│   ├── app/
+│   │   ├── models/              # Domain-based model files (NEW structure)
+│   │   │   ├── __init__.py      # Re-exports all models
+│   │   │   ├── user.py
+│   │   │   ├── item.py
+│   │   │   ├── agent.py
+│   │   │   ├── credential.py
+│   │   │   ├── link_models.py   # Many-to-many link tables
+│   │   │   ├── environment.py
+│   │   │   └── session.py
+│   │   ├── services/            # Business logic layer (NEW)
+│   │   │   ├── agent_service.py
+│   │   │   ├── environment_service.py
+│   │   │   ├── session_service.py
+│   │   │   └── message_service.py
+│   │   ├── api/
+│   │   │   ├── routes/
+│   │   │   │   ├── agents.py
+│   │   │   │   ├── credentials.py
+│   │   │   │   ├── environments.py  # NEW
+│   │   │   │   ├── sessions.py      # NEW
+│   │   │   │   └── messages.py      # NEW
+│   │   │   └── main.py          # Router registration
+│   │   ├── crud.py              # DEPRECATED for new code
+│   │   └── core/
+│   │       ├── config.py
+│   │       ├── security.py
+│   │       └── db.py
+│   └── .venv/
+└── frontend/                     # React frontend
+    └── src/
+        ├── client/              # Auto-generated OpenAPI client
+        └── routes/
 ```
 
 **CRITICAL**: Current working directory is `/Users/evgenyl/dev/ml-llm/workflow-runner-core/backend`
+
+**Architecture Pattern**:
+- **Models** in `app/models/` - Database entities and Pydantic schemas (domain-based files)
+- **Services** in `app/services/` - Business logic (NEW: use for complex operations)
+- **Routes** in `app/api/routes/` - HTTP endpoints (lightweight, delegate to services)
+- **CRUD** in `app/crud.py` - DEPRECATED for new code (use services instead)
+
+**MIGRATION NOTE (Dec 2023)**: Models refactored from single `models.py` to `models/` directory. All imports remain backward compatible via `__init__.py`. No code changes required for existing imports like `from app.models import User, Agent`.
 
 ## Command Execution Patterns
 
@@ -46,10 +86,37 @@ npm run build  # Check TypeScript errors
 
 ## Adding New Entities (Full Stack)
 
-### 1. Backend Models (`backend/app/models.py`)
+### 1. Backend Models (`backend/app/models/`)
 
-**Pattern to follow**:
+**IMPORTANT**: Models are now organized in domain-based files, not a single monolithic file.
+
+**Structure**:
+```
+backend/app/models/
+├── __init__.py           # Re-exports all models for backward compatibility
+├── user.py               # User, auth, OAuth models
+├── item.py               # Item models
+├── agent.py              # Agent models
+├── credential.py         # Credential models
+├── link_models.py        # Many-to-many link tables (e.g., AgentCredentialLink)
+├── environment.py        # AgentEnvironment models
+└── session.py            # Session, SessionMessage models
+```
+
+**When adding a new entity**:
+1. Create a new file `backend/app/models/your_entity.py`
+2. Define models following the pattern below
+3. Export models in `backend/app/models/__init__.py`
+
+**Pattern in `backend/app/models/entity.py`**:
 ```python
+import uuid
+from sqlmodel import Field, Relationship, SQLModel
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .user import User
+
 # Shared properties
 class EntityBase(SQLModel):
     name: str = Field(min_length=1, max_length=255)
@@ -66,7 +133,7 @@ class EntityUpdate(SQLModel):
 class Entity(EntityBase, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     owner_id: uuid.UUID = Field(foreign_key="user.id", nullable=False, ondelete="CASCADE")
-    owner: User | None = Relationship(back_populates="entities")  # NO QUOTES for User
+    owner: "User | None" = Relationship(back_populates="entities")  # Use quotes with TYPE_CHECKING import
 
 # Public schema
 class EntityPublic(EntityBase):
@@ -78,13 +145,116 @@ class EntitiesPublic(SQLModel):
     count: int
 ```
 
-**CRITICAL SQLAlchemy Relationship Pattern**:
-- In `User` model (defined first): `entities: list["Entity"] = Relationship(...)` - USE QUOTES (forward reference)
-- In `Entity` model (defined later): `owner: User | None = Relationship(...)` - NO QUOTES (User already defined)
-- WRONG: `owner: "User | None"` - Will cause SQLAlchemy initialization error
-- WRONG: `owner: "User" | None` - Will cause type checker issues
+**Then export in `backend/app/models/__init__.py`**:
+```python
+from .entity import (
+    Entity,
+    EntityCreate,
+    EntityUpdate,
+    EntityPublic,
+    EntitiesPublic,
+)
 
-### 2. CRUD Operations (`backend/app/crud.py`)
+__all__ = [
+    # ... existing exports ...
+    # Entities
+    "Entity",
+    "EntityCreate",
+    "EntityUpdate",
+    "EntityPublic",
+    "EntitiesPublic",
+]
+```
+
+**CRITICAL SQLAlchemy Relationship Pattern with Domain Files**:
+- ✅ Use `TYPE_CHECKING` import to avoid circular imports
+- ✅ Use quoted type hints for relationships: `owner: "User | None"`
+- ✅ Import actual model only in `TYPE_CHECKING` block
+- ✅ In both models use quotes: `entities: list["Entity"]` and `owner: "User | None"`
+- ❌ NEVER import models at module level if they create circular dependencies
+- ❌ WRONG: `owner: User | None` without TYPE_CHECKING - causes import errors
+
+**For many-to-many relationships**, create link model in `backend/app/models/link_models.py`:
+```python
+import uuid
+from sqlmodel import Field, SQLModel
+
+class EntityCategoryLink(SQLModel, table=True):
+    __tablename__ = "entity_category_link"
+    entity_id: uuid.UUID = Field(foreign_key="entity.id", primary_key=True, ondelete="CASCADE")
+    category_id: uuid.UUID = Field(foreign_key="category.id", primary_key=True, ondelete="CASCADE")
+```
+
+Then import in both related models:
+```python
+from .link_models import EntityCategoryLink
+
+categories: list["Category"] = Relationship(back_populates="entities", link_model=EntityCategoryLink)
+```
+
+### 2. Service Layer (`backend/app/services/`)
+
+**NEW**: Business logic should be in service classes, not routes or CRUD.
+
+**Pattern in `backend/app/services/entity_service.py`**:
+```python
+from uuid import UUID
+from sqlmodel import Session, select
+from app.models import Entity, EntityCreate, EntityUpdate
+
+class EntityService:
+    @staticmethod
+    def create_entity(session: Session, user_id: UUID, data: EntityCreate) -> Entity:
+        """Create new entity"""
+        entity = Entity.model_validate(data, update={"owner_id": user_id})
+        session.add(entity)
+        session.commit()
+        session.refresh(entity)
+        return entity
+
+    @staticmethod
+    def get_entity(session: Session, entity_id: UUID) -> Entity | None:
+        """Get entity by ID"""
+        return session.get(Entity, entity_id)
+
+    @staticmethod
+    def update_entity(session: Session, entity_id: UUID, data: EntityUpdate) -> Entity | None:
+        """Update entity"""
+        entity = session.get(Entity, entity_id)
+        if not entity:
+            return None
+
+        update_dict = data.model_dump(exclude_unset=True)
+        entity.sqlmodel_update(update_dict)
+
+        session.add(entity)
+        session.commit()
+        session.refresh(entity)
+        return entity
+
+    @staticmethod
+    def delete_entity(session: Session, entity_id: UUID) -> bool:
+        """Delete entity"""
+        entity = session.get(Entity, entity_id)
+        if not entity:
+            return False
+
+        session.delete(entity)
+        session.commit()
+        return True
+```
+
+**Call services from routes, NOT CRUD directly**:
+```python
+from app.services.entity_service import EntityService
+
+@router.post("/", response_model=EntityPublic)
+def create_entity(*, session: SessionDep, current_user: CurrentUser, entity_in: EntityCreate):
+    entity = EntityService.create_entity(session=session, user_id=current_user.id, data=entity_in)
+    return entity
+```
+
+### 3. CRUD Operations (`backend/app/crud.py`) - DEPRECATED FOR NEW CODE
 
 ```python
 def create_entity(*, session: Session, entity_in: EntityCreate, owner_id: uuid.UUID) -> Entity:
@@ -128,8 +298,11 @@ def create_entity(*, session: SessionDep, current_user: CurrentUser, entity_in: 
 
 **Register in `backend/app/api/main.py`**:
 ```python
-from app.api.routes import entities
+from app.api.routes import entities, environments, sessions, messages  # Add all new routes
 api_router.include_router(entities.router)
+api_router.include_router(environments.router)  # If environment-related
+api_router.include_router(sessions.router)      # If session-related
+api_router.include_router(messages.router)      # If message-related
 ```
 
 ### 4. Database Migration
@@ -337,10 +510,12 @@ def read_with_data(session: SessionDep, current_user: CurrentUser, id: uuid.UUID
 
 ## Common Mistakes to Avoid
 
-### 1. SQLAlchemy Relationships
-❌ `owner: "User | None"` - String with union syntax causes init error
-✅ `owner: User | None` - No quotes when User is already defined
-✅ `entities: list["Entity"]` - Quotes for forward reference in User model
+### 1. SQLAlchemy Relationships with Domain-Based Models
+❌ `owner: User | None` without TYPE_CHECKING import - causes circular import errors
+✅ `owner: "User | None"` with TYPE_CHECKING import - correct pattern for domain files
+❌ Importing models at module level between domain files - causes circular dependencies
+✅ Using `from typing import TYPE_CHECKING` and importing models only inside the block
+✅ Using quoted type hints for all relationship types: `list["Entity"]`, `"User | None"`
 
 ### 2. Cryptography Import
 ❌ `from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2`
@@ -363,6 +538,12 @@ def read_with_data(session: SessionDep, current_user: CurrentUser, id: uuid.UUID
 ✅ Always check `current_user.is_superuser OR entity.owner_id == current_user.id`
 ✅ Use same pattern in list endpoints (filter by owner_id for non-superusers)
 
+### 7. Reserved SQLModel Field Names
+❌ `metadata` - Reserved by SQLAlchemy/SQLModel
+✅ `session_metadata`, `message_metadata`, `entity_metadata` - Use prefixed names
+❌ `type` as a model name - Reserved Python keyword
+✅ Use `entity_type`, `credential_type`, etc.
+
 ## Testing Checklist
 
 After implementing a new entity:
@@ -381,9 +562,11 @@ After implementing a new entity:
 source .venv/bin/activate
 
 # Backend: Add entity
-# 1. Edit models.py, crud.py
-# 2. Create routes file
-# 3. Register in api/main.py
+# 1. Create backend/app/models/entity.py with models
+# 2. Export models in backend/app/models/__init__.py
+# 3. Create backend/app/services/entity_service.py with business logic
+# 4. Create backend/app/api/routes/entities.py with endpoints
+# 5. Register router in backend/app/api/main.py
 alembic revision --autogenerate -m "Add entity"
 alembic upgrade head
 python -c "from app.main import app"  # Verify

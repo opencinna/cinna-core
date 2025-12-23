@@ -3,7 +3,7 @@
 import type { CancelablePromise } from './core/CancelablePromise';
 import { OpenAPI } from './core/OpenAPI';
 import { request as __request } from './core/request';
-import type { AgentsReadAgentsData, AgentsReadAgentsResponse, AgentsCreateAgentData, AgentsCreateAgentResponse, AgentsReadAgentData, AgentsReadAgentResponse, AgentsUpdateAgentData, AgentsUpdateAgentResponse, AgentsDeleteAgentData, AgentsDeleteAgentResponse, AgentsReadAgentCredentialsData, AgentsReadAgentCredentialsResponse, AgentsAddCredentialToAgentData, AgentsAddCredentialToAgentResponse, AgentsRemoveCredentialFromAgentData, AgentsRemoveCredentialFromAgentResponse, CredentialsReadCredentialsData, CredentialsReadCredentialsResponse, CredentialsCreateCredentialData, CredentialsCreateCredentialResponse, CredentialsReadCredentialData, CredentialsReadCredentialResponse, CredentialsUpdateCredentialData, CredentialsUpdateCredentialResponse, CredentialsDeleteCredentialData, CredentialsDeleteCredentialResponse, CredentialsReadCredentialWithDataData, CredentialsReadCredentialWithDataResponse, ItemsReadItemsData, ItemsReadItemsResponse, ItemsCreateItemData, ItemsCreateItemResponse, ItemsReadItemData, ItemsReadItemResponse, ItemsUpdateItemData, ItemsUpdateItemResponse, ItemsDeleteItemData, ItemsDeleteItemResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthGetOauthConfigResponse, OauthGoogleAuthorizeResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OauthLinkGoogleAccountEndpointData, OauthLinkGoogleAccountEndpointResponse, OauthUnlinkGoogleAccountEndpointResponse, PrivateCreateUserData, PrivateCreateUserResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersSetPasswordMeData, UsersSetPasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
+import type { AgentsReadAgentsData, AgentsReadAgentsResponse, AgentsCreateAgentData, AgentsCreateAgentResponse, AgentsReadAgentData, AgentsReadAgentResponse, AgentsUpdateAgentData, AgentsUpdateAgentResponse, AgentsDeleteAgentData, AgentsDeleteAgentResponse, AgentsReadAgentCredentialsData, AgentsReadAgentCredentialsResponse, AgentsAddCredentialToAgentData, AgentsAddCredentialToAgentResponse, AgentsRemoveCredentialFromAgentData, AgentsRemoveCredentialFromAgentResponse, AgentsCreateAgentEnvironmentData, AgentsCreateAgentEnvironmentResponse, AgentsListAgentEnvironmentsData, AgentsListAgentEnvironmentsResponse, AgentsActivateEnvironmentData, AgentsActivateEnvironmentResponse, CredentialsReadCredentialsData, CredentialsReadCredentialsResponse, CredentialsCreateCredentialData, CredentialsCreateCredentialResponse, CredentialsReadCredentialData, CredentialsReadCredentialResponse, CredentialsUpdateCredentialData, CredentialsUpdateCredentialResponse, CredentialsDeleteCredentialData, CredentialsDeleteCredentialResponse, CredentialsReadCredentialWithDataData, CredentialsReadCredentialWithDataResponse, EnvironmentsGetEnvironmentData, EnvironmentsGetEnvironmentResponse, EnvironmentsUpdateEnvironmentData, EnvironmentsUpdateEnvironmentResponse, EnvironmentsDeleteEnvironmentData, EnvironmentsDeleteEnvironmentResponse, EnvironmentsStartEnvironmentData, EnvironmentsStartEnvironmentResponse, EnvironmentsStopEnvironmentData, EnvironmentsStopEnvironmentResponse, ItemsReadItemsData, ItemsReadItemsResponse, ItemsCreateItemData, ItemsCreateItemResponse, ItemsReadItemData, ItemsReadItemResponse, ItemsUpdateItemData, ItemsUpdateItemResponse, ItemsDeleteItemData, ItemsDeleteItemResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, MessagesGetMessagesData, MessagesGetMessagesResponse, MessagesSendMessageData, MessagesSendMessageResponse, OauthGetOauthConfigResponse, OauthGoogleAuthorizeResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OauthLinkGoogleAccountEndpointData, OauthLinkGoogleAccountEndpointResponse, OauthUnlinkGoogleAccountEndpointResponse, PrivateCreateUserData, PrivateCreateUserResponse, SessionsListSessionsResponse, SessionsCreateSessionData, SessionsCreateSessionResponse, SessionsGetSessionData, SessionsGetSessionResponse, SessionsUpdateSessionData, SessionsUpdateSessionResponse, SessionsDeleteSessionData, SessionsDeleteSessionResponse, SessionsSwitchSessionModeData, SessionsSwitchSessionModeResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersSetPasswordMeData, UsersSetPasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
 
 export class AgentsService {
     /**
@@ -182,6 +182,74 @@ export class AgentsService {
             }
         });
     }
+    
+    /**
+     * Create Agent Environment
+     * Create new environment for agent.
+     * @param data The data for the request.
+     * @param data.id
+     * @param data.requestBody
+     * @returns AgentEnvironmentPublic Successful Response
+     * @throws ApiError
+     */
+    public static createAgentEnvironment(data: AgentsCreateAgentEnvironmentData): CancelablePromise<AgentsCreateAgentEnvironmentResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/agents/{id}/environments',
+            path: {
+                id: data.id
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * List Agent Environments
+     * List all environments for an agent.
+     * @param data The data for the request.
+     * @param data.id
+     * @returns AgentEnvironmentsPublic Successful Response
+     * @throws ApiError
+     */
+    public static listAgentEnvironments(data: AgentsListAgentEnvironmentsData): CancelablePromise<AgentsListAgentEnvironmentsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/agents/{id}/environments',
+            path: {
+                id: data.id
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Activate Environment
+     * Set environment as active for agent.
+     * @param data The data for the request.
+     * @param data.id
+     * @param data.envId
+     * @returns AgentPublic Successful Response
+     * @throws ApiError
+     */
+    public static activateEnvironment(data: AgentsActivateEnvironmentData): CancelablePromise<AgentsActivateEnvironmentResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/agents/{id}/environments/{env_id}/activate',
+            path: {
+                id: data.id,
+                env_id: data.envId
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
 }
 
 export class CredentialsService {
@@ -306,6 +374,116 @@ export class CredentialsService {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/api/v1/credentials/{id}/with-data',
+            path: {
+                id: data.id
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+}
+
+export class EnvironmentsService {
+    /**
+     * Get Environment
+     * Get environment details.
+     * @param data The data for the request.
+     * @param data.id
+     * @returns AgentEnvironmentPublic Successful Response
+     * @throws ApiError
+     */
+    public static getEnvironment(data: EnvironmentsGetEnvironmentData): CancelablePromise<EnvironmentsGetEnvironmentResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/environments/{id}',
+            path: {
+                id: data.id
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Update Environment
+     * Update environment config.
+     * @param data The data for the request.
+     * @param data.id
+     * @param data.requestBody
+     * @returns AgentEnvironmentPublic Successful Response
+     * @throws ApiError
+     */
+    public static updateEnvironment(data: EnvironmentsUpdateEnvironmentData): CancelablePromise<EnvironmentsUpdateEnvironmentResponse> {
+        return __request(OpenAPI, {
+            method: 'PATCH',
+            url: '/api/v1/environments/{id}',
+            path: {
+                id: data.id
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Delete Environment
+     * Delete environment.
+     * @param data The data for the request.
+     * @param data.id
+     * @returns Message Successful Response
+     * @throws ApiError
+     */
+    public static deleteEnvironment(data: EnvironmentsDeleteEnvironmentData): CancelablePromise<EnvironmentsDeleteEnvironmentResponse> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/environments/{id}',
+            path: {
+                id: data.id
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Start Environment
+     * Start environment (stub).
+     * @param data The data for the request.
+     * @param data.id
+     * @returns Message Successful Response
+     * @throws ApiError
+     */
+    public static startEnvironment(data: EnvironmentsStartEnvironmentData): CancelablePromise<EnvironmentsStartEnvironmentResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/environments/{id}/start',
+            path: {
+                id: data.id
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Stop Environment
+     * Stop environment (stub).
+     * @param data The data for the request.
+     * @param data.id
+     * @returns Message Successful Response
+     * @throws ApiError
+     */
+    public static stopEnvironment(data: EnvironmentsStopEnvironmentData): CancelablePromise<EnvironmentsStopEnvironmentResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/environments/{id}/stop',
             path: {
                 id: data.id
             },
@@ -524,6 +702,61 @@ export class LoginService {
     }
 }
 
+export class MessagesService {
+    /**
+     * Get Messages
+     * Get session messages.
+     * @param data The data for the request.
+     * @param data.sessionId
+     * @param data.limit
+     * @param data.offset
+     * @returns MessagesPublic Successful Response
+     * @throws ApiError
+     */
+    public static getMessages(data: MessagesGetMessagesData): CancelablePromise<MessagesGetMessagesResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/sessions/{session_id}/messages',
+            path: {
+                session_id: data.sessionId
+            },
+            query: {
+                limit: data.limit,
+                offset: data.offset
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Send Message
+     * Send message to agent (stub - no actual agent communication yet).
+     *
+     * For Step 1: Just store user message, return mock agent response.
+     * @param data The data for the request.
+     * @param data.sessionId
+     * @param data.requestBody
+     * @returns MessagePublic Successful Response
+     * @throws ApiError
+     */
+    public static sendMessage(data: MessagesSendMessageData): CancelablePromise<MessagesSendMessageResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/sessions/{session_id}/messages',
+            path: {
+                session_id: data.sessionId
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+}
+
 export class OauthService {
     /**
      * Get Oauth Config
@@ -620,6 +853,132 @@ export class PrivateService {
             url: '/api/v1/private/users/',
             body: data.requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+}
+
+export class SessionsService {
+    /**
+     * List Sessions
+     * List user's sessions.
+     * @returns SessionsPublic Successful Response
+     * @throws ApiError
+     */
+    public static listSessions(): CancelablePromise<SessionsListSessionsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/sessions/'
+        });
+    }
+    
+    /**
+     * Create Session
+     * Create new session using agent's active environment.
+     * @param data The data for the request.
+     * @param data.requestBody
+     * @returns SessionPublic Successful Response
+     * @throws ApiError
+     */
+    public static createSession(data: SessionsCreateSessionData): CancelablePromise<SessionsCreateSessionResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/sessions/',
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Get Session
+     * Get session details.
+     * @param data The data for the request.
+     * @param data.id
+     * @returns SessionPublic Successful Response
+     * @throws ApiError
+     */
+    public static getSession(data: SessionsGetSessionData): CancelablePromise<SessionsGetSessionResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/sessions/{id}',
+            path: {
+                id: data.id
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Update Session
+     * Update session.
+     * @param data The data for the request.
+     * @param data.id
+     * @param data.requestBody
+     * @returns SessionPublic Successful Response
+     * @throws ApiError
+     */
+    public static updateSession(data: SessionsUpdateSessionData): CancelablePromise<SessionsUpdateSessionResponse> {
+        return __request(OpenAPI, {
+            method: 'PATCH',
+            url: '/api/v1/sessions/{id}',
+            path: {
+                id: data.id
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Delete Session
+     * Delete session.
+     * @param data The data for the request.
+     * @param data.id
+     * @returns Message Successful Response
+     * @throws ApiError
+     */
+    public static deleteSession(data: SessionsDeleteSessionData): CancelablePromise<SessionsDeleteSessionResponse> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/sessions/{id}',
+            path: {
+                id: data.id
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Switch Session Mode
+     * Switch session mode (building <-> conversation).
+     * @param data The data for the request.
+     * @param data.id
+     * @param data.newMode
+     * @returns SessionPublic Successful Response
+     * @throws ApiError
+     */
+    public static switchSessionMode(data: SessionsSwitchSessionModeData): CancelablePromise<SessionsSwitchSessionModeResponse> {
+        return __request(OpenAPI, {
+            method: 'PATCH',
+            url: '/api/v1/sessions/{id}/mode',
+            path: {
+                id: data.id
+            },
+            query: {
+                new_mode: data.newMode
+            },
             errors: {
                 422: 'Validation Error'
             }

@@ -29,6 +29,17 @@ export const AgentCreateSchema = {
                 }
             ],
             title: 'Entrypoint Prompt'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
         }
     },
     type: 'object',
@@ -49,40 +60,196 @@ export const AgentCredentialLinkRequestSchema = {
     title: 'AgentCredentialLinkRequest'
 } as const;
 
-export const AgentPublicSchema = {
+export const AgentEnvironmentCreateSchema = {
     properties: {
-        name: {
+        env_name: {
             type: 'string',
-            maxLength: 255,
-            minLength: 1,
-            title: 'Name'
+            title: 'Env Name'
         },
-        workflow_prompt: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Workflow Prompt'
+        env_version: {
+            type: 'string',
+            title: 'Env Version'
         },
-        entrypoint_prompt: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Entrypoint Prompt'
+        instance_name: {
+            type: 'string',
+            title: 'Instance Name'
         },
+        type: {
+            type: 'string',
+            title: 'Type'
+        },
+        config: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Config',
+            default: {}
+        }
+    },
+    type: 'object',
+    required: ['env_name', 'env_version', 'instance_name', 'type'],
+    title: 'AgentEnvironmentCreate'
+} as const;
+
+export const AgentEnvironmentPublicSchema = {
+    properties: {
         id: {
             type: 'string',
             format: 'uuid',
             title: 'Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        env_name: {
+            type: 'string',
+            title: 'Env Name'
+        },
+        env_version: {
+            type: 'string',
+            title: 'Env Version'
+        },
+        instance_name: {
+            type: 'string',
+            title: 'Instance Name'
+        },
+        type: {
+            type: 'string',
+            title: 'Type'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        is_active: {
+            type: 'boolean',
+            title: 'Is Active'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        last_health_check: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Health Check'
+        }
+    },
+    type: 'object',
+    required: ['id', 'agent_id', 'env_name', 'env_version', 'instance_name', 'type', 'status', 'is_active', 'created_at', 'updated_at', 'last_health_check'],
+    title: 'AgentEnvironmentPublic'
+} as const;
+
+export const AgentEnvironmentUpdateSchema = {
+    properties: {
+        instance_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Instance Name'
+        },
+        config: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Config'
+        }
+    },
+    type: 'object',
+    title: 'AgentEnvironmentUpdate'
+} as const;
+
+export const AgentEnvironmentsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentEnvironmentPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AgentEnvironmentsPublic'
+} as const;
+
+export const AgentPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        is_active: {
+            type: 'boolean',
+            title: 'Is Active'
+        },
+        active_environment_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Active Environment Id'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
         },
         owner_id: {
             type: 'string',
@@ -91,7 +258,7 @@ export const AgentPublicSchema = {
         }
     },
     type: 'object',
-    required: ['name', 'id', 'owner_id'],
+    required: ['id', 'name', 'description', 'is_active', 'active_environment_id', 'created_at', 'updated_at', 'owner_id'],
     title: 'AgentPublic'
 } as const;
 
@@ -110,6 +277,17 @@ export const AgentUpdateSchema = {
             ],
             title: 'Name'
         },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
         workflow_prompt: {
             anyOf: [
                 {
@@ -131,6 +309,17 @@ export const AgentUpdateSchema = {
                 }
             ],
             title: 'Entrypoint Prompt'
+        },
+        is_active: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Is Active'
         }
     },
     type: 'object',
@@ -557,6 +746,77 @@ export const MessageSchema = {
     title: 'Message'
 } as const;
 
+export const MessageCreateSchema = {
+    properties: {
+        content: {
+            type: 'string',
+            title: 'Content'
+        }
+    },
+    type: 'object',
+    required: ['content'],
+    title: 'MessageCreate'
+} as const;
+
+export const MessagePublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        session_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Session Id'
+        },
+        role: {
+            type: 'string',
+            title: 'Role'
+        },
+        content: {
+            type: 'string',
+            title: 'Content'
+        },
+        sequence_number: {
+            type: 'integer',
+            title: 'Sequence Number'
+        },
+        timestamp: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Timestamp'
+        },
+        message_metadata: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Message Metadata'
+        }
+    },
+    type: 'object',
+    required: ['id', 'session_id', 'role', 'content', 'sequence_number', 'timestamp', 'message_metadata'],
+    title: 'MessagePublic'
+} as const;
+
+export const MessagesPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/MessagePublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'MessagesPublic'
+} as const;
+
 export const NewPasswordSchema = {
     properties: {
         token: {
@@ -610,6 +870,158 @@ export const PrivateUserCreateSchema = {
     type: 'object',
     required: ['email', 'password', 'full_name'],
     title: 'PrivateUserCreate'
+} as const;
+
+export const SessionCreateSchema = {
+    properties: {
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        title: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Title'
+        },
+        mode: {
+            type: 'string',
+            title: 'Mode',
+            default: 'conversation'
+        }
+    },
+    type: 'object',
+    required: ['agent_id'],
+    title: 'SessionCreate'
+} as const;
+
+export const SessionPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        environment_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Environment Id'
+        },
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        title: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Title'
+        },
+        mode: {
+            type: 'string',
+            title: 'Mode'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        last_message_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Message At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'environment_id', 'user_id', 'title', 'mode', 'status', 'created_at', 'updated_at', 'last_message_at'],
+    title: 'SessionPublic'
+} as const;
+
+export const SessionUpdateSchema = {
+    properties: {
+        title: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Title'
+        },
+        status: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status'
+        },
+        mode: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Mode'
+        }
+    },
+    type: 'object',
+    title: 'SessionUpdate'
+} as const;
+
+export const SessionsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/SessionPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'SessionsPublic'
 } as const;
 
 export const SetPasswordSchema = {

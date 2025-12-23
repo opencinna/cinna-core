@@ -4,17 +4,57 @@ export type AgentCreate = {
     name: string;
     workflow_prompt?: (string | null);
     entrypoint_prompt?: (string | null);
+    description?: (string | null);
 };
 
 export type AgentCredentialLinkRequest = {
     credential_id: string;
 };
 
-export type AgentPublic = {
-    name: string;
-    workflow_prompt?: (string | null);
-    entrypoint_prompt?: (string | null);
+export type AgentEnvironmentCreate = {
+    env_name: string;
+    env_version: string;
+    instance_name: string;
+    type: string;
+    config?: {
+        [key: string]: unknown;
+    };
+};
+
+export type AgentEnvironmentPublic = {
     id: string;
+    agent_id: string;
+    env_name: string;
+    env_version: string;
+    instance_name: string;
+    type: string;
+    status: string;
+    is_active: boolean;
+    created_at: string;
+    updated_at: string;
+    last_health_check: (string | null);
+};
+
+export type AgentEnvironmentsPublic = {
+    data: Array<AgentEnvironmentPublic>;
+    count: number;
+};
+
+export type AgentEnvironmentUpdate = {
+    instance_name?: (string | null);
+    config?: ({
+    [key: string]: unknown;
+} | null);
+};
+
+export type AgentPublic = {
+    id: string;
+    name: string;
+    description: (string | null);
+    is_active: boolean;
+    active_environment_id: (string | null);
+    created_at: string;
+    updated_at: string;
     owner_id: string;
 };
 
@@ -25,8 +65,10 @@ export type AgentsPublic = {
 
 export type AgentUpdate = {
     name?: (string | null);
+    description?: (string | null);
     workflow_prompt?: (string | null);
     entrypoint_prompt?: (string | null);
+    is_active?: (boolean | null);
 };
 
 export type Body_login_login_access_token = {
@@ -116,6 +158,27 @@ export type Message = {
     message: string;
 };
 
+export type MessageCreate = {
+    content: string;
+};
+
+export type MessagePublic = {
+    id: string;
+    session_id: string;
+    role: string;
+    content: string;
+    sequence_number: number;
+    timestamp: string;
+    message_metadata: {
+        [key: string]: unknown;
+    };
+};
+
+export type MessagesPublic = {
+    data: Array<MessagePublic>;
+    count: number;
+};
+
 export type NewPassword = {
     token: string;
     new_password: string;
@@ -130,6 +193,35 @@ export type PrivateUserCreate = {
     password: string;
     full_name: string;
     is_verified?: boolean;
+};
+
+export type SessionCreate = {
+    agent_id: string;
+    title?: (string | null);
+    mode?: string;
+};
+
+export type SessionPublic = {
+    id: string;
+    environment_id: string;
+    user_id: string;
+    title: (string | null);
+    mode: string;
+    status: string;
+    created_at: string;
+    updated_at: string;
+    last_message_at: (string | null);
+};
+
+export type SessionsPublic = {
+    data: Array<SessionPublic>;
+    count: number;
+};
+
+export type SessionUpdate = {
+    title?: (string | null);
+    status?: (string | null);
+    mode?: (string | null);
 };
 
 export type SetPassword = {
@@ -246,6 +338,26 @@ export type AgentsRemoveCredentialFromAgentData = {
 
 export type AgentsRemoveCredentialFromAgentResponse = (Message);
 
+export type AgentsCreateAgentEnvironmentData = {
+    id: string;
+    requestBody: AgentEnvironmentCreate;
+};
+
+export type AgentsCreateAgentEnvironmentResponse = (AgentEnvironmentPublic);
+
+export type AgentsListAgentEnvironmentsData = {
+    id: string;
+};
+
+export type AgentsListAgentEnvironmentsResponse = (AgentEnvironmentsPublic);
+
+export type AgentsActivateEnvironmentData = {
+    envId: string;
+    id: string;
+};
+
+export type AgentsActivateEnvironmentResponse = (AgentPublic);
+
 export type CredentialsReadCredentialsData = {
     limit?: number;
     skip?: number;
@@ -283,6 +395,37 @@ export type CredentialsReadCredentialWithDataData = {
 };
 
 export type CredentialsReadCredentialWithDataResponse = (CredentialWithData);
+
+export type EnvironmentsGetEnvironmentData = {
+    id: string;
+};
+
+export type EnvironmentsGetEnvironmentResponse = (AgentEnvironmentPublic);
+
+export type EnvironmentsUpdateEnvironmentData = {
+    id: string;
+    requestBody: AgentEnvironmentUpdate;
+};
+
+export type EnvironmentsUpdateEnvironmentResponse = (AgentEnvironmentPublic);
+
+export type EnvironmentsDeleteEnvironmentData = {
+    id: string;
+};
+
+export type EnvironmentsDeleteEnvironmentResponse = (Message);
+
+export type EnvironmentsStartEnvironmentData = {
+    id: string;
+};
+
+export type EnvironmentsStartEnvironmentResponse = (Message);
+
+export type EnvironmentsStopEnvironmentData = {
+    id: string;
+};
+
+export type EnvironmentsStopEnvironmentResponse = (Message);
 
 export type ItemsReadItemsData = {
     limit?: number;
@@ -342,6 +485,21 @@ export type LoginRecoverPasswordHtmlContentData = {
 
 export type LoginRecoverPasswordHtmlContentResponse = (string);
 
+export type MessagesGetMessagesData = {
+    limit?: number;
+    offset?: number;
+    sessionId: string;
+};
+
+export type MessagesGetMessagesResponse = (MessagesPublic);
+
+export type MessagesSendMessageData = {
+    requestBody: MessageCreate;
+    sessionId: string;
+};
+
+export type MessagesSendMessageResponse = (MessagePublic);
+
 export type OauthGetOauthConfigResponse = (OAuthConfig);
 
 export type OauthGoogleAuthorizeResponse = ({
@@ -367,6 +525,40 @@ export type PrivateCreateUserData = {
 };
 
 export type PrivateCreateUserResponse = (UserPublic);
+
+export type SessionsListSessionsResponse = (SessionsPublic);
+
+export type SessionsCreateSessionData = {
+    requestBody: SessionCreate;
+};
+
+export type SessionsCreateSessionResponse = (SessionPublic);
+
+export type SessionsGetSessionData = {
+    id: string;
+};
+
+export type SessionsGetSessionResponse = (SessionPublic);
+
+export type SessionsUpdateSessionData = {
+    id: string;
+    requestBody: SessionUpdate;
+};
+
+export type SessionsUpdateSessionResponse = (SessionPublic);
+
+export type SessionsDeleteSessionData = {
+    id: string;
+};
+
+export type SessionsDeleteSessionResponse = (Message);
+
+export type SessionsSwitchSessionModeData = {
+    id: string;
+    newMode: string;
+};
+
+export type SessionsSwitchSessionModeResponse = (SessionPublic);
 
 export type UsersReadUsersData = {
     limit?: number;

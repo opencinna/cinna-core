@@ -16,8 +16,14 @@ from app.models import (
     Credential,
     CredentialPublic,
     CredentialsPublic,
+    AgentEnvironment,
+    AgentEnvironmentCreate,
+    AgentEnvironmentPublic,
+    AgentEnvironmentsPublic,
 )
 from app import crud
+from app.services.environment_service import EnvironmentService
+from app.services.agent_service import AgentService
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -185,3 +191,72 @@ def remove_credential_from_agent(
         session=session, agent_id=id, credential_id=credential_id
     )
     return Message(message="Credential unlinked successfully")
+
+
+# Environment management routes
+@router.post("/{id}/environments", response_model=AgentEnvironmentPublic)
+def create_agent_environment(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+    environment_in: AgentEnvironmentCreate,
+) -> Any:
+    """
+    Create new environment for agent.
+    """
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    environment = EnvironmentService.create_environment(
+        session=session, agent_id=id, data=environment_in
+    )
+    return environment
+
+
+@router.get("/{id}/environments", response_model=AgentEnvironmentsPublic)
+def list_agent_environments(
+    session: SessionDep, current_user: CurrentUser, id: uuid.UUID
+) -> Any:
+    """
+    List all environments for an agent.
+    """
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    environments = EnvironmentService.list_agent_environments(session=session, agent_id=id)
+    return AgentEnvironmentsPublic(data=environments, count=len(environments))
+
+
+@router.post("/{id}/environments/{env_id}/activate", response_model=AgentPublic)
+def activate_environment(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+    env_id: uuid.UUID,
+) -> Any:
+    """
+    Set environment as active for agent.
+    """
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    # Verify environment belongs to this agent
+    environment = session.get(AgentEnvironment, env_id)
+    if not environment or environment.agent_id != id:
+        raise HTTPException(status_code=404, detail="Environment not found for this agent")
+
+    updated_agent = AgentService.set_active_environment(
+        session=session, agent_id=id, env_id=env_id
+    )
+    return updated_agent
