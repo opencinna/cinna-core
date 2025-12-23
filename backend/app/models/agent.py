@@ -1,7 +1,10 @@
 import uuid
 from datetime import datetime
+from typing import List, Optional
 from sqlmodel import Field, Relationship, SQLModel
-from .link_models import AgentCredentialLink
+
+from app.models.user import User
+from app.models.link_models import AgentCredentialLink
 
 
 # Shared properties
@@ -38,8 +41,8 @@ class Agent(AgentBase, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-    owner: "User | None" = Relationship(back_populates="agents")
-    credentials: list["Credential"] = Relationship(
+    owner: User | None = Relationship(back_populates="agents")
+    credentials: List["app.models.credential.Credential"] = Relationship(
         back_populates="agents", link_model=AgentCredentialLink
     )
 

@@ -16,10 +16,12 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as LayoutRouteImport } from './routes/_layout'
 import { Route as LayoutIndexRouteImport } from './routes/_layout/index'
 import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
+import { Route as LayoutSessionsRouteImport } from './routes/_layout/sessions'
 import { Route as LayoutItemsRouteImport } from './routes/_layout/items'
 import { Route as LayoutCredentialsRouteImport } from './routes/_layout/credentials'
 import { Route as LayoutAgentsRouteImport } from './routes/_layout/agents'
 import { Route as LayoutAdminRouteImport } from './routes/_layout/admin'
+import { Route as LayoutSessionSessionIdRouteImport } from './routes/_layout/session/$sessionId'
 import { Route as LayoutCredentialCredentialIdRouteImport } from './routes/_layout/credential/$credentialId'
 import { Route as LayoutAgentAgentIdRouteImport } from './routes/_layout/agent/$agentId'
 
@@ -57,6 +59,11 @@ const LayoutSettingsRoute = LayoutSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutSessionsRoute = LayoutSessionsRouteImport.update({
+  id: '/sessions',
+  path: '/sessions',
+  getParentRoute: () => LayoutRoute,
+} as any)
 const LayoutItemsRoute = LayoutItemsRouteImport.update({
   id: '/items',
   path: '/items',
@@ -75,6 +82,11 @@ const LayoutAgentsRoute = LayoutAgentsRouteImport.update({
 const LayoutAdminRoute = LayoutAdminRouteImport.update({
   id: '/admin',
   path: '/admin',
+  getParentRoute: () => LayoutRoute,
+} as any)
+const LayoutSessionSessionIdRoute = LayoutSessionSessionIdRouteImport.update({
+  id: '/session/$sessionId',
+  path: '/session/$sessionId',
   getParentRoute: () => LayoutRoute,
 } as any)
 const LayoutCredentialCredentialIdRoute =
@@ -98,10 +110,12 @@ export interface FileRoutesByFullPath {
   '/agents': typeof LayoutAgentsRoute
   '/credentials': typeof LayoutCredentialsRoute
   '/items': typeof LayoutItemsRoute
+  '/sessions': typeof LayoutSessionsRoute
   '/settings': typeof LayoutSettingsRoute
   '/': typeof LayoutIndexRoute
   '/agent/$agentId': typeof LayoutAgentAgentIdRoute
   '/credential/$credentialId': typeof LayoutCredentialCredentialIdRoute
+  '/session/$sessionId': typeof LayoutSessionSessionIdRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
@@ -112,10 +126,12 @@ export interface FileRoutesByTo {
   '/agents': typeof LayoutAgentsRoute
   '/credentials': typeof LayoutCredentialsRoute
   '/items': typeof LayoutItemsRoute
+  '/sessions': typeof LayoutSessionsRoute
   '/settings': typeof LayoutSettingsRoute
   '/': typeof LayoutIndexRoute
   '/agent/$agentId': typeof LayoutAgentAgentIdRoute
   '/credential/$credentialId': typeof LayoutCredentialCredentialIdRoute
+  '/session/$sessionId': typeof LayoutSessionSessionIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -128,10 +144,12 @@ export interface FileRoutesById {
   '/_layout/agents': typeof LayoutAgentsRoute
   '/_layout/credentials': typeof LayoutCredentialsRoute
   '/_layout/items': typeof LayoutItemsRoute
+  '/_layout/sessions': typeof LayoutSessionsRoute
   '/_layout/settings': typeof LayoutSettingsRoute
   '/_layout/': typeof LayoutIndexRoute
   '/_layout/agent/$agentId': typeof LayoutAgentAgentIdRoute
   '/_layout/credential/$credentialId': typeof LayoutCredentialCredentialIdRoute
+  '/_layout/session/$sessionId': typeof LayoutSessionSessionIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -144,10 +162,12 @@ export interface FileRouteTypes {
     | '/agents'
     | '/credentials'
     | '/items'
+    | '/sessions'
     | '/settings'
     | '/'
     | '/agent/$agentId'
     | '/credential/$credentialId'
+    | '/session/$sessionId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -158,10 +178,12 @@ export interface FileRouteTypes {
     | '/agents'
     | '/credentials'
     | '/items'
+    | '/sessions'
     | '/settings'
     | '/'
     | '/agent/$agentId'
     | '/credential/$credentialId'
+    | '/session/$sessionId'
   id:
     | '__root__'
     | '/_layout'
@@ -173,10 +195,12 @@ export interface FileRouteTypes {
     | '/_layout/agents'
     | '/_layout/credentials'
     | '/_layout/items'
+    | '/_layout/sessions'
     | '/_layout/settings'
     | '/_layout/'
     | '/_layout/agent/$agentId'
     | '/_layout/credential/$credentialId'
+    | '/_layout/session/$sessionId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -238,6 +262,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutSettingsRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/sessions': {
+      id: '/_layout/sessions'
+      path: '/sessions'
+      fullPath: '/sessions'
+      preLoaderRoute: typeof LayoutSessionsRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/items': {
       id: '/_layout/items'
       path: '/items'
@@ -266,6 +297,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAdminRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/session/$sessionId': {
+      id: '/_layout/session/$sessionId'
+      path: '/session/$sessionId'
+      fullPath: '/session/$sessionId'
+      preLoaderRoute: typeof LayoutSessionSessionIdRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/credential/$credentialId': {
       id: '/_layout/credential/$credentialId'
       path: '/credential/$credentialId'
@@ -288,10 +326,12 @@ interface LayoutRouteChildren {
   LayoutAgentsRoute: typeof LayoutAgentsRoute
   LayoutCredentialsRoute: typeof LayoutCredentialsRoute
   LayoutItemsRoute: typeof LayoutItemsRoute
+  LayoutSessionsRoute: typeof LayoutSessionsRoute
   LayoutSettingsRoute: typeof LayoutSettingsRoute
   LayoutIndexRoute: typeof LayoutIndexRoute
   LayoutAgentAgentIdRoute: typeof LayoutAgentAgentIdRoute
   LayoutCredentialCredentialIdRoute: typeof LayoutCredentialCredentialIdRoute
+  LayoutSessionSessionIdRoute: typeof LayoutSessionSessionIdRoute
 }
 
 const LayoutRouteChildren: LayoutRouteChildren = {
@@ -299,10 +339,12 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutAgentsRoute: LayoutAgentsRoute,
   LayoutCredentialsRoute: LayoutCredentialsRoute,
   LayoutItemsRoute: LayoutItemsRoute,
+  LayoutSessionsRoute: LayoutSessionsRoute,
   LayoutSettingsRoute: LayoutSettingsRoute,
   LayoutIndexRoute: LayoutIndexRoute,
   LayoutAgentAgentIdRoute: LayoutAgentAgentIdRoute,
   LayoutCredentialCredentialIdRoute: LayoutCredentialCredentialIdRoute,
+  LayoutSessionSessionIdRoute: LayoutSessionSessionIdRoute,
 }
 
 const LayoutRouteWithChildren =

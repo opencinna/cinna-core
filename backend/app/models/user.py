@@ -1,4 +1,5 @@
 import uuid
+from typing import List
 from pydantic import EmailStr
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -43,9 +44,9 @@ class User(UserBase, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     hashed_password: str | None = None
     google_id: str | None = Field(default=None, max_length=255, unique=True, index=True)
-    items: list["Item"] = Relationship(back_populates="owner", cascade_delete=True)
-    agents: list["Agent"] = Relationship(back_populates="owner", cascade_delete=True)
-    credentials: list["Credential"] = Relationship(back_populates="owner", cascade_delete=True)
+    items: List["app.models.item.Item"] = Relationship(back_populates="owner", cascade_delete=True)
+    agents: List["app.models.agent.Agent"] = Relationship(back_populates="owner", cascade_delete=True)
+    credentials: List["app.models.credential.Credential"] = Relationship(back_populates="owner", cascade_delete=True)
 
 
 # Properties to return via API, id is always required

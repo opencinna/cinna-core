@@ -1,12 +1,10 @@
 import uuid
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import List, Optional
 from sqlmodel import Field, Relationship, SQLModel, Column, Text
-from .link_models import AgentCredentialLink
 
-if TYPE_CHECKING:
-    from .agent import Agent
-    from .user import User
+from app.models.user import User
+from app.models.link_models import AgentCredentialLink
 
 
 # Credential types enum
@@ -69,8 +67,8 @@ class Credential(CredentialBase, table=True):
     owner_id: uuid.UUID = Field(
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
     )
-    owner: "User | None" = Relationship(back_populates="credentials")
-    agents: list["Agent"] = Relationship(
+    owner: User | None = Relationship(back_populates="credentials")
+    agents: List["app.models.agent.Agent"] = Relationship(
         back_populates="credentials", link_model=AgentCredentialLink
     )
 

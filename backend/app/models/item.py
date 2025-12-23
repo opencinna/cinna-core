@@ -1,5 +1,8 @@
 import uuid
+from typing import Optional
 from sqlmodel import Field, Relationship, SQLModel
+
+from app.models.user import User
 
 
 # Shared properties
@@ -24,7 +27,7 @@ class Item(ItemBase, table=True):
     owner_id: uuid.UUID = Field(
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
     )
-    owner: "User | None" = Relationship(back_populates="items")
+    owner: User | None = Relationship(back_populates="items")
 
 
 # Properties to return via API, id is always required

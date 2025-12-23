@@ -6,6 +6,7 @@ import { useState } from "react"
 import { AgentsService } from "@/client"
 import { AgentPromptsTab } from "@/components/Agents/AgentPromptsTab"
 import { AgentCredentialsTab } from "@/components/Agents/AgentCredentialsTab"
+import { AgentEnvironmentsTab } from "@/components/Agents/AgentEnvironmentsTab"
 import EditAgent from "@/components/Agents/EditAgent"
 import DeleteAgent from "@/components/Agents/DeleteAgent"
 import PendingItems from "@/components/Pending/PendingItems"
@@ -45,7 +46,7 @@ export const Route = createFileRoute("/_layout/agent/$agentId")({
 function AgentDetail() {
   const { agentId } = Route.useParams()
   const navigate = useNavigate()
-  const [activeTab, setActiveTab] = useState<"prompts" | "credentials">(
+  const [activeTab, setActiveTab] = useState<"prompts" | "credentials" | "environments">(
     "prompts"
   )
   const [menuOpen, setMenuOpen] = useState(false)
@@ -122,12 +123,21 @@ function AgentDetail() {
           >
             Credentials
           </TabButton>
+          <TabButton
+            isActive={activeTab === "environments"}
+            onClick={() => setActiveTab("environments")}
+          >
+            Environments
+          </TabButton>
         </div>
 
         <div>
           {activeTab === "prompts" && <AgentPromptsTab agent={agent} />}
           {activeTab === "credentials" && (
             <AgentCredentialsTab agentId={agent.id} />
+          )}
+          {activeTab === "environments" && (
+            <AgentEnvironmentsTab agentId={agent.id} />
           )}
         </div>
       </div>

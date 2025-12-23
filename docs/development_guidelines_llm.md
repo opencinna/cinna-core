@@ -111,11 +111,10 @@ backend/app/models/
 **Pattern in `backend/app/models/entity.py`**:
 ```python
 import uuid
+from typing import List, Optional
 from sqlmodel import Field, Relationship, SQLModel
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from .user import User
+from app.models.user import User
 
 # Shared properties
 class EntityBase(SQLModel):
@@ -133,7 +132,7 @@ class EntityUpdate(SQLModel):
 class Entity(EntityBase, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     owner_id: uuid.UUID = Field(foreign_key="user.id", nullable=False, ondelete="CASCADE")
-    owner: "User | None" = Relationship(back_populates="entities")  # Use quotes with TYPE_CHECKING import
+    owner: User | None = Relationship(back_populates="entities")
 
 # Public schema
 class EntityPublic(EntityBase):
@@ -167,12 +166,71 @@ __all__ = [
 ```
 
 **CRITICAL SQLAlchemy Relationship Pattern with Domain Files**:
-- ✅ Use `TYPE_CHECKING` import to avoid circular imports
-- ✅ Use quoted type hints for relationships: `owner: "User | None"`
-- ✅ Import actual model only in `TYPE_CHECKING` block
-- ✅ In both models use quotes: `entities: list["Entity"]` and `owner: "User | None"`
-- ❌ NEVER import models at module level if they create circular dependencies
-- ❌ WRONG: `owner: User | None` without TYPE_CHECKING - causes import errors
+
+When models are split into separate files, follow this pattern to avoid circular import issues:
+
+**For models that are imported by others (e.g., `user.py`):**
+- ✅ Use full module path strings for relationships to models that will import this one
+- ✅ Example: `items: List["app.models.item.Item"] = Relationship(back_populates="owner")`
+- ✅ This creates a forward reference that SQLAlchemy resolves at mapper initialization time
+
+**For models that import others (e.g., `item.py`, `agent.py`, `credential.py`):**
+- ✅ Use direct imports: `from app.models.user import User`
+- ✅ Use direct type hints (no quotes): `owner: User | None = Relationship(back_populates="items")`
+- ✅ For circular dependencies with other models, use full module path strings
+
+**Example - user.py (imported by other models):**
+```python
+import uuid
+from typing import List
+from sqlmodel import Field, Relationship, SQLModel
+
+class User(UserBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    # Use full path strings for models that import User
+    items: List["app.models.item.Item"] = Relationship(back_populates="owner", cascade_delete=True)
+    agents: List["app.models.agent.Agent"] = Relationship(back_populates="owner", cascade_delete=True)
+```
+
+**Example - item.py (imports User):**
+```python
+import uuid
+from typing import Optional
+from sqlmodel import Field, Relationship, SQLModel
+
+from app.models.user import User  # Direct import - no circular dependency
+
+class Item(ItemBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    owner_id: uuid.UUID = Field(foreign_key="user.id", nullable=False, ondelete="CASCADE")
+    owner: User | None = Relationship(back_populates="items")  # Direct type - no quotes
+```
+
+**Example - agent.py (imports User, has circular ref with Credential):**
+```python
+import uuid
+from typing import List, Optional
+from sqlmodel import Field, Relationship, SQLModel
+
+from app.models.user import User  # Direct import
+from app.models.link_models import AgentCredentialLink
+
+class Agent(AgentBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    owner_id: uuid.UUID = Field(foreign_key="user.id", nullable=False, ondelete="CASCADE")
+    owner: User | None = Relationship(back_populates="agents")  # Direct type
+    # Use full path for circular dependency with Credential
+    credentials: List["app.models.credential.Credential"] = Relationship(
+        back_populates="agents", link_model=AgentCredentialLink
+    )
+```
+
+**Key Rules:**
+- ❌ NEVER use `from __future__ import annotations` - not needed with this pattern
+- ❌ NEVER use `TYPE_CHECKING` blocks - not needed with this pattern
+- ✅ Direct imports work when there's no circular dependency
+- ✅ Full module path strings (`"app.models.x.Y"`) resolve circular dependencies
+- ✅ This pattern matches SQLModel/SQLAlchemy best practices for split models
 
 **For many-to-many relationships**, create link model in `backend/app/models/link_models.py`:
 ```python
@@ -187,9 +245,10 @@ class EntityCategoryLink(SQLModel, table=True):
 
 Then import in both related models:
 ```python
-from .link_models import EntityCategoryLink
+from typing import List
+from app.models.link_models import EntityCategoryLink
 
-categories: list["Category"] = Relationship(back_populates="entities", link_model=EntityCategoryLink)
+categories: List["app.models.category.Category"] = Relationship(back_populates="entities", link_model=EntityCategoryLink)
 ```
 
 ### 2. Service Layer (`backend/app/services/`)
@@ -511,11 +570,19 @@ def read_with_data(session: SessionDep, current_user: CurrentUser, id: uuid.UUID
 ## Common Mistakes to Avoid
 
 ### 1. SQLAlchemy Relationships with Domain-Based Models
-❌ `owner: User | None` without TYPE_CHECKING import - causes circular import errors
-✅ `owner: "User | None"` with TYPE_CHECKING import - correct pattern for domain files
-❌ Importing models at module level between domain files - causes circular dependencies
-✅ Using `from typing import TYPE_CHECKING` and importing models only inside the block
-✅ Using quoted type hints for all relationship types: `list["Entity"]`, `"User | None"`
+**Direct Imports (No Circular Dependency):**
+✅ `from app.models.user import User` - direct import when safe
+✅ `owner: User | None = Relationship(...)` - direct type hint, no quotes needed
+
+**Forward References (Circular Dependencies):**
+✅ `items: List["app.models.item.Item"] = Relationship(...)` - full module path in quotes
+✅ Use full path strings: `"app.models.x.Y"` not just `"Y"`
+
+**Common Mistakes:**
+❌ Using `TYPE_CHECKING` blocks - not needed with this pattern
+❌ Using `from __future__ import annotations` - not needed with this pattern
+❌ Quoting direct imports: `"User | None"` when User is already imported
+❌ Short paths in quotes: `"Item"` instead of `"app.models.item.Item"`
 
 ### 2. Cryptography Import
 ❌ `from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2`
