@@ -24,6 +24,27 @@ const useAuth = () => {
     queryKey: ["currentUser"],
     queryFn: UsersService.readUserMe,
     enabled: isLoggedIn(),
+    retry: (failureCount, error: any) => {
+      // Don't retry on 404 or 401 errors
+      if (error?.status === 404 || error?.status === 401) {
+        return false
+      }
+      return failureCount < 3
+    },
+    onError: (error: any) => {
+      // If user not found (404) or unauthorized (401), clear token and redirect to login
+      if (error?.status === 404 || error?.status === 401) {
+        localStorage.removeItem("access_token")
+        navigate({ to: "/login" })
+      }
+    },
+    onSuccess: (data) => {
+      // If user is inactive, clear token and redirect to login
+      if (data && !data.is_active) {
+        localStorage.removeItem("access_token")
+        navigate({ to: "/login" })
+      }
+    },
   })
 
   const signUpMutation = useMutation({

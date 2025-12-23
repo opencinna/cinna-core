@@ -559,6 +559,9 @@ source .venv/bin/activate
 
 ## Testing
 
+IMPORTANT!
+Testing Framework is not configured yet. DOT NOT RUN TESTS!
+
 ### Backend Tests
 
 Located in `backend/tests/`

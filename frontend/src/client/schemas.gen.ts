@@ -68,15 +68,18 @@ export const AgentEnvironmentCreateSchema = {
         },
         env_version: {
             type: 'string',
-            title: 'Env Version'
+            title: 'Env Version',
+            default: '1.0.0'
         },
         instance_name: {
             type: 'string',
-            title: 'Instance Name'
+            title: 'Instance Name',
+            default: 'Instance'
         },
         type: {
             type: 'string',
-            title: 'Type'
+            title: 'Type',
+            default: 'docker'
         },
         config: {
             additionalProperties: true,
@@ -86,7 +89,7 @@ export const AgentEnvironmentCreateSchema = {
         }
     },
     type: 'object',
-    required: ['env_name', 'env_version', 'instance_name', 'type'],
+    required: ['env_name'],
     title: 'AgentEnvironmentCreate'
 } as const;
 

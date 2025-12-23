@@ -10,15 +10,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { AgentsService } from "@/client"
 import type { AgentEnvironmentCreate } from "@/client"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -30,10 +21,7 @@ interface AddEnvironmentProps {
 
 export function AddEnvironment({ agentId }: AddEnvironmentProps) {
   const [open, setOpen] = useState(false)
-  const [instanceName, setInstanceName] = useState("")
-  const [envName, setEnvName] = useState("python-env-basic")
-  const [envVersion, setEnvVersion] = useState("1.0.0")
-  const [envType, setEnvType] = useState("docker")
+  const [envName] = useState("python-env-advanced")
 
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -44,7 +32,6 @@ export function AddEnvironment({ agentId }: AddEnvironmentProps) {
     onSuccess: () => {
       showSuccessToast("The new environment has been created successfully.")
       setOpen(false)
-      resetForm()
     },
     onError: (error: any) => {
       showErrorToast(error.message || "Failed to create environment")
@@ -54,25 +41,12 @@ export function AddEnvironment({ agentId }: AddEnvironmentProps) {
     },
   })
 
-  const resetForm = () => {
-    setInstanceName("")
-    setEnvName("python-env-basic")
-    setEnvVersion("1.0.0")
-    setEnvType("docker")
-  }
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!instanceName.trim()) {
-      showErrorToast("Instance name is required")
-      return
-    }
 
     createMutation.mutate({
-      instance_name: instanceName,
       env_name: envName,
-      env_version: envVersion,
-      type: envType,
+      // instance_name, env_version, and type will use backend defaults
     })
   }
 
@@ -89,57 +63,21 @@ export function AddEnvironment({ agentId }: AddEnvironmentProps) {
           <DialogHeader>
             <DialogTitle>Create New Environment</DialogTitle>
             <DialogDescription>
-              Create a new runtime environment for your agent. This will be a Docker container or
-              remote server instance.
+              Create a new Python Advanced environment for your agent. This will be a Docker
+              container with advanced Python capabilities.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <Label htmlFor="instanceName">Instance Name*</Label>
-              <Input
-                id="instanceName"
-                placeholder="e.g., Production, Testing, Staging"
-                value={instanceName}
-                onChange={(e) => setInstanceName(e.target.value)}
-                required
-              />
-              <p className="text-sm text-muted-foreground">
-                A friendly name to identify this environment
+            <div className="text-sm text-muted-foreground">
+              <p>
+                <span className="font-medium">Template:</span> Python Advanced
               </p>
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="envName">Environment Template</Label>
-              <Select value={envName} onValueChange={setEnvName}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="python-env-basic">Python Basic</SelectItem>
-                  <SelectItem value="python-env-advanced">Python Advanced</SelectItem>
-                  <SelectItem value="python-env-ml">Python ML/AI</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="envVersion">Version</Label>
-              <Input
-                id="envVersion"
-                value={envVersion}
-                onChange={(e) => setEnvVersion(e.target.value)}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="envType">Environment Type</Label>
-              <Select value={envType} onValueChange={setEnvType}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="docker">Docker Container</SelectItem>
-                  <SelectItem value="remote_ssh">Remote SSH</SelectItem>
-                  <SelectItem value="remote_http">Remote HTTP</SelectItem>
-                </SelectContent>
-              </Select>
+              <p>
+                <span className="font-medium">Version:</span> 1.0.0
+              </p>
+              <p>
+                <span className="font-medium">Type:</span> Docker Container
+              </p>
             </div>
           </div>
           <DialogFooter>

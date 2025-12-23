@@ -23,7 +23,7 @@ export function AgentEnvironmentsTab({ agentId }: AgentEnvironmentsTabProps) {
     mutationFn: (envId: string) =>
       AgentsService.activateEnvironment({ id: agentId, envId }),
     onSuccess: () => {
-      showSuccessToast("This environment is now active for new sessions.")
+      showSuccessToast("Environment activated successfully.")
     },
     onError: (error: any) => {
       showErrorToast(error.message || "Failed to activate environment")
@@ -33,6 +33,25 @@ export function AgentEnvironmentsTab({ agentId }: AgentEnvironmentsTabProps) {
       queryClient.invalidateQueries({ queryKey: ["agent", agentId] })
     },
   })
+
+  const handleActivate = (envId: string) => {
+    const environments = environmentsData?.data || []
+
+    // If only one environment, don't ask for confirmation
+    if (environments.length === 1) {
+      activateMutation.mutate(envId)
+      return
+    }
+
+    // If multiple environments, ask for confirmation
+    if (
+      confirm(
+        "Activating this environment will start it and stop all other environments. Continue?"
+      )
+    ) {
+      activateMutation.mutate(envId)
+    }
+  }
 
   if (isLoading) {
     return (
@@ -84,7 +103,7 @@ export function AgentEnvironmentsTab({ agentId }: AgentEnvironmentsTabProps) {
               <EnvironmentCard
                 environment={activeEnvironment}
                 agentId={agentId}
-                onActivate={() => activateMutation.mutate(activeEnvironment.id)}
+                onActivate={() => handleActivate(activeEnvironment.id)}
               />
             </div>
           )}
@@ -100,7 +119,7 @@ export function AgentEnvironmentsTab({ agentId }: AgentEnvironmentsTabProps) {
                     key={env.id}
                     environment={env}
                     agentId={agentId}
-                    onActivate={() => activateMutation.mutate(env.id)}
+                    onActivate={() => handleActivate(env.id)}
                   />
                 ))}
               </div>

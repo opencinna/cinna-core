@@ -230,7 +230,7 @@ export class AgentsService {
     
     /**
      * Activate Environment
-     * Set environment as active for agent.
+     * Activate environment: starts it, sets as active for agent, stops other environments.
      * @param data The data for the request.
      * @param data.id
      * @param data.envId

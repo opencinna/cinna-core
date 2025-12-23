@@ -10,9 +10,9 @@ class AgentEnvironment(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     agent_id: uuid.UUID = Field(foreign_key="agent.id", ondelete="CASCADE")
     env_name: str  # e.g., "python-env-basic"
-    env_version: str  # e.g., "1.0.0"
-    instance_name: str  # e.g., "Production", "Testing"
-    type: str  # "docker" | "remote_ssh" | "remote_http" | "kubernetes"
+    env_version: str = "1.0.0"  # e.g., "1.0.0"
+    instance_name: str = "Instance"  # e.g., "Production", "Testing"
+    type: str = "docker"  # "docker" | "remote_ssh" | "remote_http" | "kubernetes"
     status: str = "stopped"  # "stopped" | "starting" | "running" | "error" | "deprecated"
     is_active: bool = Field(default=False)
     config: dict = Field(default_factory=dict, sa_column=Column(JSON))
@@ -24,9 +24,9 @@ class AgentEnvironment(SQLModel, table=True):
 # Pydantic Schemas
 class AgentEnvironmentCreate(SQLModel):
     env_name: str
-    env_version: str
-    instance_name: str
-    type: str  # "docker" | "remote_ssh" | "remote_http"
+    env_version: str = "1.0.0"
+    instance_name: str = "Instance"
+    type: str = "docker"  # "docker" | "remote_ssh" | "remote_http"
     config: dict = {}
 
 

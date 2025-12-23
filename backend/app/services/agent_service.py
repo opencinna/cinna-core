@@ -1,15 +1,41 @@
 from uuid import UUID
 from sqlmodel import Session, select
 from app.models import Agent, AgentCreate, AgentUpdate
+from app.models.environment import AgentEnvironmentCreate
+from app.services.environment_service import EnvironmentService
 
 
 class AgentService:
     @staticmethod
     def create_agent(session: Session, user_id: UUID, data: AgentCreate) -> Agent:
-        """Create new agent"""
+        """Create new agent with default environment"""
         agent = Agent.model_validate(data, update={"owner_id": user_id})
         session.add(agent)
         session.commit()
+        session.refresh(agent)
+
+        # Create default environment for the agent
+        default_env_data = AgentEnvironmentCreate(
+            env_name="default",
+            env_version="1.0.0",
+            instance_name="Default",
+            type="docker",
+            config={}
+        )
+        default_env = EnvironmentService.create_environment(
+            session=session,
+            agent_id=agent.id,
+            data=default_env_data
+        )
+
+        # Activate the default environment
+        EnvironmentService.activate_environment(
+            session=session,
+            agent_id=agent.id,
+            env_id=default_env.id
+        )
+
+        # Refresh agent to get updated state
         session.refresh(agent)
         return agent
 

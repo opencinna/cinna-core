@@ -62,9 +62,9 @@ def read_agents(
 @router.get("/{id}", response_model=AgentPublic)
 def read_agent(session: SessionDep, current_user: CurrentUser, id: uuid.UUID) -> Any:
     """
-    Get agent by ID.
+    Get agent by ID with environment details.
     """
-    agent = session.get(Agent, id)
+    agent = AgentService.get_agent_with_environment(session=session, agent_id=id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_superuser and (agent.owner_id != current_user.id):
@@ -77,12 +77,11 @@ def create_agent(
     *, session: SessionDep, current_user: CurrentUser, agent_in: AgentCreate
 ) -> Any:
     """
-    Create new agent.
+    Create new agent with default environment.
     """
-    agent = Agent.model_validate(agent_in, update={"owner_id": current_user.id})
-    session.add(agent)
-    session.commit()
-    session.refresh(agent)
+    agent = AgentService.create_agent(
+        session=session, user_id=current_user.id, data=agent_in
+    )
     return agent
 
 
@@ -102,12 +101,13 @@ def update_agent(
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_superuser and (agent.owner_id != current_user.id):
         raise HTTPException(status_code=400, detail="Not enough permissions")
-    update_dict = agent_in.model_dump(exclude_unset=True)
-    agent.sqlmodel_update(update_dict)
-    session.add(agent)
-    session.commit()
-    session.refresh(agent)
-    return agent
+
+    updated_agent = AgentService.update_agent(
+        session=session, agent_id=id, data=agent_in
+    )
+    if not updated_agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return updated_agent
 
 
 @router.delete("/{id}")
@@ -122,8 +122,10 @@ def delete_agent(
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_superuser and (agent.owner_id != current_user.id):
         raise HTTPException(status_code=400, detail="Not enough permissions")
-    session.delete(agent)
-    session.commit()
+
+    success = AgentService.delete_agent(session=session, agent_id=id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Agent not found")
     return Message(message="Agent deleted successfully")
 
 
@@ -243,7 +245,7 @@ def activate_environment(
     env_id: uuid.UUID,
 ) -> Any:
     """
-    Set environment as active for agent.
+    Activate environment: starts it, sets as active for agent, stops other environments.
     """
     agent = session.get(Agent, id)
     if not agent:
@@ -256,6 +258,15 @@ def activate_environment(
     if not environment or environment.agent_id != id:
         raise HTTPException(status_code=404, detail="Environment not found for this agent")
 
+    # Activate the environment (starts it, sets as active, stops others)
+    try:
+        EnvironmentService.activate_environment(
+            session=session, agent_id=id, env_id=env_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Set as agent's active environment
     updated_agent = AgentService.set_active_environment(
         session=session, agent_id=id, env_id=env_id
     )

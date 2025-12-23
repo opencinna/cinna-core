@@ -13,9 +13,9 @@ export type AgentCredentialLinkRequest = {
 
 export type AgentEnvironmentCreate = {
     env_name: string;
-    env_version: string;
-    instance_name: string;
-    type: string;
+    env_version?: string;
+    instance_name?: string;
+    type?: string;
     config?: {
         [key: string]: unknown;
     };
