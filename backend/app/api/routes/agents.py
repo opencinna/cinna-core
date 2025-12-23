@@ -73,13 +73,13 @@ def read_agent(session: SessionDep, current_user: CurrentUser, id: uuid.UUID) ->
 
 
 @router.post("/", response_model=AgentPublic)
-def create_agent(
+async def create_agent(
     *, session: SessionDep, current_user: CurrentUser, agent_in: AgentCreate
 ) -> Any:
     """
     Create new agent with default environment.
     """
-    agent = AgentService.create_agent(
+    agent = await AgentService.create_agent(
         session=session, user_id=current_user.id, data=agent_in
     )
     return agent
@@ -197,7 +197,7 @@ def remove_credential_from_agent(
 
 # Environment management routes
 @router.post("/{id}/environments", response_model=AgentEnvironmentPublic)
-def create_agent_environment(
+async def create_agent_environment(
     *,
     session: SessionDep,
     current_user: CurrentUser,
@@ -213,7 +213,7 @@ def create_agent_environment(
     if not current_user.is_superuser and (agent.owner_id != current_user.id):
         raise HTTPException(status_code=400, detail="Not enough permissions")
 
-    environment = EnvironmentService.create_environment(
+    environment = await EnvironmentService.create_environment(
         session=session, agent_id=id, data=environment_in
     )
     return environment
@@ -237,7 +237,7 @@ def list_agent_environments(
 
 
 @router.post("/{id}/environments/{env_id}/activate", response_model=AgentPublic)
-def activate_environment(
+async def activate_environment(
     *,
     session: SessionDep,
     current_user: CurrentUser,
@@ -260,7 +260,7 @@ def activate_environment(
 
     # Activate the environment (starts it, sets as active, stops others)
     try:
-        EnvironmentService.activate_environment(
+        await EnvironmentService.activate_environment(
             session=session, agent_id=id, env_id=env_id
         )
     except ValueError as e:

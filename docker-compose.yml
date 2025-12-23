@@ -54,12 +54,18 @@ services:
       - POSTGRES_USER=${POSTGRES_USER?Variable not set}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
       - SENTRY_DSN=${SENTRY_DSN}
+      - ENV_TEMPLATES_DIR=app/env-templates
+      - ENV_INSTANCES_DIR=agent-environments
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/utils/health-check/"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+    networks:
+      - default
+      - agent-bridge
 
     build:
       context: ./backend
@@ -75,3 +81,8 @@ services:
 
 volumes:
   app-db-data:
+
+networks:
+  agent-bridge:
+    driver: bridge
+    name: agent-bridge

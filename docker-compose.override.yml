@@ -22,18 +22,26 @@ services:
       - run
       - --reload
       - "app/main.py"
-    # TODO: remove once coverage is done locally
     volumes:
+      # TODO: remove once coverage is done locally
       - ./backend/htmlcov:/app/htmlcov
       - ./backend/pyproject.toml:/app/pyproject.toml
       - ./backend/uv.lock:/app/uv.lock
       - ./backend/alembic.ini:/app/alembic.ini
       - ./backend/app:/app/app
+      # Mount agent-environments outside /app to avoid file watcher detection
+      - ./backend/agent-environments:/agent-environments
+      # Mount Docker socket to allow Docker-in-Docker for agent environments
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       SMTP_HOST: "mailcatcher"
       SMTP_PORT: "1025"
       SMTP_TLS: "false"
       EMAILS_FROM_EMAIL: "noreply@example.com"
+      ENV_TEMPLATES_DIR: "app/env-templates"
+      ENV_INSTANCES_DIR: "/agent-environments"
+      # Host path for agent environments (used by docker-compose volume mounts)
+      HOST_AGENT_ENVIRONMENTS_DIR: "${PWD}/backend/agent-environments"
 
   mailcatcher:
     image: schickling/mailcatcher

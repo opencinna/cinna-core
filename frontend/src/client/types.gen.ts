@@ -427,6 +427,37 @@ export type EnvironmentsStopEnvironmentData = {
 
 export type EnvironmentsStopEnvironmentResponse = (Message);
 
+export type EnvironmentsRestartEnvironmentData = {
+    id: string;
+};
+
+export type EnvironmentsRestartEnvironmentResponse = (Message);
+
+export type EnvironmentsGetEnvironmentStatusData = {
+    id: string;
+};
+
+export type EnvironmentsGetEnvironmentStatusResponse = ({
+    [key: string]: unknown;
+});
+
+export type EnvironmentsCheckEnvironmentHealthData = {
+    id: string;
+};
+
+export type EnvironmentsCheckEnvironmentHealthResponse = ({
+    [key: string]: unknown;
+});
+
+export type EnvironmentsGetEnvironmentLogsData = {
+    id: string;
+    lines?: number;
+};
+
+export type EnvironmentsGetEnvironmentLogsResponse = ({
+    [key: string]: unknown;
+});
+
 export type ItemsReadItemsData = {
     limit?: number;
     skip?: number;

@@ -7,7 +7,7 @@ from app.services.environment_service import EnvironmentService
 
 class AgentService:
     @staticmethod
-    def create_agent(session: Session, user_id: UUID, data: AgentCreate) -> Agent:
+    async def create_agent(session: Session, user_id: UUID, data: AgentCreate) -> Agent:
         """Create new agent with default environment"""
         agent = Agent.model_validate(data, update={"owner_id": user_id})
         session.add(agent)
@@ -16,20 +16,20 @@ class AgentService:
 
         # Create default environment for the agent
         default_env_data = AgentEnvironmentCreate(
-            env_name="default",
+            env_name="python-env-basic",  # Use actual template name
             env_version="1.0.0",
             instance_name="Default",
             type="docker",
             config={}
         )
-        default_env = EnvironmentService.create_environment(
+        default_env = await EnvironmentService.create_environment(
             session=session,
             agent_id=agent.id,
             data=default_env_data
         )
 
-        # Activate the default environment
-        EnvironmentService.activate_environment(
+        # Activate the default environment (starts it)
+        await EnvironmentService.activate_environment(
             session=session,
             agent_id=agent.id,
             env_id=default_env.id

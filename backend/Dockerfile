@@ -4,6 +4,12 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app/
 
+# Install Docker CLI and docker-compose for Docker-in-Docker support
+RUN apt-get update && apt-get install -y \
+    docker.io \
+    docker-compose \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install uv
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
 COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /bin/
@@ -40,5 +46,8 @@ COPY ./tests /app/tests
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#intermediate-layers
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync
+
+# Create agent-environments directory outside /app for file watcher isolation
+RUN mkdir -p /agent-environments && chmod 755 /agent-environments
 
 CMD ["fastapi", "run", "--workers", "4", "app/main.py"]

@@ -1,0 +1,63 @@
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agent-${ENV_ID}
+    image: agent-python-env-basic:${ENV_VERSION}
+
+    # Environment variables
+    environment:
+      - ENV_ID=${ENV_ID}
+      - AGENT_ID=${AGENT_ID}
+      - ENV_NAME=${ENV_NAME}
+      - ENV_VERSION=${ENV_VERSION}
+      - DATABASE_URL=${DATABASE_URL}
+      - PYTHONPATH=/app
+      - AGENT_AUTH_TOKEN=${AGENT_AUTH_TOKEN}
+      - AGENT_PORT=${AGENT_PORT}
+
+    # NO port exposure - communication via agent-bridge network only
+    # Backend connects via http://agent-${ENV_ID}:${AGENT_PORT}
+
+    # Volume mounts (host:container) - using absolute host paths
+    volumes:
+      - ${HOST_INSTANCE_DIR}/app:/app/app
+
+    # Networks: agent-bridge (shared with backend) + isolated network
+    networks:
+      - agent-bridge
+      - agent-env-${ENV_ID}
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '${CPU_LIMIT:-1.0}'
+          memory: ${MEMORY_LIMIT:-512M}
+        reservations:
+          cpus: '${CPU_RESERVATION:-0.25}'
+          memory: ${MEMORY_RESERVATION:-128M}
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Health check - uses runtime AGENT_PORT value
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:${AGENT_PORT}/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  # Shared network with backend for communication
+  agent-bridge:
+    external: true
+    name: agent-bridge
+
+  # Isolated network for this agent environment
+  agent-env-${ENV_ID}:
+    driver: bridge
+    name: agent-env-${ENV_ID}
+    internal: false  # Allow outbound internet access

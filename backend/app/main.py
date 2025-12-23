@@ -1,10 +1,23 @@
 import sentry_sdk
+import logging
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from starlette.middleware.cors import CORSMiddleware
 
 from app.api.main import api_router
 from app.core.config import settings
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG if settings.ENVIRONMENT == "local" else logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Set DEBUG level for specific modules we want to debug
+if settings.ENVIRONMENT == "local":
+    logging.getLogger("app.services.adapters.docker_adapter").setLevel(logging.DEBUG)
+    logging.getLogger("app.services.environment_lifecycle").setLevel(logging.DEBUG)
 
 
 def custom_generate_unique_id(route: APIRoute) -> str:

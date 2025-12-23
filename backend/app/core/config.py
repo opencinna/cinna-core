@@ -106,6 +106,31 @@ class Settings(BaseSettings):
     def google_oauth_enabled(self) -> bool:
         return bool(self.GOOGLE_CLIENT_ID and self.GOOGLE_CLIENT_SECRET)
 
+    # Environment Management
+    # Paths for environment templates and instances
+    # Default for local dev: "backend/app/env-templates" and "backend/app/agent-environments"
+    # Default for Docker: "app/env-templates" and "/agent-environments"
+    ENV_TEMPLATES_DIR: str = "backend/app/env-templates"
+    ENV_INSTANCES_DIR: str = "backend/app/agent-environments"
+
+    # Host path to agent environments (for docker-compose volume mounts)
+    # This is the actual path on the Docker host machine
+    # For Docker dev: The host sees it as "./backend/agent-environments" (relative to project root)
+    # We need absolute path from host perspective for volume mounts
+    HOST_AGENT_ENVIRONMENTS_DIR: str | None = None
+
+    # Docker Network
+    DOCKER_NETWORK_NAME: str = "agent-bridge"
+
+    # Agent Authentication
+    # Token for backend to authenticate with agent containers
+    AGENT_AUTH_TOKEN: str = secrets.token_urlsafe(32)
+
+    # Port Allocation (deprecated - using network names instead)
+    # Kept for backward compatibility
+    AGENT_PORT_RANGE_START: int = 8000
+    AGENT_PORT_RANGE_END: int = 9000
+
     def _check_default_secret(self, var_name: str, value: str | None) -> None:
         if value == "changethis":
             message = (
