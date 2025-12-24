@@ -15,6 +15,7 @@ class AgentService:
         session.refresh(agent)
 
         # Create default environment for the agent
+        # auto_start=True means it will automatically start and activate after build completes
         default_env_data = AgentEnvironmentCreate(
             env_name="python-env-basic",  # Use actual template name
             env_version="1.0.0",
@@ -26,15 +27,13 @@ class AgentService:
             session=session,
             agent_id=agent.id,
             data=default_env_data,
-            user=user
+            user=user,
+            auto_start=True  # Automatically start after build completes
         )
 
-        # Activate the default environment (starts it)
-        await EnvironmentService.activate_environment(
-            session=session,
-            agent_id=agent.id,
-            env_id=default_env.id
-        )
+        # Note: Environment will be in "creating" status initially
+        # The background task will build it and then auto-start/activate
+        # UI can poll GET /environments/{id} to track progress
 
         # Refresh agent to get updated state
         session.refresh(agent)

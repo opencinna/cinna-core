@@ -1,9 +1,12 @@
 from uuid import UUID
 from datetime import datetime
 import random
+import asyncio
 from sqlmodel import Session, select
+from sqlalchemy.orm.attributes import flag_modified
 from app.models import AgentEnvironment, AgentEnvironmentCreate, AgentEnvironmentUpdate, Agent, User
 from app import crud
+from app.core.db import engine
 from .environment_lifecycle import EnvironmentLifecycleManager
 
 
@@ -64,16 +67,144 @@ class EnvironmentService:
         if cls._lifecycle_manager is None:
             cls._lifecycle_manager = EnvironmentLifecycleManager()
         return cls._lifecycle_manager
+
+    @staticmethod
+    async def _create_environment_background(
+        env_id: UUID,
+        agent_id: UUID,
+        anthropic_api_key: str | None = None,
+        auto_start: bool = False
+    ):
+        """
+        Background task to create environment instance.
+        Uses its own database session to avoid conflicts.
+
+        Args:
+            env_id: Environment ID
+            agent_id: Agent ID
+            anthropic_api_key: User's Anthropic API key
+            auto_start: If True, automatically start and activate after build
+        """
+        # Create new database session for background task
+        with Session(engine) as session:
+            try:
+                # Get environment and agent
+                environment = session.get(AgentEnvironment, env_id)
+                agent = session.get(Agent, agent_id)
+
+                if not environment or not agent:
+                    raise ValueError("Environment or Agent not found")
+
+                # Run creation process
+                lifecycle_manager = EnvironmentService.get_lifecycle_manager()
+                await lifecycle_manager.create_environment_instance(
+                    session, environment, agent, anthropic_api_key
+                )
+
+                # Auto-start if requested (typically for default agent environments)
+                if auto_start and environment.status == "stopped":
+                    # Start the environment
+                    await lifecycle_manager.start_environment(session, environment, agent)
+
+                    # Set as active
+                    environment.is_active = True
+                    session.add(environment)
+                    session.commit()
+
+            except Exception as e:
+                # Error is already logged and status updated in create_environment_instance
+                # Just ensure we don't leave the background task hanging
+                pass
+
+    @staticmethod
+    async def _activate_environment_background(
+        agent_id: UUID,
+        env_id: UUID
+    ):
+        """
+        Background task to activate environment.
+        Uses its own database session to avoid conflicts.
+
+        Steps:
+        1. Stop all other running environments
+        2. Start target environment
+        3. Update is_active flags
+
+        Args:
+            agent_id: Agent ID
+            env_id: Environment ID to activate
+        """
+        # Create new database session for background task
+        with Session(engine) as session:
+            try:
+                # Get agent and target environment
+                agent = session.get(Agent, agent_id)
+                target_env = session.get(AgentEnvironment, env_id)
+
+                if not agent or not target_env:
+                    raise ValueError("Agent or Environment not found")
+
+                # Get all environments for this agent
+                all_envs = EnvironmentService.list_agent_environments(session, agent_id)
+                lifecycle_manager = EnvironmentService.get_lifecycle_manager()
+
+                # Stop all other environments first
+                for env in all_envs:
+                    if env.id != env_id and env.status == "running":
+                        try:
+                            await lifecycle_manager.stop_environment(session, env)
+                            env.is_active = False
+                            session.add(env)
+                        except Exception as e:
+                            # Log but continue
+                            print(f"Warning: Failed to stop environment {env.id}: {e}")
+
+                # Start target environment (this updates status internally)
+                await lifecycle_manager.start_environment(session, target_env, agent)
+
+                # Update is_active flags for all environments
+                for env in all_envs:
+                    env.is_active = (env.id == env_id)
+                    env.updated_at = datetime.utcnow()
+                    session.add(env)
+
+                session.commit()
+
+            except Exception as e:
+                # Error is already logged in start_environment
+                # Update target environment status to error if not already done
+                with Session(engine) as error_session:
+                    target_env = error_session.get(AgentEnvironment, env_id)
+                    if target_env and target_env.status != "error":
+                        target_env.status = "error"
+                        target_env.status_message = f"Failed to activate environment: {str(e)}"
+                        error_session.add(target_env)
+                        error_session.commit()
     @staticmethod
     async def create_environment(
-        session: Session, agent_id: UUID, data: AgentEnvironmentCreate, user: User
+        session: Session,
+        agent_id: UUID,
+        data: AgentEnvironmentCreate,
+        user: User,
+        auto_start: bool = False
     ) -> AgentEnvironment:
         """
         Create environment for agent.
 
         Steps:
-        1. Create DB record
-        2. Create Docker instance from template (copy files, build image)
+        1. Create DB record with status "creating"
+        2. Spawn background task to build Docker instance (non-blocking)
+        3. Return immediately - client can poll status endpoint
+
+        Args:
+            session: Database session
+            agent_id: Agent ID
+            data: Environment creation data
+            user: User creating the environment
+            auto_start: If True, automatically start and activate after build completes
+
+        Note: The actual Docker build happens asynchronously.
+        Use GET /environments/{id}/status to track progress.
         """
         # Get agent
         agent = session.get(Agent, agent_id)
@@ -87,25 +218,26 @@ class EnvironmentService:
         # Generate a memorable instance name if not provided
         instance_name = data.instance_name if data.instance_name != "Instance" else generate_environment_name()
 
-        # Create DB record
+        # Create DB record with initial status
         environment = AgentEnvironment.model_validate(
-            data, update={"agent_id": agent_id, "instance_name": instance_name}
+            data, update={
+                "agent_id": agent_id,
+                "instance_name": instance_name,
+                "status": "creating",
+                "status_message": "Initializing environment creation..."
+            }
         )
         session.add(environment)
         session.commit()
         session.refresh(environment)
 
-        # Create Docker instance (copy template, build image)
-        try:
-            lifecycle_manager = EnvironmentService.get_lifecycle_manager()
-            await lifecycle_manager.create_environment_instance(
-                session, environment, agent, anthropic_api_key
+        # Spawn background task to create Docker instance
+        # This allows the API to return immediately while the build happens asynchronously
+        asyncio.create_task(
+            EnvironmentService._create_environment_background(
+                environment.id, agent_id, anthropic_api_key, auto_start
             )
-        except Exception as e:
-            # Rollback DB record if Docker creation fails
-            session.delete(environment)
-            session.commit()
-            raise Exception(f"Failed to create environment instance: {str(e)}") from e
+        )
 
         return environment
 
@@ -180,11 +312,16 @@ class EnvironmentService:
         Activate environment: starts it, sets as active, stops other environments.
 
         Business logic:
-        1. Get all environments for the agent
-        2. Start target environment (Docker)
-        3. Set target environment is_active to True
-        4. Stop all other environments (Docker)
-        5. Set all other environments is_active to False
+        1. Validate environment exists and belongs to agent
+        2. Set target environment status to "starting" immediately
+        3. Spawn background task to:
+           - Stop all other running environments
+           - Start target environment
+           - Update is_active flags
+        4. Return immediately (non-blocking)
+
+        Note: The actual start/stop happens asynchronously.
+        Use GET /environments/{id}/status to track progress.
         """
         # Get agent
         agent = session.get(Agent, agent_id)
@@ -196,35 +333,19 @@ class EnvironmentService:
         if not target_env or target_env.agent_id != agent_id:
             raise ValueError("Environment not found for this agent")
 
-        # Get all environments for this agent
-        all_envs = EnvironmentService.list_agent_environments(session, agent_id)
-
-        lifecycle_manager = EnvironmentService.get_lifecycle_manager()
-
-        # Stop all other environments first
-        for env in all_envs:
-            if env.id != env_id and env.status == "running":
-                try:
-                    await lifecycle_manager.stop_environment(session, env)
-                    env.is_active = False
-                except Exception as e:
-                    print(f"Warning: Failed to stop environment {env.id}: {e}")
-
-        # Start target environment
-        await lifecycle_manager.start_environment(session, target_env, agent)
-        target_env.is_active = True
-
-        # Update all environment records
-        for env in all_envs:
-            if env.id == env_id:
-                env.is_active = True
-            else:
-                env.is_active = False
-            env.updated_at = datetime.utcnow()
-            session.add(env)
-
+        # Update target environment status immediately
+        target_env.status = "starting"
+        target_env.status_message = "Preparing to activate environment..."
+        session.add(target_env)
         session.commit()
         session.refresh(target_env)
+
+        # Spawn background task to activate environment
+        # This allows the API to return immediately while activation happens asynchronously
+        asyncio.create_task(
+            EnvironmentService._activate_environment_background(agent_id, env_id)
+        )
+
         return target_env
 
     # === Lifecycle Operations ===

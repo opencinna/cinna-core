@@ -13,8 +13,9 @@ class AgentEnvironment(SQLModel, table=True):
     env_version: str = "1.0.0"  # e.g., "1.0.0"
     instance_name: str = "Instance"  # e.g., "Production", "Testing"
     type: str = "docker"  # "docker" | "remote_ssh" | "remote_http" | "kubernetes"
-    status: str = "stopped"  # "stopped" | "starting" | "running" | "error" | "deprecated"
+    status: str = "stopped"  # "stopped" | "creating" | "building" | "initializing" | "starting" | "running" | "error" | "deprecated"
     is_active: bool = Field(default=False)
+    status_message: str | None = None  # Detailed status message for UI (e.g., "Building Docker image...")
     config: dict = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -43,6 +44,7 @@ class AgentEnvironmentPublic(SQLModel):
     instance_name: str
     type: str
     status: str
+    status_message: str | None
     is_active: bool
     created_at: datetime
     updated_at: datetime

@@ -82,60 +82,90 @@ class EnvironmentLifecycleManager:
         Returns:
             True if creation successful
         """
-        # 1. Setup directories
-        template_dir = self.templates_dir / environment.env_name
-        instance_dir = self.instances_dir / str(environment.id)
+        try:
+            # Update status: Creating
+            environment.status = "creating"
+            environment.status_message = "Preparing environment..."
+            db_session.add(environment)
+            db_session.commit()
 
-        logger.info(f"Creating environment instance {environment.id} from template {environment.env_name}")
-        logger.debug(f"Template dir: {template_dir} (exists: {template_dir.exists()})")
-        logger.debug(f"Instance dir: {instance_dir}")
+            # 1. Setup directories
+            template_dir = self.templates_dir / environment.env_name
+            instance_dir = self.instances_dir / str(environment.id)
 
-        if not template_dir.exists():
-            raise FileNotFoundError(f"Template not found: {environment.env_name} at {template_dir}")
+            logger.info(f"Creating environment instance {environment.id} from template {environment.env_name}")
+            logger.debug(f"Template dir: {template_dir} (exists: {template_dir.exists()})")
+            logger.debug(f"Instance dir: {instance_dir}")
 
-        # Create instance directory
-        instance_dir.mkdir(parents=True, exist_ok=True)
-        logger.debug(f"Instance directory created: {instance_dir}")
+            if not template_dir.exists():
+                raise FileNotFoundError(f"Template not found: {environment.env_name} at {template_dir}")
 
-        # 2. Copy template files
-        await self._copy_template(template_dir, instance_dir)
+            # Create instance directory
+            instance_dir.mkdir(parents=True, exist_ok=True)
+            logger.debug(f"Instance directory created: {instance_dir}")
 
-        # 3. Allocate port and generate auth token
-        port = self._allocate_port()
-        auth_token = self._generate_auth_token()
-        environment.config["port"] = port
-        environment.config["auth_token"] = auth_token
-        environment.config["container_name"] = f"agent-{environment.id}"
+            # 2. Copy template files
+            environment.status_message = "Copying template files..."
+            db_session.add(environment)
+            db_session.commit()
 
-        # Mark config as modified so SQLAlchemy detects the change
-        flag_modified(environment, "config")
-        logger.debug(f"Allocated port {port} for environment {environment.id}")
+            await self._copy_template(template_dir, instance_dir)
 
-        # 4. Generate docker-compose.yml
-        self._generate_compose_file(instance_dir, environment, agent, port, auth_token)
+            # 3. Allocate port and generate auth token
+            environment.status_message = "Configuring environment..."
+            db_session.add(environment)
+            db_session.commit()
 
-        # 5. Generate .env file
-        self._generate_env_file(instance_dir, environment, agent, port, auth_token, anthropic_api_key)
+            port = self._allocate_port()
+            auth_token = self._generate_auth_token()
+            environment.config["port"] = port
+            environment.config["auth_token"] = auth_token
+            environment.config["container_name"] = f"agent-{environment.id}"
 
-        # 6. Build image
-        logger.info(f"Building Docker image for environment {environment.id}")
-        adapter = self.get_adapter(environment)
-        await adapter.initialize(
-            EnvInitConfig(
-                env_name=environment.env_name,
-                env_version=environment.env_version,
-                agent_id=agent.id,
-                workspace_id=str(environment.id)
+            # Mark config as modified so SQLAlchemy detects the change
+            flag_modified(environment, "config")
+            logger.debug(f"Allocated port {port} for environment {environment.id}")
+
+            # 4. Generate docker-compose.yml
+            self._generate_compose_file(instance_dir, environment, agent, port, auth_token)
+
+            # 5. Generate .env file
+            self._generate_env_file(instance_dir, environment, agent, port, auth_token, anthropic_api_key)
+
+            # 6. Build image
+            environment.status = "building"
+            environment.status_message = "Building Docker image (this may take several minutes)..."
+            db_session.add(environment)
+            db_session.commit()
+
+            logger.info(f"Building Docker image for environment {environment.id}")
+            adapter = self.get_adapter(environment)
+            await adapter.initialize(
+                EnvInitConfig(
+                    env_name=environment.env_name,
+                    env_version=environment.env_version,
+                    agent_id=agent.id,
+                    workspace_id=str(environment.id)
+                )
             )
-        )
-        logger.info(f"Environment {environment.id} initialized successfully")
+            logger.info(f"Environment {environment.id} initialized successfully")
 
-        # Update environment status
-        environment.status = "stopped"
-        db_session.add(environment)
-        db_session.commit()
+            # Update environment status
+            environment.status = "stopped"
+            environment.status_message = "Environment ready"
+            db_session.add(environment)
+            db_session.commit()
 
-        return True
+            return True
+
+        except Exception as e:
+            # Update status to error with detailed message
+            environment.status = "error"
+            environment.status_message = f"Failed to create environment: {str(e)}"
+            db_session.add(environment)
+            db_session.commit()
+            logger.error(f"Failed to create environment {environment.id}: {e}")
+            raise
 
     async def start_environment(
         self,
@@ -158,6 +188,7 @@ class EnvironmentLifecycleManager:
         """
         # Update status
         environment.status = "starting"
+        environment.status_message = "Starting container..."
         db_session.add(environment)
         db_session.commit()
 
@@ -169,6 +200,10 @@ class EnvironmentLifecycleManager:
             await adapter.start()
 
             # Set prompts
+            environment.status_message = "Configuring agent prompts..."
+            db_session.add(environment)
+            db_session.commit()
+
             await adapter.set_prompts(
                 workflow_prompt=agent.workflow_prompt,
                 entrypoint_prompt=agent.entrypoint_prompt
@@ -190,6 +225,7 @@ class EnvironmentLifecycleManager:
 
             # Update status
             environment.status = "running"
+            environment.status_message = "Environment is running"
             environment.last_health_check = datetime.utcnow()
             db_session.add(environment)
             db_session.commit()
@@ -199,6 +235,7 @@ class EnvironmentLifecycleManager:
         except Exception as e:
             # Update status to error
             environment.status = "error"
+            environment.status_message = f"Failed to start environment: {str(e)}"
             environment.config["last_error"] = str(e)
             flag_modified(environment, "config")
             db_session.add(environment)
