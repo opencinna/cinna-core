@@ -7,18 +7,9 @@ import DeleteAccount from "@/components/UserSettings/DeleteAccount"
 import OAuthAccounts from "@/components/UserSettings/OAuthAccounts"
 import SetPassword from "@/components/UserSettings/SetPassword"
 import UserInformation from "@/components/UserSettings/UserInformation"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { HashTabs, TabConfig } from "@/components/Common/HashTabs"
 import useAuth from "@/hooks/useAuth"
 import { usePageHeader } from "@/routes/_layout"
-
-const tabsConfig = [
-  { value: "my-profile", title: "My profile", component: UserInformation },
-  { value: "password", title: "Password", component: ChangePassword },
-  { value: "set-password", title: "Set Password", component: SetPassword },
-  { value: "oauth", title: "Connected Accounts", component: OAuthAccounts },
-  { value: "ai-credentials", title: "AI Credentials", component: AICredentialsSettings },
-  { value: "danger-zone", title: "Danger zone", component: DeleteAccount },
-]
 
 export const Route = createFileRoute("/_layout/settings")({
   component: UserSettings,
@@ -49,8 +40,18 @@ function UserSettings() {
     return null
   }
 
+  // Build tabs based on user state
+  const allTabs: TabConfig[] = [
+    { value: "my-profile", title: "My profile", content: <UserInformation /> },
+    { value: "password", title: "Password", content: <ChangePassword /> },
+    { value: "set-password", title: "Set Password", content: <SetPassword /> },
+    { value: "oauth", title: "Connected Accounts", content: <OAuthAccounts /> },
+    { value: "ai-credentials", title: "AI Credentials", content: <AICredentialsSettings /> },
+    { value: "danger-zone", title: "Danger zone", content: <DeleteAccount /> },
+  ]
+
   // Filter tabs based on user state
-  let finalTabs = tabsConfig
+  let finalTabs = allTabs
 
   // Hide "Set Password" tab if user already has password
   if (currentUser.has_password) {
@@ -63,20 +64,7 @@ function UserSettings() {
   return (
     <div className="p-6 md:p-8 overflow-y-auto">
       <div className="mx-auto max-w-7xl">
-        <Tabs defaultValue="my-profile">
-          <TabsList>
-            {finalTabs.map((tab) => (
-              <TabsTrigger key={tab.value} value={tab.value}>
-                {tab.title}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-          {finalTabs.map((tab) => (
-            <TabsContent key={tab.value} value={tab.value}>
-              <tab.component />
-            </TabsContent>
-          ))}
-        </Tabs>
+        <HashTabs tabs={finalTabs} defaultTab="my-profile" />
       </div>
     </div>
   )
