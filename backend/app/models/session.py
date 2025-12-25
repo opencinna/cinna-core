@@ -57,8 +57,19 @@ class SessionPublic(SQLModel):
     last_message_at: datetime | None
 
 
+class SessionPublicExtended(SessionPublic):
+    """Session with external session metadata"""
+    external_session_id: str | None = None
+    sdk_type: str | None = None
+
+
 class SessionsPublic(SQLModel):
     data: list[SessionPublic]
+    count: int
+
+
+class SessionsPublicExtended(SQLModel):
+    data: list[SessionPublicExtended]
     count: int
 
 

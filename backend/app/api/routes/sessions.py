@@ -9,7 +9,9 @@ from app.models import (
     SessionCreate,
     SessionUpdate,
     SessionPublic,
+    SessionPublicExtended,
     SessionsPublic,
+    SessionsPublicExtended,
     Message,
     Agent,
 )
@@ -47,19 +49,29 @@ def create_session(
     return new_session
 
 
-@router.get("/", response_model=SessionsPublic)
+@router.get("/", response_model=SessionsPublicExtended)
 def list_sessions(session: SessionDep, current_user: CurrentUser) -> Any:
     """
-    List user's sessions.
+    List user's sessions with external session metadata.
     """
     sessions = SessionService.list_user_sessions(db_session=session, user_id=current_user.id)
-    return SessionsPublic(data=sessions, count=len(sessions))
+
+    data = [
+        SessionPublicExtended(
+            **s.model_dump(),
+            external_session_id=SessionService.get_external_session_id(s),
+            sdk_type=SessionService.get_sdk_type(s),
+        )
+        for s in sessions
+    ]
+
+    return SessionsPublicExtended(data=data, count=len(sessions))
 
 
-@router.get("/{id}", response_model=SessionPublic)
+@router.get("/{id}", response_model=SessionPublicExtended)
 def get_session(session: SessionDep, current_user: CurrentUser, id: uuid.UUID) -> Any:
     """
-    Get session details.
+    Get session details with external session metadata.
     """
     chat_session = session.get(Session, id)
     if not chat_session:
@@ -69,7 +81,11 @@ def get_session(session: SessionDep, current_user: CurrentUser, id: uuid.UUID) -
     if not current_user.is_superuser and (chat_session.user_id != current_user.id):
         raise HTTPException(status_code=400, detail="Not enough permissions")
 
-    return chat_session
+    return SessionPublicExtended(
+        **chat_session.model_dump(),
+        external_session_id=SessionService.get_external_session_id(chat_session),
+        sdk_type=SessionService.get_sdk_type(chat_session),
+    )
 
 
 @router.patch("/{id}", response_model=SessionPublic)
@@ -97,12 +113,21 @@ def update_session(
     return updated_session
 
 
-@router.patch("/{id}/mode", response_model=SessionPublic)
+@router.patch("/{id}/mode", response_model=SessionPublicExtended)
 def switch_session_mode(
-    session: SessionDep, current_user: CurrentUser, id: uuid.UUID, new_mode: str
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+    new_mode: str,
+    clear_external_session: bool = False
 ) -> Any:
     """
     Switch session mode (building <-> conversation).
+
+    Args:
+        id: Session ID
+        new_mode: New mode ("building" | "conversation")
+        clear_external_session: If True, start a new SDK session
     """
     chat_session = session.get(Session, id)
     if not chat_session:
@@ -116,10 +141,41 @@ def switch_session_mode(
     if new_mode not in ["building", "conversation"]:
         raise HTTPException(status_code=400, detail="Invalid mode. Must be 'building' or 'conversation'")
 
-    updated_session = SessionService.switch_mode(
-        db_session=session, session_id=id, new_mode=new_mode
+    updated_session = SessionService.update_session_mode(
+        db=session,
+        session=chat_session,
+        new_mode=new_mode,
+        clear_external_session=clear_external_session
     )
-    return updated_session
+
+    return SessionPublicExtended(
+        **updated_session.model_dump(),
+        external_session_id=SessionService.get_external_session_id(updated_session),
+        sdk_type=SessionService.get_sdk_type(updated_session),
+    )
+
+
+@router.post("/{id}/reset-sdk", response_model=Message)
+def reset_sdk_session(
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+) -> Message:
+    """
+    Clear external SDK session, forcing a new session on next message.
+    Useful for starting fresh or recovering from SDK errors.
+    """
+    chat_session = session.get(Session, id)
+    if not chat_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Verify ownership
+    if not current_user.is_superuser and (chat_session.user_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    SessionService.clear_external_session(db=session, session=chat_session)
+
+    return Message(message="SDK session cleared. Next message will start a new session.")
 
 
 @router.delete("/{id}")

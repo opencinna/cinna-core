@@ -1,6 +1,7 @@
 from uuid import UUID
 from datetime import datetime
 from sqlmodel import Session as DBSession, select
+from sqlalchemy.orm.attributes import flag_modified
 from app.models import Session, SessionCreate, SessionUpdate, Agent, AgentEnvironment
 
 
@@ -95,3 +96,104 @@ class SessionService:
         db_session.delete(session)
         db_session.commit()
         return True
+
+    # External SDK session management methods
+
+    @staticmethod
+    def get_external_session_id(session: Session) -> str | None:
+        """Get external SDK session ID from metadata"""
+        return session.session_metadata.get("external_session_id")
+
+    @staticmethod
+    def set_external_session_id(
+        db: DBSession,
+        session: Session,
+        external_session_id: str,
+        sdk_type: str = "claude_code"
+    ) -> Session:
+        """
+        Set external SDK session ID in metadata.
+        Called after first message to SDK to store the session ID for resumption.
+        """
+        session.session_metadata["external_session_id"] = external_session_id
+        session.session_metadata["sdk_type"] = sdk_type
+
+        # Mark metadata as modified for SQLAlchemy
+        flag_modified(session, "session_metadata")
+
+        session.updated_at = datetime.utcnow()
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+
+        return session
+
+    @staticmethod
+    def get_sdk_type(session: Session) -> str | None:
+        """Get SDK type from metadata"""
+        return session.session_metadata.get("sdk_type")
+
+    @staticmethod
+    def should_create_new_sdk_session(session: Session) -> bool:
+        """
+        Determine if we should create a new SDK session or resume existing.
+
+        Returns True if:
+        - No external session ID exists
+        - Session mode was just switched (different SDK type)
+        """
+        return not session.session_metadata.get("external_session_id")
+
+    @staticmethod
+    def clear_external_session(db: DBSession, session: Session) -> Session:
+        """
+        Clear external session metadata.
+        Used when switching modes or restarting a session.
+        """
+        session.session_metadata.pop("external_session_id", None)
+        session.session_metadata.pop("sdk_type", None)
+        session.session_metadata.pop("last_sdk_message_id", None)
+
+        flag_modified(session, "session_metadata")
+
+        session.updated_at = datetime.utcnow()
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+
+        return session
+
+    @staticmethod
+    def update_session_mode(
+        db: DBSession,
+        session: Session,
+        new_mode: str,
+        clear_external_session: bool = False
+    ) -> Session:
+        """
+        Update session mode.
+
+        Args:
+            db: Database session
+            session: Session to update
+            new_mode: New mode ("building" | "conversation")
+            clear_external_session: If True, clear external session ID
+                                    (useful when switching between SDKs)
+        """
+        old_mode = session.mode
+        session.mode = new_mode
+        session.updated_at = datetime.utcnow()
+
+        # If switching modes and flag is set, clear external session
+        if clear_external_session and old_mode != new_mode:
+            session.session_metadata.pop("external_session_id", None)
+            session.session_metadata.pop("sdk_type", None)
+            session.session_metadata.pop("last_sdk_message_id", None)
+
+            flag_modified(session, "session_metadata")
+
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+
+        return session

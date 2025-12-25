@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from datetime import datetime
+from typing import Optional
 
 
 class HealthCheckResponse(BaseModel):
@@ -16,15 +17,16 @@ class PromptsConfig(BaseModel):
     entrypoint_prompt: str | None = None
 
 
-class MessageRequest(BaseModel):
+class ChatRequest(BaseModel):
     """Chat message request"""
-    session_id: str
     message: str
-    history: list[dict] = []
-    context: dict = {}
+    session_id: Optional[str] = None  # External SDK session ID
+    mode: str = "conversation"  # "building" | "conversation"
+    system_prompt: Optional[str] = None
 
 
-class MessageResponse(BaseModel):
+class ChatResponse(BaseModel):
     """Chat message response"""
     response: str
-    metadata: dict | None = None
+    session_id: Optional[str] = None
+    metadata: dict = {}
