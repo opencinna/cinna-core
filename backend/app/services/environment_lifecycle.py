@@ -202,12 +202,12 @@ class EnvironmentLifecycleManager:
             # Start container
             await adapter.start()
 
-            # Set prompts
+            # Set prompts in docs files
             environment.status_message = "Configuring agent prompts..."
             db_session.add(environment)
             db_session.commit()
 
-            await adapter.set_prompts(
+            await adapter.set_agent_prompts(
                 workflow_prompt=agent.workflow_prompt,
                 entrypoint_prompt=agent.entrypoint_prompt
             )
@@ -482,10 +482,6 @@ CPU_LIMIT={environment.config.get('cpu_limit', '1.0')}
 MEMORY_LIMIT={environment.config.get('memory_limit', '512M')}
 CPU_RESERVATION={environment.config.get('cpu_reservation', '0.25')}
 MEMORY_RESERVATION={environment.config.get('memory_reservation', '128M')}
-
-# Agent Configuration (will be set dynamically)
-WORKFLOW_PROMPT={agent.workflow_prompt or ''}
-ENTRYPOINT_PROMPT={agent.entrypoint_prompt or ''}
 
 # Logging
 LOG_LEVEL=INFO

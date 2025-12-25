@@ -92,6 +92,64 @@ class ClaudeCodeSDKManager:
             logger.debug(f"scripts/README.md not found at {scripts_readme_path}")
             return None
 
+    def _load_workflow_prompt(self) -> Optional[str]:
+        """
+        Load docs/WORKFLOW_PROMPT.md file from workspace if it exists and is not empty.
+
+        This file describes the workflow's purpose, capabilities, and execution guidelines.
+        The building agent should update this as it develops the workflow.
+
+        Returns:
+            Content of docs/WORKFLOW_PROMPT.md if exists and not empty, None otherwise
+        """
+        workflow_prompt_path = Path(self.workspace_dir) / "docs" / "WORKFLOW_PROMPT.md"
+
+        if workflow_prompt_path.exists():
+            try:
+                with open(workflow_prompt_path, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    if content:
+                        logger.info(f"Loaded docs/WORKFLOW_PROMPT.md ({len(content)} chars)")
+                        return content
+                    else:
+                        logger.debug("docs/WORKFLOW_PROMPT.md is empty")
+                        return None
+            except Exception as e:
+                logger.error(f"Failed to load docs/WORKFLOW_PROMPT.md: {e}")
+                return None
+        else:
+            logger.debug(f"docs/WORKFLOW_PROMPT.md not found at {workflow_prompt_path}")
+            return None
+
+    def _load_entrypoint_prompt(self) -> Optional[str]:
+        """
+        Load docs/ENTRYPOINT_PROMPT.md file from workspace if it exists and is not empty.
+
+        This file defines how the workflow should be triggered (entry point for scheduled/interactive modes).
+        The building agent should update this as it defines the workflow's usage.
+
+        Returns:
+            Content of docs/ENTRYPOINT_PROMPT.md if exists and not empty, None otherwise
+        """
+        entrypoint_prompt_path = Path(self.workspace_dir) / "docs" / "ENTRYPOINT_PROMPT.md"
+
+        if entrypoint_prompt_path.exists():
+            try:
+                with open(entrypoint_prompt_path, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    if content:
+                        logger.info(f"Loaded docs/ENTRYPOINT_PROMPT.md ({len(content)} chars)")
+                        return content
+                    else:
+                        logger.debug("docs/ENTRYPOINT_PROMPT.md is empty")
+                        return None
+            except Exception as e:
+                logger.error(f"Failed to load docs/ENTRYPOINT_PROMPT.md: {e}")
+                return None
+        else:
+            logger.debug(f"docs/ENTRYPOINT_PROMPT.md not found at {entrypoint_prompt_path}")
+            return None
+
     def _init_session_log(self, message: str, session_id: Optional[str]) -> Optional[Path]:
         """
         Initialize a session log file for dumping raw LLM messages.
@@ -200,13 +258,24 @@ class ClaudeCodeSDKManager:
                     building_prompt += f"\n\n---\n\n## Existing Scripts in Workspace\n\nThe following is the current contents of `./scripts/README.md` which catalogs all existing scripts in this workspace:\n\n```markdown\n{scripts_readme}\n```\n\n**Important**: When you create, modify, or remove scripts, you MUST update this file to keep it accurate."
                     logger.info("Included scripts/README.md in building mode prompt")
 
+                # Append workflow documentation if it exists
+                workflow_prompt = self._load_workflow_prompt()
+                if workflow_prompt:
+                    building_prompt += f"\n\n---\n\n## Current Workflow Configuration\n\nThe following is the current contents of `./docs/WORKFLOW_PROMPT.md` which describes the workflow's purpose and capabilities:\n\n```markdown\n{workflow_prompt}\n```\n\n**Important**: As you develop scripts and define the workflow's capabilities, you MUST update this file to accurately reflect what the workflow can do."
+                    logger.info("Included docs/WORKFLOW_PROMPT.md in building mode prompt")
+
+                entrypoint_prompt = self._load_entrypoint_prompt()
+                if entrypoint_prompt:
+                    building_prompt += f"\n\n---\n\n## Current Entry Point Configuration\n\nThe following is the current contents of `./docs/ENTRYPOINT_PROMPT.md` which defines how this workflow should be invoked:\n\n```markdown\n{entrypoint_prompt}\n```\n\n**Important**: As you develop the workflow, you MUST update this file to define clear examples of how to trigger this workflow in conversation mode."
+                    logger.info("Included docs/ENTRYPOINT_PROMPT.md in building mode prompt")
+
                 # Use claude_code preset with complete building prompt appended
                 options.system_prompt = {
                     "type": "preset",
                     "preset": "claude_code",
                     "append": building_prompt
                 }
-                logger.info("Using building mode with claude_code preset + BUILDING_AGENT.md + scripts catalog")
+                logger.info("Using building mode with claude_code preset + BUILDING_AGENT.md + scripts catalog + workflow docs")
             elif use_building_mode:
                 # Building mode requested but no BUILDING_AGENT.md available
                 logger.warning("Building mode requested but BUILDING_AGENT.md not loaded, using claude_code preset only")

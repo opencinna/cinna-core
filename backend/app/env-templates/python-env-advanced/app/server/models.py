@@ -11,8 +11,14 @@ class HealthCheckResponse(BaseModel):
     message: str | None = None
 
 
-class PromptsConfig(BaseModel):
-    """Agent prompts configuration"""
+class AgentPromptsResponse(BaseModel):
+    """Agent prompts from docs files"""
+    workflow_prompt: str | None = None
+    entrypoint_prompt: str | None = None
+
+
+class AgentPromptsUpdate(BaseModel):
+    """Update agent prompts in docs files"""
     workflow_prompt: str | None = None
     entrypoint_prompt: str | None = None
 

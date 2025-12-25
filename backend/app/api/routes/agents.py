@@ -24,6 +24,7 @@ from app.models import (
 from app import crud
 from app.services.environment_service import EnvironmentService
 from app.services.agent_service import AgentService
+from app.services.message_service import MessageService
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -108,6 +109,59 @@ def update_agent(
     if not updated_agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     return updated_agent
+
+
+@router.post("/{id}/sync-prompts", response_model=Message)
+async def sync_agent_prompts(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+) -> Any:
+    """
+    Sync agent prompts to active environment.
+
+    When user manually edits workflow_prompt or entrypoint_prompt in the backend,
+    this endpoint pushes those changes to the active environment's docs files.
+    """
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    # Check if agent has active environment
+    if not agent.active_environment_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Agent has no active environment. Cannot sync prompts."
+        )
+
+    # Get active environment
+    environment = session.get(AgentEnvironment, agent.active_environment_id)
+    if not environment:
+        raise HTTPException(status_code=404, detail="Active environment not found")
+
+    # Check environment is running
+    if environment.status != "running":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Environment is not running (status: {environment.status}). Start the environment before syncing prompts."
+        )
+
+    # Sync prompts to environment
+    try:
+        await MessageService.sync_agent_prompts_to_environment(
+            environment=environment,
+            workflow_prompt=agent.workflow_prompt,
+            entrypoint_prompt=agent.entrypoint_prompt
+        )
+        return Message(message="Agent prompts synced to environment successfully")
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to sync prompts to environment: {str(e)}"
+        )
 
 
 @router.delete("/{id}")

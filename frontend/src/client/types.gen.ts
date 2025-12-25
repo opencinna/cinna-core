@@ -52,6 +52,8 @@ export type AgentPublic = {
     id: string;
     name: string;
     description: (string | null);
+    workflow_prompt: (string | null);
+    entrypoint_prompt: (string | null);
     is_active: boolean;
     active_environment_id: (string | null);
     created_at: string;
@@ -370,6 +372,12 @@ export type AgentsDeleteAgentData = {
 };
 
 export type AgentsDeleteAgentResponse = (Message);
+
+export type AgentsSyncAgentPromptsData = {
+    id: string;
+};
+
+export type AgentsSyncAgentPromptsResponse = (Message);
 
 export type AgentsReadAgentCredentialsData = {
     id: string;

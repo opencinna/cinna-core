@@ -321,6 +321,28 @@ export const AgentPublicSchema = {
             ],
             title: 'Description'
         },
+        workflow_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Workflow Prompt'
+        },
+        entrypoint_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Entrypoint Prompt'
+        },
         is_active: {
             type: 'boolean',
             title: 'Is Active'
@@ -354,7 +376,7 @@ export const AgentPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'name', 'description', 'is_active', 'active_environment_id', 'created_at', 'updated_at', 'owner_id'],
+    required: ['id', 'name', 'description', 'workflow_prompt', 'entrypoint_prompt', 'is_active', 'active_environment_id', 'created_at', 'updated_at', 'owner_id'],
     title: 'AgentPublic'
 } as const;
 

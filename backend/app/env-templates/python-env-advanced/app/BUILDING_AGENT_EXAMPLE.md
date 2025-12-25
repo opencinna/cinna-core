@@ -22,6 +22,11 @@ Your workspace is organized as follows:
   - Processed outputs
   - Any artifacts created by your scripts
 
+- **`./docs/`** - Documentation and agent configuration
+  - **`WORKFLOW_PROMPT.md`** - Describes the workflow's purpose, capabilities, and execution guidelines
+  - **`ENTRYPOINT_PROMPT.md`** - Defines how this workflow should be invoked (trigger messages for scheduled/interactive modes)
+  - **IMPORTANT**: Update these files as you develop the workflow to reflect its actual capabilities
+
 ## Development Guidelines
 
 ### Package Management with `uv`
@@ -57,6 +62,7 @@ source .venv/bin/activate  # On Unix/macOS
 4. **Configurable parameters**: Use command-line arguments or environment variables for flexibility
 5. **Output to `./files/`**: Always write output files to the `./files/` directory
 6. **Maintain scripts catalog**: **CRITICAL** - Every time you create, modify, or remove a script, you MUST update `./scripts/README.md`
+7. **Update workflow documentation**: As you develop the workflow, update `./docs/WORKFLOW_PROMPT.md` and `./docs/ENTRYPOINT_PROMPT.md` to reflect the actual capabilities and usage
 
 ### Example Script Structure
 
@@ -159,11 +165,39 @@ Use this concise markdown format:
 
 Keep descriptions SHORT and ACTIONABLE. Focus on what users need to know to use the script.
 
+## Workflow Documentation (`./docs/`)
+
+### WORKFLOW_PROMPT.md
+
+This file defines the system prompt for the conversation mode agent. Update it to describe:
+- **Role and responsibilities**: What this workflow agent does
+- **Available resources**: Scripts, data sources, APIs
+- **Execution flow**: Step-by-step process
+- **Tools and capabilities**: What Python packages, integrations, and tools are available
+- **Decision-making guidelines**: How to handle edge cases
+
+### ENTRYPOINT_PROMPT.md
+
+This file defines how the workflow should be triggered. Update it to describe:
+- **Trigger type**: Interactive, scheduled, or hybrid
+- **Entry point examples**: Sample prompts that invoke this workflow
+- **Context requirements**: What information is needed to run the workflow
+- **Expected responses**: What the workflow returns
+
+### When to Update Documentation
+
+Update `./docs/WORKFLOW_PROMPT.md` and `./docs/ENTRYPOINT_PROMPT.md` when you:
+- Create scripts that expand the workflow's capabilities
+- Integrate new APIs or data sources
+- Define the workflow's execution logic
+- Establish patterns for how the workflow should be used
+
 ## Remember
 
 - **Always use `uv`** for package installation and management
 - **Scripts go in `./scripts/`** - never in the root or other directories
 - **Output files go in `./files/`** - keep the workspace organized
 - **Update `./scripts/README.md`** - EVERY time you create/modify/remove a script
+- **Update `./docs/` files** - Keep WORKFLOW_PROMPT.md and ENTRYPOINT_PROMPT.md current as capabilities evolve
 - **Write robust, reusable code** - these scripts will be used repeatedly
 - **Document your work** - clear comments and docstrings are essential

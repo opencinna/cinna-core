@@ -52,6 +52,8 @@ class AgentPublic(SQLModel):
     id: uuid.UUID
     name: str
     description: str | None
+    workflow_prompt: str | None
+    entrypoint_prompt: str | None
     is_active: bool
     active_environment_id: uuid.UUID | None
     created_at: datetime

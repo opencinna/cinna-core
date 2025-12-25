@@ -147,16 +147,26 @@ class EnvironmentAdapter(ABC):
     # === Configuration Management ===
 
     @abstractmethod
-    async def set_prompts(self, workflow_prompt: str | None, entrypoint_prompt: str | None) -> bool:
+    async def get_agent_prompts(self) -> dict[str, str | None]:
         """
-        Set or update agent prompts.
-
-        Args:
-            workflow_prompt: Agent's workflow instructions
-            entrypoint_prompt: Agent's entry point behavior
+        Get agent prompts from docs files.
 
         Returns:
-            True if prompts set successfully
+            Dictionary with 'workflow_prompt' and 'entrypoint_prompt' keys
+        """
+        pass
+
+    @abstractmethod
+    async def set_agent_prompts(self, workflow_prompt: str | None = None, entrypoint_prompt: str | None = None) -> bool:
+        """
+        Update agent prompts in docs files.
+
+        Args:
+            workflow_prompt: Content for docs/WORKFLOW_PROMPT.md (None to skip)
+            entrypoint_prompt: Content for docs/ENTRYPOINT_PROMPT.md (None to skip)
+
+        Returns:
+            True if successful
         """
         pass
 

@@ -37,6 +37,9 @@ function AgentDetail() {
     queryKey: ["agent", agentId],
     queryFn: () => AgentsService.readAgent({ id: agentId }),
     enabled: !!agentId,
+    refetchOnMount: "always", // Always refetch when component mounts to get latest prompts
+    refetchOnWindowFocus: true, // Refetch when user returns to the window
+    staleTime: 0, // Consider data stale immediately to ensure fresh data
   })
 
   const handleDeleteSuccess = () => {

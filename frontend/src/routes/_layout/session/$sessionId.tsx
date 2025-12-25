@@ -59,8 +59,10 @@ function ChatInterface() {
 
   const { sendMessage, isStreaming, streamingEvents } = useMessageStream({
     sessionId,
+    sessionMode: session?.mode,
     onSuccess: () => {
       // Messages are already refreshed by the hook
+      // Agent cache is also refreshed if building mode
     },
     onError: (error) => {
       showErrorToast(error.message || "Failed to send message")

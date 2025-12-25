@@ -1,12 +1,13 @@
 import os
 import logging
 import json
+from pathlib import Path
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.responses import StreamingResponse
 from datetime import datetime
 from typing import Annotated
 
-from .models import HealthCheckResponse, ChatRequest, ChatResponse, PromptsConfig
+from .models import HealthCheckResponse, ChatRequest, ChatResponse, AgentPromptsResponse, AgentPromptsUpdate
 from .sdk_manager import sdk_manager
 
 router = APIRouter(tags=["agent"])
@@ -17,10 +18,6 @@ ENV_ID = os.getenv("ENV_ID", "unknown")
 AGENT_ID = os.getenv("AGENT_ID", "unknown")
 ENV_NAME = os.getenv("ENV_NAME", "unknown")
 AGENT_AUTH_TOKEN = os.getenv("AGENT_AUTH_TOKEN")
-
-# In-memory storage for prompts (will be set by backend)
-_workflow_prompt = os.getenv("WORKFLOW_PROMPT", "")
-_entrypoint_prompt = os.getenv("ENTRYPOINT_PROMPT", "")
 
 
 async def verify_auth_token(authorization: Annotated[str | None, Header()] = None) -> None:
@@ -80,21 +77,6 @@ async def health_check() -> HealthCheckResponse:
         uptime=0,  # TODO: Calculate actual uptime
         message=f"Agent server running (env={ENV_NAME}, env_id={ENV_ID})"
     )
-
-
-@router.post("/config/prompts", dependencies=[Depends(verify_auth_token)])
-async def set_prompts(prompts: PromptsConfig):
-    """Set agent prompts"""
-    global _workflow_prompt, _entrypoint_prompt
-
-    if prompts.workflow_prompt is not None:
-        _workflow_prompt = prompts.workflow_prompt
-
-    if prompts.entrypoint_prompt is not None:
-        _entrypoint_prompt = prompts.entrypoint_prompt
-
-    logger.info("Prompts updated")
-    return {"status": "ok", "message": "Prompts updated"}
 
 
 @router.post("/config/settings", dependencies=[Depends(verify_auth_token)])
@@ -243,4 +225,97 @@ async def close_sdk_session(session_id: str):
     return {
         "status": "ok",
         "message": f"Session {session_id} will be automatically cleaned up"
+    }
+
+
+@router.get("/config/agent-prompts", dependencies=[Depends(verify_auth_token)])
+async def get_agent_prompts() -> AgentPromptsResponse:
+    """
+    Get current agent prompts from docs files.
+
+    Returns the content of:
+    - ./docs/WORKFLOW_PROMPT.md
+    - ./docs/ENTRYPOINT_PROMPT.md
+
+    These files are maintained by the building agent and define how the
+    workflow should operate in conversation mode.
+    """
+    workspace_dir = os.getenv("CLAUDE_CODE_WORKSPACE", "/app/app")
+
+    workflow_prompt_path = Path(workspace_dir) / "docs" / "WORKFLOW_PROMPT.md"
+    entrypoint_prompt_path = Path(workspace_dir) / "docs" / "ENTRYPOINT_PROMPT.md"
+
+    workflow_prompt = None
+    if workflow_prompt_path.exists():
+        try:
+            with open(workflow_prompt_path, 'r', encoding='utf-8') as f:
+                workflow_prompt = f.read()
+        except Exception as e:
+            logger.error(f"Failed to read WORKFLOW_PROMPT.md: {e}")
+
+    entrypoint_prompt = None
+    if entrypoint_prompt_path.exists():
+        try:
+            with open(entrypoint_prompt_path, 'r', encoding='utf-8') as f:
+                entrypoint_prompt = f.read()
+        except Exception as e:
+            logger.error(f"Failed to read ENTRYPOINT_PROMPT.md: {e}")
+
+    return AgentPromptsResponse(
+        workflow_prompt=workflow_prompt,
+        entrypoint_prompt=entrypoint_prompt
+    )
+
+
+@router.post("/config/agent-prompts", dependencies=[Depends(verify_auth_token)])
+async def update_agent_prompts(prompts: AgentPromptsUpdate):
+    """
+    Update agent prompts in docs files.
+
+    Updates the content of:
+    - ./docs/WORKFLOW_PROMPT.md (if workflow_prompt is provided)
+    - ./docs/ENTRYPOINT_PROMPT.md (if entrypoint_prompt is provided)
+
+    This is used by the backend to sync manually edited prompts to the agent environment.
+    """
+    workspace_dir = os.getenv("CLAUDE_CODE_WORKSPACE", "/app/app")
+    docs_dir = Path(workspace_dir) / "docs"
+
+    # Ensure docs directory exists
+    docs_dir.mkdir(parents=True, exist_ok=True)
+
+    updated_files = []
+
+    if prompts.workflow_prompt is not None:
+        workflow_prompt_path = docs_dir / "WORKFLOW_PROMPT.md"
+        try:
+            with open(workflow_prompt_path, 'w', encoding='utf-8') as f:
+                f.write(prompts.workflow_prompt)
+            updated_files.append("WORKFLOW_PROMPT.md")
+            logger.info(f"Updated WORKFLOW_PROMPT.md ({len(prompts.workflow_prompt)} chars)")
+        except Exception as e:
+            logger.error(f"Failed to write WORKFLOW_PROMPT.md: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to update WORKFLOW_PROMPT.md: {str(e)}"
+            )
+
+    if prompts.entrypoint_prompt is not None:
+        entrypoint_prompt_path = docs_dir / "ENTRYPOINT_PROMPT.md"
+        try:
+            with open(entrypoint_prompt_path, 'w', encoding='utf-8') as f:
+                f.write(prompts.entrypoint_prompt)
+            updated_files.append("ENTRYPOINT_PROMPT.md")
+            logger.info(f"Updated ENTRYPOINT_PROMPT.md ({len(prompts.entrypoint_prompt)} chars)")
+        except Exception as e:
+            logger.error(f"Failed to write ENTRYPOINT_PROMPT.md: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to update ENTRYPOINT_PROMPT.md: {str(e)}"
+            )
+
+    return {
+        "status": "ok",
+        "message": f"Updated {len(updated_files)} file(s)",
+        "updated_files": updated_files
     }

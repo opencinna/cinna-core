@@ -252,22 +252,63 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
         except Exception:
             return "error"
 
-    async def set_prompts(self, workflow_prompt: str | None, entrypoint_prompt: str | None) -> bool:
-        """Set prompts via HTTP API."""
+    async def get_agent_prompts(self) -> dict[str, str | None]:
+        """
+        Get agent prompts from docs files.
+
+        Returns:
+            Dictionary with 'workflow_prompt' and 'entrypoint_prompt' keys
+        """
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.base_url}/config/prompts",
-                    json={
-                        "workflow_prompt": workflow_prompt,
-                        "entrypoint_prompt": entrypoint_prompt
-                    },
+                response = await client.get(
+                    f"{self.base_url}/config/agent-prompts",
                     headers=self._get_headers(),
                     timeout=10.0
                 )
-                return response.status_code == 200
-        except Exception:
-            return False
+                response.raise_for_status()
+                data = response.json()
+                return {
+                    "workflow_prompt": data.get("workflow_prompt"),
+                    "entrypoint_prompt": data.get("entrypoint_prompt")
+                }
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to get agent prompts: {e}")
+            raise Exception(f"Failed to get agent prompts: {e}")
+
+    async def set_agent_prompts(self, workflow_prompt: str | None = None, entrypoint_prompt: str | None = None) -> bool:
+        """
+        Update agent prompts in docs files.
+
+        Args:
+            workflow_prompt: Content for docs/WORKFLOW_PROMPT.md (None to skip)
+            entrypoint_prompt: Content for docs/ENTRYPOINT_PROMPT.md (None to skip)
+
+        Returns:
+            True if successful
+        """
+        try:
+            payload = {}
+            if workflow_prompt is not None:
+                payload["workflow_prompt"] = workflow_prompt
+            if entrypoint_prompt is not None:
+                payload["entrypoint_prompt"] = entrypoint_prompt
+
+            if not payload:
+                return True  # Nothing to update
+
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.base_url}/config/agent-prompts",
+                    json=payload,
+                    headers=self._get_headers(),
+                    timeout=10.0
+                )
+                response.raise_for_status()
+                return True
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to set agent prompts: {e}")
+            raise Exception(f"Failed to set agent prompts: {e}")
 
     async def set_config(self, config: dict) -> bool:
         """Set config via HTTP API."""

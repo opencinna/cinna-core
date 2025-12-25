@@ -23,11 +23,12 @@ interface StructuredStreamEvent {
 
 interface UseMessageStreamOptions {
   sessionId: string
+  sessionMode?: "building" | "conversation"
   onSuccess?: () => void
   onError?: (error: Error) => void
 }
 
-export function useMessageStream({ sessionId, onSuccess, onError }: UseMessageStreamOptions) {
+export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }: UseMessageStreamOptions) {
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamingEvents, setStreamingEvents] = useState<StructuredStreamEvent[]>([])
   const queryClient = useQueryClient()
@@ -163,6 +164,15 @@ export function useMessageStream({ sessionId, onSuccess, onError }: UseMessageSt
         await new Promise(resolve => setTimeout(resolve, 300))
 
         await queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
+
+        // Invalidate agent caches if building mode (prompts may have been updated)
+        if (sessionMode === "building") {
+          console.log("Building session completed, refreshing agent data...")
+          // Invalidate all agent queries to ensure fresh prompt data
+          await queryClient.invalidateQueries({ queryKey: ["agent"] })
+          await queryClient.invalidateQueries({ queryKey: ["agents"] })
+        }
+
         onSuccess?.()
       }
 
@@ -183,7 +193,7 @@ export function useMessageStream({ sessionId, onSuccess, onError }: UseMessageSt
 
       onError?.(error instanceof Error ? error : new Error(String(error)))
     }
-  }, [sessionId, queryClient, onSuccess, onError])
+  }, [sessionId, sessionMode, queryClient, onSuccess, onError])
 
   return {
     sendMessage,
