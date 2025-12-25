@@ -17,7 +17,6 @@ const baseItems: Item[] = [
   { icon: Bot, title: "Agents", path: "/agents" },
   { icon: MessageSquare, title: "Sessions", path: "/sessions" },
   { icon: Key, title: "Credentials", path: "/credentials" },
-  { icon: Briefcase, title: "Items", path: "/items" },
 ]
 
 export function AppSidebar() {
