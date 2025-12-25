@@ -2,6 +2,7 @@ import { formatDistanceToNow } from "date-fns"
 import type { MessagePublic } from "@/client"
 import ReactMarkdown from "react-markdown"
 import { StreamEventRenderer } from "./StreamEventRenderer"
+import { Info } from "lucide-react"
 
 interface MessageBubbleProps {
   message: MessagePublic
@@ -22,10 +23,15 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   }
 
   // Extract metadata for display
-  const model = message.message_metadata?.model
-  const totalCost = message.message_metadata?.total_cost_usd
-  const claudeVersion = message.message_metadata?.claude_code_version
-  const streamingEvents = message.message_metadata?.streaming_events || []
+  const model = message.message_metadata?.model as string | undefined
+  const totalCost = message.message_metadata?.total_cost_usd as number | undefined
+  const durationMs = message.message_metadata?.duration_ms as number | undefined
+  const numTurns = message.message_metadata?.num_turns as number | undefined
+  const streamingEvents = (message.message_metadata?.streaming_events || []) as any[]
+
+  // Format UTC timestamp
+  const utcTimestamp = new Date(message.timestamp + 'Z').toUTCString()
+  const durationSec = durationMs ? (durationMs / 1000).toFixed(2) : null
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-4`}>
@@ -48,17 +54,24 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 isUser ? "text-primary-foreground/70" : "text-muted-foreground"
               }`}
             >
-              {formatDistanceToNow(new Date(message.timestamp), {
+              {formatDistanceToNow(new Date(message.timestamp + 'Z'), {
                 addSuffix: true,
               })}
             </p>
-            {!isUser && (model || totalCost || claudeVersion) && (
+            {!isUser && (model || totalCost || durationSec || numTurns) && (
               <div
-                className="text-xs text-muted-foreground/60 flex items-center gap-2"
-                title={`Model: ${model || "unknown"}\n${totalCost ? `Cost: $${totalCost.toFixed(4)}` : ""}\n${claudeVersion ? `Claude Code: ${claudeVersion}` : ""}`}
+                className="cursor-help"
+                title={[
+                  `UTC Time: ${utcTimestamp}`,
+                  model ? `Model: ${model}` : null,
+                  totalCost ? `Cost: $${totalCost.toFixed(6)} USD` : null,
+                  durationSec ? `Duration: ${durationSec}s` : null,
+                  numTurns ? `Turns: ${numTurns}` : null,
+                ]
+                  .filter(Boolean)
+                  .join('\n')}
               >
-                {model && <span className="font-mono">{model.split('-').pop()}</span>}
-                {totalCost && <span>${totalCost.toFixed(4)}</span>}
+                <Info className="w-3.5 h-3.5 text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors" />
               </div>
             )}
           </div>
