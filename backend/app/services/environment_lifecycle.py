@@ -111,7 +111,10 @@ class EnvironmentLifecycleManager:
 
             await self._copy_template(template_dir, instance_dir)
 
-            # 3. Allocate port and generate auth token
+            # 3. Create BUILDING_AGENT.md from BUILDING_AGENT_EXAMPLE.md (if exists)
+            await self._setup_building_agent_prompt(instance_dir)
+
+            # 4. Allocate port and generate auth token
             environment.status_message = "Configuring environment..."
             db_session.add(environment)
             db_session.commit()
@@ -126,13 +129,13 @@ class EnvironmentLifecycleManager:
             flag_modified(environment, "config")
             logger.debug(f"Allocated port {port} for environment {environment.id}")
 
-            # 4. Generate docker-compose.yml
+            # 5. Generate docker-compose.yml
             self._generate_compose_file(instance_dir, environment, agent, port, auth_token)
 
-            # 5. Generate .env file
+            # 6. Generate .env file
             self._generate_env_file(instance_dir, environment, agent, port, auth_token, anthropic_api_key)
 
-            # 6. Build image
+            # 7. Build image
             environment.status = "building"
             environment.status_message = "Building Docker image (this may take several minutes)..."
             db_session.add(environment)
@@ -378,6 +381,30 @@ class EnvironmentLifecycleManager:
         # Run blocking I/O operation in thread pool executor
         await asyncio.to_thread(_copy_sync)
         logger.debug(f"Template copy completed")
+
+    async def _setup_building_agent_prompt(self, instance_dir: Path):
+        """
+        Setup BUILDING_AGENT.md from BUILDING_AGENT_EXAMPLE.md template.
+
+        This file will be loaded by the SDK to append to the claude_code preset
+        system prompt when in building mode.
+
+        Args:
+            instance_dir: Environment instance directory
+        """
+        app_dir = instance_dir / "app"
+        example_file = app_dir / "BUILDING_AGENT_EXAMPLE.md"
+        target_file = app_dir / "BUILDING_AGENT.md"
+
+        def _copy_sync():
+            """Synchronous file copy."""
+            if example_file.exists():
+                shutil.copy2(example_file, target_file)
+                logger.info(f"Created BUILDING_AGENT.md from template")
+            else:
+                logger.warning(f"BUILDING_AGENT_EXAMPLE.md not found at {example_file}")
+
+        await asyncio.to_thread(_copy_sync)
 
     def _generate_compose_file(
         self,

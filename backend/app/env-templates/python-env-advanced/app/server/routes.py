@@ -114,14 +114,15 @@ async def chat(request: ChatRequest) -> ChatResponse:
     - conversation: Google ADK (to be implemented)
     """
     if request.mode == "building":
-        # Use Claude Code SDK
+        # Use Claude Code SDK with building mode (claude_code preset + BUILDING_AGENT.md)
         response_content = []
         new_session_id = request.session_id
 
         async for chunk in sdk_manager.send_message_stream(
             message=request.message,
             session_id=request.session_id,
-            system_prompt=_workflow_prompt or request.system_prompt,
+            system_prompt=request.system_prompt,  # Only use explicit override if provided
+            use_building_mode=True,
         ):
             # Capture session ID from session_created event
             if chunk["type"] == "session_created":
@@ -175,7 +176,8 @@ async def chat_stream(request: ChatRequest):
                 async for chunk in sdk_manager.send_message_stream(
                     message=request.message,
                     session_id=request.session_id,
-                    system_prompt=_workflow_prompt or request.system_prompt,
+                    system_prompt=request.system_prompt,  # Only use explicit override if provided
+                    use_building_mode=True,
                 ):
                     event_count += 1
                     logger.info(f"[Stream event #{event_count}] Received chunk type={chunk.get('type')}, content_length={len(chunk.get('content', ''))}")
@@ -224,17 +226,21 @@ async def chat_stream(request: ChatRequest):
 @router.get("/sdk/sessions", dependencies=[Depends(verify_auth_token)])
 async def list_sdk_sessions():
     """List active SDK sessions (for debugging)"""
+    # Note: Claude SDK client doesn't maintain persistent sessions
+    # Each request creates a new client that connects/disconnects
     return {
-        "active_sessions": sdk_manager.get_active_sessions(),
-        "count": len(sdk_manager.get_active_sessions())
+        "message": "SDK sessions are created per-request and not tracked",
+        "active_sessions": [],
+        "count": 0
     }
 
 
 @router.delete("/sdk/sessions/{session_id}", dependencies=[Depends(verify_auth_token)])
 async def close_sdk_session(session_id: str):
     """Close an SDK session"""
-    success = await sdk_manager.close_session(session_id)
-    if success:
-        return {"status": "ok", "message": f"Session {session_id} closed"}
-    else:
-        raise HTTPException(status_code=404, detail="Session not found")
+    # Note: Claude SDK sessions are managed by resuming with session_id
+    # No explicit close needed - they're stateless on server side
+    return {
+        "status": "ok",
+        "message": f"Session {session_id} will be automatically cleaned up"
+    }

@@ -38,6 +38,60 @@ class ClaudeCodeSDKManager:
         if not self.api_key:
             logger.warning("ANTHROPIC_API_KEY not set. SDK will not work.")
 
+        # Load building agent prompt if exists
+        self.building_agent_prompt = self._load_building_agent_prompt()
+
+    def _load_building_agent_prompt(self) -> Optional[str]:
+        """
+        Load BUILDING_AGENT.md file from workspace.
+
+        Returns:
+            Content of BUILDING_AGENT.md if exists, None otherwise
+        """
+        building_agent_path = Path(self.workspace_dir) / "BUILDING_AGENT.md"
+
+        if building_agent_path.exists():
+            try:
+                with open(building_agent_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    logger.info(f"Loaded BUILDING_AGENT.md ({len(content)} chars)")
+                    return content
+            except Exception as e:
+                logger.error(f"Failed to load BUILDING_AGENT.md: {e}")
+                return None
+        else:
+            logger.debug(f"BUILDING_AGENT.md not found at {building_agent_path}")
+            return None
+
+    def _load_scripts_readme(self) -> Optional[str]:
+        """
+        Load scripts/README.md file from workspace if it exists and is not empty.
+
+        This file contains the catalog of existing scripts and will be included
+        in the system prompt so the agent knows about existing scripts.
+
+        Returns:
+            Content of scripts/README.md if exists and not empty, None otherwise
+        """
+        scripts_readme_path = Path(self.workspace_dir) / "scripts" / "README.md"
+
+        if scripts_readme_path.exists():
+            try:
+                with open(scripts_readme_path, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    if content:
+                        logger.info(f"Loaded scripts/README.md ({len(content)} chars)")
+                        return content
+                    else:
+                        logger.debug("scripts/README.md is empty")
+                        return None
+            except Exception as e:
+                logger.error(f"Failed to load scripts/README.md: {e}")
+                return None
+        else:
+            logger.debug(f"scripts/README.md not found at {scripts_readme_path}")
+            return None
+
     def _init_session_log(self, message: str, session_id: Optional[str]) -> Optional[Path]:
         """
         Initialize a session log file for dumping raw LLM messages.
@@ -95,6 +149,7 @@ class ClaudeCodeSDKManager:
         message: str,
         session_id: Optional[str] = None,
         system_prompt: Optional[str] = None,
+        use_building_mode: bool = False,
     ) -> AsyncIterator[dict]:
         """
         Send message to Claude Code SDK and stream responses.
@@ -104,7 +159,8 @@ class ClaudeCodeSDKManager:
         Args:
             message: User message
             session_id: External SDK session ID to resume (None = create new)
-            system_prompt: Custom system prompt for this session
+            system_prompt: Custom system prompt for this session (overrides building_mode)
+            use_building_mode: If True, uses claude_code preset with BUILDING_AGENT.md appended
 
         Yields:
             Dictionaries with message data:
@@ -130,8 +186,34 @@ class ClaudeCodeSDKManager:
                 cwd=self.workspace_dir,
             )
 
+            # Set system prompt based on mode
             if system_prompt:
+                # Explicit system_prompt overrides everything
                 options.system_prompt = system_prompt
+            elif use_building_mode and self.building_agent_prompt:
+                # Build the complete building mode prompt
+                building_prompt = self.building_agent_prompt
+
+                # Append scripts README if it exists
+                scripts_readme = self._load_scripts_readme()
+                if scripts_readme:
+                    building_prompt += f"\n\n---\n\n## Existing Scripts in Workspace\n\nThe following is the current contents of `./scripts/README.md` which catalogs all existing scripts in this workspace:\n\n```markdown\n{scripts_readme}\n```\n\n**Important**: When you create, modify, or remove scripts, you MUST update this file to keep it accurate."
+                    logger.info("Included scripts/README.md in building mode prompt")
+
+                # Use claude_code preset with complete building prompt appended
+                options.system_prompt = {
+                    "type": "preset",
+                    "preset": "claude_code",
+                    "append": building_prompt
+                }
+                logger.info("Using building mode with claude_code preset + BUILDING_AGENT.md + scripts catalog")
+            elif use_building_mode:
+                # Building mode requested but no BUILDING_AGENT.md available
+                logger.warning("Building mode requested but BUILDING_AGENT.md not loaded, using claude_code preset only")
+                options.system_prompt = {
+                    "type": "preset",
+                    "preset": "claude_code"
+                }
 
             # Set resume parameter if we have a session_id
             if session_id:
