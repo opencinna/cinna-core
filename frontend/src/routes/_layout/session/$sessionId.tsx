@@ -1,12 +1,19 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { useEffect } from "react"
-import { ArrowLeft } from "lucide-react"
+import { useEffect, useState } from "react"
+import { ArrowLeft, EllipsisVertical } from "lucide-react"
 
 import { SessionsService, MessagesService } from "@/client"
 import { MessageList } from "@/components/Chat/MessageList"
 import { MessageInput } from "@/components/Chat/MessageInput"
+import EditSession from "@/components/Sessions/EditSession"
+import DeleteSession from "@/components/Sessions/DeleteSession"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import PendingItems from "@/components/Pending/PendingItems"
 import useCustomToast from "@/hooks/useCustomToast"
 import { useMessageStream } from "@/hooks/useMessageStream"
@@ -19,9 +26,9 @@ export const Route = createFileRoute("/_layout/session/$sessionId")({
 function ChatInterface() {
   const { sessionId } = Route.useParams()
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const { setHeaderContent } = usePageHeader()
+  const [menuOpen, setMenuOpen] = useState(false)
 
   const {
     data: session,
@@ -43,20 +50,6 @@ function ChatInterface() {
     enabled: !!sessionId,
   })
 
-  const switchModeMutation = useMutation({
-    mutationFn: (newMode: string) =>
-      SessionsService.switchSessionMode({ id: sessionId, newMode }),
-    onSuccess: (updatedSession) => {
-      showSuccessToast(`Switched to ${updatedSession.mode} mode`)
-    },
-    onError: (error: any) => {
-      showErrorToast(error.message || "Failed to switch mode")
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["session", sessionId] })
-    },
-  })
-
   const { sendMessage, isStreaming, streamingEvents } = useMessageStream({
     sessionId,
     onSuccess: () => {
@@ -67,17 +60,15 @@ function ChatInterface() {
     },
   })
 
-  const handleModeSwitch = () => {
-    if (!session) return
-    const newMode = session.mode === "building" ? "conversation" : "building"
-    switchModeMutation.mutate(newMode)
-  }
-
   const handleSendMessage = async (content: string) => {
     await sendMessage(content)
   }
 
   const handleBack = () => {
+    navigate({ to: "/sessions" })
+  }
+
+  const handleDeleteSuccess = () => {
     navigate({ to: "/sessions" })
   }
 
@@ -103,23 +94,25 @@ function ChatInterface() {
               </p>
             </div>
           </div>
-          <Button
-            variant={isBuilding ? "outline" : "default"}
-            size="sm"
-            onClick={handleModeSwitch}
-            className={`gap-2 shrink-0 ${
-              isBuilding
-                ? "border-orange-500 text-orange-700 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-950/20"
-                : "bg-blue-500 hover:bg-blue-600 text-white"
-            }`}
-          >
-            Switch Mode
-          </Button>
+          <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="shrink-0">
+                <EllipsisVertical className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <EditSession session={session} onSuccess={() => setMenuOpen(false)} />
+              <DeleteSession
+                id={session.id}
+                onSuccess={handleDeleteSuccess}
+              />
+            </DropdownMenuContent>
+          </DropdownMenu>
         </>
       )
     }
     return () => setHeaderContent(null)
-  }, [session, setHeaderContent])
+  }, [session, setHeaderContent, menuOpen])
 
   if (sessionLoading || messagesLoading) {
     return <PendingItems />
@@ -154,8 +147,6 @@ function ChatInterface() {
     )
   }
 
-  const isDisabled = isStreaming || session.status !== "active"
-
   return (
     <div className="flex flex-col h-full min-h-0">
       <MessageList
@@ -166,12 +157,10 @@ function ChatInterface() {
       />
       <MessageInput
         onSend={handleSendMessage}
-        disabled={isDisabled}
+        sendDisabled={isStreaming}
         placeholder={
           isStreaming
             ? "Agent is responding..."
-            : session.status !== "active"
-            ? "Session is not active"
             : "Type your message..."
         }
       />

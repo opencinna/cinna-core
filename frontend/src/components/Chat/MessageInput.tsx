@@ -5,20 +5,20 @@ import { Send } from "lucide-react"
 
 interface MessageInputProps {
   onSend: (content: string) => void
-  disabled?: boolean
+  sendDisabled?: boolean
   placeholder?: string
 }
 
 export function MessageInput({
   onSend,
-  disabled = false,
+  sendDisabled = false,
   placeholder = "Type your message...",
 }: MessageInputProps) {
   const [message, setMessage] = useState("")
 
   const handleSend = () => {
     const trimmedMessage = message.trim()
-    if (trimmedMessage && !disabled) {
+    if (trimmedMessage && !sendDisabled) {
       onSend(trimmedMessage)
       setMessage("")
     }
@@ -39,13 +39,12 @@ export function MessageInput({
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
-          disabled={disabled}
           className="min-h-[60px] max-h-[200px] resize-none"
           rows={2}
         />
         <Button
           onClick={handleSend}
-          disabled={disabled || !message.trim()}
+          disabled={sendDisabled || !message.trim()}
           size="icon"
           className="h-[60px] w-[60px] shrink-0"
         >

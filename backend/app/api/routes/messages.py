@@ -15,6 +15,7 @@ from app.models import (
     MessageCreate,
     MessagePublic,
     MessagesPublic,
+    SessionUpdate,
 )
 from app.services.message_service import MessageService
 from app.services.session_service import SessionService
@@ -145,6 +146,20 @@ async def send_message_stream(
         role="user",
         content=message_in.content,
     )
+
+    # Auto-set session title from first message if no title exists
+    if not chat_session.title or chat_session.title.strip() == "":
+        # Truncate message content to reasonable length for title
+        title = message_in.content[:100]
+        if len(message_in.content) > 100:
+            title += "..."
+
+        SessionService.update_session(
+            db_session=session,
+            session_id=session_id,
+            data=SessionUpdate(title=title)
+        )
+        logger.info(f"Auto-set session title from first message: {title}")
 
     # Set session status to "active" before streaming starts
     SessionService.update_session_status(
