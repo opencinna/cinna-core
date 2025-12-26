@@ -390,6 +390,12 @@ You are an automated invoice extraction and reporting agent...
   - host: imap.gmail.com, port: 993, login: user@example.com, password: [REDACTED]
 - **odoo** (erp_system): Odoo ERP API access
   - url: https://erp.example.com, database: production, api_token: [REDACTED]
+
+**IMPORTANT**:
+- The information above shows all available credentials
+- **DO NOT** read ./credentials/credentials.json directly - use the information above when discussing credentials with users
+- Scripts you execute can read ./credentials/credentials.json to access the actual credential data
+- Sensitive values (passwords, tokens) are shown as [REDACTED] above but are available to scripts
 ```
 
 ## Implementation

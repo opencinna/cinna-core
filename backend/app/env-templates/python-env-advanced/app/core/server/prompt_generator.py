@@ -294,9 +294,13 @@ class PromptGenerator:
         if credentials_readme:
             conversation_prompt_parts.append(
                 f"\n\n---\n\n## Available Credentials\n\n"
-                f"The following credentials are available (with sensitive data redacted):\n\n"
+                f"The following credentials are available to use in your scripts:\n\n"
                 f"```markdown\n{credentials_readme}\n```\n\n"
-                f"**Note**: Scripts can access full credential data from `./credentials/credentials.json`"
+                f"**IMPORTANT**:\n"
+                f"- The information above shows all available credentials\n"
+                f"- **DO NOT** read `./credentials/credentials.json` directly - use the information above when discussing credentials with users\n"
+                f"- Scripts you execute can read `./credentials/credentials.json` to access the actual credential data\n"
+                f"- Sensitive values (passwords, tokens) are shown as [REDACTED] above but are available to scripts"
             )
             logger.info("Included credentials/README.md in conversation mode prompt")
 
