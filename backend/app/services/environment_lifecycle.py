@@ -170,6 +170,49 @@ class EnvironmentLifecycleManager:
             logger.error(f"Failed to create environment {environment.id}: {e}")
             raise
 
+    async def _sync_agent_data(
+        self,
+        db_session: Session,
+        environment: AgentEnvironment,
+        agent: Agent
+    ):
+        """
+        Sync agent data (prompts and credentials) to running environment.
+
+        This is called after:
+        - Environment starts
+        - Environment rebuilds (if it was running)
+        - Environment restarts
+
+        Args:
+            db_session: Database session
+            environment: Environment instance
+            agent: Agent instance
+        """
+        adapter = self.get_adapter(environment)
+
+        # Set prompts in docs files
+        environment.status_message = "Configuring agent prompts..."
+        db_session.add(environment)
+        db_session.commit()
+
+        await adapter.set_agent_prompts(
+            workflow_prompt=agent.workflow_prompt,
+            entrypoint_prompt=agent.entrypoint_prompt
+        )
+
+        # Sync credentials to environment
+        environment.status_message = "Syncing credentials..."
+        db_session.add(environment)
+        db_session.commit()
+
+        from app.services.credentials_service import CredentialsService
+        credentials_data = CredentialsService.prepare_credentials_for_environment(
+            session=db_session,
+            agent_id=agent.id
+        )
+        await adapter.set_credentials(credentials_data)
+
     async def start_environment(
         self,
         db_session: Session,
@@ -181,7 +224,7 @@ class EnvironmentLifecycleManager:
         1. Update status to 'starting'
         2. Start container via adapter
         3. Wait for health check
-        4. Set prompts and credentials
+        4. Sync agent data (prompts and credentials)
         5. Update status to 'running'
 
         Args:
@@ -202,29 +245,8 @@ class EnvironmentLifecycleManager:
             # Start container
             await adapter.start()
 
-            # Set prompts in docs files
-            environment.status_message = "Configuring agent prompts..."
-            db_session.add(environment)
-            db_session.commit()
-
-            await adapter.set_agent_prompts(
-                workflow_prompt=agent.workflow_prompt,
-                entrypoint_prompt=agent.entrypoint_prompt
-            )
-
-            # Set credentials (if any)
-            # Note: credentials relationship may not exist yet
-            # TODO: Decrypt credentials when credential system is implemented
-            # if hasattr(agent, 'credentials') and agent.credentials:
-            #     credentials_data = [
-            #         {
-            #             "type": cred.type,
-            #             "name": cred.name,
-            #             "data": cred.encrypted_data  # TODO: Decrypt
-            #         }
-            #         for cred in agent.credentials
-            #     ]
-            #     await adapter.set_credentials(credentials_data)
+            # Sync agent data (prompts and credentials)
+            await self._sync_agent_data(db_session, environment, agent)
 
             # Update status
             environment.status = "running"
@@ -298,6 +320,7 @@ class EnvironmentLifecycleManager:
         3. Updates core files from template
         4. Rebuilds Docker image
         5. Starts container if it was running before
+        6. Syncs agent data (prompts and credentials) if container is running
 
         Args:
             db_session: Database session
@@ -345,8 +368,10 @@ class EnvironmentLifecycleManager:
                 was_running=was_running
             )
 
-            # Update status based on whether it was running
+            # Sync agent data if environment is now running
             if was_running:
+                await self._sync_agent_data(db_session, environment, agent)
+
                 environment.status = "running"
                 environment.status_message = "Environment rebuilt and restarted"
                 environment.last_health_check = datetime.utcnow()

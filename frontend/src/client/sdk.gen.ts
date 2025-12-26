@@ -185,6 +185,8 @@ export class AgentsService {
     /**
      * Add Credential To Agent
      * Link a credential to an agent.
+     *
+     * This will trigger automatic sync to all running environments of this agent.
      * @param data The data for the request.
      * @param data.id
      * @param data.requestBody
@@ -209,6 +211,8 @@ export class AgentsService {
     /**
      * Remove Credential From Agent
      * Unlink a credential from an agent.
+     *
+     * This will trigger automatic sync to all running environments of this agent.
      * @param data The data for the request.
      * @param data.id
      * @param data.credentialId
@@ -366,6 +370,9 @@ export class CredentialsService {
     /**
      * Update Credential
      * Update a credential.
+     *
+     * This will trigger automatic sync to all running environments of agents
+     * that have this credential linked.
      * @param data The data for the request.
      * @param data.id
      * @param data.requestBody
@@ -390,6 +397,9 @@ export class CredentialsService {
     /**
      * Delete Credential
      * Delete a credential.
+     *
+     * This will trigger automatic sync to all running environments of agents
+     * that had this credential linked.
      * @param data The data for the request.
      * @param data.id
      * @returns Message Successful Response

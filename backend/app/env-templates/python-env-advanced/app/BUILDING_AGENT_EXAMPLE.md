@@ -27,6 +27,13 @@ Your workspace is organized as follows:
   - **`ENTRYPOINT_PROMPT.md`** - Defines how this workflow should be invoked (trigger messages for scheduled/interactive modes)
   - **IMPORTANT**: Update these files as you develop the workflow to reflect its actual capabilities
 
+- **`./credentials/`** - Credentials and API keys shared with this agent
+  - **`credentials.json`** - Full credentials data (NEVER read this directly in building mode)
+  - **`README.md`** - Documentation of available credentials with redacted sensitive data
+  - **SECURITY**: NEVER read credentials.json directly - only access credentials programmatically in your scripts
+  - **SECURITY**: NEVER log or output credential values in messages or files
+  - See the credentials documentation below for details on what credentials are available
+
 ## Development Guidelines
 
 ### Package Management with `uv`
@@ -63,6 +70,86 @@ source .venv/bin/activate  # On Unix/macOS
 5. **Output to `./files/`**: Always write output files to the `./files/` directory
 6. **Maintain scripts catalog**: **CRITICAL** - Every time you create, modify, or remove a script, you MUST update `./scripts/README.md`
 7. **Update workflow documentation**: As you develop the workflow, update `./docs/WORKFLOW_PROMPT.md` and `./docs/ENTRYPOINT_PROMPT.md` to reflect the actual capabilities and usage
+8. **Credentials handling**: **NEVER** read `./credentials/credentials.json` directly - only access credentials programmatically in your scripts
+
+### Credentials and Security
+
+**IMPORTANT SECURITY RULES**:
+
+1. **NEVER read `./credentials/credentials.json` directly** during building mode
+2. **NEVER log or print credential values** in your messages or output
+3. **ONLY access credentials programmatically** within the scripts you create
+4. **Review `./credentials/README.md`** to see what credentials are available (with sensitive data redacted)
+
+**How to Use Credentials in Your Scripts**:
+
+When creating scripts that need credentials (email, APIs, databases):
+
+1. Read the credentials file **inside your script**, not in this conversation
+2. Find the credential you need by type or name
+3. Use the credential data to connect to services
+
+**Example Script with Credentials**:
+
+```python
+#!/usr/bin/env python3
+"""
+Script: check_email.py
+Description: Connect to email via IMAP and fetch unread messages
+"""
+
+import json
+import imaplib
+from pathlib import Path
+
+def load_credentials():
+    """Load credentials from file"""
+    cred_file = Path('credentials/credentials.json')
+
+    if not cred_file.exists():
+        raise FileNotFoundError("No credentials found. Ask user to share IMAP credentials.")
+
+    with open(cred_file, 'r') as f:
+        return json.load(f)
+
+def main():
+    # Load all credentials
+    all_credentials = load_credentials()
+
+    # Find IMAP credential
+    imap_cred = None
+    for cred in all_credentials:
+        if cred['type'] == 'email_imap':
+            imap_cred = cred
+            break
+
+    if not imap_cred:
+        print("ERROR: No IMAP credentials found")
+        return
+
+    # Use credential data
+    config = imap_cred['credential_data']
+
+    # Connect to IMAP server
+    if config.get('is_ssl', True):
+        mail = imaplib.IMAP4_SSL(config['host'], config['port'])
+    else:
+        mail = imaplib.IMAP4(config['host'], config['port'])
+
+    # Login (credentials are read from file, not hardcoded)
+    mail.login(config['login'], config['password'])
+
+    # ... rest of your email processing logic
+
+    mail.logout()
+
+if __name__ == '__main__':
+    main()
+```
+
+**Understanding Available Credentials**:
+
+During building mode, you can see what credentials are available by checking the credentials documentation included in your system prompt. This shows you the structure and type of each credential without exposing sensitive values.
 
 ### Example Script Structure
 

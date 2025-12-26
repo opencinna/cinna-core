@@ -380,20 +380,31 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
         except Exception:
             return False
 
-    async def set_credentials(self, credentials: list[dict]) -> bool:
-        """Write credentials to workspace credentials directory."""
-        cred_dir = self.env_dir / "app" / "workspace" / "credentials"
-        cred_dir.mkdir(parents=True, exist_ok=True)
+    async def set_credentials(self, credentials_data: dict) -> bool:
+        """
+        Update credentials in workspace via HTTP API.
 
+        Args:
+            credentials_data: Dictionary with keys:
+                - credentials_json: List of credentials with full data
+                - credentials_readme: Markdown content with redacted credentials
+
+        Returns:
+            True if successful
+        """
         try:
-            # Write credentials as JSON file
-            import json
-            cred_file = cred_dir / "credentials.json"
-            with open(cred_file, 'w') as f:
-                json.dump(credentials, f, indent=2)
-            return True
-        except Exception:
-            return False
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.base_url}/config/credentials",
+                    json=credentials_data,
+                    headers=self._get_headers(),
+                    timeout=10.0
+                )
+                response.raise_for_status()
+                return True
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to set credentials: {e}")
+            raise Exception(f"Failed to set credentials: {e}")
 
     async def upload_file(self, file: File) -> bool:
         """Upload file to container workspace via volume."""

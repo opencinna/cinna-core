@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse
 from datetime import datetime
 from typing import Annotated
 
-from .models import HealthCheckResponse, ChatRequest, ChatResponse, AgentPromptsResponse, AgentPromptsUpdate
+from .models import HealthCheckResponse, ChatRequest, ChatResponse, AgentPromptsResponse, AgentPromptsUpdate, CredentialsUpdate
 from .sdk_manager import sdk_manager
 from .agent_env_service import AgentEnvService
 
@@ -265,4 +265,36 @@ async def update_agent_prompts(prompts: AgentPromptsUpdate):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to update agent prompts: {str(e)}"
+        )
+
+
+@router.post("/config/credentials", dependencies=[Depends(verify_auth_token)])
+async def update_credentials(credentials: CredentialsUpdate):
+    """
+    Update credentials in workspace credentials directory.
+
+    Creates two files:
+    - ./credentials/credentials.json (full credentials data)
+    - ./credentials/README.md (redacted documentation for agent prompt)
+
+    This is called by the backend when:
+    - Environment starts (sync credentials)
+    - User updates credentials
+    """
+    try:
+        updated_files = agent_env_service.update_credentials(
+            credentials_json=credentials.credentials_json,
+            credentials_readme=credentials.credentials_readme
+        )
+
+        return {
+            "status": "ok",
+            "message": f"Updated {len(updated_files)} file(s)",
+            "updated_files": updated_files
+        }
+    except IOError as e:
+        logger.error(f"Failed to update credentials: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update credentials: {str(e)}"
         )

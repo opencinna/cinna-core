@@ -37,3 +37,9 @@ class ChatResponse(BaseModel):
     response: str
     session_id: Optional[str] = None
     metadata: dict = {}
+
+
+class CredentialsUpdate(BaseModel):
+    """Update credentials in workspace"""
+    credentials_json: list[dict]  # Full credentials data
+    credentials_readme: str  # Redacted README for agent prompt

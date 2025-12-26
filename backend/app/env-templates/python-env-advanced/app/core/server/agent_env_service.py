@@ -27,6 +27,7 @@ class AgentEnvService:
         """
         self.workspace_dir = Path(workspace_dir)
         self.docs_dir = self.workspace_dir / "docs"
+        self.credentials_dir = self.workspace_dir / "credentials"
 
     def get_agent_prompts(self) -> Tuple[Optional[str], Optional[str]]:
         """
@@ -179,3 +180,79 @@ class AgentEnvService:
             "has_workflow_prompt": (self.docs_dir / "WORKFLOW_PROMPT.md").exists(),
             "has_entrypoint_prompt": (self.docs_dir / "ENTRYPOINT_PROMPT.md").exists(),
         }
+
+    def update_credentials(
+        self,
+        credentials_json: list[dict],
+        credentials_readme: str
+    ) -> list[str]:
+        """
+        Update credentials in workspace credentials directory.
+
+        Creates two files:
+        - credentials/credentials.json: Full credentials data with actual values
+        - credentials/README.md: Redacted documentation for agent prompt
+
+        Args:
+            credentials_json: List of credentials with full data
+            credentials_readme: Markdown content with redacted credentials
+
+        Returns:
+            List of updated filenames
+
+        Raises:
+            IOError: If file write fails
+        """
+        import json
+
+        # Ensure credentials directory exists
+        self.credentials_dir.mkdir(parents=True, exist_ok=True)
+
+        updated_files = []
+
+        try:
+            # Write credentials.json with full data
+            credentials_file = self.credentials_dir / "credentials.json"
+            with open(credentials_file, 'w', encoding='utf-8') as f:
+                json.dump(credentials_json, f, indent=2)
+            updated_files.append("credentials.json")
+            logger.info(f"Updated credentials.json ({len(credentials_json)} credentials)")
+
+            # Write README.md with redacted data
+            readme_file = self.credentials_dir / "README.md"
+            with open(readme_file, 'w', encoding='utf-8') as f:
+                f.write(credentials_readme)
+            updated_files.append("README.md")
+            logger.info(f"Updated credentials/README.md ({len(credentials_readme)} chars)")
+
+            return updated_files
+
+        except Exception as e:
+            logger.error(f"Failed to update credentials: {e}")
+            raise IOError(f"Failed to update credentials: {str(e)}")
+
+    def get_credentials_readme(self) -> Optional[str]:
+        """
+        Get credentials README content.
+
+        Returns:
+            Content of credentials/README.md if exists and not empty, None otherwise
+        """
+        readme_file = self.credentials_dir / "README.md"
+
+        if not readme_file.exists():
+            logger.debug(f"credentials/README.md not found at {readme_file}")
+            return None
+
+        try:
+            with open(readme_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+                if content.strip():
+                    logger.info(f"Read credentials/README.md ({len(content)} chars)")
+                    return content
+                else:
+                    logger.debug("credentials/README.md is empty")
+                    return None
+        except Exception as e:
+            logger.error(f"Failed to read credentials/README.md: {e}")
+            return None

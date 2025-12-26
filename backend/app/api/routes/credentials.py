@@ -5,7 +5,6 @@ from fastapi import APIRouter, HTTPException
 from sqlmodel import func, select
 
 from app.api.deps import CurrentUser, SessionDep
-from app import crud
 from app.models import (
     Credential,
     CredentialCreate,
@@ -15,6 +14,7 @@ from app.models import (
     CredentialWithData,
     Message,
 )
+from app.services.credentials_service import CredentialsService
 
 router = APIRouter(prefix="/credentials", tags=["credentials"])
 
@@ -71,24 +71,18 @@ def read_credential_with_data(
     """
     Get credential by ID with decrypted data.
     """
-    credential = session.get(Credential, id)
-    if not credential:
-        raise HTTPException(status_code=404, detail="Credential not found")
-    if not current_user.is_superuser and (credential.owner_id != current_user.id):
-        raise HTTPException(status_code=400, detail="Not enough permissions")
-
-    # Decrypt the credential data
-    credential_data = crud.get_credential_with_data(session=session, credential=credential)
-
-    # Return credential with decrypted data
-    return CredentialWithData(
-        id=credential.id,
-        name=credential.name,
-        type=credential.type,
-        notes=credential.notes,
-        owner_id=credential.owner_id,
-        credential_data=credential_data,
-    )
+    try:
+        credential_data_dict = CredentialsService.get_credential_with_data(
+            session=session,
+            credential_id=id,
+            owner_id=current_user.id,
+            is_superuser=current_user.is_superuser
+        )
+        return CredentialWithData(**credential_data_dict)
+    except ValueError as e:
+        # Service raises ValueError for not found or permission errors
+        status_code = 404 if "not found" in str(e).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(e))
 
 
 @router.post("/", response_model=CredentialPublic)
@@ -98,14 +92,16 @@ def create_credential(
     """
     Create new credential.
     """
-    credential = crud.create_credential(
-        session=session, credential_in=credential_in, owner_id=current_user.id
+    credential = CredentialsService.create_credential(
+        session=session,
+        credential_in=credential_in,
+        owner_id=current_user.id
     )
     return credential
 
 
 @router.put("/{id}", response_model=CredentialPublic)
-def update_credential(
+async def update_credential(
     *,
     session: SessionDep,
     current_user: CurrentUser,
@@ -114,31 +110,46 @@ def update_credential(
 ) -> Any:
     """
     Update a credential.
-    """
-    credential = session.get(Credential, id)
-    if not credential:
-        raise HTTPException(status_code=404, detail="Credential not found")
-    if not current_user.is_superuser and (credential.owner_id != current_user.id):
-        raise HTTPException(status_code=400, detail="Not enough permissions")
 
-    credential = crud.update_credential(
-        session=session, db_credential=credential, credential_in=credential_in
-    )
-    return credential
+    This will trigger automatic sync to all running environments of agents
+    that have this credential linked.
+    """
+    try:
+        credential = await CredentialsService.update_credential(
+            session=session,
+            credential_id=id,
+            credential_in=credential_in,
+            owner_id=current_user.id,
+            is_superuser=current_user.is_superuser
+        )
+        return credential
+    except ValueError as e:
+        # Service raises ValueError for not found or permission errors
+        status_code = 404 if "not found" in str(e).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(e))
 
 
 @router.delete("/{id}")
-def delete_credential(
-    session: SessionDep, current_user: CurrentUser, id: uuid.UUID
+async def delete_credential(
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID
 ) -> Message:
     """
     Delete a credential.
+
+    This will trigger automatic sync to all running environments of agents
+    that had this credential linked.
     """
-    credential = session.get(Credential, id)
-    if not credential:
-        raise HTTPException(status_code=404, detail="Credential not found")
-    if not current_user.is_superuser and (credential.owner_id != current_user.id):
-        raise HTTPException(status_code=400, detail="Not enough permissions")
-    session.delete(credential)
-    session.commit()
-    return Message(message="Credential deleted successfully")
+    try:
+        await CredentialsService.delete_credential(
+            session=session,
+            credential_id=id,
+            owner_id=current_user.id,
+            is_superuser=current_user.is_superuser
+        )
+        return Message(message="Credential deleted successfully")
+    except ValueError as e:
+        # Service raises ValueError for not found or permission errors
+        status_code = 404 if "not found" in str(e).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(e))
