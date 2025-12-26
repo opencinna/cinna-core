@@ -3,6 +3,7 @@ from sqlmodel import Session, select
 from app.models import Agent, AgentCreate, AgentUpdate, User
 from app.models.environment import AgentEnvironmentCreate
 from app.services.environment_service import EnvironmentService
+from app.core.config import settings
 
 
 class AgentService:
@@ -17,8 +18,8 @@ class AgentService:
         # Create default environment for the agent
         # auto_start=True means it will automatically start and activate after build completes
         default_env_data = AgentEnvironmentCreate(
-            env_name="python-env-basic",  # Use actual template name
-            env_version="1.0.0",
+            env_name=settings.DEFAULT_AGENT_ENV_NAME,
+            env_version=settings.DEFAULT_AGENT_ENV_VERSION,
             instance_name="Default",
             type="docker",
             config={}

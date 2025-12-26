@@ -131,6 +131,11 @@ class Settings(BaseSettings):
     AGENT_PORT_RANGE_START: int = 8000
     AGENT_PORT_RANGE_END: int = 9000
 
+    # Default Agent Environment Configuration
+    # These are used when creating new agents
+    DEFAULT_AGENT_ENV_NAME: str = "python-env-advanced"
+    DEFAULT_AGENT_ENV_VERSION: str = "1.0.0"
+
     def _check_default_secret(self, var_name: str, value: str | None) -> None:
         if value == "changethis":
             message = (
