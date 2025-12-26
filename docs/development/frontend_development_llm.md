@@ -79,3 +79,45 @@ export const Route = createFileRoute("/_layout/path")({
 - Tailwind CSS
 - Theme: Light/dark mode support via shadcn/ui
 - Use `className` prop with Tailwind utilities
+- Dynamic classes: Use template literals with full class names (Tailwind JIT)
+```tsx
+const colorPreset = getColorPreset(agent.ui_color_preset)
+<div className={`rounded-lg p-3 ${colorPreset.iconBg}`}>
+```
+
+## Dialog/Modal Pattern
+```tsx
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+
+const [isOpen, setIsOpen] = useState(false)
+
+<Dialog open={isOpen} onOpenChange={setIsOpen}>
+  <DialogContent className="sm:max-w-md">
+    <DialogHeader>
+      <DialogTitle>Title</DialogTitle>
+      <DialogDescription>Description</DialogDescription>
+    </DialogHeader>
+    {/* Content */}
+  </DialogContent>
+</Dialog>
+```
+
+## Utilities Pattern
+- Shared constants/helpers: `src/utils/` directory
+- Export types and functions
+- Example: `src/utils/colorPresets.ts` for color configuration
+```tsx
+export type ColorPreset = "slate" | "blue" | ...
+export const getColorPreset = (preset: string | null | undefined) => { ... }
+```
+
+## Tab Components
+- Use `HashTabs` component for tabbed interfaces
+- Location: `@/components/Common/HashTabs`
+```tsx
+const tabs = [
+  { value: "tab1", title: "Tab 1", content: <Component1 /> },
+  { value: "tab2", title: "Tab 2", content: <Component2 /> },
+]
+<HashTabs tabs={tabs} defaultTab="tab1" />
+```

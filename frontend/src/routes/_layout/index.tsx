@@ -7,12 +7,12 @@ import { AgentsService, SessionsService } from "@/client"
 import type { SessionCreate } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { Badge } from "@/components/ui/badge"
 import { Send, Bot } from "lucide-react"
 import { usePageHeader } from "@/routes/_layout"
 import AddAgent from "@/components/Agents/AddAgent"
 import useCustomToast from "@/hooks/useCustomToast"
 import PendingItems from "@/components/Pending/PendingItems"
+import { getColorPreset } from "@/utils/colorPresets"
 
 export const Route = createFileRoute("/_layout/")({
   component: Dashboard,
@@ -161,16 +161,25 @@ function Dashboard() {
           {/* Agent Selector Pills */}
           <div className="space-y-2">
             <div className="flex flex-wrap gap-2">
-              {agentsWithActiveEnv.map((agent) => (
-                <Badge
-                  key={agent.id}
-                  variant={selectedAgentId === agent.id ? "default" : "outline"}
-                  className="cursor-pointer px-4 py-2 text-sm hover:bg-primary/10 transition-colors"
-                  onClick={() => setSelectedAgentId(agent.id)}
-                >
-                  {agent.name}
-                </Badge>
-              ))}
+              {agentsWithActiveEnv.map((agent) => {
+                const colorPreset = getColorPreset(agent.ui_color_preset)
+                const isSelected = selectedAgentId === agent.id
+                return (
+                  <button
+                    key={agent.id}
+                    className={`
+                      cursor-pointer px-4 py-2 text-sm rounded-md transition-all
+                      ${colorPreset.badgeBg}
+                      ${colorPreset.badgeText}
+                      ${colorPreset.badgeHover}
+                      ${isSelected ? colorPreset.badgeOutline : ""}
+                    `}
+                    onClick={() => setSelectedAgentId(agent.id)}
+                  >
+                    {agent.name}
+                  </button>
+                )
+              })}
             </div>
           </div>
 

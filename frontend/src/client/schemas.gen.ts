@@ -359,6 +359,17 @@ export const AgentPublicSchema = {
             ],
             title: 'Active Environment Id'
         },
+        ui_color_preset: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ui Color Preset'
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -376,7 +387,7 @@ export const AgentPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'name', 'description', 'workflow_prompt', 'entrypoint_prompt', 'is_active', 'active_environment_id', 'created_at', 'updated_at', 'owner_id'],
+    required: ['id', 'name', 'description', 'workflow_prompt', 'entrypoint_prompt', 'is_active', 'active_environment_id', 'ui_color_preset', 'created_at', 'updated_at', 'owner_id'],
     title: 'AgentPublic'
 } as const;
 
@@ -438,6 +449,17 @@ export const AgentUpdateSchema = {
                 }
             ],
             title: 'Is Active'
+        },
+        ui_color_preset: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ui Color Preset'
         }
     },
     type: 'object',
@@ -1012,6 +1034,11 @@ export const SessionCreateSchema = {
             type: 'string',
             title: 'Mode',
             default: 'conversation'
+        },
+        agent_sdk: {
+            type: 'string',
+            title: 'Agent Sdk',
+            default: 'claude'
         }
     },
     type: 'object',
@@ -1051,6 +1078,10 @@ export const SessionPublicSchema = {
             type: 'string',
             title: 'Mode'
         },
+        agent_sdk: {
+            type: 'string',
+            title: 'Agent Sdk'
+        },
         status: {
             type: 'string',
             title: 'Status'
@@ -1079,7 +1110,7 @@ export const SessionPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'environment_id', 'user_id', 'title', 'mode', 'status', 'created_at', 'updated_at', 'last_message_at'],
+    required: ['id', 'environment_id', 'user_id', 'title', 'mode', 'agent_sdk', 'status', 'created_at', 'updated_at', 'last_message_at'],
     title: 'SessionPublic'
 } as const;
 
@@ -1114,6 +1145,10 @@ export const SessionPublicExtendedSchema = {
         mode: {
             type: 'string',
             title: 'Mode'
+        },
+        agent_sdk: {
+            type: 'string',
+            title: 'Agent Sdk'
         },
         status: {
             type: 'string',
@@ -1176,7 +1211,7 @@ export const SessionPublicExtendedSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'environment_id', 'user_id', 'title', 'mode', 'status', 'created_at', 'updated_at', 'last_message_at'],
+    required: ['id', 'environment_id', 'user_id', 'title', 'mode', 'agent_sdk', 'status', 'created_at', 'updated_at', 'last_message_at'],
     title: 'SessionPublicExtended',
     description: 'Session with external session metadata'
 } as const;
@@ -1215,6 +1250,17 @@ export const SessionUpdateSchema = {
                 }
             ],
             title: 'Mode'
+        },
+        agent_sdk: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Sdk'
         }
     },
     type: 'object',

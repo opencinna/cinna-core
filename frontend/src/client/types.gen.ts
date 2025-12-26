@@ -56,6 +56,7 @@ export type AgentPublic = {
     entrypoint_prompt: (string | null);
     is_active: boolean;
     active_environment_id: (string | null);
+    ui_color_preset: (string | null);
     created_at: string;
     updated_at: string;
     owner_id: string;
@@ -72,6 +73,7 @@ export type AgentUpdate = {
     workflow_prompt?: (string | null);
     entrypoint_prompt?: (string | null);
     is_active?: (boolean | null);
+    ui_color_preset?: (string | null);
 };
 
 /**
@@ -220,6 +222,7 @@ export type SessionCreate = {
     agent_id: string;
     title?: (string | null);
     mode?: string;
+    agent_sdk?: string;
 };
 
 export type SessionPublic = {
@@ -228,6 +231,7 @@ export type SessionPublic = {
     user_id: string;
     title: (string | null);
     mode: string;
+    agent_sdk: string;
     status: string;
     created_at: string;
     updated_at: string;
@@ -243,6 +247,7 @@ export type SessionPublicExtended = {
     user_id: string;
     title: (string | null);
     mode: string;
+    agent_sdk: string;
     status: string;
     created_at: string;
     updated_at: string;
@@ -261,6 +266,7 @@ export type SessionUpdate = {
     title?: (string | null);
     status?: (string | null);
     mode?: (string | null);
+    agent_sdk?: (string | null);
 };
 
 export type SetPassword = {
