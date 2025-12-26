@@ -494,6 +494,12 @@ export type EnvironmentsRestartEnvironmentData = {
 
 export type EnvironmentsRestartEnvironmentResponse = (Message);
 
+export type EnvironmentsRebuildEnvironmentData = {
+    id: string;
+};
+
+export type EnvironmentsRebuildEnvironmentResponse = (Message);
+
 export type EnvironmentsGetEnvironmentStatusData = {
     id: string;
 };

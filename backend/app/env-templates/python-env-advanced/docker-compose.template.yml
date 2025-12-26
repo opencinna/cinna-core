@@ -17,7 +17,7 @@ services:
       - AGENT_AUTH_TOKEN=${AGENT_AUTH_TOKEN}
       - AGENT_PORT=${AGENT_PORT}
       - LOG_LEVEL=${LOG_LEVEL}
-      - CLAUDE_CODE_WORKSPACE=/app/app
+      - CLAUDE_CODE_WORKSPACE=/app/workspace
       - CLAUDE_CODE_PERMISSION_MODE=acceptEdits
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - DUMP_LLM_SESSION=${DUMP_LLM_SESSION:-true}
@@ -26,8 +26,11 @@ services:
     # Backend connects via http://agent-${ENV_ID}:${AGENT_PORT}
 
     # Volume mounts (host:container) - using absolute host paths
+    # Core: system files (server, API) - baked into image, can be updated on rebuild
+    # Workspace: user files (scripts, docs, credentials) - persisted across rebuilds
     volumes:
-      - ${HOST_INSTANCE_DIR}/app:/app/app
+      - ${HOST_INSTANCE_DIR}/app/core:/app/core
+      - ${HOST_INSTANCE_DIR}/app/workspace:/app/workspace
 
     # Networks: agent-bridge (shared with backend) + isolated network
     networks:

@@ -398,6 +398,33 @@ class EnvironmentService:
         return environment
 
     @staticmethod
+    async def rebuild_environment(session: Session, env_id: UUID) -> AgentEnvironment:
+        """
+        Rebuild environment with updated core files while preserving workspace.
+
+        This operation:
+        - Checks if container is running
+        - Stops container if running
+        - Updates core files from template
+        - Rebuilds Docker image
+        - Starts container if it was running before
+        - Preserves workspace data (scripts, files, docs, credentials, databases)
+        """
+        environment = session.get(AgentEnvironment, env_id)
+        if not environment:
+            raise ValueError(f"Environment {env_id} not found")
+
+        agent = session.get(Agent, environment.agent_id)
+        if not agent:
+            raise ValueError(f"Agent {environment.agent_id} not found")
+
+        lifecycle_manager = EnvironmentService.get_lifecycle_manager()
+        await lifecycle_manager.rebuild_environment(session, environment, agent)
+
+        session.refresh(environment)
+        return environment
+
+    @staticmethod
     async def get_environment_status(session: Session, env_id: UUID) -> dict:
         """Get environment status"""
         environment = session.get(AgentEnvironment, env_id)

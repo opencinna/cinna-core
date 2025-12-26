@@ -12,6 +12,9 @@ export function EnvironmentStatusBadge({ status }: EnvironmentStatusBadgeProps) 
       case "stopped":
         return "secondary" // Gray
       case "starting":
+      case "creating":
+      case "building":
+      case "rebuilding":
         return "outline" // Yellow/orange with animation
       case "error":
         return "destructive" // Red
@@ -30,6 +33,12 @@ export function EnvironmentStatusBadge({ status }: EnvironmentStatusBadgeProps) 
         return "Stopped"
       case "starting":
         return "Starting..."
+      case "creating":
+        return "Creating..."
+      case "building":
+        return "Building..."
+      case "rebuilding":
+        return "Rebuilding..."
       case "error":
         return "Error"
       case "deprecated":
@@ -39,10 +48,12 @@ export function EnvironmentStatusBadge({ status }: EnvironmentStatusBadgeProps) 
     }
   }
 
+  const isAnimated = ["starting", "creating", "building", "rebuilding"].includes(status)
+
   return (
     <Badge
       variant={getStatusVariant(status)}
-      className={status === "starting" ? "animate-pulse" : ""}
+      className={isAnimated ? "animate-pulse" : ""}
     >
       {getStatusLabel(status)}
     </Badge>

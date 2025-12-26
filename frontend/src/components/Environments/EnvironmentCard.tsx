@@ -5,7 +5,7 @@ import { EnvironmentsService } from "@/client"
 import type { AgentEnvironmentPublic } from "@/client"
 import { EnvironmentStatusBadge } from "./EnvironmentStatusBadge"
 import { Badge } from "@/components/ui/badge"
-import { CheckCircle2, Play, Trash2 } from "lucide-react"
+import { CheckCircle2, Play, Trash2, RefreshCw } from "lucide-react"
 import useCustomToast from "@/hooks/useCustomToast"
 
 interface EnvironmentCardProps {
@@ -31,9 +31,37 @@ export function EnvironmentCard({ environment, agentId, onActivate }: Environmen
     },
   })
 
+  const rebuildMutation = useMutation({
+    mutationFn: () => EnvironmentsService.rebuildEnvironment({ id: environment.id }),
+    onSuccess: () => {
+      showSuccessToast("Environment rebuild started. This may take a few minutes.")
+    },
+    onError: (error: any) => {
+      showErrorToast(error.message || "Failed to rebuild environment")
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["environments", agentId] })
+    },
+  })
+
   const handleDelete = () => {
     if (confirm("Delete this environment? This action cannot be undone.")) {
       deleteMutation.mutate()
+    }
+  }
+
+  const handleRebuild = () => {
+    if (
+      confirm(
+        "Rebuild this environment?\n\n" +
+          "This will:\n" +
+          "• Update core system files from the template\n" +
+          "• Rebuild the Docker image\n" +
+          "• Preserve all workspace data (scripts, files, credentials)\n\n" +
+          "Continue?"
+      )
+    ) {
+      rebuildMutation.mutate()
     }
   }
 
@@ -76,6 +104,21 @@ export function EnvironmentCard({ environment, agentId, onActivate }: Environmen
               Activate
             </Button>
           )}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleRebuild}
+            disabled={
+              rebuildMutation.isPending ||
+              environment.status === "creating" ||
+              environment.status === "building" ||
+              environment.status === "rebuilding"
+            }
+            className="gap-1"
+          >
+            <RefreshCw className={`h-4 w-4 ${rebuildMutation.isPending ? "animate-spin" : ""}`} />
+            Rebuild
+          </Button>
           <Button
             size="sm"
             variant="destructive"

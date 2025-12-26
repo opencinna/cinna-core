@@ -144,6 +144,29 @@ class EnvironmentAdapter(ABC):
         """
         pass
 
+    @abstractmethod
+    async def rebuild(self, template_core_dir, was_running: bool) -> bool:
+        """
+        Rebuild environment with updated core files while preserving workspace.
+
+        This operation:
+        1. Stops the container if running
+        2. Updates core system files from template
+        3. Rebuilds the Docker image
+        4. Starts the container if it was running before
+
+        Args:
+            template_core_dir: Path to template's core directory
+            was_running: Whether container was running before rebuild
+
+        Returns:
+            True if rebuild successful
+
+        Raises:
+            Exception if rebuild fails
+        """
+        pass
+
     # === Configuration Management ===
 
     @abstractmethod

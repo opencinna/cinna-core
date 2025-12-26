@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 import logging
 
-from app.server.routes import router
+from core.server.routes import router
 
 # Configure logging
 logging.basicConfig(

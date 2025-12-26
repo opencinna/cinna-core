@@ -283,6 +283,94 @@ class EnvironmentLifecycleManager:
         await self.start_environment(db_session, environment, agent)
         return True
 
+    async def rebuild_environment(
+        self,
+        db_session: Session,
+        environment: AgentEnvironment,
+        agent: Agent
+    ) -> bool:
+        """
+        Rebuild environment with updated core files while preserving workspace.
+
+        This operation:
+        1. Checks if container is running
+        2. Stops container if running
+        3. Updates core files from template
+        4. Rebuilds Docker image
+        5. Starts container if it was running before
+
+        Args:
+            db_session: Database session
+            environment: Environment instance
+            agent: Agent instance
+
+        Returns:
+            True if rebuild successful
+        """
+        try:
+            # Check current status
+            current_status = await self.get_status(environment)
+            was_running = current_status == "running"
+
+            logger.info(f"Rebuilding environment {environment.id} (was_running={was_running})")
+
+            # Update status
+            environment.status = "rebuilding"
+            environment.status_message = "Stopping container for rebuild..."
+            db_session.add(environment)
+            db_session.commit()
+
+            # Stop if running
+            if was_running:
+                await self.stop_environment(db_session, environment)
+
+            # Get adapter
+            adapter = self.get_adapter(environment)
+
+            # Get template core directory
+            template_dir = self.templates_dir / environment.env_name
+            template_core_dir = template_dir / "app" / "core"
+
+            if not template_core_dir.exists():
+                raise FileNotFoundError(f"Template core directory not found: {template_core_dir}")
+
+            # Update status
+            environment.status_message = "Updating core files and rebuilding image..."
+            db_session.add(environment)
+            db_session.commit()
+
+            # Rebuild via adapter
+            await adapter.rebuild(
+                template_core_dir=template_core_dir,
+                was_running=was_running
+            )
+
+            # Update status based on whether it was running
+            if was_running:
+                environment.status = "running"
+                environment.status_message = "Environment rebuilt and restarted"
+                environment.last_health_check = datetime.utcnow()
+            else:
+                environment.status = "stopped"
+                environment.status_message = "Environment rebuilt successfully"
+
+            db_session.add(environment)
+            db_session.commit()
+
+            logger.info(f"Environment {environment.id} rebuilt successfully")
+            return True
+
+        except Exception as e:
+            # Update status to error
+            environment.status = "error"
+            environment.status_message = f"Failed to rebuild environment: {str(e)}"
+            environment.config["last_error"] = str(e)
+            flag_modified(environment, "config")
+            db_session.add(environment)
+            db_session.commit()
+            logger.error(f"Failed to rebuild environment {environment.id}: {e}")
+            raise
+
     async def check_health(
         self,
         db_session: Session,
@@ -392,6 +480,7 @@ class EnvironmentLifecycleManager:
         Args:
             instance_dir: Environment instance directory
         """
+        # BUILDING_AGENT files are in app root, not in core or workspace
         app_dir = instance_dir / "app"
         example_file = app_dir / "BUILDING_AGENT_EXAMPLE.md"
         target_file = app_dir / "BUILDING_AGENT.md"

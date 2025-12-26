@@ -156,6 +156,62 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
         await self.start()
         return True
 
+    async def rebuild(self, template_core_dir: Path, was_running: bool) -> bool:
+        """
+        Rebuild environment with updated core files.
+
+        Args:
+            template_core_dir: Path to template's core directory
+            was_running: Whether container was running before rebuild
+
+        Returns:
+            True if rebuild successful
+
+        Process:
+        1. Container should already be stopped
+        2. Update core files from template
+        3. Rebuild Docker image (includes new core files)
+        4. Start container if it was running before
+        """
+        logger.info(f"Rebuilding environment {self.env_id}")
+
+        # Verify container is stopped
+        status = await self.get_status()
+        if status == "running":
+            raise RuntimeError("Container must be stopped before rebuilding")
+
+        # Update core files from template
+        logger.info(f"Updating core files from template: {template_core_dir}")
+        instance_core_dir = self.env_dir / "app" / "core"
+
+        # Remove old core files
+        if instance_core_dir.exists():
+            import shutil
+            await asyncio.to_thread(shutil.rmtree, instance_core_dir)
+            logger.debug(f"Removed old core directory: {instance_core_dir}")
+
+        # Copy new core files
+        import shutil
+        await asyncio.to_thread(
+            shutil.copytree,
+            template_core_dir,
+            instance_core_dir,
+            dirs_exist_ok=True
+        )
+        logger.info(f"Core files updated from template")
+
+        # Rebuild Docker image
+        logger.info(f"Rebuilding Docker image for environment {self.env_id}")
+        await self._run_compose_command(["build"])
+        logger.info(f"Docker image rebuilt successfully")
+
+        # Start container if it was running before
+        if was_running:
+            logger.info(f"Starting container {self.container_name} after rebuild")
+            await self.start()
+
+        return True
+
     def _get_headers(self) -> dict:
         """Get HTTP headers with auth token."""
         headers = {}
@@ -325,8 +381,8 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
             return False
 
     async def set_credentials(self, credentials: list[dict]) -> bool:
-        """Write credentials to credentials directory."""
-        cred_dir = self.env_dir / "app" / "credentials"
+        """Write credentials to workspace credentials directory."""
+        cred_dir = self.env_dir / "app" / "workspace" / "credentials"
         cred_dir.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -340,10 +396,10 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
             return False
 
     async def upload_file(self, file: File) -> bool:
-        """Upload file to container via volume."""
+        """Upload file to container workspace via volume."""
         try:
-            # Files are written to host volume mount
-            file_path = self.env_dir / "app" / "files" / file.path
+            # Files are written to workspace/files directory
+            file_path = self.env_dir / "app" / "workspace" / "files" / file.path
             file_path.parent.mkdir(parents=True, exist_ok=True)
 
             if isinstance(file.content, bytes):
@@ -357,8 +413,8 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
             return False
 
     async def download_file(self, path: str) -> File:
-        """Download file from container via volume."""
-        file_path = self.env_dir / "app" / "files" / path
+        """Download file from container workspace via volume."""
+        file_path = self.env_dir / "app" / "workspace" / "files" / path
 
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {path}")
@@ -371,7 +427,7 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
 
     async def list_files(self, path: str = "/") -> list[str]:
         """List files in workspace."""
-        base_path = self.env_dir / "app" / "files"
+        base_path = self.env_dir / "app" / "workspace" / "files"
         target_path = base_path / path.lstrip("/")
 
         if not target_path.exists():
@@ -387,7 +443,7 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
 
     async def delete_file(self, path: str) -> bool:
         """Delete file from workspace."""
-        file_path = self.env_dir / "app" / "files" / path
+        file_path = self.env_dir / "app" / "workspace" / "files" / path
 
         try:
             if file_path.exists():

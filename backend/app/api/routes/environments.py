@@ -169,6 +169,39 @@ async def restart_environment(
         raise HTTPException(status_code=500, detail=f"Failed to restart environment: {str(e)}")
 
 
+@router.post("/{id}/rebuild")
+async def rebuild_environment(
+    session: SessionDep, current_user: CurrentUser, id: uuid.UUID
+) -> Message:
+    """
+    Rebuild environment with updated core files while preserving workspace data.
+
+    This operation:
+    - Stops the container if running
+    - Updates core system files from template
+    - Rebuilds Docker image
+    - Restarts container if it was running before
+    - Preserves workspace data (scripts, files, docs, credentials, databases)
+    """
+    environment = session.get(AgentEnvironment, id)
+    if not environment:
+        raise HTTPException(status_code=404, detail="Environment not found")
+
+    # Check permission
+    agent = session.get(Agent, environment.agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    # Rebuild environment
+    try:
+        await EnvironmentService.rebuild_environment(session=session, env_id=id)
+        return Message(message="Environment rebuilt successfully")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to rebuild environment: {str(e)}")
+
+
 @router.get("/{id}/status")
 async def get_environment_status(
     session: SessionDep, current_user: CurrentUser, id: uuid.UUID

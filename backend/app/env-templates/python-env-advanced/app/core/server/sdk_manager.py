@@ -43,12 +43,13 @@ class ClaudeCodeSDKManager:
 
     def _load_building_agent_prompt(self) -> Optional[str]:
         """
-        Load BUILDING_AGENT.md file from workspace.
+        Load BUILDING_AGENT.md file from app root (not workspace).
 
         Returns:
             Content of BUILDING_AGENT.md if exists, None otherwise
         """
-        building_agent_path = Path(self.workspace_dir) / "BUILDING_AGENT.md"
+        # BUILDING_AGENT.md is in /app root, not in workspace
+        building_agent_path = Path("/app/BUILDING_AGENT.md")
 
         if building_agent_path.exists():
             try:

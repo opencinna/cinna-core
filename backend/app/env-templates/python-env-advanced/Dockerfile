@@ -46,10 +46,14 @@ COPY pyproject.toml uv.lock* ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project
 
+# Copy core application files (system files baked into image)
+COPY app/core /app/core
+
 ENV PYTHONPATH=/app
 
-# Note: app/ directory will be mounted as a volume at runtime
-# This allows for live code updates without rebuilding the image
+# Note: app/workspace/ directory will be mounted as a volume at runtime
+# This allows user files to persist across rebuilds
+# Core files are baked into the image for easy updates
 
 # Default port (will be overridden by AGENT_PORT environment variable at runtime)
 ENV AGENT_PORT=8000
@@ -61,4 +65,4 @@ ENV AGENT_PORT=8000
 
 # Start FastAPI server on the port specified by AGENT_PORT
 # Using shell form to allow environment variable expansion
-CMD fastapi run --host 0.0.0.0 --port ${AGENT_PORT} app/main.py
+CMD fastapi run --host 0.0.0.0 --port ${AGENT_PORT} core/main.py
