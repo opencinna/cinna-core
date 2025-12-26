@@ -177,6 +177,7 @@ class PromptGenerator:
         - scripts/README.md (if exists)
         - docs/WORKFLOW_PROMPT.md (if exists)
         - docs/ENTRYPOINT_PROMPT.md (if exists)
+        - credentials/README.md (if exists)
 
         Returns:
             SystemPromptPreset dict for Claude SDK, or None if building agent prompt not available
@@ -261,6 +262,7 @@ class PromptGenerator:
         Conversation mode uses:
         - docs/WORKFLOW_PROMPT.md (main system prompt)
         - scripts/README.md (available scripts context)
+        - credentials/README.md (available credentials context)
 
         This is a lightweight mode focused on workflow execution, NOT building.
 
@@ -286,6 +288,17 @@ class PromptGenerator:
                 f"```markdown\n{scripts_readme}\n```"
             )
             logger.info("Included scripts/README.md in conversation mode prompt")
+
+        # Append credentials README to give context about available credentials
+        credentials_readme = self._load_credentials_readme()
+        if credentials_readme:
+            conversation_prompt_parts.append(
+                f"\n\n---\n\n## Available Credentials\n\n"
+                f"The following credentials are available (with sensitive data redacted):\n\n"
+                f"```markdown\n{credentials_readme}\n```\n\n"
+                f"**Note**: Scripts can access full credential data from `./credentials/credentials.json`"
+            )
+            logger.info("Included credentials/README.md in conversation mode prompt")
 
         # Combine all parts into a single system prompt string
         if conversation_prompt_parts:

@@ -68,6 +68,12 @@ The building mode system prompt is composed of multiple layers:
    - Loaded at runtime and included in building mode prompt
    - Agent defines concise command to start the workflow
 
+6. **credentials/README.md** (Dynamic Context)
+   - Documentation of credentials shared with the agent
+   - Redacted sensitive data (shows structure, hides values)
+   - Loaded at runtime if file exists and is not empty
+   - Provides agent with awareness of available credentials for script development
+
 ## Workflow Documentation Prompts
 
 The building agent maintains two key documentation files that define how the completed workflow will be used:
@@ -269,7 +275,7 @@ The prompt enforces strict organization:
 
 ## Example Assembled Prompt
 
-When building mode is activated with existing scripts:
+When building mode is activated with existing scripts and credentials:
 
 ```
 [Claude Code Preset System Prompt]
@@ -298,6 +304,28 @@ The following is the current contents of `./scripts/README.md` which catalogs al
 ```
 
 **Important**: When you create, modify, or remove scripts, you MUST update this file to keep it accurate.
+
+---
+
+## Available Credentials
+
+The following is the current contents of `./credentials/README.md`:
+
+```markdown
+# Available Credentials
+
+## email_imap (my_gmail_account)
+- **host**: imap.gmail.com
+- **port**: 993
+- **login**: user@example.com
+- **password**: [REDACTED]
+- **is_ssl**: true
+```
+
+**CRITICAL SECURITY RULES**:
+- **NEVER** read `./credentials/credentials.json` directly in this conversation
+- **NEVER** log or print credential values in your messages
+- **ONLY** access credentials programmatically in the scripts you create
 ```
 
 ## Conversation Mode Prompt Architecture
@@ -317,6 +345,12 @@ The conversation mode system prompt is lightweight and execution-focused:
    - Appended to system prompt for script awareness
    - Formatted as "Available Scripts" section
 
+3. **credentials/README.md** (Available Credentials)
+   - Documentation of credentials shared with the agent
+   - Redacted sensitive data (shows structure, hides values)
+   - Appended to system prompt for credential awareness
+   - Formatted as "Available Credentials" section
+
 ### Differences from Building Mode
 
 **What's EXCLUDED**:
@@ -327,6 +361,7 @@ The conversation mode system prompt is lightweight and execution-focused:
 **What's INCLUDED**:
 - ✅ WORKFLOW_PROMPT.md (workflow-specific instructions)
 - ✅ scripts/README.md (available automation tools)
+- ✅ credentials/README.md (available credentials with redacted sensitive data)
 
 **Prompt Format**:
 - **Building Mode**: SystemPromptPreset dict (Claude Code + appended docs)
@@ -349,6 +384,12 @@ You are an automated invoice extraction and reporting agent...
 - `scripts/detect_invoices.py`: Identify emails containing invoices
 - `scripts/extract_invoice_data.py`: Parse invoice documents
 - `scripts/generate_summary.py`: Create summary reports
+
+## Available Credentials
+- **email_imap** (my_email_account): IMAP access to user@example.com
+  - host: imap.gmail.com, port: 993, login: user@example.com, password: [REDACTED]
+- **odoo** (erp_system): Odoo ERP API access
+  - url: https://erp.example.com, database: production, api_token: [REDACTED]
 ```
 
 ## Implementation
@@ -385,6 +426,7 @@ You are an automated invoice extraction and reporting agent...
    - `/app/workspace/scripts/README.md` (fresh load)
    - `/app/workspace/docs/WORKFLOW_PROMPT.md` (fresh load)
    - `/app/workspace/docs/ENTRYPOINT_PROMPT.md` (fresh load)
+   - `/app/workspace/credentials/README.md` (fresh load)
 4. Constructs SystemPromptPreset dict with Claude Code preset
 5. SDK Manager passes to ClaudeAgentOptions
 
@@ -394,6 +436,7 @@ You are an automated invoice extraction and reporting agent...
 3. PromptGenerator loads:
    - `/app/workspace/docs/WORKFLOW_PROMPT.md` (fresh load)
    - `/app/workspace/scripts/README.md` (fresh load)
+   - `/app/workspace/credentials/README.md` (fresh load)
 4. Constructs plain string prompt
 5. SDK Manager passes to ClaudeAgentOptions
 
