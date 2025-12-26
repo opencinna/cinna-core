@@ -18,13 +18,13 @@ export function AgentCard({ agent }: AgentCardProps) {
   const colorPreset = getColorPreset(agent.ui_color_preset)
 
   return (
-    <Card className="relative transition-all hover:shadow-md hover:-translate-y-0.5">
-      <Link
-        to="/agent/$agentId"
-        params={{ agentId: agent.id }}
-        className="block"
-      >
-        <CardHeader className="pb-3">
+    <Link
+      to="/agent/$agentId"
+      params={{ agentId: agent.id }}
+      className="block h-full"
+    >
+      <Card className="relative transition-all hover:shadow-md hover:-translate-y-0.5 cursor-pointer h-full flex flex-col gap-0">
+        <CardHeader className="pb-2">
           <div className="flex items-start gap-3">
             <div className={`rounded-lg p-2 ${colorPreset.iconBg}`}>
               <Bot className={`h-5 w-5 ${colorPreset.iconText}`} />
@@ -36,15 +36,14 @@ export function AgentCard({ agent }: AgentCardProps) {
             </div>
           </div>
         </CardHeader>
-
         {agent.entrypoint_prompt && (
-          <CardContent>
-            <pre className="text-xs bg-muted/50 rounded-md p-3 overflow-x-auto whitespace-pre-wrap break-words font-mono">
+          <CardContent className="pt-0 flex-1 min-h-0">
+            <pre className="text-xs bg-muted/50 rounded-md p-3 overflow-hidden whitespace-pre-wrap break-words font-mono line-clamp-4">
               {agent.entrypoint_prompt}
             </pre>
           </CardContent>
         )}
-      </Link>
-    </Card>
+      </Card>
+    </Link>
   )
 }
