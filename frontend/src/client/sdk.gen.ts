@@ -96,7 +96,7 @@ export class AgentsService {
     
     /**
      * Delete Agent
-     * Delete an agent.
+     * Delete an agent and cleanup all associated resources (environments, containers).
      * @param data The data for the request.
      * @param data.id
      * @returns Message Successful Response

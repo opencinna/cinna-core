@@ -279,13 +279,22 @@ class EnvironmentService:
         Delete environment.
 
         Steps:
-        1. Stop container if running
-        2. Delete Docker instance (remove directory, cleanup network)
-        3. Delete DB record
+        1. Clear agent's active_environment_id if this is the active environment
+        2. Stop container if running
+        3. Delete Docker instance (remove directory, cleanup network)
+        4. Delete DB record
         """
         environment = session.get(AgentEnvironment, env_id)
         if not environment:
             return False
+
+        # Clear agent's active_environment_id if this is the active environment
+        # This prevents FK constraint violations
+        agent = session.get(Agent, environment.agent_id)
+        if agent and agent.active_environment_id == env_id:
+            agent.active_environment_id = None
+            session.add(agent)
+            session.commit()
 
         lifecycle_manager = EnvironmentService.get_lifecycle_manager()
 

@@ -77,12 +77,33 @@ class AgentService:
         return agent
 
     @staticmethod
-    def delete_agent(session: Session, agent_id: UUID) -> bool:
-        """Delete agent (cascades to environments)"""
+    async def delete_agent(session: Session, agent_id: UUID) -> bool:
+        """
+        Delete agent and cleanup all associated resources.
+
+        Steps:
+        1. Get all environments for the agent
+        2. Delete each environment (stops containers, cleans up Docker resources)
+           - EnvironmentService.delete_environment handles clearing active_environment_id
+        3. Delete agent (DB cascades will handle sessions/messages)
+        """
         agent = session.get(Agent, agent_id)
         if not agent:
             return False
 
+        # Get all environments for this agent
+        environments = EnvironmentService.list_agent_environments(session, agent_id)
+
+        # Delete each environment (this properly cleans up Docker resources)
+        # delete_environment() will automatically clear active_environment_id if needed
+        for env in environments:
+            try:
+                await EnvironmentService.delete_environment(session, env.id)
+            except Exception as e:
+                # Log error but continue with other environments
+                print(f"Warning: Failed to delete environment {env.id}: {e}")
+
+        # Delete agent (DB cascades will handle any remaining records)
         session.delete(agent)
         session.commit()
         return True

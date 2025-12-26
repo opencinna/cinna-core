@@ -198,11 +198,11 @@ async def sync_agent_prompts(
 
 
 @router.delete("/{id}")
-def delete_agent(
+async def delete_agent(
     session: SessionDep, current_user: CurrentUser, id: uuid.UUID
 ) -> Message:
     """
-    Delete an agent.
+    Delete an agent and cleanup all associated resources (environments, containers).
     """
     agent = session.get(Agent, id)
     if not agent:
@@ -210,7 +210,7 @@ def delete_agent(
     if not current_user.is_superuser and (agent.owner_id != current_user.id):
         raise HTTPException(status_code=400, detail="Not enough permissions")
 
-    success = AgentService.delete_agent(session=session, agent_id=id)
+    success = await AgentService.delete_agent(session=session, agent_id=id)
     if not success:
         raise HTTPException(status_code=404, detail="Agent not found")
     return Message(message="Agent deleted successfully")
