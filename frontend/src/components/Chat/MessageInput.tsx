@@ -2,6 +2,7 @@ import { useState, KeyboardEvent } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Send } from "lucide-react"
+import { RotatingHints } from "@/components/Common/RotatingHints"
 
 interface MessageInputProps {
   onSend: (content: string) => void
@@ -51,9 +52,7 @@ export function MessageInput({
           <Send className="h-5 w-5" />
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground mt-2 max-w-7xl mx-auto">
-        Press Enter to send, Shift+Enter for new line
-      </p>
+      <RotatingHints className="mt-2 max-w-7xl mx-auto" />
     </div>
   )
 }

@@ -13,6 +13,7 @@ import AddAgent from "@/components/Agents/AddAgent"
 import useCustomToast from "@/hooks/useCustomToast"
 import PendingItems from "@/components/Pending/PendingItems"
 import { getColorPreset } from "@/utils/colorPresets"
+import { RotatingHints } from "@/components/Common/RotatingHints"
 
 export const Route = createFileRoute("/_layout/")({
   component: Dashboard,
@@ -203,9 +204,7 @@ function Dashboard() {
             />
 
             <div className="flex items-center justify-between">
-              <p className="text-xs text-muted-foreground">
-                Press Enter to send, Shift+Enter for new line
-              </p>
+              <RotatingHints />
 
               {/* Mode Switch and Send Button */}
               <div className="flex items-center gap-3">
