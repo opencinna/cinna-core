@@ -25,6 +25,8 @@ from .agent import (
     AgentsPublic,
     AgentWithCredentials,
     AgentCredentialLinkRequest,
+    AgentCreateFlowRequest,
+    AgentCreateFlowResponse,
 )
 from .credential import (
     Credential,
@@ -95,6 +97,8 @@ __all__ = [
     "AgentCredentialLink",
     "AgentWithCredentials",
     "AgentCredentialLinkRequest",
+    "AgentCreateFlowRequest",
+    "AgentCreateFlowResponse",
     # Credentials
     "Credential",
     "CredentialCreate",

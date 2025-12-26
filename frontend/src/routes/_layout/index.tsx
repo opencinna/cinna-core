@@ -26,12 +26,15 @@ export const Route = createFileRoute("/_layout/")({
   }),
 })
 
+const NEW_AGENT_ID = "__new_agent__"
+
 function Dashboard() {
   const { setHeaderContent } = usePageHeader()
   const [selectedAgentId, setSelectedAgentId] = useState<string>("")
   const [mode, setMode] = useState<"conversation" | "building">("conversation")
   const [message, setMessage] = useState("")
   const [inputMode, setInputMode] = useState<"automatic" | "manual">("automatic")
+  const [previousMode, setPreviousMode] = useState<"conversation" | "building">("conversation")
 
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -111,6 +114,15 @@ function Dashboard() {
       return
     }
 
+    // Handle "New Agent" flow
+    if (selectedAgentId === NEW_AGENT_ID) {
+      navigate({
+        to: "/agent/creating",
+        search: { description: trimmedMessage, mode },
+      })
+      return
+    }
+
     const selectedAgent = agentsWithActiveEnv.find((a) => a.id === selectedAgentId)
     if (!selectedAgent?.active_environment_id) {
       showErrorToast("Please start an environment for this agent first")
@@ -139,6 +151,23 @@ function Dashboard() {
   }
 
   const handleAgentClick = (agentId: string) => {
+    if (agentId === NEW_AGENT_ID) {
+      // New Agent selected - save current mode and switch to building
+      if (selectedAgentId !== NEW_AGENT_ID) {
+        setPreviousMode(mode)
+      }
+      setSelectedAgentId(NEW_AGENT_ID)
+      setInputMode("automatic")
+      setMessage("")
+      setMode("building")
+      return
+    }
+
+    // Switching from "New Agent" to regular agent - restore previous mode
+    if (selectedAgentId === NEW_AGENT_ID) {
+      setMode(previousMode)
+    }
+
     if (selectedAgentId === agentId && inputMode === "automatic") {
       // Agent already selected, toggle between empty and entrypoint prompt
       const agent = agentsWithActiveEnv.find((a) => a.id === agentId)
@@ -226,6 +255,19 @@ function Dashboard() {
                   </button>
                 )
               })}
+              {/* New Agent Badge */}
+              <button
+                className={`
+                  cursor-pointer px-4 py-2 text-sm rounded-md transition-all
+                  bg-gradient-to-r from-blue-500 to-purple-600
+                  text-white
+                  hover:from-blue-600 hover:to-purple-700
+                  ${selectedAgentId === NEW_AGENT_ID ? "ring-2 ring-blue-400 ring-offset-2" : ""}
+                `}
+                onClick={() => handleAgentClick(NEW_AGENT_ID)}
+              >
+                + New Agent
+              </button>
             </div>
           </div>
 
@@ -236,9 +278,11 @@ function Dashboard() {
               onChange={(e) => handleMessageChange(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={
-                mode === "building"
-                  ? "Type your message to start building..."
-                  : "Type your message to start a conversation..."
+                selectedAgentId === NEW_AGENT_ID
+                  ? "Describe what you want the agent to do and what result you expect..."
+                  : mode === "building"
+                    ? "Type your message to start building..."
+                    : "Type your message to start a conversation..."
               }
               className={`min-h-[120px] max-h-[300px] resize-none text-base transition-colors ${
                 mode === "building"
@@ -262,9 +306,14 @@ function Dashboard() {
                       <input
                         type="checkbox"
                         checked={mode === "building"}
-                        onChange={() =>
-                          setMode(mode === "conversation" ? "building" : "conversation")
-                        }
+                        onChange={() => {
+                          const newMode = mode === "conversation" ? "building" : "conversation"
+                          setMode(newMode)
+                          // Update previousMode if not on "New Agent" so it's saved for later
+                          if (selectedAgentId !== NEW_AGENT_ID) {
+                            setPreviousMode(newMode)
+                          }
+                        }}
                         className="sr-only"
                       />
                       <div

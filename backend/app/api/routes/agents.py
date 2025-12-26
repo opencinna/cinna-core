@@ -1,7 +1,9 @@
 import uuid
+import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlmodel import func, select
 
 from app.api.deps import CurrentUser, SessionDep
@@ -12,6 +14,8 @@ from app.models import (
     AgentsPublic,
     AgentUpdate,
     AgentCredentialLinkRequest,
+    AgentCreateFlowRequest,
+    AgentCreateFlowResponse,
     Message,
     Credential,
     CredentialPublic,
@@ -84,6 +88,35 @@ async def create_agent(
         session=session, user_id=current_user.id, data=agent_in, user=current_user
     )
     return agent
+
+
+@router.post("/create-flow", response_model=AgentCreateFlowResponse)
+async def create_agent_with_flow(
+    *, session: SessionDep, current_user: CurrentUser, request: AgentCreateFlowRequest
+) -> Any:
+    """
+    Initiate agent creation flow (agent + environment + session).
+    This endpoint starts the process and returns immediately.
+    Use the /create-flow-stream endpoint to monitor progress.
+    """
+    async def event_generator():
+        async for event in AgentService.create_agent_flow(
+            session=session,
+            user=current_user,
+            description=request.description,
+            mode=request.mode
+        ):
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
 
 
 @router.put("/{id}", response_model=AgentPublic)

@@ -129,6 +129,42 @@ export const AgentCreateSchema = {
     title: 'AgentCreate'
 } as const;
 
+export const AgentCreateFlowRequestSchema = {
+    properties: {
+        description: {
+            type: 'string',
+            maxLength: 2000,
+            minLength: 1,
+            title: 'Description'
+        },
+        mode: {
+            type: 'string',
+            title: 'Mode',
+            default: 'building'
+        }
+    },
+    type: 'object',
+    required: ['description'],
+    title: 'AgentCreateFlowRequest'
+} as const;
+
+export const AgentCreateFlowResponseSchema = {
+    properties: {
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        message: {
+            type: 'string',
+            title: 'Message'
+        }
+    },
+    type: 'object',
+    required: ['agent_id', 'message'],
+    title: 'AgentCreateFlowResponse'
+} as const;
+
 export const AgentCredentialLinkRequestSchema = {
     properties: {
         credential_id: {

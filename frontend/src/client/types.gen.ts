@@ -7,6 +7,16 @@ export type AgentCreate = {
     description?: (string | null);
 };
 
+export type AgentCreateFlowRequest = {
+    description: string;
+    mode?: string;
+};
+
+export type AgentCreateFlowResponse = {
+    agent_id: string;
+    message: string;
+};
+
 export type AgentCredentialLinkRequest = {
     credential_id: string;
 };
@@ -378,6 +388,12 @@ export type AgentsDeleteAgentData = {
 };
 
 export type AgentsDeleteAgentResponse = (Message);
+
+export type AgentsCreateAgentWithFlowData = {
+    requestBody: AgentCreateFlowRequest;
+};
+
+export type AgentsCreateAgentWithFlowResponse = (AgentCreateFlowResponse);
 
 export type AgentsSyncAgentPromptsData = {
     id: string;

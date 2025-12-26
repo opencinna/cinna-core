@@ -1,0 +1,204 @@
+There is a special tool called AskUserQuestion
+In the UI it looks like this:
+
+---
+
+Using tool: AskUserQuestion
+questions:
+
+[
+  {
+    "question": "Which email service will you be using to check for invoices?",
+    "header": "Email Service",
+    "multiSelect": false,
+    "options": [
+      {
+        "label": "Gmail",
+        "description": "Use Gmail API or IMAP access to fetch emails"
+      },
+      {
+        "label": "Outlook/Office 365",
+        "description": "Use Microsoft Graph API or IMAP access"
+      },
+      {
+        "label": "Generic IMAP",
+        "description": "Connect to any email provider supporting IMAP (Yahoo, custom domains, etc.)"
+      },
+      {
+        "label": "POP3",
+        "description": "Use POP3 protocol for email access"
+      }
+    ]
+  },
+  {
+    "question": "How should invoices be detected in emails?",
+    "header": "Detection",
+    "multiSelect": true,
+    "options": [
+      {
+        "label": "PDF attachments",
+        "description": "Look for PDF files attached to emails and parse them"
+      },
+      {
+        "label": "Keywords in subject/body",
+        "description": "Detect emails with invoice-related keywords like 'invoice', 'bill', 'receipt'"
+      },
+      {
+        "label": "Specific sender addresses",
+        "description": "Filter by known vendor email addresses"
+      },
+      {
+        "label": "Email folder/label",
+        "description": "Check a specific folder or label for invoices"
+      }
+    ]
+  },
+  {
+    "question": "What information should be extracted from invoices?",
+    "header": "Data Extract",
+    "multiSelect": true,
+    "options": [
+      {
+        "label": "Vendor name",
+        "description": "Company or person who issued the invoice"
+      },
+      {
+        "label": "Invoice amount and currency",
+        "description": "Total amount and currency denomination"
+      },
+      {
+        "label": "Invoice date and due date",
+        "description": "Issue date and payment due date"
+      },
+      {
+        "label": "Invoice number",
+        "description": "Unique invoice identifier"
+      }
+    ]
+  },
+  {
+    "question": "What format should the summary report be in?",
+    "header": "Report Format",
+    "multiSelect": false,
+    "options": [
+      {
+        "label": "JSON file (Recommended)",
+        "description": "Structured data easy to process programmatically"
+      },
+      {
+        "label": "CSV file",
+        "description": "Spreadsheet-compatible format for Excel/Google Sheets"
+      },
+      {
+        "label": "HTML report",
+        "description": "Formatted web page with tables and styling"
+      },
+      {
+        "label": "Plain text summary",
+        "description": "Simple text file with invoice details"
+      }
+    ]
+  }
+]
+
+----
+Using tool: AskUserQuestion
+questions:
+
+[
+  {
+    "question": "Which email service will you be using to check for invoices?",
+    "header": "Email Service",
+    "multiSelect": false,
+    "options": [
+      {
+        "label": "Gmail",
+        "description": "Use Gmail API or IMAP access to fetch emails"
+      },
+      {
+        "label": "Outlook/Office 365",
+        "description": "Use Microsoft Graph API or IMAP access"
+      },
+      {
+        "label": "Generic IMAP",
+        "description": "Connect to any email provider supporting IMAP (Yahoo, custom domains, etc.)"
+      }
+    ]
+  },
+  {
+    "question": "How should invoices be detected in emails?",
+    "header": "Detection",
+    "multiSelect": true,
+    "options": [
+      {
+        "label": "PDF attachments",
+        "description": "Look for PDF files attached to emails and parse them"
+      },
+      {
+        "label": "Keywords in subject/body",
+        "description": "Detect emails with invoice-related keywords like 'invoice', 'bill', 'receipt'"
+      },
+      {
+        "label": "Specific sender addresses",
+        "description": "Filter by known vendor email addresses"
+      }
+    ]
+  },
+  {
+    "question": "What information should be extracted from invoices?",
+    "header": "Data Extract",
+    "multiSelect": true,
+    "options": [
+      {
+        "label": "Basic info (Recommended)",
+        "description": "Vendor name, amount, invoice date, and invoice number"
+      },
+      {
+        "label": "Extended details",
+        "description": "Also extract line items, tax details, payment terms"
+      }
+    ]
+  },
+  {
+    "question": "What format should the summary report be in?",
+    "header": "Report Format",
+    "multiSelect": false,
+    "options": [
+      {
+        "label": "JSON file (Recommended)",
+        "description": "Structured data easy to process programmatically"
+      },
+      {
+        "label": "CSV file",
+        "description": "Spreadsheet-compatible format for Excel/Google Sheets"
+      },
+      {
+        "label": "HTML report",
+        "description": "Formatted web page with tables and styling"
+      }
+    ]
+  }
+]
+
+-----
+
+It could  be multiple tool calls in a single stream one after another
+completely in the UI part we should be able to visually give nice way to answer these questions
+and send a message based on that
+
+After that we should save also in DB that we answered to these questions
+so that page refresh would know that answers are given already and we don't need to render
+form for answering it
+
+
+
+MORE FEATURES:
+
+- main dashboard "Latest sessions" block with easy way to open them
+- main dashboard option "New agent" in the agent selector, which makes new agent/env/etc. - Auto enables build mode
+- when we receive in the UI todolist tool call, maybe we can visually show that active todolist somewhere in the UI separately
+- when we receive questions asked, maybe we can show a form to answer those
+- main dashboard, when we select agent in conversaion mode, in the placeholder shown the entrypoint prompt and button 'send' is active (same as 'enter'), that would be default message to send for a new session
+- main dashboard and agents list view - add tab configuration to the agent where color can be selected (consider dark/light theme), once of 12 colors, that would be used for icons and background in the main dashboard (to differentiate agents by colors); on hover on button in main screen should be replaced with outline selection
+
+

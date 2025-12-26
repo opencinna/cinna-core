@@ -77,3 +77,15 @@ class AgentWithCredentials(AgentPublic):
 # Request to link credential to agent
 class AgentCredentialLinkRequest(SQLModel):
     credential_id: uuid.UUID
+
+
+# Request to create agent with full flow (agent + environment + session)
+class AgentCreateFlowRequest(SQLModel):
+    description: str = Field(min_length=1, max_length=2000)
+    mode: str = Field(default="building")  # "building" or "conversation"
+
+
+# Response for agent creation flow initiation
+class AgentCreateFlowResponse(SQLModel):
+    agent_id: uuid.UUID
+    message: str
