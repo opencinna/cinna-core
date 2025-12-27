@@ -6,6 +6,7 @@ import { WriteToolBlock } from "./WriteToolBlock"
 import { AskUserQuestionToolBlock } from "./AskUserQuestionToolBlock"
 import { GlobToolBlock } from "./GlobToolBlock"
 import { WebSearchToolBlock } from "./WebSearchToolBlock"
+import { BashToolBlock } from "./BashToolBlock"
 
 interface ToolCallBlockProps {
   toolName: string
@@ -41,6 +42,11 @@ export function ToolCallBlock({ toolName, toolInput }: ToolCallBlockProps) {
   // Special rendering for WebSearch tool
   if (toolName === "WebSearch" && toolInput?.query) {
     return <WebSearchToolBlock query={toolInput.query} />
+  }
+
+  // Special rendering for Bash tool
+  if (toolName === "Bash" && toolInput?.command) {
+    return <BashToolBlock command={toolInput.command} />
   }
 
   // Default rendering for other tools
