@@ -1,8 +1,8 @@
-import { useState, useCallback } from "react"
+import { useState, useCallback, useRef } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 
 interface StreamEvent {
-  type: "session_created" | "assistant" | "tool" | "result" | "error" | "done" | "thinking"
+  type: "session_created" | "assistant" | "tool" | "result" | "error" | "done" | "thinking" | "interrupted"
   content?: string
   session_id?: string
   metadata?: Record<string, any>
@@ -33,7 +33,14 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
   const [streamingEvents, setStreamingEvents] = useState<StructuredStreamEvent[]>([])
   const queryClient = useQueryClient()
 
+  // Track abort controller for current request
+  const abortControllerRef = useRef<AbortController | null>(null)
+
   const sendMessage = useCallback(async (content: string, answersToMessageId?: string) => {
+    // Create new AbortController for this request
+    const abortController = new AbortController()
+    abortControllerRef.current = abortController
+
     setIsStreaming(true)
     setStreamingEvents([])
 
@@ -96,6 +103,7 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
             "Authorization": `Bearer ${token}`,
           },
           body: JSON.stringify(requestBody),
+          signal: abortController.signal,  // Add abort signal
         }
       )
 
@@ -119,6 +127,7 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
 
       let buffer = ""
       let streamCompleted = false
+      let wasInterrupted = false  // Track if stream was interrupted
 
       while (true) {
         const { done, value } = await reader.read()
@@ -142,18 +151,33 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
             try {
               const event: StreamEvent = JSON.parse(dataStr)
 
+              // Handle interrupted event
+              if (event.type === "interrupted") {
+                console.log("Stream was interrupted by user")
+                wasInterrupted = true
+                streamCompleted = true
+                break
+              }
+
               // Skip system and done events
               if (event.type === "session_created" || event.type === "done") {
                 if (event.type === "done") {
                   streamCompleted = true
+                  // Check metadata for interrupt status
+                  if (event.metadata?.interrupted) {
+                    wasInterrupted = true
+                  }
                 }
                 continue
               }
 
-              // Handle errors
+              // Handle errors from backend
               if (event.type === "error") {
                 console.error("Stream error:", event)
-                throw new Error(event.content || "Unknown stream error")
+                // Error is saved as a system message by the backend
+                // Just mark stream as completed and refresh to show the error message
+                streamCompleted = true
+                break
               }
 
               // Convert to structured event
@@ -182,11 +206,16 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
             }
           }
         }
+
+        // Break outer loop if interrupted
+        if (wasInterrupted) {
+          break
+        }
       }
 
-      // Always refresh messages after stream completes successfully
-      if (streamCompleted) {
-        console.log("Stream completed, refreshing messages...")
+      // Always refresh messages after stream ends (completed or interrupted)
+      if (streamCompleted || wasInterrupted) {
+        console.log(`Stream ${wasInterrupted ? 'interrupted' : 'completed'}, refreshing messages...`)
 
         // Small delay to ensure backend finishes writing to database
         await new Promise(resolve => setTimeout(resolve, 300))
@@ -247,6 +276,19 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
       setIsStreaming(false)
       setStreamingEvents([])
     } catch (error) {
+      // Handle abort (user clicked Stop button)
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log("Fetch aborted by user")
+        // Don't show error - this is intentional
+        setIsStreaming(false)
+        setStreamingEvents([])
+
+        // Still refresh to get partial message
+        await new Promise(resolve => setTimeout(resolve, 300))
+        await queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
+        return
+      }
+
       console.error("Message stream error:", error)
       setIsStreaming(false)
       setStreamingEvents([])
@@ -260,11 +302,59 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
       }
 
       onError?.(error instanceof Error ? error : new Error(String(error)))
+    } finally {
+      // Clear abort controller reference
+      abortControllerRef.current = null
     }
   }, [sessionId, sessionMode, queryClient, onSuccess, onError])
 
+  const stopMessage = useCallback(async () => {
+    console.log("Stop button clicked")
+
+    // CRITICAL: Send interrupt signal BEFORE aborting the stream!
+    // If we abort the stream first, the backend's async generator stops being consumed,
+    // causing the Claude SDK to cancel its read task and unregister the session
+    // BEFORE the interrupt request can be processed.
+
+    // 1. Send interrupt signal to backend (stops SDK processing)
+    try {
+      const token = localStorage.getItem("access_token")
+      if (!token) {
+        console.error("Not authenticated, cannot send interrupt")
+        return
+      }
+
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL}/api/v1/sessions/${sessionId}/messages/interrupt`,
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+          },
+        }
+      )
+
+      if (response.ok) {
+        const data = await response.json()
+        console.log("Interrupt request sent successfully:", data)
+      } else {
+        console.warn("Interrupt request returned non-200:", response.status)
+      }
+    } catch (error) {
+      console.error("Failed to send interrupt signal:", error)
+    }
+
+    // 2. Abort the fetch request (stops HTTP stream)
+    // Do this AFTER sending the interrupt signal to ensure proper cleanup
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      console.log("Fetch request aborted")
+    }
+  }, [sessionId])
+
   return {
     sendMessage,
+    stopMessage,
     isStreaming,
     streamingEvents,
   }

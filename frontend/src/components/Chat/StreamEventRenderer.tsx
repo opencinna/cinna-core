@@ -39,7 +39,7 @@ export function StreamEventRenderer({ events }: StreamEventRendererProps) {
             <MarkdownRenderer
               key={idx}
               content={event.content}
-              className="prose prose-sm dark:prose-invert max-w-none"
+              className="prose dark:prose-invert max-w-none prose-p:leading-normal prose-p:my-2 prose-ul:my-2 prose-li:my-0"
             />
           )
         } else if (event.type === "thinking" && event.content.trim()) {

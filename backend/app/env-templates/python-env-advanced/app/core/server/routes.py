@@ -9,6 +9,7 @@ from typing import Annotated
 from .models import HealthCheckResponse, ChatRequest, ChatResponse, AgentPromptsResponse, AgentPromptsUpdate, CredentialsUpdate
 from .sdk_manager import sdk_manager
 from .agent_env_service import AgentEnvService
+from .active_session_manager import active_session_manager
 
 router = APIRouter(tags=["agent"])
 logger = logging.getLogger(__name__)
@@ -193,6 +194,40 @@ async def chat_stream(request: ChatRequest):
             status_code=400,
             detail=f"Unsupported agent_sdk: {request.agent_sdk}. Currently only 'claude' is supported."
         )
+
+
+@router.post("/chat/interrupt/{session_id}", dependencies=[Depends(verify_auth_token)])
+async def interrupt_session(session_id: str):
+    """
+    Request interrupt for an active streaming session.
+
+    This sets an interrupt flag that will be checked during message streaming.
+    The actual SDK interrupt() is called from within the streaming loop.
+
+    Args:
+        session_id: External SDK session ID
+
+    Returns:
+        Status indicating if interrupt was requested
+    """
+    logger.info(f"Interrupt request received for session: {session_id}")
+
+    success = await active_session_manager.request_interrupt(session_id)
+
+    if success:
+        return {
+            "status": "ok",
+            "message": f"Interrupt requested for session {session_id}",
+            "session_id": session_id
+        }
+    else:
+        # Session not found or not active - this is OK, might have just finished
+        logger.info(f"Interrupt request for inactive session {session_id} (may have completed)")
+        return {
+            "status": "not_found",
+            "message": f"Session {session_id} is not currently active (may have completed)",
+            "session_id": session_id
+        }
 
 
 @router.get("/sdk/sessions", dependencies=[Depends(verify_auth_token)])

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .prompt_generator import PromptGenerator
 from .sdk_utils import SessionLogger, format_message_for_debug, format_sdk_message
+from .active_session_manager import active_session_manager
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,14 @@ class ClaudeCodeSDKManager:
             # For now, use a placeholder for tracking
             current_session_id = session_id
 
+            # Register session EARLY for interrupt support
+            # This allows interrupts to work even during the slow connect/query phase
+            # For resumed sessions, we know the ID upfront and can register immediately
+            # For new sessions, we'll register again when we get the real session_id from ResultMessage
+            if current_session_id:
+                await active_session_manager.register_session(current_session_id, client)
+                logger.info(f"Registered session {current_session_id} for interrupt support")
+
             # Emit session_created event only for new sessions
             if not session_id:
                 # We don't know the real session_id yet - will get it from ResultMessage
@@ -148,15 +157,60 @@ class ClaudeCodeSDKManager:
                 await client.query(message)
                 logger.info("Query sent successfully, starting to receive responses...")
             except Exception as e:
+                # Check if this is a "No conversation found" error from corrupted session
+                error_msg = str(e)
+                if "No conversation found" in error_msg or "Cannot write to terminated process" in error_msg:
+                    logger.warning(f"Session {current_session_id} appears corrupted, will retry without resuming")
+
+                    # Clean up the corrupted client
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass  # Ignore disconnect errors for corrupted clients
+
+                    # Unregister the corrupted session
+                    if current_session_id:
+                        await active_session_manager.unregister_session(current_session_id)
+
+                    # Yield error event indicating session was corrupted
+                    yield {
+                        "type": "error",
+                        "content": "Previous session was corrupted or interrupted. Please send your message again to start a new session.",
+                        "error_type": "CorruptedSession",
+                        "session_corrupted": True,  # Signal to backend to clear external_session_id
+                    }
+                    return
+
                 logger.error(f"Error sending query to SDK client: {e}", exc_info=True)
                 raise
 
             # Stream responses using receive_messages()
             logger.info("Starting to iterate over receive_messages()...")
             message_count = 0
+            interrupt_initiated = False  # Track if we called interrupt()
+
             try:
                 async for message_obj in client.receive_messages():
                     message_count += 1
+
+                    # Check for interrupt requests (if we have a session_id)
+                    if current_session_id:
+                        if await active_session_manager.check_interrupt_requested(current_session_id):
+                            logger.info(f"Interrupt detected for session {current_session_id}, calling SDK interrupt()")
+                            try:
+                                await client.interrupt()
+                                interrupt_initiated = True  # Mark that we initiated the interrupt
+                                logger.info("SDK interrupt() called successfully")
+                                # Yield interrupt event
+                                yield {
+                                    "type": "interrupted",
+                                    "content": "Message interrupted by user",
+                                    "session_id": current_session_id,
+                                }
+                                break  # Exit receive_messages loop - expect exit code -9
+                            except Exception as int_error:
+                                logger.error(f"Failed to interrupt SDK: {int_error}")
+                                # Continue processing - don't break on interrupt failure
 
                     # Dump raw message to log file if enabled
                     self.session_logger.dump_message(session_log_file, message_obj, message_count)
@@ -182,6 +236,8 @@ class ClaudeCodeSDKManager:
                             current_session_id = message_obj.session_id
                             formatted["session_id"] = current_session_id
                             logger.info(f"Captured session_id from ResultMessage: {current_session_id}")
+                            # Register session now that we have the ID
+                            await active_session_manager.register_session(current_session_id, client)
 
                         yield formatted
 
@@ -196,9 +252,31 @@ class ClaudeCodeSDKManager:
                 self.session_logger.complete_session_log(session_log_file, message_count)
 
             except Exception as e:
-                logger.error(f"Error during receive_messages iteration: {e}", exc_info=True)
-                raise
+                # Check if this is exit code -9 (SIGKILL)
+                error_msg = str(e)
+                if "exit code -9" in error_msg or "exit code: -9" in error_msg:
+                    if interrupt_initiated:
+                        logger.info("Received expected exit code -9 after calling interrupt()")
+                        # This is not an error - it's the expected result of interrupt()
+                        # The interrupted event was already yielded above
+                    else:
+                        logger.warning(f"Session {current_session_id} died with exit code -9 (likely corrupted from previous interrupt)")
+                        # Yield corrupted session error
+                        yield {
+                            "type": "error",
+                            "content": "Session was corrupted from a previous interrupt. Please try your message again.",
+                            "error_type": "CorruptedSession",
+                            "session_corrupted": True,
+                        }
+                else:
+                    # This is an unexpected error
+                    logger.error(f"Error during receive_messages iteration: {e}", exc_info=True)
+                    raise
             finally:
+                # Unregister session from active session manager
+                if current_session_id:
+                    await active_session_manager.unregister_session(current_session_id)
+
                 # Always disconnect after completing the message
                 try:
                     await client.disconnect()

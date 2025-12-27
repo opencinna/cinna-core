@@ -242,3 +242,79 @@ async def send_message_stream(
             "X-Accel-Buffering": "no",
         }
     )
+
+
+@router.post("/{session_id}/messages/interrupt")
+async def interrupt_message(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    session_id: uuid.UUID,
+) -> Any:
+    """
+    Interrupt an active streaming message.
+
+    Flow:
+    1. Verify session ownership
+    2. Get external SDK session ID
+    3. Call environment interrupt endpoint
+    4. Return status
+    """
+    # Verify session exists and user owns it
+    chat_session = session.get(Session, session_id)
+    if not chat_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if not current_user.is_superuser and (chat_session.user_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    # Get external SDK session ID
+    external_session_id = SessionService.get_external_session_id(chat_session)
+
+    if not external_session_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No active external session to interrupt (message may not have started yet)"
+        )
+
+    # Get environment
+    environment = session.get(AgentEnvironment, chat_session.environment_id)
+    if not environment:
+        raise HTTPException(status_code=404, detail="Environment not found")
+
+    # Call environment interrupt endpoint
+    import httpx
+
+    base_url = MessageService.get_environment_url(environment)
+    auth_headers = MessageService.get_auth_headers(environment)
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.post(
+                f"{base_url}/chat/interrupt/{external_session_id}",
+                headers=auth_headers
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(f"Interrupt request sent successfully: {data}")
+                return {
+                    "status": "ok",
+                    "message": "Interrupt request sent",
+                    "session_id": str(session_id),
+                    "external_session_id": external_session_id
+                }
+            else:
+                logger.warning(f"Environment returned {response.status_code}: {response.text}")
+                return {
+                    "status": "warning",
+                    "message": "Interrupt request sent but session may have completed",
+                    "session_id": str(session_id)
+                }
+
+    except httpx.RequestError as e:
+        logger.error(f"Failed to send interrupt to environment: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to communicate with environment: {str(e)}"
+        )

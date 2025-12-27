@@ -58,7 +58,7 @@ function ChatInterface() {
     enabled: !!sessionId,
   })
 
-  const { sendMessage, isStreaming, streamingEvents } = useMessageStream({
+  const { sendMessage, stopMessage, isStreaming, streamingEvents } = useMessageStream({
     sessionId,
     sessionMode: session?.mode,
     onSuccess: () => {
@@ -185,21 +185,8 @@ function ChatInterface() {
 
   const messages = messagesData?.data || []
 
-  // Check if session is in error state
-  if (session.status === "error") {
-    return (
-      <div className="flex flex-col h-full min-h-0">
-        <div className="flex-1 flex items-center justify-center min-h-0">
-          <div className="text-center space-y-4">
-            <p className="text-destructive font-semibold">Session encountered an error</p>
-            <p className="text-muted-foreground">
-              Please check the environment status or create a new session.
-            </p>
-          </div>
-        </div>
-      </div>
-    )
-  }
+  // Note: We no longer show a separate error screen.
+  // Errors are now saved as system messages in the chat and will appear in the message list.
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -212,6 +199,7 @@ function ChatInterface() {
       />
       <MessageInput
         onSend={handleSendMessage}
+        onStop={stopMessage}
         sendDisabled={isStreaming}
         placeholder={
           isStreaming

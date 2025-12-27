@@ -1002,10 +1002,25 @@ export const MessagePublicSchema = {
                 }
             ],
             title: 'Answers To Message Id'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        status_message: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status Message'
         }
     },
     type: 'object',
-    required: ['id', 'session_id', 'role', 'content', 'sequence_number', 'timestamp', 'message_metadata', 'tool_questions_status', 'answers_to_message_id'],
+    required: ['id', 'session_id', 'role', 'content', 'sequence_number', 'timestamp', 'message_metadata', 'tool_questions_status', 'answers_to_message_id', 'status', 'status_message'],
     title: 'MessagePublic'
 } as const;
 

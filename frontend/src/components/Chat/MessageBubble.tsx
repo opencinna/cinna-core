@@ -1,11 +1,10 @@
 import { useState } from "react"
 import { formatDistanceToNow } from "date-fns"
 import type { MessagePublic } from "@/client"
-import ReactMarkdown from "react-markdown"
 import { StreamEventRenderer } from "./StreamEventRenderer"
 import { MessageActions } from "./MessageActions"
 import { AnswerQuestionsModal } from "./AnswerQuestionsModal"
-import { Info } from "lucide-react"
+import { Info, AlertCircle } from "lucide-react"
 
 interface MessageBubbleProps {
   message: MessagePublic
@@ -17,11 +16,18 @@ export function MessageBubble({ message, onSendAnswer }: MessageBubbleProps) {
 
   const isUser = message.role === "user"
   const isSystem = message.role === "system"
+  const isSystemError = isSystem && message.status === "error"
 
   if (isSystem) {
     return (
       <div className="flex justify-center my-4">
-        <div className="bg-muted text-muted-foreground text-sm px-4 py-2 rounded-full max-w-md text-center">
+        <div
+          className={`text-sm px-4 py-2 rounded-lg max-w-2xl ${
+            isSystemError
+              ? "bg-destructive/10 text-destructive border border-destructive/20"
+              : "bg-muted text-muted-foreground"
+          }`}
+        >
           {message.content}
         </div>
       </div>
@@ -34,6 +40,11 @@ export function MessageBubble({ message, onSendAnswer }: MessageBubbleProps) {
   const durationMs = message.message_metadata?.duration_ms as number | undefined
   const numTurns = message.message_metadata?.num_turns as number | undefined
   const streamingEvents = (message.message_metadata?.streaming_events || []) as any[]
+
+  // Extract status
+  const messageStatus = message.status || ""
+  const isInterrupted = messageStatus === "user_interrupted"
+  const isError = messageStatus === "error"
 
   // Extract and deduplicate questions from AskUserQuestion tool calls
   const extractQuestions = () => {
@@ -113,22 +124,41 @@ export function MessageBubble({ message, onSendAnswer }: MessageBubbleProps) {
                 >
                   {formattedTime}
                 </p>
-                {!isUser && (model || totalCost || durationSec || numTurns) && (
-                  <div
-                    className="cursor-help"
-                    title={[
-                      `UTC Time: ${utcTimestamp}`,
-                      model ? `Model: ${model}` : null,
-                      totalCost ? `Cost: $${totalCost.toFixed(6)} USD` : null,
-                      durationSec ? `Duration: ${durationSec}s` : null,
-                      numTurns ? `Turns: ${numTurns}` : null,
-                    ]
-                      .filter(Boolean)
-                      .join('\n')}
-                  >
-                    <Info className="w-3.5 h-3.5 text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors" />
-                  </div>
-                )}
+
+                <div className="flex items-center gap-1.5">
+                  {/* Status badge for interrupted/error messages */}
+                  {!isUser && (isInterrupted || isError) && (
+                    <div
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs ${
+                        isInterrupted
+                          ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200"
+                          : "bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200"
+                      }`}
+                      title={message.status_message || (isInterrupted ? "Interrupted by user" : "Error occurred")}
+                    >
+                      <AlertCircle className="h-3 w-3" />
+                      <span>{isInterrupted ? "Interrupted" : "Error"}</span>
+                    </div>
+                  )}
+
+                  {/* Existing info icon */}
+                  {!isUser && (model || totalCost || durationSec || numTurns) && (
+                    <div
+                      className="cursor-help"
+                      title={[
+                        `UTC Time: ${utcTimestamp}`,
+                        model ? `Model: ${model}` : null,
+                        totalCost ? `Cost: $${totalCost.toFixed(6)} USD` : null,
+                        durationSec ? `Duration: ${durationSec}s` : null,
+                        numTurns ? `Turns: ${numTurns}` : null,
+                      ]
+                        .filter(Boolean)
+                        .join('\n')}
+                    >
+                      <Info className="w-3.5 h-3.5 text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors" />
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>

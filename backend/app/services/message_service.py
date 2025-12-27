@@ -22,6 +22,8 @@ class MessageService:
         message_metadata: dict | None = None,
         answers_to_message_id: UUID | None = None,
         tool_questions_status: str | None = None,
+        status: str = "",
+        status_message: str | None = None,
     ) -> SessionMessage:
         """Create message in session with auto-incremented sequence"""
         # Get the next sequence number for this session
@@ -39,6 +41,8 @@ class MessageService:
             message_metadata=message_metadata or {},
             answers_to_message_id=answers_to_message_id,
             tool_questions_status=tool_questions_status,
+            status=status,
+            status_message=status_message,
         )
         session.add(message)
 
@@ -354,6 +358,7 @@ class MessageService:
         agent_response_parts = []
         streaming_events = []  # Store raw streaming events for visualization
         new_external_session_id = external_session_id
+        was_interrupted = False  # Track if message was interrupted
         response_metadata = {
             "external_session_id": external_session_id,
             "mode": session_mode,
@@ -370,18 +375,66 @@ class MessageService:
                 agent_sdk=agent_sdk,
                 external_session_id=external_session_id
             ):
+                # Handle interrupted events
+                if event.get("type") == "interrupted":
+                    was_interrupted = True
+                    logger.info("Message was interrupted by user")
+                    # Forward event to frontend
+                    yield event
+                    # Don't return - let cleanup happen below
+                    break
+
                 # Handle error events from message service
                 if event.get("type") == "error":
-                    # Update session status to "error" on SDK/HTTP errors (non-blocking)
-                    def _update_error_status():
+                    error_content = event.get("content", "Unknown error occurred")
+                    error_type = event.get("error_type", "Error")
+
+                    # Check if this is a corrupted session error
+                    if event.get("session_corrupted"):
+                        logger.warning(f"Session {session_id} has corrupted external_session_id, clearing it")
+                        # Clear the corrupted external_session_id so next message starts fresh
+                        def _clear_corrupted_session():
+                            with get_fresh_db_session() as db:
+                                from app.services.session_service import SessionService
+                                chat_session_db = db.get(ChatSession, session_id)
+                                if chat_session_db:
+                                    SessionService.set_external_session_id(
+                                        db=db,
+                                        session=chat_session_db,
+                                        external_session_id=None
+                                    )
+                                # Also update session status to "idle"
+                                SessionService.update_session_status(
+                                    db_session=db,
+                                    session_id=session_id,
+                                    status="idle"
+                                )
+                        await asyncio.to_thread(_clear_corrupted_session)
+                    else:
+                        # Update session status to "idle" (not "error" - we're showing error in chat)
+                        def _update_idle_status():
+                            with get_fresh_db_session() as db:
+                                from app.services.session_service import SessionService
+                                SessionService.update_session_status(
+                                    db_session=db,
+                                    session_id=session_id,
+                                    status="idle"
+                                )
+                        await asyncio.to_thread(_update_idle_status)
+
+                    # Save error as a system message in the chat
+                    def _save_error_message():
                         with get_fresh_db_session() as db:
-                            from app.services.session_service import SessionService
-                            SessionService.update_session_status(
-                                db_session=db,
+                            MessageService.create_message(
+                                session=db,
                                 session_id=session_id,
-                                status="error"
+                                role="system",
+                                content=f"⚠️ {error_content}",
+                                message_metadata={"error_type": error_type},
+                                status="error",
                             )
-                    await asyncio.to_thread(_update_error_status)
+                    await asyncio.to_thread(_save_error_message)
+
                     # Forward error event and exit
                     yield event
                     return
@@ -465,21 +518,37 @@ class MessageService:
                             role="agent",
                             content=agent_content,
                             message_metadata=response_metadata,
-                            tool_questions_status=tool_questions_status
+                            tool_questions_status=tool_questions_status,
+                            status="user_interrupted" if was_interrupted else "",
+                            status_message="Interrupted by user" if was_interrupted else None
                         )
                 await asyncio.to_thread(_save_agent_message)
-                logger.info(f"Agent response saved ({len(streaming_events)} events, model={response_metadata.get('model')}, has_questions={has_questions})")
+                logger.info(f"Agent response saved ({len(streaming_events)} events, model={response_metadata.get('model')}, has_questions={has_questions}, interrupted={was_interrupted})")
 
-            # Update session status to "completed" after successful streaming (non-blocking)
-            def _update_completed_status():
-                with get_fresh_db_session() as db:
-                    from app.services.session_service import SessionService
-                    SessionService.update_session_status(
-                        db_session=db,
-                        session_id=session_id,
-                        status="completed"
-                    )
-            await asyncio.to_thread(_update_completed_status)
+            # Update session status after streaming
+            # Keep as "active" when interrupted so user can continue
+            # Mark as "completed" only when finished normally
+            if was_interrupted:
+                def _update_active_status():
+                    with get_fresh_db_session() as db:
+                        from app.services.session_service import SessionService
+                        SessionService.update_session_status(
+                            db_session=db,
+                            session_id=session_id,
+                            status="active"
+                        )
+                await asyncio.to_thread(_update_active_status)
+                logger.info("Session kept as 'active' after interruption")
+            else:
+                def _update_completed_status():
+                    with get_fresh_db_session() as db:
+                        from app.services.session_service import SessionService
+                        SessionService.update_session_status(
+                            db_session=db,
+                            session_id=session_id,
+                            status="completed"
+                        )
+                await asyncio.to_thread(_update_completed_status)
 
             # Sync agent prompts from environment if in building mode (non-blocking)
             if session_mode == "building":
@@ -527,7 +596,10 @@ class MessageService:
             yield {
                 "type": "done",
                 "content": "",
-                "metadata": response_metadata
+                "metadata": {
+                    **response_metadata,
+                    "interrupted": was_interrupted
+                }
             }
 
         except Exception as e:

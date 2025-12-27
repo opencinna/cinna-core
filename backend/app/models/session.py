@@ -33,6 +33,8 @@ class SessionMessage(SQLModel, table=True):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     tool_questions_status: str | None = None  # null | "unanswered" | "answered"
     answers_to_message_id: uuid.UUID | None = Field(default=None, foreign_key="message.id")
+    status: str = ""  # "" | "user_interrupted" | "error"
+    status_message: str | None = None  # Error details or interrupt reason
 
 
 # Pydantic Schemas
@@ -96,6 +98,8 @@ class MessagePublic(SQLModel):
     message_metadata: dict
     tool_questions_status: str | None
     answers_to_message_id: uuid.UUID | None
+    status: str
+    status_message: str | None
 
 
 class MessagesPublic(SQLModel):

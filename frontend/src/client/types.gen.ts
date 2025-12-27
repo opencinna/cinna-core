@@ -208,6 +208,8 @@ export type MessagePublic = {
     };
     tool_questions_status: (string | null);
     answers_to_message_id: (string | null);
+    status: string;
+    status_message: (string | null);
 };
 
 export type MessagesPublic = {
@@ -630,6 +632,12 @@ export type MessagesSendMessageStreamData = {
 };
 
 export type MessagesSendMessageStreamResponse = (unknown);
+
+export type MessagesInterruptMessageData = {
+    sessionId: string;
+};
+
+export type MessagesInterruptMessageResponse = (unknown);
 
 export type OauthGetOauthConfigResponse = (OAuthConfig);
 
