@@ -1,4 +1,4 @@
-import { useState, KeyboardEvent } from "react"
+import { useState, KeyboardEvent, forwardRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Send, Square } from "lucide-react"
@@ -11,12 +11,13 @@ interface MessageInputProps {
   placeholder?: string
 }
 
-export function MessageInput({
-  onSend,
-  onStop,
-  sendDisabled = false,
-  placeholder = "Type your message...",
-}: MessageInputProps) {
+export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
+  function MessageInput({
+    onSend,
+    onStop,
+    sendDisabled = false,
+    placeholder = "Type your message...",
+  }, ref) {
   const [message, setMessage] = useState("")
 
   const handleSend = () => {
@@ -45,6 +46,7 @@ export function MessageInput({
     <div className="border-t p-4 bg-background shrink-0">
       <div className="flex gap-2 items-end max-w-7xl mx-auto">
         <Textarea
+          ref={ref}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -78,4 +80,4 @@ export function MessageInput({
       <RotatingHints className="mt-2 max-w-7xl mx-auto" />
     </div>
   )
-}
+})

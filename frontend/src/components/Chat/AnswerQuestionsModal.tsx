@@ -237,6 +237,7 @@ export function AnswerQuestionsModal({
                     {question.options.map((option, oIndex) => {
                       const isSelected = (answers[qIndex] as string[] || []).includes(option.label)
                       const recommended = isRecommended(option.label)
+                      const hasAnySelection = ((answers[qIndex] as string[] || []).length > 0) || customSelected[qIndex]
 
                       return (
                         <div
@@ -244,7 +245,9 @@ export function AnswerQuestionsModal({
                           className={`flex items-start gap-3 p-3 rounded border transition-all cursor-pointer ${
                             isSelected
                               ? "bg-blue-50 dark:bg-blue-950 border-blue-300 dark:border-blue-700 opacity-100"
-                              : "bg-white dark:bg-slate-900 border-gray-200 dark:border-gray-700 opacity-60 hover:opacity-100"
+                              : hasAnySelection
+                                ? "bg-white dark:bg-slate-900 border-gray-200 dark:border-gray-700 opacity-60 hover:opacity-100"
+                                : "bg-white dark:bg-slate-900 border-gray-200 dark:border-gray-700 opacity-100 hover:opacity-100"
                           }`}
                           onClick={() => handleMultiSelectChange(qIndex, option.label, !isSelected)}
                         >
@@ -274,7 +277,9 @@ export function AnswerQuestionsModal({
                       className={`flex items-start gap-3 p-3 rounded border transition-all cursor-pointer ${
                         customSelected[qIndex]
                           ? "bg-blue-50 dark:bg-blue-950 border-blue-300 dark:border-blue-700 opacity-100"
-                          : "bg-white dark:bg-slate-900 border-gray-200 dark:border-gray-700 opacity-60 hover:opacity-100"
+                          : ((answers[qIndex] as string[] || []).length > 0) || customSelected[qIndex]
+                            ? "bg-white dark:bg-slate-900 border-gray-200 dark:border-gray-700 opacity-60 hover:opacity-100"
+                            : "bg-white dark:bg-slate-900 border-gray-200 dark:border-gray-700 opacity-100 hover:opacity-100"
                       }`}
                       onClick={() =>
                         handleMultiSelectChange(qIndex, "__custom__", !customSelected[qIndex])
@@ -313,6 +318,7 @@ export function AnswerQuestionsModal({
                     {question.options.map((option, oIndex) => {
                       const isSelected = answers[qIndex] === option.label
                       const recommended = isRecommended(option.label)
+                      const hasAnySelection = !!answers[qIndex] || customSelected[qIndex]
 
                       return (
                         <div
@@ -320,7 +326,9 @@ export function AnswerQuestionsModal({
                           className={`flex items-start gap-3 p-3 rounded border transition-all cursor-pointer ${
                             isSelected
                               ? "bg-blue-50 dark:bg-blue-950 border-blue-300 dark:border-blue-700 opacity-100"
-                              : "bg-white dark:bg-slate-900 border-gray-200 dark:border-gray-700 opacity-60 hover:opacity-100"
+                              : hasAnySelection
+                                ? "bg-white dark:bg-slate-900 border-gray-200 dark:border-gray-700 opacity-60 hover:opacity-100"
+                                : "bg-white dark:bg-slate-900 border-gray-200 dark:border-gray-700 opacity-100 hover:opacity-100"
                           }`}
                           onClick={() => handleSingleSelectChange(qIndex, option.label)}
                         >
@@ -350,7 +358,9 @@ export function AnswerQuestionsModal({
                       className={`flex items-start gap-3 p-3 rounded border transition-all cursor-pointer ${
                         customSelected[qIndex]
                           ? "bg-blue-50 dark:bg-blue-950 border-blue-300 dark:border-blue-700 opacity-100"
-                          : "bg-white dark:bg-slate-900 border-gray-200 dark:border-gray-700 opacity-60 hover:opacity-100"
+                          : (!!answers[qIndex] || customSelected[qIndex])
+                            ? "bg-white dark:bg-slate-900 border-gray-200 dark:border-gray-700 opacity-60 hover:opacity-100"
+                            : "bg-white dark:bg-slate-900 border-gray-200 dark:border-gray-700 opacity-100 hover:opacity-100"
                       }`}
                       onClick={() => handleSingleSelectChange(qIndex, "__custom__")}
                     >

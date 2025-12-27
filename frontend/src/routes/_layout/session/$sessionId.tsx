@@ -37,6 +37,7 @@ function ChatInterface() {
   const { setHeaderContent } = usePageHeader()
   const [menuOpen, setMenuOpen] = useState(false)
   const initialMessageSent = useRef(false)
+  const messageInputRef = useRef<HTMLTextAreaElement>(null)
 
   const {
     data: session,
@@ -126,6 +127,13 @@ function ChatInterface() {
     navigate({ to: "/sessions" })
   }, [navigate])
 
+  // Auto-focus message input when page loads
+  useEffect(() => {
+    if (!sessionLoading && !messagesLoading && messageInputRef.current) {
+      messageInputRef.current.focus()
+    }
+  }, [sessionLoading, messagesLoading])
+
   // Update header when session loads
   useEffect(() => {
     if (session) {
@@ -198,6 +206,7 @@ function ChatInterface() {
         onSendAnswer={handleSendAnswer}
       />
       <MessageInput
+        ref={messageInputRef}
         onSend={handleSendMessage}
         onStop={stopMessage}
         sendDisabled={isStreaming}
