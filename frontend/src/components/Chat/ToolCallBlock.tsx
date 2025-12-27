@@ -5,6 +5,7 @@ import { TodoWriteToolBlock } from "./TodoWriteToolBlock"
 import { WriteToolBlock } from "./WriteToolBlock"
 import { AskUserQuestionToolBlock } from "./AskUserQuestionToolBlock"
 import { GlobToolBlock } from "./GlobToolBlock"
+import { WebSearchToolBlock } from "./WebSearchToolBlock"
 
 interface ToolCallBlockProps {
   toolName: string
@@ -35,6 +36,11 @@ export function ToolCallBlock({ toolName, toolInput }: ToolCallBlockProps) {
   // Special rendering for Glob tool
   if (toolName === "Glob" && toolInput?.pattern) {
     return <GlobToolBlock pattern={toolInput.pattern} />
+  }
+
+  // Special rendering for WebSearch tool
+  if (toolName === "WebSearch" && toolInput?.query) {
+    return <WebSearchToolBlock query={toolInput.query} />
   }
 
   // Default rendering for other tools
