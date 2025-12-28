@@ -179,3 +179,33 @@
     background-color: oklch(0.205 0 0);
   }
 }
+
+/* Custom heading sizes - scaled down so H4 becomes H2 */
+/* These need to be outside @layer base to override Tailwind's prose utilities */
+.prose h1 {
+  font-size: 1.5em !important;
+  font-weight: 700 !important;
+  margin-top: 1.5em !important;
+  margin-bottom: 0.75em !important;
+  line-height: 1.2 !important;
+}
+
+.prose h2 {
+  font-size: 1em !important;
+  font-weight: 600 !important;
+  margin-top: 1.5em !important;
+  margin-bottom: 0.5em !important;
+  line-height: 1.5 !important;
+}
+
+/* H3 and below have minimal styling */
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6 {
+  font-size: 1em !important;
+  font-weight: 600 !important;
+  margin-top: 1em !important;
+  margin-bottom: 0.5em !important;
+  line-height: 1.5 !important;
+}
