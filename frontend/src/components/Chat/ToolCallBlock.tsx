@@ -3,6 +3,7 @@ import { MarkdownRenderer } from "./MarkdownRenderer"
 import { ReadToolBlock } from "./ReadToolBlock"
 import { TodoWriteToolBlock } from "./TodoWriteToolBlock"
 import { WriteToolBlock } from "./WriteToolBlock"
+import { EditToolBlock } from "./EditToolBlock"
 import { AskUserQuestionToolBlock } from "./AskUserQuestionToolBlock"
 import { GlobToolBlock } from "./GlobToolBlock"
 import { WebSearchToolBlock } from "./WebSearchToolBlock"
@@ -22,6 +23,11 @@ export function ToolCallBlock({ toolName, toolInput }: ToolCallBlockProps) {
   // Special rendering for Write tool
   if (toolName === "Write" && toolInput?.file_path && toolInput?.content) {
     return <WriteToolBlock filePath={toolInput.file_path} content={toolInput.content} />
+  }
+
+  // Special rendering for Edit tool
+  if (toolName === "Edit" && toolInput?.file_path && toolInput?.old_string && toolInput?.new_string) {
+    return <EditToolBlock filePath={toolInput.file_path} oldString={toolInput.old_string} newString={toolInput.new_string} />
   }
 
   // Special rendering for TodoWrite tool
