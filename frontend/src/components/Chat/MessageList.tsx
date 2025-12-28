@@ -44,10 +44,8 @@ export function MessageList({ messages, isLoading, streamingEvents, isStreaming,
 
     setShowScrollButton(!isNearBottom)
 
-    // If user scrolls manually, mark as scrolled
-    if (!isNearBottom) {
-      setUserHasScrolled(true)
-    }
+    // Track user scroll position - reset flag when user scrolls back to bottom
+    setUserHasScrolled(!isNearBottom)
   }
 
   // Auto-scroll on mount
@@ -60,7 +58,7 @@ export function MessageList({ messages, isLoading, streamingEvents, isStreaming,
     if (!userHasScrolled) {
       scrollToBottom()
     }
-  }, [messages.length, streamingEvents, userHasScrolled])
+  }, [messages, streamingEvents, userHasScrolled])
 
   if (isLoading) {
     return (
