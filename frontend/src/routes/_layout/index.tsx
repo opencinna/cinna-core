@@ -66,7 +66,6 @@ function Dashboard() {
     mutationFn: (data: { sessionData: SessionCreate; initialMessage: string }) =>
       SessionsService.createSession({ requestBody: data.sessionData }),
     onSuccess: (session, variables) => {
-      showSuccessToast("Your conversation session has been created.")
       const initialMessage = variables.initialMessage
       setMessage("")
       navigate({

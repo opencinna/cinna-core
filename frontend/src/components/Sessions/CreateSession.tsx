@@ -51,7 +51,6 @@ export function CreateSession({ variant = "default", size = "default", className
     mutationFn: (data: SessionCreate) =>
       SessionsService.createSession({ requestBody: data }),
     onSuccess: (session) => {
-      showSuccessToast("Your conversation session has been created.")
       setOpen(false)
       resetForm()
       // Navigate to the chat interface
