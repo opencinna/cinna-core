@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react"
+import React, { useState, useCallback, useRef, useEffect } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 
 interface StreamEvent {
@@ -11,13 +11,14 @@ interface StreamEvent {
 }
 
 interface StructuredStreamEvent {
-  type: "assistant" | "tool" | "thinking"
+  type: "assistant" | "tool" | "thinking" | "system"
   content: string
   tool_name?: string
   metadata?: {
     tool_id?: string
     tool_input?: Record<string, any>
     model?: string
+    interrupt_notification?: boolean
   }
 }
 
@@ -31,10 +32,13 @@ interface UseMessageStreamOptions {
 export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }: UseMessageStreamOptions) {
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamingEvents, setStreamingEvents] = useState<StructuredStreamEvent[]>([])
+  const [isInterruptPending, setIsInterruptPending] = useState(false)
   const queryClient = useQueryClient()
 
   // Track abort controller for current request
   const abortControllerRef = useRef<AbortController | null>(null)
+  // Track if we've already checked for active streams on mount
+  const hasCheckedForActiveStream = useRef(false)
 
   const sendMessage = useCallback(async (content: string, answersToMessageId?: string) => {
     // Create new AbortController for this request
@@ -43,6 +47,7 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
 
     setIsStreaming(true)
     setStreamingEvents([])
+    setIsInterruptPending(false) // Reset interrupt pending state
 
     // Optimistically add user message to the cache immediately
     const tempUserMessageId = `temp-${Date.now()}`
@@ -156,6 +161,7 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
                 console.log("Stream was interrupted by user")
                 wasInterrupted = true
                 streamCompleted = true
+                setIsInterruptPending(false) // Clear pending state
                 break
               }
 
@@ -163,6 +169,7 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
               if (event.type === "session_created" || event.type === "done") {
                 if (event.type === "done") {
                   streamCompleted = true
+                  setIsInterruptPending(false) // Clear pending state on completion
                   // Check metadata for interrupt status
                   if (event.metadata?.interrupted) {
                     wasInterrupted = true
@@ -181,7 +188,7 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
               }
 
               // Convert to structured event
-              if (event.type === "assistant" || event.type === "tool" || event.type === "thinking") {
+              if (event.type === "assistant" || event.type === "tool" || event.type === "thinking" || event.type === "system") {
                 const structuredEvent: StructuredStreamEvent = {
                   type: event.type,
                   content: event.content || "",
@@ -196,6 +203,7 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
                     tool_id: event.metadata.tool_id,
                     tool_input: event.metadata.tool_input,
                     model: event.metadata.model,
+                    interrupt_notification: event.metadata.interrupt_notification,
                   }
                 }
 
@@ -276,14 +284,15 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
       setIsStreaming(false)
       setStreamingEvents([])
     } catch (error) {
-      // Handle abort (user clicked Stop button)
+      // Handle network errors or browser disconnections
+      // Note: We no longer manually abort, so AbortError means browser disconnected (e.g., page refresh)
       if (error instanceof Error && error.name === 'AbortError') {
-        console.log("Fetch aborted by user")
-        // Don't show error - this is intentional
+        console.log("Stream disconnected (likely page refresh/navigation)")
+        // Backend will continue processing, so just clean up frontend state
         setIsStreaming(false)
         setStreamingEvents([])
 
-        // Still refresh to get partial message
+        // Refresh to get any messages that were saved
         await new Promise(resolve => setTimeout(resolve, 300))
         await queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
         return
@@ -292,6 +301,7 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
       console.error("Message stream error:", error)
       setIsStreaming(false)
       setStreamingEvents([])
+      setIsInterruptPending(false) // Clear pending state on error
 
       // Remove optimistic message and refresh from server
       try {
@@ -311,16 +321,19 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
   const stopMessage = useCallback(async () => {
     console.log("Stop button clicked")
 
-    // CRITICAL: Send interrupt signal BEFORE aborting the stream!
-    // If we abort the stream first, the backend's async generator stops being consumed,
-    // causing the Claude SDK to cancel its read task and unregister the session
-    // BEFORE the interrupt request can be processed.
+    // Set interrupt pending state immediately for UI feedback
+    setIsInterruptPending(true)
 
-    // 1. Send interrupt signal to backend (stops SDK processing)
+    // NEW BEHAVIOR: Send interrupt signal but DON'T abort the stream
+    // The backend will continue streaming from the agent environment,
+    // receive the "interrupted" event, and send it to us through the existing stream.
+    // This ensures proper cleanup in the SDK and prevents session corruption.
+
     try {
       const token = localStorage.getItem("access_token")
       if (!token) {
         console.error("Not authenticated, cannot send interrupt")
+        setIsInterruptPending(false) // Clear pending state on error
         return
       }
 
@@ -337,25 +350,104 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
       if (response.ok) {
         const data = await response.json()
         console.log("Interrupt request sent successfully:", data)
+        // The stream will continue and receive the "interrupted" event
+        // isInterruptPending will be cleared when we receive interrupted/done event
       } else {
         console.warn("Interrupt request returned non-200:", response.status)
+        setIsInterruptPending(false) // Clear pending state if request failed
       }
     } catch (error) {
       console.error("Failed to send interrupt signal:", error)
+      setIsInterruptPending(false) // Clear pending state on error
     }
 
-    // 2. Abort the fetch request (stops HTTP stream)
-    // Do this AFTER sending the interrupt signal to ensure proper cleanup
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      console.log("Fetch request aborted")
-    }
+    // DON'T abort the fetch - let it receive the "interrupted" event naturally
+    // The stream will end when the backend sends the "done" event
   }, [sessionId])
+
+  // Check if session is actively streaming and reconnect if needed
+  // This handles the case where user refreshes page during streaming
+  const checkAndReconnectToActiveStream = useCallback(async () => {
+    if (hasCheckedForActiveStream.current) {
+      return // Already checked
+    }
+    hasCheckedForActiveStream.current = true
+
+    try {
+      const token = localStorage.getItem("access_token")
+      if (!token) {
+        return
+      }
+
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL}/api/v1/sessions/${sessionId}/messages/streaming-status`,
+        {
+          headers: {
+            "Authorization": `Bearer ${token}`,
+          },
+        }
+      )
+
+      if (response.ok) {
+        const data = await response.json()
+        if (data.is_streaming) {
+          console.log("Detected active stream, reconnecting...", data.stream_info)
+          setIsStreaming(true)
+
+          // Refresh messages to show any partial content
+          await queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
+
+          // Note: We don't try to reconnect to the SSE stream because:
+          // 1. The backend is still processing independently
+          // 2. Messages are being saved to database
+          // 3. We'll get the final result via query invalidation
+          // 4. The "active" indicator shows user something is happening
+
+          // Poll for completion
+          const pollInterval = setInterval(async () => {
+            const statusResponse = await fetch(
+              `${import.meta.env.VITE_API_URL}/api/v1/sessions/${sessionId}/messages/streaming-status`,
+              {
+                headers: {
+                  "Authorization": `Bearer ${token}`,
+                },
+              }
+            )
+
+            if (statusResponse.ok) {
+              const statusData = await statusResponse.json()
+              if (!statusData.is_streaming) {
+                // Stream completed
+                console.log("Active stream completed, refreshing messages")
+                clearInterval(pollInterval)
+                setIsStreaming(false)
+                await queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
+                await queryClient.invalidateQueries({ queryKey: ["session", sessionId] })
+                await queryClient.invalidateQueries({ queryKey: ["sessions"] })
+                onSuccess?.()
+              }
+            }
+          }, 1000) // Poll every second
+
+          // Cleanup on unmount
+          return () => clearInterval(pollInterval)
+        }
+      }
+    } catch (error) {
+      console.error("Failed to check for active stream:", error)
+    }
+  }, [sessionId, queryClient, onSuccess])
+
+  // Check for active stream on mount
+  useEffect(() => {
+    checkAndReconnectToActiveStream()
+  }, [checkAndReconnectToActiveStream])
 
   return {
     sendMessage,
     stopMessage,
     isStreaming,
     streamingEvents,
+    isInterruptPending,
   }
 }

@@ -6,13 +6,14 @@ import { MessageBubble } from "./MessageBubble"
 import { StreamingMessage } from "./StreamingMessage"
 
 interface StreamEvent {
-  type: "assistant" | "tool" | "thinking"
+  type: "assistant" | "tool" | "thinking" | "system"
   content: string
   tool_name?: string
   metadata?: {
     tool_id?: string
     tool_input?: Record<string, any>
     model?: string
+    interrupt_notification?: boolean
   }
 }
 

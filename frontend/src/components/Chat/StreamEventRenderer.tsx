@@ -2,13 +2,14 @@ import { ToolCallBlock } from "./ToolCallBlock"
 import { MarkdownRenderer } from "./MarkdownRenderer"
 
 interface StreamEvent {
-  type: "assistant" | "tool" | "thinking"
+  type: "assistant" | "tool" | "thinking" | "system"
   content: string
   tool_name?: string
   metadata?: {
     tool_id?: string
     tool_input?: Record<string, any>
     model?: string
+    interrupt_notification?: boolean
   }
 }
 
@@ -46,6 +47,21 @@ export function StreamEventRenderer({ events }: StreamEventRendererProps) {
           // Render thinking block
           return (
             <div key={idx} className="text-xs italic text-muted-foreground bg-muted/50 rounded px-3 py-2">
+              {event.content}
+            </div>
+          )
+        } else if (event.type === "system" && event.content.trim()) {
+          // Render system notification (e.g., interrupt notifications)
+          const isInterruptNotification = event.metadata?.interrupt_notification
+          return (
+            <div
+              key={idx}
+              className={`text-sm px-3 py-2 rounded ${
+                isInterruptNotification
+                  ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 border border-yellow-200 dark:border-yellow-800/30"
+                  : "bg-muted text-muted-foreground"
+              }`}
+            >
               {event.content}
             </div>
           )

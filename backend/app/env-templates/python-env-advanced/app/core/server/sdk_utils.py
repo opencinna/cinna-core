@@ -190,13 +190,14 @@ def format_message_for_debug(message_obj) -> str:
         return f"Error formatting message: {e}, raw: {str(message_obj)[:500]}"
 
 
-def format_sdk_message(message_obj, session_id: str) -> Optional[dict]:
+def format_sdk_message(message_obj, session_id: str, interrupt_initiated: bool = False) -> Optional[dict]:
     """
     Format SDK message object into standard dictionary for API responses.
 
     Args:
         message_obj: SDK message object (AssistantMessage, ResultMessage, SystemMessage, etc.)
         session_id: Current session ID
+        interrupt_initiated: Whether interrupt() was called for this session
 
     Returns:
         Formatted message dict, or None to skip this message
@@ -208,7 +209,8 @@ def format_sdk_message(message_obj, session_id: str) -> Optional[dict]:
         ToolResultBlock,
         ResultMessage,
         ThinkingBlock,
-        SystemMessage
+        SystemMessage,
+        UserMessage
     )
 
     formatted = {
@@ -296,8 +298,13 @@ def format_sdk_message(message_obj, session_id: str) -> Optional[dict]:
 
     # Handle ResultMessage
     elif isinstance(message_obj, ResultMessage):
-        formatted["type"] = "done"  # Signal completion
-        formatted["content"] = ""  # Don't show "Task completed" to user
+        # Check if this was interrupted based on subtype and interrupt_initiated flag
+        # When interrupt() is called, SDK may return with subtype "error_during_execution"
+        # instead of raising exit code -9
+        is_interrupted = interrupt_initiated and message_obj.subtype == "error_during_execution"
+
+        formatted["type"] = "interrupted" if is_interrupted else "done"
+        formatted["content"] = "Request interrupted by user" if is_interrupted else ""
         formatted["metadata"] = {
             "subtype": message_obj.subtype,
             "duration_ms": message_obj.duration_ms,
@@ -306,6 +313,24 @@ def format_sdk_message(message_obj, session_id: str) -> Optional[dict]:
             "total_cost_usd": message_obj.total_cost_usd,
             "session_id": message_obj.session_id,
         }
+
+        if is_interrupted:
+            logger.info(f"Detected interrupted session from ResultMessage subtype: {message_obj.subtype}")
+
+    # Handle UserMessage (SDK sends these for interrupt notifications)
+    elif isinstance(message_obj, UserMessage):
+        # Check if this is an interrupt notification
+        content_str = str(message_obj.content)
+        if "[Request interrupted by user" in content_str:
+            # This is an interrupt notification - show it to the user
+            formatted["type"] = "system"
+            formatted["content"] = "⚠️ Request interrupted by user"
+            formatted["metadata"]["interrupt_notification"] = True
+            return formatted
+        else:
+            # Other UserMessages - skip them (internal SDK messages)
+            logger.debug(f"Skipping UserMessage: {content_str[:100]}")
+            return None
 
     # Handle other message types
     else:

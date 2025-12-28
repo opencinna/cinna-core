@@ -150,6 +150,7 @@ async def chat_stream(request: ChatRequest):
         async def event_stream():
             """Generate SSE events from SDK stream"""
             event_count = 0
+            session_id_for_cleanup = request.session_id
             try:
                 logger.info("Calling sdk_manager.send_message_stream()...")
                 async for chunk in sdk_manager.send_message_stream(
@@ -162,15 +163,28 @@ async def chat_stream(request: ChatRequest):
                     event_count += 1
                     logger.info(f"[Stream event #{event_count}] Received chunk type={chunk.get('type')}, content_length={len(chunk.get('content', ''))}")
 
+                    # Capture session_id for cleanup if this is a new session
+                    if chunk.get("type") == "session_created" and chunk.get("session_id"):
+                        session_id_for_cleanup = chunk.get("session_id")
+
                     # Format as SSE event
                     event_data = json.dumps(chunk)
-                    yield f"data: {event_data}\n\n"
+                    try:
+                        yield f"data: {event_data}\n\n"
+                    except (ConnectionResetError, BrokenPipeError) as conn_error:
+                        logger.warning(f"Client disconnected while streaming (event #{event_count}): {conn_error}")
+                        # Backend disconnected - SDK manager will continue and clean up in finally block
+                        # We can't send more data, so break the loop
+                        break
 
                 logger.info(f"SDK stream completed. Total events: {event_count}")
 
                 # Send done event
                 logger.info("Sending final done event")
-                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                try:
+                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                except (ConnectionResetError, BrokenPipeError) as conn_error:
+                    logger.warning(f"Client disconnected before done event: {conn_error}")
 
             except Exception as e:
                 logger.error(f"Stream error: {e}", exc_info=True)
@@ -179,7 +193,10 @@ async def chat_stream(request: ChatRequest):
                     "content": str(e),
                     "error_type": type(e).__name__,
                 })
-                yield f"data: {error_event}\n\n"
+                try:
+                    yield f"data: {error_event}\n\n"
+                except (ConnectionResetError, BrokenPipeError):
+                    logger.warning("Client disconnected before error event could be sent")
 
         return StreamingResponse(
             event_stream(),

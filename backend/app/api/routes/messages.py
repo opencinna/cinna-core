@@ -22,6 +22,7 @@ from app.models import (
 from app.services.message_service import MessageService
 from app.services.session_service import SessionService
 from app.services.ai_functions_service import AIFunctionsService
+from app.services.active_streaming_manager import active_streaming_manager
 
 logger = logging.getLogger(__name__)
 
@@ -256,9 +257,10 @@ async def interrupt_message(
 
     Flow:
     1. Verify session ownership
-    2. Get external SDK session ID
-    3. Call environment interrupt endpoint
-    4. Return status
+    2. Request interrupt via active_streaming_manager
+    3. If external_session_id available, forward to agent env immediately
+    4. If not available yet, queue interrupt (will be sent when session_id arrives)
+    5. Return status
     """
     # Verify session exists and user owns it
     chat_session = session.get(Session, session_id)
@@ -268,14 +270,27 @@ async def interrupt_message(
     if not current_user.is_superuser and (chat_session.user_id != current_user.id):
         raise HTTPException(status_code=400, detail="Not enough permissions")
 
-    # Get external SDK session ID
-    external_session_id = SessionService.get_external_session_id(chat_session)
+    # Request interrupt via active_streaming_manager
+    interrupt_info = await active_streaming_manager.request_interrupt(session_id)
 
-    if not external_session_id:
+    if not interrupt_info["found"]:
         raise HTTPException(
             status_code=400,
-            detail="No active external session to interrupt (message may not have started yet)"
+            detail="No active stream to interrupt (message may have already completed)"
         )
+
+    # If interrupt is pending (external_session_id not yet available)
+    if interrupt_info["pending"]:
+        logger.info(f"Interrupt queued for session {session_id} (waiting for external_session_id)")
+        return {
+            "status": "ok",
+            "message": "Interrupt queued (session starting)",
+            "session_id": str(session_id),
+            "queued": True
+        }
+
+    # External session ID is available - forward to agent env
+    external_session_id = interrupt_info["external_session_id"]
 
     # Get environment
     environment = session.get(AgentEnvironment, chat_session.environment_id)
@@ -302,14 +317,16 @@ async def interrupt_message(
                     "status": "ok",
                     "message": "Interrupt request sent",
                     "session_id": str(session_id),
-                    "external_session_id": external_session_id
+                    "external_session_id": external_session_id,
+                    "queued": False
                 }
             else:
                 logger.warning(f"Environment returned {response.status_code}: {response.text}")
                 return {
                     "status": "warning",
                     "message": "Interrupt request sent but session may have completed",
-                    "session_id": str(session_id)
+                    "session_id": str(session_id),
+                    "queued": False
                 }
 
     except httpx.RequestError as e:
@@ -318,3 +335,48 @@ async def interrupt_message(
             status_code=500,
             detail=f"Failed to communicate with environment: {str(e)}"
         )
+
+
+@router.get("/{session_id}/messages/streaming-status")
+async def get_streaming_status(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    session_id: uuid.UUID,
+) -> Any:
+    """
+    Check if a session is currently streaming.
+
+    This allows frontend to:
+    - Detect ongoing streams after page refresh
+    - Reconnect to active streams
+    - Show appropriate UI state
+
+    Returns:
+        {
+            "is_streaming": bool,
+            "stream_info": dict | None  # Only if streaming
+        }
+    """
+    # Verify session exists and user owns it
+    chat_session = session.get(Session, session_id)
+    if not chat_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if not current_user.is_superuser and (chat_session.user_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    # Check if session is actively streaming
+    is_streaming = await active_streaming_manager.is_streaming(session_id)
+
+    if is_streaming:
+        stream_info = await active_streaming_manager.get_stream_info(session_id)
+        return {
+            "is_streaming": True,
+            "stream_info": stream_info
+        }
+    else:
+        return {
+            "is_streaming": False,
+            "stream_info": None
+        }

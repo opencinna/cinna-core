@@ -188,29 +188,71 @@ class ClaudeCodeSDKManager:
             logger.info("Starting to iterate over receive_messages()...")
             message_count = 0
             interrupt_initiated = False  # Track if we called interrupt()
+            interrupt_event_yielded = False  # Track if we've sent interrupted event to backend
 
             try:
                 async for message_obj in client.receive_messages():
                     message_count += 1
 
+                    # Extract session_id from SystemMessage (first message) if we don't have it yet
+                    # Check multiple ways since SDK structure can vary
+                    if not current_session_id:
+                        extracted_session_id = None
+
+                        # Try data.session_id (SystemMessage - data could be object or dict)
+                        if hasattr(message_obj, 'data'):
+                            data = message_obj.data
+                            # Try as attribute (dataclass/object)
+                            if hasattr(data, 'session_id'):
+                                extracted_session_id = data.session_id
+                                logger.info(f"Extracted session_id from message_obj.data.session_id: {extracted_session_id}")
+                            # Try as dict key
+                            elif isinstance(data, dict) and data.get('session_id'):
+                                extracted_session_id = data['session_id']
+                                logger.info(f"Extracted session_id from message_obj.data['session_id']: {extracted_session_id}")
+                        # Try session_id attribute directly (ResultMessage)
+                        elif hasattr(message_obj, 'session_id'):
+                            extracted_session_id = message_obj.session_id
+                            logger.info(f"Extracted session_id from message_obj.session_id: {extracted_session_id}")
+
+                        if extracted_session_id:
+                            current_session_id = extracted_session_id
+                            logger.info(f"✅ Captured session_id: {current_session_id}")
+                            # Register session EARLY so interrupts can be processed
+                            await active_session_manager.register_session(current_session_id, client)
+                            logger.info(f"✅ Registered session {current_session_id} for interrupt support (early)")
+
+                            # Immediately yield session_created event with session_id
+                            # This allows backend to forward pending interrupts early
+                            yield {
+                                "type": "session_created",
+                                "session_id": current_session_id,
+                                "content": "",
+                            }
+                            logger.info(f"✅ Yielded session_created event with session_id: {current_session_id}")
+
                     # Check for interrupt requests (if we have a session_id)
-                    if current_session_id:
+                    # Only check if we haven't already initiated an interrupt
+                    if current_session_id and not interrupt_initiated:
                         if await active_session_manager.check_interrupt_requested(current_session_id):
                             logger.info(f"Interrupt detected for session {current_session_id}, calling SDK interrupt()")
                             try:
                                 await client.interrupt()
                                 interrupt_initiated = True  # Mark that we initiated the interrupt
-                                logger.info("SDK interrupt() called successfully")
-                                # Yield interrupt event
+                                logger.info("SDK interrupt() called successfully - continuing to receive final messages")
+                                # DON'T break here - let SDK send final messages and naturally end
+                                # The SDK will raise exit code -9 when it's done cleaning up
+                            except Exception as int_error:
+                                logger.error(f"Failed to interrupt SDK: {int_error}", exc_info=True)
+                                # Yield error event to inform backend
                                 yield {
-                                    "type": "interrupted",
-                                    "content": "Message interrupted by user",
+                                    "type": "error",
+                                    "content": f"Failed to interrupt session: {str(int_error)}",
+                                    "error_type": "InterruptError",
                                     "session_id": current_session_id,
                                 }
-                                break  # Exit receive_messages loop - expect exit code -9
-                            except Exception as int_error:
-                                logger.error(f"Failed to interrupt SDK: {int_error}")
-                                # Continue processing - don't break on interrupt failure
+                                # Don't continue processing - break and let cleanup happen
+                                break
 
                     # Dump raw message to log file if enabled
                     self.session_logger.dump_message(session_log_file, message_obj, message_count)
@@ -221,7 +263,7 @@ class ClaudeCodeSDKManager:
                     logger.debug(f"[Claude SDK #{message_count}] Full structure:\n{format_message_for_debug(message_obj)}")
                     logger.debug(f"[Claude SDK #{message_count}] ===================================")
 
-                    formatted = format_sdk_message(message_obj, current_session_id)
+                    formatted = format_sdk_message(message_obj, current_session_id, interrupt_initiated)
 
                     # Debug: Log formatted message
                     if formatted is not None:
@@ -231,13 +273,9 @@ class ClaudeCodeSDKManager:
                         logger.info(f"[Claude SDK #{message_count}] Message filtered out (returned None)")
 
                     if formatted is not None:  # Skip filtered messages
-                        # Extract session_id from ResultMessage for new sessions
-                        if isinstance(message_obj, ResultMessage) and not current_session_id:
-                            current_session_id = message_obj.session_id
+                        # Include session_id in formatted message if we have it
+                        if current_session_id and formatted.get("session_id") is None:
                             formatted["session_id"] = current_session_id
-                            logger.info(f"Captured session_id from ResultMessage: {current_session_id}")
-                            # Register session now that we have the ID
-                            await active_session_manager.register_session(current_session_id, client)
 
                         yield formatted
 
@@ -257,8 +295,14 @@ class ClaudeCodeSDKManager:
                 if "exit code -9" in error_msg or "exit code: -9" in error_msg:
                     if interrupt_initiated:
                         logger.info("Received expected exit code -9 after calling interrupt()")
-                        # This is not an error - it's the expected result of interrupt()
-                        # The interrupted event was already yielded above
+                        # This is the expected result of interrupt() - yield the interrupted event now
+                        if not interrupt_event_yielded:
+                            yield {
+                                "type": "interrupted",
+                                "content": "Message interrupted by user",
+                                "session_id": current_session_id,
+                            }
+                            interrupt_event_yielded = True
                     else:
                         logger.warning(f"Session {current_session_id} died with exit code -9 (likely corrupted from previous interrupt)")
                         # Yield corrupted session error

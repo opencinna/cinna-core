@@ -8,6 +8,7 @@ import asyncio
 from sqlmodel import Session, select, func
 from sqlalchemy.orm import Session as AlchemySession
 from app.models import SessionMessage, Session as ChatSession, AgentEnvironment, Agent
+from app.services.active_streaming_manager import active_streaming_manager
 
 logger = logging.getLogger(__name__)
 
@@ -354,6 +355,13 @@ class MessageService:
             dict: SSE event dictionaries
         """
 
+        # Register this as an active stream BEFORE starting
+        # This allows frontend to reconnect if it disconnects during streaming
+        await active_streaming_manager.register_stream(
+            session_id=session_id,
+            external_session_id=external_session_id
+        )
+
         # Variables to collect agent response
         agent_response_parts = []
         streaming_events = []  # Store raw streaming events for visualization
@@ -439,12 +447,38 @@ class MessageService:
                     yield event
                     return
 
-                # Capture external session ID from done event
-                if event.get("type") == "done" and not external_session_id:
+                # Capture external session ID from first event that has it (not just "done")
+                # This allows us to forward pending interrupts early in the stream
+                if not new_external_session_id:
                     event_session_id = event.get("session_id") or event.get("metadata", {}).get("session_id")
+                    logger.debug(f"🔍 Event type={event.get('type')}, session_id={event.get('session_id')}, metadata.session_id={event.get('metadata', {}).get('session_id')}")
                     if event_session_id:
                         new_external_session_id = event_session_id
-                        logger.info(f"External session ID captured from ResultMessage: {new_external_session_id}")
+                        logger.info(f"✅ External session ID captured early from event type={event.get('type')}: {new_external_session_id}")
+
+                        # Update active streaming manager with external session ID
+                        # This returns True if there's a pending interrupt
+                        interrupt_pending = await active_streaming_manager.update_external_session_id(
+                            session_id=session_id,
+                            external_session_id=new_external_session_id
+                        )
+
+                        # If interrupt was requested before external_session_id was available, forward it now
+                        if interrupt_pending:
+                            logger.info(f"Forwarding pending interrupt to agent env for session {session_id}")
+                            try:
+                                import httpx
+                                async with httpx.AsyncClient(timeout=5.0) as client:
+                                    response = await client.post(
+                                        f"{base_url}/chat/interrupt/{new_external_session_id}",
+                                        headers=auth_headers
+                                    )
+                                    if response.status_code == 200:
+                                        logger.info(f"Pending interrupt forwarded successfully")
+                                    else:
+                                        logger.warning(f"Failed to forward pending interrupt: {response.status_code}")
+                            except Exception as e:
+                                logger.error(f"Error forwarding pending interrupt: {e}")
 
                         # Store external session ID (non-blocking)
                         def _store_session_id():
@@ -621,3 +655,7 @@ class MessageService:
                 "content": str(e),
                 "error_type": type(e).__name__
             }
+        finally:
+            # Always unregister stream when done (success, error, or interruption)
+            await active_streaming_manager.unregister_stream(session_id)
+            logger.info(f"Stream unregistered for session {session_id}")

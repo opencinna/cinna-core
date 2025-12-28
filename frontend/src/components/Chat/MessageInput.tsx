@@ -1,13 +1,14 @@
 import { useState, KeyboardEvent, forwardRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { Send, Square } from "lucide-react"
+import { Send, Square, Loader2 } from "lucide-react"
 import { RotatingHints } from "@/components/Common/RotatingHints"
 
 interface MessageInputProps {
   onSend: (content: string) => void
   onStop?: () => void
   sendDisabled?: boolean
+  isInterruptPending?: boolean
   placeholder?: string
 }
 
@@ -16,6 +17,7 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
     onSend,
     onStop,
     sendDisabled = false,
+    isInterruptPending = false,
     placeholder = "Type your message...",
   }, ref) {
   const [message, setMessage] = useState("")
@@ -62,8 +64,13 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
             variant="destructive"
             size="icon"
             className="h-[60px] w-[60px] shrink-0"
+            disabled={isInterruptPending}
           >
-            <Square className="h-5 w-5" />
+            {isInterruptPending ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <Square className="h-5 w-5" />
+            )}
           </Button>
         ) : (
           // Show Send button when not streaming

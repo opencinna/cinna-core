@@ -59,7 +59,7 @@ function ChatInterface() {
     enabled: !!sessionId,
   })
 
-  const { sendMessage, stopMessage, isStreaming, streamingEvents } = useMessageStream({
+  const { sendMessage, stopMessage, isStreaming, streamingEvents, isInterruptPending } = useMessageStream({
     sessionId,
     sessionMode: session?.mode,
     onSuccess: () => {
@@ -210,6 +210,7 @@ function ChatInterface() {
         onSend={handleSendMessage}
         onStop={stopMessage}
         sendDisabled={isStreaming}
+        isInterruptPending={isInterruptPending}
         placeholder={
           isStreaming
             ? "Agent is responding..."

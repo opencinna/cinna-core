@@ -639,6 +639,12 @@ export type MessagesInterruptMessageData = {
 
 export type MessagesInterruptMessageResponse = (unknown);
 
+export type MessagesGetStreamingStatusData = {
+    sessionId: string;
+};
+
+export type MessagesGetStreamingStatusResponse = (unknown);
+
 export type OauthGetOauthConfigResponse = (OAuthConfig);
 
 export type OauthGoogleAuthorizeResponse = ({
