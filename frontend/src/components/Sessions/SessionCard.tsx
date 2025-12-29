@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import type { SessionPublic } from "@/client"
 import { SessionModeBadge } from "./SessionModeBadge"
-import { formatDistanceToNow } from "date-fns"
+import { RelativeTime } from "@/components/Common/RelativeTime"
 import { getColorPreset } from "@/utils/colorPresets"
 import { AnimatedPlaceholder } from "@/components/Common/AnimatedPlaceholder"
 
@@ -60,21 +60,7 @@ export function SessionCard({ session, agentName, agentColorPreset }: SessionCar
           <div className="text-sm text-muted-foreground">
             {session.last_message_at ? (
               <p>
-                Last message{" "}
-                {(() => {
-                  try {
-                    // Handle timestamp - it might already have 'Z'
-                    const timestampStr = typeof session.last_message_at === 'string'
-                      ? (session.last_message_at.endsWith('Z') ? session.last_message_at : session.last_message_at + 'Z')
-                      : session.last_message_at
-                    const date = new Date(timestampStr)
-                    return !isNaN(date.getTime())
-                      ? formatDistanceToNow(date, { addSuffix: true })
-                      : "recently"
-                  } catch {
-                    return "recently"
-                  }
-                })()}
+                Last message <RelativeTime timestamp={session.last_message_at} />
               </p>
             ) : (
               <p>No messages yet</p>

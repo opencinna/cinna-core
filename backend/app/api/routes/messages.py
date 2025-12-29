@@ -18,11 +18,14 @@ from app.models import (
     MessagePublic,
     MessagesPublic,
     SessionUpdate,
+    SessionMessage,
+    ActivityCreate,
 )
 from app.services.message_service import MessageService
 from app.services.session_service import SessionService
 from app.services.ai_functions_service import AIFunctionsService
 from app.services.active_streaming_manager import active_streaming_manager
+from app.services.activity_service import ActivityService
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +240,132 @@ async def send_message_stream(
         # Flag to track if frontend is still connected
         frontend_connected = True
 
+        async def _create_error_activity(session_id: uuid.UUID, error_message: str | None):
+            """
+            Create activity for background stream error.
+            Called when stream fails while user was disconnected.
+            """
+            try:
+                def _create_activity():
+                    with DBSession(engine) as db:
+                        # Get session to find user_id and environment_id
+                        chat_session = db.get(Session, session_id)
+                        if not chat_session:
+                            logger.warning(f"Cannot create error activity: session {session_id} not found")
+                            return
+
+                        # Get environment to find agent_id
+                        environment = db.get(AgentEnvironment, chat_session.environment_id)
+                        if not environment:
+                            logger.warning(f"Cannot create error activity: environment not found for session {session_id}")
+                            return
+
+                        agent_id = environment.agent_id
+                        user_id = chat_session.user_id
+
+                        # Create descriptive text for the error activity
+                        activity_text = "Session encountered an error"
+                        if error_message:
+                            # Truncate error message if too long
+                            if len(error_message) > 100:
+                                activity_text = f"Error: {error_message[:97]}..."
+                            else:
+                                activity_text = f"Error: {error_message}"
+
+                        # Create "error_occurred" activity
+                        ActivityService.create_activity(
+                            db_session=db,
+                            user_id=user_id,
+                            data=ActivityCreate(
+                                session_id=session_id,
+                                agent_id=agent_id,
+                                activity_type="error_occurred",
+                                text=activity_text,
+                                action_required="",
+                                is_read=False
+                            )
+                        )
+                        logger.info(f"Created 'error_occurred' activity for session {session_id}: {activity_text}")
+
+                await asyncio.to_thread(_create_activity)
+            except Exception as e:
+                logger.error(f"Failed to create error activity for session {session_id}: {e}", exc_info=True)
+
+        async def _create_unread_completion_activities(session_id: uuid.UUID):
+            """
+            Create activities for unread session completion.
+            Called when stream completes while user was disconnected.
+            """
+            try:
+                def _create_activities():
+                    with DBSession(engine) as db:
+                        # Get session to find user_id and environment_id
+                        chat_session = db.get(Session, session_id)
+                        if not chat_session:
+                            logger.warning(f"Cannot create activities: session {session_id} not found")
+                            return
+
+                        # Get environment to find agent_id
+                        environment = db.get(AgentEnvironment, chat_session.environment_id)
+                        if not environment:
+                            logger.warning(f"Cannot create activities: environment not found for session {session_id}")
+                            return
+
+                        agent_id = environment.agent_id
+                        user_id = chat_session.user_id
+
+                        # Only create activities if session was actually completed (not interrupted)
+                        # Interrupted sessions have status "active", completed sessions have status "completed"
+                        if chat_session.status != "completed":
+                            logger.info(f"Skipping activities for session {session_id} with status '{chat_session.status}' (not completed)")
+                            return
+
+                        # Get the latest agent message to check if it has questions
+                        from sqlmodel import select, desc
+                        latest_message_stmt = (
+                            select(SessionMessage)
+                            .where(SessionMessage.session_id == session_id)
+                            .where(SessionMessage.role == "agent")
+                            .order_by(desc(SessionMessage.sequence_number))
+                            .limit(1)
+                        )
+                        latest_message = db.exec(latest_message_stmt).first()
+
+                        # Create "session_completed" activity
+                        ActivityService.create_activity(
+                            db_session=db,
+                            user_id=user_id,
+                            data=ActivityCreate(
+                                session_id=session_id,
+                                agent_id=agent_id,
+                                activity_type="session_completed",
+                                text="Session completed",
+                                action_required="",
+                                is_read=False
+                            )
+                        )
+                        logger.info(f"Created 'session_completed' activity for session {session_id}")
+
+                        # If the latest message has unanswered questions, create additional activity
+                        if latest_message and latest_message.tool_questions_status == "unanswered":
+                            ActivityService.create_activity(
+                                db_session=db,
+                                user_id=user_id,
+                                data=ActivityCreate(
+                                    session_id=session_id,
+                                    agent_id=agent_id,
+                                    activity_type="questions_asked",
+                                    text="Agent asked questions that need answers",
+                                    action_required="answers_required",
+                                    is_read=False
+                                )
+                            )
+                            logger.info(f"Created 'questions_asked' activity for session {session_id}")
+
+                await asyncio.to_thread(_create_activities)
+            except Exception as e:
+                logger.error(f"Failed to create unread completion activities for session {session_id}: {e}", exc_info=True)
+
         async def stream_consumer_task():
             """
             Background task that consumes events from agent env.
@@ -244,6 +373,9 @@ async def send_message_stream(
             """
             try:
                 event_count = 0
+                error_occurred = False
+                error_message = None
+
                 async for event in MessageService.stream_message_with_events(
                     session_id=session_id,
                     environment_id=environment_id,
@@ -259,19 +391,30 @@ async def send_message_stream(
                     # Always put event in queue (even if frontend disconnected)
                     await event_queue.put(event)
 
+                    # Track if an error occurred
+                    if event.get("type") == "error":
+                        error_occurred = True
+                        error_message = event.get("content", "Unknown error occurred")
+                        logger.warning(f"Error detected in stream for session {session_id}: {error_message}")
+
                 # Signal completion
                 await event_queue.put(None)
 
                 if frontend_connected:
                     logger.info(
                         f"Stream consumer completed for session {session_id} "
-                        f"({event_count} events, frontend still connected)"
+                        f"({event_count} events, frontend still connected, error={error_occurred})"
                     )
                 else:
                     logger.info(
                         f"Stream consumer completed for session {session_id} "
-                        f"({event_count} events, frontend disconnected earlier)"
+                        f"({event_count} events, frontend disconnected earlier, error={error_occurred})"
                     )
+                    # Create activities for unread session completion or error
+                    if error_occurred:
+                        await _create_error_activity(session_id, error_message)
+                    else:
+                        await _create_unread_completion_activities(session_id)
             except Exception as e:
                 logger.error(
                     f"Error in stream consumer for session {session_id}: {e}",
@@ -280,6 +423,10 @@ async def send_message_stream(
                 # Put error marker in queue
                 await event_queue.put({"type": "error", "content": str(e)})
                 await event_queue.put(None)
+
+                # Create error activity if frontend was disconnected
+                if not frontend_connected:
+                    await _create_error_activity(session_id, str(e))
 
         # Start background consumer task BEFORE we start yielding to frontend
         # This is the key to decoupling - the task is independent

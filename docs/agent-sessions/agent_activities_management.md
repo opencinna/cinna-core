@@ -37,6 +37,7 @@ Each activity has:
 Current types (more can be added):
 - `session_completed`: Background session finished its work
 - `questions_asked`: Agent returned with questions using AskUserQuestion tool
+- `error_occurred`: Background session encountered an error
 - `file_created`: Agent created a file (future)
 - `agent_notification`: General agent notification (future)
 
@@ -112,33 +113,45 @@ Current types (more can be added):
 
 ### Where to Create Activities
 
-**1. Session Completion** (Not yet implemented):
-- Location: Backend session streaming logic when final message completes
-- When: Session status changes to "completed"
+**1. Session Completion** (✅ Implemented):
+- Location: `backend/app/api/routes/messages.py` - `_create_unread_completion_activities()`
+- When: Stream completes while user disconnected AND session status is "completed"
 - Create activity with:
   - `activity_type`: "session_completed"
-  - `text`: "Session completed" or more descriptive text
+  - `text`: "Session completed"
   - `session_id`: The completed session
   - `agent_id`: Session's agent
   - `is_read`: false (user wasn't watching)
 
-**2. Questions Asked** (Not yet implemented):
-- Location: When agent returns message with AskUserQuestion tool blocks
-- Reference: `frontend/src/components/Chat/AskUserQuestionToolBlock.tsx` renders questions
-- When: Message contains tool_questions_status = "unanswered"
+**2. Questions Asked** (✅ Implemented):
+- Location: `backend/app/api/routes/messages.py` - `_create_unread_completion_activities()`
+- Reference: `backend/app/services/message_service.py:545` - question detection logic
+- When: Stream completes while user disconnected AND latest message has tool_questions_status = "unanswered"
 - Create activity with:
   - `activity_type`: "questions_asked"
-  - `text`: "Agent asked {count} question(s)"
+  - `text`: "Agent asked questions that need answers"
   - `session_id`: Current session
   - `agent_id`: Session's agent
   - `action_required`: "answers_required"
-  - `is_read`: true if user is in active session, false if background session
+  - `is_read`: false (user wasn't watching)
 
-**3. File Created** (Future):
+**3. Error Occurred** (✅ Implemented):
+- Location: `backend/app/api/routes/messages.py` - `_create_error_activity()`
+- When: Stream fails with error while user disconnected
+- Examples: corrupted session, connection errors, environment errors
+- Create activity with:
+  - `activity_type`: "error_occurred"
+  - `text`: "Error: {error_message}" (truncated to 100 chars)
+  - `session_id`: The session that failed
+  - `agent_id`: Session's agent
+  - `action_required`: "" (empty - informational)
+  - `is_read`: false (user wasn't watching)
+
+**4. File Created** (Future):
 - When: Agent creates file via workspace API
 - Create activity linking to file and session
 
-**4. Agent Notifications** (Future):
+**5. Agent Notifications** (Future):
 - When: Agent explicitly requests to notify user
 - Custom text from agent
 

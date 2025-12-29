@@ -3,8 +3,8 @@ import { useNavigate } from "@tanstack/react-router"
 import { SessionsService } from "@/client"
 import type { SessionPublicExtended } from "@/client"
 import { MessageSquare, Clock, Wrench, MessageCircle } from "lucide-react"
-import { formatDistanceToNow } from "date-fns"
 import { AnimatedPlaceholder } from "@/components/Common/AnimatedPlaceholder"
+import { RelativeTime } from "@/components/Common/RelativeTime"
 import { getColorPreset } from "@/utils/colorPresets"
 
 interface LatestSessionsProps {
@@ -76,23 +76,7 @@ export function LatestSessions({ limit = 8 }: LatestSessionsProps) {
 
               <div className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
                 <Clock className="h-3 w-3" />
-                <span>
-                  {(() => {
-                    try {
-                      const timestamp = session.last_message_at || session.created_at
-                      // Handle timestamp - it might already have 'Z'
-                      const timestampStr = typeof timestamp === 'string'
-                        ? (timestamp.endsWith('Z') ? timestamp : timestamp + 'Z')
-                        : timestamp
-                      const date = new Date(timestampStr)
-                      return !isNaN(date.getTime())
-                        ? formatDistanceToNow(date, { addSuffix: true })
-                        : "recently"
-                    } catch {
-                      return "recently"
-                    }
-                  })()}
-                </span>
+                <RelativeTime timestamp={session.last_message_at || session.created_at} />
               </div>
             </div>
           </button>

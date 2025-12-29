@@ -7,8 +7,8 @@ import type { ActivityPublicExtended } from "@/client"
 import PendingItems from "@/components/Pending/PendingItems"
 import { usePageHeader } from "@/routes/_layout"
 import { getColorPreset } from "@/utils/colorPresets"
-import { formatDistanceToNow } from "date-fns"
-import { Bell, CheckCircle2, AlertCircle, FileText, MessageCircle } from "lucide-react"
+import { RelativeTime } from "@/components/Common/RelativeTime"
+import { Bell, CheckCircle2, AlertCircle, FileText, MessageCircle, AlertOctagon } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 export const Route = createFileRoute("/_layout/activities")({
@@ -138,6 +138,8 @@ function ActivitiesList() {
         return <CheckCircle2 className="h-4 w-4" />
       case "questions_asked":
         return <MessageCircle className="h-4 w-4" />
+      case "error_occurred":
+        return <AlertOctagon className="h-4 w-4" />
       case "file_created":
         return <FileText className="h-4 w-4" />
       case "agent_notification":
@@ -286,9 +288,10 @@ function ActivitiesList() {
                               <span>Action required</span>
                             </div>
                           )}
-                          <p className="text-xs text-muted-foreground">
-                            {formatDistanceToNow(new Date(activity.created_at), { addSuffix: true })}
-                          </p>
+                          <RelativeTime
+                            timestamp={activity.created_at}
+                            className="text-xs text-muted-foreground"
+                          />
                         </div>
                       </div>
                     </div>
