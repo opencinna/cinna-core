@@ -68,6 +68,16 @@ from .session import (
     MessagePublic,
     MessagesPublic,
 )
+from .activity import (
+    Activity,
+    ActivityCreate,
+    ActivityUpdate,
+    ActivityPublic,
+    ActivityPublicExtended,
+    ActivitiesPublic,
+    ActivitiesPublicExtended,
+    ActivityStats,
+)
 
 __all__ = [
     # Core
@@ -137,4 +147,13 @@ __all__ = [
     "MessageCreate",
     "MessagePublic",
     "MessagesPublic",
+    # Activities
+    "Activity",
+    "ActivityCreate",
+    "ActivityUpdate",
+    "ActivityPublic",
+    "ActivityPublicExtended",
+    "ActivitiesPublic",
+    "ActivitiesPublicExtended",
+    "ActivityStats",
 ]

@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.routes import (
+    activities,
     agents,
     credentials,
     environments,
@@ -28,6 +29,7 @@ api_router.include_router(environments.router)
 api_router.include_router(sessions.router)
 api_router.include_router(messages.router)
 api_router.include_router(workspace.router)
+api_router.include_router(activities.router)
 
 
 if settings.ENVIRONMENT == "local":

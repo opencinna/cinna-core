@@ -82,6 +82,270 @@ export const AIServiceCredentialsUpdateSchema = {
     description: 'Update AI service credentials (partial update)'
 } as const;
 
+export const ActivitiesPublicExtendedSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/ActivityPublicExtended'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'ActivitiesPublicExtended'
+} as const;
+
+export const ActivityCreateSchema = {
+    properties: {
+        session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Id'
+        },
+        agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Id'
+        },
+        activity_type: {
+            type: 'string',
+            title: 'Activity Type'
+        },
+        text: {
+            type: 'string',
+            title: 'Text'
+        },
+        action_required: {
+            type: 'string',
+            title: 'Action Required',
+            default: ''
+        },
+        is_read: {
+            type: 'boolean',
+            title: 'Is Read',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['activity_type', 'text'],
+    title: 'ActivityCreate'
+} as const;
+
+export const ActivityPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Id'
+        },
+        agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Id'
+        },
+        activity_type: {
+            type: 'string',
+            title: 'Activity Type'
+        },
+        text: {
+            type: 'string',
+            title: 'Text'
+        },
+        action_required: {
+            type: 'string',
+            title: 'Action Required'
+        },
+        is_read: {
+            type: 'boolean',
+            title: 'Is Read'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'user_id', 'session_id', 'agent_id', 'activity_type', 'text', 'action_required', 'is_read', 'created_at'],
+    title: 'ActivityPublic'
+} as const;
+
+export const ActivityPublicExtendedSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Id'
+        },
+        agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Id'
+        },
+        activity_type: {
+            type: 'string',
+            title: 'Activity Type'
+        },
+        text: {
+            type: 'string',
+            title: 'Text'
+        },
+        action_required: {
+            type: 'string',
+            title: 'Action Required'
+        },
+        is_read: {
+            type: 'boolean',
+            title: 'Is Read'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Name'
+        },
+        agent_ui_color_preset: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Ui Color Preset'
+        },
+        session_title: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Title'
+        }
+    },
+    type: 'object',
+    required: ['id', 'user_id', 'session_id', 'agent_id', 'activity_type', 'text', 'action_required', 'is_read', 'created_at'],
+    title: 'ActivityPublicExtended',
+    description: 'Activity with extended data (agent name, session title, etc.)'
+} as const;
+
+export const ActivityStatsSchema = {
+    properties: {
+        unread_count: {
+            type: 'integer',
+            title: 'Unread Count'
+        },
+        action_required_count: {
+            type: 'integer',
+            title: 'Action Required Count'
+        }
+    },
+    type: 'object',
+    required: ['unread_count', 'action_required_count'],
+    title: 'ActivityStats',
+    description: 'Statistics about activities (unread count, action required count)'
+} as const;
+
+export const ActivityUpdateSchema = {
+    properties: {
+        is_read: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Is Read'
+        }
+    },
+    type: 'object',
+    title: 'ActivityUpdate'
+} as const;
+
 export const AgentCreateSchema = {
     properties: {
         name: {
