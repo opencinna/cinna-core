@@ -17,7 +17,7 @@ export function WebSearchToolBlock({ query }: WebSearchToolBlockProps) {
             href={searchUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="font-mono bg-muted px-1.5 py-0.5 rounded text-xs hover:bg-muted/80 transition-colors underline decoration-dotted underline-offset-2 cursor-pointer"
+            className="font-mono bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 rounded text-xs hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors underline decoration-dotted underline-offset-2 cursor-pointer"
           >
             {query}
           </a>

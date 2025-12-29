@@ -32,7 +32,7 @@ export function EditToolBlock({ filePath, oldString, newString }: EditToolBlockP
       <div className="flex-1 min-w-0">
         <div className="text-foreground/90 mb-2">
           Editing file{" "}
-          <code className="font-mono bg-muted px-1.5 py-0.5 rounded text-xs">
+          <code className="font-mono bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 rounded text-xs">
             {filePath}
           </code>
         </div>
