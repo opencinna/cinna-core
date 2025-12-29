@@ -35,9 +35,10 @@ Each activity has:
 ### Activity Types
 
 Current types (more can be added):
+- `session_running`: Session is actively streaming (shown while session has interaction_status = "running")
 - `session_completed`: Background session finished its work
 - `questions_asked`: Agent returned with questions using AskUserQuestion tool
-- `error_occurred`: Background session encountered an error
+- `error_occurred`: Session encountered an error
 - `file_created`: Agent created a file (future)
 - `agent_notification`: General agent notification (future)
 
@@ -85,6 +86,8 @@ Current types (more can be added):
 - `get_activity_stats()`: Get counts for sidebar indicator
 - `update_activity()`: Generic update
 - `delete_activity()`: Delete activity
+- `find_activity_by_session_and_type()`: Find activity by session_id and activity_type
+- `delete_activity_by_session_and_type()`: Delete activity by session_id and activity_type
 
 **API Routes** (`backend/app/api/routes/activities.py`):
 - `POST /activities/`: Create activity
@@ -102,6 +105,7 @@ Current types (more can be added):
 - IntersectionObserver setup for auto-read tracking
 - Click activity to navigate to related session
 - Visual distinction for action-required items
+- Special rendering for `session_running`: emerald background with emerald border, spinning loader icon
 
 **Sidebar Integration** (`frontend/src/components/Sidebar/AppSidebar.tsx`):
 - ActivitiesMenu component with bell icon
@@ -112,6 +116,25 @@ Current types (more can be added):
 ## Integration Points
 
 ### Where to Create Activities
+
+**0. Session Running** (✅ Implemented):
+- Location: `backend/app/api/routes/messages.py` - `_create_session_running_activity()`
+- When: Stream starts (before first event sent to frontend)
+- Lifecycle:
+  - **Created**: When stream starts, `interaction_status` set to "running" on session
+  - **Deleted**: If stream completes with frontend connected
+  - **Replaced**: If stream completes without frontend connected, replaced with `session_completed` or `error_occurred`
+- Create activity with:
+  - `activity_type`: "session_running"
+  - `text`: "Session is running"
+  - `session_id`: The running session
+  - `agent_id`: Session's agent
+  - `action_required`: "" (informational)
+  - `is_read`: false (always unread while running)
+- Management:
+  - Uses `ActivityService.delete_activity_by_session_and_type()` for cleanup
+  - Error activities created even if frontend connected (errors always tracked)
+  - See `_delete_session_running_activity()`, `_update_running_activity_to_completion()`, `_update_running_activity_to_error()`
 
 **1. Session Completion** (✅ Implemented):
 - Location: `backend/app/api/routes/messages.py` - `_create_unread_completion_activities()`
@@ -168,7 +191,10 @@ Current types (more can be added):
 
 **Session Status Tracking**:
 - Session model has `status` field: "active", "completed", "error", "paused"
+- Session model has `interaction_status` field: "" (default/nothing happening), "running" (active stream)
 - Reference: `backend/app/models/session.py`
+- `interaction_status` set to "running" when stream starts, cleared when stream completes
+- Managed by `MessageService.stream_message_with_events()` in finally block
 - When status changes to "completed", create activity
 
 **Message Tool Questions**:
@@ -178,13 +204,15 @@ Current types (more can be added):
 
 ## Business Rules
 
-1. **One activity per event**: Don't create duplicate activities for same event
+1. **One activity per event**: Don't create duplicate activities for same event (exception: `session_running` replaced with final state)
 2. **User ownership**: Activities only visible to owning user
 3. **Cascade deletion**: Activities deleted when related session/agent deleted (database foreign keys)
 4. **Privacy**: Activities are private, never shared between users
 5. **Retention**: Activities stored indefinitely (can add cleanup later)
 6. **Read state persistence**: Once marked read, stays read (no "mark as unread")
 7. **Action required is immutable**: Set at creation, doesn't change
+8. **Session running lifecycle**: `session_running` activity is temporary, deleted if frontend watching or replaced with final state if not
+9. **Error tracking**: Error activities always created, even if frontend was watching (important for audit trail)
 
 ## Statistics & Performance
 
@@ -213,13 +241,18 @@ Current types (more can be added):
 ## Testing Considerations
 
 When testing activities integration:
-1. Test background session completion while user not watching
-2. Test active session events are marked read immediately
-3. Test agent asking questions in background session
-4. Test sidebar indicator updates correctly
-5. Test clicking activity navigates to correct session
-6. Test agent filtering works correctly
-7. Test read/unread transitions smoothly
+1. Test `session_running` activity created when stream starts
+2. Test `session_running` deleted when stream completes with frontend watching
+3. Test `session_running` replaced with `session_completed` when stream completes without frontend
+4. Test `session_running` replaced with `error_occurred` when stream fails
+5. Test background session completion while user not watching
+6. Test active session events (frontend watching still creates error activities)
+7. Test agent asking questions in background session
+8. Test sidebar indicator updates correctly
+9. Test clicking activity navigates to correct session
+10. Test agent filtering works correctly
+11. Test read/unread transitions smoothly
+12. Test `session_running` shows emerald background with spinning icon
 
 ## File Reference Summary
 
@@ -235,7 +268,8 @@ When testing activities integration:
 - Client: `frontend/src/client/sdk.gen.ts` (auto-generated ActivitiesService)
 
 **Related Context**:
-- Session model: `backend/app/models/session.py`
+- Session model: `backend/app/models/session.py` (Session with interaction_status field)
 - Message model: `backend/app/models/session.py` (SessionMessage)
+- Message service: `backend/app/services/message_service.py` (manages interaction_status lifecycle)
 - Streaming manager: `backend/app/services/active_streaming_manager.py`
 - Question tool block: `frontend/src/components/Chat/AskUserQuestionToolBlock.tsx`

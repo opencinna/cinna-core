@@ -147,3 +147,42 @@ class ActivityService:
         db_session.delete(activity)
         db_session.commit()
         return True
+
+    @staticmethod
+    def find_activity_by_session_and_type(
+        db_session: DBSession,
+        session_id: UUID,
+        activity_type: str
+    ) -> Activity | None:
+        """Find an activity by session_id and activity_type"""
+        statement = (
+            select(Activity)
+            .where(
+                and_(
+                    Activity.session_id == session_id,
+                    Activity.activity_type == activity_type
+                )
+            )
+            .order_by(Activity.created_at.desc())
+            .limit(1)
+        )
+        return db_session.exec(statement).first()
+
+    @staticmethod
+    def delete_activity_by_session_and_type(
+        db_session: DBSession,
+        session_id: UUID,
+        activity_type: str
+    ) -> bool:
+        """Delete an activity by session_id and activity_type"""
+        activity = ActivityService.find_activity_by_session_and_type(
+            db_session=db_session,
+            session_id=session_id,
+            activity_type=activity_type
+        )
+        if not activity:
+            return False
+
+        db_session.delete(activity)
+        db_session.commit()
+        return True

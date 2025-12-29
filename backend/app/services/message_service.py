@@ -362,6 +362,18 @@ class MessageService:
             external_session_id=external_session_id
         )
 
+        # Set interaction_status to 'running'
+        def _set_running_status():
+            with get_fresh_db_session() as db:
+                from app.services.session_service import SessionService
+                from app.models import SessionUpdate
+                SessionService.update_session(
+                    db_session=db,
+                    session_id=session_id,
+                    data=SessionUpdate(interaction_status="running")
+                )
+        await asyncio.to_thread(_set_running_status)
+
         # Variables to collect agent response
         agent_response_parts = []
         streaming_events = []  # Store raw streaming events for visualization
@@ -656,6 +668,18 @@ class MessageService:
                 "error_type": type(e).__name__
             }
         finally:
+            # Clear interaction_status
+            def _clear_running_status():
+                with get_fresh_db_session() as db:
+                    from app.services.session_service import SessionService
+                    from app.models import SessionUpdate
+                    SessionService.update_session(
+                        db_session=db,
+                        session_id=session_id,
+                        data=SessionUpdate(interaction_status="")
+                    )
+            await asyncio.to_thread(_clear_running_status)
+
             # Always unregister stream when done (success, error, or interruption)
             await active_streaming_manager.unregister_stream(session_id)
             logger.info(f"Stream unregistered for session {session_id}")

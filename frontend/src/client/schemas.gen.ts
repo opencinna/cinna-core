@@ -1441,6 +1441,10 @@ export const SessionPublicSchema = {
             type: 'string',
             title: 'Status'
         },
+        interaction_status: {
+            type: 'string',
+            title: 'Interaction Status'
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -1465,7 +1469,7 @@ export const SessionPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'environment_id', 'user_id', 'title', 'mode', 'agent_sdk', 'status', 'created_at', 'updated_at', 'last_message_at'],
+    required: ['id', 'environment_id', 'user_id', 'title', 'mode', 'agent_sdk', 'status', 'interaction_status', 'created_at', 'updated_at', 'last_message_at'],
     title: 'SessionPublic'
 } as const;
 
@@ -1508,6 +1512,10 @@ export const SessionPublicExtendedSchema = {
         status: {
             type: 'string',
             title: 'Status'
+        },
+        interaction_status: {
+            type: 'string',
+            title: 'Interaction Status'
         },
         created_at: {
             type: 'string',
@@ -1589,7 +1597,7 @@ export const SessionPublicExtendedSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'environment_id', 'user_id', 'title', 'mode', 'agent_sdk', 'status', 'created_at', 'updated_at', 'last_message_at'],
+    required: ['id', 'environment_id', 'user_id', 'title', 'mode', 'agent_sdk', 'status', 'interaction_status', 'created_at', 'updated_at', 'last_message_at'],
     title: 'SessionPublicExtended',
     description: 'Session with external session metadata'
 } as const;
@@ -1617,6 +1625,17 @@ export const SessionUpdateSchema = {
                 }
             ],
             title: 'Status'
+        },
+        interaction_status: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Interaction Status'
         },
         mode: {
             anyOf: [

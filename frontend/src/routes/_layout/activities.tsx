@@ -8,7 +8,7 @@ import PendingItems from "@/components/Pending/PendingItems"
 import { usePageHeader } from "@/routes/_layout"
 import { getColorPreset } from "@/utils/colorPresets"
 import { RelativeTime } from "@/components/Common/RelativeTime"
-import { Bell, CheckCircle2, AlertCircle, FileText, MessageCircle, AlertOctagon } from "lucide-react"
+import { Bell, CheckCircle2, AlertCircle, FileText, MessageCircle, AlertOctagon, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 export const Route = createFileRoute("/_layout/activities")({
@@ -134,6 +134,8 @@ function ActivitiesList() {
 
   const getActivityIcon = (activityType: string) => {
     switch (activityType) {
+      case "session_running":
+        return <Loader2 className="h-4 w-4 animate-spin" />
       case "session_completed":
         return <CheckCircle2 className="h-4 w-4" />
       case "questions_asked":
@@ -226,6 +228,7 @@ function ActivitiesList() {
                   const colorPreset = getColorPreset(activity.agent_ui_color_preset)
                   const hasActionRequired = activity.action_required !== ""
                   const isUnread = !activity.is_read
+                  const isRunning = activity.activity_type === "session_running"
 
                   return (
                     <div
@@ -242,7 +245,11 @@ function ActivitiesList() {
                       className={cn(
                         "relative p-4 rounded-lg border transition-all",
                         activity.session_id ? "cursor-pointer hover:bg-muted/50" : "",
-                        isUnread ? "bg-muted/30" : "bg-card"
+                        isRunning
+                          ? "bg-emerald-500/10 border-emerald-500/30"
+                          : isUnread
+                            ? "bg-muted/30"
+                            : "bg-card"
                       )}
                     >
                       {/* Unread/Action Required indicator */}
@@ -257,7 +264,7 @@ function ActivitiesList() {
 
                       <div className="flex items-start gap-3">
                         {/* Icon */}
-                        <div className={cn("mt-1", colorPreset.badgeText)}>
+                        <div className={cn("mt-1", isRunning ? "text-emerald-600 dark:text-emerald-400" : colorPreset.badgeText)}>
                           {getActivityIcon(activity.activity_type)}
                         </div>
 

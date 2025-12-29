@@ -14,6 +14,7 @@ class Session(SQLModel, table=True):
     mode: str = "conversation"  # "building" | "conversation"
     agent_sdk: str = "claude"  # SDK to use: "claude" (more options can be added later)
     status: str = "active"  # "active" | "paused" | "completed" | "error"
+    interaction_status: str = ""  # "" (default/nothing happens) | "running" (active stream with agent-env)
     session_metadata: dict = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -48,6 +49,7 @@ class SessionCreate(SQLModel):
 class SessionUpdate(SQLModel):
     title: str | None = None
     status: str | None = None
+    interaction_status: str | None = None
     mode: str | None = None
     agent_sdk: str | None = None
 
@@ -60,6 +62,7 @@ class SessionPublic(SQLModel):
     mode: str
     agent_sdk: str
     status: str
+    interaction_status: str
     created_at: datetime
     updated_at: datetime
     last_message_at: datetime | None

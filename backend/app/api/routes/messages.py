@@ -366,6 +366,227 @@ async def send_message_stream(
             except Exception as e:
                 logger.error(f"Failed to create unread completion activities for session {session_id}: {e}", exc_info=True)
 
+        async def _create_session_running_activity():
+            """
+            Create 'session_running' activity when stream starts.
+            This activity will be shown if user is not watching the session.
+            """
+            try:
+                def _create_activity():
+                    with DBSession(engine) as db:
+                        # Get session to find user_id and environment_id
+                        chat_session = db.get(Session, session_id)
+                        if not chat_session:
+                            logger.warning(f"Cannot create running activity: session {session_id} not found")
+                            return
+
+                        # Get environment to find agent_id
+                        environment = db.get(AgentEnvironment, chat_session.environment_id)
+                        if not environment:
+                            logger.warning(f"Cannot create running activity: environment not found for session {session_id}")
+                            return
+
+                        agent_id = environment.agent_id
+                        user_id = chat_session.user_id
+
+                        # Create "session_running" activity (unread by default)
+                        ActivityService.create_activity(
+                            db_session=db,
+                            user_id=user_id,
+                            data=ActivityCreate(
+                                session_id=session_id,
+                                agent_id=agent_id,
+                                activity_type="session_running",
+                                text="Session is running",
+                                action_required="",
+                                is_read=False
+                            )
+                        )
+                        logger.info(f"Created 'session_running' activity for session {session_id}")
+
+                await asyncio.to_thread(_create_activity)
+            except Exception as e:
+                logger.error(f"Failed to create session_running activity for session {session_id}: {e}", exc_info=True)
+
+        async def _delete_session_running_activity():
+            """
+            Delete 'session_running' activity when stream completes with frontend watching.
+            """
+            try:
+                def _delete_activity():
+                    with DBSession(engine) as db:
+                        ActivityService.delete_activity_by_session_and_type(
+                            db_session=db,
+                            session_id=session_id,
+                            activity_type="session_running"
+                        )
+                        logger.info(f"Deleted 'session_running' activity for session {session_id} (frontend was watching)")
+
+                await asyncio.to_thread(_delete_activity)
+            except Exception as e:
+                logger.error(f"Failed to delete session_running activity for session {session_id}: {e}", exc_info=True)
+
+        async def _update_running_activity_to_completion():
+            """
+            Update 'session_running' activity to completion status.
+            Called when stream completes while user was disconnected.
+            """
+            try:
+                def _update_or_replace():
+                    with DBSession(engine) as db:
+                        # Find the session_running activity
+                        running_activity = ActivityService.find_activity_by_session_and_type(
+                            db_session=db,
+                            session_id=session_id,
+                            activity_type="session_running"
+                        )
+
+                        if running_activity:
+                            # Delete the running activity
+                            db.delete(running_activity)
+                            db.commit()
+                            logger.info(f"Deleted 'session_running' activity for session {session_id}")
+
+                        # Create completion activities (existing logic)
+                        _create_unread_completion_activities_sync(db)
+
+                def _create_unread_completion_activities_sync(db: DBSession):
+                    """Sync version of _create_unread_completion_activities for inline use"""
+                    # Get session to find user_id and environment_id
+                    chat_session = db.get(Session, session_id)
+                    if not chat_session:
+                        logger.warning(f"Cannot create activities: session {session_id} not found")
+                        return
+
+                    # Get environment to find agent_id
+                    environment = db.get(AgentEnvironment, chat_session.environment_id)
+                    if not environment:
+                        logger.warning(f"Cannot create activities: environment not found for session {session_id}")
+                        return
+
+                    agent_id = environment.agent_id
+                    user_id = chat_session.user_id
+
+                    # Only create activities if session was actually completed (not interrupted)
+                    if chat_session.status != "completed":
+                        logger.info(f"Skipping activities for session {session_id} with status '{chat_session.status}' (not completed)")
+                        return
+
+                    # Get the latest agent message to check if it has questions
+                    from sqlmodel import select, desc
+                    latest_message_stmt = (
+                        select(SessionMessage)
+                        .where(SessionMessage.session_id == session_id)
+                        .where(SessionMessage.role == "agent")
+                        .order_by(desc(SessionMessage.sequence_number))
+                        .limit(1)
+                    )
+                    latest_message = db.exec(latest_message_stmt).first()
+
+                    # Create "session_completed" activity
+                    ActivityService.create_activity(
+                        db_session=db,
+                        user_id=user_id,
+                        data=ActivityCreate(
+                            session_id=session_id,
+                            agent_id=agent_id,
+                            activity_type="session_completed",
+                            text="Session completed",
+                            action_required="",
+                            is_read=False
+                        )
+                    )
+                    logger.info(f"Created 'session_completed' activity for session {session_id}")
+
+                    # If the latest message has unanswered questions, create additional activity
+                    if latest_message and latest_message.tool_questions_status == "unanswered":
+                        ActivityService.create_activity(
+                            db_session=db,
+                            user_id=user_id,
+                            data=ActivityCreate(
+                                session_id=session_id,
+                                agent_id=agent_id,
+                                activity_type="questions_asked",
+                                text="Agent asked questions that need answers",
+                                action_required="answers_required",
+                                is_read=False
+                            )
+                        )
+                        logger.info(f"Created 'questions_asked' activity for session {session_id}")
+
+                await asyncio.to_thread(_update_or_replace)
+            except Exception as e:
+                logger.error(f"Failed to update running activity to completion for session {session_id}: {e}", exc_info=True)
+
+        async def _update_running_activity_to_error(error_message: str | None):
+            """
+            Update 'session_running' activity to error status.
+            Called when stream encounters error while user was disconnected.
+            """
+            try:
+                def _update_or_replace():
+                    with DBSession(engine) as db:
+                        # Find the session_running activity
+                        running_activity = ActivityService.find_activity_by_session_and_type(
+                            db_session=db,
+                            session_id=session_id,
+                            activity_type="session_running"
+                        )
+
+                        if running_activity:
+                            # Delete the running activity
+                            db.delete(running_activity)
+                            db.commit()
+                            logger.info(f"Deleted 'session_running' activity for session {session_id}")
+
+                        # Create error activity
+                        _create_error_activity_sync(db, error_message)
+
+                def _create_error_activity_sync(db: DBSession, error_msg: str | None):
+                    """Sync version of _create_error_activity for inline use"""
+                    # Get session to find user_id and environment_id
+                    chat_session = db.get(Session, session_id)
+                    if not chat_session:
+                        logger.warning(f"Cannot create error activity: session {session_id} not found")
+                        return
+
+                    # Get environment to find agent_id
+                    environment = db.get(AgentEnvironment, chat_session.environment_id)
+                    if not environment:
+                        logger.warning(f"Cannot create error activity: environment not found for session {session_id}")
+                        return
+
+                    agent_id = environment.agent_id
+                    user_id = chat_session.user_id
+
+                    # Create descriptive text for the error activity
+                    activity_text = "Session encountered an error"
+                    if error_msg:
+                        # Truncate error message if too long
+                        if len(error_msg) > 100:
+                            activity_text = f"Error: {error_msg[:97]}..."
+                        else:
+                            activity_text = f"Error: {error_msg}"
+
+                    # Create "error_occurred" activity
+                    ActivityService.create_activity(
+                        db_session=db,
+                        user_id=user_id,
+                        data=ActivityCreate(
+                            session_id=session_id,
+                            agent_id=agent_id,
+                            activity_type="error_occurred",
+                            text=activity_text,
+                            action_required="",
+                            is_read=False
+                        )
+                    )
+                    logger.info(f"Created 'error_occurred' activity for session {session_id}: {activity_text}")
+
+                await asyncio.to_thread(_update_or_replace)
+            except Exception as e:
+                logger.error(f"Failed to update running activity to error for session {session_id}: {e}", exc_info=True)
+
         async def stream_consumer_task():
             """
             Background task that consumes events from agent env.
@@ -405,16 +626,22 @@ async def send_message_stream(
                         f"Stream consumer completed for session {session_id} "
                         f"({event_count} events, frontend still connected, error={error_occurred})"
                     )
+                    # Frontend was watching - delete the "session_running" activity
+                    await _delete_session_running_activity()
+
+                    # But if error occurred, still create error activity (errors are important to track)
+                    if error_occurred:
+                        await _create_error_activity(session_id, error_message)
                 else:
                     logger.info(
                         f"Stream consumer completed for session {session_id} "
                         f"({event_count} events, frontend disconnected earlier, error={error_occurred})"
                     )
-                    # Create activities for unread session completion or error
+                    # Update or replace the "session_running" activity with final result
                     if error_occurred:
-                        await _create_error_activity(session_id, error_message)
+                        await _update_running_activity_to_error(error_message)
                     else:
-                        await _create_unread_completion_activities(session_id)
+                        await _update_running_activity_to_completion()
             except Exception as e:
                 logger.error(
                     f"Error in stream consumer for session {session_id}: {e}",
@@ -424,9 +651,12 @@ async def send_message_stream(
                 await event_queue.put({"type": "error", "content": str(e)})
                 await event_queue.put(None)
 
-                # Create error activity if frontend was disconnected
+                # Update running activity to error if frontend was disconnected
                 if not frontend_connected:
-                    await _create_error_activity(session_id, str(e))
+                    await _update_running_activity_to_error(str(e))
+
+        # Create "session_running" activity before stream starts
+        await _create_session_running_activity()
 
         # Start background consumer task BEFORE we start yielding to frontend
         # This is the key to decoupling - the task is independent

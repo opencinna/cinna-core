@@ -305,6 +305,7 @@ export type SessionPublic = {
     mode: string;
     agent_sdk: string;
     status: string;
+    interaction_status: string;
     created_at: string;
     updated_at: string;
     last_message_at: (string | null);
@@ -321,6 +322,7 @@ export type SessionPublicExtended = {
     mode: string;
     agent_sdk: string;
     status: string;
+    interaction_status: string;
     created_at: string;
     updated_at: string;
     last_message_at: (string | null);
@@ -339,6 +341,7 @@ export type SessionsPublicExtended = {
 export type SessionUpdate = {
     title?: (string | null);
     status?: (string | null);
+    interaction_status?: (string | null);
     mode?: (string | null);
     agent_sdk?: (string | null);
 };
