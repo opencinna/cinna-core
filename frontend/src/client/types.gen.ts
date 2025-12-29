@@ -10,6 +10,7 @@ export type AgentCreate = {
 export type AgentCreateFlowRequest = {
     description: string;
     mode?: string;
+    auto_create_session?: boolean;
 };
 
 export type AgentCreateFlowResponse = {

@@ -83,6 +83,7 @@ class AgentCredentialLinkRequest(SQLModel):
 class AgentCreateFlowRequest(SQLModel):
     description: str = Field(min_length=1, max_length=2000)
     mode: str = Field(default="building")  # "building" or "conversation"
+    auto_create_session: bool = Field(default=False)  # If False, stop after environment is ready
 
 
 # Response for agent creation flow initiation

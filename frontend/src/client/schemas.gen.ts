@@ -141,6 +141,11 @@ export const AgentCreateFlowRequestSchema = {
             type: 'string',
             title: 'Mode',
             default: 'building'
+        },
+        auto_create_session: {
+            type: 'boolean',
+            title: 'Auto Create Session',
+            default: false
         }
     },
     type: 'object',

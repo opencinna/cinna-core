@@ -111,11 +111,15 @@ class AgentService:
 
     @staticmethod
     async def create_agent_flow(
-        session: Session, user: User, description: str, mode: str
+        session: Session, user: User, description: str, mode: str, auto_create_session: bool = False
     ):
         """
-        Create full agent flow: agent + environment + session
+        Create full agent flow: agent + environment + (optionally) session
         This is an async generator that yields progress updates
+
+        Args:
+            auto_create_session: If True, automatically create session after environment is ready.
+                               If False, stop after environment is ready (for credential sharing).
         """
         agent = None
         environment = None
@@ -199,9 +203,15 @@ class AgentService:
                 session.refresh(environment)
 
                 if environment.status == "running":
+                    # Set agent's active environment
+                    agent.active_environment_id = environment.id
+                    session.add(agent)
+                    session.commit()
+
                     yield {
                         "step": "environment_ready",
                         "message": "Environment is ready",
+                        "agent_id": str(agent.id),
                         "environment_id": str(environment.id),
                         "current_step": "start_environment"
                     }
@@ -220,17 +230,23 @@ class AgentService:
             else:
                 raise Exception("Environment failed to start within timeout")
 
-            # Step 3: Create session
+            # If auto_create_session is False, stop here (for credential sharing)
+            if not auto_create_session:
+                yield {
+                    "step": "completed",
+                    "message": "Agent and environment created successfully. Ready for credential sharing.",
+                    "agent_id": str(agent.id),
+                    "environment_id": str(environment.id),
+                    "current_step": "redirect"
+                }
+                return
+
+            # Step 3: Create session (only if auto_create_session is True)
             yield {
                 "step": "session_creating",
                 "message": "Creating conversation session...",
                 "current_step": "create_session"
             }
-
-            # Set agent's active environment
-            agent.active_environment_id = environment.id
-            session.add(agent)
-            session.commit()
 
             # Create session
             session_data = SessionCreate(
