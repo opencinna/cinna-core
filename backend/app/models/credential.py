@@ -12,6 +12,7 @@ class CredentialType(str, Enum):
     EMAIL_IMAP = "email_imap"
     ODOO = "odoo"
     GMAIL_OAUTH = "gmail_oauth"
+    API_TOKEN = "api_token"
 
 
 # Shared properties for credentials
@@ -43,6 +44,12 @@ class GmailOAuthData(SQLModel):
     token_type: str = "Bearer"
     expires_at: int | None = None
     scope: str | None = None
+
+
+class ApiTokenData(SQLModel):
+    api_token_type: str  # "bearer" or "custom"
+    api_token_template: str = "Authorization: Bearer {TOKEN}"
+    api_token: str
 
 
 # Properties to receive on credential creation

@@ -36,6 +36,7 @@ const credentialTypeLabels: Record<string, string> = {
   email_imap: "Email (IMAP)",
   odoo: "Odoo",
   gmail_oauth: "Gmail OAuth",
+  api_token: "API Token",
 }
 
 export const columns: ColumnDef<CredentialPublic>[] = [

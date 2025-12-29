@@ -135,7 +135,7 @@ export type CredentialsPublic = {
     count: number;
 };
 
-export type CredentialType = 'email_imap' | 'odoo' | 'gmail_oauth';
+export type CredentialType = 'email_imap' | 'odoo' | 'gmail_oauth' | 'api_token';
 
 export type CredentialUpdate = {
     name?: (string | null);

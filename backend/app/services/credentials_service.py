@@ -27,6 +27,7 @@ class CredentialsService:
         "email_imap": ["password"],
         "odoo": ["api_token"],
         "gmail_oauth": ["access_token", "refresh_token"],
+        "api_token": ["http_header_value"],
     }
 
     @staticmethod
@@ -62,6 +63,10 @@ class CredentialsService:
             # Decrypt credential data
             credential_data = crud.get_credential_with_data(session=session, credential=cred)
 
+            # Process API Token credentials to generate HTTP header fields
+            if cred.type.value == "api_token":
+                credential_data = CredentialsService._process_api_token_credential(credential_data)
+
             result.append({
                 "id": str(cred.id),
                 "name": cred.name,
@@ -71,6 +76,60 @@ class CredentialsService:
             })
 
         return result
+
+    @staticmethod
+    def _process_api_token_credential(credential_data: dict) -> dict:
+        """
+        Process API Token credential to generate ready-to-use HTTP header fields.
+
+        Converts:
+            {
+                "api_token_type": "bearer" | "custom",
+                "api_token_template": "Authorization: Bearer {TOKEN}",  # if custom
+                "api_token": "secret_token"
+            }
+
+        To:
+            {
+                "http_header_name": "Authorization",
+                "http_header_value": "Bearer secret_token"
+            }
+
+        Args:
+            credential_data: Raw credential data with template fields
+
+        Returns:
+            Processed credential data with http_header_name and http_header_value
+        """
+        api_token_type = credential_data.get("api_token_type", "bearer")
+        api_token = credential_data.get("api_token", "")
+
+        if api_token_type == "bearer":
+            # Default bearer token
+            return {
+                "http_header_name": "Authorization",
+                "http_header_value": f"Bearer {api_token}"
+            }
+        else:
+            # Custom template
+            template = credential_data.get("api_token_template", "Authorization: Bearer {TOKEN}")
+
+            # Replace {TOKEN} placeholder with actual token
+            header_string = template.replace("{TOKEN}", api_token)
+
+            # Parse header name and value
+            if ":" in header_string:
+                header_name, header_value = header_string.split(":", 1)
+                return {
+                    "http_header_name": header_name.strip(),
+                    "http_header_value": header_value.strip()
+                }
+            else:
+                # Fallback: treat the whole string as header value with Authorization header
+                return {
+                    "http_header_name": "Authorization",
+                    "http_header_value": header_string
+                }
 
     @staticmethod
     def redact_credential_data(credential_type: str, credential_data: dict) -> dict:
@@ -151,11 +210,20 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             "with open(credentials_file, 'r') as f:",
             "    all_credentials = json.load(f)",
             "",
-            "# Find specific credential by name or type (type preferable)",
+            "# Find specific credential by ID (recommended, IDs never change)",
+            "credential_id = '6a32aeb0-3a26-43eb-ab2b-d9df720be807'  # Use actual ID from list below",
+            "for cred in all_credentials:",
+            "    if cred['id'] == credential_id:",
+            "        config = cred['credential_data']",
+            "        # Use config fields based on credential type",
+            "        break",
+            "",
+            "# Or find by type (if you only have one credential of this type)",
             "for cred in all_credentials:",
             "    if cred['type'] == 'email_imap':",
-            "        imap_config = cred['credential_data']",
-            "        # Use imap_config['host'], imap_config['login'], etc.",
+            "        config = cred['credential_data']",
+            "        # Use config['host'], config['login'], etc.",
+            "        break",
             "```",
             "",
             "## Available Credentials",
@@ -209,8 +277,10 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
 
             # Add type-specific usage hints (only for credentials with data)
             cred_name = cred["name"]
+            cred_id = cred["id"]
             if cred_type == "email_imap":
                 lines.append(f"### IMAP Credential: {cred_name}")
+                lines.append(f"**ID**: `{cred_id}`")
                 lines.append("")
                 lines.append("```python")
                 lines.append("import json")
@@ -220,9 +290,10 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 lines.append("with open('credentials/credentials.json', 'r') as f:")
                 lines.append("    all_credentials = json.load(f)")
                 lines.append("")
-                lines.append(f"# Find '{cred_name}' credential")
+                lines.append(f"# Find credential by ID (recommended)")
+                lines.append(f"credential_id = '{cred_id}'")
                 lines.append("for cred in all_credentials:")
-                lines.append(f"    if cred['name'] == '{cred_name}':")
+                lines.append("    if cred['id'] == credential_id:")
                 lines.append("        config = cred['credential_data']")
                 lines.append("        # Connect to IMAP server")
                 lines.append("        if config.get('is_ssl', True):")
@@ -232,10 +303,12 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 lines.append("        mail.login(config['login'], config['password'])")
                 lines.append("        # ... use mail connection")
                 lines.append("        mail.logout()")
+                lines.append("        break")
                 lines.append("```")
                 lines.append("")
             elif cred_type == "odoo":
                 lines.append(f"### Odoo Credential: {cred_name}")
+                lines.append(f"**ID**: `{cred_id}`")
                 lines.append("")
                 lines.append("```python")
                 lines.append("import json")
@@ -245,9 +318,10 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 lines.append("with open('credentials/credentials.json', 'r') as f:")
                 lines.append("    all_credentials = json.load(f)")
                 lines.append("")
-                lines.append(f"# Find '{cred_name}' credential")
+                lines.append(f"# Find credential by ID (recommended)")
+                lines.append(f"credential_id = '{cred_id}'")
                 lines.append("for cred in all_credentials:")
-                lines.append(f"    if cred['name'] == '{cred_name}':")
+                lines.append("    if cred['id'] == credential_id:")
                 lines.append("        config = cred['credential_data']")
                 lines.append("        # Connect to Odoo")
                 lines.append("        common = xmlrpc.client.ServerProxy(f\"{config['url']}/xmlrpc/2/common\")")
@@ -258,10 +332,12 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 lines.append("            {}")
                 lines.append("        )")
                 lines.append("        # ... use Odoo API")
+                lines.append("        break")
                 lines.append("```")
                 lines.append("")
             elif cred_type == "gmail_oauth":
                 lines.append(f"### Gmail OAuth Credential: {cred_name}")
+                lines.append(f"**ID**: `{cred_id}`")
                 lines.append("")
                 lines.append("```python")
                 lines.append("import json")
@@ -272,22 +348,53 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 lines.append("with open('credentials/credentials.json', 'r') as f:")
                 lines.append("    all_credentials = json.load(f)")
                 lines.append("")
-                lines.append(f"# Find '{cred_name}' credential")
+                lines.append(f"# Find credential by ID (recommended)")
+                lines.append(f"credential_id = '{cred_id}'")
                 lines.append("for cred in all_credentials:")
-                lines.append(f"    if cred['name'] == '{cred_name}':")
+                lines.append("    if cred['id'] == credential_id:")
                 lines.append("        # Use Gmail API")
                 lines.append("        creds = Credentials.from_authorized_user_info(cred['credential_data'])")
                 lines.append("        service = build('gmail', 'v1', credentials=creds)")
                 lines.append("        # ... use Gmail API")
+                lines.append("        break")
+                lines.append("```")
+                lines.append("")
+            elif cred_type == "api_token":
+                lines.append(f"### API Token Credential: {cred_name}")
+                lines.append(f"**ID**: `{cred_id}`")
+                lines.append("")
+                lines.append("```python")
+                lines.append("import json")
+                lines.append("import requests")
+                lines.append("")
+                lines.append("# Load credentials")
+                lines.append("with open('credentials/credentials.json', 'r') as f:")
+                lines.append("    all_credentials = json.load(f)")
+                lines.append("")
+                lines.append(f"# Find credential by ID (recommended)")
+                lines.append(f"credential_id = '{cred_id}'")
+                lines.append("for cred in all_credentials:")
+                lines.append("    if cred['id'] == credential_id:")
+                lines.append("        config = cred['credential_data']")
+                lines.append("        # Use pre-processed HTTP header")
+                lines.append("        headers = {")
+                lines.append("            config['http_header_name']: config['http_header_value']")
+                lines.append("        }")
+                lines.append("        ")
+                lines.append("        # Make API request")
+                lines.append("        response = requests.get('https://api.example.com/endpoint', headers=headers)")
+                lines.append("        # ... use response")
+                lines.append("        break")
                 lines.append("```")
                 lines.append("")
 
         lines.append("## Best Practices")
         lines.append("")
-        lines.append("1. **Load credentials at script start** and reuse the connection")
-        lines.append("2. **Handle errors gracefully** - credentials might be invalid or expired")
-        lines.append("3. **Close connections properly** when done")
-        lines.append("4. **Never hardcode credentials** - always read from the credentials file")
+        lines.append("1. **Use credential IDs for lookup** - IDs never change, unlike names")
+        lines.append("2. **Load credentials at script start** and reuse the connection")
+        lines.append("3. **Handle errors gracefully** - credentials might be invalid or expired")
+        lines.append("4. **Close connections properly** when done")
+        lines.append("5. **Never hardcode credentials** - always read from the credentials file")
         lines.append("")
 
         return "\n".join(lines)

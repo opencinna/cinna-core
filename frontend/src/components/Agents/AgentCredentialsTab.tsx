@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { Plus, Trash2, ExternalLink } from "lucide-react"
+import { Plus, ExternalLink, Unlink } from "lucide-react"
 import { useState } from "react"
 
 import { AgentsService, CredentialsService } from "@/client"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -42,6 +43,21 @@ import { handleError } from "@/utils"
 
 interface AgentCredentialsTabProps {
   agentId: string
+}
+
+function getCredentialTypeLabel(type: string): string {
+  switch (type) {
+    case "email_imap":
+      return "Email (IMAP)"
+    case "odoo":
+      return "Odoo"
+    case "gmail_oauth":
+      return "Gmail OAuth"
+    case "api_token":
+      return "API Token"
+    default:
+      return type
+  }
 }
 
 export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
@@ -252,7 +268,11 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
                       <ExternalLink className="h-3 w-3" />
                     </Link>
                   </TableCell>
-                  <TableCell>{credential.type}</TableCell>
+                  <TableCell>
+                    <Badge variant="secondary">
+                      {getCredentialTypeLabel(credential.type)}
+                    </Badge>
+                  </TableCell>
                   <TableCell>
                     {credential.notes && (
                       <span className="text-sm text-muted-foreground">
@@ -266,8 +286,9 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
                       size="icon"
                       onClick={() => handleRemove(credential.id)}
                       disabled={removeMutation.isPending}
+                      title="Unshare"
                     >
-                      <Trash2 className="h-4 w-4 text-destructive" />
+                      <Unlink className="h-4 w-4 text-destructive" />
                       <span className="sr-only">Remove credential</span>
                     </Button>
                   </TableCell>

@@ -38,6 +38,7 @@ from .credential import (
     EmailImapData,
     OdooData,
     GmailOAuthData,
+    ApiTokenData,
     CredentialWithData,
 )
 from .item import (
@@ -109,6 +110,7 @@ __all__ = [
     "EmailImapData",
     "OdooData",
     "GmailOAuthData",
+    "ApiTokenData",
     "CredentialWithData",
     # Items
     "Item",

@@ -658,7 +658,7 @@ export const CredentialPublicSchema = {
 
 export const CredentialTypeSchema = {
     type: 'string',
-    enum: ['email_imap', 'odoo', 'gmail_oauth'],
+    enum: ['email_imap', 'odoo', 'gmail_oauth', 'api_token'],
     title: 'CredentialType'
 } as const;
 

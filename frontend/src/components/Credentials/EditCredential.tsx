@@ -27,10 +27,15 @@ import {
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { Checkbox } from "@/components/ui/checkbox"
 import { LoadingButton } from "@/components/ui/loading-button"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
+import {
+  EmailImapFields,
+  OdooFields,
+  GmailOAuthFields,
+  ApiTokenFields,
+} from "@/components/Credentials/CredentialFields"
 
 const formSchema = z.object({
   name: z.string().min(1, { message: "Name is required" }),
@@ -137,191 +142,19 @@ const EditCredential = ({ credential, onSuccess }: EditCredentialProps) => {
                 />
 
                 {credential.type === "email_imap" && (
-                  <>
-                    <FormField
-                      control={form.control}
-                      name="credential_data.host"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Host</FormLabel>
-                          <FormControl>
-                            <Input placeholder="imap.gmail.com" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="credential_data.port"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Port</FormLabel>
-                          <FormControl>
-                            <Input type="number" placeholder="993" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="credential_data.login"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Login</FormLabel>
-                          <FormControl>
-                            <Input placeholder="user@example.com" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="credential_data.password"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Password</FormLabel>
-                          <FormControl>
-                            <Input type="password" placeholder="••••••••" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="credential_data.is_ssl"
-                      render={({ field }) => (
-                        <FormItem className="flex flex-row items-start space-x-3 space-y-0">
-                          <FormControl>
-                            <Checkbox
-                              checked={field.value as boolean}
-                              onCheckedChange={field.onChange}
-                            />
-                          </FormControl>
-                          <div className="space-y-1 leading-none">
-                            <FormLabel>Use SSL</FormLabel>
-                          </div>
-                        </FormItem>
-                      )}
-                    />
-                  </>
+                  <EmailImapFields control={form.control} />
                 )}
 
                 {credential.type === "odoo" && (
-                  <>
-                    <FormField
-                      control={form.control}
-                      name="credential_data.url"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>URL</FormLabel>
-                          <FormControl>
-                            <Input placeholder="https://your-odoo.com" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="credential_data.database_name"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Database Name</FormLabel>
-                          <FormControl>
-                            <Input placeholder="production" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="credential_data.login"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Login</FormLabel>
-                          <FormControl>
-                            <Input placeholder="admin" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="credential_data.api_token"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>API Token</FormLabel>
-                          <FormControl>
-                            <Input type="password" placeholder="••••••••" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  </>
+                  <OdooFields control={form.control} />
                 )}
 
                 {credential.type === "gmail_oauth" && (
-                  <>
-                    <FormField
-                      control={form.control}
-                      name="credential_data.access_token"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Access Token</FormLabel>
-                          <FormControl>
-                            <Textarea placeholder="ya29.a0..." {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="credential_data.refresh_token"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Refresh Token</FormLabel>
-                          <FormControl>
-                            <Textarea placeholder="1//0g..." {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="credential_data.token_type"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Token Type</FormLabel>
-                          <FormControl>
-                            <Input placeholder="Bearer" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="credential_data.scope"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Scope</FormLabel>
-                          <FormControl>
-                            <Input placeholder="https://www.googleapis.com/auth/gmail.readonly" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  </>
+                  <GmailOAuthFields control={form.control} />
+                )}
+
+                {credential.type === "api_token" && (
+                  <ApiTokenFields control={form.control} watch={form.watch} />
                 )}
 
                 <FormField

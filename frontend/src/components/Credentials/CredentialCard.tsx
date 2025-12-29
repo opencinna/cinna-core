@@ -23,6 +23,8 @@ function getCredentialIcon(type: string) {
       return <Database className="h-5 w-5" />
     case "gmail_oauth":
       return <AtSign className="h-5 w-5" />
+    case "api_token":
+      return <Key className="h-5 w-5" />
     default:
       return <Key className="h-5 w-5" />
   }
@@ -36,6 +38,8 @@ function getCredentialTypeLabel(type: string): string {
       return "Odoo"
     case "gmail_oauth":
       return "Gmail OAuth"
+    case "api_token":
+      return "API Token"
     default:
       return type
   }

@@ -966,9 +966,10 @@ export class MessagesService {
      *
      * Flow:
      * 1. Verify session ownership
-     * 2. Get external SDK session ID
-     * 3. Call environment interrupt endpoint
-     * 4. Return status
+     * 2. Request interrupt via active_streaming_manager
+     * 3. If external_session_id available, forward to agent env immediately
+     * 4. If not available yet, queue interrupt (will be sent when session_id arrives)
+     * 5. Return status
      * @param data The data for the request.
      * @param data.sessionId
      * @returns unknown Successful Response
