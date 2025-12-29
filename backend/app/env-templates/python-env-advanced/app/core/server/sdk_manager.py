@@ -88,7 +88,7 @@ class ClaudeCodeSDKManager:
 
             # Build options
             options = ClaudeAgentOptions(
-                allowed_tools=["Read", "Edit", "Glob", "Grep", "Bash", "Write"],
+                allowed_tools=["Read", "Edit", "Glob", "Grep", "Bash", "Write", "WebFetch", "WebSearch", "TodoWrite"],
                 permission_mode=self.permission_mode,
                 cwd=self.workspace_dir,
             )
