@@ -1,4 +1,5 @@
-import { Bot, Briefcase, Home, Key, MessageSquare, Users } from "lucide-react"
+import { Link as RouterLink, useRouterState } from "@tanstack/react-router"
+import { Bot, Home, Key, MessageSquare, Users } from "lucide-react"
 
 import { SidebarAppearance } from "@/components/Common/Appearance"
 import { Logo } from "@/components/Common/Logo"
@@ -7,24 +8,51 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import useAuth from "@/hooks/useAuth"
 import { type Item, Main } from "./Main"
 import { User } from "./User"
 
-const baseItems: Item[] = [
+const items: Item[] = [
   { icon: Home, title: "Dashboard", path: "/" },
   { icon: Bot, title: "Agents", path: "/agents" },
   { icon: MessageSquare, title: "Sessions", path: "/sessions" },
   { icon: Key, title: "Credentials", path: "/credentials" },
 ]
 
+function AdminMenu() {
+  const { isMobile, setOpenMobile } = useSidebar()
+  const router = useRouterState()
+  const currentPath = router.location.pathname
+
+  const handleMenuClick = () => {
+    if (isMobile) {
+      setOpenMobile(false)
+    }
+  }
+
+  const isActive = currentPath === "/admin"
+
+  return (
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <SidebarMenuButton tooltip="Admin" isActive={isActive} asChild>
+          <RouterLink to="/admin" onClick={handleMenuClick}>
+            <Users />
+            <span>Admin</span>
+          </RouterLink>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    </SidebarMenu>
+  )
+}
+
 export function AppSidebar() {
   const { user: currentUser } = useAuth()
-
-  const items = currentUser?.is_superuser
-    ? [...baseItems, { icon: Users, title: "Admin", path: "/admin" }]
-    : baseItems
 
   return (
     <Sidebar collapsible="icon">
@@ -36,6 +64,7 @@ export function AppSidebar() {
       </SidebarContent>
       <SidebarFooter>
         <SidebarAppearance />
+        {currentUser?.is_superuser && <AdminMenu />}
         <User user={currentUser} />
       </SidebarFooter>
     </Sidebar>
