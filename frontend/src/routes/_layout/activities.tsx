@@ -194,14 +194,13 @@ function ActivitiesList() {
           {/* Filters sidebar */}
           <div className="w-48 flex-shrink-0">
             <div className="sticky top-6 space-y-4">
-              <h3 className="text-sm font-semibold text-muted-foreground">Filter by Agent</h3>
               <div className="space-y-2">
                 <button
                   onClick={() => setSelectedAgentId(null)}
                   className={cn(
-                    "w-full text-left px-3 py-2 text-sm rounded-md transition-colors",
+                    "w-full text-left px-3 py-2 text-sm rounded-md transition-all",
                     selectedAgentId === null
-                      ? "bg-primary/10 text-primary font-medium"
+                      ? "ring-2 ring-primary text-primary font-medium"
                       : "hover:bg-muted"
                   )}
                 >
