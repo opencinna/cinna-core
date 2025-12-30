@@ -1,8 +1,12 @@
 from uuid import UUID
 from datetime import datetime
+import logging
+import asyncio
 from sqlmodel import Session as DBSession, select
 from sqlalchemy.orm.attributes import flag_modified
 from app.models import Session, SessionCreate, SessionUpdate, Agent, AgentEnvironment
+
+logger = logging.getLogger(__name__)
 
 
 class SessionService:
@@ -229,3 +233,69 @@ class SessionService:
         db.refresh(session)
 
         return session
+
+    @staticmethod
+    async def auto_generate_session_title(
+        session_id: UUID,
+        first_message_content: str,
+        get_fresh_db_session: callable
+    ) -> None:
+        """
+        Auto-generate session title from first message if no title exists.
+        Runs asynchronously in the background.
+
+        Args:
+            session_id: Session UUID
+            first_message_content: Content of the first message
+            get_fresh_db_session: Callable that returns a fresh DB session (context manager)
+        """
+        try:
+            from app.services.ai_functions_service import AIFunctionsService
+
+            # Check if AIFunctionsService is available
+            if AIFunctionsService.is_available():
+                # Generate title using LLM
+                title = await asyncio.to_thread(
+                    AIFunctionsService.generate_session_title,
+                    first_message_content
+                )
+
+                # Update session with generated title
+                with get_fresh_db_session() as db:
+                    SessionService.update_session(
+                        db_session=db,
+                        session_id=session_id,
+                        data=SessionUpdate(title=title)
+                    )
+                logger.info(f"Generated session title asynchronously: {title}")
+            else:
+                # If no LLM available, set truncated message immediately
+                fallback_title = first_message_content[:100]
+                if len(first_message_content) > 100:
+                    fallback_title += "..."
+
+                with get_fresh_db_session() as db:
+                    SessionService.update_session(
+                        db_session=db,
+                        session_id=session_id,
+                        data=SessionUpdate(title=fallback_title)
+                    )
+                logger.info(f"Set fallback session title (no LLM): {fallback_title}")
+
+        except Exception as e:
+            logger.warning(f"Failed to generate session title asynchronously: {e}")
+            # Fallback to truncated message if LLM fails
+            fallback_title = first_message_content[:100]
+            if len(first_message_content) > 100:
+                fallback_title += "..."
+
+            try:
+                with get_fresh_db_session() as db:
+                    SessionService.update_session(
+                        db_session=db,
+                        session_id=session_id,
+                        data=SessionUpdate(title=fallback_title)
+                    )
+                logger.info(f"Set fallback session title after error: {fallback_title}")
+            except Exception as fallback_error:
+                logger.error(f"Failed to set fallback title: {fallback_error}", exc_info=True)

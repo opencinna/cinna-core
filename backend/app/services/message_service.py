@@ -7,8 +7,9 @@ import logging
 import asyncio
 from sqlmodel import Session, select, func
 from sqlalchemy.orm import Session as AlchemySession
-from app.models import SessionMessage, Session as ChatSession, AgentEnvironment, Agent
+from app.models import SessionMessage, Session as ChatSession, AgentEnvironment, Agent, SessionUpdate
 from app.services.active_streaming_manager import active_streaming_manager
+from app.core.db import engine as db_engine
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,58 @@ class MessageService:
         if auth_token:
             return {"Authorization": f"Bearer {auth_token}"}
         return {}
+
+    @staticmethod
+    async def forward_interrupt_to_environment(
+        base_url: str,
+        auth_headers: dict,
+        external_session_id: str
+    ) -> dict:
+        """
+        Forward interrupt request to the agent environment.
+
+        Args:
+            base_url: Environment base URL
+            auth_headers: Authentication headers
+            external_session_id: External SDK session ID
+
+        Returns:
+            dict with status information:
+            {
+                "status": "ok" | "warning" | "error",
+                "message": str,
+                "external_session_id": str
+            }
+
+        Raises:
+            Exception: If communication with environment fails
+        """
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(
+                    f"{base_url}/chat/interrupt/{external_session_id}",
+                    headers=auth_headers
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    logger.info(f"Interrupt request sent successfully: {data}")
+                    return {
+                        "status": "ok",
+                        "message": "Interrupt request sent",
+                        "external_session_id": external_session_id
+                    }
+                else:
+                    logger.warning(f"Environment returned {response.status_code}: {response.text}")
+                    return {
+                        "status": "warning",
+                        "message": "Interrupt request sent but session may have completed",
+                        "external_session_id": external_session_id
+                    }
+
+        except httpx.RequestError as e:
+            logger.error(f"Failed to send interrupt to environment: {e}")
+            raise Exception(f"Failed to communicate with environment: {str(e)}")
 
     @staticmethod
     async def send_message_to_environment_stream(
@@ -683,3 +736,275 @@ class MessageService:
             # Always unregister stream when done (success, error, or interruption)
             await active_streaming_manager.unregister_stream(session_id)
             logger.info(f"Stream unregistered for session {session_id}")
+
+    @staticmethod
+    async def stream_message_with_activity_tracking(
+        session_id: UUID,
+        environment_id: UUID,
+        base_url: str,
+        auth_headers: dict,
+        user_message_content: str,
+        session_mode: str,
+        agent_sdk: str,
+        external_session_id: str | None,
+        get_fresh_db_session: callable
+    ) -> AsyncIterator[dict]:
+        """
+        Stream message with integrated activity tracking for frontend disconnection handling.
+
+        This method orchestrates the entire streaming process with activity management:
+        - Creates "session_running" activity at start
+        - Streams events to frontend via queue
+        - Handles frontend disconnection gracefully
+        - Updates activities based on completion status
+
+        Args:
+            session_id: Session UUID
+            environment_id: Environment UUID
+            base_url: Environment base URL
+            auth_headers: Environment auth headers
+            user_message_content: User's message
+            session_mode: "building" or "conversation"
+            agent_sdk: SDK to use
+            external_session_id: External SDK session ID (None for new)
+            get_fresh_db_session: Callable that returns a fresh DB session
+
+        Yields:
+            dict: SSE event dictionaries for frontend
+        """
+        from app.services.activity_service import ActivityService
+
+        # Create queue for event passing (unbounded to avoid blocking)
+        event_queue = asyncio.Queue()
+
+        # Flag to track if frontend is still connected
+        frontend_connected = True
+
+        async def stream_consumer_task():
+            """
+            Background task that consumes events from agent env.
+            Runs independently of frontend connection state.
+            """
+            try:
+                event_count = 0
+                error_occurred = False
+                error_message = None
+
+                async for event in MessageService.stream_message_with_events(
+                    session_id=session_id,
+                    environment_id=environment_id,
+                    base_url=base_url,
+                    auth_headers=auth_headers,
+                    user_message_content=user_message_content,
+                    session_mode=session_mode,
+                    agent_sdk=agent_sdk,
+                    external_session_id=external_session_id,
+                    get_fresh_db_session=get_fresh_db_session
+                ):
+                    event_count += 1
+                    # Always put event in queue (even if frontend disconnected)
+                    await event_queue.put(event)
+
+                    # Track if an error occurred
+                    if event.get("type") == "error":
+                        error_occurred = True
+                        error_message = event.get("content", "Unknown error occurred")
+                        logger.warning(f"Error detected in stream for session {session_id}: {error_message}")
+
+                # Signal completion
+                await event_queue.put(None)
+
+                if frontend_connected:
+                    logger.info(
+                        f"Stream consumer completed for session {session_id} "
+                        f"({event_count} events, frontend still connected, error={error_occurred})"
+                    )
+                    # Frontend was watching - delete the "session_running" activity
+                    def _delete_running_activity():
+                        with get_fresh_db_session() as db:
+                            asyncio.run(ActivityService.delete_session_running_activity(db, session_id))
+                    await asyncio.to_thread(_delete_running_activity)
+
+                    # But if error occurred, still create error activity (errors are important to track)
+                    if error_occurred:
+                        def _create_error():
+                            with get_fresh_db_session() as db:
+                                asyncio.run(ActivityService.create_error_activity(db, session_id, error_message))
+                        await asyncio.to_thread(_create_error)
+                else:
+                    logger.info(
+                        f"Stream consumer completed for session {session_id} "
+                        f"({event_count} events, frontend disconnected earlier, error={error_occurred})"
+                    )
+                    # Update or replace the "session_running" activity with final result
+                    if error_occurred:
+                        def _transition_to_error():
+                            with get_fresh_db_session() as db:
+                                asyncio.run(ActivityService.transition_running_to_error(db, session_id, error_message))
+                        await asyncio.to_thread(_transition_to_error)
+                    else:
+                        def _transition_to_completion():
+                            with get_fresh_db_session() as db:
+                                asyncio.run(ActivityService.transition_running_to_completion(db, session_id))
+                        await asyncio.to_thread(_transition_to_completion)
+            except Exception as e:
+                logger.error(
+                    f"Error in stream consumer for session {session_id}: {e}",
+                    exc_info=True
+                )
+                # Put error marker in queue
+                await event_queue.put({"type": "error", "content": str(e)})
+                await event_queue.put(None)
+
+                # Update running activity to error if frontend was disconnected
+                if not frontend_connected:
+                    def _transition_to_error_on_exception():
+                        with get_fresh_db_session() as db:
+                            asyncio.run(ActivityService.transition_running_to_error(db, session_id, str(e)))
+                    await asyncio.to_thread(_transition_to_error_on_exception)
+
+        # Create "session_running" activity before stream starts
+        def _create_running_activity():
+            with get_fresh_db_session() as db:
+                asyncio.run(ActivityService.create_session_running_activity(db, session_id))
+        await asyncio.to_thread(_create_running_activity)
+
+        # Start background consumer task BEFORE we start yielding to frontend
+        # This is the key to decoupling - the task is independent
+        consumer_task = asyncio.create_task(stream_consumer_task())
+
+        try:
+            # Yield events to frontend from queue
+            while True:
+                event = await event_queue.get()
+
+                # None signals completion
+                if event is None:
+                    break
+
+                # Format event as SSE and forward to frontend
+                event_json = json.dumps(event)
+                yield f"data: {event_json}\n\n"
+
+        except (asyncio.CancelledError, GeneratorExit) as e:
+            # Frontend disconnected
+            frontend_connected = False
+            logger.warning(
+                f"Frontend disconnected from session {session_id} (error: {type(e).__name__}). "
+                f"Backend-to-agent-env stream continues independently."
+            )
+            # Don't cancel consumer_task - let it continue!
+            # The background task will keep consuming and saving data
+            raise
+        except Exception as e:
+            # Unexpected error
+            frontend_connected = False
+            logger.error(
+                f"Unexpected error while streaming to frontend for session {session_id}: {e}",
+                exc_info=True
+            )
+            # Don't cancel consumer_task in case it can still save data
+            raise
+
+    @staticmethod
+    async def handle_stream_message(
+        session_id: UUID,
+        message_content: str,
+        answers_to_message_id: UUID | None,
+        db_session: Session,
+        get_fresh_db_session: callable
+    ) -> AsyncIterator[str]:
+        """
+        Comprehensive handler for streaming message requests.
+
+        This method orchestrates the entire streaming flow:
+        1. Validates environment status
+        2. Stores user message
+        3. Generates session title (if needed)
+        4. Sets session status
+        5. Streams response with activity tracking
+
+        Args:
+            session_id: Session UUID
+            message_content: User's message content
+            answers_to_message_id: Optional message ID being answered
+            db_session: Database session for initial operations
+            get_fresh_db_session: Callable that returns fresh DB sessions for background tasks
+
+        Yields:
+            str: SSE-formatted event strings for streaming response
+
+        Raises:
+            ValueError: If environment is not found or not running
+        """
+        from app.services.session_service import SessionService
+
+        # Get session
+        chat_session = db_session.get(ChatSession, session_id)
+        if not chat_session:
+            raise ValueError("Session not found")
+
+        # Get environment
+        environment = db_session.get(AgentEnvironment, chat_session.environment_id)
+        if not environment:
+            raise ValueError("Environment not found")
+
+        # Validate environment is running
+        if environment.status != "running":
+            raise ValueError(f"Environment is not running (status: {environment.status})")
+
+        # Get external SDK session ID (if exists)
+        external_session_id = SessionService.get_external_session_id(chat_session)
+
+        logger.info(
+            f"Streaming message to session {session_id} "
+            f"(mode={chat_session.mode}, agent_sdk={chat_session.agent_sdk}, external_session_id={external_session_id})"
+        )
+
+        # Store user message
+        MessageService.create_message(
+            session=db_session,
+            session_id=session_id,
+            role="user",
+            content=message_content,
+            answers_to_message_id=answers_to_message_id,
+        )
+
+        # Auto-generate session title from first message if no title exists
+        if not chat_session.title or chat_session.title.strip() == "":
+            # Start background task to generate title (fire and forget)
+            asyncio.create_task(
+                SessionService.auto_generate_session_title(
+                    session_id=session_id,
+                    first_message_content=message_content,
+                    get_fresh_db_session=get_fresh_db_session
+                )
+            )
+
+        # Set session status to "active" before streaming starts
+        SessionService.update_session_status(
+            db_session=db_session,
+            session_id=session_id,
+            status="active"
+        )
+
+        # Extract data from ORM objects BEFORE async generator (to avoid detached instance errors)
+        session_mode = chat_session.mode
+        agent_sdk = chat_session.agent_sdk
+        environment_id = environment.id
+        base_url = MessageService.get_environment_url(environment)
+        auth_headers = MessageService.get_auth_headers(environment)
+
+        # Stream response using MessageService with activity tracking
+        async for event in MessageService.stream_message_with_activity_tracking(
+            session_id=session_id,
+            environment_id=environment_id,
+            base_url=base_url,
+            auth_headers=auth_headers,
+            user_message_content=message_content,
+            session_mode=session_mode,
+            agent_sdk=agent_sdk,
+            external_session_id=external_session_id,
+            get_fresh_db_session=get_fresh_db_session
+        ):
+            yield event
