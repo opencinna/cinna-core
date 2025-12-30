@@ -85,6 +85,13 @@ from .event import (
     EventBroadcast,
     ConnectionInfo,
 )
+from .agent_schedule import (
+    AgentSchedule,
+    ScheduleRequest,
+    ScheduleResponse,
+    SaveScheduleRequest,
+    AgentSchedulePublic,
+)
 
 __all__ = [
     # Core
@@ -169,4 +176,10 @@ __all__ = [
     "EventPublic",
     "EventBroadcast",
     "ConnectionInfo",
+    # Agent Schedules
+    "AgentSchedule",
+    "ScheduleRequest",
+    "ScheduleResponse",
+    "SaveScheduleRequest",
+    "AgentSchedulePublic",
 ]

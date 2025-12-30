@@ -11,6 +11,7 @@ from typing import Optional
 
 from app.core.config import settings
 from app.agents import generate_agent_config, generate_conversation_title
+from app.agents.schedule_generator import generate_agent_schedule
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,47 @@ class AIFunctionsService:
             if len(message_content) > 100:
                 title += "..."
             return title
+
+    @staticmethod
+    def generate_schedule(natural_language: str, timezone: str) -> dict:
+        """
+        Generate CRON schedule from natural language.
+
+        Args:
+            natural_language: User's input (e.g., "every workday at 7 AM")
+            timezone: IANA timezone (e.g., "Europe/Berlin")
+
+        Returns:
+            dict with keys:
+                - success: bool
+                - description: Human-readable schedule (if success)
+                - cron_string: CRON expression in local time (if success)
+                - error: Error message (if not success)
+
+        Note:
+            The CRON string is in local time. The caller must convert to UTC
+            using AgentSchedulerService.convert_local_cron_to_utc().
+
+        Raises:
+            ValueError: If GOOGLE_API_KEY is not configured
+        """
+        try:
+            api_key = AIFunctionsService._get_api_key()
+            result = generate_agent_schedule(natural_language, timezone, api_key)
+            logger.info(
+                f"Generated schedule: {result.get('success')} - "
+                f"{result.get('description') or result.get('error')}"
+            )
+            return result
+        except ValueError:
+            # Re-raise configuration errors
+            raise
+        except Exception as e:
+            logger.error(f"Failed to generate schedule: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": f"Failed to generate schedule: {str(e)}"
+            }
 
     @staticmethod
     def is_available() -> bool:

@@ -47,6 +47,10 @@ class Agent(AgentBase, table=True):
     credentials: List["app.models.credential.Credential"] = Relationship(
         back_populates="agents", link_model=AgentCredentialLink
     )
+    schedules: List["app.models.agent_schedule.AgentSchedule"] = Relationship(
+        back_populates="agent",
+        cascade_delete=True
+    )
 
 
 # Properties to return via API, id is always required

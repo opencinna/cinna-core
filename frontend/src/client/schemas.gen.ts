@@ -696,6 +696,68 @@ export const AgentPublicSchema = {
     title: 'AgentPublic'
 } as const;
 
+export const AgentSchedulePublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        cron_string: {
+            type: 'string',
+            title: 'Cron String'
+        },
+        timezone: {
+            type: 'string',
+            title: 'Timezone'
+        },
+        description: {
+            type: 'string',
+            title: 'Description'
+        },
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled'
+        },
+        last_execution: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Execution'
+        },
+        next_execution: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Next Execution'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'agent_id', 'cron_string', 'timezone', 'description', 'enabled', 'last_execution', 'next_execution', 'created_at', 'updated_at'],
+    title: 'AgentSchedulePublic',
+    description: 'Public response model for AgentSchedule.'
+} as const;
+
 export const AgentUpdateSchema = {
     properties: {
         name: {
@@ -1442,6 +1504,106 @@ export const PrivateUserCreateSchema = {
     type: 'object',
     required: ['email', 'password', 'full_name'],
     title: 'PrivateUserCreate'
+} as const;
+
+export const SaveScheduleRequestSchema = {
+    properties: {
+        cron_string: {
+            type: 'string',
+            title: 'Cron String'
+        },
+        timezone: {
+            type: 'string',
+            title: 'Timezone'
+        },
+        description: {
+            type: 'string',
+            title: 'Description'
+        },
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled',
+            default: true
+        }
+    },
+    type: 'object',
+    required: ['cron_string', 'timezone', 'description'],
+    title: 'SaveScheduleRequest',
+    description: 'Request to save schedule configuration.'
+} as const;
+
+export const ScheduleRequestSchema = {
+    properties: {
+        natural_language: {
+            type: 'string',
+            title: 'Natural Language'
+        },
+        timezone: {
+            type: 'string',
+            title: 'Timezone'
+        }
+    },
+    type: 'object',
+    required: ['natural_language', 'timezone'],
+    title: 'ScheduleRequest',
+    description: 'Request to generate schedule from natural language.'
+} as const;
+
+export const ScheduleResponseSchema = {
+    properties: {
+        success: {
+            type: 'boolean',
+            title: 'Success'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        cron_string: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Cron String'
+        },
+        next_execution: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Next Execution'
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        }
+    },
+    type: 'object',
+    required: ['success'],
+    title: 'ScheduleResponse',
+    description: 'Response from AI schedule generation.'
 } as const;
 
 export const SessionCreateSchema = {

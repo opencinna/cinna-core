@@ -27,6 +27,8 @@ dependencies = [
     "google-adk>=1.17.0",
     "python-socketio>=5.16.0",
     "python-engineio>=4.13.0",
+    "pytz>=2025.2",
+    "croniter>=6.0.0",
 ]
 
 [tool.uv]

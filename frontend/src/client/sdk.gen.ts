@@ -3,7 +3,7 @@
 import type { CancelablePromise } from './core/CancelablePromise';
 import { OpenAPI } from './core/OpenAPI';
 import { request as __request } from './core/request';
-import type { ActivitiesCreateActivityData, ActivitiesCreateActivityResponse, ActivitiesListActivitiesData, ActivitiesListActivitiesResponse, ActivitiesDeleteAllActivitiesResponse, ActivitiesGetActivityStatsResponse, ActivitiesUpdateActivityData, ActivitiesUpdateActivityResponse, ActivitiesDeleteActivityData, ActivitiesDeleteActivityResponse, ActivitiesMarkActivitiesAsReadData, ActivitiesMarkActivitiesAsReadResponse, AgentsReadAgentsData, AgentsReadAgentsResponse, AgentsCreateAgentData, AgentsCreateAgentResponse, AgentsReadAgentData, AgentsReadAgentResponse, AgentsUpdateAgentData, AgentsUpdateAgentResponse, AgentsDeleteAgentData, AgentsDeleteAgentResponse, AgentsCreateAgentWithFlowData, AgentsCreateAgentWithFlowResponse, AgentsSyncAgentPromptsData, AgentsSyncAgentPromptsResponse, AgentsReadAgentCredentialsData, AgentsReadAgentCredentialsResponse, AgentsAddCredentialToAgentData, AgentsAddCredentialToAgentResponse, AgentsRemoveCredentialFromAgentData, AgentsRemoveCredentialFromAgentResponse, AgentsCreateAgentEnvironmentData, AgentsCreateAgentEnvironmentResponse, AgentsListAgentEnvironmentsData, AgentsListAgentEnvironmentsResponse, AgentsActivateEnvironmentData, AgentsActivateEnvironmentResponse, CredentialsReadCredentialsData, CredentialsReadCredentialsResponse, CredentialsCreateCredentialData, CredentialsCreateCredentialResponse, CredentialsReadCredentialData, CredentialsReadCredentialResponse, CredentialsUpdateCredentialData, CredentialsUpdateCredentialResponse, CredentialsDeleteCredentialData, CredentialsDeleteCredentialResponse, CredentialsReadCredentialWithDataData, CredentialsReadCredentialWithDataResponse, EnvironmentsGetEnvironmentData, EnvironmentsGetEnvironmentResponse, EnvironmentsUpdateEnvironmentData, EnvironmentsUpdateEnvironmentResponse, EnvironmentsDeleteEnvironmentData, EnvironmentsDeleteEnvironmentResponse, EnvironmentsStartEnvironmentData, EnvironmentsStartEnvironmentResponse, EnvironmentsStopEnvironmentData, EnvironmentsStopEnvironmentResponse, EnvironmentsRestartEnvironmentData, EnvironmentsRestartEnvironmentResponse, EnvironmentsRebuildEnvironmentData, EnvironmentsRebuildEnvironmentResponse, EnvironmentsGetEnvironmentStatusData, EnvironmentsGetEnvironmentStatusResponse, EnvironmentsCheckEnvironmentHealthData, EnvironmentsCheckEnvironmentHealthResponse, EnvironmentsGetEnvironmentLogsData, EnvironmentsGetEnvironmentLogsResponse, EventsBroadcastEventData, EventsBroadcastEventResponse, EventsGetConnectionStatsResponse, EventsTestEventResponse, ItemsReadItemsData, ItemsReadItemsResponse, ItemsCreateItemData, ItemsCreateItemResponse, ItemsReadItemData, ItemsReadItemResponse, ItemsUpdateItemData, ItemsUpdateItemResponse, ItemsDeleteItemData, ItemsDeleteItemResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, MessagesGetMessagesData, MessagesGetMessagesResponse, MessagesSendMessageData, MessagesSendMessageResponse, MessagesSendMessageStreamData, MessagesSendMessageStreamResponse, MessagesInterruptMessageData, MessagesInterruptMessageResponse, MessagesGetStreamingStatusData, MessagesGetStreamingStatusResponse, OauthGetOauthConfigResponse, OauthGoogleAuthorizeResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OauthLinkGoogleAccountEndpointData, OauthLinkGoogleAccountEndpointResponse, OauthUnlinkGoogleAccountEndpointResponse, PrivateCreateUserData, PrivateCreateUserResponse, SessionsCreateSessionData, SessionsCreateSessionResponse, SessionsListSessionsData, SessionsListSessionsResponse, SessionsGetSessionData, SessionsGetSessionResponse, SessionsUpdateSessionData, SessionsUpdateSessionResponse, SessionsDeleteSessionData, SessionsDeleteSessionResponse, SessionsSwitchSessionModeData, SessionsSwitchSessionModeResponse, SessionsResetSdkSessionData, SessionsResetSdkSessionResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersSetPasswordMeData, UsersSetPasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UsersGetAiCredentialsStatusResponse, UsersGetAiCredentialsResponse, UsersDeleteAiCredentialsResponse, UsersUpdateAiCredentialsData, UsersUpdateAiCredentialsResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse, WorkspaceGetWorkspaceTreeData, WorkspaceGetWorkspaceTreeResponse, WorkspaceDownloadWorkspaceItemData, WorkspaceDownloadWorkspaceItemResponse } from './types.gen';
+import type { ActivitiesCreateActivityData, ActivitiesCreateActivityResponse, ActivitiesListActivitiesData, ActivitiesListActivitiesResponse, ActivitiesDeleteAllActivitiesResponse, ActivitiesGetActivityStatsResponse, ActivitiesUpdateActivityData, ActivitiesUpdateActivityResponse, ActivitiesDeleteActivityData, ActivitiesDeleteActivityResponse, ActivitiesMarkActivitiesAsReadData, ActivitiesMarkActivitiesAsReadResponse, AgentsReadAgentsData, AgentsReadAgentsResponse, AgentsCreateAgentData, AgentsCreateAgentResponse, AgentsReadAgentData, AgentsReadAgentResponse, AgentsUpdateAgentData, AgentsUpdateAgentResponse, AgentsDeleteAgentData, AgentsDeleteAgentResponse, AgentsCreateAgentWithFlowData, AgentsCreateAgentWithFlowResponse, AgentsSyncAgentPromptsData, AgentsSyncAgentPromptsResponse, AgentsReadAgentCredentialsData, AgentsReadAgentCredentialsResponse, AgentsAddCredentialToAgentData, AgentsAddCredentialToAgentResponse, AgentsRemoveCredentialFromAgentData, AgentsRemoveCredentialFromAgentResponse, AgentsCreateAgentEnvironmentData, AgentsCreateAgentEnvironmentResponse, AgentsListAgentEnvironmentsData, AgentsListAgentEnvironmentsResponse, AgentsActivateEnvironmentData, AgentsActivateEnvironmentResponse, AgentsGenerateScheduleData, AgentsGenerateScheduleResponse, AgentsSaveScheduleData, AgentsSaveScheduleResponse, AgentsGetScheduleData, AgentsGetScheduleResponse, AgentsDeleteScheduleData, AgentsDeleteScheduleResponse, CredentialsReadCredentialsData, CredentialsReadCredentialsResponse, CredentialsCreateCredentialData, CredentialsCreateCredentialResponse, CredentialsReadCredentialData, CredentialsReadCredentialResponse, CredentialsUpdateCredentialData, CredentialsUpdateCredentialResponse, CredentialsDeleteCredentialData, CredentialsDeleteCredentialResponse, CredentialsReadCredentialWithDataData, CredentialsReadCredentialWithDataResponse, EnvironmentsGetEnvironmentData, EnvironmentsGetEnvironmentResponse, EnvironmentsUpdateEnvironmentData, EnvironmentsUpdateEnvironmentResponse, EnvironmentsDeleteEnvironmentData, EnvironmentsDeleteEnvironmentResponse, EnvironmentsStartEnvironmentData, EnvironmentsStartEnvironmentResponse, EnvironmentsStopEnvironmentData, EnvironmentsStopEnvironmentResponse, EnvironmentsRestartEnvironmentData, EnvironmentsRestartEnvironmentResponse, EnvironmentsRebuildEnvironmentData, EnvironmentsRebuildEnvironmentResponse, EnvironmentsGetEnvironmentStatusData, EnvironmentsGetEnvironmentStatusResponse, EnvironmentsCheckEnvironmentHealthData, EnvironmentsCheckEnvironmentHealthResponse, EnvironmentsGetEnvironmentLogsData, EnvironmentsGetEnvironmentLogsResponse, EventsBroadcastEventData, EventsBroadcastEventResponse, EventsGetConnectionStatsResponse, EventsTestEventResponse, ItemsReadItemsData, ItemsReadItemsResponse, ItemsCreateItemData, ItemsCreateItemResponse, ItemsReadItemData, ItemsReadItemResponse, ItemsUpdateItemData, ItemsUpdateItemResponse, ItemsDeleteItemData, ItemsDeleteItemResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, MessagesGetMessagesData, MessagesGetMessagesResponse, MessagesSendMessageData, MessagesSendMessageResponse, MessagesSendMessageStreamData, MessagesSendMessageStreamResponse, MessagesInterruptMessageData, MessagesInterruptMessageResponse, MessagesGetStreamingStatusData, MessagesGetStreamingStatusResponse, OauthGetOauthConfigResponse, OauthGoogleAuthorizeResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OauthLinkGoogleAccountEndpointData, OauthLinkGoogleAccountEndpointResponse, OauthUnlinkGoogleAccountEndpointResponse, PrivateCreateUserData, PrivateCreateUserResponse, SessionsCreateSessionData, SessionsCreateSessionResponse, SessionsListSessionsData, SessionsListSessionsResponse, SessionsGetSessionData, SessionsGetSessionResponse, SessionsUpdateSessionData, SessionsUpdateSessionResponse, SessionsDeleteSessionData, SessionsDeleteSessionResponse, SessionsSwitchSessionModeData, SessionsSwitchSessionModeResponse, SessionsResetSdkSessionData, SessionsResetSdkSessionResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersSetPasswordMeData, UsersSetPasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UsersGetAiCredentialsStatusResponse, UsersGetAiCredentialsResponse, UsersDeleteAiCredentialsResponse, UsersUpdateAiCredentialsData, UsersUpdateAiCredentialsResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse, WorkspaceGetWorkspaceTreeData, WorkspaceGetWorkspaceTreeResponse, WorkspaceDownloadWorkspaceItemData, WorkspaceDownloadWorkspaceItemResponse } from './types.gen';
 
 export class ActivitiesService {
     /**
@@ -440,6 +440,96 @@ export class AgentsService {
             path: {
                 id: data.id,
                 env_id: data.envId
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Generate Schedule
+     * Generate CRON schedule from natural language using AI.
+     * @param data The data for the request.
+     * @param data.id
+     * @param data.requestBody
+     * @returns ScheduleResponse Successful Response
+     * @throws ApiError
+     */
+    public static generateSchedule(data: AgentsGenerateScheduleData): CancelablePromise<AgentsGenerateScheduleResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/agents/{id}/schedule',
+            path: {
+                id: data.id
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Save Schedule
+     * Save schedule configuration for agent.
+     * @param data The data for the request.
+     * @param data.id
+     * @param data.requestBody
+     * @returns AgentSchedulePublic Successful Response
+     * @throws ApiError
+     */
+    public static saveSchedule(data: AgentsSaveScheduleData): CancelablePromise<AgentsSaveScheduleResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/api/v1/agents/{id}/schedule',
+            path: {
+                id: data.id
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Get Schedule
+     * Get current schedule for agent.
+     * @param data The data for the request.
+     * @param data.id
+     * @returns unknown Successful Response
+     * @throws ApiError
+     */
+    public static getSchedule(data: AgentsGetScheduleData): CancelablePromise<AgentsGetScheduleResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/agents/{id}/schedule',
+            path: {
+                id: data.id
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Delete Schedule
+     * Delete agent schedule.
+     * @param data The data for the request.
+     * @param data.id
+     * @returns Message Successful Response
+     * @throws ApiError
+     */
+    public static deleteSchedule(data: AgentsDeleteScheduleData): CancelablePromise<AgentsDeleteScheduleResponse> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/agents/{id}/schedule',
+            path: {
+                id: data.id
             },
             errors: {
                 422: 'Validation Error'

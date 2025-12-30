@@ -129,6 +129,22 @@ export type AgentPublic = {
     owner_id: string;
 };
 
+/**
+ * Public response model for AgentSchedule.
+ */
+export type AgentSchedulePublic = {
+    id: string;
+    agent_id: string;
+    cron_string: string;
+    timezone: string;
+    description: string;
+    enabled: boolean;
+    last_execution: (string | null);
+    next_execution: string;
+    created_at: string;
+    updated_at: string;
+};
+
 export type AgentsPublic = {
     data: Array<AgentPublic>;
     count: number;
@@ -320,6 +336,35 @@ export type PrivateUserCreate = {
     password: string;
     full_name: string;
     is_verified?: boolean;
+};
+
+/**
+ * Request to save schedule configuration.
+ */
+export type SaveScheduleRequest = {
+    cron_string: string;
+    timezone: string;
+    description: string;
+    enabled?: boolean;
+};
+
+/**
+ * Request to generate schedule from natural language.
+ */
+export type ScheduleRequest = {
+    natural_language: string;
+    timezone: string;
+};
+
+/**
+ * Response from AI schedule generation.
+ */
+export type ScheduleResponse = {
+    success: boolean;
+    description?: (string | null);
+    cron_string?: (string | null);
+    next_execution?: (string | null);
+    error?: (string | null);
 };
 
 export type SessionCreate = {
@@ -579,6 +624,32 @@ export type AgentsActivateEnvironmentData = {
 };
 
 export type AgentsActivateEnvironmentResponse = (AgentPublic);
+
+export type AgentsGenerateScheduleData = {
+    id: string;
+    requestBody: ScheduleRequest;
+};
+
+export type AgentsGenerateScheduleResponse = (ScheduleResponse);
+
+export type AgentsSaveScheduleData = {
+    id: string;
+    requestBody: SaveScheduleRequest;
+};
+
+export type AgentsSaveScheduleResponse = (AgentSchedulePublic);
+
+export type AgentsGetScheduleData = {
+    id: string;
+};
+
+export type AgentsGetScheduleResponse = ((AgentSchedulePublic | null));
+
+export type AgentsDeleteScheduleData = {
+    id: string;
+};
+
+export type AgentsDeleteScheduleResponse = (Message);
 
 export type CredentialsReadCredentialsData = {
     limit?: number;

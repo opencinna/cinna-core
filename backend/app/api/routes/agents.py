@@ -24,11 +24,17 @@ from app.models import (
     AgentEnvironmentCreate,
     AgentEnvironmentPublic,
     AgentEnvironmentsPublic,
+    ScheduleRequest,
+    ScheduleResponse,
+    SaveScheduleRequest,
+    AgentSchedulePublic,
 )
 from app.services.environment_service import EnvironmentService
 from app.services.agent_service import AgentService
 from app.services.credentials_service import CredentialsService
 from app.services.message_service import MessageService
+from app.services.ai_functions_service import AIFunctionsService
+from app.services.agent_scheduler_service import AgentSchedulerService
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -367,3 +373,120 @@ async def activate_environment(
         session=session, agent_id=id, env_id=env_id
     )
     return updated_agent
+
+
+# Schedule management routes
+@router.post("/{id}/schedule", response_model=ScheduleResponse)
+def generate_schedule(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+    data: ScheduleRequest
+) -> ScheduleResponse:
+    """Generate CRON schedule from natural language using AI."""
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    # Call AI function to generate CRON string (in local time)
+    ai_result = AIFunctionsService.generate_schedule(
+        natural_language=data.natural_language,
+        timezone=data.timezone
+    )
+
+    # If successful, calculate next execution for preview
+    if ai_result.get("success"):
+        try:
+            # Convert CRON from local time to UTC
+            cron_utc = AgentSchedulerService.convert_local_cron_to_utc(
+                ai_result["cron_string"],
+                data.timezone
+            )
+
+            # Calculate next execution
+            next_exec = AgentSchedulerService.calculate_next_execution(
+                cron_utc,
+                data.timezone
+            )
+
+            # Keep CRON in local time (don't update it)
+            # The save_schedule endpoint will do the conversion
+            ai_result["next_execution"] = next_exec.isoformat()
+        except Exception as e:
+            return ScheduleResponse(
+                success=False,
+                error=f"Failed to calculate next execution: {str(e)}"
+            )
+
+    return ScheduleResponse(**ai_result)
+
+
+@router.put("/{id}/schedule", response_model=AgentSchedulePublic)
+def save_schedule(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+    data: SaveScheduleRequest
+) -> Any:
+    """Save schedule configuration for agent."""
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    # Create or update schedule using service
+    try:
+        schedule = AgentSchedulerService.create_or_update_schedule(
+            session=session,
+            agent_id=id,
+            cron_string=data.cron_string,
+            timezone=data.timezone,
+            description=data.description,
+            enabled=data.enabled
+        )
+        return schedule
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{id}/schedule", response_model=AgentSchedulePublic | None)
+def get_schedule(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+) -> Any:
+    """Get current schedule for agent."""
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    return AgentSchedulerService.get_agent_schedule(session, id)
+
+
+@router.delete("/{id}/schedule")
+def delete_schedule(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+) -> Message:
+    """Delete agent schedule."""
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    deleted = AgentSchedulerService.delete_schedule(session, id)
+    if deleted:
+        return Message(message="Schedule deleted successfully")
+    else:
+        return Message(message="No schedule found")
