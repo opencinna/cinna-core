@@ -236,17 +236,15 @@ class ActivityService:
 
             # Emit WebSocket event for session_running activity
             from app.services.event_service import event_service
-            asyncio.create_task(
-                event_service.emit_event(
-                    event_type=EventType.ACTIVITY_CREATED,
-                    model_id=running_activity.id,
-                    user_id=user_id,
-                    meta={
-                        "activity_type": "session_running",
-                        "session_id": str(session_id),
-                        "agent_id": str(agent_id)
-                    }
-                )
+            await event_service.emit_event(
+                event_type=EventType.ACTIVITY_CREATED,
+                model_id=running_activity.id,
+                user_id=user_id,
+                meta={
+                    "activity_type": "session_running",
+                    "session_id": str(session_id),
+                    "agent_id": str(agent_id)
+                }
             )
 
             return running_activity
@@ -284,16 +282,14 @@ class ActivityService:
 
                 # Emit WebSocket event for activity deletion
                 from app.services.event_service import event_service
-                asyncio.create_task(
-                    event_service.emit_event(
-                        event_type=EventType.ACTIVITY_DELETED,
-                        model_id=activity_id,
-                        user_id=user_id,
-                        meta={
-                            "activity_type": "session_running",
-                            "session_id": str(session_id)
-                        }
-                    )
+                await event_service.emit_event(
+                    event_type=EventType.ACTIVITY_DELETED,
+                    model_id=activity_id,
+                    user_id=user_id,
+                    meta={
+                        "activity_type": "session_running",
+                        "session_id": str(session_id)
+                    }
                 )
                 return True
 
@@ -355,17 +351,15 @@ class ActivityService:
 
             # Emit WebSocket event for activity creation
             from app.services.event_service import event_service
-            asyncio.create_task(
-                event_service.emit_event(
-                    event_type=EventType.ACTIVITY_CREATED,
-                    model_id=activity.id,
-                    user_id=user_id,
-                    meta={
-                        "activity_type": "error_occurred",
-                        "session_id": str(session_id),
-                        "agent_id": str(agent_id)
-                    }
-                )
+            await event_service.emit_event(
+                event_type=EventType.ACTIVITY_CREATED,
+                model_id=activity.id,
+                user_id=user_id,
+                meta={
+                    "activity_type": "error_occurred",
+                    "session_id": str(session_id),
+                    "agent_id": str(agent_id)
+                }
             )
 
             return activity
@@ -434,17 +428,15 @@ class ActivityService:
 
             # Emit WebSocket event for session_completed activity
             from app.services.event_service import event_service
-            asyncio.create_task(
-                event_service.emit_event(
-                    event_type=EventType.ACTIVITY_CREATED,
-                    model_id=completed_activity.id,
-                    user_id=user_id,
-                    meta={
-                        "activity_type": "session_completed",
-                        "session_id": str(session_id),
-                        "agent_id": str(agent_id)
-                    }
-                )
+            await event_service.emit_event(
+                event_type=EventType.ACTIVITY_CREATED,
+                model_id=completed_activity.id,
+                user_id=user_id,
+                meta={
+                    "activity_type": "session_completed",
+                    "session_id": str(session_id),
+                    "agent_id": str(agent_id)
+                }
             )
 
             # If the latest message has unanswered questions, create additional activity
@@ -465,17 +457,15 @@ class ActivityService:
                 logger.info(f"Created 'questions_asked' activity for session {session_id}")
 
                 # Emit WebSocket event for questions_asked activity
-                asyncio.create_task(
-                    event_service.emit_event(
-                        event_type=EventType.ACTIVITY_CREATED,
-                        model_id=questions_activity.id,
-                        user_id=user_id,
-                        meta={
-                            "activity_type": "questions_asked",
-                            "session_id": str(session_id),
-                            "agent_id": str(agent_id)
-                        }
-                    )
+                await event_service.emit_event(
+                    event_type=EventType.ACTIVITY_CREATED,
+                    model_id=questions_activity.id,
+                    user_id=user_id,
+                    meta={
+                        "activity_type": "questions_asked",
+                        "session_id": str(session_id),
+                        "agent_id": str(agent_id)
+                    }
                 )
 
             return completed_activity, questions_activity
@@ -512,16 +502,14 @@ class ActivityService:
 
                 # Emit WebSocket event for activity deletion
                 from app.services.event_service import event_service
-                asyncio.create_task(
-                    event_service.emit_event(
-                        event_type=EventType.ACTIVITY_DELETED,
-                        model_id=activity_id,
-                        user_id=user_id,
-                        meta={
-                            "activity_type": "session_running",
-                            "session_id": str(session_id)
-                        }
-                    )
+                await event_service.emit_event(
+                    event_type=EventType.ACTIVITY_DELETED,
+                    model_id=activity_id,
+                    user_id=user_id,
+                    meta={
+                        "activity_type": "session_running",
+                        "session_id": str(session_id)
+                    }
                 )
 
             # Create completion activities
@@ -561,16 +549,14 @@ class ActivityService:
 
                 # Emit WebSocket event for activity deletion
                 from app.services.event_service import event_service
-                asyncio.create_task(
-                    event_service.emit_event(
-                        event_type=EventType.ACTIVITY_DELETED,
-                        model_id=activity_id,
-                        user_id=user_id,
-                        meta={
-                            "activity_type": "session_running",
-                            "session_id": str(session_id)
-                        }
-                    )
+                await event_service.emit_event(
+                    event_type=EventType.ACTIVITY_DELETED,
+                    model_id=activity_id,
+                    user_id=user_id,
+                    meta={
+                        "activity_type": "session_running",
+                        "session_id": str(session_id)
+                    }
                 )
 
             # Create error activity
