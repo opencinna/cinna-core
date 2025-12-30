@@ -98,16 +98,16 @@ function AgentDetail() {
   }
 
   const tabs = [
-    { value: "prompts", title: "Prompts", content: <AgentPromptsTab agent={agent} /> },
+    { value: "configuration", title: "Configuration", content: <AgentPromptsTab agent={agent} /> },
     { value: "credentials", title: "Credentials", content: <AgentCredentialsTab agentId={agent.id} /> },
     { value: "environments", title: "Environments", content: <AgentEnvironmentsTab agentId={agent.id} /> },
-    { value: "configuration", title: "Configuration", content: <AgentConfigurationTab agent={agent} /> },
+    { value: "interface", title: "Interface", content: <AgentConfigurationTab agent={agent} /> },
   ]
 
   return (
     <div className="p-6 md:p-8 overflow-y-auto">
       <div className="mx-auto max-w-7xl">
-        <HashTabs tabs={tabs} defaultTab="prompts" />
+        <HashTabs tabs={tabs} defaultTab="configuration" />
       </div>
     </div>
   )
