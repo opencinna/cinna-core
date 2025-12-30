@@ -57,6 +57,10 @@ services:
       - ENV_TEMPLATES_DIR=app/env-templates
       - ENV_INSTANCES_DIR=/agent-environments
       - HOST_AGENT_ENVIRONMENTS_DIR=${HOST_AGENT_ENVIRONMENTS_DIR:-./backend/agent-environments}
+    ports:
+      # Expose backend API and WebSocket port
+      # WebSocket uses the same port as the HTTP API (Socket.IO upgrades the connection)
+      - "8000:8000"
     volumes:
       # Mount Docker socket to allow Docker-from-Docker for agent environments
       - /var/run/docker.sock:/var/run/docker.sock
@@ -78,6 +82,9 @@ services:
   frontend:
     image: '${DOCKER_IMAGE_FRONTEND?Variable not set}:${TAG-latest}'
     restart: always
+    ports:
+      # Expose frontend nginx server
+      - "80:80"
     build:
       context: ./frontend
       args:

@@ -1,0 +1,313 @@
+/**
+ * EventService - WebSocket client for real-time event communication
+ *
+ * Provides a singleton Socket.IO client that connects to the backend
+ * WebSocket server for real-time event updates.
+ */
+
+import { io, Socket } from "socket.io-client"
+
+// Event types matching backend EventType
+export const EventTypes = {
+  // Session events
+  SESSION_CREATED: "session_created",
+  SESSION_UPDATED: "session_updated",
+  SESSION_DELETED: "session_deleted",
+
+  // Message events
+  MESSAGE_CREATED: "message_created",
+  MESSAGE_UPDATED: "message_updated",
+  MESSAGE_DELETED: "message_deleted",
+
+  // Activity events
+  ACTIVITY_CREATED: "activity_created",
+  ACTIVITY_UPDATED: "activity_updated",
+  ACTIVITY_DELETED: "activity_deleted",
+
+  // Agent events
+  AGENT_CREATED: "agent_created",
+  AGENT_UPDATED: "agent_updated",
+  AGENT_DELETED: "agent_deleted",
+
+  // Streaming events
+  STREAM_STARTED: "stream_started",
+  STREAM_COMPLETED: "stream_completed",
+  STREAM_ERROR: "stream_error",
+
+  // Generic notification
+  NOTIFICATION: "notification",
+} as const
+
+export type EventType = (typeof EventTypes)[keyof typeof EventTypes]
+
+// Event structure matching backend EventPublic
+export interface EventData {
+  type: string
+  model_id?: string
+  text_content?: string
+  meta?: Record<string, any>
+  user_id?: string
+  timestamp: string
+}
+
+// Event handler callback type
+export type EventHandler = (event: EventData) => void
+
+// Event subscription
+interface EventSubscription {
+  eventType: string | "*" // "*" means subscribe to all events
+  handler: EventHandler
+  id: string
+}
+
+// Connection status
+export type ConnectionStatus = "connected" | "connecting" | "disconnected"
+
+// Connection status listener
+export type ConnectionStatusListener = (status: ConnectionStatus) => void
+
+class EventServiceClass {
+  private socket: Socket | null = null
+  private subscriptions: Map<string, EventSubscription> = new Map()
+  private isConnecting = false
+  private reconnectAttempts = 0
+  private maxReconnectAttempts = 5
+  private reconnectDelay = 1000 // Start with 1 second
+  private statusListeners: Set<ConnectionStatusListener> = new Set()
+  private currentStatus: ConnectionStatus = "disconnected"
+
+  /**
+   * Initialize the WebSocket connection
+   */
+  connect(userId: string): void {
+    if (this.socket?.connected || this.isConnecting) {
+      console.log("[EventService] Already connected or connecting")
+      return
+    }
+
+    this.isConnecting = true
+    this.updateStatus("connecting")
+    const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000"
+
+    console.log("[EventService] Connecting to:", apiUrl, "with path: /ws")
+
+    this.socket = io(apiUrl, {
+      path: "/ws",
+      transports: ["websocket", "polling"],
+      auth: {
+        user_id: userId,
+      },
+      reconnection: true,
+      reconnectionAttempts: this.maxReconnectAttempts,
+      reconnectionDelay: this.reconnectDelay,
+      reconnectionDelayMax: 5000,
+    })
+
+    // Connection event handlers
+    this.socket.on("connect", () => {
+      console.log("[EventService] Connected, socket ID:", this.socket?.id)
+      this.isConnecting = false
+      this.reconnectAttempts = 0
+      this.reconnectDelay = 1000
+      this.updateStatus("connected")
+    })
+
+    this.socket.on("disconnect", (reason) => {
+      console.log("[EventService] Disconnected:", reason)
+      this.isConnecting = false
+      this.updateStatus("disconnected")
+    })
+
+    this.socket.on("connect_error", (error) => {
+      console.error("[EventService] Connection error:", error)
+      this.isConnecting = false
+      this.reconnectAttempts++
+
+      // Exponential backoff
+      if (this.reconnectAttempts < this.maxReconnectAttempts) {
+        this.reconnectDelay = Math.min(this.reconnectDelay * 2, 5000)
+        this.updateStatus("connecting")
+      } else {
+        this.updateStatus("disconnected")
+      }
+    })
+
+    // Listen for events from server
+    this.socket.on("event", (data: EventData) => {
+      console.log("[EventService] Received event:", data.type, data)
+      this.handleEvent(data)
+    })
+
+    // Ping/pong for keepalive
+    this.socket.on("pong", (data) => {
+      console.log("[EventService] Pong received:", data)
+    })
+  }
+
+  /**
+   * Disconnect from WebSocket
+   */
+  disconnect(): void {
+    if (this.socket) {
+      console.log("[EventService] Disconnecting...")
+      this.socket.disconnect()
+      this.socket = null
+      this.isConnecting = false
+      this.subscriptions.clear()
+      this.updateStatus("disconnected")
+    }
+  }
+
+  /**
+   * Subscribe to specific event type or all events
+   * @param eventType - Event type to subscribe to, or "*" for all events
+   * @param handler - Callback function to handle the event
+   * @returns Subscription ID (use to unsubscribe)
+   */
+  subscribe(eventType: string | "*", handler: EventHandler): string {
+    const id = `${eventType}_${Date.now()}_${Math.random()}`
+    this.subscriptions.set(id, { eventType, handler, id })
+    console.log(`[EventService] Subscribed to ${eventType}, subscription ID:`, id)
+    return id
+  }
+
+  /**
+   * Unsubscribe from an event
+   * @param subscriptionId - ID returned from subscribe()
+   */
+  unsubscribe(subscriptionId: string): void {
+    const subscription = this.subscriptions.get(subscriptionId)
+    if (subscription) {
+      this.subscriptions.delete(subscriptionId)
+      console.log(`[EventService] Unsubscribed from ${subscription.eventType}`)
+    }
+  }
+
+  /**
+   * Subscribe to a specific room
+   * @param room - Room name to subscribe to
+   */
+  async subscribeToRoom(room: string): Promise<void> {
+    if (!this.socket) {
+      console.warn("[EventService] Cannot subscribe to room: not connected")
+      return
+    }
+
+    return new Promise((resolve, reject) => {
+      this.socket?.emit("subscribe", { room }, (response: any) => {
+        if (response?.status === "success") {
+          console.log(`[EventService] Subscribed to room: ${room}`)
+          resolve()
+        } else {
+          console.error(`[EventService] Failed to subscribe to room: ${room}`, response)
+          reject(new Error(response?.message || "Failed to subscribe"))
+        }
+      })
+    })
+  }
+
+  /**
+   * Unsubscribe from a specific room
+   * @param room - Room name to unsubscribe from
+   */
+  async unsubscribeFromRoom(room: string): Promise<void> {
+    if (!this.socket) {
+      console.warn("[EventService] Cannot unsubscribe from room: not connected")
+      return
+    }
+
+    return new Promise((resolve, reject) => {
+      this.socket?.emit("unsubscribe", { room }, (response: any) => {
+        if (response?.status === "success") {
+          console.log(`[EventService] Unsubscribed from room: ${room}`)
+          resolve()
+        } else {
+          console.error(`[EventService] Failed to unsubscribe from room: ${room}`, response)
+          reject(new Error(response?.message || "Failed to unsubscribe"))
+        }
+      })
+    })
+  }
+
+  /**
+   * Send a ping to check connection
+   */
+  ping(): void {
+    if (this.socket) {
+      this.socket.emit("ping")
+    }
+  }
+
+  /**
+   * Check if connected
+   */
+  isConnected(): boolean {
+    return this.socket?.connected || false
+  }
+
+  /**
+   * Get socket ID
+   */
+  getSocketId(): string | undefined {
+    return this.socket?.id
+  }
+
+  /**
+   * Get current connection status
+   */
+  getStatus(): ConnectionStatus {
+    return this.currentStatus
+  }
+
+  /**
+   * Subscribe to connection status changes
+   * @param listener - Callback function to handle status changes
+   * @returns Unsubscribe function
+   */
+  onStatusChange(listener: ConnectionStatusListener): () => void {
+    this.statusListeners.add(listener)
+    // Immediately call with current status
+    listener(this.currentStatus)
+
+    // Return unsubscribe function
+    return () => {
+      this.statusListeners.delete(listener)
+    }
+  }
+
+  /**
+   * Update connection status and notify listeners
+   */
+  private updateStatus(status: ConnectionStatus): void {
+    if (this.currentStatus !== status) {
+      this.currentStatus = status
+      console.log(`[EventService] Status changed to: ${status}`)
+      this.statusListeners.forEach((listener) => {
+        try {
+          listener(status)
+        } catch (error) {
+          console.error("[EventService] Error in status listener:", error)
+        }
+      })
+    }
+  }
+
+  /**
+   * Handle incoming event and notify subscribers
+   */
+  private handleEvent(event: EventData): void {
+    // Notify subscribers who are listening to this specific event type
+    this.subscriptions.forEach((subscription) => {
+      if (subscription.eventType === event.type || subscription.eventType === "*") {
+        try {
+          subscription.handler(event)
+        } catch (error) {
+          console.error(`[EventService] Error in event handler for ${event.type}:`, error)
+        }
+      }
+    })
+  }
+}
+
+// Export singleton instance
+export const eventService = new EventServiceClass()

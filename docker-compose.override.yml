@@ -12,8 +12,6 @@ services:
 
   backend:
     restart: "no"
-    ports:
-      - "8000:8000"
     build:
       context: ./backend
     # command: sleep infinity  # Infinite loop to keep container alive doing nothing

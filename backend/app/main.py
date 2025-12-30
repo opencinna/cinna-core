@@ -44,3 +44,10 @@ if settings.all_cors_origins:
     )
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
+# Mount Socket.IO app for WebSocket support
+from app.services.event_service import event_service
+
+# Mount the Socket.IO ASGI app at /ws
+socket_app = event_service.get_asgi_app()
+app.mount("/ws", socket_app)

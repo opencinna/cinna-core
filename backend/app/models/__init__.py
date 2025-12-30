@@ -78,6 +78,13 @@ from .activity import (
     ActivitiesPublicExtended,
     ActivityStats,
 )
+from .event import (
+    EventType,
+    EventBase,
+    EventPublic,
+    EventBroadcast,
+    ConnectionInfo,
+)
 
 __all__ = [
     # Core
@@ -156,4 +163,10 @@ __all__ = [
     "ActivitiesPublic",
     "ActivitiesPublicExtended",
     "ActivityStats",
+    # Events
+    "EventType",
+    "EventBase",
+    "EventPublic",
+    "EventBroadcast",
+    "ConnectionInfo",
 ]

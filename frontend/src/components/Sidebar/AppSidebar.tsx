@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query"
 
 import { SidebarAppearance } from "@/components/Common/Appearance"
 import { Logo } from "@/components/Common/Logo"
+import { WebSocketStatus } from "@/components/Common/WebSocketStatus"
 import {
   Sidebar,
   SidebarContent,
@@ -117,6 +118,7 @@ export function AppSidebar() {
         <Main items={itemsAfterActivities} />
       </SidebarContent>
       <SidebarFooter>
+        <WebSocketStatus />
         <SidebarAppearance />
         {currentUser?.is_superuser && <AdminMenu />}
         <User user={currentUser} />

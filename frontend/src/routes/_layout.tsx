@@ -8,6 +8,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { isLoggedIn } from "@/hooks/useAuth"
+import { useEventBusConnection } from "@/hooks/useEventBus"
 
 interface HeaderContextType {
   setHeaderContent: (content: ReactNode) => void
@@ -36,6 +37,9 @@ export const Route = createFileRoute("/_layout")({
 
 function Layout() {
   const [headerContent, setHeaderContent] = useState<ReactNode>(null)
+
+  // Initialize WebSocket connection for real-time events
+  useEventBusConnection()
 
   return (
     <HeaderContext.Provider value={{ setHeaderContent }}>
