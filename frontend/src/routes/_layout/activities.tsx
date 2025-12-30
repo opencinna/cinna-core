@@ -8,9 +8,17 @@ import PendingItems from "@/components/Pending/PendingItems"
 import { usePageHeader } from "@/routes/_layout"
 import { getColorPreset } from "@/utils/colorPresets"
 import { RelativeTime } from "@/components/Common/RelativeTime"
-import { Bell, CheckCircle2, AlertCircle, FileText, MessageCircle, AlertOctagon, Loader2 } from "lucide-react"
+import { Bell, CheckCircle2, AlertCircle, FileText, MessageCircle, AlertOctagon, Loader2, EllipsisVertical, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useMultiEventSubscription, EventTypes } from "@/hooks/useEventBus"
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu"
+import useCustomToast from "@/hooks/useCustomToast"
 
 export const Route = createFileRoute("/_layout/activities")({
   component: ActivitiesList,
@@ -19,8 +27,10 @@ export const Route = createFileRoute("/_layout/activities")({
 function ActivitiesList() {
   const { setHeaderContent } = usePageHeader()
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
 
   // Map to track which activities are currently visible
   const [visibleActivities, setVisibleActivities] = useState<Set<string>>(new Set())
@@ -40,6 +50,7 @@ function ActivitiesList() {
         limit: 100,
         orderDesc: true,
       }),
+    placeholderData: (previousData) => previousData,
   })
 
   const {
@@ -59,6 +70,19 @@ function ActivitiesList() {
     },
   })
 
+  const clearAllMutation = useMutation({
+    mutationFn: () => ActivitiesService.deleteAllActivities(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["activities"] })
+      queryClient.invalidateQueries({ queryKey: ["activity-stats"] })
+      showSuccessToast("All activities cleared")
+      setMenuOpen(false)
+    },
+    onError: () => {
+      showErrorToast("Failed to clear activities")
+    },
+  })
+
   // Subscribe to WebSocket events for activities
   useMultiEventSubscription(
     [EventTypes.ACTIVITY_CREATED, EventTypes.ACTIVITY_UPDATED, EventTypes.ACTIVITY_DELETED],
@@ -73,13 +97,31 @@ function ActivitiesList() {
 
   useEffect(() => {
     setHeaderContent(
-      <div className="min-w-0">
-        <h1 className="text-lg font-semibold truncate">Activities</h1>
-        <p className="text-xs text-muted-foreground">View your system activities and notifications</p>
+      <div className="flex items-center justify-between w-full gap-4">
+        <div className="min-w-0">
+          <h1 className="text-lg font-semibold truncate">Activities</h1>
+          <p className="text-xs text-muted-foreground">View your system activities and notifications</p>
+        </div>
+        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" className="shrink-0">
+              <EllipsisVertical className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              onClick={() => clearAllMutation.mutate()}
+              className="text-destructive focus:text-destructive"
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Clear All
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     )
     return () => setHeaderContent(null)
-  }, [setHeaderContent])
+  }, [setHeaderContent, menuOpen])
 
   // Setup IntersectionObserver to track visible activities
   useEffect(() => {
@@ -173,7 +215,8 @@ function ActivitiesList() {
     }
   }
 
-  if (activitiesLoading || agentsLoading) {
+  // Only show loading skeleton on initial load (no data at all)
+  if ((activitiesLoading && !activitiesData) || agentsLoading) {
     return <PendingItems />
   }
 

@@ -3,7 +3,7 @@
 import type { CancelablePromise } from './core/CancelablePromise';
 import { OpenAPI } from './core/OpenAPI';
 import { request as __request } from './core/request';
-import type { ActivitiesCreateActivityData, ActivitiesCreateActivityResponse, ActivitiesListActivitiesData, ActivitiesListActivitiesResponse, ActivitiesGetActivityStatsResponse, ActivitiesUpdateActivityData, ActivitiesUpdateActivityResponse, ActivitiesDeleteActivityData, ActivitiesDeleteActivityResponse, ActivitiesMarkActivitiesAsReadData, ActivitiesMarkActivitiesAsReadResponse, AgentsReadAgentsData, AgentsReadAgentsResponse, AgentsCreateAgentData, AgentsCreateAgentResponse, AgentsReadAgentData, AgentsReadAgentResponse, AgentsUpdateAgentData, AgentsUpdateAgentResponse, AgentsDeleteAgentData, AgentsDeleteAgentResponse, AgentsCreateAgentWithFlowData, AgentsCreateAgentWithFlowResponse, AgentsSyncAgentPromptsData, AgentsSyncAgentPromptsResponse, AgentsReadAgentCredentialsData, AgentsReadAgentCredentialsResponse, AgentsAddCredentialToAgentData, AgentsAddCredentialToAgentResponse, AgentsRemoveCredentialFromAgentData, AgentsRemoveCredentialFromAgentResponse, AgentsCreateAgentEnvironmentData, AgentsCreateAgentEnvironmentResponse, AgentsListAgentEnvironmentsData, AgentsListAgentEnvironmentsResponse, AgentsActivateEnvironmentData, AgentsActivateEnvironmentResponse, CredentialsReadCredentialsData, CredentialsReadCredentialsResponse, CredentialsCreateCredentialData, CredentialsCreateCredentialResponse, CredentialsReadCredentialData, CredentialsReadCredentialResponse, CredentialsUpdateCredentialData, CredentialsUpdateCredentialResponse, CredentialsDeleteCredentialData, CredentialsDeleteCredentialResponse, CredentialsReadCredentialWithDataData, CredentialsReadCredentialWithDataResponse, EnvironmentsGetEnvironmentData, EnvironmentsGetEnvironmentResponse, EnvironmentsUpdateEnvironmentData, EnvironmentsUpdateEnvironmentResponse, EnvironmentsDeleteEnvironmentData, EnvironmentsDeleteEnvironmentResponse, EnvironmentsStartEnvironmentData, EnvironmentsStartEnvironmentResponse, EnvironmentsStopEnvironmentData, EnvironmentsStopEnvironmentResponse, EnvironmentsRestartEnvironmentData, EnvironmentsRestartEnvironmentResponse, EnvironmentsRebuildEnvironmentData, EnvironmentsRebuildEnvironmentResponse, EnvironmentsGetEnvironmentStatusData, EnvironmentsGetEnvironmentStatusResponse, EnvironmentsCheckEnvironmentHealthData, EnvironmentsCheckEnvironmentHealthResponse, EnvironmentsGetEnvironmentLogsData, EnvironmentsGetEnvironmentLogsResponse, ItemsReadItemsData, ItemsReadItemsResponse, ItemsCreateItemData, ItemsCreateItemResponse, ItemsReadItemData, ItemsReadItemResponse, ItemsUpdateItemData, ItemsUpdateItemResponse, ItemsDeleteItemData, ItemsDeleteItemResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, MessagesGetMessagesData, MessagesGetMessagesResponse, MessagesSendMessageData, MessagesSendMessageResponse, MessagesSendMessageStreamData, MessagesSendMessageStreamResponse, MessagesInterruptMessageData, MessagesInterruptMessageResponse, MessagesGetStreamingStatusData, MessagesGetStreamingStatusResponse, OauthGetOauthConfigResponse, OauthGoogleAuthorizeResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OauthLinkGoogleAccountEndpointData, OauthLinkGoogleAccountEndpointResponse, OauthUnlinkGoogleAccountEndpointResponse, PrivateCreateUserData, PrivateCreateUserResponse, SessionsCreateSessionData, SessionsCreateSessionResponse, SessionsListSessionsData, SessionsListSessionsResponse, SessionsGetSessionData, SessionsGetSessionResponse, SessionsUpdateSessionData, SessionsUpdateSessionResponse, SessionsDeleteSessionData, SessionsDeleteSessionResponse, SessionsSwitchSessionModeData, SessionsSwitchSessionModeResponse, SessionsResetSdkSessionData, SessionsResetSdkSessionResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersSetPasswordMeData, UsersSetPasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UsersGetAiCredentialsStatusResponse, UsersGetAiCredentialsResponse, UsersDeleteAiCredentialsResponse, UsersUpdateAiCredentialsData, UsersUpdateAiCredentialsResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse, WorkspaceGetWorkspaceTreeData, WorkspaceGetWorkspaceTreeResponse, WorkspaceDownloadWorkspaceItemData, WorkspaceDownloadWorkspaceItemResponse } from './types.gen';
+import type { ActivitiesCreateActivityData, ActivitiesCreateActivityResponse, ActivitiesListActivitiesData, ActivitiesListActivitiesResponse, ActivitiesDeleteAllActivitiesResponse, ActivitiesGetActivityStatsResponse, ActivitiesUpdateActivityData, ActivitiesUpdateActivityResponse, ActivitiesDeleteActivityData, ActivitiesDeleteActivityResponse, ActivitiesMarkActivitiesAsReadData, ActivitiesMarkActivitiesAsReadResponse, AgentsReadAgentsData, AgentsReadAgentsResponse, AgentsCreateAgentData, AgentsCreateAgentResponse, AgentsReadAgentData, AgentsReadAgentResponse, AgentsUpdateAgentData, AgentsUpdateAgentResponse, AgentsDeleteAgentData, AgentsDeleteAgentResponse, AgentsCreateAgentWithFlowData, AgentsCreateAgentWithFlowResponse, AgentsSyncAgentPromptsData, AgentsSyncAgentPromptsResponse, AgentsReadAgentCredentialsData, AgentsReadAgentCredentialsResponse, AgentsAddCredentialToAgentData, AgentsAddCredentialToAgentResponse, AgentsRemoveCredentialFromAgentData, AgentsRemoveCredentialFromAgentResponse, AgentsCreateAgentEnvironmentData, AgentsCreateAgentEnvironmentResponse, AgentsListAgentEnvironmentsData, AgentsListAgentEnvironmentsResponse, AgentsActivateEnvironmentData, AgentsActivateEnvironmentResponse, CredentialsReadCredentialsData, CredentialsReadCredentialsResponse, CredentialsCreateCredentialData, CredentialsCreateCredentialResponse, CredentialsReadCredentialData, CredentialsReadCredentialResponse, CredentialsUpdateCredentialData, CredentialsUpdateCredentialResponse, CredentialsDeleteCredentialData, CredentialsDeleteCredentialResponse, CredentialsReadCredentialWithDataData, CredentialsReadCredentialWithDataResponse, EnvironmentsGetEnvironmentData, EnvironmentsGetEnvironmentResponse, EnvironmentsUpdateEnvironmentData, EnvironmentsUpdateEnvironmentResponse, EnvironmentsDeleteEnvironmentData, EnvironmentsDeleteEnvironmentResponse, EnvironmentsStartEnvironmentData, EnvironmentsStartEnvironmentResponse, EnvironmentsStopEnvironmentData, EnvironmentsStopEnvironmentResponse, EnvironmentsRestartEnvironmentData, EnvironmentsRestartEnvironmentResponse, EnvironmentsRebuildEnvironmentData, EnvironmentsRebuildEnvironmentResponse, EnvironmentsGetEnvironmentStatusData, EnvironmentsGetEnvironmentStatusResponse, EnvironmentsCheckEnvironmentHealthData, EnvironmentsCheckEnvironmentHealthResponse, EnvironmentsGetEnvironmentLogsData, EnvironmentsGetEnvironmentLogsResponse, EventsBroadcastEventData, EventsBroadcastEventResponse, EventsGetConnectionStatsResponse, EventsTestEventResponse, ItemsReadItemsData, ItemsReadItemsResponse, ItemsCreateItemData, ItemsCreateItemResponse, ItemsReadItemData, ItemsReadItemResponse, ItemsUpdateItemData, ItemsUpdateItemResponse, ItemsDeleteItemData, ItemsDeleteItemResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, MessagesGetMessagesData, MessagesGetMessagesResponse, MessagesSendMessageData, MessagesSendMessageResponse, MessagesSendMessageStreamData, MessagesSendMessageStreamResponse, MessagesInterruptMessageData, MessagesInterruptMessageResponse, MessagesGetStreamingStatusData, MessagesGetStreamingStatusResponse, OauthGetOauthConfigResponse, OauthGoogleAuthorizeResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OauthLinkGoogleAccountEndpointData, OauthLinkGoogleAccountEndpointResponse, OauthUnlinkGoogleAccountEndpointResponse, PrivateCreateUserData, PrivateCreateUserResponse, SessionsCreateSessionData, SessionsCreateSessionResponse, SessionsListSessionsData, SessionsListSessionsResponse, SessionsGetSessionData, SessionsGetSessionResponse, SessionsUpdateSessionData, SessionsUpdateSessionResponse, SessionsDeleteSessionData, SessionsDeleteSessionResponse, SessionsSwitchSessionModeData, SessionsSwitchSessionModeResponse, SessionsResetSdkSessionData, SessionsResetSdkSessionResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersSetPasswordMeData, UsersSetPasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UsersGetAiCredentialsStatusResponse, UsersGetAiCredentialsResponse, UsersDeleteAiCredentialsResponse, UsersUpdateAiCredentialsData, UsersUpdateAiCredentialsResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse, WorkspaceGetWorkspaceTreeData, WorkspaceGetWorkspaceTreeResponse, WorkspaceDownloadWorkspaceItemData, WorkspaceDownloadWorkspaceItemResponse } from './types.gen';
 
 export class ActivitiesService {
     /**
@@ -56,6 +56,19 @@ export class ActivitiesService {
             errors: {
                 422: 'Validation Error'
             }
+        });
+    }
+    
+    /**
+     * Delete All Activities
+     * Delete all activities for the current user.
+     * @returns unknown Successful Response
+     * @throws ApiError
+     */
+    public static deleteAllActivities(): CancelablePromise<ActivitiesDeleteAllActivitiesResponse> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/activities/'
         });
     }
     
@@ -799,6 +812,72 @@ export class EnvironmentsService {
     }
 }
 
+export class EventsService {
+    /**
+     * Broadcast Event
+     * Broadcast an event to connected WebSocket clients.
+     *
+     * This endpoint allows broadcasting events to:
+     * - Specific users (via user_id)
+     * - Specific rooms (via room)
+     * - All connected clients (if neither user_id nor room is specified)
+     *
+     * Example event types:
+     * - session_updated
+     * - message_created
+     * - activity_created
+     * - notification
+     * @param data The data for the request.
+     * @param data.requestBody
+     * @returns unknown Successful Response
+     * @throws ApiError
+     */
+    public static broadcastEvent(data: EventsBroadcastEventData): CancelablePromise<EventsBroadcastEventResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/events/broadcast',
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Get Connection Stats
+     * Get WebSocket connection statistics.
+     *
+     * Returns:
+     * - connection_count: Total number of active WebSocket connections
+     * - connected_users: List of user IDs currently connected
+     * - is_current_user_connected: Whether the current user is connected
+     * @returns unknown Successful Response
+     * @throws ApiError
+     */
+    public static getConnectionStats(): CancelablePromise<EventsGetConnectionStatsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/events/stats'
+        });
+    }
+    
+    /**
+     * Test Event
+     * Send a test event to the current user.
+     *
+     * Useful for testing WebSocket connectivity.
+     * @returns unknown Successful Response
+     * @throws ApiError
+     */
+    public static testEvent(): CancelablePromise<EventsTestEventResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/events/test'
+        });
+    }
+}
+
 export class ItemsService {
     /**
      * Read Items
@@ -1065,13 +1144,10 @@ export class MessagesService {
      * Send Message Stream
      * Send message to agent environment and stream response.
      *
-     * Flow:
-     * 1. Verify session ownership
-     * 2. Get external SDK session ID (if exists)
-     * 3. Stream message to environment container
-     * 4. Capture session_created event and store external_session_id
-     * 5. Save user message and agent response to database
-     * 6. Stream events to frontend
+     * This is a thin routing wrapper that:
+     * 1. Verifies session ownership (authorization)
+     * 2. Delegates all business logic to MessageService
+     * 3. Returns streaming response
      * @param data The data for the request.
      * @param data.sessionId
      * @param data.requestBody
@@ -1100,9 +1176,8 @@ export class MessagesService {
      * Flow:
      * 1. Verify session ownership
      * 2. Request interrupt via active_streaming_manager
-     * 3. If external_session_id available, forward to agent env immediately
-     * 4. If not available yet, queue interrupt (will be sent when session_id arrives)
-     * 5. Return status
+     * 3. Forward interrupt to agent environment if external_session_id available
+     * 4. Return status
      * @param data The data for the request.
      * @param data.sessionId
      * @returns unknown Successful Response

@@ -1036,6 +1036,83 @@ export const CredentialsPublicSchema = {
     title: 'CredentialsPublic'
 } as const;
 
+export const EventBroadcastSchema = {
+    properties: {
+        type: {
+            type: 'string',
+            title: 'Type',
+            description: 'Event type'
+        },
+        model_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Id',
+            description: 'ID of the related model'
+        },
+        text_content: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Text Content',
+            description: 'Optional notification text'
+        },
+        meta: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Meta',
+            description: 'Additional metadata'
+        },
+        user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Id',
+            description: 'Target user ID (None for broadcast)'
+        },
+        room: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Room',
+            description: "Room name for targeted broadcast (e.g., 'user_{user_id}')"
+        }
+    },
+    type: 'object',
+    required: ['type'],
+    title: 'EventBroadcast',
+    description: 'Event broadcast request model.'
+} as const;
+
 export const GoogleCallbackRequestSchema = {
     properties: {
         code: {

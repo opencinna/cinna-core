@@ -249,3 +249,37 @@ async def delete_activity(
     )
 
     return {"message": "Activity deleted successfully"}
+
+
+@router.delete("/")
+async def delete_all_activities(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser
+) -> Any:
+    """
+    Delete all activities for the current user.
+    """
+    # Get all activities for the current user
+    query = select(Activity).where(Activity.user_id == current_user.id)
+    activities = session.exec(query).all()
+
+    # Delete all activities
+    deleted_count = 0
+    for activity in activities:
+        success = ActivityService.delete_activity(
+            db_session=session, activity_id=activity.id
+        )
+        if success:
+            deleted_count += 1
+            # Emit WebSocket event for each activity deletion
+            await event_service.emit_event(
+                event_type=EventType.ACTIVITY_DELETED,
+                model_id=activity.id,
+                user_id=current_user.id,
+                meta={
+                    "activity_type": activity.activity_type
+                }
+            )
+
+    return {"message": f"Deleted {deleted_count} activities", "deleted_count": deleted_count}

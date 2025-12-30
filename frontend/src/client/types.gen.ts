@@ -213,6 +213,38 @@ export type CredentialWithData = {
     };
 };
 
+/**
+ * Event broadcast request model.
+ */
+export type EventBroadcast = {
+    /**
+     * Event type
+     */
+    type: string;
+    /**
+     * ID of the related model
+     */
+    model_id?: (string | null);
+    /**
+     * Optional notification text
+     */
+    text_content?: (string | null);
+    /**
+     * Additional metadata
+     */
+    meta?: ({
+    [key: string]: unknown;
+} | null);
+    /**
+     * Target user ID (None for broadcast)
+     */
+    user_id?: (string | null);
+    /**
+     * Room name for targeted broadcast (e.g., 'user_{user_id}')
+     */
+    room?: (string | null);
+};
+
 export type GoogleCallbackRequest = {
     code: string;
     state: string;
@@ -439,6 +471,8 @@ export type ActivitiesListActivitiesData = {
 
 export type ActivitiesListActivitiesResponse = (ActivitiesPublicExtended);
 
+export type ActivitiesDeleteAllActivitiesResponse = (unknown);
+
 export type ActivitiesGetActivityStatsResponse = (ActivityStats);
 
 export type ActivitiesUpdateActivityData = {
@@ -651,6 +685,16 @@ export type EnvironmentsGetEnvironmentLogsData = {
 export type EnvironmentsGetEnvironmentLogsResponse = ({
     [key: string]: unknown;
 });
+
+export type EventsBroadcastEventData = {
+    requestBody: EventBroadcast;
+};
+
+export type EventsBroadcastEventResponse = (unknown);
+
+export type EventsGetConnectionStatsResponse = (unknown);
+
+export type EventsTestEventResponse = (unknown);
 
 export type ItemsReadItemsData = {
     limit?: number;
