@@ -8,6 +8,7 @@ import { AskUserQuestionToolBlock } from "./AskUserQuestionToolBlock"
 import { GlobToolBlock } from "./GlobToolBlock"
 import { WebSearchToolBlock } from "./WebSearchToolBlock"
 import { BashToolBlock } from "./BashToolBlock"
+import { KnowledgeQueryToolBlock } from "./KnowledgeQueryToolBlock"
 
 interface ToolCallBlockProps {
   toolName: string
@@ -53,6 +54,11 @@ export function ToolCallBlock({ toolName, toolInput }: ToolCallBlockProps) {
   // Special rendering for Bash tool
   if (toolName === "Bash" && toolInput?.command) {
     return <BashToolBlock command={toolInput.command} />
+  }
+
+  // Special rendering for Knowledge Query tool
+  if (toolName === "mcp__knowledge__query_integration_knowledge" && toolInput?.query) {
+    return <KnowledgeQueryToolBlock query={toolInput.query} />
   }
 
   // Default rendering for other tools
