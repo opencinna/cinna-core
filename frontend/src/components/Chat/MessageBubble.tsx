@@ -40,7 +40,7 @@ export function MessageBubble({ message, onSendAnswer }: MessageBubbleProps) {
             <span>{message.content}</span>
             {isHandoverMessage && forwardedToSessionId && (
               <Link
-                to="/sessions/$sessionId"
+                to="/session/$sessionId"
                 params={{ sessionId: forwardedToSessionId }}
                 className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 underline underline-offset-2"
               >
