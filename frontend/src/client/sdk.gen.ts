@@ -3,7 +3,7 @@
 import type { CancelablePromise } from './core/CancelablePromise';
 import { OpenAPI } from './core/OpenAPI';
 import { request as __request } from './core/request';
-import type { ActivitiesCreateActivityData, ActivitiesCreateActivityResponse, ActivitiesListActivitiesData, ActivitiesListActivitiesResponse, ActivitiesDeleteAllActivitiesResponse, ActivitiesGetActivityStatsResponse, ActivitiesUpdateActivityData, ActivitiesUpdateActivityResponse, ActivitiesDeleteActivityData, ActivitiesDeleteActivityResponse, ActivitiesMarkActivitiesAsReadData, ActivitiesMarkActivitiesAsReadResponse, AgentsReadAgentsData, AgentsReadAgentsResponse, AgentsCreateAgentData, AgentsCreateAgentResponse, AgentsReadAgentData, AgentsReadAgentResponse, AgentsUpdateAgentData, AgentsUpdateAgentResponse, AgentsDeleteAgentData, AgentsDeleteAgentResponse, AgentsCreateAgentWithFlowData, AgentsCreateAgentWithFlowResponse, AgentsSyncAgentPromptsData, AgentsSyncAgentPromptsResponse, AgentsReadAgentCredentialsData, AgentsReadAgentCredentialsResponse, AgentsAddCredentialToAgentData, AgentsAddCredentialToAgentResponse, AgentsRemoveCredentialFromAgentData, AgentsRemoveCredentialFromAgentResponse, AgentsCreateAgentEnvironmentData, AgentsCreateAgentEnvironmentResponse, AgentsListAgentEnvironmentsData, AgentsListAgentEnvironmentsResponse, AgentsActivateEnvironmentData, AgentsActivateEnvironmentResponse, AgentsGenerateScheduleData, AgentsGenerateScheduleResponse, AgentsSaveScheduleData, AgentsSaveScheduleResponse, AgentsGetScheduleData, AgentsGetScheduleResponse, AgentsDeleteScheduleData, AgentsDeleteScheduleResponse, CredentialsReadCredentialsData, CredentialsReadCredentialsResponse, CredentialsCreateCredentialData, CredentialsCreateCredentialResponse, CredentialsReadCredentialData, CredentialsReadCredentialResponse, CredentialsUpdateCredentialData, CredentialsUpdateCredentialResponse, CredentialsDeleteCredentialData, CredentialsDeleteCredentialResponse, CredentialsReadCredentialWithDataData, CredentialsReadCredentialWithDataResponse, EnvironmentsGetEnvironmentData, EnvironmentsGetEnvironmentResponse, EnvironmentsUpdateEnvironmentData, EnvironmentsUpdateEnvironmentResponse, EnvironmentsDeleteEnvironmentData, EnvironmentsDeleteEnvironmentResponse, EnvironmentsStartEnvironmentData, EnvironmentsStartEnvironmentResponse, EnvironmentsStopEnvironmentData, EnvironmentsStopEnvironmentResponse, EnvironmentsRestartEnvironmentData, EnvironmentsRestartEnvironmentResponse, EnvironmentsRebuildEnvironmentData, EnvironmentsRebuildEnvironmentResponse, EnvironmentsGetEnvironmentStatusData, EnvironmentsGetEnvironmentStatusResponse, EnvironmentsCheckEnvironmentHealthData, EnvironmentsCheckEnvironmentHealthResponse, EnvironmentsGetEnvironmentLogsData, EnvironmentsGetEnvironmentLogsResponse, EventsBroadcastEventData, EventsBroadcastEventResponse, EventsGetConnectionStatsResponse, EventsTestEventResponse, ItemsReadItemsData, ItemsReadItemsResponse, ItemsCreateItemData, ItemsCreateItemResponse, ItemsReadItemData, ItemsReadItemResponse, ItemsUpdateItemData, ItemsUpdateItemResponse, ItemsDeleteItemData, ItemsDeleteItemResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, MessagesGetMessagesData, MessagesGetMessagesResponse, MessagesSendMessageData, MessagesSendMessageResponse, MessagesSendMessageStreamData, MessagesSendMessageStreamResponse, MessagesInterruptMessageData, MessagesInterruptMessageResponse, MessagesGetStreamingStatusData, MessagesGetStreamingStatusResponse, OauthGetOauthConfigResponse, OauthGoogleAuthorizeResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OauthLinkGoogleAccountEndpointData, OauthLinkGoogleAccountEndpointResponse, OauthUnlinkGoogleAccountEndpointResponse, PrivateCreateUserData, PrivateCreateUserResponse, SessionsCreateSessionData, SessionsCreateSessionResponse, SessionsListSessionsData, SessionsListSessionsResponse, SessionsGetSessionData, SessionsGetSessionResponse, SessionsUpdateSessionData, SessionsUpdateSessionResponse, SessionsDeleteSessionData, SessionsDeleteSessionResponse, SessionsSwitchSessionModeData, SessionsSwitchSessionModeResponse, SessionsResetSdkSessionData, SessionsResetSdkSessionResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersSetPasswordMeData, UsersSetPasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UsersGetAiCredentialsStatusResponse, UsersGetAiCredentialsResponse, UsersDeleteAiCredentialsResponse, UsersUpdateAiCredentialsData, UsersUpdateAiCredentialsResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse, WorkspaceGetWorkspaceTreeData, WorkspaceGetWorkspaceTreeResponse, WorkspaceDownloadWorkspaceItemData, WorkspaceDownloadWorkspaceItemResponse } from './types.gen';
+import type { ActivitiesCreateActivityData, ActivitiesCreateActivityResponse, ActivitiesListActivitiesData, ActivitiesListActivitiesResponse, ActivitiesDeleteAllActivitiesResponse, ActivitiesGetActivityStatsResponse, ActivitiesUpdateActivityData, ActivitiesUpdateActivityResponse, ActivitiesDeleteActivityData, ActivitiesDeleteActivityResponse, ActivitiesMarkActivitiesAsReadData, ActivitiesMarkActivitiesAsReadResponse, AgentsReadAgentsData, AgentsReadAgentsResponse, AgentsCreateAgentData, AgentsCreateAgentResponse, AgentsReadAgentData, AgentsReadAgentResponse, AgentsUpdateAgentData, AgentsUpdateAgentResponse, AgentsDeleteAgentData, AgentsDeleteAgentResponse, AgentsCreateAgentWithFlowData, AgentsCreateAgentWithFlowResponse, AgentsSyncAgentPromptsData, AgentsSyncAgentPromptsResponse, AgentsReadAgentCredentialsData, AgentsReadAgentCredentialsResponse, AgentsAddCredentialToAgentData, AgentsAddCredentialToAgentResponse, AgentsRemoveCredentialFromAgentData, AgentsRemoveCredentialFromAgentResponse, AgentsCreateAgentEnvironmentData, AgentsCreateAgentEnvironmentResponse, AgentsListAgentEnvironmentsData, AgentsListAgentEnvironmentsResponse, AgentsActivateEnvironmentData, AgentsActivateEnvironmentResponse, AgentsGenerateScheduleData, AgentsGenerateScheduleResponse, AgentsSaveScheduleData, AgentsSaveScheduleResponse, AgentsGetScheduleData, AgentsGetScheduleResponse, AgentsDeleteScheduleData, AgentsDeleteScheduleResponse, AgentsListHandoverConfigsData, AgentsListHandoverConfigsResponse, AgentsCreateHandoverConfigData, AgentsCreateHandoverConfigResponse, AgentsUpdateHandoverConfigData, AgentsUpdateHandoverConfigResponse, AgentsDeleteHandoverConfigData, AgentsDeleteHandoverConfigResponse, AgentsGenerateHandoverPromptEndpointData, AgentsGenerateHandoverPromptEndpointResponse, CredentialsReadCredentialsData, CredentialsReadCredentialsResponse, CredentialsCreateCredentialData, CredentialsCreateCredentialResponse, CredentialsReadCredentialData, CredentialsReadCredentialResponse, CredentialsUpdateCredentialData, CredentialsUpdateCredentialResponse, CredentialsDeleteCredentialData, CredentialsDeleteCredentialResponse, CredentialsReadCredentialWithDataData, CredentialsReadCredentialWithDataResponse, EnvironmentsGetEnvironmentData, EnvironmentsGetEnvironmentResponse, EnvironmentsUpdateEnvironmentData, EnvironmentsUpdateEnvironmentResponse, EnvironmentsDeleteEnvironmentData, EnvironmentsDeleteEnvironmentResponse, EnvironmentsStartEnvironmentData, EnvironmentsStartEnvironmentResponse, EnvironmentsStopEnvironmentData, EnvironmentsStopEnvironmentResponse, EnvironmentsRestartEnvironmentData, EnvironmentsRestartEnvironmentResponse, EnvironmentsRebuildEnvironmentData, EnvironmentsRebuildEnvironmentResponse, EnvironmentsGetEnvironmentStatusData, EnvironmentsGetEnvironmentStatusResponse, EnvironmentsCheckEnvironmentHealthData, EnvironmentsCheckEnvironmentHealthResponse, EnvironmentsGetEnvironmentLogsData, EnvironmentsGetEnvironmentLogsResponse, EventsBroadcastEventData, EventsBroadcastEventResponse, EventsGetConnectionStatsResponse, EventsTestEventResponse, ItemsReadItemsData, ItemsReadItemsResponse, ItemsCreateItemData, ItemsCreateItemResponse, ItemsReadItemData, ItemsReadItemResponse, ItemsUpdateItemData, ItemsUpdateItemResponse, ItemsDeleteItemData, ItemsDeleteItemResponse, KnowledgeQueryKnowledgeData, KnowledgeQueryKnowledgeResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, MessagesGetMessagesData, MessagesGetMessagesResponse, MessagesSendMessageData, MessagesSendMessageResponse, MessagesSendMessageStreamData, MessagesSendMessageStreamResponse, MessagesInterruptMessageData, MessagesInterruptMessageResponse, MessagesGetStreamingStatusData, MessagesGetStreamingStatusResponse, OauthGetOauthConfigResponse, OauthGoogleAuthorizeResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OauthLinkGoogleAccountEndpointData, OauthLinkGoogleAccountEndpointResponse, OauthUnlinkGoogleAccountEndpointResponse, PrivateCreateUserData, PrivateCreateUserResponse, SessionsCreateSessionData, SessionsCreateSessionResponse, SessionsListSessionsData, SessionsListSessionsResponse, SessionsGetSessionData, SessionsGetSessionResponse, SessionsUpdateSessionData, SessionsUpdateSessionResponse, SessionsDeleteSessionData, SessionsDeleteSessionResponse, SessionsSwitchSessionModeData, SessionsSwitchSessionModeResponse, SessionsResetSdkSessionData, SessionsResetSdkSessionResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersSetPasswordMeData, UsersSetPasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UsersGetAiCredentialsStatusResponse, UsersGetAiCredentialsResponse, UsersDeleteAiCredentialsResponse, UsersUpdateAiCredentialsData, UsersUpdateAiCredentialsResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse, WorkspaceGetWorkspaceTreeData, WorkspaceGetWorkspaceTreeResponse, WorkspaceDownloadWorkspaceItemData, WorkspaceDownloadWorkspaceItemResponse } from './types.gen';
 
 export class ActivitiesService {
     /**
@@ -531,6 +531,124 @@ export class AgentsService {
             path: {
                 id: data.id
             },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * List Handover Configs
+     * Get all handover configurations for an agent.
+     * @param data The data for the request.
+     * @param data.id
+     * @returns HandoverConfigsPublic Successful Response
+     * @throws ApiError
+     */
+    public static listHandoverConfigs(data: AgentsListHandoverConfigsData): CancelablePromise<AgentsListHandoverConfigsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/agents/{id}/handovers',
+            path: {
+                id: data.id
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Create Handover Config
+     * Create a new handover configuration.
+     * @param data The data for the request.
+     * @param data.id
+     * @param data.requestBody
+     * @returns HandoverConfigPublic Successful Response
+     * @throws ApiError
+     */
+    public static createHandoverConfig(data: AgentsCreateHandoverConfigData): CancelablePromise<AgentsCreateHandoverConfigResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/agents/{id}/handovers',
+            path: {
+                id: data.id
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Update Handover Config
+     * Update a handover configuration.
+     * @param data The data for the request.
+     * @param data.id
+     * @param data.handoverId
+     * @param data.requestBody
+     * @returns HandoverConfigPublic Successful Response
+     * @throws ApiError
+     */
+    public static updateHandoverConfig(data: AgentsUpdateHandoverConfigData): CancelablePromise<AgentsUpdateHandoverConfigResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/api/v1/agents/{id}/handovers/{handover_id}',
+            path: {
+                id: data.id,
+                handover_id: data.handoverId
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Delete Handover Config
+     * Delete a handover configuration.
+     * @param data The data for the request.
+     * @param data.id
+     * @param data.handoverId
+     * @returns Message Successful Response
+     * @throws ApiError
+     */
+    public static deleteHandoverConfig(data: AgentsDeleteHandoverConfigData): CancelablePromise<AgentsDeleteHandoverConfigResponse> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/agents/{id}/handovers/{handover_id}',
+            path: {
+                id: data.id,
+                handover_id: data.handoverId
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Generate Handover Prompt Endpoint
+     * Generate handover prompt using AI.
+     * @param data The data for the request.
+     * @param data.id
+     * @param data.requestBody
+     * @returns GenerateHandoverPromptResponse Successful Response
+     * @throws ApiError
+     */
+    public static generateHandoverPromptEndpoint(data: AgentsGenerateHandoverPromptEndpointData): CancelablePromise<AgentsGenerateHandoverPromptEndpointResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/agents/{id}/handovers/generate',
+            path: {
+                id: data.id
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: 'Validation Error'
             }
@@ -1072,6 +1190,47 @@ export class ItemsService {
             path: {
                 id: data.id
             },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+}
+
+export class KnowledgeService {
+    /**
+     * Query Knowledge
+     * Query the integration knowledge base.
+     *
+     * This endpoint is called by agent environments to get guidance on
+     * building integrations with various systems (ERP, CRM, etc.).
+     *
+     * Currently returns a stub response. Will be implemented with proper
+     * knowledge database later.
+     *
+     * Args:
+     * request: Query request with search string
+     * environment: Authenticated environment (injected by dependency)
+     *
+     * Returns:
+     * Knowledge response with guidance text
+     * @param data The data for the request.
+     * @param data.requestBody
+     * @param data.authorization
+     * @param data.xAgentEnvId
+     * @returns KnowledgeQueryResponse Successful Response
+     * @throws ApiError
+     */
+    public static queryKnowledge(data: KnowledgeQueryKnowledgeData): CancelablePromise<KnowledgeQueryKnowledgeResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/knowledge/query',
+            headers: {
+                authorization: data.authorization,
+                'x-agent-env-id': data.xAgentEnvId
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: 'Validation Error'
             }

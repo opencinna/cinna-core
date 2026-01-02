@@ -92,6 +92,15 @@ from .agent_schedule import (
     SaveScheduleRequest,
     AgentSchedulePublic,
 )
+from .agent_handover import (
+    AgentHandoverConfig,
+    HandoverConfigCreate,
+    HandoverConfigUpdate,
+    HandoverConfigPublic,
+    HandoverConfigsPublic,
+    GenerateHandoverPromptRequest,
+    GenerateHandoverPromptResponse,
+)
 
 __all__ = [
     # Core
@@ -182,4 +191,12 @@ __all__ = [
     "ScheduleResponse",
     "SaveScheduleRequest",
     "AgentSchedulePublic",
+    # Agent Handovers
+    "AgentHandoverConfig",
+    "HandoverConfigCreate",
+    "HandoverConfigUpdate",
+    "HandoverConfigPublic",
+    "HandoverConfigsPublic",
+    "GenerateHandoverPromptRequest",
+    "GenerateHandoverPromptResponse",
 ]

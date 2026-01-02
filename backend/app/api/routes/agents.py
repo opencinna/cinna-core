@@ -1,5 +1,6 @@
 import uuid
 import json
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -28,6 +29,13 @@ from app.models import (
     ScheduleResponse,
     SaveScheduleRequest,
     AgentSchedulePublic,
+    AgentHandoverConfig,
+    HandoverConfigCreate,
+    HandoverConfigUpdate,
+    HandoverConfigPublic,
+    HandoverConfigsPublic,
+    GenerateHandoverPromptRequest,
+    GenerateHandoverPromptResponse,
 )
 from app.services.environment_service import EnvironmentService
 from app.services.agent_service import AgentService
@@ -490,3 +498,202 @@ def delete_schedule(
         return Message(message="Schedule deleted successfully")
     else:
         return Message(message="No schedule found")
+
+
+# Handover configuration routes
+@router.get("/{id}/handovers", response_model=HandoverConfigsPublic)
+def list_handover_configs(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+) -> Any:
+    """Get all handover configurations for an agent."""
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    # Query handover configs where this agent is the source
+    statement = select(AgentHandoverConfig).where(
+        AgentHandoverConfig.source_agent_id == id
+    )
+    configs = session.exec(statement).all()
+
+    # Build public response with target agent names
+    public_configs = []
+    for config in configs:
+        target_agent = session.get(Agent, config.target_agent_id)
+        public_configs.append(
+            HandoverConfigPublic(
+                id=config.id,
+                source_agent_id=config.source_agent_id,
+                target_agent_id=config.target_agent_id,
+                target_agent_name=target_agent.name if target_agent else "Unknown",
+                handover_prompt=config.handover_prompt,
+                enabled=config.enabled,
+                created_at=config.created_at,
+                updated_at=config.updated_at,
+            )
+        )
+
+    return HandoverConfigsPublic(data=public_configs, count=len(public_configs))
+
+
+@router.post("/{id}/handovers", response_model=HandoverConfigPublic)
+def create_handover_config(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+    data: HandoverConfigCreate,
+) -> Any:
+    """Create a new handover configuration."""
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    # Verify target agent exists and user has access
+    target_agent = session.get(Agent, data.target_agent_id)
+    if not target_agent:
+        raise HTTPException(status_code=404, detail="Target agent not found")
+    if not current_user.is_superuser and (target_agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions to access target agent")
+
+    # Prevent self-handover
+    if id == data.target_agent_id:
+        raise HTTPException(status_code=400, detail="Cannot create handover to the same agent")
+
+    # Create handover config
+    config = AgentHandoverConfig(
+        source_agent_id=id,
+        target_agent_id=data.target_agent_id,
+        handover_prompt=data.handover_prompt,
+        enabled=True,
+    )
+    session.add(config)
+    session.commit()
+    session.refresh(config)
+
+    return HandoverConfigPublic(
+        id=config.id,
+        source_agent_id=config.source_agent_id,
+        target_agent_id=config.target_agent_id,
+        target_agent_name=target_agent.name,
+        handover_prompt=config.handover_prompt,
+        enabled=config.enabled,
+        created_at=config.created_at,
+        updated_at=config.updated_at,
+    )
+
+
+@router.put("/{id}/handovers/{handover_id}", response_model=HandoverConfigPublic)
+def update_handover_config(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+    handover_id: uuid.UUID,
+    data: HandoverConfigUpdate,
+) -> Any:
+    """Update a handover configuration."""
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    config = session.get(AgentHandoverConfig, handover_id)
+    if not config or config.source_agent_id != id:
+        raise HTTPException(status_code=404, detail="Handover configuration not found")
+
+    # Update fields
+    if data.handover_prompt is not None:
+        config.handover_prompt = data.handover_prompt
+    if data.enabled is not None:
+        config.enabled = data.enabled
+
+    config.updated_at = datetime.utcnow()
+    session.add(config)
+    session.commit()
+    session.refresh(config)
+
+    target_agent = session.get(Agent, config.target_agent_id)
+    return HandoverConfigPublic(
+        id=config.id,
+        source_agent_id=config.source_agent_id,
+        target_agent_id=config.target_agent_id,
+        target_agent_name=target_agent.name if target_agent else "Unknown",
+        handover_prompt=config.handover_prompt,
+        enabled=config.enabled,
+        created_at=config.created_at,
+        updated_at=config.updated_at,
+    )
+
+
+@router.delete("/{id}/handovers/{handover_id}")
+def delete_handover_config(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+    handover_id: uuid.UUID,
+) -> Message:
+    """Delete a handover configuration."""
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    config = session.get(AgentHandoverConfig, handover_id)
+    if not config or config.source_agent_id != id:
+        raise HTTPException(status_code=404, detail="Handover configuration not found")
+
+    session.delete(config)
+    session.commit()
+
+    return Message(message="Handover configuration deleted successfully")
+
+
+@router.post("/{id}/handovers/generate", response_model=GenerateHandoverPromptResponse)
+def generate_handover_prompt_endpoint(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+    data: GenerateHandoverPromptRequest,
+) -> Any:
+    """Generate handover prompt using AI."""
+    # Verify source agent
+    source_agent = session.get(Agent, id)
+    if not source_agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (source_agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    # Verify target agent
+    target_agent = session.get(Agent, data.target_agent_id)
+    if not target_agent:
+        raise HTTPException(status_code=404, detail="Target agent not found")
+    if not current_user.is_superuser and (target_agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions to access target agent")
+
+    # Prevent self-handover
+    if id == data.target_agent_id:
+        raise HTTPException(status_code=400, detail="Cannot create handover to the same agent")
+
+    # Generate handover prompt
+    result = AIFunctionsService.generate_handover_prompt(
+        source_agent_name=source_agent.name,
+        source_entrypoint=source_agent.entrypoint_prompt,
+        source_workflow=source_agent.workflow_prompt,
+        target_agent_name=target_agent.name,
+        target_entrypoint=target_agent.entrypoint_prompt,
+        target_workflow=target_agent.workflow_prompt,
+    )
+
+    return GenerateHandoverPromptResponse(**result)

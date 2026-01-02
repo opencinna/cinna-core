@@ -1175,6 +1175,55 @@ export const EventBroadcastSchema = {
     description: 'Event broadcast request model.'
 } as const;
 
+export const GenerateHandoverPromptRequestSchema = {
+    properties: {
+        target_agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Target Agent Id'
+        }
+    },
+    type: 'object',
+    required: ['target_agent_id'],
+    title: 'GenerateHandoverPromptRequest',
+    description: 'Request to generate handover prompt using AI.'
+} as const;
+
+export const GenerateHandoverPromptResponseSchema = {
+    properties: {
+        success: {
+            type: 'boolean',
+            title: 'Success'
+        },
+        handover_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Handover Prompt'
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        }
+    },
+    type: 'object',
+    required: ['success'],
+    title: 'GenerateHandoverPromptResponse',
+    description: 'Response from AI handover prompt generation.'
+} as const;
+
 export const GoogleCallbackRequestSchema = {
     properties: {
         code: {
@@ -1203,6 +1252,121 @@ export const HTTPValidationErrorSchema = {
     },
     type: 'object',
     title: 'HTTPValidationError'
+} as const;
+
+export const HandoverConfigCreateSchema = {
+    properties: {
+        target_agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Target Agent Id'
+        },
+        handover_prompt: {
+            type: 'string',
+            title: 'Handover Prompt',
+            default: ''
+        }
+    },
+    type: 'object',
+    required: ['target_agent_id'],
+    title: 'HandoverConfigCreate',
+    description: 'Request to create handover configuration.'
+} as const;
+
+export const HandoverConfigPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        source_agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Source Agent Id'
+        },
+        target_agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Target Agent Id'
+        },
+        target_agent_name: {
+            type: 'string',
+            title: 'Target Agent Name'
+        },
+        handover_prompt: {
+            type: 'string',
+            title: 'Handover Prompt'
+        },
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'source_agent_id', 'target_agent_id', 'target_agent_name', 'handover_prompt', 'enabled', 'created_at', 'updated_at'],
+    title: 'HandoverConfigPublic',
+    description: 'Public response model for AgentHandoverConfig.'
+} as const;
+
+export const HandoverConfigUpdateSchema = {
+    properties: {
+        handover_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Handover Prompt'
+        },
+        enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Enabled'
+        }
+    },
+    type: 'object',
+    title: 'HandoverConfigUpdate',
+    description: 'Request to update handover configuration.'
+} as const;
+
+export const HandoverConfigsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/HandoverConfigPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'HandoverConfigsPublic',
+    description: 'List of handover configurations.'
 } as const;
 
 export const ItemCreateSchema = {
@@ -1316,6 +1480,43 @@ export const ItemsPublicSchema = {
     type: 'object',
     required: ['data', 'count'],
     title: 'ItemsPublic'
+} as const;
+
+export const KnowledgeQueryRequestSchema = {
+    properties: {
+        query: {
+            type: 'string',
+            title: 'Query'
+        }
+    },
+    type: 'object',
+    required: ['query'],
+    title: 'KnowledgeQueryRequest',
+    description: 'Request model for querying integration knowledge.'
+} as const;
+
+export const KnowledgeQueryResponseSchema = {
+    properties: {
+        content: {
+            type: 'string',
+            title: 'Content'
+        },
+        source: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source'
+        }
+    },
+    type: 'object',
+    required: ['content'],
+    title: 'KnowledgeQueryResponse',
+    description: 'Response model for knowledge queries.'
 } as const;
 
 export const MessageSchema = {

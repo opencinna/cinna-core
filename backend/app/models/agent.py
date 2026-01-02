@@ -51,6 +51,12 @@ class Agent(AgentBase, table=True):
         back_populates="agent",
         cascade_delete=True
     )
+    handover_configs: List["app.models.agent_handover.AgentHandoverConfig"] = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "[AgentHandoverConfig.source_agent_id]",
+            "cascade": "all, delete-orphan"
+        }
+    )
 
 
 # Properties to return via API, id is always required

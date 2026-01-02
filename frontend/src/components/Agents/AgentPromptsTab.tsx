@@ -26,6 +26,7 @@ import { LoadingButton } from "@/components/ui/loading-button"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 import { SmartScheduler } from "./SmartScheduler"
+import { AgentHandovers } from "./AgentHandovers"
 
 const entrypointFormSchema = z.object({
   entrypoint_prompt: z.string().optional(),
@@ -312,6 +313,9 @@ export function AgentPromptsTab({ agent }: AgentPromptsTabProps) {
           </Form>
         </CardContent>
       </Card>
+
+      {/* Handover to Agents Section */}
+      <AgentHandovers agent={agent} />
     </div>
   )
 }

@@ -10,7 +10,7 @@ import logging
 from typing import Optional
 
 from app.core.config import settings
-from app.agents import generate_agent_config, generate_conversation_title
+from app.agents import generate_agent_config, generate_conversation_title, generate_handover_prompt
 from app.agents.schedule_generator import generate_agent_schedule
 
 logger = logging.getLogger(__name__)
@@ -147,6 +147,61 @@ class AIFunctionsService:
             return {
                 "success": False,
                 "error": f"Failed to generate schedule: {str(e)}"
+            }
+
+    @staticmethod
+    def generate_handover_prompt(
+        source_agent_name: str,
+        source_entrypoint: str | None,
+        source_workflow: str | None,
+        target_agent_name: str,
+        target_entrypoint: str | None,
+        target_workflow: str | None
+    ) -> dict:
+        """
+        Generate handover prompt between two agents using AI.
+
+        Args:
+            source_agent_name: Name of source agent
+            source_entrypoint: Source agent's entrypoint prompt
+            source_workflow: Source agent's workflow prompt
+            target_agent_name: Name of target agent
+            target_entrypoint: Target agent's entrypoint prompt
+            target_workflow: Target agent's workflow prompt
+
+        Returns:
+            dict with keys:
+                - success: bool
+                - handover_prompt: Generated prompt (if success)
+                - error: Error message (if not success)
+
+        Raises:
+            ValueError: If GOOGLE_API_KEY is not configured
+        """
+        try:
+            api_key = AIFunctionsService._get_api_key()
+            result = generate_handover_prompt(
+                source_agent_name=source_agent_name,
+                source_entrypoint=source_entrypoint,
+                source_workflow=source_workflow,
+                target_agent_name=target_agent_name,
+                target_entrypoint=target_entrypoint,
+                target_workflow=target_workflow,
+                api_key=api_key
+            )
+            logger.info(
+                f"Generated handover prompt: {result.get('success')} - "
+                f"{result.get('handover_prompt', '')[:50] if result.get('success') else result.get('error')}"
+            )
+            return result
+        except ValueError:
+            # Re-raise configuration errors
+            raise
+        except Exception as e:
+            logger.error(f"Failed to generate handover prompt: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": f"Failed to generate handover prompt: {str(e)}"
             }
 
     @staticmethod

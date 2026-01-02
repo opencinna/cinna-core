@@ -261,9 +261,63 @@ export type EventBroadcast = {
     room?: (string | null);
 };
 
+/**
+ * Request to generate handover prompt using AI.
+ */
+export type GenerateHandoverPromptRequest = {
+    target_agent_id: string;
+};
+
+/**
+ * Response from AI handover prompt generation.
+ */
+export type GenerateHandoverPromptResponse = {
+    success: boolean;
+    handover_prompt?: (string | null);
+    error?: (string | null);
+};
+
 export type GoogleCallbackRequest = {
     code: string;
     state: string;
+};
+
+/**
+ * Request to create handover configuration.
+ */
+export type HandoverConfigCreate = {
+    target_agent_id: string;
+    handover_prompt?: string;
+};
+
+/**
+ * Public response model for AgentHandoverConfig.
+ */
+export type HandoverConfigPublic = {
+    id: string;
+    source_agent_id: string;
+    target_agent_id: string;
+    target_agent_name: string;
+    handover_prompt: string;
+    enabled: boolean;
+    created_at: string;
+    updated_at: string;
+};
+
+/**
+ * List of handover configurations.
+ */
+export type HandoverConfigsPublic = {
+    data: Array<HandoverConfigPublic>;
+    count: number;
+};
+
+/**
+ * Request to update handover configuration.
+ */
+export type HandoverConfigUpdate = {
+    handover_prompt?: (string | null);
+    enabled?: (boolean | null);
 };
 
 export type HTTPValidationError = {
@@ -290,6 +344,21 @@ export type ItemsPublic = {
 export type ItemUpdate = {
     title?: (string | null);
     description?: (string | null);
+};
+
+/**
+ * Request model for querying integration knowledge.
+ */
+export type KnowledgeQueryRequest = {
+    query: string;
+};
+
+/**
+ * Response model for knowledge queries.
+ */
+export type KnowledgeQueryResponse = {
+    content: string;
+    source?: (string | null);
 };
 
 export type Message = {
@@ -651,6 +720,41 @@ export type AgentsDeleteScheduleData = {
 
 export type AgentsDeleteScheduleResponse = (Message);
 
+export type AgentsListHandoverConfigsData = {
+    id: string;
+};
+
+export type AgentsListHandoverConfigsResponse = (HandoverConfigsPublic);
+
+export type AgentsCreateHandoverConfigData = {
+    id: string;
+    requestBody: HandoverConfigCreate;
+};
+
+export type AgentsCreateHandoverConfigResponse = (HandoverConfigPublic);
+
+export type AgentsUpdateHandoverConfigData = {
+    handoverId: string;
+    id: string;
+    requestBody: HandoverConfigUpdate;
+};
+
+export type AgentsUpdateHandoverConfigResponse = (HandoverConfigPublic);
+
+export type AgentsDeleteHandoverConfigData = {
+    handoverId: string;
+    id: string;
+};
+
+export type AgentsDeleteHandoverConfigResponse = (Message);
+
+export type AgentsGenerateHandoverPromptEndpointData = {
+    id: string;
+    requestBody: GenerateHandoverPromptRequest;
+};
+
+export type AgentsGenerateHandoverPromptEndpointResponse = (GenerateHandoverPromptResponse);
+
 export type CredentialsReadCredentialsData = {
     limit?: number;
     skip?: number;
@@ -798,6 +902,14 @@ export type ItemsDeleteItemData = {
 };
 
 export type ItemsDeleteItemResponse = (Message);
+
+export type KnowledgeQueryKnowledgeData = {
+    authorization?: (string | null);
+    requestBody: KnowledgeQueryRequest;
+    xAgentEnvId?: (string | null);
+};
+
+export type KnowledgeQueryKnowledgeResponse = (KnowledgeQueryResponse);
 
 export type LoginLoginAccessTokenData = {
     formData: Body_login_login_access_token;
