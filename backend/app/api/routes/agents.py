@@ -716,7 +716,7 @@ def generate_handover_prompt_endpoint(
 
 
 @router.post("/handover/execute", response_model=ExecuteHandoverResponse)
-def execute_handover(
+async def execute_handover(
     *,
     session: SessionDep,
     current_user: CurrentUser,
@@ -732,7 +732,7 @@ def execute_handover(
     3. Logs system message in source session with link to new session
     """
     logger.info(f"Handover request from user {current_user.id}: target_agent_id={data.target_agent_id}, source_session_id={data.source_session_id}")
-    success, new_session_id, error = AgentService.execute_handover(
+    success, new_session_id, error = await AgentService.execute_handover(
         session=session,
         user_id=current_user.id,
         target_agent_id=data.target_agent_id,

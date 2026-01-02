@@ -9,6 +9,7 @@ from app.services.environment_lifecycle import EnvironmentLifecycleManager
 from app.services.session_service import SessionService
 from app.services.ai_functions_service import AIFunctionsService
 from app.core.config import settings
+from app.core.db import engine
 
 logger = logging.getLogger(__name__)
 
@@ -371,7 +372,7 @@ class AgentService:
             logger.error(f"Failed to sync handover config to environment: {e}")
 
     @staticmethod
-    def execute_handover(
+    async def execute_handover(
         session: Session,
         user_id: UUID,
         target_agent_id: UUID,
@@ -432,13 +433,47 @@ class AgentService:
             if not new_session:
                 return (False, None, "Failed to create session for target agent")
 
-            # Post handover message to new session
-            MessageService.create_message(
-                session=session,
-                session_id=new_session.id,
-                role="user",
-                content=handover_message
-            )
+            # Trigger background processing of the handover message
+            # This initiates the agent processing in the background, similar to when frontend sends a message
+            # Note: handle_stream_message will save the user message, so we don't need to create it explicitly
+            async def process_handover_message():
+                """Background task to process the handover message with the target agent."""
+                db_session = None
+                try:
+                    logger.info(f"Starting background processing for handover message in session {new_session.id}")
+
+                    # Create a database session for initial operations
+                    # handle_stream_message uses this for quick lookups, then delegates to
+                    # stream_message_with_events which uses get_fresh_db_session for long-running operations
+                    db_session = Session(engine)
+
+                    # Use handle_stream_message to initiate full message processing
+                    # We consume the stream but don't send events anywhere (no frontend connection)
+                    stream = MessageService.handle_stream_message(
+                        session_id=new_session.id,
+                        message_content=handover_message,
+                        answers_to_message_id=None,
+                        db_session=db_session,
+                        get_fresh_db_session=lambda: Session(engine)
+                    )
+
+                    # Consume the stream to completion (events are discarded since no frontend)
+                    async for _ in stream:
+                        pass  # Events are processed internally, we just need to consume the iterator
+
+                    logger.info(f"Completed background processing for handover message in session {new_session.id}")
+
+                except Exception as e:
+                    logger.error(f"Error in background handover message processing: {str(e)}", exc_info=True)
+                finally:
+                    # Clean up database session
+                    if db_session:
+                        db_session.close()
+
+            # Start the background task without awaiting (fire-and-forget)
+            asyncio.create_task(process_handover_message())
+
+            logger.info(f"Initiated background processing for handover message in session {new_session.id}")
 
             # Log system message in source session about the handover
             source_session = session.get(ChatSession, source_session_id)

@@ -25,6 +25,8 @@ The system implements a three-layer streaming architecture that decouples fronte
 
 ### 1. Sending a Message
 
+#### Via Frontend
+
 **Frontend** (`useMessageStream.ts:sendMessage`):
 - Opens SSE connection to `/api/v1/sessions/{session_id}/messages/stream`
 - Optimistically adds user message to cache
@@ -34,6 +36,20 @@ The system implements a three-layer streaming architecture that decouples fronte
 - Saves user message to database immediately
 - Registers stream in `ActiveStreamingManager`
 - Delegates to `MessageService.stream_message_with_events()`
+
+#### Via Agent Handover
+
+**Agent Tool** (`tools/agent_handover.py:agent_handover`):
+- Calls backend endpoint `POST /agents/handover/execute`
+
+**Backend** (`agents.py:execute_handover`):
+- Async endpoint delegates to `AgentService.execute_handover()`
+
+**Service** (`agent_service.py:execute_handover`):
+- Creates new session for target agent
+- Launches background task using `asyncio.create_task()`
+- Background task calls `MessageService.handle_stream_message()` to process message
+- Returns immediately without blocking
 
 **Backend** (`message_service.py:stream_message_with_events`):
 Orchestrates the complete flow:
@@ -133,6 +149,8 @@ Returns: `{is_streaming: bool, stream_info: {...}}`
 **Old Behavior**: Frontend abort → Backend stream closed → Agent env stream closed → Corrupted SDK sessions, lost messages
 
 **New Behavior**: Frontend disconnect → Backend continues → Agent env completes normally → All data saved, session intact
+
+**Agent Handovers**: Use the same decoupled architecture - background task processes message independently without any frontend connection, ensuring reliable agent-to-agent communication
 
 ### Implementation Challenge: Python Generator Chain Closure
 
@@ -467,7 +485,9 @@ Fields:
 
 ### Backend
 - `api/routes/messages.py` - API endpoints
+- `api/routes/agents.py` - Agent handover endpoint (triggers background processing)
 - `services/message_service.py` - Streaming orchestration
+- `services/agent_service.py` - Agent handover execution with background message processing
 - `services/active_streaming_manager.py` - Stream tracking
 - `services/session_service.py` - Session/external ID management
 

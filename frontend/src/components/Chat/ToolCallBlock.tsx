@@ -9,6 +9,7 @@ import { GlobToolBlock } from "./GlobToolBlock"
 import { WebSearchToolBlock } from "./WebSearchToolBlock"
 import { BashToolBlock } from "./BashToolBlock"
 import { KnowledgeQueryToolBlock } from "./KnowledgeQueryToolBlock"
+import { AgentHandoverToolBlock } from "./AgentHandoverToolBlock"
 
 interface ToolCallBlockProps {
   toolName: string
@@ -59,6 +60,22 @@ export function ToolCallBlock({ toolName, toolInput }: ToolCallBlockProps) {
   // Special rendering for Knowledge Query tool
   if (toolName === "mcp__knowledge__query_integration_knowledge" && toolInput?.query) {
     return <KnowledgeQueryToolBlock query={toolInput.query} />
+  }
+
+  // Special rendering for Agent Handover tool
+  if (
+    toolName === "mcp__handover__agent_handover" &&
+    toolInput?.target_agent_id &&
+    toolInput?.target_agent_name &&
+    toolInput?.handover_message
+  ) {
+    return (
+      <AgentHandoverToolBlock
+        targetAgentId={toolInput.target_agent_id}
+        targetAgentName={toolInput.target_agent_name}
+        handoverMessage={toolInput.handover_message}
+      />
+    )
   }
 
   // Default rendering for other tools

@@ -265,14 +265,16 @@ When handover configs are created/updated/deleted, they are synced to the agent'
 #### 5. Handover Execution Flow
 
 **Business Logic**: `AgentService.execute_handover()` in `backend/app/services/agent_service.py`
-- Validates target agent and permissions
+- Async method that validates target agent and permissions
 - Creates new conversation session using `SessionService.create_session()`
-- Posts handover message to new session using `MessageService.create_message()`
+- Launches background task to process handover message using `MessageService.handle_stream_message()`
+- Background task runs independently, similar to frontend message processing flow
+- Message is saved and processed by target agent without blocking handover response
 - Logs system message in source session with metadata (forwarded_to_session_id, target_agent_id, target_agent_name)
-- Returns success status and new session ID
+- Returns success status and new session ID immediately while processing continues in background
 
 **Backend Endpoint**: `POST /agents/handover/execute` in `backend/app/api/routes/agents.py`
-- Delegates all logic to `AgentService.execute_handover()`
+- Async endpoint that delegates all logic to `AgentService.execute_handover()`
 
 **Session Context**: Backend session ID passed via ChatRequest payload and tracked globally
 - `session_id`: Claude SDK session ID (for SDK resumption)
