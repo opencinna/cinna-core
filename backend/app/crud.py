@@ -137,6 +137,7 @@ def create_credential(
         notes=credential_in.notes,
         encrypted_data=encrypted_data,
         owner_id=owner_id,
+        user_workspace_id=credential_in.user_workspace_id,
     )
     session.add(db_credential)
     session.commit()

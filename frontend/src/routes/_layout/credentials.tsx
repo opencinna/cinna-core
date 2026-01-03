@@ -7,6 +7,7 @@ import { CredentialsService } from "@/client"
 import AddCredential from "@/components/Credentials/AddCredential"
 import { CredentialCard } from "@/components/Credentials/CredentialCard"
 import PendingItems from "@/components/Pending/PendingItems"
+import useWorkspace from "@/hooks/useWorkspace"
 import { usePageHeader } from "@/routes/_layout"
 
 export const Route = createFileRoute("/_layout/credentials")({
@@ -21,12 +22,15 @@ export const Route = createFileRoute("/_layout/credentials")({
 })
 
 function CredentialsGrid() {
+  const { activeWorkspaceId } = useWorkspace()
+
   const { data, isLoading, error } = useQuery({
-    queryKey: ["credentials"],
+    queryKey: ["credentials", activeWorkspaceId],
     queryFn: async () => {
       const response = await CredentialsService.readCredentials({
         skip: 0,
         limit: 100,
+        userWorkspaceId: activeWorkspaceId || undefined,
       })
       return response
     },

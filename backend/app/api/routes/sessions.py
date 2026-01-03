@@ -58,7 +58,8 @@ def list_sessions(
     skip: int = 0,
     limit: int = 100,
     order_by: str = "created_at",  # "created_at" | "updated_at" | "last_message_at"
-    order_desc: bool = True
+    order_desc: bool = True,
+    user_workspace_id: uuid.UUID | None = None,
 ) -> Any:
     """
     List user's sessions with external session metadata and agent names.
@@ -68,6 +69,7 @@ def list_sessions(
         limit: Number of records to return
         order_by: Field to order by (created_at, updated_at, last_message_at)
         order_desc: Order descending if True, ascending if False
+        user_workspace_id: Optional workspace filter. If not provided, returns all sessions.
     """
     # Join Session with AgentEnvironment and Agent to get agent name and color
     statement = (
@@ -76,6 +78,10 @@ def list_sessions(
         .join(Agent, AgentEnvironment.agent_id == Agent.id)
         .where(Session.user_id == current_user.id)
     )
+
+    # Apply workspace filter if provided
+    if user_workspace_id is not None:
+        statement = statement.where(Session.user_workspace_id == user_workspace_id)
 
     # Add ordering
     order_field = getattr(Session, order_by, Session.created_at)

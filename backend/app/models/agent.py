@@ -17,6 +17,7 @@ class AgentBase(SQLModel):
 # Properties to receive on agent creation
 class AgentCreate(AgentBase):
     description: str | None = None
+    user_workspace_id: uuid.UUID | None = None
 
 
 # Properties to receive on agent update
@@ -34,6 +35,9 @@ class Agent(AgentBase, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     owner_id: uuid.UUID = Field(
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    user_workspace_id: uuid.UUID | None = Field(
+        default=None, foreign_key="user_workspace.id", ondelete="CASCADE"
     )
     # NEW FIELDS for agent sessions
     description: str | None = None
@@ -72,6 +76,7 @@ class AgentPublic(SQLModel):
     created_at: datetime
     updated_at: datetime
     owner_id: uuid.UUID
+    user_workspace_id: uuid.UUID | None
 
 
 class AgentsPublic(SQLModel):

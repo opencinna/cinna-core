@@ -6,6 +6,7 @@ import { SessionsService } from "@/client"
 import type { SessionPublicExtended } from "@/client"
 import { AgentSessionsGroup } from "@/components/Sessions/AgentSessionsGroup"
 import PendingItems from "@/components/Pending/PendingItems"
+import useWorkspace from "@/hooks/useWorkspace"
 import { usePageHeader } from "@/routes/_layout"
 
 export const Route = createFileRoute("/_layout/sessions")({
@@ -14,14 +15,17 @@ export const Route = createFileRoute("/_layout/sessions")({
 
 function SessionsList() {
   const { setHeaderContent } = usePageHeader()
+  const { activeWorkspaceId } = useWorkspace()
 
   const {
     data: sessionsData,
     isLoading: sessionsLoading,
     error: sessionsError,
   } = useQuery({
-    queryKey: ["sessions"],
-    queryFn: () => SessionsService.listSessions(),
+    queryKey: ["sessions", activeWorkspaceId],
+    queryFn: () => SessionsService.listSessions({
+      userWorkspaceId: activeWorkspaceId || undefined,
+    }),
   })
 
   useEffect(() => {

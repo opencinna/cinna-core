@@ -23,6 +23,7 @@ class SessionService:
         session = Session(
             environment_id=agent.active_environment_id,
             user_id=user_id,
+            user_workspace_id=agent.user_workspace_id,
             title=data.title,
             mode=data.mode,
             agent_sdk=data.agent_sdk,

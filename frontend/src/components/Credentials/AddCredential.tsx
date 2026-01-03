@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/select"
 import { LoadingButton } from "@/components/ui/loading-button"
 import useCustomToast from "@/hooks/useCustomToast"
+import useWorkspace from "@/hooks/useWorkspace"
 import { handleError } from "@/utils"
 
 const formSchema = z.object({
@@ -50,6 +51,7 @@ const AddCredential = () => {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { showSuccessToast, showErrorToast } = useCustomToast()
+  const { activeWorkspaceId } = useWorkspace()
 
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
@@ -78,7 +80,12 @@ const AddCredential = () => {
   })
 
   const onSubmit = (data: FormData) => {
-    mutation.mutate(data)
+    // Include active workspace_id in the credential creation
+    const credentialData: CredentialCreate = {
+      ...data,
+      user_workspace_id: activeWorkspaceId || undefined,
+    }
+    mutation.mutate(credentialData)
   }
 
   return (

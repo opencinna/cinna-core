@@ -59,15 +59,17 @@ def list_activities(
     session: SessionDep,
     current_user: CurrentUser,
     agent_id: uuid.UUID | None = None,
+    user_workspace_id: uuid.UUID | None = None,
     skip: int = 0,
     limit: int = 100,
     order_desc: bool = True
 ) -> Any:
     """
-    List user's activities with optional filtering by agent.
+    List user's activities with optional filtering by agent and workspace.
 
     Args:
         agent_id: Optional agent ID to filter by
+        user_workspace_id: Optional workspace filter. If not provided, returns all activities.
         skip: Number of records to skip
         limit: Number of records to return
         order_desc: Order descending if True, ascending if False
@@ -83,6 +85,10 @@ def list_activities(
     # Filter by agent if specified
     if agent_id:
         query = query.where(Activity.agent_id == agent_id)
+
+    # Filter by workspace if specified
+    if user_workspace_id is not None:
+        query = query.where(Activity.user_workspace_id == user_workspace_id)
 
     # Add ordering
     if order_desc:

@@ -14,6 +14,7 @@ from app.api.routes import (
     private,
     sessions,
     users,
+    user_workspaces,
     utils,
     workspace,
 )
@@ -31,6 +32,7 @@ api_router.include_router(environments.router)
 api_router.include_router(sessions.router)
 api_router.include_router(messages.router)
 api_router.include_router(workspace.router)
+api_router.include_router(user_workspaces.router)
 api_router.include_router(activities.router)
 api_router.include_router(events.router)
 api_router.include_router(knowledge.router)

@@ -187,6 +187,18 @@ export const ActivityPublicSchema = {
             ],
             title: 'Agent Id'
         },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
+        },
         activity_type: {
             type: 'string',
             title: 'Activity Type'
@@ -210,7 +222,7 @@ export const ActivityPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'user_id', 'session_id', 'agent_id', 'activity_type', 'text', 'action_required', 'is_read', 'created_at'],
+    required: ['id', 'user_id', 'session_id', 'agent_id', 'user_workspace_id', 'activity_type', 'text', 'action_required', 'is_read', 'created_at'],
     title: 'ActivityPublic'
 } as const;
 
@@ -249,6 +261,18 @@ export const ActivityPublicExtendedSchema = {
                 }
             ],
             title: 'Agent Id'
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
         },
         activity_type: {
             type: 'string',
@@ -306,7 +330,7 @@ export const ActivityPublicExtendedSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'user_id', 'session_id', 'agent_id', 'activity_type', 'text', 'action_required', 'is_read', 'created_at'],
+    required: ['id', 'user_id', 'session_id', 'agent_id', 'user_workspace_id', 'activity_type', 'text', 'action_required', 'is_read', 'created_at'],
     title: 'ActivityPublicExtended',
     description: 'Activity with extended data (agent name, session title, etc.)'
 } as const;
@@ -386,6 +410,18 @@ export const AgentCreateSchema = {
                 }
             ],
             title: 'Description'
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
         }
     },
     type: 'object',
@@ -689,10 +725,22 @@ export const AgentPublicSchema = {
             type: 'string',
             format: 'uuid',
             title: 'Owner Id'
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
         }
     },
     type: 'object',
-    required: ['id', 'name', 'description', 'workflow_prompt', 'entrypoint_prompt', 'is_active', 'active_environment_id', 'ui_color_preset', 'created_at', 'updated_at', 'owner_id'],
+    required: ['id', 'name', 'description', 'workflow_prompt', 'entrypoint_prompt', 'is_active', 'active_environment_id', 'ui_color_preset', 'created_at', 'updated_at', 'owner_id', 'user_workspace_id'],
     title: 'AgentPublic'
 } as const;
 
@@ -942,6 +990,18 @@ export const CredentialCreateSchema = {
                 }
             ],
             title: 'Credential Data'
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
         }
     },
     type: 'object',
@@ -980,10 +1040,22 @@ export const CredentialPublicSchema = {
             type: 'string',
             format: 'uuid',
             title: 'Owner Id'
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
         }
     },
     type: 'object',
-    required: ['name', 'type', 'id', 'owner_id'],
+    required: ['name', 'type', 'id', 'owner_id', 'user_workspace_id'],
     title: 'CredentialPublic'
 } as const;
 
@@ -1068,6 +1140,18 @@ export const CredentialWithDataSchema = {
             format: 'uuid',
             title: 'Owner Id'
         },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
+        },
         credential_data: {
             additionalProperties: true,
             type: 'object',
@@ -1075,7 +1159,7 @@ export const CredentialWithDataSchema = {
         }
     },
     type: 'object',
-    required: ['name', 'type', 'id', 'owner_id', 'credential_data'],
+    required: ['name', 'type', 'id', 'owner_id', 'user_workspace_id', 'credential_data'],
     title: 'CredentialWithData'
 } as const;
 
@@ -1921,6 +2005,18 @@ export const SessionPublicSchema = {
             format: 'uuid',
             title: 'User Id'
         },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
+        },
         title: {
             anyOf: [
                 {
@@ -1972,7 +2068,7 @@ export const SessionPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'environment_id', 'user_id', 'title', 'mode', 'agent_sdk', 'status', 'interaction_status', 'created_at', 'updated_at', 'last_message_at'],
+    required: ['id', 'environment_id', 'user_id', 'user_workspace_id', 'title', 'mode', 'agent_sdk', 'status', 'interaction_status', 'created_at', 'updated_at', 'last_message_at'],
     title: 'SessionPublic'
 } as const;
 
@@ -1992,6 +2088,18 @@ export const SessionPublicExtendedSchema = {
             type: 'string',
             format: 'uuid',
             title: 'User Id'
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
         },
         title: {
             anyOf: [
@@ -2100,7 +2208,7 @@ export const SessionPublicExtendedSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'environment_id', 'user_id', 'title', 'mode', 'agent_sdk', 'status', 'interaction_status', 'created_at', 'updated_at', 'last_message_at'],
+    required: ['id', 'environment_id', 'user_id', 'user_workspace_id', 'title', 'mode', 'agent_sdk', 'status', 'interaction_status', 'created_at', 'updated_at', 'last_message_at'],
     title: 'SessionPublicExtended',
     description: 'Session with external session metadata'
 } as const;
@@ -2514,6 +2622,93 @@ export const UserUpdateMeSchema = {
     },
     type: 'object',
     title: 'UserUpdateMe'
+} as const;
+
+export const UserWorkspaceCreateSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'UserWorkspaceCreate'
+} as const;
+
+export const UserWorkspacePublicSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['name', 'id', 'user_id', 'created_at', 'updated_at'],
+    title: 'UserWorkspacePublic'
+} as const;
+
+export const UserWorkspaceUpdateSchema = {
+    properties: {
+        name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        }
+    },
+    type: 'object',
+    title: 'UserWorkspaceUpdate'
+} as const;
+
+export const UserWorkspacesPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/UserWorkspacePublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'UserWorkspacesPublic'
 } as const;
 
 export const UsersPublicSchema = {

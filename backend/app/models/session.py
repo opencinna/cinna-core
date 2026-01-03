@@ -10,6 +10,9 @@ class Session(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     environment_id: uuid.UUID = Field(foreign_key="agent_environment.id", ondelete="CASCADE")
     user_id: uuid.UUID = Field(foreign_key="user.id", ondelete="CASCADE")
+    user_workspace_id: uuid.UUID | None = Field(
+        default=None, foreign_key="user_workspace.id", ondelete="CASCADE"
+    )
     title: str | None = None
     mode: str = "conversation"  # "building" | "conversation"
     agent_sdk: str = "claude"  # SDK to use: "claude" (more options can be added later)
@@ -58,6 +61,7 @@ class SessionPublic(SQLModel):
     id: uuid.UUID
     environment_id: uuid.UUID
     user_id: uuid.UUID
+    user_workspace_id: uuid.UUID | None
     title: str | None
     mode: str
     agent_sdk: str

@@ -29,6 +29,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { LoadingButton } from "@/components/ui/loading-button"
 import useCustomToast from "@/hooks/useCustomToast"
+import useWorkspace from "@/hooks/useWorkspace"
 import { handleError } from "@/utils"
 
 const formSchema = z.object({
@@ -42,6 +43,7 @@ const AddAgent = () => {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { showSuccessToast, showErrorToast } = useCustomToast()
+  const { activeWorkspaceId } = useWorkspace()
 
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
@@ -68,7 +70,12 @@ const AddAgent = () => {
   })
 
   const onSubmit = (data: FormData) => {
-    mutation.mutate(data)
+    // Include active workspace_id in the agent creation
+    const agentData: AgentCreate = {
+      ...data,
+      user_workspace_id: activeWorkspaceId || undefined,
+    }
+    mutation.mutate(agentData)
   }
 
   return (

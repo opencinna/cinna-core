@@ -19,6 +19,9 @@ class Activity(SQLModel, table=True):
     user_id: uuid.UUID = Field(foreign_key="user.id", ondelete="CASCADE")
     session_id: uuid.UUID | None = Field(default=None, foreign_key="session.id", ondelete="CASCADE")
     agent_id: uuid.UUID | None = Field(default=None, foreign_key="agent.id", ondelete="SET NULL")
+    user_workspace_id: uuid.UUID | None = Field(
+        default=None, foreign_key="user_workspace.id", ondelete="CASCADE"
+    )
 
     # Activity type: "session_completed", "file_created", "agent_notification", "questions_asked", etc.
     activity_type: str
@@ -54,6 +57,7 @@ class ActivityPublic(SQLModel):
     user_id: uuid.UUID
     session_id: uuid.UUID | None
     agent_id: uuid.UUID | None
+    user_workspace_id: uuid.UUID | None
     activity_type: str
     text: str
     action_required: str

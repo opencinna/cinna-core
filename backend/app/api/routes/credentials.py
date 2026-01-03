@@ -21,30 +21,46 @@ router = APIRouter(prefix="/credentials", tags=["credentials"])
 
 @router.get("/", response_model=CredentialsPublic)
 def read_credentials(
-    session: SessionDep, current_user: CurrentUser, skip: int = 0, limit: int = 100
+    session: SessionDep,
+    current_user: CurrentUser,
+    skip: int = 0,
+    limit: int = 100,
+    user_workspace_id: uuid.UUID | None = None,
 ) -> Any:
     """
     Retrieve credentials (without decrypted data).
+    If user_workspace_id is not provided, returns all credentials.
+    If user_workspace_id is provided, filters by that workspace.
     """
     if current_user.is_superuser:
         count_statement = select(func.count()).select_from(Credential)
+        statement = select(Credential)
+
+        # Apply workspace filter
+        if user_workspace_id is not None:
+            count_statement = count_statement.where(Credential.user_workspace_id == user_workspace_id)
+            statement = statement.where(Credential.user_workspace_id == user_workspace_id)
+
         count = session.exec(count_statement).one()
-        statement = select(Credential).offset(skip).limit(limit)
-        credentials = session.exec(statement).all()
+        credentials = session.exec(statement.offset(skip).limit(limit)).all()
     else:
         count_statement = (
             select(func.count())
             .select_from(Credential)
             .where(Credential.owner_id == current_user.id)
         )
-        count = session.exec(count_statement).one()
         statement = (
             select(Credential)
             .where(Credential.owner_id == current_user.id)
-            .offset(skip)
-            .limit(limit)
         )
-        credentials = session.exec(statement).all()
+
+        # Apply workspace filter
+        if user_workspace_id is not None:
+            count_statement = count_statement.where(Credential.user_workspace_id == user_workspace_id)
+            statement = statement.where(Credential.user_workspace_id == user_workspace_id)
+
+        count = session.exec(count_statement).one()
+        credentials = session.exec(statement.offset(skip).limit(limit)).all()
 
     return CredentialsPublic(data=credentials, count=count)
 

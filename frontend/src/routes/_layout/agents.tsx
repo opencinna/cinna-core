@@ -7,6 +7,7 @@ import { AgentsService } from "@/client"
 import AddAgent from "@/components/Agents/AddAgent"
 import { AgentCard } from "@/components/Agents/AgentCard"
 import PendingItems from "@/components/Pending/PendingItems"
+import useWorkspace from "@/hooks/useWorkspace"
 import { usePageHeader } from "@/routes/_layout"
 
 export const Route = createFileRoute("/_layout/agents")({
@@ -21,12 +22,15 @@ export const Route = createFileRoute("/_layout/agents")({
 })
 
 function AgentsGrid() {
+  const { activeWorkspaceId } = useWorkspace()
+
   const { data, isLoading, error } = useQuery({
-    queryKey: ["agents"],
+    queryKey: ["agents", activeWorkspaceId],
     queryFn: async () => {
       const response = await AgentsService.readAgents({
         skip: 0,
         limit: 100,
+        userWorkspaceId: activeWorkspaceId || undefined,
       })
       return response
     },

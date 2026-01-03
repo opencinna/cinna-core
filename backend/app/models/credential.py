@@ -57,6 +57,7 @@ class CredentialCreate(CredentialBase):
     # credential_data will contain the type-specific data (EmailImapData, OdooData, or GmailOAuthData)
     # Optional to allow creating credentials with just name and type, then filling details later
     credential_data: dict | None = None
+    user_workspace_id: uuid.UUID | None = None
 
 
 # Properties to receive on credential update
@@ -74,6 +75,9 @@ class Credential(CredentialBase, table=True):
     owner_id: uuid.UUID = Field(
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
     )
+    user_workspace_id: uuid.UUID | None = Field(
+        default=None, foreign_key="user_workspace.id", ondelete="CASCADE"
+    )
     owner: User | None = Relationship(back_populates="credentials")
     agents: List["app.models.agent.Agent"] = Relationship(
         back_populates="credentials", link_model=AgentCredentialLink
@@ -84,6 +88,7 @@ class Credential(CredentialBase, table=True):
 class CredentialPublic(CredentialBase):
     id: uuid.UUID
     owner_id: uuid.UUID
+    user_workspace_id: uuid.UUID | None
 
 
 # Properties to return via API with decrypted data

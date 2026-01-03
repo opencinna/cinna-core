@@ -14,10 +14,22 @@ class ActivityService:
         db_session: DBSession, user_id: UUID, data: ActivityCreate
     ) -> Activity:
         """Create a new activity"""
+        # Determine workspace_id: inherit from session if provided, otherwise from agent
+        workspace_id = None
+        if data.session_id:
+            session = db_session.get(Session, data.session_id)
+            if session:
+                workspace_id = session.user_workspace_id
+        elif data.agent_id:
+            agent = db_session.get(Agent, data.agent_id)
+            if agent:
+                workspace_id = agent.user_workspace_id
+
         activity = Activity(
             user_id=user_id,
             session_id=data.session_id,
             agent_id=data.agent_id,
+            user_workspace_id=workspace_id,
             activity_type=data.activity_type,
             text=data.text,
             action_required=data.action_required,

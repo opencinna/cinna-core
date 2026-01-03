@@ -11,6 +11,7 @@ import { RelativeTime } from "@/components/Common/RelativeTime"
 import { Bell, CheckCircle2, AlertCircle, FileText, MessageCircle, AlertOctagon, Loader2, EllipsisVertical, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useMultiEventSubscription, EventTypes } from "@/hooks/useEventBus"
+import useWorkspace from "@/hooks/useWorkspace"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -31,6 +32,7 @@ function ActivitiesList() {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { showSuccessToast, showErrorToast } = useCustomToast()
+  const { activeWorkspaceId } = useWorkspace()
 
   // Map to track which activities are currently visible
   const [visibleActivities, setVisibleActivities] = useState<Set<string>>(new Set())
@@ -42,10 +44,11 @@ function ActivitiesList() {
     isLoading: activitiesLoading,
     error: activitiesError,
   } = useQuery({
-    queryKey: ["activities", selectedAgentId],
+    queryKey: ["activities", selectedAgentId, activeWorkspaceId],
     queryFn: () =>
       ActivitiesService.listActivities({
         agentId: selectedAgentId || undefined,
+        userWorkspaceId: activeWorkspaceId || undefined,
         skip: 0,
         limit: 100,
         orderDesc: true,

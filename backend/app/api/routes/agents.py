@@ -56,31 +56,47 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 
 @router.get("/", response_model=AgentsPublic)
 def read_agents(
-    session: SessionDep, current_user: CurrentUser, skip: int = 0, limit: int = 100
+    session: SessionDep,
+    current_user: CurrentUser,
+    skip: int = 0,
+    limit: int = 100,
+    user_workspace_id: uuid.UUID | None = None,
 ) -> Any:
     """
-    Retrieve agents.
+    Retrieve agents. Optionally filter by workspace.
+    If user_workspace_id is not provided, returns all agents.
+    If user_workspace_id is provided (including null for default workspace), filters by that workspace.
     """
 
     if current_user.is_superuser:
         count_statement = select(func.count()).select_from(Agent)
+        statement = select(Agent)
+
+        # Apply workspace filter for superuser too
+        if user_workspace_id is not None:
+            count_statement = count_statement.where(Agent.user_workspace_id == user_workspace_id)
+            statement = statement.where(Agent.user_workspace_id == user_workspace_id)
+
         count = session.exec(count_statement).one()
-        statement = select(Agent).offset(skip).limit(limit)
-        agents = session.exec(statement).all()
+        agents = session.exec(statement.offset(skip).limit(limit)).all()
     else:
         count_statement = (
             select(func.count())
             .select_from(Agent)
             .where(Agent.owner_id == current_user.id)
         )
-        count = session.exec(count_statement).one()
         statement = (
             select(Agent)
             .where(Agent.owner_id == current_user.id)
-            .offset(skip)
-            .limit(limit)
         )
-        agents = session.exec(statement).all()
+
+        # Apply workspace filter
+        if user_workspace_id is not None:
+            count_statement = count_statement.where(Agent.user_workspace_id == user_workspace_id)
+            statement = statement.where(Agent.user_workspace_id == user_workspace_id)
+
+        count = session.exec(count_statement).one()
+        agents = session.exec(statement.offset(skip).limit(limit)).all()
 
     return AgentsPublic(data=agents, count=count)
 

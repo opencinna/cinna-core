@@ -19,6 +19,7 @@ export type ActivityPublic = {
     user_id: string;
     session_id: (string | null);
     agent_id: (string | null);
+    user_workspace_id: (string | null);
     activity_type: string;
     text: string;
     action_required: string;
@@ -34,6 +35,7 @@ export type ActivityPublicExtended = {
     user_id: string;
     session_id: (string | null);
     agent_id: (string | null);
+    user_workspace_id: (string | null);
     activity_type: string;
     text: string;
     action_required: string;
@@ -61,6 +63,7 @@ export type AgentCreate = {
     workflow_prompt?: (string | null);
     entrypoint_prompt?: (string | null);
     description?: (string | null);
+    user_workspace_id?: (string | null);
 };
 
 export type AgentCreateFlowRequest = {
@@ -127,6 +130,7 @@ export type AgentPublic = {
     created_at: string;
     updated_at: string;
     owner_id: string;
+    user_workspace_id: (string | null);
 };
 
 /**
@@ -193,6 +197,7 @@ export type CredentialCreate = {
     credential_data?: ({
     [key: string]: unknown;
 } | null);
+    user_workspace_id?: (string | null);
 };
 
 export type CredentialPublic = {
@@ -201,6 +206,7 @@ export type CredentialPublic = {
     notes?: (string | null);
     id: string;
     owner_id: string;
+    user_workspace_id: (string | null);
 };
 
 export type CredentialsPublic = {
@@ -224,6 +230,7 @@ export type CredentialWithData = {
     notes?: (string | null);
     id: string;
     owner_id: string;
+    user_workspace_id: (string | null);
     credential_data: {
         [key: string]: unknown;
     };
@@ -466,6 +473,7 @@ export type SessionPublic = {
     id: string;
     environment_id: string;
     user_id: string;
+    user_workspace_id: (string | null);
     title: (string | null);
     mode: string;
     agent_sdk: string;
@@ -483,6 +491,7 @@ export type SessionPublicExtended = {
     id: string;
     environment_id: string;
     user_id: string;
+    user_workspace_id: (string | null);
     title: (string | null);
     mode: string;
     agent_sdk: string;
@@ -583,6 +592,27 @@ export type UserUpdateMe = {
     email?: (string | null);
 };
 
+export type UserWorkspaceCreate = {
+    name: string;
+};
+
+export type UserWorkspacePublic = {
+    name: string;
+    id: string;
+    user_id: string;
+    created_at: string;
+    updated_at: string;
+};
+
+export type UserWorkspacesPublic = {
+    data: Array<UserWorkspacePublic>;
+    count: number;
+};
+
+export type UserWorkspaceUpdate = {
+    name?: (string | null);
+};
+
 export type ValidationError = {
     loc: Array<(string | number)>;
     msg: string;
@@ -600,6 +630,7 @@ export type ActivitiesListActivitiesData = {
     limit?: number;
     orderDesc?: boolean;
     skip?: number;
+    userWorkspaceId?: (string | null);
 };
 
 export type ActivitiesListActivitiesResponse = (ActivitiesPublicExtended);
@@ -632,6 +663,7 @@ export type ActivitiesMarkActivitiesAsReadResponse = ({
 export type AgentsReadAgentsData = {
     limit?: number;
     skip?: number;
+    userWorkspaceId?: (string | null);
 };
 
 export type AgentsReadAgentsResponse = (AgentsPublic);
@@ -783,6 +815,7 @@ export type AgentsExecuteHandoverResponse = (ExecuteHandoverResponse);
 export type CredentialsReadCredentialsData = {
     limit?: number;
     skip?: number;
+    userWorkspaceId?: (string | null);
 };
 
 export type CredentialsReadCredentialsResponse = (CredentialsPublic);
@@ -1033,6 +1066,7 @@ export type SessionsListSessionsData = {
     orderBy?: string;
     orderDesc?: boolean;
     skip?: number;
+    userWorkspaceId?: (string | null);
 };
 
 export type SessionsListSessionsResponse = (SessionsPublicExtended);
@@ -1141,6 +1175,38 @@ export type UsersUpdateAiCredentialsData = {
 };
 
 export type UsersUpdateAiCredentialsResponse = (Message);
+
+export type UserWorkspacesReadWorkspacesData = {
+    limit?: number;
+    skip?: number;
+};
+
+export type UserWorkspacesReadWorkspacesResponse = (UserWorkspacesPublic);
+
+export type UserWorkspacesCreateWorkspaceData = {
+    requestBody: UserWorkspaceCreate;
+};
+
+export type UserWorkspacesCreateWorkspaceResponse = (UserWorkspacePublic);
+
+export type UserWorkspacesReadWorkspaceData = {
+    workspaceId: string;
+};
+
+export type UserWorkspacesReadWorkspaceResponse = (UserWorkspacePublic);
+
+export type UserWorkspacesUpdateWorkspaceData = {
+    requestBody: UserWorkspaceUpdate;
+    workspaceId: string;
+};
+
+export type UserWorkspacesUpdateWorkspaceResponse = (UserWorkspacePublic);
+
+export type UserWorkspacesDeleteWorkspaceData = {
+    workspaceId: string;
+};
+
+export type UserWorkspacesDeleteWorkspaceResponse = (Message);
 
 export type UtilsTestEmailData = {
     emailTo: string;

@@ -103,6 +103,13 @@ from .agent_handover import (
     ExecuteHandoverRequest,
     ExecuteHandoverResponse,
 )
+from .user_workspace import (
+    UserWorkspace,
+    UserWorkspaceCreate,
+    UserWorkspaceUpdate,
+    UserWorkspacePublic,
+    UserWorkspacesPublic,
+)
 
 __all__ = [
     # Core
@@ -203,4 +210,10 @@ __all__ = [
     "GenerateHandoverPromptResponse",
     "ExecuteHandoverRequest",
     "ExecuteHandoverResponse",
+    # User Workspaces
+    "UserWorkspace",
+    "UserWorkspaceCreate",
+    "UserWorkspaceUpdate",
+    "UserWorkspacePublic",
+    "UserWorkspacesPublic",
 ]
