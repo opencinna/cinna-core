@@ -1,14 +1,6 @@
-import React, { useState, useCallback, useRef, useEffect } from "react"
+import { useState, useCallback, useRef, useEffect } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-
-interface StreamEvent {
-  type: "session_created" | "assistant" | "tool" | "result" | "error" | "done" | "thinking" | "interrupted"
-  content?: string
-  session_id?: string
-  metadata?: Record<string, any>
-  error_type?: string
-  tool_name?: string
-}
+import { eventService } from "@/services/eventService"
 
 interface StructuredStreamEvent {
   type: "assistant" | "tool" | "thinking" | "system"
@@ -35,58 +27,16 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
   const [isInterruptPending, setIsInterruptPending] = useState(false)
   const queryClient = useQueryClient()
 
-  // Track abort controller for current request
-  const abortControllerRef = useRef<AbortController | null>(null)
+  // Track subscription ID for cleanup
+  const streamSubscriptionRef = useRef<string | null>(null)
+  const streamRoomRef = useRef<string | null>(null)
   // Track if we've already checked for active streams on mount
   const hasCheckedForActiveStream = useRef(false)
 
   const sendMessage = useCallback(async (content: string, answersToMessageId?: string) => {
-    // Create new AbortController for this request
-    const abortController = new AbortController()
-    abortControllerRef.current = abortController
-
     setIsStreaming(true)
     setStreamingEvents([])
-    setIsInterruptPending(false) // Reset interrupt pending state
-
-    // Optimistically add user message to the cache immediately
-    const tempUserMessageId = `temp-${Date.now()}`
-    queryClient.setQueryData(["messages", sessionId], (old: any) => {
-      if (!old) return old
-
-      const newUserMessage = {
-        id: tempUserMessageId,
-        session_id: sessionId,
-        role: "user",
-        content: content,
-        sequence_number: (old.data?.length || 0) + 1,
-        timestamp: new Date().toISOString(),
-        message_metadata: {},
-        answers_to_message_id: answersToMessageId || null,
-      }
-
-      return {
-        ...old,
-        data: [...(old.data || []), newUserMessage],
-        count: (old.count || 0) + 1,
-      }
-    })
-
-    // If answering questions, optimistically update the referenced message status
-    if (answersToMessageId) {
-      queryClient.setQueryData(["messages", sessionId], (old: any) => {
-        if (!old) return old
-
-        return {
-          ...old,
-          data: old.data.map((msg: any) =>
-            msg.id === answersToMessageId
-              ? { ...msg, tool_questions_status: "answered" }
-              : msg
-          ),
-        }
-      })
-    }
+    setIsInterruptPending(false)
 
     try {
       const token = localStorage.getItem("access_token")
@@ -94,6 +44,58 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
         throw new Error("Not authenticated")
       }
 
+      // Subscribe to session-specific streaming room
+      const streamRoom = `session_${sessionId}_stream`
+      streamRoomRef.current = streamRoom
+
+      await eventService.subscribeToRoom(streamRoom)
+
+      // Subscribe to stream events
+      const subscriptionId = eventService.subscribe("stream_event", (event: any) => {
+        handleStreamEvent(event)
+      })
+      streamSubscriptionRef.current = subscriptionId
+
+      // Optimistically add user message to cache
+      const tempUserMessageId = `temp-${Date.now()}`
+      queryClient.setQueryData(["messages", sessionId], (old: any) => {
+        if (!old) return old
+
+        const newUserMessage = {
+          id: tempUserMessageId,
+          session_id: sessionId,
+          role: "user",
+          content: content,
+          sequence_number: (old.data?.length || 0) + 1,
+          timestamp: new Date().toISOString(),
+          message_metadata: {},
+          answers_to_message_id: answersToMessageId || null,
+        }
+
+        return {
+          ...old,
+          data: [...(old.data || []), newUserMessage],
+          count: (old.count || 0) + 1,
+        }
+      })
+
+      // If answering questions, optimistically update the referenced message status
+      if (answersToMessageId) {
+        queryClient.setQueryData(["messages", sessionId], (old: any) => {
+          if (!old) return old
+
+          return {
+            ...old,
+            data: old.data.map((msg: any) =>
+              msg.id === answersToMessageId
+                ? { ...msg, tool_questions_status: "answered" }
+                : msg
+            ),
+          }
+        })
+      }
+
+      // Send message via REST API (triggers background WebSocket streaming)
       const requestBody: any = { content }
       if (answersToMessageId) {
         requestBody.answers_to_message_id = answersToMessageId
@@ -108,7 +110,6 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
             "Authorization": `Bearer ${token}`,
           },
           body: JSON.stringify(requestBody),
-          signal: abortController.signal,  // Add abort signal
         }
       )
 
@@ -117,9 +118,8 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
         throw new Error(`Failed to send message: ${response.status} - ${errorText}`)
       }
 
-      if (!response.body) {
-        throw new Error("No response body")
-      }
+      const data = await response.json()
+      console.log("Message processing started:", data)
 
       // Fetch session immediately to get temporary title (set before streaming starts)
       setTimeout(() => {
@@ -127,181 +127,22 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
         queryClient.invalidateQueries({ queryKey: ["sessions"] })
       }, 200)
 
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
+      // WebSocket events will handle the rest
 
-      let buffer = ""
-      let streamCompleted = false
-      let wasInterrupted = false  // Track if stream was interrupted
-
-      while (true) {
-        const { done, value } = await reader.read()
-
-        if (done) {
-          streamCompleted = true
-          break
-        }
-
-        // Decode the chunk and add to buffer
-        buffer += decoder.decode(value, { stream: true })
-
-        // Process complete SSE messages
-        const lines = buffer.split("\n")
-        buffer = lines.pop() || "" // Keep incomplete line in buffer
-
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const dataStr = line.slice(6)
-
-            try {
-              const event: StreamEvent = JSON.parse(dataStr)
-
-              // Handle interrupted event
-              if (event.type === "interrupted") {
-                console.log("Stream was interrupted by user")
-                wasInterrupted = true
-                streamCompleted = true
-                setIsInterruptPending(false) // Clear pending state
-                break
-              }
-
-              // Skip system and done events
-              if (event.type === "session_created" || event.type === "done") {
-                if (event.type === "done") {
-                  streamCompleted = true
-                  setIsInterruptPending(false) // Clear pending state on completion
-                  // Check metadata for interrupt status
-                  if (event.metadata?.interrupted) {
-                    wasInterrupted = true
-                  }
-                }
-                continue
-              }
-
-              // Handle errors from backend
-              if (event.type === "error") {
-                console.error("Stream error:", event)
-                // Error is saved as a system message by the backend
-                // Just mark stream as completed and refresh to show the error message
-                streamCompleted = true
-                break
-              }
-
-              // Convert to structured event
-              if (event.type === "assistant" || event.type === "tool" || event.type === "thinking" || event.type === "system") {
-                const structuredEvent: StructuredStreamEvent = {
-                  type: event.type,
-                  content: event.content || "",
-                }
-
-                if (event.tool_name) {
-                  structuredEvent.tool_name = event.tool_name
-                }
-
-                if (event.metadata) {
-                  structuredEvent.metadata = {
-                    tool_id: event.metadata.tool_id,
-                    tool_input: event.metadata.tool_input,
-                    model: event.metadata.model,
-                    interrupt_notification: event.metadata.interrupt_notification,
-                  }
-                }
-
-                setStreamingEvents(prev => [...prev, structuredEvent])
-              }
-            } catch (parseError) {
-              console.error("Failed to parse SSE event:", dataStr, parseError)
-            }
-          }
-        }
-
-        // Break outer loop if interrupted
-        if (wasInterrupted) {
-          break
-        }
-      }
-
-      // Always refresh messages after stream ends (completed or interrupted)
-      if (streamCompleted || wasInterrupted) {
-        console.log(`Stream ${wasInterrupted ? 'interrupted' : 'completed'}, refreshing messages...`)
-
-        // Small delay to ensure backend finishes writing to database
-        await new Promise(resolve => setTimeout(resolve, 300))
-
-        await queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
-
-        // Invalidate session query to get updated title (generated on first message)
-        await queryClient.invalidateQueries({ queryKey: ["session", sessionId] })
-        // Also invalidate sessions list to update dashboard
-        await queryClient.invalidateQueries({ queryKey: ["sessions"] })
-
-        // Poll for AI-generated title (backend generates in background)
-        // Strategy: 3 quick attempts every 500ms, then slower checks every 2s until title appears
-        let pollAttempt = 0
-        const pollForTitle = async () => {
-          pollAttempt++
-
-          // Fetch session to check if title exists
-          const currentSession = queryClient.getQueryData(["session", sessionId]) as any
-
-          // If we have a title, stop polling
-          if (currentSession?.title) {
-            return
-          }
-
-          // Invalidate to fetch fresh data
-          await queryClient.invalidateQueries({ queryKey: ["session", sessionId] })
-          await queryClient.invalidateQueries({ queryKey: ["sessions"] })
-
-          // Determine next poll delay
-          let nextDelay: number
-          if (pollAttempt <= 3) {
-            // First 3 attempts: every 500ms (at 500ms, 1000ms, 1500ms)
-            nextDelay = 500
-          } else {
-            // After that: every 2 seconds until title appears
-            nextDelay = 2000
-          }
-
-          // Schedule next poll
-          setTimeout(pollForTitle, nextDelay)
-        }
-
-        // Start polling after 500ms
-        setTimeout(pollForTitle, 500)
-
-        // Invalidate agent caches if building mode (prompts may have been updated)
-        if (sessionMode === "building") {
-          console.log("Building session completed, refreshing agent data...")
-          // Invalidate all agent queries to ensure fresh prompt data
-          await queryClient.invalidateQueries({ queryKey: ["agent"] })
-          await queryClient.invalidateQueries({ queryKey: ["agents"] })
-        }
-
-        onSuccess?.()
-      }
-
-      setIsStreaming(false)
-      setStreamingEvents([])
     } catch (error) {
-      // Handle network errors or browser disconnections
-      // Note: We no longer manually abort, so AbortError means browser disconnected (e.g., page refresh)
-      if (error instanceof Error && error.name === 'AbortError') {
-        console.log("Stream disconnected (likely page refresh/navigation)")
-        // Backend will continue processing, so just clean up frontend state
-        setIsStreaming(false)
-        setStreamingEvents([])
-
-        // Refresh to get any messages that were saved
-        await new Promise(resolve => setTimeout(resolve, 300))
-        await queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
-        return
-      }
-
-      console.error("Message stream error:", error)
+      console.error("Failed to send message:", error)
       setIsStreaming(false)
       setStreamingEvents([])
-      setIsInterruptPending(false) // Clear pending state on error
+
+      // Cleanup
+      if (streamSubscriptionRef.current) {
+        eventService.unsubscribe(streamSubscriptionRef.current)
+        streamSubscriptionRef.current = null
+      }
+      if (streamRoomRef.current) {
+        await eventService.unsubscribeFromRoom(streamRoomRef.current)
+        streamRoomRef.current = null
+      }
 
       // Remove optimistic message and refresh from server
       try {
@@ -312,28 +153,123 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
       }
 
       onError?.(error instanceof Error ? error : new Error(String(error)))
-    } finally {
-      // Clear abort controller reference
-      abortControllerRef.current = null
     }
   }, [sessionId, sessionMode, queryClient, onSuccess, onError])
 
+  const handleStreamEvent = useCallback((event: any) => {
+    console.log("Received stream event:", event)
+
+    const { session_id, event_type, data } = event
+
+    // Verify event is for current session
+    if (session_id !== sessionId) {
+      return
+    }
+
+    // Handle different event types
+    switch (event_type) {
+      case "stream_started":
+        console.log("Stream started")
+        break
+
+      case "user_message_created":
+        // User message already added optimistically
+        console.log("User message created:", data)
+        break
+
+      case "assistant":
+      case "tool":
+      case "thinking":
+      case "system":
+        // Add to streaming events for real-time display
+        const structuredEvent: StructuredStreamEvent = {
+          type: data.type,
+          content: data.content || "",
+          tool_name: data.tool_name,
+          metadata: data.metadata,
+        }
+        setStreamingEvents(prev => [...prev, structuredEvent])
+        break
+
+      case "interrupted":
+        console.log("Stream interrupted")
+        setIsInterruptPending(false)
+        handleStreamComplete(true)
+        break
+
+      case "error":
+        console.error("Stream error:", data)
+        setIsInterruptPending(false)
+        handleStreamComplete(false)
+        break
+
+      case "stream_completed":
+        console.log("Stream completed")
+        setIsInterruptPending(false)
+        handleStreamComplete(false)
+        break
+
+      default:
+        console.log("Unknown event type:", event_type)
+    }
+  }, [sessionId])
+
+  const handleStreamComplete = useCallback(async (wasInterrupted: boolean) => {
+    console.log(`Stream ${wasInterrupted ? 'interrupted' : 'completed'}`)
+
+    // Cleanup subscriptions
+    if (streamSubscriptionRef.current) {
+      eventService.unsubscribe(streamSubscriptionRef.current)
+      streamSubscriptionRef.current = null
+    }
+    if (streamRoomRef.current) {
+      await eventService.unsubscribeFromRoom(streamRoomRef.current)
+      streamRoomRef.current = null
+    }
+
+    // Refresh messages
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
+    await queryClient.invalidateQueries({ queryKey: ["session", sessionId] })
+    await queryClient.invalidateQueries({ queryKey: ["sessions"] })
+
+    // Poll for AI-generated title (same as before)
+    let pollAttempt = 0
+    const pollForTitle = async () => {
+      pollAttempt++
+      const currentSession = queryClient.getQueryData(["session", sessionId]) as any
+      if (currentSession?.title) {
+        return
+      }
+      await queryClient.invalidateQueries({ queryKey: ["session", sessionId] })
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] })
+
+      const nextDelay = pollAttempt <= 3 ? 500 : 2000
+      setTimeout(pollForTitle, nextDelay)
+    }
+    setTimeout(pollForTitle, 500)
+
+    // Invalidate agent caches if building mode
+    if (sessionMode === "building") {
+      console.log("Building session completed, refreshing agent data...")
+      await queryClient.invalidateQueries({ queryKey: ["agent"] })
+      await queryClient.invalidateQueries({ queryKey: ["agents"] })
+    }
+
+    setIsStreaming(false)
+    setStreamingEvents([])
+    onSuccess?.()
+  }, [sessionId, sessionMode, queryClient, onSuccess])
+
   const stopMessage = useCallback(async () => {
     console.log("Stop button clicked")
-
-    // Set interrupt pending state immediately for UI feedback
     setIsInterruptPending(true)
-
-    // NEW BEHAVIOR: Send interrupt signal but DON'T abort the stream
-    // The backend will continue streaming from the agent environment,
-    // receive the "interrupted" event, and send it to us through the existing stream.
-    // This ensures proper cleanup in the SDK and prevents session corruption.
 
     try {
       const token = localStorage.getItem("access_token")
       if (!token) {
-        console.error("Not authenticated, cannot send interrupt")
-        setIsInterruptPending(false) // Clear pending state on error
+        console.error("Not authenticated")
+        setIsInterruptPending(false)
         return
       }
 
@@ -348,25 +284,19 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
       )
 
       if (response.ok) {
-        const data = await response.json()
-        console.log("Interrupt request sent successfully:", data)
-        // The stream will continue and receive the "interrupted" event
-        // isInterruptPending will be cleared when we receive interrupted/done event
+        console.log("Interrupt request sent")
+        // Wait for "interrupted" event via WebSocket
       } else {
-        console.warn("Interrupt request returned non-200:", response.status)
-        setIsInterruptPending(false) // Clear pending state if request failed
+        console.warn("Interrupt request failed:", response.status)
+        setIsInterruptPending(false)
       }
     } catch (error) {
-      console.error("Failed to send interrupt signal:", error)
-      setIsInterruptPending(false) // Clear pending state on error
+      console.error("Failed to send interrupt:", error)
+      setIsInterruptPending(false)
     }
-
-    // DON'T abort the fetch - let it receive the "interrupted" event naturally
-    // The stream will end when the backend sends the "done" event
   }, [sessionId])
 
-  // Check if session is actively streaming and reconnect if needed
-  // This handles the case where user refreshes page during streaming
+  // Check for active stream on mount (reconnection logic)
   const checkAndReconnectToActiveStream = useCallback(async () => {
     if (hasCheckedForActiveStream.current) {
       return // Already checked
@@ -375,9 +305,7 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
 
     try {
       const token = localStorage.getItem("access_token")
-      if (!token) {
-        return
-      }
+      if (!token) return
 
       const response = await fetch(
         `${import.meta.env.VITE_API_URL}/api/v1/sessions/${sessionId}/messages/streaming-status`,
@@ -391,57 +319,60 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
       if (response.ok) {
         const data = await response.json()
         if (data.is_streaming) {
-          console.log("Detected active stream, reconnecting...", data.stream_info)
+          console.log("Detected active stream, reconnecting via WebSocket")
           setIsStreaming(true)
 
-          // Refresh messages to show any partial content
-          await queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
+          // Subscribe to streaming room
+          const streamRoom = `session_${sessionId}_stream`
+          streamRoomRef.current = streamRoom
+          await eventService.subscribeToRoom(streamRoom)
 
-          // Note: We don't try to reconnect to the SSE stream because:
-          // 1. The backend is still processing independently
-          // 2. Messages are being saved to database
-          // 3. We'll get the final result via query invalidation
-          // 4. The "active" indicator shows user something is happening
+          // Subscribe to stream events
+          const subscriptionId = eventService.subscribe("stream_event", handleStreamEvent)
+          streamSubscriptionRef.current = subscriptionId
+
+          // Refresh messages
+          await queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
 
           // Poll for completion
           const pollInterval = setInterval(async () => {
             const statusResponse = await fetch(
               `${import.meta.env.VITE_API_URL}/api/v1/sessions/${sessionId}/messages/streaming-status`,
-              {
-                headers: {
-                  "Authorization": `Bearer ${token}`,
-                },
-              }
+              { headers: { "Authorization": `Bearer ${token}` } }
             )
 
             if (statusResponse.ok) {
               const statusData = await statusResponse.json()
               if (!statusData.is_streaming) {
-                // Stream completed
-                console.log("Active stream completed, refreshing messages")
                 clearInterval(pollInterval)
-                setIsStreaming(false)
-                await queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
-                await queryClient.invalidateQueries({ queryKey: ["session", sessionId] })
-                await queryClient.invalidateQueries({ queryKey: ["sessions"] })
-                onSuccess?.()
+                handleStreamComplete(false)
               }
             }
-          }, 1000) // Poll every second
+          }, 1000)
 
-          // Cleanup on unmount
           return () => clearInterval(pollInterval)
         }
       }
     } catch (error) {
       console.error("Failed to check for active stream:", error)
     }
-  }, [sessionId, queryClient, onSuccess])
+  }, [sessionId, queryClient, handleStreamEvent, handleStreamComplete])
 
-  // Check for active stream on mount
   useEffect(() => {
     checkAndReconnectToActiveStream()
   }, [checkAndReconnectToActiveStream])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (streamSubscriptionRef.current) {
+        eventService.unsubscribe(streamSubscriptionRef.current)
+      }
+      if (streamRoomRef.current) {
+        eventService.unsubscribeFromRoom(streamRoomRef.current)
+      }
+    }
+  }, [])
 
   return {
     sendMessage,

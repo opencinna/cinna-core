@@ -189,6 +189,36 @@ class EventService:
         """Get total number of active connections."""
         return len(self.connections)
 
+    async def emit_stream_event(
+        self,
+        session_id: UUID,
+        event_type: str,
+        event_data: dict[str, Any],
+    ):
+        """
+        Emit a streaming event to a session-specific room.
+
+        Args:
+            session_id: Session UUID
+            event_type: Type of streaming event (assistant, tool, etc.)
+            event_data: Full event data including content, metadata
+        """
+        room = f"session_{session_id}_stream"
+
+        # Emit to session-specific streaming room
+        await self.sio.emit(
+            "stream_event",  # WebSocket event name
+            {
+                "session_id": str(session_id),
+                "event_type": event_type,
+                "data": event_data,
+                "timestamp": datetime.utcnow().isoformat()
+            },
+            room=room
+        )
+
+        logger.debug(f"Emitted stream event {event_type} to room {room}")
+
     def get_asgi_app(self):
         """Get the ASGI app for Socket.IO."""
         return socketio.ASGIApp(self.sio, socketio_path="/")

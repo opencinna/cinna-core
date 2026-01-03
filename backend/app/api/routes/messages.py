@@ -2,7 +2,7 @@ import uuid
 from typing import Any
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session as DBSession
 
@@ -96,14 +96,18 @@ async def send_message_stream(
     current_user: CurrentUser,
     session_id: uuid.UUID,
     message_in: MessageCreate,
+    background_tasks: BackgroundTasks
 ) -> Any:
     """
-    Send message to agent environment and stream response.
+    Send message to agent environment and stream response via WebSocket.
 
-    This is a thin routing wrapper that:
-    1. Verifies session ownership (authorization)
-    2. Delegates all business logic to MessageService
-    3. Returns streaming response
+    This endpoint:
+    1. Validates session ownership
+    2. Launches background task to process message
+    3. Returns immediately with success status
+
+    Streaming events are emitted via WebSocket to room: session_{session_id}_stream
+    Frontend should subscribe to this room before calling this endpoint.
     """
     # Verify session exists and user owns it
     chat_session = session.get(Session, session_id)
@@ -113,27 +117,22 @@ async def send_message_stream(
     if not current_user.is_superuser and (chat_session.user_id != current_user.id):
         raise HTTPException(status_code=400, detail="Not enough permissions")
 
-    # Delegate all business logic to MessageService
-    try:
-        stream = MessageService.handle_stream_message(
-            session_id=session_id,
-            message_content=message_in.content,
-            answers_to_message_id=message_in.answers_to_message_id,
-            db_session=session,
-            get_fresh_db_session=lambda: DBSession(engine)
-        )
+    # Launch background task to handle streaming
+    background_tasks.add_task(
+        MessageService.handle_stream_message_websocket,
+        session_id=session_id,
+        message_content=message_in.content,
+        answers_to_message_id=message_in.answers_to_message_id,
+        db_session=session,
+        get_fresh_db_session=lambda: DBSession(engine)
+    )
 
-        return StreamingResponse(
-            stream,
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            }
-        )
-    except ValueError as e:
-        # Convert service-level ValueError to HTTP exception
-        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "status": "ok",
+        "message": "Message processing started",
+        "session_id": str(session_id),
+        "stream_room": f"session_{session_id}_stream"
+    }
 
 
 @router.post("/{session_id}/messages/interrupt")

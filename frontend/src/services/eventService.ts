@@ -138,6 +138,13 @@ class EventServiceClass {
       this.handleEvent(data)
     })
 
+    // Listen for streaming events
+    this.socket.on("stream_event", (data: any) => {
+      console.log("[EventService] Received stream event:", data.event_type, data)
+      // Treat stream_event as a special event type for subscribers
+      this.handleStreamEvent(data)
+    })
+
     // Ping/pong for keepalive
     this.socket.on("pong", (data) => {
       console.log("[EventService] Pong received:", data)
@@ -303,6 +310,22 @@ class EventServiceClass {
           subscription.handler(event)
         } catch (error) {
           console.error(`[EventService] Error in event handler for ${event.type}:`, error)
+        }
+      }
+    })
+  }
+
+  /**
+   * Handle incoming stream event and notify subscribers
+   */
+  private handleStreamEvent(streamEvent: any): void {
+    // Notify subscribers who are listening to "stream_event"
+    this.subscriptions.forEach((subscription) => {
+      if (subscription.eventType === "stream_event" || subscription.eventType === "*") {
+        try {
+          subscription.handler(streamEvent)
+        } catch (error) {
+          console.error(`[EventService] Error in stream event handler:`, error)
         }
       }
     })

@@ -1433,12 +1433,15 @@ export class MessagesService {
     
     /**
      * Send Message Stream
-     * Send message to agent environment and stream response.
+     * Send message to agent environment and stream response via WebSocket.
      *
-     * This is a thin routing wrapper that:
-     * 1. Verifies session ownership (authorization)
-     * 2. Delegates all business logic to MessageService
-     * 3. Returns streaming response
+     * This endpoint:
+     * 1. Validates session ownership
+     * 2. Launches background task to process message
+     * 3. Returns immediately with success status
+     *
+     * Streaming events are emitted via WebSocket to room: session_{session_id}_stream
+     * Frontend should subscribe to this room before calling this endpoint.
      * @param data The data for the request.
      * @param data.sessionId
      * @param data.requestBody

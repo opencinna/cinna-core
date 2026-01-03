@@ -1066,3 +1066,147 @@ class MessageService:
             get_fresh_db_session=get_fresh_db_session
         ):
             yield event
+
+    @staticmethod
+    async def handle_stream_message_websocket(
+        session_id: UUID,
+        message_content: str,
+        answers_to_message_id: UUID | None,
+        db_session: Session,
+        get_fresh_db_session: callable
+    ) -> None:
+        """
+        Handle message streaming via WebSocket instead of SSE.
+
+        This method:
+        - Emits stream start event
+        - Creates user message
+        - Streams to agent-env (SSE)
+        - Emits each event to WebSocket
+        - Saves agent response
+        - Emits stream completion event
+
+        Args:
+            session_id: Session UUID
+            message_content: User's message
+            answers_to_message_id: Optional ID of message being answered
+            db_session: Database session for initial queries
+            get_fresh_db_session: Callable for fresh DB sessions
+        """
+        from app.services.event_service import event_service
+        from app.services.session_service import SessionService
+
+        # Emit stream started event
+        await event_service.emit_stream_event(
+            session_id=session_id,
+            event_type="stream_started",
+            event_data={
+                "status": "started",
+                "message": "Processing your message..."
+            }
+        )
+
+        try:
+            # Get session and environment
+            chat_session = db_session.get(ChatSession, session_id)
+            if not chat_session:
+                raise ValueError("Session not found")
+
+            environment = db_session.get(AgentEnvironment, chat_session.environment_id)
+            if not environment:
+                raise ValueError("Environment not found")
+
+            # Validate environment is running
+            if environment.status != "running":
+                raise ValueError(f"Environment is not running (status: {environment.status})")
+
+            # Create user message
+            user_message = MessageService.create_message(
+                session=db_session,
+                session_id=session_id,
+                role="user",
+                content=message_content,
+                answers_to_message_id=answers_to_message_id
+            )
+
+            # Emit user message created event (for immediate UI update)
+            await event_service.emit_stream_event(
+                session_id=session_id,
+                event_type="user_message_created",
+                event_data={
+                    "id": str(user_message.id),
+                    "role": "user",
+                    "content": message_content,
+                    "sequence_number": user_message.sequence_number,
+                    "timestamp": user_message.timestamp.isoformat()
+                }
+            )
+
+            # Auto-generate session title from first message if no title exists
+            if not chat_session.title or chat_session.title.strip() == "":
+                # Start background task to generate title (fire and forget)
+                asyncio.create_task(
+                    SessionService.auto_generate_session_title(
+                        session_id=session_id,
+                        first_message_content=message_content,
+                        get_fresh_db_session=get_fresh_db_session
+                    )
+                )
+
+            # Set session status to "active" before streaming starts
+            SessionService.update_session_status(
+                db_session=db_session,
+                session_id=session_id,
+                status="active"
+            )
+
+            # Get environment details
+            base_url = MessageService.get_environment_url(environment)
+            auth_headers = MessageService.get_auth_headers(environment)
+            session_mode = chat_session.mode
+            agent_sdk = chat_session.agent_sdk
+            external_session_id = SessionService.get_external_session_id(chat_session)
+            environment_id = environment.id
+
+            # Stream from environment and emit each event via WebSocket
+            async for event in MessageService.stream_message_with_events(
+                session_id=session_id,
+                environment_id=environment_id,
+                base_url=base_url,
+                auth_headers=auth_headers,
+                user_message_content=message_content,
+                session_mode=session_mode,
+                agent_sdk=agent_sdk,
+                external_session_id=external_session_id,
+                get_fresh_db_session=get_fresh_db_session
+            ):
+                # Emit each streaming event via WebSocket
+                await event_service.emit_stream_event(
+                    session_id=session_id,
+                    event_type=event.get("type"),
+                    event_data=event
+                )
+
+            # Emit stream completed event
+            await event_service.emit_stream_event(
+                session_id=session_id,
+                event_type="stream_completed",
+                event_data={
+                    "status": "completed",
+                    "session_id": str(session_id)
+                }
+            )
+
+        except Exception as e:
+            logger.error(f"Error in WebSocket message streaming: {e}", exc_info=True)
+
+            # Emit error event
+            await event_service.emit_stream_event(
+                session_id=session_id,
+                event_type="error",
+                event_data={
+                    "type": "error",
+                    "content": str(e),
+                    "error_type": type(e).__name__
+                }
+            )
