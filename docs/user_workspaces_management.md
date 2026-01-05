@@ -262,6 +262,55 @@ Design allows for:
 - **Shared state pattern**: All components access same workspace state via Context (prevents state desync)
 - Switching workspace automatically remounts list page components via `key` prop pattern
 
+**Workspace Change Detection**:
+
+The system needs to detect when users switch workspaces to redirect them from detail pages (which show entities from the old workspace). However, it must NOT redirect on normal page navigation when the workspace hasn't changed.
+
+**Implementation Details**:
+
+1. **localStorage Value Normalization**:
+   - `getActiveWorkspaceId()` normalizes inconsistent values to ensure proper comparison
+   - Empty string `""` → converted to `null` (default workspace)
+   - String `"null"` → converted to actual `null`
+   - This prevents false positives where `"" !== null` would trigger unwanted redirects
+
+2. **Change Detection via Previous Value Tracking**:
+   - `WorkspaceProvider` maintains `previousWorkspaceId` ref initialized to current workspace ID
+   - Ref stored in Context, shared across all `useWorkspace()` hook instances
+   - On workspace change effect: compares `previousWorkspaceId.current` with `activeWorkspaceId`
+   - Only redirects if values differ (actual workspace change occurred)
+   - Updates ref to new value after processing change
+
+3. **Why Not `isInitialMount` Pattern**:
+   - ❌ **Problem with per-hook refs**: Each component calling `useWorkspace()` would get separate `isInitialMount` ref
+   - ❌ **False positives**: When navigating to agent detail page, new components mount and their effects run
+   - ❌ **State lifecycle mismatch**: Hook instances mount/unmount independently from workspace state
+   - ✅ **Solution**: Track actual value change, not mount state
+
+4. **Redirect Behavior**:
+   - When workspace changes (previous ≠ current):
+     - On list pages (`/`, `/agents`, `/credentials`, `/sessions`, `/activities`): No redirect needed
+     - On detail pages (`/agent/[id]`, `/credential/[id]`, etc.): Redirect to index
+   - When workspace unchanged (previous === current):
+     - No redirect, regardless of page type
+     - Allows normal navigation to detail pages without interference
+
+5. **Context Structure**:
+   ```typescript
+   WorkspaceContext = {
+     activeWorkspaceId: string | null,           // Current workspace
+     setActiveWorkspaceIdState: (id) => void,    // State setter
+     previousWorkspaceId: MutableRefObject<string | null>  // Previous value for comparison
+   }
+   ```
+
+**Why This Approach Works**:
+- Previous value stored in ref (doesn't trigger re-renders when updated)
+- Ref shared via Context (all hook instances see same value)
+- Comparison happens in effect that depends on `activeWorkspaceId`
+- Effect only performs redirect when actual state change detected
+- Normal navigation never changes `activeWorkspaceId`, so never redirects
+
 **Icon Configuration** (`frontend/src/config/workspaceIcons.ts`):
 - `WORKSPACE_ICONS` - Array of 20 predefined icon options with themes
 - `getWorkspaceIcon()` - Helper function to retrieve icon component by name
@@ -318,6 +367,7 @@ Design allows for:
 - Prevents state desynchronization across components (each calling `useWorkspace()` sees same state)
 - Before Context: each component had separate state instance → switching didn't propagate
 - After Context: state change in one component triggers re-render in all consumers
+- **Important**: Context also stores `previousWorkspaceId` ref for change detection (see Workspace Change Detection above)
 
 **Component Remount via Key Prop**:
 - React `key` prop pattern forces component remount when workspace changes
@@ -325,10 +375,81 @@ Design allows for:
 - Simpler mental model: workspace change = fresh component mount = fresh data fetch
 - Creating workspace auto-switches to it (better UX)
 
-**Null vs Undefined Semantics**:
-- `null` workspace ID → "Default" workspace (explicit filter)
-- `undefined` workspace ID → no filter (returns all entities)
+**Null vs Undefined vs Empty String Semantics**:
+- `null` workspace ID → "Default" workspace (explicit filter for entities without workspace)
+- `undefined` workspace ID → no filter (returns all entities across workspaces)
+- `""` (empty string) → **normalized to `null`** by `getActiveWorkspaceId()` (prevents comparison bugs)
+- `"null"` (string) → **normalized to `null`** by `getActiveWorkspaceId()` (handles edge cases)
 - Frontend sends `undefined` when not filtering, `null` for default
+- **Critical**: Always use actual `null` for default workspace, never empty string
+
+### Troubleshooting
+
+**Issue: Detail pages redirect to index unexpectedly**
+
+Symptoms:
+- Navigating to `/agent/[id]` or other detail pages immediately redirects to `/`
+- Console shows "Workspace changed to: [value]" repeatedly
+- Happens even though workspace hasn't actually changed
+
+Common Causes & Solutions:
+
+1. **Empty string vs null comparison issue**:
+   - Problem: localStorage contains `""` instead of being absent (null)
+   - Check: `localStorage.getItem('last_user_workspace_id')` returns `""`
+   - Fix: `getActiveWorkspaceId()` normalizes empty strings to `null`
+   - Verify: After normalization, comparison works correctly
+
+2. **isInitialMount pattern with per-hook refs**:
+   - Problem: Each component calling `useWorkspace()` gets separate ref
+   - Symptom: `isInitialMount.current` shows `false` even on first page load
+   - Fix: Don't use per-hook refs; use shared ref in Context or value-based change detection
+   - Current solution: Track `previousWorkspaceId` in shared Context ref
+
+3. **Workspace change detection on every render**:
+   - Problem: Effect runs on every component mount, not just workspace changes
+   - Check: Effect should compare previous and current workspace IDs
+   - Fix: Only redirect if `previousWorkspaceId.current !== activeWorkspaceId`
+   - Verify: Navigation to detail pages works without redirect when workspace unchanged
+
+4. **localStorage value type inconsistencies**:
+   - Problem: Sometimes stores `"null"` (string) instead of actual null
+   - Check: `typeof localStorage.getItem('last_user_workspace_id')`
+   - Fix: Normalize both `""` and `"null"` string to actual `null`
+
+**Debugging Steps**:
+
+1. Check localStorage value:
+   ```javascript
+   console.log('Raw value:', localStorage.getItem('last_user_workspace_id'))
+   console.log('Type:', typeof localStorage.getItem('last_user_workspace_id'))
+   ```
+
+2. Verify normalization:
+   ```javascript
+   // In getActiveWorkspaceId()
+   console.log('Before normalization:', value)
+   console.log('After normalization:', normalizedValue)
+   ```
+
+3. Track workspace changes:
+   ```javascript
+   // In workspace change effect
+   console.log('Previous:', previousWorkspaceId.current, 'Current:', activeWorkspaceId)
+   console.log('Values equal?', previousWorkspaceId.current === activeWorkspaceId)
+   ```
+
+4. Monitor redirect logic:
+   ```javascript
+   console.log('Current path:', window.location.pathname)
+   console.log('Is list page?', listPages.includes(window.location.pathname))
+   ```
+
+**Best Practices**:
+- Always use actual `null` for default workspace, never `""` or `"null"` strings
+- Share refs/state that need to be consistent across hook instances via Context
+- Use value comparison for change detection, not mount state tracking
+- Test navigation to detail pages after implementing workspace features
 
 ### Extension Points
 

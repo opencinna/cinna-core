@@ -12,7 +12,12 @@ import { useRouter } from "@tanstack/react-router"
 const WORKSPACE_STORAGE_KEY = "last_user_workspace_id"
 
 const getActiveWorkspaceId = (): string | null => {
-  return localStorage.getItem(WORKSPACE_STORAGE_KEY)
+  const value = localStorage.getItem(WORKSPACE_STORAGE_KEY)
+  // Normalize empty string and "null" string to actual null for default workspace
+  if (value === "" || value === "null") {
+    return null
+  }
+  return value
 }
 
 const setActiveWorkspaceId = (workspaceId: string | null) => {
@@ -27,15 +32,17 @@ const setActiveWorkspaceId = (workspaceId: string | null) => {
 const WorkspaceContext = createContext<{
   activeWorkspaceId: string | null
   setActiveWorkspaceIdState: (id: string | null) => void
+  previousWorkspaceId: React.MutableRefObject<string | null>
 } | null>(null)
 
 export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
-  const [activeWorkspaceId, setActiveWorkspaceIdState] = useState<string | null>(
-    getActiveWorkspaceId()
-  )
+  const initialId = getActiveWorkspaceId()
+  const [activeWorkspaceId, setActiveWorkspaceIdState] = useState<string | null>(initialId)
+  // Track the previous workspace ID to detect actual changes
+  const previousWorkspaceId = useRef<string | null>(initialId)
 
   return (
-    <WorkspaceContext.Provider value={{ activeWorkspaceId, setActiveWorkspaceIdState }}>
+    <WorkspaceContext.Provider value={{ activeWorkspaceId, setActiveWorkspaceIdState, previousWorkspaceId }}>
       {children}
     </WorkspaceContext.Provider>
   )
@@ -46,42 +53,43 @@ const useWorkspace = () => {
   const { showErrorToast } = useCustomToast()
   const router = useRouter()
   const context = useContext(WorkspaceContext)
-  const isInitialMount = useRef(true)
 
   if (!context) {
     throw new Error('useWorkspace must be used within WorkspaceProvider')
   }
 
-  const { activeWorkspaceId, setActiveWorkspaceIdState } = context
+  const { activeWorkspaceId, setActiveWorkspaceIdState, previousWorkspaceId } = context
 
   // Load active workspace ID from localStorage on mount
   useEffect(() => {
     const storedId = getActiveWorkspaceId()
-    setActiveWorkspaceIdState(storedId)
-  }, [setActiveWorkspaceIdState])
+    if (storedId !== activeWorkspaceId) {
+      setActiveWorkspaceIdState(storedId)
+    }
+  }, [setActiveWorkspaceIdState, activeWorkspaceId])
 
   // Handle workspace change - redirect if needed
   useEffect(() => {
-    if (isInitialMount.current) {
-      isInitialMount.current = false
+    // Check if workspace actually changed
+    if (previousWorkspaceId.current === activeWorkspaceId) {
       return
     }
 
-    console.log('Workspace changed to:', activeWorkspaceId)
+    // Update the ref to track the new workspace
+    previousWorkspaceId.current = activeWorkspaceId
 
     // If on a detail page (not a list page), redirect to index
     const listPages = ['/', '/agents', '/credentials', '/sessions', '/activities']
     const currentPath = window.location.pathname
 
     if (!listPages.includes(currentPath)) {
-      console.log('Redirecting to index from:', currentPath)
       router.navigate({ to: '/' })
     }
 
     // Note: We don't need to manually invalidate queries here
     // The key prop on components will force them to remount when activeWorkspaceId changes
     // React Query will automatically fetch when new queries are mounted
-  }, [activeWorkspaceId, router])
+  }, [activeWorkspaceId, router, previousWorkspaceId])
 
   // Fetch all user workspaces
   const { data: workspacesData } = useQuery({
