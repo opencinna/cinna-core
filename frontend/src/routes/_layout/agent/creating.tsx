@@ -105,6 +105,7 @@ function AgentCreating() {
             description,
             mode,
             auto_create_session: false,  // We'll create session after credential sharing
+            user_workspace_id: activeWorkspaceId || undefined,
           }),
         })
 

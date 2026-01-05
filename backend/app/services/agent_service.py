@@ -116,7 +116,7 @@ class AgentService:
 
     @staticmethod
     async def create_agent_flow(
-        session: Session, user: User, description: str, mode: str, auto_create_session: bool = False
+        session: Session, user: User, description: str, mode: str, auto_create_session: bool = False, user_workspace_id: UUID | None = None
     ):
         """
         Create full agent flow: agent + environment + (optionally) session
@@ -162,6 +162,7 @@ class AgentService:
                 description=description,
                 workflow_prompt=workflow_prompt,
                 entrypoint_prompt=entrypoint_prompt,
+                user_workspace_id=user_workspace_id,
             )
 
             agent = Agent.model_validate(agent_data, update={"owner_id": user.id})

@@ -728,6 +728,18 @@ export const AgentCreateFlowRequestSchema = {
             type: 'boolean',
             title: 'Auto Create Session',
             default: false
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
         }
     },
     type: 'object',

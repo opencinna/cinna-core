@@ -70,6 +70,7 @@ export type AgentCreateFlowRequest = {
     description: string;
     mode?: string;
     auto_create_session?: boolean;
+    user_workspace_id?: (string | null);
 };
 
 export type AgentCreateFlowResponse = {

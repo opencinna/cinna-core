@@ -110,11 +110,29 @@ function Dashboard() {
     return () => setHeaderContent(null)
   }, [setHeaderContent])
 
+  // Reset selection when workspace changes
   useEffect(() => {
-    if (agentsWithActiveEnv.length > 0 && !selectedAgentId) {
-      setSelectedAgentId(agentsWithActiveEnv[0].id)
+    setSelectedAgentId("")
+    setInputMode("automatic")
+  }, [activeWorkspaceId])
+
+  useEffect(() => {
+    // Don't make selection decisions while agents are still loading
+    if (agentsLoading) return
+
+    if (!selectedAgentId) {
+      if (agentsWithActiveEnv.length > 0) {
+        // When agents with active environments exist, select the first one in conversation mode
+        setSelectedAgentId(agentsWithActiveEnv[0].id)
+        setMode("conversation")
+      } else if (agents.length === 0) {
+        // When no agents exist at all, default to "New Agent" mode in building mode
+        setSelectedAgentId(NEW_AGENT_ID)
+        setMode("building")
+      }
+      // If agents exist but none have active environments, don't auto-select anything
     }
-  }, [agentsWithActiveEnv, selectedAgentId])
+  }, [agentsWithActiveEnv, agents.length, selectedAgentId, agentsLoading])
 
   // Auto-insert entrypoint prompt when agent changes (only in automatic mode)
   useEffect(() => {
@@ -243,24 +261,7 @@ function Dashboard() {
     return <PendingItems />
   }
 
-  if (agents.length === 0) {
-    return (
-      <div className="flex items-center justify-center min-h-[calc(100vh-4rem)]">
-        <div className="flex flex-col items-center justify-center text-center max-w-md">
-          <div className="rounded-full bg-muted p-6 mb-6">
-            <Bot className="h-12 w-12 text-muted-foreground" />
-          </div>
-          <h2 className="text-2xl font-semibold mb-2">No Agents Available</h2>
-          <p className="text-muted-foreground mb-6">
-            You need to create an agent before you can start a conversation.
-          </p>
-          <AddAgent />
-        </div>
-      </div>
-    )
-  }
-
-  if (agentsWithActiveEnv.length === 0) {
+  if (agents.length > 0 && agentsWithActiveEnv.length === 0) {
     return (
       <div className="flex items-center justify-center min-h-[calc(100vh-4rem)]">
         <div className="flex flex-col items-center justify-center text-center max-w-md">

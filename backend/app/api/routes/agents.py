@@ -159,7 +159,8 @@ async def create_agent_with_flow(
             user=current_user,
             description=request.description,
             mode=request.mode,
-            auto_create_session=request.auto_create_session
+            auto_create_session=request.auto_create_session,
+            user_workspace_id=request.user_workspace_id
         ):
             yield f"data: {json.dumps(event)}\n\n"
 
