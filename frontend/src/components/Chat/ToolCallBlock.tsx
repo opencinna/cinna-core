@@ -59,7 +59,7 @@ export function ToolCallBlock({ toolName, toolInput }: ToolCallBlockProps) {
 
   // Special rendering for Knowledge Query tool
   if (toolName === "mcp__knowledge__query_integration_knowledge" && toolInput?.query) {
-    return <KnowledgeQueryToolBlock query={toolInput.query} />
+    return <KnowledgeQueryToolBlock query={toolInput.query} articleIds={toolInput.article_ids} />
   }
 
   // Special rendering for Agent Handover tool
