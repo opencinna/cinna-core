@@ -128,6 +128,7 @@ export type AgentPublic = {
     is_active: boolean;
     active_environment_id: (string | null);
     ui_color_preset: (string | null);
+    show_on_dashboard: boolean;
     created_at: string;
     updated_at: string;
     owner_id: string;
@@ -162,6 +163,7 @@ export type AgentUpdate = {
     entrypoint_prompt?: (string | null);
     is_active?: (boolean | null);
     ui_color_preset?: (string | null);
+    show_on_dashboard?: (boolean | null);
 };
 
 /**

@@ -28,6 +28,7 @@ class AgentUpdate(SQLModel):
     entrypoint_prompt: str | None = None
     is_active: bool | None = None
     ui_color_preset: str | None = None
+    show_on_dashboard: bool | None = None
 
 
 # Database model, database table inferred from class name
@@ -44,6 +45,7 @@ class Agent(AgentBase, table=True):
     is_active: bool = Field(default=True)
     active_environment_id: uuid.UUID | None = Field(default=None, foreign_key="agent_environment.id")
     ui_color_preset: str | None = Field(default="slate")
+    show_on_dashboard: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -73,6 +75,7 @@ class AgentPublic(SQLModel):
     is_active: bool
     active_environment_id: uuid.UUID | None
     ui_color_preset: str | None
+    show_on_dashboard: bool
     created_at: datetime
     updated_at: datetime
     owner_id: uuid.UUID

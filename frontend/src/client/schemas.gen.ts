@@ -1005,6 +1005,10 @@ export const AgentPublicSchema = {
             ],
             title: 'Ui Color Preset'
         },
+        show_on_dashboard: {
+            type: 'boolean',
+            title: 'Show On Dashboard'
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -1034,7 +1038,7 @@ export const AgentPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'name', 'description', 'workflow_prompt', 'entrypoint_prompt', 'is_active', 'active_environment_id', 'ui_color_preset', 'created_at', 'updated_at', 'owner_id', 'user_workspace_id'],
+    required: ['id', 'name', 'description', 'workflow_prompt', 'entrypoint_prompt', 'is_active', 'active_environment_id', 'ui_color_preset', 'show_on_dashboard', 'created_at', 'updated_at', 'owner_id', 'user_workspace_id'],
     title: 'AgentPublic'
 } as const;
 
@@ -1169,6 +1173,17 @@ export const AgentUpdateSchema = {
                 }
             ],
             title: 'Ui Color Preset'
+        },
+        show_on_dashboard: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Show On Dashboard'
         }
     },
     type: 'object',

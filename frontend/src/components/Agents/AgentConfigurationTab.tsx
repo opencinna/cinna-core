@@ -13,6 +13,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Switch } from "@/components/ui/switch"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 
 interface AgentConfigurationTabProps {
   agent: AgentPublic
@@ -37,42 +45,89 @@ export function AgentConfigurationTab({ agent }: AgentConfigurationTabProps) {
     },
   })
 
+  const updateDashboardVisibilityMutation = useMutation({
+    mutationFn: (showOnDashboard: boolean) =>
+      AgentsService.updateAgent({
+        id: agent.id,
+        requestBody: { show_on_dashboard: showOnDashboard }
+      }),
+    onSuccess: () => {
+      showSuccessToast("Dashboard visibility updated successfully")
+      queryClient.invalidateQueries({ queryKey: ["agent", agent.id] })
+      queryClient.invalidateQueries({ queryKey: ["agents"] })
+    },
+    onError: (error: any) => {
+      showErrorToast(error.message || "Failed to update dashboard visibility")
+    },
+  })
+
   const handleColorChange = (colorPreset: string) => {
     updateMutation.mutate({ ui_color_preset: colorPreset })
+  }
+
+  const handleDashboardVisibilityChange = (checked: boolean) => {
+    updateDashboardVisibilityMutation.mutate(checked)
   }
 
   const currentPreset = getColorPreset(agent.ui_color_preset)
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-lg font-medium mb-1">Appearance</h3>
-        <p className="text-sm text-muted-foreground">
-          Customize how your agent appears in the interface
-        </p>
-      </div>
-
-      <div className="space-y-4">
-        <div>
-          <label className="text-sm font-medium mb-3 block">Color Preset</label>
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setIsDialogOpen(true)}
-              className="rounded-lg p-3 hover:opacity-80 transition-opacity cursor-pointer"
-            >
-              <div className={`rounded-lg p-3 ${currentPreset.iconBg}`}>
-                <Bot className={`h-8 w-8 ${currentPreset.iconText}`} />
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {/* Appearance Card */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Appearance</CardTitle>
+          <CardDescription>
+            Customize how your agent appears in the interface
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div>
+            <label className="text-sm font-medium mb-3 block">Color Preset</label>
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => setIsDialogOpen(true)}
+                className="rounded-lg p-3 hover:opacity-80 transition-opacity cursor-pointer"
+              >
+                <div className={`rounded-lg p-3 ${currentPreset.iconBg}`}>
+                  <Bot className={`h-8 w-8 ${currentPreset.iconText}`} />
+                </div>
+              </button>
+              <div>
+                <p className="text-sm font-medium">{currentPreset.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  Click on the icon to change the color preset
+                </p>
               </div>
-            </button>
-            <div>
-              <p className="text-sm font-medium">{currentPreset.name}</p>
-              <p className="text-xs text-muted-foreground">
-                Click on the icon to change the color preset
-              </p>
             </div>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
+
+      {/* Usability Card */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Usability</CardTitle>
+          <CardDescription>
+            Control where and how this agent appears in the application
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">Show on Dashboard</p>
+              <p className="text-xs text-muted-foreground">
+                Display this agent in the agent list on the main dashboard
+              </p>
+            </div>
+            <Switch
+              checked={agent.show_on_dashboard}
+              onCheckedChange={handleDashboardVisibilityChange}
+              disabled={updateDashboardVisibilityMutation.isPending}
+            />
+          </div>
+        </CardContent>
+      </Card>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent className="sm:max-w-2xl">

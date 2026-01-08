@@ -1251,7 +1251,10 @@ export class FilesService {
     
     /**
      * Delete File
-     * Mark file for deletion (soft delete)
+     * Mark file for deletion (soft delete).
+     *
+     * Authorization:
+     * - File owner only
      * @param data The data for the request.
      * @param data.fileId
      * @returns unknown Successful Response

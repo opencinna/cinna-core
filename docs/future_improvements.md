@@ -43,13 +43,6 @@ User story 1:
 Features required:
 - artifact's tool for the agent (CRUD) to manage artifact records on the backend, when local files of the agents could be saved in the backend DB.
 
-### Multi-Agent UI cleanup
-
-If user is having too many agents, and some of them are secondary, user don't want to see all of them on the main screen. 
-
-Features required:
-- user can mark in the configuration of the agent (or maybe on the agents card) that it's 'Favorite' agent, meaning visible on the main dashboard. 
-
 ### Developers Assistance Tools
 
 User wants agent to do actions with the GitHub API.
