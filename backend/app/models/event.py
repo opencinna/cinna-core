@@ -32,6 +32,12 @@ class EventType:
     AGENT_UPDATED = "agent_updated"
     AGENT_DELETED = "agent_deleted"
 
+    # Environment events
+    ENVIRONMENT_ACTIVATING = "environment_activating"
+    ENVIRONMENT_ACTIVATED = "environment_activated"
+    ENVIRONMENT_ACTIVATION_FAILED = "environment_activation_failed"
+    ENVIRONMENT_SUSPENDED = "environment_suspended"
+
     # Streaming events
     STREAM_STARTED = "stream_started"
     STREAM_COMPLETED = "stream_completed"

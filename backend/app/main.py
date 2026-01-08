@@ -54,18 +54,28 @@ app.mount("/ws", socket_app)
 
 
 # Startup and shutdown events
-from app.services.file_cleanup_scheduler import start_scheduler, shutdown_scheduler
+from app.services.file_cleanup_scheduler import (
+    start_scheduler as start_file_cleanup_scheduler,
+    shutdown_scheduler as shutdown_file_cleanup_scheduler
+)
+from app.services.environment_suspension_scheduler import (
+    start_scheduler as start_suspension_scheduler,
+    shutdown_scheduler as shutdown_suspension_scheduler
+)
 
 
 @app.on_event("startup")
 def on_startup():
     """Start background services on app startup"""
-    start_scheduler()
+    start_file_cleanup_scheduler()
+    start_suspension_scheduler()
     logger.info("Application startup complete")
 
 
 @app.on_event("shutdown")
 def on_shutdown():
     """Stop background services on app shutdown"""
-    shutdown_scheduler()
+    shutdown_file_cleanup_scheduler()
+    shutdown_suspension_scheduler()
+    event_service.shutdown()
     logger.info("Application shutdown complete")

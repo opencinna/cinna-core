@@ -270,18 +270,19 @@ workspace/knowledge/
 **Purpose**: Update core system files and knowledge base from template while preserving workspace data
 
 **Process**:
-1. Check if environment is running → stop if needed
-2. Delete old core directory: `{instance_dir}/app/core`
-3. Copy fresh core from template: `{template_dir}/app/core` → `{instance_dir}/app/core`
-4. Update knowledge files from template: `{template_dir}/app/workspace/knowledge` → `{instance_dir}/app/workspace/knowledge`
+1. Check if environment is running → stop if needed (`docker-compose stop`)
+2. Remove old container via `docker-compose down` (keeps volumes)
+3. Delete old core directory: `{instance_dir}/app/core`
+4. Copy fresh core from template: `{template_dir}/app/core` → `{instance_dir}/app/core`
+5. Update knowledge files from template: `{template_dir}/app/workspace/knowledge` → `{instance_dir}/app/workspace/knowledge`
    - **Add/Update only**: New and updated knowledge files from template are copied
    - **Preserve user files**: User-created knowledge files not in template are kept
    - **No deletions**: Existing knowledge files are never deleted
-5. Rebuild Docker image via `DockerEnvironmentAdapter.rebuild()`
+6. Rebuild Docker image via `DockerEnvironmentAdapter.rebuild()`
    - Runs `docker-compose build` (uses cache for speed)
    - New core files baked into image
-6. Restart container if it was running before
-7. Update status to `running` or `stopped`
+7. Start container if it was running before (`docker-compose up -d` creates new container from new image)
+8. Update status to `running` or `stopped`
 
 **Preserved**:
 - All workspace data (scripts, files, docs, credentials, databases, logs)
@@ -301,6 +302,158 @@ workspace/knowledge/
 - Docker image layers
 - **Template dependencies** (pyproject.toml packages)
 - Knowledge base files from template (add/update only, no deletions)
+
+### Environment Suspension & Activation
+
+**Entry Points**:
+- `backend/app/services/environment_lifecycle.py::suspend_environment()`
+- `backend/app/services/environment_lifecycle.py::activate_suspended_environment()`
+
+**Purpose**: Gracefully manage resource usage by suspending inactive environments and reactivating them on-demand
+
+#### Automatic Suspension
+
+**Scheduler**: `backend/app/services/environment_suspension_scheduler.py`
+- Runs every 10 minutes (background APScheduler job)
+- Checks all `running` environments for inactivity
+
+**Suspension Criteria** (ALL must be true):
+1. Environment status is `running`
+2. Last activity > 10 minutes ago (tracked via `last_activity_at`)
+3. EITHER:
+   - User is offline (no active WebSocket connection), OR
+   - Environment is not the active one for its agent
+
+**Process**:
+1. Stop Docker container via `DockerEnvironmentAdapter.stop()` → `docker-compose stop`
+2. Container is stopped but not removed (suspended state, not destroyed)
+3. Set status to `suspended` (instead of `stopped`)
+4. Set status message: "Environment suspended due to inactivity"
+5. Emit `ENVIRONMENT_SUSPENDED` WebSocket event to user
+
+**Activity Tracking**:
+- `last_activity_at` updated when:
+  - User sends a message to the environment
+  - User opens a session with the environment
+  - User sends `agent_usage_intent` WebSocket event (opens session in UI)
+
+#### Manual Suspension
+
+**API Endpoint**: `POST /api/v1/environments/{id}/suspend`
+
+**UI Location**: Environment card "Suspend" button (replaces "Delete" for active environments)
+
+**Confirmation Dialog**:
+```
+Suspend this environment?
+
+This will stop the container to save resources.
+The environment will automatically reactivate when you send a message or open a session.
+```
+
+**Process**: Same as automatic suspension, but user-initiated
+
+#### Automatic Activation
+
+**Triggers**:
+1. **User opens session**: `agent_usage_intent` WebSocket event → triggers background activation
+2. **User sends message**: Message service detects `suspended` status → activates synchronously before sending
+
+**WebSocket Event Flow** (`agent_usage_intent` handler in `event_service.py`):
+1. Frontend sends `agent_usage_intent` event with `environment_id`
+2. Backend updates `last_activity_at` timestamp
+3. If environment is `suspended`:
+   - Spawns activation in background thread pool (non-blocking)
+   - Returns `{status: "activating"}` immediately
+   - Activation runs in separate thread to avoid blocking Socket.IO event loop
+4. If environment is already `running` or other status:
+   - Returns current status
+
+**Message Service Activation** (`message_service.py::handle_stream_message_websocket()`):
+1. Check environment status before processing message
+2. If `suspended`:
+   - Call `activate_suspended_environment()` synchronously
+   - Wait for activation to complete (emits events)
+   - Proceed with message streaming
+3. Update `last_activity_at` after activation
+
+**Activation Process** (`activate_suspended_environment()`):
+1. Emit `ENVIRONMENT_ACTIVATING` WebSocket event
+2. Set status to `activating`, status_message: "Activating environment..."
+3. Update configuration files (regenerate auth token, docker-compose.yml, .env)
+4. Start Docker container via `DockerEnvironmentAdapter.start()` → `docker-compose up -d`
+5. Existing container starts (no rebuild needed, fast activation)
+6. Wait for health check (up to 120 seconds)
+7. Sync agent data (prompts, credentials)
+8. Set status to `running`, status_message: "Environment activated"
+9. Update `last_activity_at` to current time
+10. Emit `ENVIRONMENT_ACTIVATED` WebSocket event
+
+**Error Handling**:
+- On failure: Set status to `error`, emit `ENVIRONMENT_ACTIVATION_FAILED` event
+- Errors include Docker issues, health check timeouts, configuration problems
+
+#### Frontend Integration
+
+**Session UI** (`frontend/src/routes/_layout/session/$sessionId.tsx`):
+
+**State Management**:
+- `isEnvActivating` state tracks activation in progress
+- Updated via:
+  - Environment query data (status === "suspended" | "activating")
+  - WebSocket events (ENVIRONMENT_ACTIVATING, ENVIRONMENT_ACTIVATED, etc.)
+
+**UI Behavior**:
+- **Suspended/Activating**: Shows "Activating..." button with spinner (replaces "App" button)
+- **Running**: Shows normal "App" button
+- User can type messages during activation (queued, sent after activation completes)
+
+**WebSocket Event Listeners**:
+- `ENVIRONMENT_ACTIVATING` → Set activating state, invalidate environment query
+- `ENVIRONMENT_ACTIVATED` → Clear activating state, show success toast, invalidate query
+- `ENVIRONMENT_ACTIVATION_FAILED` → Clear activating state, show error toast, invalidate query
+- `ENVIRONMENT_SUSPENDED` → Clear activating state, invalidate query
+
+**Environment Panel** (`frontend/src/components/Environments/EnvironmentCard.tsx`):
+- Active + Running → Shows "Suspend" button (Pause icon)
+- Inactive → Shows "Delete" button (cannot delete active environments)
+
+#### Implementation Details
+
+**Thread Pool Isolation** (`event_service.py`):
+- Background activation runs in `ThreadPoolExecutor` (4 workers)
+- Prevents blocking Socket.IO event loop during Docker operations
+- Uses `_activate_environment_sync()` method (synchronous wrapper for async activation)
+- Ensures WebSocket connection remains responsive during activation
+
+**Database Schema Updates**:
+- Added `suspended` status to environment status enum
+- Added `activating` status for activation in progress
+- Added `last_activity_at` timestamp field (nullable datetime)
+
+**Migration**: `backend/app/alembic/versions/813b0bf363af_add_last_activity_at_to_agent_.py`
+
+**Event Types** (`backend/app/models/event.py`):
+- `ENVIRONMENT_ACTIVATING` - Activation started
+- `ENVIRONMENT_ACTIVATED` - Activation successful
+- `ENVIRONMENT_ACTIVATION_FAILED` - Activation failed
+- `ENVIRONMENT_SUSPENDED` - Environment suspended
+
+**User Online Status**:
+- Tracked via Socket.IO connections in `event_service.py`
+- Method: `is_user_online(user_id)` checks active WebSocket connections
+- Used by scheduler to prevent suspending environments when user is online and active
+
+#### Benefits
+
+1. **Resource Efficiency**: Inactive environments don't consume CPU/memory
+2. **Seamless UX**: Users don't manage suspension manually (mostly automatic)
+3. **Fast Reactivation**: Typically < 10 seconds (existing container starts, no rebuild)
+4. **Real-time Feedback**: WebSocket events provide instant status updates
+5. **No Data Loss**: Workspace data fully preserved during suspension
+6. **Cost Savings**: Reduces infrastructure costs for inactive users
+7. **Intelligent Scheduling**: Doesn't suspend if user is online with active environment
+8. **Container Preservation**: Suspended containers kept intact (`stop` not `down`), rebuild creates new containers from new images
 
 ## Docker Configuration
 
@@ -345,37 +498,70 @@ workspace/knowledge/
 - Lifecycle: `backend/app/services/environment_lifecycle.py::rebuild_environment()`
 - Adapter: `backend/app/services/adapters/docker_adapter.py::rebuild()`
 
+**Suspend**: `POST /api/v1/environments/{id}/suspend`
+- Route: `backend/app/api/routes/environments.py::suspend_environment()`
+- Service: `backend/app/services/environment_service.py::suspend_environment()`
+- Lifecycle: `backend/app/services/environment_lifecycle.py::suspend_environment()`
+- Adapter: `backend/app/services/adapters/docker_adapter.py::stop()`
+
 ## Database Schema
 
-**Status Values**: `stopped`, `creating`, `building`, `initializing`, `starting`, `running`, `rebuilding`, `error`, `deprecated`
+**Status Values**: `stopped`, `creating`, `building`, `initializing`, `starting`, `running`, `rebuilding`, `suspended`, `activating`, `error`, `deprecated`
 
 **Model**: `backend/app/models/environment.py::AgentEnvironment`
+
+**Additional Fields**:
+- `last_activity_at` (datetime, nullable) - Timestamp of last activity (message sent, session opened, usage intent)
 
 **Rebuild Status Flow**:
 1. `running` or `stopped` → trigger rebuild
 2. `rebuilding` → during rebuild operation
 3. `running` (if was running) or `stopped` (if was stopped) → after rebuild
 
+**Suspension Status Flow**:
+1. `running` → idle for 10+ minutes (or manual suspension)
+2. `suspended` → environment suspended
+3. User opens session or sends message
+4. `activating` → activation in progress
+5. `running` → environment ready for use
+
 ## Implementation References
 
 **Environment Lifecycle Manager**:
 - `backend/app/services/environment_lifecycle.py`
-- Methods: `create_environment_instance()`, `start_environment()`, `stop_environment()`, `rebuild_environment()`
+- Methods: `create_environment_instance()`, `start_environment()`, `stop_environment()`, `suspend_environment()`, `activate_suspended_environment()`, `rebuild_environment()`
 
 **Docker Adapter**:
 - `backend/app/services/adapters/docker_adapter.py`
-- Methods: `initialize()`, `start()`, `stop()`, `rebuild()`
+- Methods:
+  - `initialize()` - Build Docker image
+  - `start()` - Start container (`docker-compose up -d`)
+  - `stop()` - Stop container without removing (`docker-compose stop`)
+  - `rebuild()` - Remove old container (`docker-compose down`), rebuild image, create new container
+  - `delete()` - Remove container and volumes (`docker-compose down -v --remove-orphans`)
 
 **Base Adapter Interface**:
 - `backend/app/services/adapters/base.py::EnvironmentAdapter.rebuild()`
 
-**Frontend**:
-- Component: `frontend/src/components/Environments/EnvironmentCard.tsx`
-- Action: Rebuild button with confirmation dialog
+**Suspension Scheduler**:
+- `backend/app/services/environment_suspension_scheduler.py`
+- Functions: `start_scheduler()`, `shutdown_scheduler()`, `run_suspension_check()`
+
+**Event Service**:
+- `backend/app/services/event_service.py`
+- Methods: `is_user_online()`, `agent_usage_intent` event handler, `_activate_environment_sync()`
+
+**Frontend Components**:
+- Environment Card: `frontend/src/components/Environments/EnvironmentCard.tsx`
+  - Actions: Rebuild button, Suspend button (for active environments)
+- Session UI: `frontend/src/routes/_layout/session/$sessionId.tsx`
+  - Features: Activation status UI, WebSocket event listeners, environment query
+- Event Service: `frontend/src/services/eventService.ts`
+  - Methods: `sendAgentUsageIntent()`, event subscriptions
 
 ## Benefits
 
-1. **Zero Data Loss**: Workspace preserved across system updates
+1. **Zero Data Loss**: Workspace preserved across system updates and suspension/activation cycles
 2. **Fast Updates**: Rebuild only updates core, uses Docker cache
 3. **Version Control**: Core code tracks template version
 4. **Isolation**: Each environment has independent workspace
@@ -383,3 +569,7 @@ workspace/knowledge/
 6. **Development**: Core updates tested without recreating environments
 7. **Knowledge Distribution**: Integration knowledge base updates distributed to all environments via rebuild, while preserving user customizations
 8. **Dependency Management**: Two-layer system allows template dependency updates via rebuild while preserving agent-installed workspace dependencies
+9. **Resource Efficiency**: Automatic suspension saves CPU/memory for inactive environments
+10. **Seamless Reactivation**: Fast activation (< 10 seconds) with real-time WebSocket feedback
+11. **Cost Optimization**: Reduces infrastructure costs by suspending idle resources
+12. **Smart Scheduling**: Intelligent suspension logic prevents disrupting active users

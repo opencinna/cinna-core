@@ -5,7 +5,7 @@ import { EnvironmentsService } from "@/client"
 import type { AgentEnvironmentPublic } from "@/client"
 import { EnvironmentStatusBadge } from "./EnvironmentStatusBadge"
 import { Badge } from "@/components/ui/badge"
-import { CheckCircle2, Play, Trash2, RefreshCw } from "lucide-react"
+import { CheckCircle2, Play, Trash2, RefreshCw, Pause, Loader2 } from "lucide-react"
 import useCustomToast from "@/hooks/useCustomToast"
 
 interface EnvironmentCardProps {
@@ -44,6 +44,20 @@ export function EnvironmentCard({ environment, agentId, onActivate }: Environmen
     },
   })
 
+  const suspendMutation = useMutation({
+    mutationFn: () => EnvironmentsService.suspendEnvironment({ id: environment.id }),
+    onSuccess: () => {
+      showSuccessToast("Environment suspended successfully")
+    },
+    onError: (error: any) => {
+      showErrorToast(error.message || "Failed to suspend environment")
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["environments", agentId] })
+      queryClient.invalidateQueries({ queryKey: ["agent", agentId] })
+    },
+  })
+
   const handleDelete = () => {
     if (confirm("Delete this environment? This action cannot be undone.")) {
       deleteMutation.mutate()
@@ -64,6 +78,27 @@ export function EnvironmentCard({ environment, agentId, onActivate }: Environmen
       rebuildMutation.mutate()
     }
   }
+
+  const handleSuspend = () => {
+    if (
+      confirm(
+        "Suspend this environment?\n\n" +
+          "This will stop the container to save resources. " +
+          "The environment will automatically reactivate when you send a message or open a session."
+      )
+    ) {
+      suspendMutation.mutate()
+    }
+  }
+
+  // Check if environment is in a transitional state (starting/activating)
+  const isTransitioning = [
+    "creating",
+    "building",
+    "initializing",
+    "starting",
+    "activating",
+  ].includes(environment.status)
 
   return (
     <Card className={`p-4 ${environment.is_active ? "bg-green-50 dark:bg-green-950/20" : ""}`}>
@@ -98,10 +133,36 @@ export function EnvironmentCard({ environment, agentId, onActivate }: Environmen
         </div>
 
         <div className="flex flex-col gap-2">
-          {!environment.is_active && (
-            <Button size="sm" onClick={onActivate} className="gap-1">
-              <Play className="h-4 w-4" />
-              Activate
+          {(!environment.is_active || (environment.is_active && environment.status !== "running")) && (
+            <Button
+              size="sm"
+              onClick={onActivate}
+              className="gap-1"
+              disabled={isTransitioning}
+            >
+              {isTransitioning ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Activating...
+                </>
+              ) : (
+                <>
+                  <Play className="h-4 w-4" />
+                  Activate
+                </>
+              )}
+            </Button>
+          )}
+          {environment.is_active && environment.status === "running" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleSuspend}
+              disabled={suspendMutation.isPending}
+              className="gap-1"
+            >
+              <Pause className="h-4 w-4" />
+              Suspend
             </Button>
           )}
           <Button
@@ -119,16 +180,18 @@ export function EnvironmentCard({ environment, agentId, onActivate }: Environmen
             <RefreshCw className={`h-4 w-4 ${rebuildMutation.isPending ? "animate-spin" : ""}`} />
             Rebuild
           </Button>
-          <Button
-            size="sm"
-            variant="destructive"
-            onClick={handleDelete}
-            disabled={deleteMutation.isPending || environment.is_active}
-            className="gap-1"
-          >
-            <Trash2 className="h-4 w-4" />
-            Delete
-          </Button>
+          {!environment.is_active && (
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={deleteMutation.isPending}
+              className="gap-1"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete
+            </Button>
+          )}
         </div>
       </div>
     </Card>

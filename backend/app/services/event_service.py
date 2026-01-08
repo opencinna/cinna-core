@@ -1,9 +1,11 @@
 """EventService for managing WebSocket-based real-time events."""
 
 import logging
+import asyncio
 from datetime import datetime
 from typing import Any
 from uuid import UUID
+import concurrent.futures
 
 import socketio
 
@@ -27,6 +29,12 @@ class EventService:
 
         # Track active connections: {sid: ConnectionInfo}
         self.connections: dict[str, dict[str, Any]] = {}
+
+        # Thread pool for background tasks (to avoid blocking event loop)
+        self.executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=4,
+            thread_name_prefix="event_service_bg"
+        )
 
         # Register event handlers
         self._register_handlers()
@@ -118,6 +126,86 @@ class EventService:
             """Handle ping from client (for keepalive)."""
             return {"status": "pong", "timestamp": datetime.utcnow().isoformat()}
 
+        @self.sio.event
+        async def agent_usage_intent(sid, data):
+            """
+            Handle agent usage intent event from frontend.
+
+            This event is sent when the user shows intention to use an agent:
+            - Opening a session with that agent
+            - Clicking on the agent in the dashboard
+            - Navigating to agent's page
+
+            Args:
+                data: Dict with 'environment_id' and optionally 'agent_id'
+
+            Returns:
+                Status dict indicating if activation was triggered
+            """
+            if sid not in self.connections:
+                logger.warning(f"agent_usage_intent from unknown connection: {sid}")
+                return {"status": "error", "message": "Not authenticated"}
+
+            user_id = self.connections[sid]["user_id"]
+            environment_id = data.get("environment_id")
+
+            if not environment_id:
+                logger.warning(f"agent_usage_intent without environment_id from user {user_id}")
+                return {"status": "error", "message": "environment_id required"}
+
+            try:
+                # Import here to avoid circular dependencies
+                from app.core.db import engine as db_engine
+                from sqlmodel import Session as DBSession
+                from app.models.environment import AgentEnvironment
+                from app.models.agent import Agent
+                import asyncio
+
+                # Check environment status and trigger activation if needed
+                with DBSession(db_engine) as session:
+                    environment = session.get(AgentEnvironment, UUID(environment_id))
+                    if not environment:
+                        logger.warning(f"Environment {environment_id} not found")
+                        return {"status": "error", "message": "Environment not found"}
+
+                    # Update last_activity_at
+                    environment.last_activity_at = datetime.utcnow()
+                    session.add(environment)
+                    session.commit()
+
+                    # If suspended, trigger activation in background
+                    if environment.status == "suspended":
+                        logger.info(f"User {user_id} triggered activation for suspended environment {environment_id}")
+
+                        # Get agent
+                        agent = session.get(Agent, environment.agent_id)
+                        if not agent:
+                            logger.error(f"Agent {environment.agent_id} not found for environment {environment_id}")
+                            return {"status": "error", "message": "Agent not found"}
+
+                        # Spawn background task in thread pool to avoid blocking event loop
+                        self.executor.submit(
+                            self._activate_environment_sync,
+                            str(environment.id),
+                            str(agent.id)
+                        )
+
+                        return {
+                            "status": "activating",
+                            "message": "Environment activation started",
+                            "environment_id": str(environment_id)
+                        }
+
+                    return {
+                        "status": "ok",
+                        "message": f"Environment status: {environment.status}",
+                        "environment_id": str(environment_id)
+                    }
+
+            except Exception as e:
+                logger.error(f"Error handling agent_usage_intent: {e}", exc_info=True)
+                return {"status": "error", "message": str(e)}
+
     async def emit_event(
         self,
         event_type: str,
@@ -181,9 +269,21 @@ class EventService:
         """Get list of currently connected user IDs."""
         return list({conn["user_id"] for conn in self.connections.values()})
 
-    def is_user_connected(self, user_id: UUID) -> bool:
-        """Check if a specific user is connected."""
+    def is_user_online(self, user_id: UUID) -> bool:
+        """
+        Check if a specific user is online (has active WebSocket connection).
+
+        Args:
+            user_id: User UUID
+
+        Returns:
+            True if user has at least one active connection
+        """
         return any(conn["user_id"] == user_id for conn in self.connections.values())
+
+    def is_user_connected(self, user_id: UUID) -> bool:
+        """Check if a specific user is connected (alias for is_user_online)."""
+        return self.is_user_online(user_id)
 
     def get_connection_count(self) -> int:
         """Get total number of active connections."""
@@ -218,6 +318,54 @@ class EventService:
         )
 
         logger.debug(f"Emitted stream event {event_type} to room {room}")
+
+    def _activate_environment_sync(self, environment_id: str, agent_id: str):
+        """
+        Synchronous background task to activate a suspended environment.
+        Runs in a separate thread to avoid blocking the event loop.
+
+        Args:
+            environment_id: Environment UUID as string
+            agent_id: Agent UUID as string
+        """
+        try:
+            # Import here to avoid circular dependencies
+            from app.core.db import engine as db_engine
+            from sqlmodel import Session as DBSession
+            from app.models.environment import AgentEnvironment
+            from app.models.agent import Agent
+            from app.services.environment_lifecycle import EnvironmentLifecycleManager
+
+            # Use fresh DB session for background task
+            with DBSession(db_engine) as session:
+                environment = session.get(AgentEnvironment, UUID(environment_id))
+                agent = session.get(Agent, UUID(agent_id))
+
+                if not environment or not agent:
+                    logger.error(f"Environment or agent not found: env={environment_id}, agent={agent_id}")
+                    return
+
+                # Activate the environment using asyncio.run for async operations
+                lifecycle_manager = EnvironmentLifecycleManager()
+                asyncio.run(
+                    lifecycle_manager.activate_suspended_environment(
+                        db_session=session,
+                        environment=environment,
+                        agent=agent,
+                        emit_events=True
+                    )
+                )
+
+                logger.info(f"Background activation completed for environment {environment_id}")
+
+        except Exception as e:
+            logger.error(f"Background activation failed for environment {environment_id}: {e}", exc_info=True)
+
+    def shutdown(self):
+        """Shutdown the event service and cleanup resources."""
+        logger.info("Shutting down EventService executor...")
+        self.executor.shutdown(wait=True, cancel_futures=True)
+        logger.info("EventService executor shut down")
 
     def get_asgi_app(self):
         """Get the ASGI app for Socket.IO."""

@@ -878,10 +878,22 @@ export const AgentEnvironmentPublicSchema = {
                 }
             ],
             title: 'Last Health Check'
+        },
+        last_activity_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Activity At'
         }
     },
     type: 'object',
-    required: ['id', 'agent_id', 'env_name', 'env_version', 'instance_name', 'type', 'status', 'status_message', 'is_active', 'created_at', 'updated_at', 'last_health_check'],
+    required: ['id', 'agent_id', 'env_name', 'env_version', 'instance_name', 'type', 'status', 'status_message', 'is_active', 'created_at', 'updated_at', 'last_health_check', 'last_activity_at'],
     title: 'AgentEnvironmentPublic'
 } as const;
 

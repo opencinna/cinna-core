@@ -13,13 +13,14 @@ class AgentEnvironment(SQLModel, table=True):
     env_version: str = "1.0.0"  # e.g., "1.0.0"
     instance_name: str = "Instance"  # e.g., "Production", "Testing"
     type: str = "docker"  # "docker" | "remote_ssh" | "remote_http" | "kubernetes"
-    status: str = "stopped"  # "stopped" | "creating" | "building" | "initializing" | "starting" | "running" | "rebuilding" | "error" | "deprecated"
+    status: str = "stopped"  # "stopped" | "creating" | "building" | "initializing" | "starting" | "running" | "rebuilding" | "suspended" | "activating" | "error" | "deprecated"
     is_active: bool = Field(default=False)
     status_message: str | None = None  # Detailed status message for UI (e.g., "Building Docker image...")
     config: dict = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     last_health_check: datetime | None = None
+    last_activity_at: datetime | None = None  # Last time environment was actively used (message sent, session opened, etc.)
 
 
 # Pydantic Schemas
@@ -49,6 +50,7 @@ class AgentEnvironmentPublic(SQLModel):
     created_at: datetime
     updated_at: datetime
     last_health_check: datetime | None
+    last_activity_at: datetime | None
 
 
 class AgentEnvironmentsPublic(SQLModel):

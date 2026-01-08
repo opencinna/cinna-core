@@ -1,9 +1,9 @@
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useEffect, useState, useRef, useCallback } from "react"
-import { ArrowLeft, EllipsisVertical, Package } from "lucide-react"
+import { ArrowLeft, EllipsisVertical, Package, Loader2 } from "lucide-react"
 
-import { SessionsService, MessagesService, AgentsService } from "@/client"
+import { SessionsService, MessagesService, AgentsService, EnvironmentsService } from "@/client"
 import { MessageList } from "@/components/Chat/MessageList"
 import { MessageInput } from "@/components/Chat/MessageInput"
 import EditSession from "@/components/Sessions/EditSession"
@@ -20,6 +20,7 @@ import { useMessageStream } from "@/hooks/useMessageStream"
 import { usePageHeader } from "@/routes/_layout"
 import { AnimatedPlaceholder } from "@/components/Common/AnimatedPlaceholder"
 import { EnvironmentPanel } from "@/components/Environment/EnvironmentPanel"
+import { eventService, EventTypes } from "@/services/eventService"
 
 export const Route = createFileRoute("/_layout/session/$sessionId")({
   component: ChatInterface,
@@ -35,12 +36,15 @@ function ChatInterface() {
   const { sessionId } = Route.useParams()
   const { initialMessage, fileIds } = Route.useSearch()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const { setHeaderContent } = usePageHeader()
   const [menuOpen, setMenuOpen] = useState(false)
   const [envPanelOpen, setEnvPanelOpen] = useState(false)
   const initialMessageSent = useRef(false)
   const messageInputRef = useRef<HTMLTextAreaElement>(null)
+  const [isEnvActivating, setIsEnvActivating] = useState(false)
+  const usageIntentSent = useRef(false)
 
   const {
     data: session,
@@ -68,6 +72,14 @@ function ChatInterface() {
     queryKey: ["agent", session?.agent_id],
     queryFn: () => AgentsService.readAgent({ id: session!.agent_id! }),
     enabled: !!session?.agent_id,
+  })
+
+  const {
+    data: environment,
+  } = useQuery({
+    queryKey: ["environment", session?.environment_id],
+    queryFn: () => EnvironmentsService.getEnvironment({ id: session!.environment_id! }),
+    enabled: !!session?.environment_id,
   })
 
   const { sendMessage, stopMessage, isStreaming, streamingEvents, isInterruptPending } = useMessageStream({
@@ -148,6 +160,87 @@ function ChatInterface() {
     }
   }, [sessionLoading, messagesLoading])
 
+  // Update isEnvActivating based on environment status
+  useEffect(() => {
+    if (environment) {
+      const status = environment.status
+      if (status === "suspended" || status === "activating") {
+        setIsEnvActivating(true)
+      } else if (status === "running") {
+        setIsEnvActivating(false)
+      }
+    }
+  }, [environment])
+
+  // Send agent usage intent when session loads
+  useEffect(() => {
+    if (session && session.environment_id && !usageIntentSent.current) {
+      usageIntentSent.current = true
+      // Send usage intent to potentially activate suspended environment
+      eventService.sendAgentUsageIntent(session.environment_id).catch((error) => {
+        console.error("Failed to send agent usage intent:", error)
+      })
+    }
+  }, [session])
+
+  // Listen for environment activation events
+  useEffect(() => {
+    if (!session?.environment_id) return
+
+    const subscriptions: string[] = []
+
+    // Listen for activating event
+    const activatingSub = eventService.subscribe(EventTypes.ENVIRONMENT_ACTIVATING, (event) => {
+      if (event.model_id === session.environment_id) {
+        console.log("Environment is activating...")
+        setIsEnvActivating(true)
+        // Invalidate environment query to refetch status
+        queryClient.invalidateQueries({ queryKey: ["environment", session.environment_id] })
+      }
+    })
+    subscriptions.push(activatingSub)
+
+    // Listen for activated event
+    const activatedSub = eventService.subscribe(EventTypes.ENVIRONMENT_ACTIVATED, (event) => {
+      if (event.model_id === session.environment_id) {
+        console.log("Environment activated successfully")
+        setIsEnvActivating(false)
+        showSuccessToast("Agent environment activated")
+        // Invalidate environment query to refetch status
+        queryClient.invalidateQueries({ queryKey: ["environment", session.environment_id] })
+      }
+    })
+    subscriptions.push(activatedSub)
+
+    // Listen for activation failed event
+    const failedSub = eventService.subscribe(EventTypes.ENVIRONMENT_ACTIVATION_FAILED, (event) => {
+      if (event.model_id === session.environment_id) {
+        console.error("Environment activation failed:", event.meta)
+        setIsEnvActivating(false)
+        showErrorToast("Failed to activate agent environment")
+        // Invalidate environment query to refetch status
+        queryClient.invalidateQueries({ queryKey: ["environment", session.environment_id] })
+      }
+    })
+    subscriptions.push(failedSub)
+
+    // Listen for suspended event
+    const suspendedSub = eventService.subscribe(EventTypes.ENVIRONMENT_SUSPENDED, (event) => {
+      if (event.model_id === session.environment_id) {
+        console.log("Environment was suspended")
+        setIsEnvActivating(false)
+        // Invalidate environment query to refetch status
+        queryClient.invalidateQueries({ queryKey: ["environment", session.environment_id] })
+      }
+    })
+    subscriptions.push(suspendedSub)
+
+    // Cleanup subscriptions
+    return () => {
+      subscriptions.forEach(sub => eventService.unsubscribe(sub))
+    }
+  }, [session?.environment_id, showSuccessToast, showErrorToast, queryClient])
+
   // Update header when session loads
   useEffect(() => {
     if (session) {
@@ -171,15 +264,27 @@ function ChatInterface() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant={envPanelOpen ? "secondary" : "ghost"}
-              size="sm"
-              className="shrink-0"
-              onClick={() => setEnvPanelOpen(!envPanelOpen)}
-            >
-              <Package className="h-4 w-4 mr-1.5" />
-              App
-            </Button>
+            {isEnvActivating ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="shrink-0 cursor-wait"
+                disabled
+              >
+                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                Activating...
+              </Button>
+            ) : (
+              <Button
+                variant={envPanelOpen ? "secondary" : "ghost"}
+                size="sm"
+                className="shrink-0"
+                onClick={() => setEnvPanelOpen(!envPanelOpen)}
+              >
+                <Package className="h-4 w-4 mr-1.5" />
+                App
+              </Button>
+            )}
             <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="sm" className="shrink-0">
@@ -199,7 +304,7 @@ function ChatInterface() {
       )
     }
     return () => setHeaderContent(null)
-  }, [session, setHeaderContent, menuOpen, envPanelOpen, handleBack, handleDeleteSuccess])
+  }, [session, setHeaderContent, menuOpen, envPanelOpen, handleBack, handleDeleteSuccess, isEnvActivating])
 
   if (sessionLoading || messagesLoading) {
     return <PendingItems />

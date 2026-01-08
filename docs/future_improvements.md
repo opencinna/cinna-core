@@ -2,20 +2,6 @@
 
 ## User Scenarios and Features
 
-### Graceful Resource Usage
-
-Every agent-env goes into suspended mode when it's not used for longer than 10 minutes.
-When we detect user's intention to use a certain agent, re-activate the env.
-Signs of intentions:
-- user opens a session with that agent
-- user clicked the agent in the main dashboard UI and started typing message
-
-If env is inactive, and we already in the situation that message was sent to the session,
-on the backend we start activating environment, send event to the frontend to show 'Activating Agent ...',
-and once env is active, send another event 'environment activated', and then send message to the agent.
-
-Usually activation of the env should take a few seconds, less than 10, so it should be pretty comfortable process.
-
 ### Improved handover processing
 
 When background-executed session (via CRON) is over and according to the session logs

@@ -105,6 +105,7 @@ export type AgentEnvironmentPublic = {
     created_at: string;
     updated_at: string;
     last_health_check: (string | null);
+    last_activity_at: (string | null);
 };
 
 export type AgentEnvironmentsPublic = {
@@ -1116,6 +1117,12 @@ export type EnvironmentsStopEnvironmentData = {
 };
 
 export type EnvironmentsStopEnvironmentResponse = (Message);
+
+export type EnvironmentsSuspendEnvironmentData = {
+    id: string;
+};
+
+export type EnvironmentsSuspendEnvironmentResponse = (Message);
 
 export type EnvironmentsRestartEnvironmentData = {
     id: string;

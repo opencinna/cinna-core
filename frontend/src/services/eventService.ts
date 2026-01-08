@@ -29,6 +29,12 @@ export const EventTypes = {
   AGENT_UPDATED: "agent_updated",
   AGENT_DELETED: "agent_deleted",
 
+  // Environment events
+  ENVIRONMENT_ACTIVATING: "environment_activating",
+  ENVIRONMENT_ACTIVATED: "environment_activated",
+  ENVIRONMENT_ACTIVATION_FAILED: "environment_activation_failed",
+  ENVIRONMENT_SUSPENDED: "environment_suspended",
+
   // Streaming events
   STREAM_STARTED: "stream_started",
   STREAM_COMPLETED: "stream_completed",
@@ -243,6 +249,33 @@ class EventServiceClass {
     if (this.socket) {
       this.socket.emit("ping")
     }
+  }
+
+  /**
+   * Send agent usage intent event to backend
+   * This signals that the user intends to use a specific agent environment
+   * and triggers activation if the environment is suspended
+   *
+   * @param environmentId - Environment UUID
+   * @returns Promise resolving to backend response
+   */
+  async sendAgentUsageIntent(environmentId: string): Promise<any> {
+    if (!this.socket) {
+      console.warn("[EventService] Cannot send agent_usage_intent: not connected")
+      return { status: "error", message: "Not connected" }
+    }
+
+    return new Promise((resolve, reject) => {
+      this.socket?.emit("agent_usage_intent", { environment_id: environmentId }, (response: any) => {
+        if (response?.status === "error") {
+          console.error(`[EventService] agent_usage_intent error:`, response)
+          reject(new Error(response.message || "Failed to send usage intent"))
+        } else {
+          console.log(`[EventService] agent_usage_intent sent for environment ${environmentId}, response:`, response)
+          resolve(response)
+        }
+      })
+    })
   }
 
   /**

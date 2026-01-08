@@ -1054,6 +1054,31 @@ class MessageService:
         if not environment:
             raise ValueError("Environment not found")
 
+        # Get agent
+        agent = db_session.get(Agent, environment.agent_id)
+        if not agent:
+            raise ValueError("Agent not found")
+
+        # Check if environment is suspended and activate if needed
+        if environment.status == "suspended":
+            logger.info(f"Environment {environment.id} is suspended, activating...")
+
+            # Import lifecycle manager
+            from app.services.environment_lifecycle import EnvironmentLifecycleManager
+            lifecycle_manager = EnvironmentLifecycleManager()
+
+            # Activate the environment (this emits activation events)
+            await lifecycle_manager.activate_suspended_environment(
+                db_session=db_session,
+                environment=environment,
+                agent=agent,
+                emit_events=True
+            )
+
+            # Refresh environment status
+            db_session.refresh(environment)
+            logger.info(f"Environment {environment.id} activated, status: {environment.status}")
+
         # Validate environment is running
         if environment.status != "running":
             raise ValueError(f"Environment is not running (status: {environment.status})")
@@ -1163,9 +1188,39 @@ class MessageService:
             if not environment:
                 raise ValueError("Environment not found")
 
+            # Get agent
+            agent = db_session.get(Agent, environment.agent_id)
+            if not agent:
+                raise ValueError("Agent not found")
+
+            # Check if environment is suspended and activate if needed
+            if environment.status == "suspended":
+                logger.info(f"Environment {environment.id} is suspended, activating...")
+
+                # Import lifecycle manager
+                from app.services.environment_lifecycle import EnvironmentLifecycleManager
+                lifecycle_manager = EnvironmentLifecycleManager()
+
+                # Activate the environment (this emits activation events)
+                await lifecycle_manager.activate_suspended_environment(
+                    db_session=db_session,
+                    environment=environment,
+                    agent=agent,
+                    emit_events=True
+                )
+
+                # Refresh environment status
+                db_session.refresh(environment)
+                logger.info(f"Environment {environment.id} activated, status: {environment.status}")
+
             # Validate environment is running
             if environment.status != "running":
                 raise ValueError(f"Environment is not running (status: {environment.status})")
+
+            # Update last_activity_at
+            environment.last_activity_at = datetime.utcnow()
+            db_session.add(environment)
+            db_session.commit()
 
             # Create user message
             user_message = MessageService.create_message(

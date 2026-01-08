@@ -301,6 +301,169 @@ class EnvironmentLifecycleManager:
             db_session.commit()
             raise
 
+    async def suspend_environment(
+        self,
+        db_session: Session,
+        environment: AgentEnvironment
+    ) -> bool:
+        """
+        Suspend environment container to save resources.
+
+        This stops the container but keeps the status as 'suspended' instead of 'stopped',
+        indicating it can be quickly reactivated when needed.
+
+        Args:
+            db_session: Database session
+            environment: Environment instance
+
+        Returns:
+            True if suspension successful
+        """
+        try:
+            logger.info(f"Suspending environment {environment.id}")
+            adapter = self.get_adapter(environment)
+            await adapter.stop()
+
+            environment.status = "suspended"
+            environment.status_message = "Environment suspended due to inactivity"
+            db_session.add(environment)
+            db_session.commit()
+
+            logger.info(f"Environment {environment.id} suspended successfully")
+            return True
+
+        except Exception as e:
+            environment.status = "error"
+            environment.status_message = f"Failed to suspend environment: {str(e)}"
+            environment.config["last_error"] = str(e)
+            flag_modified(environment, "config")
+            db_session.add(environment)
+            db_session.commit()
+            logger.error(f"Failed to suspend environment {environment.id}: {e}")
+            raise
+
+    async def activate_suspended_environment(
+        self,
+        db_session: Session,
+        environment: AgentEnvironment,
+        agent: Agent,
+        emit_events: bool = True
+    ) -> bool:
+        """
+        Activate a suspended environment.
+
+        This starts the container and sets status to 'running'.
+        Similar to start_environment but optimized for suspended environments.
+
+        Args:
+            db_session: Database session
+            environment: Environment instance (must be in 'suspended' status)
+            agent: Agent instance
+            emit_events: If True, emit activation events via event service
+
+        Returns:
+            True if activation successful
+        """
+        try:
+            logger.info(f"Activating suspended environment {environment.id}")
+
+            # Emit activating event
+            if emit_events:
+                from app.services.event_service import event_service
+                from app.models.event import EventType
+                await event_service.emit_event(
+                    event_type=EventType.ENVIRONMENT_ACTIVATING,
+                    model_id=environment.id,
+                    user_id=agent.owner_id,
+                    meta={
+                        "environment_id": str(environment.id),
+                        "agent_id": str(agent.id),
+                        "instance_name": environment.instance_name
+                    }
+                )
+
+            # Update status
+            environment.status = "activating"
+            environment.status_message = "Activating environment..."
+            db_session.add(environment)
+            db_session.commit()
+
+            # Get instance directory
+            instance_dir = self.instances_dir / str(environment.id)
+
+            # Update configuration files (generates new auth token, docker-compose.yml, .env)
+            environment.status_message = "Updating configuration files..."
+            db_session.add(environment)
+            db_session.commit()
+
+            self._update_environment_config(db_session, instance_dir, environment, agent)
+            db_session.add(environment)
+            db_session.commit()
+
+            # Get adapter
+            adapter = self.get_adapter(environment)
+
+            # Start container
+            environment.status_message = "Starting container..."
+            db_session.add(environment)
+            db_session.commit()
+
+            await adapter.start()
+
+            # Sync agent data (prompts and credentials)
+            await self._sync_agent_data(db_session, environment, agent)
+
+            # Update status
+            environment.status = "running"
+            environment.status_message = "Environment activated"
+            environment.last_health_check = datetime.utcnow()
+            environment.last_activity_at = datetime.utcnow()
+            db_session.add(environment)
+            db_session.commit()
+
+            # Emit activated event
+            if emit_events:
+                await event_service.emit_event(
+                    event_type=EventType.ENVIRONMENT_ACTIVATED,
+                    model_id=environment.id,
+                    user_id=agent.owner_id,
+                    meta={
+                        "environment_id": str(environment.id),
+                        "agent_id": str(agent.id),
+                        "instance_name": environment.instance_name
+                    }
+                )
+
+            logger.info(f"Environment {environment.id} activated successfully")
+            return True
+
+        except Exception as e:
+            # Update status to error
+            environment.status = "error"
+            environment.status_message = f"Failed to activate environment: {str(e)}"
+            environment.config["last_error"] = str(e)
+            flag_modified(environment, "config")
+            db_session.add(environment)
+            db_session.commit()
+
+            # Emit activation failed event
+            if emit_events:
+                from app.services.event_service import event_service
+                from app.models.event import EventType
+                await event_service.emit_event(
+                    event_type=EventType.ENVIRONMENT_ACTIVATION_FAILED,
+                    model_id=environment.id,
+                    user_id=agent.owner_id,
+                    meta={
+                        "environment_id": str(environment.id),
+                        "agent_id": str(agent.id),
+                        "error": str(e)
+                    }
+                )
+
+            logger.error(f"Failed to activate environment {environment.id}: {e}")
+            raise
+
     async def restart_environment(
         self,
         db_session: Session,

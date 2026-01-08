@@ -143,6 +143,35 @@ async def stop_environment(
         raise HTTPException(status_code=500, detail=f"Failed to stop environment: {str(e)}")
 
 
+@router.post("/{id}/suspend")
+async def suspend_environment(
+    session: SessionDep, current_user: CurrentUser, id: uuid.UUID
+) -> Message:
+    """
+    Suspend environment to save resources.
+
+    Stops the container and sets status to 'suspended' instead of 'stopped',
+    indicating it can be quickly reactivated when needed.
+    """
+    environment = session.get(AgentEnvironment, id)
+    if not environment:
+        raise HTTPException(status_code=404, detail="Environment not found")
+
+    # Check permission
+    agent = session.get(Agent, environment.agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    # Suspend environment
+    try:
+        await EnvironmentService.suspend_environment(session=session, env_id=id)
+        return Message(message="Environment suspended successfully")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to suspend environment: {str(e)}")
+
+
 @router.post("/{id}/restart")
 async def restart_environment(
     session: SessionDep, current_user: CurrentUser, id: uuid.UUID

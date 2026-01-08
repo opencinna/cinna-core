@@ -129,8 +129,8 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
         raise TimeoutError(f"Container {self.container_name} did not become healthy within {max_wait}s")
 
     async def stop(self) -> bool:
-        """Stop environment using docker-compose down."""
-        await self._run_compose_command(["down"])
+        """Stop environment using docker-compose stop."""
+        await self._run_compose_command(["stop"])
         return True
 
     async def delete(self) -> bool:
@@ -173,10 +173,11 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
 
         Process:
         1. Container should already be stopped
-        2. Update core files from template
-        3. Update knowledge files from template (add/update only, preserve user-created files)
-        4. Rebuild Docker image (includes new core files)
-        5. Start container if it was running before
+        2. Remove old container (docker-compose down)
+        3. Update core files from template
+        4. Update knowledge files from template (add/update only, preserve user-created files)
+        5. Rebuild Docker image (includes new core files)
+        6. Start container if it was running before (creates new container from new image)
         """
         logger.info(f"Rebuilding environment {self.env_id}")
 
@@ -184,6 +185,12 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
         status = await self.get_status()
         if status == "running":
             raise RuntimeError("Container must be stopped before rebuilding")
+
+        # Remove old container so new one will be created from new image
+        # Use 'down' without -v to keep volumes (workspace data)
+        logger.info(f"Removing old container {self.container_name}")
+        await self._run_compose_command(["down"])
+        logger.debug(f"Old container removed")
 
         # Update core files from template
         logger.info(f"Updating core files from template: {template_core_dir}")

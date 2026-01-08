@@ -399,6 +399,24 @@ class EnvironmentService:
         return environment
 
     @staticmethod
+    async def suspend_environment(session: Session, env_id: UUID) -> AgentEnvironment:
+        """
+        Suspend environment container to save resources.
+
+        This stops the container but keeps the status as 'suspended' instead of 'stopped',
+        indicating it can be quickly reactivated when needed.
+        """
+        environment = session.get(AgentEnvironment, env_id)
+        if not environment:
+            raise ValueError(f"Environment {env_id} not found")
+
+        lifecycle_manager = EnvironmentService.get_lifecycle_manager()
+        await lifecycle_manager.suspend_environment(session, environment)
+
+        session.refresh(environment)
+        return environment
+
+    @staticmethod
     async def restart_environment(session: Session, env_id: UUID) -> AgentEnvironment:
         """Restart environment container"""
         environment = session.get(AgentEnvironment, env_id)
