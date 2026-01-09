@@ -542,6 +542,7 @@ export type MessagePublic = {
     answers_to_message_id: (string | null);
     status: string;
     status_message: (string | null);
+    sent_to_agent_status: string;
     files?: Array<FileUploadPublic>;
 };
 
@@ -649,6 +650,7 @@ export type SessionPublic = {
     agent_sdk: string;
     status: string;
     interaction_status: string;
+    pending_messages_count: number;
     created_at: string;
     updated_at: string;
     last_message_at: (string | null);
@@ -667,6 +669,7 @@ export type SessionPublicExtended = {
     agent_sdk: string;
     status: string;
     interaction_status: string;
+    pending_messages_count: number;
     created_at: string;
     updated_at: string;
     last_message_at: (string | null);

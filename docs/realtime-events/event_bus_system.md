@@ -136,6 +136,7 @@ def on_startup():
 - Handle errors gracefully (exceptions are logged, not propagated)
 - Keep handlers fast (offload heavy work to background tasks if needed)
 - Handlers receive full event data: `{type, model_id, meta, user_id, timestamp}`
+- **CRITICAL**: See "Background Task Patterns in Event Handlers" section below for async task management
 
 **Example Use Case**: Streaming Lifecycle Events
 
@@ -335,6 +336,217 @@ curl http://localhost:8000/api/v1/events/stats \
 - `user_id` set correctly when emitting
 - Browser Network tab shows WebSocket connection (ws:// protocol)
 
+## Background Task Patterns in Event Handlers
+
+### Critical Async Patterns to Avoid Task Cancellation
+
+Based on production debugging of streaming cancellation issues, event handlers must follow these patterns when creating background tasks.
+
+#### 1. NEVER Use `asyncio.run()` in Event Handlers
+
+**Problem**: Event handlers run in FastAPI's main event loop. Using `asyncio.run()` creates a temporary event loop that destroys all child tasks when it completes.
+
+**Bad Example**:
+```python
+async def handle_environment_activated(event_data: dict):
+    session_ids = get_sessions_for_environment(env_id)
+
+    for session_id in session_ids:
+        # ❌ WRONG - creates temporary event loop!
+        asyncio.run(process_pending_messages(session_id))
+```
+
+**Correct Pattern**:
+```python
+async def handle_environment_activated(event_data: dict):
+    session_ids = get_sessions_for_environment(env_id)
+
+    for session_id in session_ids:
+        # ✅ CORRECT - uses current event loop
+        _create_task_with_error_logging(
+            process_pending_messages(session_id),
+            task_name=f"process_pending_{session_id}"
+        )
+```
+
+#### 2. Don't Await Functions That Create Background Tasks
+
+**Problem**: Awaiting a function that spawns background tasks ties those tasks to the parent's lifecycle. When the parent completes, child tasks get cancelled.
+
+**Bad Example**:
+```python
+async def handle_environment_activated(event_data: dict):
+    for session_id in session_ids:
+        # initiate_stream() creates background tasks
+        await initiate_stream(session_id)  # ❌ WRONG - child tasks cancelled!
+```
+
+**Correct Pattern**:
+```python
+async def handle_environment_activated(event_data: dict):
+    for session_id in session_ids:
+        # Wrap in create_task to make it independent
+        _create_task_with_error_logging(
+            SessionService.initiate_stream(session_id),
+            task_name=f"initiate_stream_{session_id}"
+        )  # ✅ CORRECT - task is independent
+```
+
+#### 3. Use `_create_task_with_error_logging()` Helper
+
+**Why**: Background tasks fail silently by default. This helper logs all exceptions and cancellations.
+
+**Implementation** (add to your service file):
+```python
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
+
+def _create_task_with_error_logging(coro, task_name: str = "background_task"):
+    """Create an asyncio task with proper exception logging.
+
+    This helper ensures:
+    - All exceptions are logged with full stack traces
+    - Task cancellations are logged for debugging
+    - Task reference is kept to prevent premature GC
+    """
+    task = asyncio.create_task(coro)
+
+    def _handle_task_result(task):
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            logger.info(f"Task {task_name} was cancelled")
+        except Exception as e:
+            logger.error(f"Unhandled exception in {task_name}: {e}", exc_info=True)
+
+    task.add_done_callback(_handle_task_result)
+    return task
+```
+
+**Usage in Event Handlers**:
+```python
+@staticmethod
+async def handle_stream_completed(event_data: dict):
+    environment_id = event_data["meta"]["environment_id"]
+
+    # Create background task with error logging
+    _create_task_with_error_logging(
+        sync_agent_prompts(environment_id),
+        task_name=f"sync_prompts_{environment_id}"
+    )
+```
+
+#### 4. Avoid Detached SQLAlchemy Objects in Background Tasks
+
+**Problem**: ORM objects become detached when their session closes. Background tasks must fetch fresh objects with their own sessions.
+
+**Bad Example**:
+```python
+async def handle_environment_activated(event_data: dict):
+    with Session(engine) as session:
+        environment = session.get(AgentEnvironment, env_id)
+        agent = session.get(Agent, agent_id)
+
+        # ❌ WRONG - objects are detached after session closes!
+        _create_task_with_error_logging(
+            process_environment(environment, agent),
+            task_name="process_env"
+        )
+```
+
+**Correct Pattern**:
+```python
+async def handle_environment_activated(event_data: dict):
+    # Extract IDs only
+    environment_id = event_data["meta"]["environment_id"]
+    agent_id = event_data["meta"]["agent_id"]
+
+    # Background task fetches fresh objects
+    async def _process_with_fresh_session():
+        with Session(engine) as fresh_session:
+            environment = fresh_session.get(AgentEnvironment, environment_id)
+            agent = fresh_session.get(Agent, agent_id)
+
+            # Process with properly attached objects
+            await process_environment(environment, agent, fresh_session)
+
+    _create_task_with_error_logging(
+        _process_with_fresh_session(),
+        task_name=f"process_env_{environment_id}"
+    )  # ✅ CORRECT
+```
+
+### Real-World Example: Environment Activation Handler
+
+**Before (Broken)**:
+```python
+@staticmethod
+async def handle_environment_activated(event_data: dict[str, Any]):
+    """Handler with task cancellation issues"""
+    with Session(engine) as session:
+        session_ids = get_pending_session_ids(session, environment_id)
+
+    for session_id in session_ids:
+        # Bug: awaiting creates child tasks that get cancelled
+        await SessionService.initiate_stream(
+            session_id=session_id,
+            get_fresh_db_session=lambda: DBSession(engine)
+        )
+```
+
+**After (Fixed)**:
+```python
+@staticmethod
+async def handle_environment_activated(event_data: dict[str, Any]):
+    """Handler with proper task management"""
+    with Session(engine) as session:
+        session_ids = get_pending_session_ids(session, environment_id)
+
+    for session_id in session_ids:
+        # Fixed: wrap in create_task to make independent
+        _create_task_with_error_logging(
+            SessionService.initiate_stream(
+                session_id=session_id,
+                get_fresh_db_session=lambda: DBSession(engine)
+            ),
+            task_name=f"initiate_stream_{session_id}"
+        )
+```
+
+### Debugging Background Task Issues
+
+When event handlers fail silently:
+
+1. **Check for task cancellation**:
+   ```bash
+   docker compose logs backend | grep "was cancelled"
+   ```
+
+2. **Check for unhandled exceptions**:
+   ```bash
+   docker compose logs backend | grep "Unhandled exception"
+   ```
+
+3. **Verify no `asyncio.run()` in handlers**:
+   ```bash
+   grep -r "asyncio.run" backend/app/services/
+   ```
+
+4. **Test event handler isolation**:
+   - Add logging at handler entry: `logger.info(f"Handler started: {event_data}")`
+   - Add logging before task creation: `logger.info(f"Creating task: {task_name}")`
+   - Check if handler completes but tasks never run
+
+### Implementation Files
+
+Event handlers using these patterns:
+- `backend/app/services/session_service.py` - `handle_environment_activated()`
+- `backend/app/services/activity_service.py` - `handle_stream_started()`, `handle_stream_completed()`
+- `backend/app/services/environment_service.py` - `handle_stream_completed_event()`
+- `backend/app/services/event_service.py` - `agent_usage_intent` WebSocket handler
+
 ## Extension Points
 
 To extend this system:
@@ -346,6 +558,7 @@ To extend this system:
 2. **Add backend event handlers**:
    - Create handler function: `async def handle_event(event_data: dict)`
    - Register in `main.py` startup: `event_service.register_handler(event_type, handler)`
+   - **IMPORTANT**: Follow background task patterns above to avoid task cancellation
 
 3. **Custom WebSocket rooms**:
    - Use `event_service.broadcast_to_room(room_name, event_data)`

@@ -6,10 +6,8 @@ import httpx
 import logging
 import asyncio
 from sqlmodel import Session, select, func
-from sqlalchemy.orm import Session as AlchemySession
 from app.models import SessionMessage, Session as ChatSession, AgentEnvironment, Agent, SessionUpdate
 from app.services.active_streaming_manager import active_streaming_manager
-from app.core.db import engine as db_engine
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +229,7 @@ class MessageService:
                 answers_to_message_id=msg.answers_to_message_id,
                 status=msg.status,
                 status_message=msg.status_message,
+                sent_to_agent_status=msg.sent_to_agent_status,
                 files=files
             )
             messages.append(message_public)
@@ -251,6 +250,224 @@ class MessageService:
         messages = list(session.exec(statement).all())
         # Reverse to get chronological order
         return list(reversed(messages))
+
+    @staticmethod
+    def collect_pending_messages(session: Session, session_id: UUID) -> tuple[str | None, list[SessionMessage]]:
+        """
+        Collect all pending user messages (sent_to_agent_status='pending') for a session.
+
+        If messages have attached files, reconstructs the content with file paths prepended.
+
+        Returns:
+            tuple: (concatenated_content, list of pending_messages)
+                - concatenated_content: All pending messages concatenated with formatting, or None if no pending messages
+                - pending_messages: List of SessionMessage objects that are pending
+        """
+        from app.models.file_upload import MessageFile
+
+        # Get all pending user messages
+        statement = (
+            select(SessionMessage)
+            .where(
+                SessionMessage.session_id == session_id,
+                SessionMessage.role == "user",
+                SessionMessage.sent_to_agent_status == "pending"
+            )
+            .order_by(SessionMessage.sequence_number)
+        )
+        pending_messages = list(session.exec(statement).all())
+
+        if not pending_messages:
+            return None, []
+
+        # Helper function to reconstruct message content with files
+        def get_message_content_with_files(message: SessionMessage) -> str:
+            # Check if message has attached files
+            file_statement = select(MessageFile).where(MessageFile.message_id == message.id)
+            message_files = list(session.exec(file_statement).all())
+
+            if not message_files:
+                # No files, return original content
+                return message.content
+
+            # Reconstruct content with file paths (same format as prepare_user_message_with_files)
+            file_paths = [mf.agent_env_path for mf in message_files if mf.agent_env_path]
+
+            if not file_paths:
+                # Files exist but no agent_env_path, return original content
+                return message.content
+
+            file_list = "\n".join(f"- {path}" for path in file_paths)
+            return f"Uploaded files:\n{file_list}\n---\n\n{message.content}"
+
+        # Concatenate messages with formatting
+        if len(pending_messages) == 1:
+            # Single message - no need for formatting
+            concatenated_content = get_message_content_with_files(pending_messages[0])
+        else:
+            # Multiple messages - format with separators
+            message_contents = []
+            for i, msg in enumerate(pending_messages):
+                msg_content = get_message_content_with_files(msg)
+                message_contents.append(f"[Message {i+1}]:\n{msg_content}")
+            concatenated_content = "\n\n".join(message_contents)
+
+        logger.info(f"Collected {len(pending_messages)} pending messages for session {session_id}")
+        return concatenated_content, pending_messages
+
+    @staticmethod
+    def mark_messages_as_sent(session: Session, message_ids: list[UUID]) -> None:
+        """
+        Mark messages as sent to agent-env.
+
+        Args:
+            session: Database session
+            message_ids: List of message IDs to mark as sent
+        """
+        for message_id in message_ids:
+            message = session.get(SessionMessage, message_id)
+            if message and message.role == "user":
+                message.sent_to_agent_status = "sent"
+                session.add(message)
+
+        session.commit()
+        logger.info(f"Marked {len(message_ids)} messages as sent to agent")
+
+    @staticmethod
+    async def process_pending_messages(session_id: UUID, get_fresh_db_session: callable) -> None:
+        """
+        Process all pending messages for a session by streaming them to the agent.
+
+        This is the core method that:
+        1. Collects pending messages
+        2. Gets environment and agent details
+        3. Emits stream_started event
+        4. Calls streaming logic
+        5. Marks messages as sent after successful stream
+        6. Updates session state
+
+        Args:
+            session_id: Session UUID
+            get_fresh_db_session: Callable that returns a fresh DB session (context manager)
+        """
+        logger.info(f"process_pending_messages called for session {session_id}")
+
+        try:
+            from app.services.event_service import event_service
+
+            # Get session info, pending messages, and prepare for streaming
+            with get_fresh_db_session() as db:
+                # Get session
+                chat_session = db.get(ChatSession, session_id)
+                if not chat_session:
+                    logger.error(f"Session {session_id} not found")
+                    return
+
+                # Collect pending messages
+                concatenated_content, pending_messages = MessageService.collect_pending_messages(db, session_id)
+
+                if not concatenated_content or not pending_messages:
+                    logger.info(f"No pending messages found for session {session_id}")
+                    # Still reset session state
+                    chat_session.pending_messages_count = 0
+                    chat_session.interaction_status = ""
+                    db.add(chat_session)
+                    db.commit()
+                    return
+
+                # Get environment and agent
+                environment = db.get(AgentEnvironment, chat_session.environment_id)
+                if not environment:
+                    logger.error(f"Environment {chat_session.environment_id} not found")
+                    return
+
+                agent = db.get(Agent, environment.agent_id)
+                if not agent:
+                    logger.error(f"Agent {environment.agent_id} not found")
+                    return
+
+                # Prepare streaming parameters
+                base_url = MessageService.get_environment_url(environment)
+                auth_headers = MessageService.get_auth_headers(environment)
+                external_session_id = chat_session.session_metadata.get("external_session_id")
+                session_mode = chat_session.mode or "conversation"
+                agent_sdk = chat_session.agent_sdk or "claude"
+                environment_id = environment.id
+
+                # Store message IDs for marking as sent later
+                message_ids = [msg.id for msg in pending_messages]
+
+            # Emit stream_started event to frontend
+            await event_service.emit_stream_event(
+                session_id=session_id,
+                event_type="stream_started",
+                event_data={
+                    "message": f"Processing {len(pending_messages)} pending message(s)...",
+                    "pending_count": len(pending_messages)
+                }
+            )
+
+            logger.info(f"Starting stream for session {session_id} with {len(pending_messages)} pending message(s)")
+
+            # Stream the concatenated messages and emit each event via WebSocket
+            async for event in MessageService.stream_message_with_events(
+                session_id=session_id,
+                environment_id=environment_id,
+                base_url=base_url,
+                auth_headers=auth_headers,
+                user_message_content=concatenated_content,
+                session_mode=session_mode,
+                agent_sdk=agent_sdk,
+                external_session_id=external_session_id,
+                get_fresh_db_session=get_fresh_db_session
+            ):
+                # Emit each streaming event via WebSocket to frontend
+                await event_service.emit_stream_event(
+                    session_id=session_id,
+                    event_type=event.get("type"),
+                    event_data=event
+                )
+
+            # Emit stream completed event
+            await event_service.emit_stream_event(
+                session_id=session_id,
+                event_type="stream_completed",
+                event_data={
+                    "status": "completed",
+                    "session_id": str(session_id)
+                }
+            )
+
+            # After successful stream, mark messages as sent and update session
+            with get_fresh_db_session() as db:
+                MessageService.mark_messages_as_sent(db, message_ids)
+
+                # Update session state
+                chat_session = db.get(ChatSession, session_id)
+                if chat_session:
+                    chat_session.pending_messages_count = 0
+                    chat_session.interaction_status = ""
+                    db.add(chat_session)
+                    db.commit()
+
+            logger.info(f"Successfully processed {len(message_ids)} pending messages for session {session_id}")
+
+        except Exception as e:
+            logger.error(f"Error in process_pending_messages for session {session_id}: {e}", exc_info=True)
+            # Emit error event
+            try:
+                await event_service.emit_stream_event(
+                    session_id=session_id,
+                    event_type="error",
+                    event_data={
+                        "type": "error",
+                        "content": str(e),
+                        "error_type": type(e).__name__
+                    }
+                )
+            except Exception as emit_error:
+                logger.error(f"Failed to emit error event: {emit_error}", exc_info=True)
+            raise
 
     @staticmethod
     def detect_ask_user_question_tool(streaming_events: list[dict]) -> bool:
@@ -861,172 +1078,48 @@ class MessageService:
             logger.info(f"Stream unregistered for session {session_id}")
 
     @staticmethod
-    async def handle_stream_message_websocket(
+    async def create_user_message_and_emit_event(
+        db_session: Session,
         session_id: UUID,
         message_content: str,
-        answers_to_message_id: UUID | None,
-        db_session: Session,
-        get_fresh_db_session: callable,
-        skip_user_message_creation: bool = False
-    ) -> None:
+        answers_to_message_id: UUID | None
+    ) -> SessionMessage:
         """
-        Handle message streaming via WebSocket instead of SSE.
+        Create user message and emit event to frontend.
 
-        This method:
-        - Emits stream start event
-        - Creates user message (unless skip_user_message_creation=True)
-        - Streams to agent-env (SSE)
-        - Emits each event to WebSocket
-        - Saves agent response
-        - Emits stream completion event
+        This is a helper method to avoid code duplication.
 
         Args:
+            db_session: Database session
             session_id: Session UUID
-            message_content: User's message (may include file paths if files attached)
-            answers_to_message_id: Optional ID of message being answered
-            db_session: Database session for initial queries
-            get_fresh_db_session: Callable for fresh DB sessions
-            skip_user_message_creation: If True, skip creating user message (for files already created)
+            message_content: User message content
+            answers_to_message_id: Optional message ID being answered
+
+        Returns:
+            Created SessionMessage
         """
         from app.services.event_service import event_service
-        from app.services.session_service import SessionService
 
-        # Emit stream started event
+        # Create user message
+        user_message = MessageService.create_message(
+            session=db_session,
+            session_id=session_id,
+            role="user",
+            content=message_content,
+            answers_to_message_id=answers_to_message_id
+        )
+
+        # Emit user message created event
         await event_service.emit_stream_event(
             session_id=session_id,
-            event_type="stream_started",
+            event_type="user_message_created",
             event_data={
-                "status": "started",
-                "message": "Processing your message..."
+                "id": str(user_message.id),
+                "role": "user",
+                "content": message_content,
+                "sequence_number": user_message.sequence_number,
+                "timestamp": user_message.timestamp.isoformat()
             }
         )
 
-        try:
-            # Get session and environment
-            chat_session = db_session.get(ChatSession, session_id)
-            if not chat_session:
-                raise ValueError("Session not found")
-
-            environment = db_session.get(AgentEnvironment, chat_session.environment_id)
-            if not environment:
-                raise ValueError("Environment not found")
-
-            # Get agent
-            agent = db_session.get(Agent, environment.agent_id)
-            if not agent:
-                raise ValueError("Agent not found")
-
-            # Check if environment is suspended and activate if needed
-            if environment.status == "suspended":
-                logger.info(f"Environment {environment.id} is suspended, activating...")
-
-                # Import lifecycle manager
-                from app.services.environment_lifecycle import EnvironmentLifecycleManager
-                lifecycle_manager = EnvironmentLifecycleManager()
-
-                # Activate the environment (this emits activation events)
-                await lifecycle_manager.activate_suspended_environment(
-                    db_session=db_session,
-                    environment=environment,
-                    agent=agent,
-                    emit_events=True
-                )
-
-                # Refresh environment status
-                db_session.refresh(environment)
-                logger.info(f"Environment {environment.id} activated, status: {environment.status}")
-
-            # Validate environment is running
-            if environment.status != "running":
-                raise ValueError(f"Environment is not running (status: {environment.status})")
-
-            # Update last_activity_at
-            environment.last_activity_at = datetime.utcnow()
-            db_session.add(environment)
-            db_session.commit()
-
-            # Create user message (unless already created by file handling)
-            if not skip_user_message_creation:
-                user_message = MessageService.create_message(
-                    session=db_session,
-                    session_id=session_id,
-                    role="user",
-                    content=message_content,
-                    answers_to_message_id=answers_to_message_id
-                )
-
-                # Emit user message created event (for immediate UI update)
-                await event_service.emit_stream_event(
-                    session_id=session_id,
-                    event_type="user_message_created",
-                    event_data={
-                        "id": str(user_message.id),
-                        "role": "user",
-                        "content": message_content,
-                        "sequence_number": user_message.sequence_number,
-                        "timestamp": user_message.timestamp.isoformat()
-                    }
-                )
-
-            # Auto-generate session title from first message if no title exists
-            if not chat_session.title or chat_session.title.strip() == "":
-                # Start background task to generate title (fire and forget)
-                asyncio.create_task(
-                    SessionService.auto_generate_session_title(
-                        session_id=session_id,
-                        first_message_content=message_content,
-                        get_fresh_db_session=get_fresh_db_session
-                    )
-                )
-
-            # Get environment details
-            # Note: Session status will be updated by SessionService via STREAM_STARTED event
-            base_url = MessageService.get_environment_url(environment)
-            auth_headers = MessageService.get_auth_headers(environment)
-            session_mode = chat_session.mode
-            agent_sdk = chat_session.agent_sdk
-            external_session_id = SessionService.get_external_session_id(chat_session)
-            environment_id = environment.id
-
-            # Stream from environment and emit each event via WebSocket
-            async for event in MessageService.stream_message_with_events(
-                session_id=session_id,
-                environment_id=environment_id,
-                base_url=base_url,
-                auth_headers=auth_headers,
-                user_message_content=message_content,
-                session_mode=session_mode,
-                agent_sdk=agent_sdk,
-                external_session_id=external_session_id,
-                get_fresh_db_session=get_fresh_db_session
-            ):
-                # Emit each streaming event via WebSocket
-                await event_service.emit_stream_event(
-                    session_id=session_id,
-                    event_type=event.get("type"),
-                    event_data=event
-                )
-
-            # Emit stream completed event
-            await event_service.emit_stream_event(
-                session_id=session_id,
-                event_type="stream_completed",
-                event_data={
-                    "status": "completed",
-                    "session_id": str(session_id)
-                }
-            )
-
-        except Exception as e:
-            logger.error(f"Error in WebSocket message streaming: {e}", exc_info=True)
-
-            # Emit error event
-            await event_service.emit_stream_event(
-                session_id=session_id,
-                event_type="error",
-                event_data={
-                    "type": "error",
-                    "content": str(e),
-                    "error_type": type(e).__name__
-                }
-            )
+        return user_message

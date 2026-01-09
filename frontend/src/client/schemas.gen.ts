@@ -2381,6 +2381,10 @@ export const MessagePublicSchema = {
             ],
             title: 'Status Message'
         },
+        sent_to_agent_status: {
+            type: 'string',
+            title: 'Sent To Agent Status'
+        },
         files: {
             items: {
                 '$ref': '#/components/schemas/FileUploadPublic'
@@ -2390,7 +2394,7 @@ export const MessagePublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'session_id', 'role', 'content', 'sequence_number', 'timestamp', 'message_metadata', 'tool_questions_status', 'answers_to_message_id', 'status', 'status_message'],
+    required: ['id', 'session_id', 'role', 'content', 'sequence_number', 'timestamp', 'message_metadata', 'tool_questions_status', 'answers_to_message_id', 'status', 'status_message', 'sent_to_agent_status'],
     title: 'MessagePublic'
 } as const;
 
@@ -2947,6 +2951,10 @@ export const SessionPublicSchema = {
             type: 'string',
             title: 'Interaction Status'
         },
+        pending_messages_count: {
+            type: 'integer',
+            title: 'Pending Messages Count'
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -2971,7 +2979,7 @@ export const SessionPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'environment_id', 'user_id', 'user_workspace_id', 'title', 'mode', 'agent_sdk', 'status', 'interaction_status', 'created_at', 'updated_at', 'last_message_at'],
+    required: ['id', 'environment_id', 'user_id', 'user_workspace_id', 'title', 'mode', 'agent_sdk', 'status', 'interaction_status', 'pending_messages_count', 'created_at', 'updated_at', 'last_message_at'],
     title: 'SessionPublic'
 } as const;
 
@@ -3030,6 +3038,10 @@ export const SessionPublicExtendedSchema = {
         interaction_status: {
             type: 'string',
             title: 'Interaction Status'
+        },
+        pending_messages_count: {
+            type: 'integer',
+            title: 'Pending Messages Count'
         },
         created_at: {
             type: 'string',
@@ -3111,7 +3123,7 @@ export const SessionPublicExtendedSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'environment_id', 'user_id', 'user_workspace_id', 'title', 'mode', 'agent_sdk', 'status', 'interaction_status', 'created_at', 'updated_at', 'last_message_at'],
+    required: ['id', 'environment_id', 'user_id', 'user_workspace_id', 'title', 'mode', 'agent_sdk', 'status', 'interaction_status', 'pending_messages_count', 'created_at', 'updated_at', 'last_message_at'],
     title: 'SessionPublicExtended',
     description: 'Session with external session metadata'
 } as const;

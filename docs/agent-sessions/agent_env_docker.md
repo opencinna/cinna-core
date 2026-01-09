@@ -425,7 +425,7 @@ The environment will automatically reactivate when you send a message or open a 
 4. If environment is already `running` or other status:
    - Returns current status
 
-**Message Service Activation** (`message_service.py::handle_stream_message_websocket()`):
+**Message Service Activation** (`session_service.py::initiate_stream()`):
 1. Check environment status before processing message
 2. If `suspended`:
    - Call `activate_suspended_environment()` synchronously

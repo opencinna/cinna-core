@@ -7,6 +7,7 @@ from sqlmodel import Session as DBSession, select
 from sqlalchemy.orm.attributes import flag_modified
 from app.models import Session, SessionCreate, SessionUpdate, Agent, AgentEnvironment
 from app.core.db import engine
+from app.utils import create_task_with_error_logging
 
 logger = logging.getLogger(__name__)
 
@@ -237,72 +238,6 @@ class SessionService:
 
         return session
 
-    @staticmethod
-    async def auto_generate_session_title(
-        session_id: UUID,
-        first_message_content: str,
-        get_fresh_db_session: callable
-    ) -> None:
-        """
-        Auto-generate session title from first message if no title exists.
-        Runs asynchronously in the background.
-
-        Args:
-            session_id: Session UUID
-            first_message_content: Content of the first message
-            get_fresh_db_session: Callable that returns a fresh DB session (context manager)
-        """
-        try:
-            from app.services.ai_functions_service import AIFunctionsService
-
-            # Check if AIFunctionsService is available
-            if AIFunctionsService.is_available():
-                # Generate title using LLM
-                title = await asyncio.to_thread(
-                    AIFunctionsService.generate_session_title,
-                    first_message_content
-                )
-
-                # Update session with generated title
-                with get_fresh_db_session() as db:
-                    SessionService.update_session(
-                        db_session=db,
-                        session_id=session_id,
-                        data=SessionUpdate(title=title)
-                    )
-                logger.info(f"Generated session title asynchronously: {title}")
-            else:
-                # If no LLM available, set truncated message immediately
-                fallback_title = first_message_content[:100]
-                if len(first_message_content) > 100:
-                    fallback_title += "..."
-
-                with get_fresh_db_session() as db:
-                    SessionService.update_session(
-                        db_session=db,
-                        session_id=session_id,
-                        data=SessionUpdate(title=fallback_title)
-                    )
-                logger.info(f"Set fallback session title (no LLM): {fallback_title}")
-
-        except Exception as e:
-            logger.warning(f"Failed to generate session title asynchronously: {e}")
-            # Fallback to truncated message if LLM fails
-            fallback_title = first_message_content[:100]
-            if len(first_message_content) > 100:
-                fallback_title += "..."
-
-            try:
-                with get_fresh_db_session() as db:
-                    SessionService.update_session(
-                        db_session=db,
-                        session_id=session_id,
-                        data=SessionUpdate(title=fallback_title)
-                    )
-                logger.info(f"Set fallback session title after error: {fallback_title}")
-            except Exception as fallback_error:
-                logger.error(f"Failed to set fallback title: {fallback_error}", exc_info=True)
-
     # Event handlers for event bus integration
     # These handlers react to streaming events and update session status accordingly
 
@@ -466,3 +401,294 @@ class SessionService:
 
         except Exception as e:
             logger.error(f"Error handling STREAM_INTERRUPTED event: {e}", exc_info=True)
+
+    @staticmethod
+    async def auto_generate_session_title(
+        session_id: UUID,
+        first_message_content: str,
+        get_fresh_db_session: callable
+    ) -> None:
+        """
+        Auto-generate session title from first message if no title exists.
+        Runs asynchronously in the background.
+
+        Args:
+            session_id: Session UUID
+            first_message_content: Content of the first message
+            get_fresh_db_session: Callable that returns a fresh DB session (context manager)
+        """
+        logger.info(f"[DEBUG] Starting auto_generate_session_title for session {session_id}")
+        logger.info(f"[DEBUG] First message content (first 100 chars): {first_message_content[:100]}")
+
+        try:
+            from app.services.ai_functions_service import AIFunctionsService
+
+            # Check if AIFunctionsService is available
+            is_available = AIFunctionsService.is_available()
+            logger.info(f"[DEBUG] AIFunctionsService.is_available() = {is_available}")
+
+            if is_available:
+                # Generate title using LLM
+                logger.info(f"[DEBUG] Calling AIFunctionsService.generate_session_title")
+                title = await asyncio.to_thread(
+                    AIFunctionsService.generate_session_title,
+                    first_message_content
+                )
+                logger.info(f"[DEBUG] Generated title: {title}")
+
+                # Update session with generated title
+                logger.info(f"[DEBUG] Updating session {session_id} with title: {title}")
+                with get_fresh_db_session() as db:
+                    updated_session = SessionService.update_session(
+                        db_session=db,
+                        session_id=session_id,
+                        data=SessionUpdate(title=title)
+                    )
+                    logger.info(f"[DEBUG] Session updated successfully. New title: {updated_session.title}")
+                logger.info(f"Generated session title asynchronously: {title}")
+            else:
+                # If no LLM available, set truncated message immediately
+                logger.info(f"[DEBUG] No LLM available, using fallback title")
+                fallback_title = first_message_content[:100]
+                if len(first_message_content) > 100:
+                    fallback_title += "..."
+
+                logger.info(f"[DEBUG] Fallback title: {fallback_title}")
+                with get_fresh_db_session() as db:
+                    updated_session = SessionService.update_session(
+                        db_session=db,
+                        session_id=session_id,
+                        data=SessionUpdate(title=fallback_title)
+                    )
+                    logger.info(f"[DEBUG] Session updated with fallback title. New title: {updated_session.title}")
+                logger.info(f"Set fallback session title (no LLM): {fallback_title}")
+
+        except Exception as e:
+            logger.error(f"[DEBUG] Exception in auto_generate_session_title: {e}", exc_info=True)
+            logger.warning(f"Failed to generate session title asynchronously: {e}")
+            # Fallback to truncated message if LLM fails
+            fallback_title = first_message_content[:100]
+            if len(first_message_content) > 100:
+                fallback_title += "..."
+
+            logger.info(f"[DEBUG] Using error fallback title: {fallback_title}")
+            try:
+                with get_fresh_db_session() as db:
+                    updated_session = SessionService.update_session(
+                        db_session=db,
+                        session_id=session_id,
+                        data=SessionUpdate(title=fallback_title)
+                    )
+                    logger.info(f"[DEBUG] Session updated with error fallback. New title: {updated_session.title}")
+                logger.info(f"Set fallback session title after error: {fallback_title}")
+            except Exception as fallback_error:
+                logger.error(f"[DEBUG] Failed to set fallback title: {fallback_error}", exc_info=True)
+                logger.error(f"Failed to set fallback title: {fallback_error}", exc_info=True)
+
+    @staticmethod
+    async def initiate_stream(
+        session_id: UUID,
+        get_fresh_db_session: callable
+    ) -> dict[str, Any]:
+        """
+        Initiate streaming for a session's pending messages.
+
+        This method checks if the environment is ready and either:
+        - Starts streaming immediately if environment is running
+        - Marks session as pending_stream if environment is not ready
+        - Starts environment activation if environment is suspended
+
+        This is the central orchestration point for deciding when to stream.
+
+        Args:
+            session_id: Session UUID
+            get_fresh_db_session: Callable that returns a fresh DB session (context manager)
+
+        Returns:
+            dict with status information:
+            {
+                "action": "streaming" | "pending" | "no_pending_messages",
+                "message": str,
+                "pending_count": int
+            }
+        """
+        with get_fresh_db_session() as db:
+            from app.models import Session as ChatSession, AgentEnvironment, Agent
+            from app.services.message_service import MessageService
+
+            # Get session
+            session = db.get(ChatSession, session_id)
+            if not session:
+                return {"action": "error", "message": "Session not found"}
+
+            # Get environment
+            environment = db.get(AgentEnvironment, session.environment_id)
+            if not environment:
+                return {"action": "error", "message": "Environment not found"}
+
+            # Get agent
+            agent = db.get(Agent, environment.agent_id)
+            if not agent:
+                return {"action": "error", "message": "Agent not found"}
+
+            # Check if there are pending messages
+            concatenated_content, pending_messages = MessageService.collect_pending_messages(db, session_id)
+
+            if not pending_messages:
+                logger.info(f"No pending messages for session {session_id}")
+                return {
+                    "action": "no_pending_messages",
+                    "message": "No pending messages to process",
+                    "pending_count": 0
+                }
+
+            # Auto-generate session title from first message if no title exists
+            if not session.title or session.title.strip() == "":
+                # Start background task to generate title with error logging
+                logger.info(f"[DEBUG] Session {session_id} has no title (title='{session.title}'). Creating title generation task...")
+                create_task_with_error_logging(
+                    SessionService.auto_generate_session_title(
+                        session_id=session_id,
+                        first_message_content=concatenated_content,
+                        get_fresh_db_session=get_fresh_db_session
+                    ),
+                    task_name=f"auto_generate_title_session_{session_id}"
+                )
+                logger.info(f"[DEBUG] Title generation task created for session {session_id}")
+            else:
+                logger.info(f"[DEBUG] Session {session_id} already has title: '{session.title}'. Skipping title generation.")
+
+            # Check environment status
+            if environment.status == "suspended":
+                logger.info(f"Environment {environment.id} is suspended, initiating activation...")
+
+                # Store IDs for background task (avoid passing detached ORM objects)
+                environment_id_for_activation = environment.id
+                agent_id_for_activation = agent.id
+
+                # Start activation in background
+                from app.services.environment_lifecycle import EnvironmentLifecycleManager
+
+                async def _activate_with_fresh_session():
+                    """Wrapper to fetch objects with a fresh DB session"""
+                    with get_fresh_db_session() as fresh_db:
+                        fresh_env = fresh_db.get(AgentEnvironment, environment_id_for_activation)
+                        fresh_agent = fresh_db.get(Agent, agent_id_for_activation)
+                        if not fresh_env or not fresh_agent:
+                            logger.error(f"Could not fetch environment or agent for activation")
+                            return False
+
+                        lifecycle_manager = EnvironmentLifecycleManager()
+                        return await lifecycle_manager.activate_suspended_environment(
+                            db_session=fresh_db,
+                            environment=fresh_env,
+                            agent=fresh_agent,
+                            emit_events=True
+                        )
+
+                create_task_with_error_logging(
+                    _activate_with_fresh_session(),
+                    task_name=f"activate_environment_{environment_id_for_activation}"
+                )
+
+                # Mark session as pending stream
+                session.interaction_status = "pending_stream"
+                session.pending_messages_count = len(pending_messages)
+                db.add(session)
+                db.commit()
+
+                logger.info(f"Environment activation started, session {session_id} marked as pending_stream")
+                return {
+                    "action": "pending",
+                    "message": "Environment is starting, messages will be processed once ready",
+                    "pending_count": len(pending_messages)
+                }
+
+            elif environment.status == "running":
+                logger.info(f"Environment {environment.id} is running, starting stream for session {session_id}")
+
+                # Environment is ready - start streaming in background
+                # The actual streaming will be done by process_pending_messages
+                create_task_with_error_logging(
+                    MessageService.process_pending_messages(
+                        session_id=session_id,
+                        get_fresh_db_session=get_fresh_db_session
+                    ),
+                    task_name=f"process_pending_messages_{session_id}"
+                )
+
+                return {
+                    "action": "streaming",
+                    "message": f"Processing {len(pending_messages)} pending message(s)",
+                    "pending_count": len(pending_messages)
+                }
+
+            else:
+                # Environment in other state (activating, building, error, etc.)
+                logger.info(f"Environment {environment.id} status is {environment.status}, marking session as pending_stream")
+
+                session.interaction_status = "pending_stream"
+                session.pending_messages_count = len(pending_messages)
+                db.add(session)
+                db.commit()
+
+                return {
+                    "action": "pending",
+                    "message": f"Environment is {environment.status}, messages will be processed once ready",
+                    "pending_count": len(pending_messages)
+                }
+
+    @staticmethod
+    async def handle_environment_activated(event_data: dict[str, Any]) -> None:
+        """
+        React to ENVIRONMENT_ACTIVATED events and process pending messages.
+
+        When an environment is activated, this method:
+        - Finds all sessions with pending_stream status for this environment
+        - Calls initiate_stream() for each session to process pending messages
+
+        Args:
+            event_data: Full event dict with type, model_id, meta, user_id, timestamp
+        """
+        try:
+            meta = event_data.get("meta", {})
+            environment_id = meta.get("environment_id")
+
+            if not environment_id:
+                logger.error(f"Invalid ENVIRONMENT_ACTIVATED event: missing environment_id: {meta}")
+                return
+
+            logger.info(f"Processing ENVIRONMENT_ACTIVATED event for environment {environment_id}")
+
+            # Find all sessions with pending messages for this environment
+            with DBSession(engine) as db:
+                sessions_with_pending = db.exec(
+                    select(Session).where(
+                        Session.environment_id == UUID(environment_id),
+                        Session.interaction_status == "pending_stream"
+                    )
+                ).all()
+
+                session_ids = [session.id for session in sessions_with_pending]
+
+            logger.info(f"Found {len(session_ids)} sessions with pending_stream for environment {environment_id}")
+
+            # Process each session by calling initiate_stream
+            # NOTE: We call initiate_stream as a coroutine but don't await it directly
+            # because it creates background tasks. Awaiting would cause task cancellation.
+            for session_id in session_ids:
+                try:
+                    # Create a task for initiate_stream to prevent parent context cancellation
+                    create_task_with_error_logging(
+                        SessionService.initiate_stream(
+                            session_id=session_id,
+                            get_fresh_db_session=lambda: DBSession(engine)
+                        ),
+                        task_name=f"initiate_stream_{session_id}"
+                    )
+                    logger.info(f"Initiated stream for session {session_id}")
+                except Exception as e:
+                    logger.error(f"Error initiating stream for session {session_id}: {e}", exc_info=True)
+
+        except Exception as e:
+            logger.error(f"Error handling ENVIRONMENT_ACTIVATED event: {e}", exc_info=True)

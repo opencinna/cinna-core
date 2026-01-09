@@ -10,6 +10,7 @@ import concurrent.futures
 import socketio
 
 from app.models.event import EventPublic, EventBroadcast
+from app.utils import create_task_with_error_logging
 
 logger = logging.getLogger(__name__)
 
@@ -189,11 +190,42 @@ class EventService:
                             logger.error(f"Agent {environment.agent_id} not found for environment {environment_id}")
                             return {"status": "error", "message": "Agent not found"}
 
-                        # Spawn background task in thread pool to avoid blocking event loop
-                        self.executor.submit(
-                            self._activate_environment_sync,
-                            str(environment.id),
-                            str(agent.id)
+                        # Store IDs for background task (avoid passing detached ORM objects)
+                        env_id_for_activation = environment.id
+                        agent_id_for_activation = agent.id
+
+                        # Activate in background using current event loop (NOT asyncio.run!)
+                        # asyncio.run() creates a new event loop that gets destroyed, cancelling all tasks
+                        async def _activate_async():
+                            """Activate environment with fresh DB session in main event loop"""
+                            from app.core.db import engine as db_engine
+                            from sqlmodel import Session as DBSession
+                            from app.models.environment import AgentEnvironment
+                            from app.models.agent import Agent
+                            from app.services.environment_lifecycle import EnvironmentLifecycleManager
+
+                            with DBSession(db_engine) as fresh_session:
+                                fresh_env = fresh_session.get(AgentEnvironment, env_id_for_activation)
+                                fresh_agent = fresh_session.get(Agent, agent_id_for_activation)
+
+                                if not fresh_env or not fresh_agent:
+                                    logger.error(f"Environment or agent not found during activation")
+                                    return False
+
+                                lifecycle_manager = EnvironmentLifecycleManager()
+                                result = await lifecycle_manager.activate_suspended_environment(
+                                    db_session=fresh_session,
+                                    environment=fresh_env,
+                                    agent=fresh_agent,
+                                    emit_events=True
+                                )
+
+                                logger.info(f"Background activation completed for environment {env_id_for_activation}")
+                                return result
+
+                        create_task_with_error_logging(
+                            _activate_async(),
+                            task_name=f"activate_from_usage_intent_{env_id_for_activation}"
                         )
 
                         return {
@@ -240,10 +272,14 @@ class EventService:
         logger.debug(f"Calling {len(handlers)} backend handler(s) for event type: {event_type}")
 
         # Call all handlers in background tasks (non-blocking)
-        for handler in handlers:
+        for i, handler in enumerate(handlers):
             try:
                 # Create task to run handler without awaiting
-                asyncio.create_task(handler(event_data))
+                # Use error logging wrapper to prevent silent failures and premature cancellation
+                create_task_with_error_logging(
+                    handler(event_data),
+                    task_name=f"event_handler_{event_type}_{i}"
+                )
             except Exception as e:
                 logger.error(f"Error calling backend handler for {event_type}: {e}", exc_info=True)
 

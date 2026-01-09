@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,6 +15,34 @@ from app.core.config import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def create_task_with_error_logging(coro, task_name: str = "background_task"):
+    """
+    Create an asyncio task with proper exception logging.
+
+    When using asyncio.create_task(), exceptions can be silently suppressed.
+    This helper ensures exceptions are logged and tasks aren't prematurely cancelled.
+
+    Args:
+        coro: Coroutine to run as a task
+        task_name: Name for logging purposes
+
+    Returns:
+        asyncio.Task: The created task with error logging callback
+    """
+    task = asyncio.create_task(coro)
+
+    def _handle_task_result(task):
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            logger.info(f"Task {task_name} was cancelled")
+        except Exception as e:
+            logger.error(f"Unhandled exception in {task_name}: {e}", exc_info=True)
+
+    task.add_done_callback(_handle_task_result)
+    return task
 
 
 @dataclass

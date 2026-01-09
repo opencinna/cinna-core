@@ -54,7 +54,6 @@ async def send_message_stream(
     current_user: CurrentUser,
     session_id: uuid.UUID,
     message_in: MessageCreate,
-    background_tasks: BackgroundTasks
 ) -> Any:
     """
     Send message to agent environment and stream response via WebSocket.
@@ -62,8 +61,9 @@ async def send_message_stream(
     This endpoint:
     1. Validates session ownership
     2. Handles file attachments (if present) via MessageService
-    3. Launches background task to process message
-    4. Returns immediately with success status
+    3. Creates user message with sent_to_agent_status='pending'
+    4. Delegates to SessionService to initiate streaming
+    5. Returns immediately with status
 
     Streaming events are emitted via WebSocket to room: session_{session_id}_stream
     Frontend should subscribe to this room before calling this endpoint.
@@ -78,10 +78,10 @@ async def send_message_stream(
 
     # Handle file attachments if present
     has_files = bool(message_in.file_ids)
-    message_content_for_agent = message_in.content
 
     if has_files:
         # Prepare user message with files using service layer
+        # This creates the message with sent_to_agent_status='pending' by default
         try:
             user_message, message_content_for_agent = await MessageService.prepare_user_message_with_files(
                 session=session,
@@ -98,24 +98,43 @@ async def send_message_stream(
         except Exception as e:
             logger.error(f"Failed to prepare message with files: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Failed to prepare message with files: {str(e)}")
+    else:
+        # Create user message without files
+        # sent_to_agent_status='pending' by default
+        user_message = MessageService.create_message(
+            session=session,
+            session_id=session_id,
+            role="user",
+            content=message_in.content,
+            answers_to_message_id=message_in.answers_to_message_id
+        )
+        logger.info(f"Created user message for session {session_id}")
 
-    # Launch background task for message streaming (unified path for files and non-files)
-    background_tasks.add_task(
-        MessageService.handle_stream_message_websocket,
+    # Delegate to SessionService to decide when to stream
+    from app.services.session_service import SessionService
+
+    result = await SessionService.initiate_stream(
         session_id=session_id,
-        message_content=message_content_for_agent,  # May include file paths if files attached
-        answers_to_message_id=None if has_files else message_in.answers_to_message_id,  # Already set if files
-        db_session=session,
-        get_fresh_db_session=lambda: DBSession(engine),
-        skip_user_message_creation=has_files  # Skip if already created by file handling
+        get_fresh_db_session=lambda: DBSession(engine)
     )
 
+    # Build response based on result
     response = {
         "status": "ok",
-        "message": "Message processing started",
         "session_id": str(session_id),
         "stream_room": f"session_{session_id}_stream"
     }
+
+    if result["action"] == "streaming":
+        response["message"] = result["message"]
+        response["streaming"] = True
+    elif result["action"] == "pending":
+        response["message"] = result["message"]
+        response["pending"] = True
+    elif result["action"] == "error":
+        raise HTTPException(status_code=500, detail=result["message"])
+    else:
+        response["message"] = result.get("message", "Message received")
 
     if has_files:
         response["files_attached"] = len(message_in.file_ids)
@@ -137,6 +156,9 @@ async def interrupt_message(
     2. Request interrupt via active_streaming_manager
     3. Forward interrupt to agent environment if external_session_id available
     4. Return status
+
+    Note: Interrupt only stops the current stream. Pending messages remain pending
+    and will be processed when the user sends the next message.
     """
     # Verify session exists and user owns it
     chat_session = session.get(Session, session_id)

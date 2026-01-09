@@ -37,23 +37,27 @@ The system implements a three-layer streaming architecture with **WebSocket** fo
 
 **Backend API** (`messages.py:send_message_stream`):
 - Validates session ownership
-- Launches background task via `BackgroundTasks.add_task()`
-- Calls `MessageService.handle_stream_message_websocket()` in background
+- Handles file attachments via `MessageService.prepare_user_message_with_files()` if present
+- Creates user message with `sent_to_agent_status='pending'`
+- Delegates to `SessionService.initiate_stream()` at line 116
 - Returns immediately with response: `{status: "ok", stream_room: "session_{id}_stream"}`
 
-**Backend Service** (`message_service.py:handle_stream_message_websocket`):
-Orchestrates WebSocket streaming:
-1. Emits `stream_started` WebSocket event
-2. Saves user message to database (unless already created by file handling)
-3. Auto-generates session title if needed
-4. Sets session status to "active"
-5. Delegates to `stream_message_with_events()` which:
+**Backend Service** (`session_service.py:initiate_stream`):
+Orchestrates pending message processing and environment activation:
+1. Checks if environment needs activation (suspended/inactive)
+2. If activation needed:
+   - Activates environment in background task
+   - Environment sends `agent_usage_intent` event when ready
+   - Event handler calls `process_pending_messages()` to start streaming
+3. If environment already active:
+   - Immediately processes pending messages via `process_pending_messages()`
+4. `process_pending_messages()` handles streaming:
    - Emits `STREAM_STARTED` backend event (triggers activity creation)
    - Streams from agent-env via SSE
    - Emits `STREAM_ERROR`/`STREAM_INTERRUPTED` backend events as needed
    - Emits `STREAM_COMPLETED` backend event (triggers activity/environment handlers)
-6. Emits each streaming event to WebSocket room
-7. Emits `stream_completed` WebSocket event when done
+   - Emits each streaming event to WebSocket room
+   - Emits `stream_completed` WebSocket event when done
 
 **Event Service** (`event_service.py:emit_stream_event`):
 - Emits events to session-specific room: `session_{session_id}_stream`
@@ -151,9 +155,13 @@ Agent Env SDK → Agent Env Server → Backend Service → WebSocket Room → Fr
 
 ### Background Task Execution
 
-**Implementation** (`messages.py:send_message_stream`):
-- Uses FastAPI's `BackgroundTasks` to run `handle_stream_message_websocket()`
-- Task executes independently after endpoint returns
+**Implementation** (`messages.py:send_message_stream` → `session_service.py:initiate_stream`):
+- Creates user message with `sent_to_agent_status='pending'`
+- Delegates to `SessionService.initiate_stream()` which:
+  - Checks if environment needs activation
+  - Spawns background task for environment activation if needed
+  - Or immediately processes pending messages if environment active
+- Uses `_create_task_with_error_logging()` for background task management
 - Frontend receives immediate response, then WebSocket events
 - No SSE connection kept open
 
@@ -162,6 +170,7 @@ Agent Env SDK → Agent Env Server → Backend Service → WebSocket Room → Fr
 - Background task can't be interrupted by HTTP client disconnect
 - WebSocket room delivery is decoupled from task execution
 - Multiple clients can subscribe to same room (multi-tab support ready)
+- Automatic environment activation before streaming
 
 ## Session Management
 
@@ -239,8 +248,8 @@ SDK sessions persist across messages for context continuity (unchanged).
 - Backend: No change needed - WebSocket delivery is fire-and-forget
 - Error events still emitted to room even if client temporarily disconnected
 
-**Backend Errors** (`handle_stream_message_websocket`):
-- Catches exceptions during streaming setup or processing
+**Backend Errors** (`initiate_stream` → `process_pending_messages`):
+- Catches exceptions during environment activation or message processing
 - Emits error event to WebSocket room via `emit_stream_event()`
 - Includes error type and message in event data
 - Frontend receives and displays error
@@ -320,12 +329,12 @@ Backend-to-agent-env SSE errors handled same as before, yielded as error events,
 - `components/Chat/StreamingMessage.tsx` - Real-time streaming display
 
 ### Backend
-- `api/routes/messages.py` - WebSocket endpoint with file handling via MessageService
-- `services/message_service.py` - prepare_user_message_with_files(), handle_stream_message_websocket(), stream_message_with_events()
+- `api/routes/messages.py` - Message endpoint with file handling and streaming initiation (line 116)
+- `services/session_service.py` - initiate_stream(), process_pending_messages(), environment activation logic
+- `services/message_service.py` - prepare_user_message_with_files(), stream_message_with_events()
 - `services/event_service.py` - EventService with emit_stream_event() and backend event handlers
 - `services/activity_service.py` - Event handlers for streaming lifecycle (handle_stream_started, etc.)
 - `services/active_streaming_manager.py` - Stream tracking
-- `services/session_service.py` - Session/external ID management
 - `main.py` - Event handler registration on startup
 
 ### Agent Environment (unchanged)
@@ -345,6 +354,157 @@ Backend-to-agent-env SSE errors handled same as before, yielded as error events,
 - HTTP streaming from agent environment
 - Compatible with existing SDK implementations
 - No changes to agent environment code required
+
+## Background Task Management Best Practices
+
+### Critical Patterns for Async Task Creation
+
+Based on production debugging of streaming cancellation issues, follow these patterns to avoid task cancellation:
+
+#### 1. NEVER Use `asyncio.run()` in WebSocket Handlers
+
+**Problem**: `asyncio.run()` creates a **temporary event loop** that destroys all child tasks when it completes.
+
+**Bad Example**:
+```python
+# In WebSocket handler (which is already async!)
+async def on_message(data):
+    # This creates a NEW event loop, runs the function, then DESTROYS the loop
+    self.executor.submit(
+        lambda: asyncio.run(some_async_function())  # ❌ WRONG!
+    )
+```
+
+**Correct Pattern**:
+```python
+# Use the current event loop
+async def on_message(data):
+    # Create background task in the CURRENT event loop
+    asyncio.create_task(some_async_function())  # ✅ CORRECT
+```
+
+**Why**: WebSocket handlers already run in FastAPI's event loop. Creating a new loop with `asyncio.run()` causes all tasks spawned during that function to be cancelled when the temporary loop closes.
+
+#### 2. Don't Await Functions That Create Background Tasks
+
+**Problem**: When you await a function that spawns background tasks, those tasks become children of the awaiting context. When the awaited function returns, asyncio cancels the child tasks.
+
+**Bad Example**:
+```python
+async def handle_event():
+    # initiate_stream() creates background tasks and returns immediately
+    await initiate_stream(session_id)  # ❌ WRONG - child tasks will be cancelled!
+    # When this function returns, background tasks get cancelled
+```
+
+**Correct Pattern**:
+```python
+async def handle_event():
+    # Wrap in create_task to make it independent
+    _create_task_with_error_logging(
+        initiate_stream(session_id),
+        task_name=f"initiate_stream_{session_id}"
+    )  # ✅ CORRECT - task is independent
+```
+
+**Why**: Background tasks need to be independent of their creator's lifecycle. Using `create_task` creates a top-level task that won't be cancelled when the parent function returns.
+
+#### 3. Always Log Background Task Errors
+
+**Problem**: By default, background tasks that fail silently swallow exceptions, making debugging impossible.
+
+**Solution**: Use the `_create_task_with_error_logging()` helper:
+
+```python
+def _create_task_with_error_logging(coro, task_name: str = "background_task"):
+    """Create an asyncio task with proper exception logging."""
+    task = asyncio.create_task(coro)
+
+    def _handle_task_result(task):
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            logger.info(f"Task {task_name} was cancelled")
+        except Exception as e:
+            logger.error(f"Unhandled exception in {task_name}: {e}", exc_info=True)
+
+    task.add_done_callback(_handle_task_result)
+    return task
+```
+
+**Usage**:
+```python
+_create_task_with_error_logging(
+    process_message(session_id),
+    task_name=f"process_message_{session_id}"
+)
+```
+
+**Benefits**:
+- Logs all exceptions with full stack traces
+- Logs task cancellations for debugging
+- Keeps task reference to prevent premature garbage collection
+
+#### 4. Avoid Passing Detached ORM Objects to Background Tasks
+
+**Problem**: SQLAlchemy objects become "detached" when their originating session closes. Background tasks with different sessions cannot use detached objects.
+
+**Bad Example**:
+```python
+async def create_background_task(db: Session):
+    environment = db.get(AgentEnvironment, env_id)
+    agent = db.get(Agent, agent_id)
+
+    # This background task will fail - objects are detached from db session!
+    _create_task_with_error_logging(
+        lifecycle_manager.activate_environment(
+            db_session=get_new_session(),  # Different session!
+            environment=environment,        # ❌ Detached object
+            agent=agent                    # ❌ Detached object
+        )
+    )
+```
+
+**Correct Pattern**:
+```python
+async def create_background_task(db: Session):
+    # Store only IDs, not ORM objects
+    environment_id = some_environment.id
+    agent_id = some_agent.id
+
+    # Background task fetches fresh objects with its own session
+    async def _task_with_fresh_objects():
+        with get_new_session() as fresh_db:
+            fresh_env = fresh_db.get(AgentEnvironment, environment_id)
+            fresh_agent = fresh_db.get(Agent, agent_id)
+
+            return await lifecycle_manager.activate_environment(
+                db_session=fresh_db,
+                environment=fresh_env,
+                agent=fresh_agent
+            )
+
+    _create_task_with_error_logging(
+        _task_with_fresh_objects(),
+        task_name=f"activate_env_{environment_id}"
+    )
+```
+
+**Why**: Each background task should manage its own database session and fetch fresh ORM objects. This ensures objects are properly attached and prevents SQLAlchemy errors.
+
+### Implementation Files Using These Patterns
+
+- `backend/app/services/session_service.py` - `_create_task_with_error_logging()`, `initiate_stream()`, `process_pending_messages()`
+- `backend/app/services/event_service.py` - `agent_usage_intent` handler, background task creation for environment activation
+
+### Testing Background Task Issues
+
+When debugging streaming or background task problems:
+
+1. **Check for task cancellation logs**: `grep "was cancelled" backend.log`
+2. **Check for unhandled exceptions**: `grep "Unhandled exception" backend.log`
+3. **Verify no `asyncio.run()` in async contexts**: `grep -r "asyncio.run" backend/app/`
+4. **Look for awaited background task creators**: Search for `await` followed by functions that use `create_task`
 
 ## Future Enhancements
 

@@ -19,7 +19,8 @@ class Session(SQLModel, table=True):
     mode: str = "conversation"  # "building" | "conversation"
     agent_sdk: str = "claude"  # SDK to use: "claude" (more options can be added later)
     status: str = "active"  # "active" | "paused" | "completed" | "error"
-    interaction_status: str = ""  # "" (default/nothing happens) | "running" (active stream with agent-env)
+    interaction_status: str = ""  # "" (default/nothing happens) | "running" (active stream with agent-env) | "pending_stream" (waiting for env to activate or user to send next message)
+    pending_messages_count: int = 0  # Number of user messages with sent_to_agent_status='pending'
     session_metadata: dict = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -41,6 +42,7 @@ class SessionMessage(SQLModel, table=True):
     answers_to_message_id: uuid.UUID | None = Field(default=None, foreign_key="message.id")
     status: str = ""  # "" | "user_interrupted" | "error"
     status_message: str | None = None  # Error details or interrupt reason
+    sent_to_agent_status: str = "pending"  # "pending" | "sent" - tracks if user message was sent to agent-env
 
     # Note: 'files' attribute is populated at runtime by service layer
     # (Not declared as Field to avoid SQLModel table column creation)
@@ -72,6 +74,7 @@ class SessionPublic(SQLModel):
     agent_sdk: str
     status: str
     interaction_status: str
+    pending_messages_count: int
     created_at: datetime
     updated_at: datetime
     last_message_at: datetime | None
@@ -114,6 +117,7 @@ class MessagePublic(SQLModel):
     answers_to_message_id: uuid.UUID | None
     status: str
     status_message: str | None
+    sent_to_agent_status: str
     files: list[FileUploadPublic] = Field(default_factory=list)
 
 

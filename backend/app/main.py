@@ -118,6 +118,11 @@ def on_startup():
         event_type=EventType.STREAM_INTERRUPTED,
         handler=SessionService.handle_stream_interrupted
     )
+    # Session service handler for processing pending messages when environment activates
+    event_service.register_handler(
+        event_type=EventType.ENVIRONMENT_ACTIVATED,
+        handler=SessionService.handle_environment_activated
+    )
 
     logger.info("Registered backend event handlers (EnvironmentService, ActivityService, SessionService)")
 

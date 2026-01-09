@@ -1862,11 +1862,11 @@ export class MessagesService {
      * Send message to agent environment and stream response via WebSocket.
      *
      * This endpoint:
-     * 1. Validates session ownership and environment
-     * 2. Validates and uploads files (if attached)
-     * 3. Creates user message with file associations
-     * 4. Launches background task to process message
-     * 5. Returns immediately with success status
+     * 1. Validates session ownership
+     * 2. Handles file attachments (if present) via MessageService
+     * 3. Creates user message with sent_to_agent_status='pending'
+     * 4. Delegates to SessionService to initiate streaming
+     * 5. Returns immediately with status
      *
      * Streaming events are emitted via WebSocket to room: session_{session_id}_stream
      * Frontend should subscribe to this room before calling this endpoint.
@@ -1900,6 +1900,9 @@ export class MessagesService {
      * 2. Request interrupt via active_streaming_manager
      * 3. Forward interrupt to agent environment if external_session_id available
      * 4. Return status
+     *
+     * Note: Interrupt only stops the current stream. Pending messages remain pending
+     * and will be processed when the user sends the next message.
      * @param data The data for the request.
      * @param data.sessionId
      * @returns unknown Successful Response
