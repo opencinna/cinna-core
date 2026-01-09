@@ -2,21 +2,33 @@
 
 ## Overview
 
-WebSocket-based event bus using Socket.IO for real-time communication between backend (FastAPI) and frontend (React). Events are emitted from backend on data changes, and frontend components subscribe to specific event types to update in real-time.
+Event bus system for real-time communication with **two channels**:
+1. **WebSocket (Socket.IO)**: Backend → Frontend real-time updates
+2. **Backend Event Handlers**: Backend → Backend event-driven processing
+
+Events are emitted from backend services, triggering both WebSocket broadcasts to frontend clients and backend handler functions for server-side processing.
 
 ## Architecture
 
 ```
-Frontend Components          Backend Services
-       |                            |
-   useEventBus hooks          EventService
-       |                            |
-   eventService.ts      ←WebSocket→ Socket.IO Server
-       |                            |
-   socket.io-client               /ws endpoint
+Frontend Components                    Backend Services
+       |                                      |
+   useEventBus hooks                    EventService
+       |                                 /          \
+   eventService.ts      ←WebSocket→  Socket.IO   Backend Handlers
+       |                               Server      (registered functions)
+   socket.io-client                      |              |
+                                     /ws endpoint   EnvironmentService
+                                                    SessionService
+                                                    etc.
 ```
 
 **WebSocket URL**: `ws://localhost:8000/ws` (dev) | `wss://api.domain.com/ws` (prod)
+
+**Event Flow**:
+1. Service emits event via `event_service.emit_event()`
+2. Event is sent to WebSocket clients (frontend)
+3. Event is also dispatched to registered backend handlers (server-side processing)
 
 ## Event Structure
 
@@ -70,9 +82,82 @@ await event_service.emit_event(
 ```
 
 **Key Methods** (`EventService` in `event_service.py`):
-- `emit_event()` - Broadcast to user room (`user_{user_id}`)
+- `emit_event()` - Broadcast to user room + call backend handlers
 - `broadcast_to_room()` - Broadcast to custom room
+- `register_handler()` - Register backend event handler
 - `get_connection_stats()` - Get active connections
+
+### Backend: Register Event Handlers
+
+Backend services can react to events without using WebSockets. This enables **event-driven architecture** between backend services.
+
+**1. Create Handler Function**:
+```python
+# backend/app/services/environment_service.py
+@staticmethod
+async def handle_stream_completed_event(event_data: dict[str, Any]):
+    """
+    React to stream completion events.
+
+    Args:
+        event_data: Full event dict with type, model_id, meta, user_id, timestamp
+    """
+    meta = event_data.get("meta", {})
+    session_mode = meta.get("session_mode")
+    environment_id = meta.get("environment_id")
+
+    if session_mode == "building":
+        # Perform post-processing (e.g., sync agent prompts)
+        with Session(engine) as session:
+            environment = session.get(AgentEnvironment, UUID(environment_id))
+            # ... business logic
+```
+
+**2. Register Handler on Startup**:
+```python
+# backend/app/main.py
+from app.services.event_service import event_service
+from app.models.event import EventType
+from app.services.environment_service import EnvironmentService
+
+@app.on_event("startup")
+def on_startup():
+    # Register backend event handlers
+    event_service.register_handler(
+        event_type=EventType.STREAM_COMPLETED,
+        handler=EnvironmentService.handle_stream_completed_event
+    )
+```
+
+**Handler Best Practices**:
+- Handlers run as background tasks (non-blocking)
+- Use fresh database sessions (avoid session conflicts)
+- Handle errors gracefully (exceptions are logged, not propagated)
+- Keep handlers fast (offload heavy work to background tasks if needed)
+- Handlers receive full event data: `{type, model_id, meta, user_id, timestamp}`
+
+**Example Use Case**: `stream_completed` Event
+
+When a chat stream completes, `MessageService` emits `STREAM_COMPLETED` event. `EnvironmentService` listens for this event and automatically syncs agent prompts from the environment back to the agent model (for "building" mode sessions).
+
+```python
+# Message service emits event after stream finishes
+await event_service.emit_event(
+    event_type=EventType.STREAM_COMPLETED,
+    model_id=session_id,
+    meta={
+        "session_id": str(session_id),
+        "environment_id": str(environment_id),
+        "agent_id": str(agent_id),
+        "session_mode": session_mode,  # "building" or "conversation"
+        "was_interrupted": False
+    },
+    user_id=user_id
+)
+
+# Environment service handler automatically processes this event
+# No direct coupling between MessageService and EnvironmentService
+```
 
 ### Frontend: Subscribe to Events
 
@@ -188,6 +273,7 @@ curl http://localhost:8000/api/v1/events/stats \
 
 ## Best Practices
 
+### Frontend
 1. **Invalidate queries, don't manually update cache**:
    ```tsx
    queryClient.invalidateQueries({ queryKey: ["sessions"] })
@@ -195,14 +281,41 @@ curl http://localhost:8000/api/v1/events/stats \
 
 2. **Use specific event types** (avoid wildcard `"*"` subscriptions)
 
-3. **Include metadata for context**:
-   ```python
-   meta={"session_id": str(session_id), "agent_id": str(agent_id)}
-   ```
-
-4. **Filter events in handlers when needed**:
+3. **Filter events in handlers when needed**:
    ```tsx
    if (event.model_id === currentSessionId) { /* handle */ }
+   ```
+
+### Backend
+1. **Use event-driven architecture for service integration**:
+   - Prefer backend event handlers over direct service calls
+   - Reduces coupling between services
+   - Example: Instead of `MessageService` directly calling `EnvironmentService`, emit `STREAM_COMPLETED` event
+
+2. **Include rich metadata in events**:
+   ```python
+   meta={
+       "session_id": str(session_id),
+       "agent_id": str(agent_id),
+       "session_mode": "building",
+       "environment_id": str(environment_id)
+   }
+   ```
+
+3. **Handle errors gracefully in event handlers**:
+   ```python
+   try:
+       # Handler logic
+   except Exception as e:
+       logger.error(f"Error in handler: {e}", exc_info=True)
+       # Don't raise - handlers should not crash the event loop
+   ```
+
+4. **Use fresh database sessions in handlers**:
+   ```python
+   # Avoid using the request's db session
+   with Session(engine) as session:
+       # Query and update data
    ```
 
 ## Troubleshooting
@@ -221,9 +334,21 @@ curl http://localhost:8000/api/v1/events/stats \
 
 To extend this system:
 
-1. **Add new event types**: Update `EventType` enum in `backend/app/models/event.py`
-2. **Custom rooms**: Use `event_service.broadcast_to_room(room_name, event_data)`
-3. **Multi-instance scaling** (potential future implementation): Configure Redis adapter in `event_service.py`:
+1. **Add new event types**:
+   - Update `EventType` enum in `backend/app/models/event.py`
+   - Document the event's metadata structure
+
+2. **Add backend event handlers**:
+   - Create handler function: `async def handle_event(event_data: dict)`
+   - Register in `main.py` startup: `event_service.register_handler(event_type, handler)`
+
+3. **Custom WebSocket rooms**:
+   - Use `event_service.broadcast_to_room(room_name, event_data)`
+   - Frontend subscribes: `useRoomSubscription(room_name)`
+
+4. **Multi-instance scaling** (potential future implementation):
+   - Configure Redis adapter for Socket.IO
+   - Backend handlers already work across instances (each instance processes events independently)
    ```python
    from socketio import AsyncRedisManager
    redis_manager = AsyncRedisManager('redis://redis:6379')

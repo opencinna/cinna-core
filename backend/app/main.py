@@ -69,6 +69,17 @@ def on_startup():
     """Start background services on app startup"""
     start_file_cleanup_scheduler()
     start_suspension_scheduler()
+
+    # Register backend event handlers
+    from app.models.event import EventType
+    from app.services.environment_service import EnvironmentService
+
+    event_service.register_handler(
+        event_type=EventType.STREAM_COMPLETED,
+        handler=EnvironmentService.handle_stream_completed_event
+    )
+    logger.info("Registered backend event handlers")
+
     logger.info("Application startup complete")
 
 

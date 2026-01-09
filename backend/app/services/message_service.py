@@ -324,102 +324,6 @@ class MessageService:
             }
 
     @staticmethod
-    async def sync_agent_prompts_from_environment(
-        session: Session,
-        environment: AgentEnvironment,
-        agent: Agent
-    ) -> bool:
-        """
-        Sync agent prompts from environment docs files back to agent model.
-
-        This should be called after a building mode session completes to capture
-        any updates the agent made to WORKFLOW_PROMPT.md and ENTRYPOINT_PROMPT.md.
-
-        Args:
-            session: Database session
-            environment: Agent environment instance
-            agent: Agent instance to update
-
-        Returns:
-            True if sync successful
-        """
-        try:
-            from app.services.environment_lifecycle import EnvironmentLifecycleManager
-
-            lifecycle_manager = EnvironmentLifecycleManager()
-            adapter = lifecycle_manager.get_adapter(environment)
-
-            # Fetch current prompts from environment
-            prompts = await adapter.get_agent_prompts()
-
-            workflow_prompt = prompts.get("workflow_prompt")
-            entrypoint_prompt = prompts.get("entrypoint_prompt")
-
-            # Update agent if prompts have changed
-            updated = False
-            if workflow_prompt and workflow_prompt != agent.workflow_prompt:
-                agent.workflow_prompt = workflow_prompt
-                updated = True
-                logger.info(f"Updated agent {agent.id} workflow_prompt from environment ({len(workflow_prompt)} chars)")
-
-            if entrypoint_prompt and entrypoint_prompt != agent.entrypoint_prompt:
-                agent.entrypoint_prompt = entrypoint_prompt
-                updated = True
-                logger.info(f"Updated agent {agent.id} entrypoint_prompt from environment ({len(entrypoint_prompt)} chars)")
-
-            if updated:
-                agent.updated_at = datetime.utcnow()
-                session.add(agent)
-                session.commit()
-                session.refresh(agent)
-                logger.info(f"Synced agent prompts from environment {environment.id} to agent {agent.id}")
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to sync agent prompts from environment: {e}", exc_info=True)
-            return False
-
-    @staticmethod
-    async def sync_agent_prompts_to_environment(
-        environment: AgentEnvironment,
-        workflow_prompt: str | None = None,
-        entrypoint_prompt: str | None = None
-    ) -> bool:
-        """
-        Sync agent prompts from backend to environment docs files.
-
-        This should be called when user manually edits prompts in the backend UI
-        to ensure the environment has the latest versions.
-
-        Args:
-            environment: Agent environment instance
-            workflow_prompt: Updated workflow prompt content (None to skip)
-            entrypoint_prompt: Updated entrypoint prompt content (None to skip)
-
-        Returns:
-            True if sync successful
-        """
-        try:
-            from app.services.environment_lifecycle import EnvironmentLifecycleManager
-
-            lifecycle_manager = EnvironmentLifecycleManager()
-            adapter = lifecycle_manager.get_adapter(environment)
-
-            # Push prompts to environment
-            await adapter.set_agent_prompts(
-                workflow_prompt=workflow_prompt,
-                entrypoint_prompt=entrypoint_prompt
-            )
-
-            logger.info(f"Synced agent prompts to environment {environment.id}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to sync agent prompts to environment: {e}", exc_info=True)
-            return False
-
-    @staticmethod
     async def stream_message_with_events(
         session_id: UUID,
         environment_id: UUID,
@@ -754,46 +658,37 @@ class MessageService:
                         )
                 await asyncio.to_thread(_update_completed_status)
 
-            # Sync agent prompts from environment if in building mode (non-blocking)
-            if session_mode == "building":
-                logger.info(f"Syncing agent prompts from environment after building session")
+                # Emit stream_completed event for event-driven post-processing
+                # This allows services (like EnvironmentService) to react to stream completion
                 try:
-                    def _get_env_and_agent():
+                    from app.models.event import EventType
+
+                    # Get user_id and agent_id for event targeting
+                    def _get_session_info():
                         with get_fresh_db_session() as db:
-                            env_db = db.get(AgentEnvironment, environment_id)
-                            agent_db = db.get(Agent, env_db.agent_id) if env_db else None
-                            return env_db, agent_db
+                            session_db = db.get(ChatSession, session_id)
+                            if session_db:
+                                env_db = db.get(AgentEnvironment, environment_id)
+                                return session_db.user_id, env_db.agent_id if env_db else None
+                            return None, None
 
-                    env_db, agent_db = await asyncio.to_thread(_get_env_and_agent)
+                    user_id, agent_id = await asyncio.to_thread(_get_session_info)
 
-                    if env_db and agent_db:
-                        # sync_agent_prompts_from_environment is already async
-                        def _sync_prompts():
-                            with get_fresh_db_session() as db:
-                                # Re-fetch to ensure we have attached instances
-                                env_attached = db.get(AgentEnvironment, environment_id)
-                                agent_attached = db.get(Agent, env_db.agent_id)
-                                if env_attached and agent_attached:
-                                    import asyncio
-                                    loop = asyncio.new_event_loop()
-                                    asyncio.set_event_loop(loop)
-                                    try:
-                                        loop.run_until_complete(
-                                            MessageService.sync_agent_prompts_from_environment(
-                                                session=db,
-                                                environment=env_attached,
-                                                agent=agent_attached
-                                            )
-                                        )
-                                    finally:
-                                        loop.close()
-
-                        await asyncio.to_thread(_sync_prompts)
-                        logger.info("Agent prompts synced successfully from environment")
-                    else:
-                        logger.warning("Could not sync prompts: environment or agent not found")
-                except Exception as sync_error:
-                    logger.error(f"Failed to sync agent prompts: {sync_error}", exc_info=True)
+                    await event_service.emit_event(
+                        event_type=EventType.STREAM_COMPLETED,
+                        model_id=session_id,
+                        meta={
+                            "session_id": str(session_id),
+                            "environment_id": str(environment_id),
+                            "agent_id": str(agent_id) if agent_id else None,
+                            "session_mode": session_mode,
+                            "was_interrupted": was_interrupted
+                        },
+                        user_id=user_id
+                    )
+                    logger.info(f"Emitted stream_completed event for session {session_id} (mode: {session_mode})")
+                except Exception as event_error:
+                    logger.error(f"Failed to emit stream_completed event: {event_error}", exc_info=True)
                     # Don't fail the request, just log the error
 
             # Send final done event to frontend

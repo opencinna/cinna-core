@@ -3,7 +3,7 @@
 import logging
 import asyncio
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable, Awaitable
 from uuid import UUID
 import concurrent.futures
 
@@ -12,6 +12,9 @@ import socketio
 from app.models.event import EventPublic, EventBroadcast
 
 logger = logging.getLogger(__name__)
+
+# Type alias for event handler functions
+EventHandler = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 class EventService:
@@ -35,6 +38,9 @@ class EventService:
             max_workers=4,
             thread_name_prefix="event_service_bg"
         )
+
+        # Backend event handlers registry: {event_type: [handler_functions]}
+        self._backend_handlers: dict[str, list[EventHandler]] = {}
 
         # Register event handlers
         self._register_handlers()
@@ -206,6 +212,41 @@ class EventService:
                 logger.error(f"Error handling agent_usage_intent: {e}", exc_info=True)
                 return {"status": "error", "message": str(e)}
 
+    def register_handler(self, event_type: str, handler: EventHandler):
+        """Register a backend handler for a specific event type.
+
+        This allows backend services to react to events without using WebSockets.
+
+        Args:
+            event_type: Event type to listen for (e.g., 'stream_completed')
+            handler: Async function that accepts event data dict
+        """
+        if event_type not in self._backend_handlers:
+            self._backend_handlers[event_type] = []
+        self._backend_handlers[event_type].append(handler)
+        logger.info(f"Registered backend handler for event type: {event_type}")
+
+    async def _call_backend_handlers(self, event_type: str, event_data: dict[str, Any]):
+        """Call all registered backend handlers for an event type.
+
+        Args:
+            event_type: Event type
+            event_data: Full event data including type, model_id, meta, etc.
+        """
+        handlers = self._backend_handlers.get(event_type, [])
+        if not handlers:
+            return
+
+        logger.debug(f"Calling {len(handlers)} backend handler(s) for event type: {event_type}")
+
+        # Call all handlers in background tasks (non-blocking)
+        for handler in handlers:
+            try:
+                # Create task to run handler without awaiting
+                asyncio.create_task(handler(event_data))
+            except Exception as e:
+                logger.error(f"Error calling backend handler for {event_type}: {e}", exc_info=True)
+
     async def emit_event(
         self,
         event_type: str,
@@ -215,7 +256,7 @@ class EventService:
         user_id: UUID | None = None,
         room: str | None = None,
     ):
-        """Emit an event to connected clients.
+        """Emit an event to connected clients and backend handlers.
 
         Args:
             event_type: Type of event (e.g., 'session_updated')
@@ -235,6 +276,9 @@ class EventService:
         )
 
         event_data = event.model_dump(mode="json")
+
+        # Call backend handlers (non-blocking)
+        await self._call_backend_handlers(event_type, event_data)
 
         # Determine target room
         target_room = room

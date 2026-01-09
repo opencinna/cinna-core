@@ -240,7 +240,7 @@ async def sync_agent_prompts(
 
     # Sync prompts to environment
     try:
-        await MessageService.sync_agent_prompts_to_environment(
+        await EnvironmentService.sync_agent_prompts_to_environment(
             environment=environment,
             workflow_prompt=agent.workflow_prompt,
             entrypoint_prompt=agent.entrypoint_prompt

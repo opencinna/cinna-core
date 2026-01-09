@@ -2,12 +2,16 @@ from uuid import UUID
 from datetime import datetime
 import random
 import asyncio
+import logging
+from typing import Any
 from sqlmodel import Session, select
 from sqlalchemy.orm.attributes import flag_modified
 from app.models import AgentEnvironment, AgentEnvironmentCreate, AgentEnvironmentUpdate, Agent, User
 from app import crud
 from app.core.db import engine
 from .environment_lifecycle import EnvironmentLifecycleManager
+
+logger = logging.getLogger(__name__)
 
 
 def generate_environment_name() -> str:
@@ -499,3 +503,153 @@ class EnvironmentService:
         logs = await lifecycle_manager.get_logs(environment, lines=lines)
 
         return logs
+
+    # === Prompt Sync Operations ===
+
+    @staticmethod
+    async def sync_agent_prompts_from_environment(
+        session: Session,
+        environment: AgentEnvironment,
+        agent: Agent
+    ) -> bool:
+        """
+        Sync agent prompts from environment docs files back to agent model.
+
+        This should be called after a building mode session completes to capture
+        any updates the agent made to WORKFLOW_PROMPT.md and ENTRYPOINT_PROMPT.md.
+
+        Args:
+            session: Database session
+            environment: Agent environment instance
+            agent: Agent instance to update
+
+        Returns:
+            True if sync successful
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            lifecycle_manager = EnvironmentService.get_lifecycle_manager()
+            adapter = lifecycle_manager.get_adapter(environment)
+
+            # Fetch current prompts from environment
+            prompts = await adapter.get_agent_prompts()
+
+            workflow_prompt = prompts.get("workflow_prompt")
+            entrypoint_prompt = prompts.get("entrypoint_prompt")
+
+            # Update agent if prompts have changed
+            updated = False
+            if workflow_prompt and workflow_prompt != agent.workflow_prompt:
+                agent.workflow_prompt = workflow_prompt
+                updated = True
+                logger.info(f"Updated agent {agent.id} workflow_prompt from environment ({len(workflow_prompt)} chars)")
+
+            if entrypoint_prompt and entrypoint_prompt != agent.entrypoint_prompt:
+                agent.entrypoint_prompt = entrypoint_prompt
+                updated = True
+                logger.info(f"Updated agent {agent.id} entrypoint_prompt from environment ({len(entrypoint_prompt)} chars)")
+
+            if updated:
+                agent.updated_at = datetime.utcnow()
+                session.add(agent)
+                session.commit()
+                session.refresh(agent)
+                logger.info(f"Synced agent prompts from environment {environment.id} to agent {agent.id}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to sync agent prompts from environment: {e}", exc_info=True)
+            return False
+
+    @staticmethod
+    async def sync_agent_prompts_to_environment(
+        environment: AgentEnvironment,
+        workflow_prompt: str | None = None,
+        entrypoint_prompt: str | None = None
+    ) -> bool:
+        """
+        Sync agent prompts from backend to environment docs files.
+
+        This should be called when user manually edits prompts in the backend UI
+        to ensure the environment has the latest versions.
+
+        Args:
+            environment: Agent environment instance
+            workflow_prompt: Updated workflow prompt content (None to skip)
+            entrypoint_prompt: Updated entrypoint prompt content (None to skip)
+
+        Returns:
+            True if sync successful
+        """
+        try:
+            lifecycle_manager = EnvironmentService.get_lifecycle_manager()
+            adapter = lifecycle_manager.get_adapter(environment)
+
+            # Push prompts to environment
+            await adapter.set_agent_prompts(
+                workflow_prompt=workflow_prompt,
+                entrypoint_prompt=entrypoint_prompt
+            )
+
+            logger.info(f"Synced agent prompts to environment {environment.id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to sync agent prompts to environment: {e}", exc_info=True)
+            return False
+
+    @staticmethod
+    async def handle_stream_completed_event(event_data: dict[str, Any]):
+        """
+        Event handler for stream_completed events.
+
+        This handler is called automatically when a stream completes.
+        If the session was in "building" mode, it syncs agent prompts
+        from the environment back to the agent model.
+
+        Args:
+            event_data: Event data containing session_id, environment_id, agent_id, etc.
+        """
+        try:
+            meta = event_data.get("meta", {})
+            session_mode = meta.get("session_mode")
+            environment_id = meta.get("environment_id")
+            agent_id = meta.get("agent_id")
+
+            # Only proceed if this was a building session
+            if session_mode != "building":
+                logger.debug(f"Skipping prompt sync for non-building session (mode: {session_mode})")
+                return
+
+            if not environment_id or not agent_id:
+                logger.warning("stream_completed event missing environment_id or agent_id in metadata")
+                return
+
+            logger.info(f"Handling stream_completed event: syncing prompts from environment {environment_id}")
+
+            # Use a fresh database session for this background task
+            with Session(engine) as session:
+                environment = session.get(AgentEnvironment, UUID(environment_id))
+                agent = session.get(Agent, UUID(agent_id))
+
+                if not environment or not agent:
+                    logger.warning(f"Environment {environment_id} or agent {agent_id} not found")
+                    return
+
+                # Sync prompts from environment to agent
+                success = await EnvironmentService.sync_agent_prompts_from_environment(
+                    session=session,
+                    environment=environment,
+                    agent=agent
+                )
+
+                if success:
+                    logger.info(f"Successfully synced agent prompts after building session")
+                else:
+                    logger.warning(f"Failed to sync agent prompts after building session")
+
+        except Exception as e:
+            logger.error(f"Error in handle_stream_completed_event: {e}", exc_info=True)
