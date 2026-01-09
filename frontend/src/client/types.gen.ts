@@ -1582,3 +1582,10 @@ export type WorkspaceDownloadWorkspaceItemData = {
 };
 
 export type WorkspaceDownloadWorkspaceItemResponse = (unknown);
+
+export type WorkspaceViewWorkspaceFileData = {
+    envId: string;
+    path: string;
+};
+
+export type WorkspaceViewWorkspaceFileResponse = (unknown);

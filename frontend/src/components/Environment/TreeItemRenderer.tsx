@@ -9,6 +9,7 @@ interface TreeItemRendererProps {
   onToggleFolder: (path: string) => void
   onDownload: (fileName: string) => void
   path?: string
+  envId?: string
 }
 
 export function TreeItemRenderer({
@@ -17,7 +18,8 @@ export function TreeItemRenderer({
   expandedFolders,
   onToggleFolder,
   onDownload,
-  path = ""
+  path = "",
+  envId,
 }: TreeItemRendererProps) {
   const currentPath = path ? `${path}/${item.name}` : item.name
   const isExpanded = expandedFolders.has(currentPath)
@@ -66,6 +68,7 @@ export function TreeItemRenderer({
             onToggleFolder={onToggleFolder}
             onDownload={onDownload}
             path={currentPath}
+            envId={envId}
           />
         ))}
       </>
@@ -76,13 +79,25 @@ export function TreeItemRenderer({
   const lastDotIndex = item.name.lastIndexOf('.')
   const baseName = lastDotIndex > 0 ? item.name.substring(0, lastDotIndex) : item.name
   const extension = lastDotIndex > 0 ? item.name.substring(lastDotIndex) : ''
+  const isViewableFile = item.fileType === "csv" || item.fileType === "md"
+
+  const handleFileClick = () => {
+    if (isViewableFile && envId) {
+      // Open file viewer in new tab
+      const url = `/environment/${envId}/file?path=${encodeURIComponent(currentPath)}`
+      window.open(url, '_blank')
+    }
+  }
 
   return (
     <div
       className="flex items-center justify-between py-1 px-2 rounded-md hover:bg-muted/50 group transition-colors"
       style={{ paddingLeft: `${level * 12 + 24}px` }} // Extra padding for files to align with folder content
     >
-      <div className="flex items-center gap-2 min-w-0 flex-1">
+      <div
+        className={`flex items-center gap-2 min-w-0 flex-1 ${isViewableFile && envId ? "cursor-pointer" : ""}`}
+        onClick={handleFileClick}
+      >
         <div className="shrink-0" title={item.modified}>
           <FileIcon fileType={item.fileType} />
         </div>
@@ -94,7 +109,10 @@ export function TreeItemRenderer({
         </span>
         <button
           className="opacity-0 group-hover:opacity-100 shrink-0 p-0 hover:text-foreground text-muted-foreground transition-colors"
-          onClick={() => onDownload(currentPath)}
+          onClick={(e) => {
+            e.stopPropagation()
+            onDownload(currentPath)
+          }}
           title="Download"
         >
           <Download className="h-4 w-4" />

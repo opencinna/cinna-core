@@ -137,6 +137,7 @@ export function EnvironmentPanel({ isOpen, environmentId }: EnvironmentPanelProp
               onToggleFolder={handleToggleFolder}
               onDownload={handleDownload}
               pathPrefix="files"
+              envId={environmentId}
             />
             <WorkspaceTabContent
               value="scripts"
@@ -145,6 +146,7 @@ export function EnvironmentPanel({ isOpen, environmentId }: EnvironmentPanelProp
               onToggleFolder={handleToggleFolder}
               onDownload={handleDownload}
               pathPrefix="scripts"
+              envId={environmentId}
             />
             <WorkspaceTabContent
               value="logs"
@@ -153,6 +155,7 @@ export function EnvironmentPanel({ isOpen, environmentId }: EnvironmentPanelProp
               onToggleFolder={handleToggleFolder}
               onDownload={handleDownload}
               pathPrefix="logs"
+              envId={environmentId}
             />
             <WorkspaceTabContent
               value="docs"
@@ -161,6 +164,7 @@ export function EnvironmentPanel({ isOpen, environmentId }: EnvironmentPanelProp
               onToggleFolder={handleToggleFolder}
               onDownload={handleDownload}
               pathPrefix="docs"
+              envId={environmentId}
             />
             <WorkspaceTabContent
               value="uploads"
@@ -169,6 +173,7 @@ export function EnvironmentPanel({ isOpen, environmentId }: EnvironmentPanelProp
               onToggleFolder={handleToggleFolder}
               onDownload={handleDownload}
               pathPrefix="uploads"
+              envId={environmentId}
             />
           </>
         )}

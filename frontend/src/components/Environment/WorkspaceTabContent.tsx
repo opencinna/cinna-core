@@ -10,6 +10,7 @@ interface WorkspaceTabContentProps {
   onToggleFolder: (path: string) => void
   onDownload: (fileName: string) => void
   pathPrefix: string
+  envId?: string
 }
 
 export function WorkspaceTabContent({
@@ -18,7 +19,8 @@ export function WorkspaceTabContent({
   expandedFolders,
   onToggleFolder,
   onDownload,
-  pathPrefix
+  pathPrefix,
+  envId,
 }: WorkspaceTabContentProps) {
   const hasContent = data[0]?.children && data[0].children.length > 0
 
@@ -35,6 +37,7 @@ export function WorkspaceTabContent({
               onToggleFolder={onToggleFolder}
               onDownload={onDownload}
               path={pathPrefix}
+              envId={envId}
             />
           ))}
         </div>

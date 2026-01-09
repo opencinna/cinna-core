@@ -219,8 +219,47 @@ Frontend UI → Backend API → Backend Storage → Agent-Env Upload → Agent A
 - `.gitignore` - Added `backend/data/uploads/` exclusion
 - `docker-compose.yml` - Volume mount for uploads directory
 
+## File Viewing Feature
+
+Enables users to view files directly in the browser by clicking on them in the environment panel. Files open in a new browser tab with appropriate rendering based on file type.
+
+**Flow:**
+1. User clicks on supported file (e.g., CSV) in environment panel → opens new browser tab
+2. Backend streams file content from agent environment workspace
+3. Frontend renders file with appropriate viewer component
+4. User can download file from viewer header
+
+### Backend Implementation
+
+**Workspace Routes:** `backend/app/api/routes/workspace.py`
+- `GET /api/v1/environments/{env_id}/workspace/view-file/{path}` - Stream file content as text for rendering
+
+### Frontend Implementation
+
+**Route:** `frontend/src/routes/_layout/environment/$envId/file.tsx`
+- Accepts `envId` (URL param) and `path` (search param)
+- Opens in new browser tab via `window.open()`
+
+**Components:**
+- **FileViewer:** `frontend/src/components/Environment/FileViewer.tsx` - Main viewer with header, filename, path, and download button
+- **CSVViewer:** `frontend/src/components/Environment/CSVViewer.tsx` - Renders CSV as table with proper parsing (handles quoted fields, escapes)
+- **MarkdownViewer:** `frontend/src/components/Environment/MarkdownViewer.tsx` - Renders Markdown with GFM support and code syntax highlighting
+- **TreeItemRenderer:** `frontend/src/components/Environment/TreeItemRenderer.tsx` - Updated to make viewable files (CSV, Markdown) clickable, opens in new tab
+
+**File Type Renderers:**
+Different file types are handled by specific viewer components located in `frontend/src/components/Environment/`:
+- CSV files: `CSVViewer.tsx` (table rendering with headers)
+- Markdown files: `MarkdownViewer.tsx` (rendered markdown with GFM support, syntax highlighting for code blocks)
+- Additional file type renderers can be added alongside existing viewers
+
+**Integration:**
+- Environment panel file tree detects file types
+- Clickable files (CSV, Markdown) have cursor pointer on hover
+- Click handler opens new tab with file viewer route
+- Download button remains independent from view action
+
 ---
 
-**Document Version:** 2.0 (Post-Implementation)
-**Last Updated:** 2026-01-07
-**Status:** ✅ Feature Fully Implemented
+**Document Version:** 2.2 (Added Markdown Viewer)
+**Last Updated:** 2026-01-09
+**Status:** ✅ Features Fully Implemented
