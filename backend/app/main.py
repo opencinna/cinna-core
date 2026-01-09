@@ -73,12 +73,33 @@ def on_startup():
     # Register backend event handlers
     from app.models.event import EventType
     from app.services.environment_service import EnvironmentService
+    from app.services.activity_service import ActivityService
 
+    # Environment service handlers
     event_service.register_handler(
         event_type=EventType.STREAM_COMPLETED,
         handler=EnvironmentService.handle_stream_completed_event
     )
-    logger.info("Registered backend event handlers")
+
+    # Activity service handlers for streaming lifecycle
+    event_service.register_handler(
+        event_type=EventType.STREAM_STARTED,
+        handler=ActivityService.handle_stream_started
+    )
+    event_service.register_handler(
+        event_type=EventType.STREAM_COMPLETED,
+        handler=ActivityService.handle_stream_completed
+    )
+    event_service.register_handler(
+        event_type=EventType.STREAM_ERROR,
+        handler=ActivityService.handle_stream_error
+    )
+    event_service.register_handler(
+        event_type=EventType.STREAM_INTERRUPTED,
+        handler=ActivityService.handle_stream_interrupted
+    )
+
+    logger.info("Registered backend event handlers (EnvironmentService, ActivityService)")
 
     logger.info("Application startup complete")
 

@@ -49,7 +49,8 @@ Frontend Components                    Backend Services
 **Messages**: `message_created`, `message_updated`, `message_deleted`
 **Activities**: `activity_created`, `activity_updated`, `activity_deleted`
 **Agents**: `agent_created`, `agent_updated`, `agent_deleted`
-**Streaming**: `stream_started`, `stream_completed`, `stream_error`
+**Environments**: `environment_activating`, `environment_activated`, `environment_activation_failed`, `environment_suspended`
+**Streaming**: `stream_started`, `stream_completed`, `stream_error`, `stream_interrupted`
 **Generic**: `notification`
 
 ## Key Files
@@ -136,9 +137,13 @@ def on_startup():
 - Keep handlers fast (offload heavy work to background tasks if needed)
 - Handlers receive full event data: `{type, model_id, meta, user_id, timestamp}`
 
-**Example Use Case**: `stream_completed` Event
+**Example Use Case**: Streaming Lifecycle Events
 
-When a chat stream completes, `MessageService` emits `STREAM_COMPLETED` event. `EnvironmentService` listens for this event and automatically syncs agent prompts from the environment back to the agent model (for "building" mode sessions).
+When chat streaming occurs, `MessageService` emits events at each stage:
+- `STREAM_STARTED` → `ActivityService` creates "session_running" activity
+- `STREAM_COMPLETED` → `ActivityService` manages completion, `EnvironmentService` syncs prompts (building mode)
+- `STREAM_ERROR` → `ActivityService` creates error activity
+- `STREAM_INTERRUPTED` → `ActivityService` cleans up running activity
 
 ```python
 # Message service emits event after stream finishes

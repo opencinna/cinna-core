@@ -85,6 +85,117 @@ class MessageService:
         return message
 
     @staticmethod
+    async def prepare_user_message_with_files(
+        session: Session,
+        session_id: UUID,
+        message_content: str,
+        file_ids: list[UUID],
+        environment_id: UUID,
+        user_id: UUID,
+        answers_to_message_id: UUID | None = None
+    ) -> tuple[SessionMessage, str]:
+        """
+        Prepare user message with file attachments.
+
+        This method:
+        1. Validates files (ownership, status)
+        2. Uploads files to agent-env
+        3. Creates user message with file associations
+        4. Updates message_files with agent_env_paths
+        5. Marks files as attached
+
+        Args:
+            session: Database session
+            session_id: Session UUID
+            message_content: Original user message content (without file paths)
+            file_ids: List of file IDs to attach
+            environment_id: Environment UUID for file upload
+            user_id: User UUID for ownership validation
+            answers_to_message_id: Optional message ID being answered
+
+        Returns:
+            tuple: (user_message, message_content_for_agent)
+                - user_message: Created SessionMessage with files
+                - message_content_for_agent: Message content with file paths prepended
+
+        Raises:
+            HTTPException: If validation fails or upload errors
+        """
+        from app.models.file_upload import FileUpload, MessageFile
+        from app.services.file_service import FileService
+        from sqlmodel import select
+        from fastapi import HTTPException
+
+        # Validate files exist
+        statement = select(FileUpload).where(FileUpload.id.in_(file_ids))
+        files = session.exec(statement).all()
+
+        if len(files) != len(file_ids):
+            raise HTTPException(status_code=400, detail="Some files not found")
+
+        # Check ownership and status
+        for file in files:
+            if file.user_id != user_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Not authorized for file: {file.filename}"
+                )
+            if file.status != "temporary":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File already attached: {file.filename}"
+                )
+
+        # Upload files to agent-env
+        try:
+            agent_file_paths = await FileService.upload_files_to_agent_env(
+                session=session,
+                file_ids=file_ids,
+                environment_id=environment_id,
+            )
+        except HTTPException:
+            raise  # Re-raise HTTP exceptions as-is
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to upload files to agent environment: {str(e)}"
+            )
+
+        # Compose message content with file paths for agent
+        file_list = "\n".join(f"- {path}" for path in agent_file_paths.values())
+        message_content_for_agent = f"Uploaded files:\n{file_list}\n---\n\n{message_content}"
+
+        # Create user message with file associations
+        user_message = MessageService.create_message(
+            session=session,
+            session_id=session_id,
+            role="user",
+            content=message_content,  # Store original content without file paths
+            answers_to_message_id=answers_to_message_id,
+            file_ids=file_ids,
+        )
+
+        # Update message_files with agent_env_paths
+        statement = select(MessageFile).where(MessageFile.message_id == user_message.id)
+        message_files = session.exec(statement).all()
+
+        for message_file in message_files:
+            if message_file.file_id in agent_file_paths:
+                message_file.agent_env_path = agent_file_paths[message_file.file_id]
+
+        session.commit()
+
+        # Mark files as attached
+        FileService.mark_files_as_attached(
+            session=session,
+            file_ids=list(agent_file_paths.keys()),
+        )
+
+        logger.info(f"Prepared user message with {len(file_ids)} files for session {session_id}")
+
+        return user_message, message_content_for_agent
+
+    @staticmethod
     def get_session_messages(
         session: Session, session_id: UUID, limit: int = 100, offset: int = 0
     ) -> list["MessagePublic"]:
@@ -380,6 +491,32 @@ class MessageService:
                 )
         await asyncio.to_thread(_set_running_status)
 
+        # Get user_id for event emission
+        def _get_user_id():
+            with get_fresh_db_session() as db:
+                session_db = db.get(ChatSession, session_id)
+                return session_db.user_id if session_db else None
+        user_id = await asyncio.to_thread(_get_user_id)
+
+        # Emit STREAM_STARTED event for activity tracking
+        try:
+            from app.services.event_service import event_service
+            from app.models.event import EventType
+            await event_service.emit_event(
+                event_type=EventType.STREAM_STARTED,
+                model_id=session_id,
+                meta={
+                    "session_id": str(session_id),
+                    "environment_id": str(environment_id),
+                    "session_mode": session_mode,
+                    "agent_sdk": agent_sdk
+                },
+                user_id=user_id
+            )
+            logger.info(f"Emitted STREAM_STARTED event for session {session_id}")
+        except Exception as e:
+            logger.error(f"Failed to emit STREAM_STARTED event: {e}", exc_info=True)
+
         # Variables to collect agent response
         agent_response_parts = []
         streaming_events = []  # Store raw streaming events for visualization
@@ -407,6 +544,25 @@ class MessageService:
                 if event.get("type") == "interrupted":
                     was_interrupted = True
                     logger.info("Message was interrupted by user")
+
+                    # Emit STREAM_INTERRUPTED event for activity tracking
+                    try:
+                        from app.services.event_service import event_service as evt_service
+                        from app.models.event import EventType
+                        await evt_service.emit_event(
+                            event_type=EventType.STREAM_INTERRUPTED,
+                            model_id=session_id,
+                            meta={
+                                "session_id": str(session_id),
+                                "environment_id": str(environment_id),
+                                "session_mode": session_mode
+                            },
+                            user_id=user_id
+                        )
+                        logger.info(f"Emitted STREAM_INTERRUPTED event for session {session_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to emit STREAM_INTERRUPTED event: {e}", exc_info=True)
+
                     # Forward event to frontend
                     yield event
                     # Don't return - let cleanup happen below
@@ -462,6 +618,26 @@ class MessageService:
                                 status="error",
                             )
                     await asyncio.to_thread(_save_error_message)
+
+                    # Emit STREAM_ERROR event for activity tracking
+                    try:
+                        from app.services.event_service import event_service as evt_service
+                        from app.models.event import EventType
+                        await evt_service.emit_event(
+                            event_type=EventType.STREAM_ERROR,
+                            model_id=session_id,
+                            meta={
+                                "session_id": str(session_id),
+                                "environment_id": str(environment_id),
+                                "error_type": error_type,
+                                "error_message": error_content,
+                                "session_mode": session_mode
+                            },
+                            user_id=user_id
+                        )
+                        logger.info(f"Emitted STREAM_ERROR event for session {session_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to emit STREAM_ERROR event: {e}", exc_info=True)
 
                     # Forward error event and exit
                     yield event
@@ -715,6 +891,26 @@ class MessageService:
                     )
             await asyncio.to_thread(_update_error_status)
 
+            # Emit STREAM_ERROR event for activity tracking
+            try:
+                from app.services.event_service import event_service as evt_service
+                from app.models.event import EventType
+                await evt_service.emit_event(
+                    event_type=EventType.STREAM_ERROR,
+                    model_id=session_id,
+                    meta={
+                        "session_id": str(session_id),
+                        "environment_id": str(environment_id),
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "session_mode": session_mode
+                    },
+                    user_id=user_id
+                )
+                logger.info(f"Emitted STREAM_ERROR event for session {session_id}")
+            except Exception as evt_error:
+                logger.error(f"Failed to emit STREAM_ERROR event: {evt_error}", exc_info=True)
+
             yield {
                 "type": "error",
                 "content": str(e),
@@ -738,316 +934,20 @@ class MessageService:
             logger.info(f"Stream unregistered for session {session_id}")
 
     @staticmethod
-    async def stream_message_with_activity_tracking(
-        session_id: UUID,
-        environment_id: UUID,
-        base_url: str,
-        auth_headers: dict,
-        user_message_content: str,
-        session_mode: str,
-        agent_sdk: str,
-        external_session_id: str | None,
-        get_fresh_db_session: callable
-    ) -> AsyncIterator[dict]:
-        """
-        Stream message with integrated activity tracking for frontend disconnection handling.
-
-        This method orchestrates the entire streaming process with activity management:
-        - Creates "session_running" activity at start
-        - Streams events to frontend via queue
-        - Handles frontend disconnection gracefully
-        - Updates activities based on completion status
-
-        Args:
-            session_id: Session UUID
-            environment_id: Environment UUID
-            base_url: Environment base URL
-            auth_headers: Environment auth headers
-            user_message_content: User's message
-            session_mode: "building" or "conversation"
-            agent_sdk: SDK to use
-            external_session_id: External SDK session ID (None for new)
-            get_fresh_db_session: Callable that returns a fresh DB session
-
-        Yields:
-            dict: SSE event dictionaries for frontend
-        """
-        from app.services.activity_service import ActivityService
-
-        # Create queue for event passing (unbounded to avoid blocking)
-        event_queue = asyncio.Queue()
-
-        # Flag to track if frontend is still connected
-        frontend_connected = True
-
-        async def stream_consumer_task():
-            """
-            Background task that consumes events from agent env.
-            Runs independently of frontend connection state.
-            """
-            try:
-                event_count = 0
-                error_occurred = False
-                error_message = None
-
-                async for event in MessageService.stream_message_with_events(
-                    session_id=session_id,
-                    environment_id=environment_id,
-                    base_url=base_url,
-                    auth_headers=auth_headers,
-                    user_message_content=user_message_content,
-                    session_mode=session_mode,
-                    agent_sdk=agent_sdk,
-                    external_session_id=external_session_id,
-                    get_fresh_db_session=get_fresh_db_session
-                ):
-                    event_count += 1
-                    # Always put event in queue (even if frontend disconnected)
-                    await event_queue.put(event)
-
-                    # Track if an error occurred
-                    if event.get("type") == "error":
-                        error_occurred = True
-                        error_message = event.get("content", "Unknown error occurred")
-                        logger.warning(f"Error detected in stream for session {session_id}: {error_message}")
-
-                # Signal completion
-                await event_queue.put(None)
-
-                if frontend_connected:
-                    logger.info(
-                        f"Stream consumer completed for session {session_id} "
-                        f"({event_count} events, frontend still connected, error={error_occurred})"
-                    )
-                    # Frontend was watching - delete the "session_running" activity
-                    def _delete_running_activity():
-                        with get_fresh_db_session() as db:
-                            asyncio.run(ActivityService.delete_session_running_activity(db, session_id))
-                    await asyncio.to_thread(_delete_running_activity)
-
-                    # But if error occurred, still create error activity (errors are important to track)
-                    if error_occurred:
-                        def _create_error():
-                            with get_fresh_db_session() as db:
-                                asyncio.run(ActivityService.create_error_activity(db, session_id, error_message))
-                        await asyncio.to_thread(_create_error)
-                else:
-                    logger.info(
-                        f"Stream consumer completed for session {session_id} "
-                        f"({event_count} events, frontend disconnected earlier, error={error_occurred})"
-                    )
-                    # Update or replace the "session_running" activity with final result
-                    if error_occurred:
-                        def _transition_to_error():
-                            with get_fresh_db_session() as db:
-                                asyncio.run(ActivityService.transition_running_to_error(db, session_id, error_message))
-                        await asyncio.to_thread(_transition_to_error)
-                    else:
-                        def _transition_to_completion():
-                            with get_fresh_db_session() as db:
-                                asyncio.run(ActivityService.transition_running_to_completion(db, session_id))
-                        await asyncio.to_thread(_transition_to_completion)
-            except Exception as e:
-                logger.error(
-                    f"Error in stream consumer for session {session_id}: {e}",
-                    exc_info=True
-                )
-                # Put error marker in queue
-                await event_queue.put({"type": "error", "content": str(e)})
-                await event_queue.put(None)
-
-                # Update running activity to error if frontend was disconnected
-                if not frontend_connected:
-                    def _transition_to_error_on_exception():
-                        with get_fresh_db_session() as db:
-                            asyncio.run(ActivityService.transition_running_to_error(db, session_id, str(e)))
-                    await asyncio.to_thread(_transition_to_error_on_exception)
-
-        # Create "session_running" activity before stream starts
-        def _create_running_activity():
-            with get_fresh_db_session() as db:
-                asyncio.run(ActivityService.create_session_running_activity(db, session_id))
-        await asyncio.to_thread(_create_running_activity)
-
-        # Start background consumer task BEFORE we start yielding to frontend
-        # This is the key to decoupling - the task is independent
-        consumer_task = asyncio.create_task(stream_consumer_task())
-
-        try:
-            # Yield events to frontend from queue
-            while True:
-                event = await event_queue.get()
-
-                # None signals completion
-                if event is None:
-                    break
-
-                # Format event as SSE and forward to frontend
-                event_json = json.dumps(event)
-                yield f"data: {event_json}\n\n"
-
-        except (asyncio.CancelledError, GeneratorExit) as e:
-            # Frontend disconnected
-            frontend_connected = False
-            logger.warning(
-                f"Frontend disconnected from session {session_id} (error: {type(e).__name__}). "
-                f"Backend-to-agent-env stream continues independently."
-            )
-            # Don't cancel consumer_task - let it continue!
-            # The background task will keep consuming and saving data
-            raise
-        except Exception as e:
-            # Unexpected error
-            frontend_connected = False
-            logger.error(
-                f"Unexpected error while streaming to frontend for session {session_id}: {e}",
-                exc_info=True
-            )
-            # Don't cancel consumer_task in case it can still save data
-            raise
-
-    @staticmethod
-    async def handle_stream_message(
-        session_id: UUID,
-        message_content: str,
-        answers_to_message_id: UUID | None,
-        db_session: Session,
-        get_fresh_db_session: callable
-    ) -> AsyncIterator[str]:
-        """
-        Comprehensive handler for streaming message requests.
-
-        This method orchestrates the entire streaming flow:
-        1. Validates environment status
-        2. Stores user message
-        3. Generates session title (if needed)
-        4. Sets session status
-        5. Streams response with activity tracking
-
-        Args:
-            session_id: Session UUID
-            message_content: User's message content
-            answers_to_message_id: Optional message ID being answered
-            db_session: Database session for initial operations
-            get_fresh_db_session: Callable that returns fresh DB sessions for background tasks
-
-        Yields:
-            str: SSE-formatted event strings for streaming response
-
-        Raises:
-            ValueError: If environment is not found or not running
-        """
-        from app.services.session_service import SessionService
-
-        # Get session
-        chat_session = db_session.get(ChatSession, session_id)
-        if not chat_session:
-            raise ValueError("Session not found")
-
-        # Get environment
-        environment = db_session.get(AgentEnvironment, chat_session.environment_id)
-        if not environment:
-            raise ValueError("Environment not found")
-
-        # Get agent
-        agent = db_session.get(Agent, environment.agent_id)
-        if not agent:
-            raise ValueError("Agent not found")
-
-        # Check if environment is suspended and activate if needed
-        if environment.status == "suspended":
-            logger.info(f"Environment {environment.id} is suspended, activating...")
-
-            # Import lifecycle manager
-            from app.services.environment_lifecycle import EnvironmentLifecycleManager
-            lifecycle_manager = EnvironmentLifecycleManager()
-
-            # Activate the environment (this emits activation events)
-            await lifecycle_manager.activate_suspended_environment(
-                db_session=db_session,
-                environment=environment,
-                agent=agent,
-                emit_events=True
-            )
-
-            # Refresh environment status
-            db_session.refresh(environment)
-            logger.info(f"Environment {environment.id} activated, status: {environment.status}")
-
-        # Validate environment is running
-        if environment.status != "running":
-            raise ValueError(f"Environment is not running (status: {environment.status})")
-
-        # Get external SDK session ID (if exists)
-        external_session_id = SessionService.get_external_session_id(chat_session)
-
-        logger.info(
-            f"Streaming message to session {session_id} "
-            f"(mode={chat_session.mode}, agent_sdk={chat_session.agent_sdk}, external_session_id={external_session_id})"
-        )
-
-        # Store user message
-        MessageService.create_message(
-            session=db_session,
-            session_id=session_id,
-            role="user",
-            content=message_content,
-            answers_to_message_id=answers_to_message_id,
-        )
-
-        # Auto-generate session title from first message if no title exists
-        if not chat_session.title or chat_session.title.strip() == "":
-            # Start background task to generate title (fire and forget)
-            asyncio.create_task(
-                SessionService.auto_generate_session_title(
-                    session_id=session_id,
-                    first_message_content=message_content,
-                    get_fresh_db_session=get_fresh_db_session
-                )
-            )
-
-        # Set session status to "active" before streaming starts
-        SessionService.update_session_status(
-            db_session=db_session,
-            session_id=session_id,
-            status="active"
-        )
-
-        # Extract data from ORM objects BEFORE async generator (to avoid detached instance errors)
-        session_mode = chat_session.mode
-        agent_sdk = chat_session.agent_sdk
-        environment_id = environment.id
-        base_url = MessageService.get_environment_url(environment)
-        auth_headers = MessageService.get_auth_headers(environment)
-
-        # Stream response using MessageService with activity tracking
-        async for event in MessageService.stream_message_with_activity_tracking(
-            session_id=session_id,
-            environment_id=environment_id,
-            base_url=base_url,
-            auth_headers=auth_headers,
-            user_message_content=message_content,
-            session_mode=session_mode,
-            agent_sdk=agent_sdk,
-            external_session_id=external_session_id,
-            get_fresh_db_session=get_fresh_db_session
-        ):
-            yield event
-
-    @staticmethod
     async def handle_stream_message_websocket(
         session_id: UUID,
         message_content: str,
         answers_to_message_id: UUID | None,
         db_session: Session,
-        get_fresh_db_session: callable
+        get_fresh_db_session: callable,
+        skip_user_message_creation: bool = False
     ) -> None:
         """
         Handle message streaming via WebSocket instead of SSE.
 
         This method:
         - Emits stream start event
-        - Creates user message
+        - Creates user message (unless skip_user_message_creation=True)
         - Streams to agent-env (SSE)
         - Emits each event to WebSocket
         - Saves agent response
@@ -1055,10 +955,11 @@ class MessageService:
 
         Args:
             session_id: Session UUID
-            message_content: User's message
+            message_content: User's message (may include file paths if files attached)
             answers_to_message_id: Optional ID of message being answered
             db_session: Database session for initial queries
             get_fresh_db_session: Callable for fresh DB sessions
+            skip_user_message_creation: If True, skip creating user message (for files already created)
         """
         from app.services.event_service import event_service
         from app.services.session_service import SessionService
@@ -1117,27 +1018,28 @@ class MessageService:
             db_session.add(environment)
             db_session.commit()
 
-            # Create user message
-            user_message = MessageService.create_message(
-                session=db_session,
-                session_id=session_id,
-                role="user",
-                content=message_content,
-                answers_to_message_id=answers_to_message_id
-            )
+            # Create user message (unless already created by file handling)
+            if not skip_user_message_creation:
+                user_message = MessageService.create_message(
+                    session=db_session,
+                    session_id=session_id,
+                    role="user",
+                    content=message_content,
+                    answers_to_message_id=answers_to_message_id
+                )
 
-            # Emit user message created event (for immediate UI update)
-            await event_service.emit_stream_event(
-                session_id=session_id,
-                event_type="user_message_created",
-                event_data={
-                    "id": str(user_message.id),
-                    "role": "user",
-                    "content": message_content,
-                    "sequence_number": user_message.sequence_number,
-                    "timestamp": user_message.timestamp.isoformat()
-                }
-            )
+                # Emit user message created event (for immediate UI update)
+                await event_service.emit_stream_event(
+                    session_id=session_id,
+                    event_type="user_message_created",
+                    event_data={
+                        "id": str(user_message.id),
+                        "role": "user",
+                        "content": message_content,
+                        "sequence_number": user_message.sequence_number,
+                        "timestamp": user_message.timestamp.isoformat()
+                    }
+                )
 
             # Auto-generate session title from first message if no title exists
             if not chat_session.title or chat_session.title.strip() == "":

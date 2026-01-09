@@ -89,6 +89,12 @@ Current types (more can be added):
 - `find_activity_by_session_and_type()`: Find activity by session_id and activity_type
 - `delete_activity_by_session_and_type()`: Delete activity by session_id and activity_type
 
+**Event Handlers** (registered in `main.py` startup):
+- `handle_stream_started()`: React to STREAM_STARTED events
+- `handle_stream_completed()`: React to STREAM_COMPLETED events
+- `handle_stream_error()`: React to STREAM_ERROR events
+- `handle_stream_interrupted()`: React to STREAM_INTERRUPTED events
+
 **API Routes** (`backend/app/api/routes/activities.py`):
 - `POST /activities/`: Create activity
 - `GET /activities/`: List activities with optional agent_id filter
@@ -117,58 +123,53 @@ Current types (more can be added):
 
 ### Where to Create Activities
 
-**0. Session Running** (✅ Implemented):
-- Location: `backend/app/api/routes/messages.py` - `_create_session_running_activity()`
-- When: Stream starts (before first event sent to frontend)
-- Lifecycle:
-  - **Created**: When stream starts, `interaction_status` set to "running" on session
-  - **Deleted**: If stream completes with frontend connected
-  - **Replaced**: If stream completes without frontend connected, replaced with `session_completed` or `error_occurred`
-- Create activity with:
+**Activities are now event-driven** (✅ Implemented):
+- Location: `backend/app/services/activity_service.py` - Event handlers
+- Triggered by: Streaming events from `MessageService`
+- Architecture: Event bus system with `EventService.register_handler()`
+
+**Event Handlers:**
+
+**0. Session Running** (`handle_stream_started`):
+- Triggered by: `STREAM_STARTED` event
+- When: Stream starts
+- Action: Creates `session_running` activity
   - `activity_type`: "session_running"
   - `text`: "Session is running"
-  - `session_id`: The running session
-  - `agent_id`: Session's agent
-  - `action_required`: "" (informational)
-  - `is_read`: false (always unread while running)
-- Management:
-  - Uses `ActivityService.delete_activity_by_session_and_type()` for cleanup
-  - Error activities created even if frontend connected (errors always tracked)
-  - See `_delete_session_running_activity()`, `_update_running_activity_to_completion()`, `_update_running_activity_to_error()`
+  - `is_read`: false
+- Lifecycle managed by subsequent events
 
-**1. Session Completion** (✅ Implemented):
-- Location: `backend/app/api/routes/messages.py` - `_create_unread_completion_activities()`
-- When: Stream completes while user disconnected AND session status is "completed"
-- Create activity with:
-  - `activity_type`: "session_completed"
-  - `text`: "Session completed"
-  - `session_id`: The completed session
-  - `agent_id`: Session's agent
-  - `is_read`: false (user wasn't watching)
+**1. Session Completion** (`handle_stream_completed`):
+- Triggered by: `STREAM_COMPLETED` event
+- When: Stream completes successfully
+- Logic:
+  - **If user connected**: Deletes `session_running` activity
+  - **If user disconnected**: Creates `session_completed` + `questions_asked` (if applicable)
+- Uses `event_service.is_user_connected(user_id)` to check connection
 
-**2. Questions Asked** (✅ Implemented):
-- Location: `backend/app/api/routes/messages.py` - `_create_unread_completion_activities()`
-- Reference: `backend/app/services/message_service.py:545` - question detection logic
-- When: Stream completes while user disconnected AND latest message has tool_questions_status = "unanswered"
-- Create activity with:
+**2. Questions Asked** (part of `handle_stream_completed`):
+- When: Stream completes AND latest message has `tool_questions_status = "unanswered"`
+- Action: Creates `questions_asked` activity
   - `activity_type`: "questions_asked"
   - `text`: "Agent asked questions that need answers"
-  - `session_id`: Current session
-  - `agent_id`: Session's agent
   - `action_required`: "answers_required"
-  - `is_read`: false (user wasn't watching)
+  - `is_read`: false
 
-**3. Error Occurred** (✅ Implemented):
-- Location: `backend/app/api/routes/messages.py` - `_create_error_activity()`
-- When: Stream fails with error while user disconnected
-- Examples: corrupted session, connection errors, environment errors
-- Create activity with:
+**3. Error Occurred** (`handle_stream_error`):
+- Triggered by: `STREAM_ERROR` event
+- When: Stream fails with error
+- Action:
+  - Deletes `session_running` activity
+  - Creates `error_occurred` activity (always, even if user connected)
   - `activity_type`: "error_occurred"
   - `text`: "Error: {error_message}" (truncated to 100 chars)
-  - `session_id`: The session that failed
-  - `agent_id`: Session's agent
-  - `action_required`: "" (empty - informational)
-  - `is_read`: false (user wasn't watching)
+  - `is_read`: false
+
+**4. Stream Interrupted** (`handle_stream_interrupted`):
+- Triggered by: `STREAM_INTERRUPTED` event
+- When: User manually interrupts stream
+- Action: Deletes `session_running` activity
+- No completion activities (session can be resumed)
 
 **4. File Created** (Future):
 - When: Agent creates file via workspace API
@@ -258,8 +259,9 @@ When testing activities integration:
 
 **Backend**:
 - Models: `backend/app/models/activity.py`
-- Service: `backend/app/services/activity_service.py`
+- Service: `backend/app/services/activity_service.py` (includes event handlers)
 - Routes: `backend/app/api/routes/activities.py`
+- Event Registration: `backend/app/main.py` (on_startup)
 - Migration: `backend/app/alembic/versions/*_add_activity_table.py`
 
 **Frontend**:
@@ -270,6 +272,8 @@ When testing activities integration:
 **Related Context**:
 - Session model: `backend/app/models/session.py` (Session with interaction_status field)
 - Message model: `backend/app/models/session.py` (SessionMessage)
-- Message service: `backend/app/services/message_service.py` (manages interaction_status lifecycle)
+- Message service: `backend/app/services/message_service.py` (emits streaming events)
+- Event service: `backend/app/services/event_service.py` (event bus with backend handlers)
+- Event types: `backend/app/models/event.py` (EventType enum)
 - Streaming manager: `backend/app/services/active_streaming_manager.py`
 - Question tool block: `frontend/src/components/Chat/AskUserQuestionToolBlock.tsx`

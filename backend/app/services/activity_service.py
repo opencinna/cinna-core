@@ -1,4 +1,5 @@
 from uuid import UUID
+from typing import Any
 import logging
 import asyncio
 from sqlmodel import Session as DBSession, select, and_, func, desc
@@ -578,3 +579,161 @@ class ActivityService:
         except Exception as e:
             logger.error(f"Failed to update running activity to error for session {session_id}: {e}", exc_info=True)
             return False
+
+    # Event-driven handlers for streaming lifecycle
+
+    @staticmethod
+    async def handle_stream_started(event_data: dict[str, Any]):
+        """
+        Event handler for STREAM_STARTED events.
+
+        Creates 'session_running' activity when a stream starts.
+        This activity will be shown if user is not watching the session.
+
+        Args:
+            event_data: Event dict with type, model_id, meta, user_id, timestamp
+        """
+        try:
+            from app.core.db import engine as db_engine
+            from sqlmodel import Session as DBSession
+
+            session_id = event_data.get("model_id")
+            if not session_id:
+                logger.warning("STREAM_STARTED event missing model_id")
+                return
+
+            # Use fresh DB session
+            with DBSession(db_engine) as db:
+                await ActivityService.create_session_running_activity(
+                    db_session=db,
+                    session_id=UUID(session_id)
+                )
+
+            logger.info(f"[Event Handler] Created session_running activity for session {session_id}")
+
+        except Exception as e:
+            logger.error(f"Error in handle_stream_started: {e}", exc_info=True)
+
+    @staticmethod
+    async def handle_stream_completed(event_data: dict[str, Any]):
+        """
+        Event handler for STREAM_COMPLETED events.
+
+        Manages activity lifecycle based on whether user was connected:
+        - If connected: Deletes session_running activity
+        - If disconnected: Replaces with session_completed + questions_asked (if applicable)
+
+        Args:
+            event_data: Event dict with type, model_id, meta, user_id, timestamp
+        """
+        try:
+            from app.core.db import engine as db_engine
+            from sqlmodel import Session as DBSession
+            from app.services.event_service import event_service
+
+            session_id = event_data.get("model_id")
+            user_id = event_data.get("user_id")
+
+            if not session_id or not user_id:
+                logger.warning("STREAM_COMPLETED event missing session_id or user_id")
+                return
+
+            # Check if user was connected during stream completion
+            user_connected = event_service.is_user_connected(UUID(user_id))
+
+            # Use fresh DB session
+            with DBSession(db_engine) as db:
+                if user_connected:
+                    # User was watching - just delete the running activity
+                    deleted = await ActivityService.delete_session_running_activity(
+                        db_session=db,
+                        session_id=UUID(session_id)
+                    )
+                    if deleted:
+                        logger.info(f"[Event Handler] Deleted session_running activity (user was watching) for session {session_id}")
+                else:
+                    # User was disconnected - replace with completion activities
+                    success = await ActivityService.transition_running_to_completion(
+                        db_session=db,
+                        session_id=UUID(session_id)
+                    )
+                    if success:
+                        logger.info(f"[Event Handler] Created completion activities (user was disconnected) for session {session_id}")
+
+        except Exception as e:
+            logger.error(f"Error in handle_stream_completed: {e}", exc_info=True)
+
+    @staticmethod
+    async def handle_stream_error(event_data: dict[str, Any]):
+        """
+        Event handler for STREAM_ERROR events.
+
+        Creates error_occurred activity (always, even if user connected).
+        Deletes session_running activity if exists.
+
+        Args:
+            event_data: Event dict with type, model_id, meta, user_id, timestamp
+        """
+        try:
+            from app.core.db import engine as db_engine
+            from sqlmodel import Session as DBSession
+
+            session_id = event_data.get("model_id")
+            if not session_id:
+                logger.warning("STREAM_ERROR event missing model_id")
+                return
+
+            meta = event_data.get("meta", {})
+            error_message = meta.get("error_message", "Unknown error occurred")
+
+            # Use fresh DB session
+            with DBSession(db_engine) as db:
+                # Delete session_running activity if exists
+                await ActivityService.delete_session_running_activity(
+                    db_session=db,
+                    session_id=UUID(session_id)
+                )
+
+                # Always create error activity (errors are important to track)
+                await ActivityService.create_error_activity(
+                    db_session=db,
+                    session_id=UUID(session_id),
+                    error_message=error_message
+                )
+
+            logger.info(f"[Event Handler] Created error activity for session {session_id}")
+
+        except Exception as e:
+            logger.error(f"Error in handle_stream_error: {e}", exc_info=True)
+
+    @staticmethod
+    async def handle_stream_interrupted(event_data: dict[str, Any]):
+        """
+        Event handler for STREAM_INTERRUPTED events.
+
+        Deletes session_running activity.
+        No completion activities created (session can be resumed).
+
+        Args:
+            event_data: Event dict with type, model_id, meta, user_id, timestamp
+        """
+        try:
+            from app.core.db import engine as db_engine
+            from sqlmodel import Session as DBSession
+
+            session_id = event_data.get("model_id")
+            if not session_id:
+                logger.warning("STREAM_INTERRUPTED event missing model_id")
+                return
+
+            # Use fresh DB session
+            with DBSession(db_engine) as db:
+                deleted = await ActivityService.delete_session_running_activity(
+                    db_session=db,
+                    session_id=UUID(session_id)
+                )
+                if deleted:
+                    logger.info(f"[Event Handler] Deleted session_running activity (interrupted) for session {session_id}")
+
+        except Exception as e:
+            logger.error(f"Error in handle_stream_interrupted: {e}", exc_info=True)

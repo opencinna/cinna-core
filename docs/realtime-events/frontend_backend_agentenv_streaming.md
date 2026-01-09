@@ -43,14 +43,17 @@ The system implements a three-layer streaming architecture with **WebSocket** fo
 
 **Backend Service** (`message_service.py:handle_stream_message_websocket`):
 Orchestrates WebSocket streaming:
-1. Emits `stream_started` event via `event_service.emit_stream_event()`
-2. Saves user message to database immediately
+1. Emits `stream_started` WebSocket event
+2. Saves user message to database (unless already created by file handling)
 3. Auto-generates session title if needed
 4. Sets session status to "active"
-5. Delegates to `stream_message_with_events()` which streams from agent-env via SSE
-6. Emits each event to WebSocket room as received
-7. Emits `stream_completed` event when done
-8. On error: emits error event with exception details
+5. Delegates to `stream_message_with_events()` which:
+   - Emits `STREAM_STARTED` backend event (triggers activity creation)
+   - Streams from agent-env via SSE
+   - Emits `STREAM_ERROR`/`STREAM_INTERRUPTED` backend events as needed
+   - Emits `STREAM_COMPLETED` backend event (triggers activity/environment handlers)
+6. Emits each streaming event to WebSocket room
+7. Emits `stream_completed` WebSocket event when done
 
 **Event Service** (`event_service.py:emit_stream_event`):
 - Emits events to session-specific room: `session_{session_id}_stream`
@@ -98,12 +101,14 @@ Agent Env SDK → Agent Env Server → Backend Service → WebSocket Room → Fr
 - Manages room subscriptions via `subscribeToRoom()/unsubscribeFromRoom()`
 
 **Backend Processing** (`message_service.py:stream_message_with_events`):
-- Streams from agent-env via SSE (unchanged from original implementation)
+- Emits `STREAM_STARTED` backend event (for activity tracking)
+- Streams from agent-env via SSE
 - Collects events in memory
 - Captures external session ID early
 - Creates agent message placeholder on first `assistant` event
 - Saves final agent response when stream completes
-- Updates session status and syncs prompts (building mode)
+- Emits `STREAM_COMPLETED`/`STREAM_ERROR`/`STREAM_INTERRUPTED` backend events
+- Backend event handlers (ActivityService, EnvironmentService) react to events
 - Tracked by `ActiveStreamingManager`
 
 ### 3. WebSocket vs SSE
@@ -315,11 +320,13 @@ Backend-to-agent-env SSE errors handled same as before, yielded as error events,
 - `components/Chat/StreamingMessage.tsx` - Real-time streaming display
 
 ### Backend
-- `api/routes/messages.py` - WebSocket-based endpoint with BackgroundTasks
-- `services/event_service.py` - EventService with emit_stream_event() method
-- `services/message_service.py` - handle_stream_message_websocket() and stream_message_with_events()
-- `services/active_streaming_manager.py` - Stream tracking (unchanged)
-- `services/session_service.py` - Session/external ID management (unchanged)
+- `api/routes/messages.py` - WebSocket endpoint with file handling via MessageService
+- `services/message_service.py` - prepare_user_message_with_files(), handle_stream_message_websocket(), stream_message_with_events()
+- `services/event_service.py` - EventService with emit_stream_event() and backend event handlers
+- `services/activity_service.py` - Event handlers for streaming lifecycle (handle_stream_started, etc.)
+- `services/active_streaming_manager.py` - Stream tracking
+- `services/session_service.py` - Session/external ID management
+- `main.py` - Event handler registration on startup
 
 ### Agent Environment (unchanged)
 - `env-templates/python-env-advanced/app/core/server/routes.py` - SSE endpoints

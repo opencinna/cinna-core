@@ -42,6 +42,7 @@ class EventType:
     STREAM_STARTED = "stream_started"
     STREAM_COMPLETED = "stream_completed"
     STREAM_ERROR = "stream_error"
+    STREAM_INTERRUPTED = "stream_interrupted"
 
     # Generic notification
     NOTIFICATION = "notification"

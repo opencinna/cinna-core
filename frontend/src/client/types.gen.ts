@@ -1328,13 +1328,6 @@ export type MessagesGetMessagesData = {
 
 export type MessagesGetMessagesResponse = (MessagesPublic);
 
-export type MessagesSendMessageData = {
-    requestBody: MessageCreate;
-    sessionId: string;
-};
-
-export type MessagesSendMessageResponse = (MessagePublic);
-
 export type MessagesSendMessageStreamData = {
     requestBody: MessageCreate;
     sessionId: string;
