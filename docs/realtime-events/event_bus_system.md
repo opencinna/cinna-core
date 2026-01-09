@@ -392,38 +392,10 @@ async def handle_environment_activated(event_data: dict):
         )  # ✅ CORRECT - task is independent
 ```
 
-#### 3. Use `_create_task_with_error_logging()` Helper
+#### 3. Use `create_task_with_error_logging()` Helper
 
 **Why**: Background tasks fail silently by default. This helper logs all exceptions and cancellations.
-
-**Implementation** (add to your service file):
-```python
-import asyncio
-import logging
-
-logger = logging.getLogger(__name__)
-
-def _create_task_with_error_logging(coro, task_name: str = "background_task"):
-    """Create an asyncio task with proper exception logging.
-
-    This helper ensures:
-    - All exceptions are logged with full stack traces
-    - Task cancellations are logged for debugging
-    - Task reference is kept to prevent premature GC
-    """
-    task = asyncio.create_task(coro)
-
-    def _handle_task_result(task):
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            logger.info(f"Task {task_name} was cancelled")
-        except Exception as e:
-            logger.error(f"Unhandled exception in {task_name}: {e}", exc_info=True)
-
-    task.add_done_callback(_handle_task_result)
-    return task
-```
+Implementation is here `backend/app/utils.py`.
 
 **Usage in Event Handlers**:
 ```python
@@ -432,7 +404,7 @@ async def handle_stream_completed(event_data: dict):
     environment_id = event_data["meta"]["environment_id"]
 
     # Create background task with error logging
-    _create_task_with_error_logging(
+    create_task_with_error_logging(
         sync_agent_prompts(environment_id),
         task_name=f"sync_prompts_{environment_id}"
     )

@@ -161,7 +161,7 @@ Agent Env SDK → Agent Env Server → Backend Service → WebSocket Room → Fr
   - Checks if environment needs activation
   - Spawns background task for environment activation if needed
   - Or immediately processes pending messages if environment active
-- Uses `_create_task_with_error_logging()` for background task management
+- Uses `create_task_with_error_logging()` for background task management
 - Frontend receives immediate response, then WebSocket events
 - No SSE connection kept open
 
@@ -401,7 +401,7 @@ async def handle_event():
 ```python
 async def handle_event():
     # Wrap in create_task to make it independent
-    _create_task_with_error_logging(
+    create_task_with_error_logging(
         initiate_stream(session_id),
         task_name=f"initiate_stream_{session_id}"
     )  # ✅ CORRECT - task is independent
@@ -413,28 +413,13 @@ async def handle_event():
 
 **Problem**: By default, background tasks that fail silently swallow exceptions, making debugging impossible.
 
-**Solution**: Use the `_create_task_with_error_logging()` helper:
+**Solution**: Use the `create_task_with_error_logging()` helper from `backend/app/utils.py`:
 
 ```python
-def _create_task_with_error_logging(coro, task_name: str = "background_task"):
-    """Create an asyncio task with proper exception logging."""
-    task = asyncio.create_task(coro)
+from app.utils import create_task_with_error_logging
 
-    def _handle_task_result(task):
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            logger.info(f"Task {task_name} was cancelled")
-        except Exception as e:
-            logger.error(f"Unhandled exception in {task_name}: {e}", exc_info=True)
-
-    task.add_done_callback(_handle_task_result)
-    return task
-```
-
-**Usage**:
-```python
-_create_task_with_error_logging(
+# Usage:
+create_task_with_error_logging(
     process_message(session_id),
     task_name=f"process_message_{session_id}"
 )
@@ -456,7 +441,7 @@ async def create_background_task(db: Session):
     agent = db.get(Agent, agent_id)
 
     # This background task will fail - objects are detached from db session!
-    _create_task_with_error_logging(
+    create_task_with_error_logging(
         lifecycle_manager.activate_environment(
             db_session=get_new_session(),  # Different session!
             environment=environment,        # ❌ Detached object
@@ -484,7 +469,7 @@ async def create_background_task(db: Session):
                 agent=fresh_agent
             )
 
-    _create_task_with_error_logging(
+    create_task_with_error_logging(
         _task_with_fresh_objects(),
         task_name=f"activate_env_{environment_id}"
     )
@@ -494,7 +479,8 @@ async def create_background_task(db: Session):
 
 ### Implementation Files Using These Patterns
 
-- `backend/app/services/session_service.py` - `_create_task_with_error_logging()`, `initiate_stream()`, `process_pending_messages()`
+- `backend/app/utils.py` - `create_task_with_error_logging()` utility function (line 20)
+- `backend/app/services/session_service.py` - `initiate_stream()`, `process_pending_messages()`
 - `backend/app/services/event_service.py` - `agent_usage_intent` handler, background task creation for environment activation
 
 ### Testing Background Task Issues
