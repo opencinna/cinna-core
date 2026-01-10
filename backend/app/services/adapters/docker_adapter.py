@@ -880,8 +880,8 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
         self,
         path: str,
         query: str,
-        page: int = 1,
-        page_size: int = 1000,
+        page: int | None = None,
+        page_size: int | None = None,
         timeout_seconds: int = 30
     ) -> dict:
         """
@@ -890,21 +890,23 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
         Args:
             path: Relative path to SQLite file from workspace root
             query: SQL query to execute
-            page: Page number (1-based) for SELECT queries
-            page_size: Number of rows per page
+            page: Page number (1-based) for SELECT queries, None = no pagination
+            page_size: Number of rows per page, None = no pagination
             timeout_seconds: Query timeout in seconds
 
         Returns:
             Dictionary with columns, rows, pagination info, and execution stats
         """
         try:
-            payload = {
+            payload: dict = {
                 "path": path,
                 "query": query,
-                "page": page,
-                "page_size": page_size,
                 "timeout_seconds": timeout_seconds
             }
+            # Only include pagination if both page and page_size are provided
+            if page is not None and page_size is not None:
+                payload["page"] = page
+                payload["page_size"] = page_size
 
             async with httpx.AsyncClient() as client:
                 response = await client.post(

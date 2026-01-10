@@ -18,8 +18,8 @@ class DatabaseQueryRequest(BaseModel):
     """Request to execute SQL query on SQLite database"""
     path: str  # Relative path to SQLite file
     query: str  # SQL query to execute
-    page: int = 1  # Page number (1-based)
-    page_size: int = 1000  # Rows per page
+    page: int | None = None  # Page number (1-based), None = no pagination
+    page_size: int | None = None  # Rows per page, None = no pagination
     timeout_seconds: int = 30  # Query timeout
 
 

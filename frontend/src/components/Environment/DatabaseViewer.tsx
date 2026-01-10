@@ -100,15 +100,23 @@ export function DatabaseViewer({
 
   // Execute query mutation
   const queryMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async ({
+      queryToExecute,
+      currentMode,
+      currentPage,
+    }: {
+      queryToExecute: string
+      currentMode: "auto" | "manual"
+      currentPage: number
+    }) => {
       const response = await WorkspaceService.executeDatabaseQuery({
         envId,
         requestBody: {
           path: dbPath,
-          query: effectiveQuery,
+          query: queryToExecute,
           // Only send pagination params in auto mode - manual mode queries handle their own LIMIT
-          ...(mode === "auto"
-            ? { page, page_size: DEFAULT_PAGE_SIZE }
+          ...(currentMode === "auto"
+            ? { page: currentPage, page_size: DEFAULT_PAGE_SIZE }
             : {}),
           timeout_seconds: 30,
         },
@@ -120,7 +128,11 @@ export function DatabaseViewer({
   // Execute query when table/page changes in auto mode
   useEffect(() => {
     if (mode === "auto" && selectedTable && effectiveQuery) {
-      queryMutation.mutate()
+      queryMutation.mutate({
+        queryToExecute: effectiveQuery,
+        currentMode: mode,
+        currentPage: page,
+      })
     }
   }, [mode, selectedTable, page])
 
@@ -136,7 +148,11 @@ export function DatabaseViewer({
   // Handle execute button
   const handleExecute = () => {
     if (mode === "manual" && query.trim()) {
-      queryMutation.mutate()
+      queryMutation.mutate({
+        queryToExecute: query,
+        currentMode: "manual",
+        currentPage: page,
+      })
     }
   }
 
