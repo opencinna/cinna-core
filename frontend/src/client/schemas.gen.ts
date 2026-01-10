@@ -1652,14 +1652,26 @@ export const DatabaseQueryRequestSchema = {
             title: 'Query'
         },
         page: {
-            type: 'integer',
-            title: 'Page',
-            default: 1
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Page'
         },
         page_size: {
-            type: 'integer',
-            title: 'Page Size',
-            default: 1000
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Page Size'
         },
         timeout_seconds: {
             type: 'integer',
@@ -1895,6 +1907,34 @@ export const GenerateHandoverPromptResponseSchema = {
     required: ['success'],
     title: 'GenerateHandoverPromptResponse',
     description: 'Response from AI handover prompt generation.'
+} as const;
+
+export const GenerateSQLRequestSchema = {
+    properties: {
+        path: {
+            type: 'string',
+            title: 'Path'
+        },
+        user_request: {
+            type: 'string',
+            title: 'User Request'
+        },
+        current_query: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Current Query'
+        }
+    },
+    type: 'object',
+    required: ['path', 'user_request'],
+    title: 'GenerateSQLRequest',
+    description: 'Request to generate SQL query from natural language'
 } as const;
 
 export const GoogleCallbackRequestSchema = {

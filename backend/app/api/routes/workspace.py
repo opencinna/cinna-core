@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from app.api.deps import CurrentUser, SessionDep
 from app.models import AgentEnvironment, Agent
 from app.services.environment_service import EnvironmentService
+from app.services.ai_functions_service import AIFunctionsService
 
 router = APIRouter(prefix="/environments", tags=["workspace"])
 
@@ -21,6 +22,13 @@ class DatabaseQueryRequest(BaseModel):
     page: int | None = None  # Page number (1-based), None = no pagination
     page_size: int | None = None  # Rows per page, None = no pagination
     timeout_seconds: int = 30  # Query timeout
+
+
+class GenerateSQLRequest(BaseModel):
+    """Request to generate SQL query from natural language"""
+    path: str  # Relative path to SQLite file
+    user_request: str  # Natural language description of desired query
+    current_query: str | None = None  # Current SQL query in editor (optional)
 
 
 @router.get("/{env_id}/workspace/tree")
@@ -399,4 +407,81 @@ async def execute_database_query(
             "rows_affected": None,
             "error": str(e),
             "error_type": "execution_error"
+        }
+
+
+@router.post("/{env_id}/database/generate-sql")
+async def generate_sql_query(
+    session: SessionDep,
+    current_user: CurrentUser,
+    env_id: uuid.UUID,
+    request: GenerateSQLRequest
+) -> Any:
+    """
+    Generate SQL query from natural language description using AI.
+
+    Args:
+        env_id: Environment ID
+        request: GenerateSQLRequest with path, user_request, and optional current_query
+
+    Returns:
+        dict with keys:
+            - success: bool
+            - sql: Generated SQL query (if success)
+            - error: Error message or clarifying questions (if not success)
+
+    Permissions: User must own the agent
+    """
+    # Check if AI functions are available
+    if not AIFunctionsService.is_available():
+        return {
+            "success": False,
+            "error": "AI features are not available. Please configure GOOGLE_API_KEY."
+        }
+
+    # Get environment and verify permissions
+    environment = session.get(AgentEnvironment, env_id)
+    if not environment:
+        raise HTTPException(status_code=404, detail="Environment not found")
+
+    agent = session.get(Agent, environment.agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    # Check environment is running
+    if environment.status != "running":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Environment must be running (current status: {environment.status})"
+        )
+
+    try:
+        # First, get the database schema
+        lifecycle_manager = EnvironmentService.get_lifecycle_manager()
+        adapter = lifecycle_manager.get_adapter(environment)
+        schema = await adapter.get_database_schema(request.path)
+
+        # Generate SQL using AI
+        result = AIFunctionsService.generate_sql(
+            user_request=request.user_request,
+            database_schema=schema,
+            current_query=request.current_query
+        )
+
+        return result
+
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Failed to generate SQL: {str(e)}"
         }

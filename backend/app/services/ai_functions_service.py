@@ -10,7 +10,7 @@ import logging
 from typing import Optional
 
 from app.core.config import settings
-from app.agents import generate_agent_config, generate_conversation_title, generate_handover_prompt
+from app.agents import generate_agent_config, generate_conversation_title, generate_handover_prompt, generate_sql_query
 from app.agents.schedule_generator import generate_agent_schedule
 
 logger = logging.getLogger(__name__)
@@ -213,3 +213,49 @@ class AIFunctionsService:
             bool: True if AI functions can be used, False otherwise
         """
         return bool(settings.GOOGLE_API_KEY)
+
+    @staticmethod
+    def generate_sql(
+        user_request: str,
+        database_schema: dict,
+        current_query: str | None = None
+    ) -> dict:
+        """
+        Generate SQL query from natural language description.
+
+        Args:
+            user_request: User's natural language request
+            database_schema: Database schema with tables, views, and columns
+            current_query: Current SQL query in the editor (optional)
+
+        Returns:
+            dict with keys:
+                - success: bool
+                - sql: Generated SQL query (if success)
+                - error: Error message or clarifying questions (if not success)
+
+        Raises:
+            ValueError: If GOOGLE_API_KEY is not configured
+        """
+        try:
+            api_key = AIFunctionsService._get_api_key()
+            result = generate_sql_query(
+                user_request=user_request,
+                database_schema=database_schema,
+                current_query=current_query,
+                api_key=api_key
+            )
+            logger.info(
+                f"Generated SQL: {result.get('success')} - "
+                f"{result.get('sql', '')[:50] if result.get('success') else result.get('error')}"
+            )
+            return result
+        except ValueError:
+            # Re-raise configuration errors
+            raise
+        except Exception as e:
+            logger.error(f"Failed to generate SQL: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": f"Failed to generate SQL query: {str(e)}"
+            }

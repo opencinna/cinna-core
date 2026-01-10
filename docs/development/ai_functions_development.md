@@ -26,6 +26,12 @@ AI Functions provide simple, fast LLM-powered utilities for text generation task
    - Used in: `backend/app/services/agent_service.py:132-156`
    - **Note**: Generated prompts are **initial drafts** that building agents will refine later
 
+3. **SQL Query Generator** (`backend/app/agents/sql_generator.py`)
+   - Generates SQLite SQL queries from natural language descriptions
+   - Takes database schema context (tables, views, columns, types)
+   - Returns JSON: `{success: true, sql: "..."}` or `{success: false, error: "..."}`
+   - Used in: `backend/app/api/routes/workspace.py` (database viewer)
+
 ## Implementation Pattern
 
 All AI functions follow this simple pattern:
@@ -216,9 +222,10 @@ def generate_entrypoint(description: str, api_key: str) -> str:
 See existing implementations:
 - Simple text generation: `backend/app/agents/title_generator.py`
 - Template-based generation: `backend/app/agents/agent_generator.py`
+- Structured JSON output: `backend/app/agents/sql_generator.py`
 - Prompt templates: `backend/app/agents/prompts/`
 - Service integration: `backend/app/services/ai_functions_service.py`
-- Usage in routes: `backend/app/api/routes/messages.py:155-175`
+- Usage in routes: `backend/app/api/routes/messages.py:155-175`, `backend/app/api/routes/workspace.py`
 - Usage in services: `backend/app/services/agent_service.py:132-156`
 
 ## Future Enhancements
@@ -227,7 +234,6 @@ Potential AI functions to add:
 - Code snippet summarization
 - Error message explanation
 - Parameter suggestion from context
-- Workflow description generation
 - Commit message generation
 
 Keep functions focused, fast, and simple!

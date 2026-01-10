@@ -336,8 +336,8 @@ export type CredentialWithData = {
 export type DatabaseQueryRequest = {
     path: string;
     query: string;
-    page?: number;
-    page_size?: number;
+    page?: (number | null);
+    page_size?: (number | null);
     timeout_seconds?: number;
 };
 
@@ -418,6 +418,15 @@ export type GenerateHandoverPromptResponse = {
     success: boolean;
     handover_prompt?: (string | null);
     error?: (string | null);
+};
+
+/**
+ * Request to generate SQL query from natural language
+ */
+export type GenerateSQLRequest = {
+    path: string;
+    user_request: string;
+    current_query?: (string | null);
 };
 
 export type GoogleCallbackRequest = {
@@ -1623,3 +1632,10 @@ export type WorkspaceExecuteDatabaseQueryData = {
 };
 
 export type WorkspaceExecuteDatabaseQueryResponse = (unknown);
+
+export type WorkspaceGenerateSqlQueryData = {
+    envId: string;
+    requestBody: GenerateSQLRequest;
+};
+
+export type WorkspaceGenerateSqlQueryResponse = (unknown);

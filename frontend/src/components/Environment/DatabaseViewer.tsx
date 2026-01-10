@@ -10,7 +10,9 @@ import {
   Eye,
   Database,
   Key,
+  Sparkles,
 } from "lucide-react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
@@ -30,6 +32,7 @@ import type {
   SQLiteQueryResult,
   SQLiteTableInfo,
 } from "./types"
+import { GenerateSQLModal } from "./GenerateSQLModal"
 
 interface DatabaseViewerProps {
   envId: string
@@ -57,6 +60,7 @@ export function DatabaseViewer({
     new Set(["tables", "views"])
   )
   const [schemaPanelOpen, setSchemaPanelOpen] = useState(false)
+  const [generateModalOpen, setGenerateModalOpen] = useState(false)
 
   // Extract filename from path
   const filename = dbPath.split("/").pop() || "database"
@@ -154,6 +158,12 @@ export function DatabaseViewer({
         currentPage: page,
       })
     }
+  }
+
+  // Handle generated SQL from modal
+  const handleQueryGenerated = (sql: string) => {
+    setQuery(sql)
+    toast.success("SQL query generated successfully")
   }
 
   // Handle mode change
@@ -298,14 +308,24 @@ export function DatabaseViewer({
             </div>
 
             {mode === "manual" && (
-              <Button
-                size="sm"
-                onClick={handleExecute}
-                disabled={!query.trim() || isQuerying}
-              >
-                <Play className="h-4 w-4 mr-2" />
-                Execute
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setGenerateModalOpen(true)}
+                >
+                  <Sparkles className="h-4 w-4 mr-1" />
+                  Generate
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleExecute}
+                  disabled={!query.trim() || isQuerying}
+                >
+                  <Play className="h-4 w-4 mr-2" />
+                  Execute
+                </Button>
+              </div>
             )}
           </div>
 
@@ -483,6 +503,16 @@ export function DatabaseViewer({
           </div>
         </div>
       </div>
+
+      {/* Generate SQL Modal */}
+      <GenerateSQLModal
+        open={generateModalOpen}
+        onOpenChange={setGenerateModalOpen}
+        envId={envId}
+        dbPath={dbPath}
+        currentQuery={query}
+        onQueryGenerated={handleQueryGenerated}
+      />
     </div>
   )
 }
