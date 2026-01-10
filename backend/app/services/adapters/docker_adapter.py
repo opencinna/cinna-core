@@ -805,3 +805,128 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
         """
         tasks = [self.upload_file_to_agent_env(filename, content) for filename, content in files]
         return await asyncio.gather(*tasks)
+
+    # === SQLite Database Methods ===
+
+    async def get_database_tables(self, path: str) -> list[str]:
+        """
+        Get list of table names from SQLite database.
+
+        Args:
+            path: Relative path to SQLite file from workspace root
+
+        Returns:
+            List of table and view names
+        """
+        import urllib.parse
+        encoded_path = urllib.parse.quote(path, safe='/')
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/database/tables/{encoded_path}",
+                    headers=self._get_headers(),
+                    timeout=10.0
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise FileNotFoundError(f"Database file not found: {path}")
+            elif e.response.status_code == 400:
+                raise ValueError(f"Invalid path: {path}")
+            else:
+                logger.error(f"Failed to get database tables: {e}")
+                raise Exception(f"Failed to get database tables: {e}")
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to get database tables: {e}")
+            raise Exception(f"Failed to get database tables: {e}")
+
+    async def get_database_schema(self, path: str) -> dict:
+        """
+        Get complete schema for SQLite database.
+
+        Args:
+            path: Relative path to SQLite file from workspace root
+
+        Returns:
+            Dictionary with path, tables, and views (each with columns)
+        """
+        import urllib.parse
+        encoded_path = urllib.parse.quote(path, safe='/')
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/database/schema/{encoded_path}",
+                    headers=self._get_headers(),
+                    timeout=30.0
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise FileNotFoundError(f"Database file not found: {path}")
+            elif e.response.status_code == 400:
+                raise ValueError(f"Invalid path: {path}")
+            else:
+                logger.error(f"Failed to get database schema: {e}")
+                raise Exception(f"Failed to get database schema: {e}")
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to get database schema: {e}")
+            raise Exception(f"Failed to get database schema: {e}")
+
+    async def execute_database_query(
+        self,
+        path: str,
+        query: str,
+        page: int = 1,
+        page_size: int = 1000,
+        timeout_seconds: int = 30
+    ) -> dict:
+        """
+        Execute SQL query on SQLite database.
+
+        Args:
+            path: Relative path to SQLite file from workspace root
+            query: SQL query to execute
+            page: Page number (1-based) for SELECT queries
+            page_size: Number of rows per page
+            timeout_seconds: Query timeout in seconds
+
+        Returns:
+            Dictionary with columns, rows, pagination info, and execution stats
+        """
+        try:
+            payload = {
+                "path": path,
+                "query": query,
+                "page": page,
+                "page_size": page_size,
+                "timeout_seconds": timeout_seconds
+            }
+
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.base_url}/database/query",
+                    json=payload,
+                    headers=self._get_headers(),
+                    timeout=float(timeout_seconds) + 5.0  # Add buffer for network
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to execute database query: {e}")
+            return {
+                "columns": [],
+                "rows": [],
+                "total_rows": 0,
+                "page": page,
+                "page_size": page_size,
+                "has_more": False,
+                "execution_time_ms": 0,
+                "query_type": "OTHER",
+                "rows_affected": None,
+                "error": str(e),
+                "error_type": "execution_error"
+            }

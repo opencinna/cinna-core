@@ -30,8 +30,21 @@ export const formatDate = (dateString: string | null | undefined): string => {
   })
 }
 
+// SQLite file extensions
+const SQLITE_EXTENSIONS = [".db", ".sqlite", ".sqlite3"]
+
+// Check if filename is a SQLite database
+export const isSQLiteFile = (filename: string): boolean => {
+  const lower = filename.toLowerCase()
+  return SQLITE_EXTENSIONS.some(ext => lower.endsWith(ext))
+}
+
 // Helper function to get file extension from name
 export const getFileExtension = (name: string): string => {
+  // Check for SQLite files first (they use special handling)
+  if (isSQLiteFile(name)) {
+    return "sqlite"
+  }
   const lastDot = name.lastIndexOf('.')
   return lastDot > 0 ? name.substring(lastDot + 1).toLowerCase() : 'txt'
 }

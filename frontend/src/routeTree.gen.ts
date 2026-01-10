@@ -30,6 +30,7 @@ import { Route as LayoutCredentialCredentialIdRouteImport } from './routes/_layo
 import { Route as LayoutAgentCreatingRouteImport } from './routes/_layout/agent/creating'
 import { Route as LayoutAgentAgentIdRouteImport } from './routes/_layout/agent/$agentId'
 import { Route as LayoutEnvironmentEnvIdFileRouteImport } from './routes/_layout/environment/$envId/file'
+import { Route as LayoutEnvironmentEnvIdDatabaseRouteImport } from './routes/_layout/environment/$envId/database'
 import { Route as LayoutAgentAgentIdConversationsRouteImport } from './routes/_layout/agent/$agentId/conversations'
 
 const SignupRoute = SignupRouteImport.update({
@@ -140,6 +141,12 @@ const LayoutEnvironmentEnvIdFileRoute =
     path: '/environment/$envId/file',
     getParentRoute: () => LayoutRoute,
   } as any)
+const LayoutEnvironmentEnvIdDatabaseRoute =
+  LayoutEnvironmentEnvIdDatabaseRouteImport.update({
+    id: '/environment/$envId/database',
+    path: '/environment/$envId/database',
+    getParentRoute: () => LayoutRoute,
+  } as any)
 const LayoutAgentAgentIdConversationsRoute =
   LayoutAgentAgentIdConversationsRouteImport.update({
     id: '/conversations',
@@ -168,6 +175,7 @@ export interface FileRoutesByFullPath {
   '/session/$sessionId': typeof LayoutSessionSessionIdRoute
   '/credentials/oauth/callback': typeof CredentialsOauthCallbackRoute
   '/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
+  '/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
 }
 export interface FileRoutesByTo {
@@ -191,6 +199,7 @@ export interface FileRoutesByTo {
   '/session/$sessionId': typeof LayoutSessionSessionIdRoute
   '/credentials/oauth/callback': typeof CredentialsOauthCallbackRoute
   '/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
+  '/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
 }
 export interface FileRoutesById {
@@ -216,6 +225,7 @@ export interface FileRoutesById {
   '/_layout/session/$sessionId': typeof LayoutSessionSessionIdRoute
   '/credentials/oauth/callback': typeof CredentialsOauthCallbackRoute
   '/_layout/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
+  '/_layout/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/_layout/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
 }
 export interface FileRouteTypes {
@@ -241,6 +251,7 @@ export interface FileRouteTypes {
     | '/session/$sessionId'
     | '/credentials/oauth/callback'
     | '/agent/$agentId/conversations'
+    | '/environment/$envId/database'
     | '/environment/$envId/file'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -264,6 +275,7 @@ export interface FileRouteTypes {
     | '/session/$sessionId'
     | '/credentials/oauth/callback'
     | '/agent/$agentId/conversations'
+    | '/environment/$envId/database'
     | '/environment/$envId/file'
   id:
     | '__root__'
@@ -288,6 +300,7 @@ export interface FileRouteTypes {
     | '/_layout/session/$sessionId'
     | '/credentials/oauth/callback'
     | '/_layout/agent/$agentId/conversations'
+    | '/_layout/environment/$envId/database'
     | '/_layout/environment/$envId/file'
   fileRoutesById: FileRoutesById
 }
@@ -449,6 +462,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutEnvironmentEnvIdFileRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/environment/$envId/database': {
+      id: '/_layout/environment/$envId/database'
+      path: '/environment/$envId/database'
+      fullPath: '/environment/$envId/database'
+      preLoaderRoute: typeof LayoutEnvironmentEnvIdDatabaseRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/agent/$agentId/conversations': {
       id: '/_layout/agent/$agentId/conversations'
       path: '/conversations'
@@ -485,6 +505,7 @@ interface LayoutRouteChildren {
   LayoutCredentialCredentialIdRoute: typeof LayoutCredentialCredentialIdRoute
   LayoutKnowledgeSourceSourceIdRoute: typeof LayoutKnowledgeSourceSourceIdRoute
   LayoutSessionSessionIdRoute: typeof LayoutSessionSessionIdRoute
+  LayoutEnvironmentEnvIdDatabaseRoute: typeof LayoutEnvironmentEnvIdDatabaseRoute
   LayoutEnvironmentEnvIdFileRoute: typeof LayoutEnvironmentEnvIdFileRoute
 }
 
@@ -503,6 +524,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutCredentialCredentialIdRoute: LayoutCredentialCredentialIdRoute,
   LayoutKnowledgeSourceSourceIdRoute: LayoutKnowledgeSourceSourceIdRoute,
   LayoutSessionSessionIdRoute: LayoutSessionSessionIdRoute,
+  LayoutEnvironmentEnvIdDatabaseRoute: LayoutEnvironmentEnvIdDatabaseRoute,
   LayoutEnvironmentEnvIdFileRoute: LayoutEnvironmentEnvIdFileRoute,
 }
 

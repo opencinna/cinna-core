@@ -17,7 +17,10 @@ from .models import (
     AgentHandoverResponse,
     CredentialsUpdate,
     WorkspaceTreeResponse,
-    FileUploadResponse
+    FileUploadResponse,
+    SQLiteDatabaseSchema,
+    SQLiteQueryRequest,
+    SQLiteQueryResult
 )
 from .sdk_manager import sdk_manager
 from .agent_env_service import AgentEnvService
@@ -587,3 +590,120 @@ async def upload_file_to_workspace(
         size=len(content),
         message="File uploaded successfully"
     )
+
+
+# SQLite Database Endpoints
+
+@router.get("/database/tables/{path:path}", dependencies=[Depends(verify_auth_token)])
+async def get_database_tables(path: str) -> list[str]:
+    """
+    Get list of table names from SQLite database.
+
+    Args:
+        path: Relative path to SQLite file from workspace root
+
+    Returns:
+        List of table and view names
+
+    Raises:
+        400: Invalid path
+        404: File not found
+        500: Database error
+    """
+    try:
+        tables = agent_env_service.get_database_tables(path)
+        return tables
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except IOError as e:
+        if "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error getting database tables for {path}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get tables: {str(e)}")
+
+
+@router.get("/database/schema/{path:path}", dependencies=[Depends(verify_auth_token)])
+async def get_database_schema(path: str) -> SQLiteDatabaseSchema:
+    """
+    Get complete schema for SQLite database.
+
+    Args:
+        path: Relative path to SQLite file from workspace root
+
+    Returns:
+        Database schema with tables, views, and columns
+
+    Raises:
+        400: Invalid path
+        404: File not found
+        500: Database error
+    """
+    try:
+        schema = agent_env_service.get_database_schema(path)
+        return SQLiteDatabaseSchema(**schema)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except IOError as e:
+        if "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error getting database schema for {path}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get schema: {str(e)}")
+
+
+@router.post("/database/query", dependencies=[Depends(verify_auth_token)])
+async def execute_database_query(request: SQLiteQueryRequest) -> SQLiteQueryResult:
+    """
+    Execute SQL query on SQLite database.
+
+    For SELECT queries: returns paginated results
+    For DML queries (INSERT/UPDATE/DELETE): returns rows_affected count
+
+    Args:
+        request: Query request with path, SQL, pagination, and timeout
+
+    Returns:
+        Query result with columns, rows, pagination info, and execution stats
+    """
+    try:
+        result = agent_env_service.execute_query(
+            relative_path=request.path,
+            query=request.query,
+            page=request.page,
+            page_size=request.page_size,
+            timeout_seconds=request.timeout_seconds
+        )
+        return SQLiteQueryResult(**result)
+    except ValueError as e:
+        # Path validation error
+        return SQLiteQueryResult(
+            columns=[],
+            rows=[],
+            total_rows=0,
+            page=request.page,
+            page_size=request.page_size,
+            has_more=False,
+            execution_time_ms=0,
+            query_type="OTHER",
+            rows_affected=None,
+            error=str(e),
+            error_type="file_error"
+        )
+    except Exception as e:
+        logger.error(f"Error executing query on {request.path}: {e}")
+        return SQLiteQueryResult(
+            columns=[],
+            rows=[],
+            total_rows=0,
+            page=request.page,
+            page_size=request.page_size,
+            has_more=False,
+            execution_time_ms=0,
+            query_type="OTHER",
+            rows_affected=None,
+            error=str(e),
+            error_type="execution_error"
+        )

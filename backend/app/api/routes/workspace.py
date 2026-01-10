@@ -3,12 +3,24 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, SessionDep
 from app.models import AgentEnvironment, Agent
 from app.services.environment_service import EnvironmentService
 
 router = APIRouter(prefix="/environments", tags=["workspace"])
+
+
+# Request/Response models for database endpoints
+
+class DatabaseQueryRequest(BaseModel):
+    """Request to execute SQL query on SQLite database"""
+    path: str  # Relative path to SQLite file
+    query: str  # SQL query to execute
+    page: int = 1  # Page number (1-based)
+    page_size: int = 1000  # Rows per page
+    timeout_seconds: int = 30  # Query timeout
 
 
 @router.get("/{env_id}/workspace/tree")
@@ -208,3 +220,183 @@ async def view_workspace_file(
             status_code=500,
             detail=f"Failed to view file: {str(e)}"
         )
+
+
+# SQLite Database Endpoints
+
+@router.get("/{env_id}/database/tables/{path:path}")
+async def get_database_tables(
+    session: SessionDep,
+    current_user: CurrentUser,
+    env_id: uuid.UUID,
+    path: str
+) -> list[str]:
+    """
+    Get list of table names from SQLite database.
+
+    Args:
+        env_id: Environment ID
+        path: Relative path to SQLite file from workspace root
+
+    Returns:
+        List of table and view names
+
+    Permissions: User must own the agent
+    """
+    # Get environment and verify permissions
+    environment = session.get(AgentEnvironment, env_id)
+    if not environment:
+        raise HTTPException(status_code=404, detail="Environment not found")
+
+    agent = session.get(Agent, environment.agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    # Check environment is running
+    if environment.status != "running":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Environment must be running (current status: {environment.status})"
+        )
+
+    try:
+        lifecycle_manager = EnvironmentService.get_lifecycle_manager()
+        adapter = lifecycle_manager.get_adapter(environment)
+        return await adapter.get_database_tables(path)
+
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get database tables: {str(e)}"
+        )
+
+
+@router.get("/{env_id}/database/schema/{path:path}")
+async def get_database_schema(
+    session: SessionDep,
+    current_user: CurrentUser,
+    env_id: uuid.UUID,
+    path: str
+) -> Any:
+    """
+    Get complete schema for SQLite database.
+
+    Args:
+        env_id: Environment ID
+        path: Relative path to SQLite file from workspace root
+
+    Returns:
+        Database schema with path, tables, and views (each with columns)
+
+    Permissions: User must own the agent
+    """
+    # Get environment and verify permissions
+    environment = session.get(AgentEnvironment, env_id)
+    if not environment:
+        raise HTTPException(status_code=404, detail="Environment not found")
+
+    agent = session.get(Agent, environment.agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    # Check environment is running
+    if environment.status != "running":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Environment must be running (current status: {environment.status})"
+        )
+
+    try:
+        lifecycle_manager = EnvironmentService.get_lifecycle_manager()
+        adapter = lifecycle_manager.get_adapter(environment)
+        return await adapter.get_database_schema(path)
+
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get database schema: {str(e)}"
+        )
+
+
+@router.post("/{env_id}/database/query")
+async def execute_database_query(
+    session: SessionDep,
+    current_user: CurrentUser,
+    env_id: uuid.UUID,
+    request: DatabaseQueryRequest
+) -> Any:
+    """
+    Execute SQL query on SQLite database.
+
+    For SELECT queries: returns paginated results
+    For DML queries (INSERT/UPDATE/DELETE): returns rows_affected count
+
+    Args:
+        env_id: Environment ID
+        request: Query request with path, SQL, pagination, and timeout
+
+    Returns:
+        Query result with columns, rows, pagination info, and execution stats
+
+    Permissions: User must own the agent
+    """
+    # Get environment and verify permissions
+    environment = session.get(AgentEnvironment, env_id)
+    if not environment:
+        raise HTTPException(status_code=404, detail="Environment not found")
+
+    agent = session.get(Agent, environment.agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    # Check environment is running
+    if environment.status != "running":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Environment must be running (current status: {environment.status})"
+        )
+
+    try:
+        lifecycle_manager = EnvironmentService.get_lifecycle_manager()
+        adapter = lifecycle_manager.get_adapter(environment)
+        return await adapter.execute_database_query(
+            path=request.path,
+            query=request.query,
+            page=request.page,
+            page_size=request.page_size,
+            timeout_seconds=request.timeout_seconds
+        )
+
+    except Exception as e:
+        # Return error in response format rather than HTTP error
+        # This allows the frontend to display the error message
+        return {
+            "columns": [],
+            "rows": [],
+            "total_rows": 0,
+            "page": request.page,
+            "page_size": request.page_size,
+            "has_more": False,
+            "execution_time_ms": 0,
+            "query_type": "OTHER",
+            "rows_affected": None,
+            "error": str(e),
+            "error_type": "execution_error"
+        }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Tabs } from "@/components/ui/tabs"
 import { WorkspaceService, OpenAPI } from "@/client"
@@ -7,7 +7,7 @@ import { TabHeader } from "./TabHeader"
 import { WorkspaceTabContent } from "./WorkspaceTabContent"
 import { LoadingState, ErrorState, NoEnvironmentState } from "./StateComponents"
 import { convertFileNodeToTreeItem, type FileNode } from "./utils"
-import type { TreeItem } from "./types"
+import type { TreeItem, DatabaseTableItem } from "./types"
 
 interface WorkspaceTreeResponse {
   files?: FileNode
@@ -26,6 +26,8 @@ export function EnvironmentPanel({ isOpen, environmentId }: EnvironmentPanelProp
   const [activeTab, setActiveTab] = useState("files")
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [isWidePanelMode, setIsWidePanelMode] = useState(false)
+  // Database tables state: path -> { tables: DatabaseTableItem[], loading: boolean, error: string | null }
+  const [databaseTables, setDatabaseTables] = useState<Record<string, { tables: DatabaseTableItem[], loading: boolean, error: string | null }>>({})
 
   // Set up request interceptor for blob downloads (only once)
   useEffect(() => {
@@ -61,6 +63,50 @@ export function EnvironmentPanel({ isOpen, environmentId }: EnvironmentPanelProp
     enabled: isOpen && !!environmentId,
     staleTime: 5000, // Cache for 5 seconds
   })
+
+  // Fetch database tables for a SQLite file (must be before conditional return)
+  const handleFetchDatabaseTables = useCallback(async (dbPath: string) => {
+    if (!environmentId) return
+
+    // Set loading state first, then check if already loaded
+    setDatabaseTables(prev => {
+      // Don't refetch if already loaded or loading
+      if (prev[dbPath]?.tables.length > 0 || prev[dbPath]?.loading) return prev
+      return {
+        ...prev,
+        [dbPath]: { tables: [], loading: true, error: null }
+      }
+    })
+
+    // Check current state to avoid duplicate fetches
+    const currentState = databaseTables[dbPath]
+    if (currentState?.tables.length > 0 || currentState?.loading) return
+
+    try {
+      const tableNames = await WorkspaceService.getDatabaseTables({
+        envId: environmentId,
+        path: dbPath
+      })
+
+      // Convert table names to DatabaseTableItem objects
+      const tables: DatabaseTableItem[] = tableNames.map(name => ({
+        type: "database_table" as const,
+        name,
+        tableType: "table" as const, // API returns just names, assume table (views included)
+        databasePath: dbPath
+      }))
+
+      setDatabaseTables(prev => ({
+        ...prev,
+        [dbPath]: { tables, loading: false, error: null }
+      }))
+    } catch (error) {
+      setDatabaseTables(prev => ({
+        ...prev,
+        [dbPath]: { tables: [], loading: false, error: String(error) }
+      }))
+    }
+  }, [environmentId, databaseTables])
 
   if (!isOpen) return null
 
@@ -138,6 +184,8 @@ export function EnvironmentPanel({ isOpen, environmentId }: EnvironmentPanelProp
               onDownload={handleDownload}
               pathPrefix="files"
               envId={environmentId}
+              databaseTables={databaseTables}
+              onFetchDatabaseTables={handleFetchDatabaseTables}
             />
             <WorkspaceTabContent
               value="scripts"
@@ -147,6 +195,8 @@ export function EnvironmentPanel({ isOpen, environmentId }: EnvironmentPanelProp
               onDownload={handleDownload}
               pathPrefix="scripts"
               envId={environmentId}
+              databaseTables={databaseTables}
+              onFetchDatabaseTables={handleFetchDatabaseTables}
             />
             <WorkspaceTabContent
               value="logs"
@@ -156,6 +206,8 @@ export function EnvironmentPanel({ isOpen, environmentId }: EnvironmentPanelProp
               onDownload={handleDownload}
               pathPrefix="logs"
               envId={environmentId}
+              databaseTables={databaseTables}
+              onFetchDatabaseTables={handleFetchDatabaseTables}
             />
             <WorkspaceTabContent
               value="docs"
@@ -165,6 +217,8 @@ export function EnvironmentPanel({ isOpen, environmentId }: EnvironmentPanelProp
               onDownload={handleDownload}
               pathPrefix="docs"
               envId={environmentId}
+              databaseTables={databaseTables}
+              onFetchDatabaseTables={handleFetchDatabaseTables}
             />
             <WorkspaceTabContent
               value="uploads"
@@ -174,6 +228,8 @@ export function EnvironmentPanel({ isOpen, environmentId }: EnvironmentPanelProp
               onDownload={handleDownload}
               pathPrefix="uploads"
               envId={environmentId}
+              databaseTables={databaseTables}
+              onFetchDatabaseTables={handleFetchDatabaseTables}
             />
           </>
         )}

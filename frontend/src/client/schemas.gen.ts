@@ -1641,6 +1641,38 @@ export const CredentialsPublicSchema = {
     title: 'CredentialsPublic'
 } as const;
 
+export const DatabaseQueryRequestSchema = {
+    properties: {
+        path: {
+            type: 'string',
+            title: 'Path'
+        },
+        query: {
+            type: 'string',
+            title: 'Query'
+        },
+        page: {
+            type: 'integer',
+            title: 'Page',
+            default: 1
+        },
+        page_size: {
+            type: 'integer',
+            title: 'Page Size',
+            default: 1000
+        },
+        timeout_seconds: {
+            type: 'integer',
+            title: 'Timeout Seconds',
+            default: 30
+        }
+    },
+    type: 'object',
+    required: ['path', 'query'],
+    title: 'DatabaseQueryRequest',
+    description: 'Request to execute SQL query on SQLite database'
+} as const;
+
 export const EventBroadcastSchema = {
     properties: {
         type: {

@@ -335,7 +335,7 @@ function ChatInterface() {
           streamingEvents={streamingEvents}
           isStreaming={isStreaming}
           onSendAnswer={handleSendAnswer}
-          conversationModeUi={agent?.conversation_mode_ui || "detailed"}
+          conversationModeUi={session.mode === "building" ? "detailed" : (agent?.conversation_mode_ui || "detailed")}
         />
         <EnvironmentPanel isOpen={envPanelOpen} environmentId={session?.environment_id} />
       </div>

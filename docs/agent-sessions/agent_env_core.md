@@ -672,3 +672,4 @@ Events: {
 - `docs/agent-sessions/agent_env_docker.md` - Docker architecture and rebuild operations
 - `docs/agent-sessions/agent_env_building_prompt.md` - Building mode prompt construction
 - `docs/agent-sessions/business_logic.md` - Overall system architecture
+- `docs/file-management/remote_database_viewer.md` - SQLite database viewing/querying in UI (agent-env exposes `/database/*` endpoints for schema and query execution)

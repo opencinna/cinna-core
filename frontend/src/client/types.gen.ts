@@ -331,6 +331,17 @@ export type CredentialWithData = {
 };
 
 /**
+ * Request to execute SQL query on SQLite database
+ */
+export type DatabaseQueryRequest = {
+    path: string;
+    query: string;
+    page?: number;
+    page_size?: number;
+    timeout_seconds?: number;
+};
+
+/**
  * Event broadcast request model.
  */
 export type EventBroadcast = {
@@ -1589,3 +1600,24 @@ export type WorkspaceViewWorkspaceFileData = {
 };
 
 export type WorkspaceViewWorkspaceFileResponse = (unknown);
+
+export type WorkspaceGetDatabaseTablesData = {
+    envId: string;
+    path: string;
+};
+
+export type WorkspaceGetDatabaseTablesResponse = (Array<(string)>);
+
+export type WorkspaceGetDatabaseSchemaData = {
+    envId: string;
+    path: string;
+};
+
+export type WorkspaceGetDatabaseSchemaResponse = (unknown);
+
+export type WorkspaceExecuteDatabaseQueryData = {
+    envId: string;
+    requestBody: DatabaseQueryRequest;
+};
+
+export type WorkspaceExecuteDatabaseQueryResponse = (unknown);

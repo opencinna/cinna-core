@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 
 
 class HealthCheckResponse(BaseModel):
@@ -90,3 +90,51 @@ class FileUploadResponse(BaseModel):
     filename: str  # Final filename (may differ from requested if conflict)
     size: int  # File size in bytes
     message: str
+
+
+# SQLite Database Models
+
+class SQLiteColumnInfo(BaseModel):
+    """Column information for a SQLite table/view"""
+    name: str
+    type: str  # SQLite type: TEXT, INTEGER, REAL, BLOB, NULL
+    nullable: bool
+    primary_key: bool
+
+
+class SQLiteTableInfo(BaseModel):
+    """Information about a table or view in SQLite database"""
+    name: str
+    type: str  # "table" | "view"
+    columns: list[SQLiteColumnInfo]
+
+
+class SQLiteDatabaseSchema(BaseModel):
+    """Complete schema information for a SQLite database"""
+    path: str  # Relative path to database file
+    tables: list[SQLiteTableInfo]
+    views: list[SQLiteTableInfo]
+
+
+class SQLiteQueryRequest(BaseModel):
+    """Request to execute SQL query on SQLite database"""
+    path: str  # Relative path to SQLite file
+    query: str  # SQL query to execute
+    page: int | None = None  # Page number (1-based), None = no pagination
+    page_size: int | None = None  # Rows per page, None = no pagination
+    timeout_seconds: int = 30  # Query timeout
+
+
+class SQLiteQueryResult(BaseModel):
+    """Result from SQL query execution"""
+    columns: list[str]  # Column names
+    rows: list[list[Any]]  # Row data as list of lists
+    total_rows: int  # Total row count (for SELECT queries)
+    page: int | None  # Current page (None if no pagination)
+    page_size: int | None  # Page size used (None if no pagination)
+    has_more: bool  # Whether more pages exist
+    execution_time_ms: float  # Query execution time
+    query_type: str  # "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "OTHER"
+    rows_affected: int | None = None  # For DML queries
+    error: str | None = None  # Error message if query failed
+    error_type: str | None = None  # "syntax_error" | "timeout" | "file_error" | "execution_error"

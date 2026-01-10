@@ -1,4 +1,4 @@
-import { FileText, FileJson, FileCode, ScrollText, FileSpreadsheet, BookOpen } from "lucide-react"
+import { FileText, FileJson, FileCode, ScrollText, FileSpreadsheet, BookOpen, Database } from "lucide-react"
 
 interface FileIconProps {
   fileType: string
@@ -19,6 +19,8 @@ export function FileIcon({ fileType, className = "h-4 w-4" }: FileIconProps) {
       return <ScrollText className={`${className} text-yellow-500`} />
     case "md":
       return <BookOpen className={`${className} text-indigo-500`} />
+    case "sqlite":
+      return <Database className={`${className} text-orange-500`} />
     default:
       return <FileText className={className} />
   }

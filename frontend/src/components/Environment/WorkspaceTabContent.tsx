@@ -1,7 +1,7 @@
 import { TabsContent } from "@/components/ui/tabs"
 import { TreeItemRenderer } from "./TreeItemRenderer"
 import { EmptyState } from "./StateComponents"
-import type { TreeItem } from "./types"
+import type { TreeItem, DatabaseTableItem } from "./types"
 
 interface WorkspaceTabContentProps {
   value: string
@@ -11,6 +11,8 @@ interface WorkspaceTabContentProps {
   onDownload: (fileName: string) => void
   pathPrefix: string
   envId?: string
+  databaseTables?: Record<string, { tables: DatabaseTableItem[], loading: boolean, error: string | null }>
+  onFetchDatabaseTables?: (path: string) => void
 }
 
 export function WorkspaceTabContent({
@@ -21,6 +23,8 @@ export function WorkspaceTabContent({
   onDownload,
   pathPrefix,
   envId,
+  databaseTables,
+  onFetchDatabaseTables,
 }: WorkspaceTabContentProps) {
   const hasContent = data[0]?.children && data[0].children.length > 0
 
@@ -38,6 +42,8 @@ export function WorkspaceTabContent({
               onDownload={onDownload}
               path={pathPrefix}
               envId={envId}
+              databaseTables={databaseTables}
+              onFetchDatabaseTables={onFetchDatabaseTables}
             />
           ))}
         </div>

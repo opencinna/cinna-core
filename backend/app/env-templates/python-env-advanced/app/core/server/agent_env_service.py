@@ -699,3 +699,329 @@ class AgentEnvService:
             status_code=500,
             detail=f"Could not resolve filename conflict for {filename} after {max_attempts} attempts"
         )
+
+    # SQLite Database Methods
+
+    SQLITE_EXTENSIONS = [".db", ".sqlite", ".sqlite3"]
+
+    @staticmethod
+    def is_sqlite_file(filename: str) -> bool:
+        """Check if filename has SQLite extension."""
+        lower = filename.lower()
+        return any(lower.endswith(ext) for ext in AgentEnvService.SQLITE_EXTENSIONS)
+
+    def get_database_tables(self, relative_path: str) -> list[str]:
+        """
+        Get list of table names from SQLite database.
+
+        Args:
+            relative_path: Path to SQLite file relative to workspace
+
+        Returns:
+            List of table names (tables and views combined)
+
+        Raises:
+            ValueError: If path is invalid
+            IOError: If file doesn't exist or can't be read
+        """
+        import sqlite3
+
+        absolute_path = self.validate_workspace_path(relative_path)
+
+        if not absolute_path.exists():
+            raise IOError(f"Database file not found: {relative_path}")
+
+        if not absolute_path.is_file():
+            raise IOError(f"Path is not a file: {relative_path}")
+
+        try:
+            conn = sqlite3.connect(str(absolute_path), timeout=5.0)
+            cursor = conn.cursor()
+
+            # Get tables
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+            tables = [row[0] for row in cursor.fetchall()]
+
+            # Get views
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='view' ORDER BY name"
+            )
+            views = [row[0] for row in cursor.fetchall()]
+
+            conn.close()
+
+            return tables + views
+
+        except sqlite3.Error as e:
+            logger.error(f"SQLite error reading {relative_path}: {e}")
+            raise IOError(f"Failed to read database: {str(e)}")
+
+    def get_database_schema(self, relative_path: str) -> dict:
+        """
+        Get complete schema for SQLite database including tables, views, and columns.
+
+        Args:
+            relative_path: Path to SQLite file relative to workspace
+
+        Returns:
+            Dict with path, tables, and views (each with columns)
+
+        Raises:
+            ValueError: If path is invalid
+            IOError: If file doesn't exist or can't be read
+        """
+        import sqlite3
+
+        absolute_path = self.validate_workspace_path(relative_path)
+
+        if not absolute_path.exists():
+            raise IOError(f"Database file not found: {relative_path}")
+
+        if not absolute_path.is_file():
+            raise IOError(f"Path is not a file: {relative_path}")
+
+        try:
+            conn = sqlite3.connect(str(absolute_path), timeout=5.0)
+            cursor = conn.cursor()
+
+            def get_columns(table_name: str) -> list[dict]:
+                """Get column info for a table/view."""
+                cursor.execute(f"PRAGMA table_info('{table_name}')")
+                columns = []
+                for row in cursor.fetchall():
+                    columns.append({
+                        "name": row[1],
+                        "type": row[2] or "TEXT",
+                        "nullable": row[3] == 0,  # notnull = 0 means nullable
+                        "primary_key": row[5] > 0
+                    })
+                return columns
+
+            # Get tables with columns
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+            tables = []
+            for row in cursor.fetchall():
+                table_name = row[0]
+                tables.append({
+                    "name": table_name,
+                    "type": "table",
+                    "columns": get_columns(table_name)
+                })
+
+            # Get views with columns
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='view' ORDER BY name"
+            )
+            views = []
+            for row in cursor.fetchall():
+                view_name = row[0]
+                views.append({
+                    "name": view_name,
+                    "type": "view",
+                    "columns": get_columns(view_name)
+                })
+
+            conn.close()
+
+            return {
+                "path": relative_path,
+                "tables": tables,
+                "views": views
+            }
+
+        except sqlite3.Error as e:
+            logger.error(f"SQLite error reading schema from {relative_path}: {e}")
+            raise IOError(f"Failed to read database schema: {str(e)}")
+
+    def execute_query(
+        self,
+        relative_path: str,
+        query: str,
+        page: int | None = None,
+        page_size: int | None = None,
+        timeout_seconds: int = 30
+    ) -> dict:
+        """
+        Execute SQL query on SQLite database.
+
+        Args:
+            relative_path: Path to SQLite file relative to workspace
+            query: SQL query to execute
+            page: Page number (1-based) for SELECT queries, None = no pagination
+            page_size: Number of rows per page, None = no pagination
+            timeout_seconds: Query timeout in seconds
+
+        Returns:
+            Dict with columns, rows, pagination info, and execution stats
+
+        For SELECT queries: returns paginated results (if page/page_size provided)
+        For DML queries: returns rows_affected count
+        """
+        import sqlite3
+        import time
+
+        absolute_path = self.validate_workspace_path(relative_path)
+
+        if not absolute_path.exists():
+            return {
+                "columns": [],
+                "rows": [],
+                "total_rows": 0,
+                "page": page,
+                "page_size": page_size,
+                "has_more": False,
+                "execution_time_ms": 0,
+                "query_type": "OTHER",
+                "rows_affected": None,
+                "error": f"Database file not found: {relative_path}",
+                "error_type": "file_error"
+            }
+
+        # Detect query type
+        query_stripped = query.strip().upper()
+        if query_stripped.startswith("SELECT"):
+            query_type = "SELECT"
+        elif query_stripped.startswith("INSERT"):
+            query_type = "INSERT"
+        elif query_stripped.startswith("UPDATE"):
+            query_type = "UPDATE"
+        elif query_stripped.startswith("DELETE"):
+            query_type = "DELETE"
+        else:
+            query_type = "OTHER"
+
+        try:
+            conn = sqlite3.connect(str(absolute_path), timeout=float(timeout_seconds))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            start_time = time.time()
+
+            if query_type == "SELECT":
+                # Check if pagination is requested
+                use_pagination = page is not None and page_size is not None
+
+                if use_pagination:
+                    # For paginated SELECT queries, get total count first
+                    # Wrap in subquery to handle complex queries
+                    try:
+                        count_query = f"SELECT COUNT(*) FROM ({query})"
+                        cursor.execute(count_query)
+                        total_rows = cursor.fetchone()[0]
+                    except sqlite3.Error:
+                        # If count fails (e.g., UNION queries), execute without count
+                        total_rows = -1
+
+                    # Execute with pagination
+                    offset = (page - 1) * page_size
+                    paginated_query = f"{query} LIMIT {page_size} OFFSET {offset}"
+                    cursor.execute(paginated_query)
+                else:
+                    # No pagination - execute query as-is
+                    cursor.execute(query)
+                    total_rows = -1
+
+                # Get column names
+                columns = [description[0] for description in cursor.description] if cursor.description else []
+
+                # Fetch rows
+                rows = []
+                for row in cursor.fetchall():
+                    rows.append(list(row))
+
+                execution_time_ms = (time.time() - start_time) * 1000
+
+                # Calculate has_more
+                if use_pagination:
+                    if total_rows >= 0:
+                        has_more = (offset + len(rows)) < total_rows
+                    else:
+                        # If we couldn't get count, check if we got a full page
+                        has_more = len(rows) == page_size
+                        total_rows = offset + len(rows)
+                        if has_more:
+                            total_rows = -1  # Unknown total
+                else:
+                    has_more = False
+                    total_rows = len(rows)
+
+                conn.close()
+
+                return {
+                    "columns": columns,
+                    "rows": rows,
+                    "total_rows": total_rows,
+                    "page": page,
+                    "page_size": page_size,
+                    "has_more": has_more,
+                    "execution_time_ms": round(execution_time_ms, 2),
+                    "query_type": query_type,
+                    "rows_affected": None,
+                    "error": None,
+                    "error_type": None
+                }
+
+            else:
+                # DML or other queries
+                cursor.execute(query)
+                rows_affected = cursor.rowcount
+                conn.commit()
+
+                execution_time_ms = (time.time() - start_time) * 1000
+                conn.close()
+
+                return {
+                    "columns": [],
+                    "rows": [],
+                    "total_rows": 0,
+                    "page": 1,
+                    "page_size": page_size,
+                    "has_more": False,
+                    "execution_time_ms": round(execution_time_ms, 2),
+                    "query_type": query_type,
+                    "rows_affected": rows_affected,
+                    "error": None,
+                    "error_type": None
+                }
+
+        except sqlite3.OperationalError as e:
+            error_str = str(e).lower()
+            if "timeout" in error_str or "locked" in error_str:
+                error_type = "timeout"
+            else:
+                error_type = "execution_error"
+
+            logger.error(f"SQLite OperationalError on {relative_path}: {e}, original_query={query!r}, page={page}, page_size={page_size}")
+            return {
+                "columns": [],
+                "rows": [],
+                "total_rows": 0,
+                "page": page,
+                "page_size": page_size,
+                "has_more": False,
+                "execution_time_ms": 0,
+                "query_type": query_type,
+                "rows_affected": None,
+                "error": str(e),
+                "error_type": error_type
+            }
+
+        except sqlite3.Error as e:
+            logger.error(f"SQLite error executing query on {relative_path}: {e}")
+            return {
+                "columns": [],
+                "rows": [],
+                "total_rows": 0,
+                "page": page,
+                "page_size": page_size,
+                "has_more": False,
+                "execution_time_ms": 0,
+                "query_type": query_type,
+                "rows_affected": None,
+                "error": str(e),
+                "error_type": "syntax_error" if "syntax" in str(e).lower() else "execution_error"
+            }
