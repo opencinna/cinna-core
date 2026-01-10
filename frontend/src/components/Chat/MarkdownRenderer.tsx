@@ -21,7 +21,7 @@ export function MarkdownRenderer({ content, className = "" }: MarkdownRendererPr
             if (!isCodeBlock) {
               // Inline code - subtle background highlight that adapts to theme
               return (
-                <code className="bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 px-1.5 py-0.5 rounded font-mono text-sm" {...rest}>
+                <code className="bg-slate-900 text-slate-900 dark:text-slate-100 px-1.5 py-0.5 rounded font-mono text-sm" {...rest}>
                   {children}
                 </code>
               )
