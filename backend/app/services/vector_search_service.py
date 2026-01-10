@@ -67,6 +67,7 @@ def get_accessible_source_ids(
 ) -> List[uuid.UUID]:
     """
     Get list of knowledge source IDs accessible to the user and workspace.
+    Includes both user-owned sources and enabled discoverable sources.
 
     Args:
         session: Database session
@@ -76,7 +77,9 @@ def get_accessible_source_ids(
     Returns:
         List of accessible source IDs
     """
-    # Build query for accessible sources
+    from app.models.knowledge import UserEnabledDiscoverableSource
+
+    # Build query for user's own accessible sources
     query = select(AIKnowledgeGitRepo).where(
         and_(
             AIKnowledgeGitRepo.user_id == user_id,
@@ -105,8 +108,33 @@ def get_accessible_source_ids(
     sources = session.exec(query).all()
     source_ids = [source.id for source in sources]
 
-    logger.info(f"Found {len(source_ids)} accessible sources for user {user_id}")
-    return source_ids
+    # Get enabled discoverable sources
+    enabled_discoverable_query = (
+        select(AIKnowledgeGitRepo)
+        .join(
+            UserEnabledDiscoverableSource,
+            AIKnowledgeGitRepo.id == UserEnabledDiscoverableSource.git_repo_id
+        )
+        .where(
+            and_(
+                UserEnabledDiscoverableSource.user_id == user_id,
+                AIKnowledgeGitRepo.public_discovery == True,
+                AIKnowledgeGitRepo.status == SourceStatus.connected,
+            )
+        )
+    )
+
+    enabled_discoverable_sources = session.exec(enabled_discoverable_query).all()
+    discoverable_ids = [source.id for source in enabled_discoverable_sources]
+
+    # Combine both lists (deduplicate just in case)
+    all_source_ids = list(set(source_ids + discoverable_ids))
+
+    logger.info(
+        f"Found {len(source_ids)} user sources and {len(discoverable_ids)} "
+        f"enabled discoverable sources for user {user_id}"
+    )
+    return all_source_ids
 
 
 def search_article_chunks(

@@ -198,6 +198,7 @@ export type AIKnowledgeGitRepoPublic = {
     last_sync_at?: (string | null);
     sync_commit_hash?: (string | null);
     workspace_access_type?: WorkspaceAccessType;
+    public_discovery?: boolean;
     id: string;
     user_id: string;
     created_at: string;
@@ -216,6 +217,7 @@ export type AIKnowledgeGitRepoUpdate = {
     is_enabled?: (boolean | null);
     workspace_access_type?: (WorkspaceAccessType | null);
     workspace_ids?: (Array<(string)> | null);
+    public_discovery?: (boolean | null);
 };
 
 /**
@@ -339,6 +341,19 @@ export type DatabaseQueryRequest = {
     page?: (number | null);
     page_size?: (number | null);
     timeout_seconds?: number;
+};
+
+/**
+ * Public schema for discoverable knowledge sources.
+ */
+export type DiscoverableSourcePublic = {
+    id: string;
+    name: string;
+    description?: (string | null);
+    status: SourceStatus;
+    article_count?: number;
+    owner_username?: (string | null);
+    is_enabled_by_user?: boolean;
 };
 
 /**
@@ -766,6 +781,7 @@ export type UserCreate = {
     is_active?: boolean;
     is_superuser?: boolean;
     full_name?: (string | null);
+    username?: (string | null);
     password: string;
 };
 
@@ -774,6 +790,7 @@ export type UserPublic = {
     is_active?: boolean;
     is_superuser?: boolean;
     full_name?: (string | null);
+    username?: (string | null);
     id: string;
     has_google_account?: boolean;
     has_password?: boolean;
@@ -787,6 +804,7 @@ export type UserPublicWithAICredentials = {
     is_active?: boolean;
     is_superuser?: boolean;
     full_name?: (string | null);
+    username?: (string | null);
     id: string;
     has_google_account?: boolean;
     has_password?: boolean;
@@ -811,12 +829,14 @@ export type UserUpdate = {
     is_active?: boolean;
     is_superuser?: boolean;
     full_name?: (string | null);
+    username?: (string | null);
     password?: (string | null);
 };
 
 export type UserUpdateMe = {
     full_name?: (string | null);
     email?: (string | null);
+    username?: (string | null);
 };
 
 export type UserWorkspaceCreate = {
@@ -1316,6 +1336,25 @@ export type KnowledgeSourcesListKnowledgeArticlesData = {
 };
 
 export type KnowledgeSourcesListKnowledgeArticlesResponse = (Array<KnowledgeArticlePublic>);
+
+export type KnowledgeSourcesListDiscoverableSourcesData = {
+    limit?: number;
+    skip?: number;
+};
+
+export type KnowledgeSourcesListDiscoverableSourcesResponse = (Array<DiscoverableSourcePublic>);
+
+export type KnowledgeSourcesEnableDiscoverableSourceData = {
+    sourceId: string;
+};
+
+export type KnowledgeSourcesEnableDiscoverableSourceResponse = (unknown);
+
+export type KnowledgeSourcesDisableDiscoverableSourceData = {
+    sourceId: string;
+};
+
+export type KnowledgeSourcesDisableDiscoverableSourceResponse = (unknown);
 
 export type LoginLoginAccessTokenData = {
     formData: Body_login_login_access_token;

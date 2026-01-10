@@ -10,6 +10,7 @@ class UserBase(SQLModel):
     is_active: bool = True
     is_superuser: bool = False
     full_name: str | None = Field(default=None, max_length=255)
+    username: str | None = Field(default=None, max_length=50, index=True, regex=r"^[a-zA-Z0-9_]*$")
 
 
 # Properties to receive via API on creation
@@ -32,6 +33,7 @@ class UserUpdate(UserBase):
 class UserUpdateMe(SQLModel):
     full_name: str | None = Field(default=None, max_length=255)
     email: EmailStr | None = Field(default=None, max_length=255)
+    username: str | None = Field(default=None, max_length=50, regex=r"^[a-zA-Z0-9_]*$")
 
 
 class UpdatePassword(SQLModel):

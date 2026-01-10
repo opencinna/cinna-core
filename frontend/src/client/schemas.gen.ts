@@ -161,6 +161,11 @@ export const AIKnowledgeGitRepoPublicSchema = {
             '$ref': '#/components/schemas/WorkspaceAccessType',
             default: 'all'
         },
+        public_discovery: {
+            type: 'boolean',
+            title: 'Public Discovery',
+            default: false
+        },
         id: {
             type: 'string',
             format: 'uuid',
@@ -275,6 +280,17 @@ export const AIKnowledgeGitRepoUpdateSchema = {
                 }
             ],
             title: 'Workspace Ids'
+        },
+        public_discovery: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Public Discovery'
         }
     },
     type: 'object',
@@ -1683,6 +1699,59 @@ export const DatabaseQueryRequestSchema = {
     required: ['path', 'query'],
     title: 'DatabaseQueryRequest',
     description: 'Request to execute SQL query on SQLite database'
+} as const;
+
+export const DiscoverableSourcePublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        status: {
+            '$ref': '#/components/schemas/SourceStatus'
+        },
+        article_count: {
+            type: 'integer',
+            title: 'Article Count',
+            default: 0
+        },
+        owner_username: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Username'
+        },
+        is_enabled_by_user: {
+            type: 'boolean',
+            title: 'Is Enabled By User',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['id', 'name', 'status'],
+    title: 'DiscoverableSourcePublic',
+    description: 'Public schema for discoverable knowledge sources.'
 } as const;
 
 export const EventBroadcastSchema = {
@@ -3369,6 +3438,18 @@ export const UserCreateSchema = {
             ],
             title: 'Full Name'
         },
+        username: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 50
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Username'
+        },
         password: {
             type: 'string',
             maxLength: 128,
@@ -3410,6 +3491,18 @@ export const UserPublicSchema = {
                 }
             ],
             title: 'Full Name'
+        },
+        username: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 50
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Username'
         },
         id: {
             type: 'string',
@@ -3461,6 +3554,18 @@ export const UserPublicWithAICredentialsSchema = {
                 }
             ],
             title: 'Full Name'
+        },
+        username: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 50
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Username'
         },
         id: {
             type: 'string',
@@ -3568,6 +3673,18 @@ export const UserUpdateSchema = {
             ],
             title: 'Full Name'
         },
+        username: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 50
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Username'
+        },
         password: {
             anyOf: [
                 {
@@ -3612,6 +3729,18 @@ export const UserUpdateMeSchema = {
                 }
             ],
             title: 'Email'
+        },
+        username: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 50
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Username'
         }
     },
     type: 'object',

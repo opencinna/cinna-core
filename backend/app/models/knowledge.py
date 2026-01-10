@@ -46,6 +46,7 @@ class AIKnowledgeGitRepoBase(SQLModel):
     last_sync_at: Optional[datetime] = None
     sync_commit_hash: Optional[str] = None
     workspace_access_type: WorkspaceAccessType = Field(default=WorkspaceAccessType.all)
+    public_discovery: bool = Field(default=False, index=True)
 
 
 class AIKnowledgeGitRepo(AIKnowledgeGitRepoBase, table=True):
@@ -100,6 +101,7 @@ class AIKnowledgeGitRepoUpdate(SQLModel):
     is_enabled: Optional[bool] = None
     workspace_access_type: Optional[WorkspaceAccessType] = None
     workspace_ids: Optional[list[uuid.UUID]] = None
+    public_discovery: Optional[bool] = None
 
 
 # Workspace Permissions Model
@@ -118,6 +120,34 @@ class AIKnowledgeGitRepoWorkspace(SQLModel, table=True):
 
     # Relationships
     git_repo: Optional[AIKnowledgeGitRepo] = Relationship(back_populates="workspace_permissions")
+
+
+# User Enabled Discoverable Sources Model
+class UserEnabledDiscoverableSource(SQLModel, table=True):
+    """Link table for users who enabled discoverable knowledge sources."""
+
+    __tablename__ = "user_enabled_discoverable_sources"
+    __table_args__ = (
+        Index("idx_user_source_unique", "user_id", "git_repo_id", unique=True),
+    )
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="user.id", ondelete="CASCADE", index=True)
+    git_repo_id: uuid.UUID = Field(foreign_key="ai_knowledge_git_repo.id", ondelete="CASCADE", index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# Discoverable Source Public Schema
+class DiscoverableSourcePublic(SQLModel):
+    """Public schema for discoverable knowledge sources."""
+
+    id: uuid.UUID
+    name: str
+    description: Optional[str] = None
+    status: SourceStatus
+    article_count: int = 0
+    owner_username: Optional[str] = None
+    is_enabled_by_user: bool = False
 
 
 # Knowledge Article Model

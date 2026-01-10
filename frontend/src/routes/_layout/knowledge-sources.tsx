@@ -1,11 +1,14 @@
 import { createFileRoute, Link } from "@tanstack/react-router"
 import { useState, useEffect } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { Plus, BookOpen, Check, X, Clock, AlertCircle } from "lucide-react"
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query"
+import { Plus, BookOpen, Check, X, Clock, AlertCircle, Globe } from "lucide-react"
 
 import { KnowledgeSourcesService } from "@/client"
+import type { DiscoverableSourcePublic } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Table,
   TableBody,
@@ -64,7 +67,7 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
-function KnowledgeSourcesList() {
+function MyKnowledgeSourcesList() {
   const { data: sources, isLoading, error } = useQuery({
     queryKey: ["knowledge-sources"],
     queryFn: () => KnowledgeSourcesService.listKnowledgeSources(),
@@ -139,6 +142,106 @@ function KnowledgeSourcesList() {
   )
 }
 
+function DiscoverableSourcesList() {
+  const queryClient = useQueryClient()
+
+  const { data: sources, isLoading, error } = useQuery({
+    queryKey: ["discoverable-sources"],
+    queryFn: () => KnowledgeSourcesService.listDiscoverableSources(),
+  })
+
+  const enableMutation = useMutation({
+    mutationFn: (sourceId: string) =>
+      KnowledgeSourcesService.enableDiscoverableSource({ sourceId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["discoverable-sources"] })
+    },
+  })
+
+  const disableMutation = useMutation({
+    mutationFn: (sourceId: string) =>
+      KnowledgeSourcesService.disableDiscoverableSource({ sourceId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["discoverable-sources"] })
+    },
+  })
+
+  const handleToggle = (source: DiscoverableSourcePublic) => {
+    if (source.is_enabled_by_user) {
+      disableMutation.mutate(source.id)
+    } else {
+      enableMutation.mutate(source.id)
+    }
+  }
+
+  if (isLoading) {
+    return <PendingItems />
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center py-6">
+        <p className="text-destructive text-sm">
+          Error loading discoverable sources: {(error as Error).message}
+        </p>
+      </div>
+    )
+  }
+
+  if (!sources || sources.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center text-center py-8">
+        <div className="rounded-full bg-muted p-3 mb-3">
+          <Globe className="h-6 w-6 text-muted-foreground" />
+        </div>
+        <p className="text-sm text-muted-foreground">No discoverable sources available</p>
+      </div>
+    )
+  }
+
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Name</TableHead>
+          <TableHead>Owner</TableHead>
+          <TableHead>Articles</TableHead>
+          <TableHead>Enabled</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {sources.map((source) => (
+          <TableRow key={source.id}>
+            <TableCell className="font-medium">
+              <div>
+                {source.name}
+                {source.description && (
+                  <p className="text-xs text-muted-foreground truncate max-w-xs">
+                    {source.description}
+                  </p>
+                )}
+              </div>
+            </TableCell>
+            <TableCell className="text-sm text-muted-foreground">
+              {source.owner_username || "—"}
+            </TableCell>
+            <TableCell>
+              <Badge variant="secondary">{source.article_count}</Badge>
+            </TableCell>
+            <TableCell>
+              <Switch
+                checked={source.is_enabled_by_user}
+                onCheckedChange={() => handleToggle(source)}
+                disabled={enableMutation.isPending || disableMutation.isPending}
+              />
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  )
+}
+
 function KnowledgeSourcesPage() {
   const { setHeaderContent } = usePageHeader()
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
@@ -162,8 +265,36 @@ function KnowledgeSourcesPage() {
 
   return (
     <div className="p-6 md:p-8 overflow-y-auto">
-      <div className="mx-auto max-w-7xl">
-        <KnowledgeSourcesList />
+      <div className="mx-auto max-w-7xl space-y-8">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <BookOpen className="h-5 w-5" />
+              My Knowledge Sources
+            </CardTitle>
+            <CardDescription>
+              Knowledge sources you own and manage
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <MyKnowledgeSourcesList />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Globe className="h-5 w-5" />
+              Discoverable Sources
+            </CardTitle>
+            <CardDescription>
+              Public knowledge sources from other users. Enable them to include in your agent's knowledge queries.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <DiscoverableSourcesList />
+          </CardContent>
+        </Card>
       </div>
 
       <AddSourceModal

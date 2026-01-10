@@ -16,6 +16,7 @@ from app.models.knowledge import (
     AIKnowledgeGitRepoPublic,
     AIKnowledgeGitRepoUpdate,
     CheckAccessResponse,
+    DiscoverableSourcePublic,
     KnowledgeArticlePublic,
     RefreshKnowledgeResponse,
 )
@@ -267,3 +268,77 @@ def list_knowledge_articles(
         )
         for article in articles
     ]
+
+
+# Discoverable Sources Endpoints
+
+@router.get("/discoverable/list", response_model=list[DiscoverableSourcePublic])
+def list_discoverable_sources(
+    session: SessionDep,
+    current_user: CurrentUser,
+    skip: int = 0,
+    limit: int = 100,
+) -> Any:
+    """
+    List discoverable knowledge sources from other users.
+
+    Returns sources marked as public_discovery=True by their owners.
+    Enabled sources (by the current user) are sorted first.
+    """
+    sources = knowledge_source_service.get_discoverable_sources(
+        session=session,
+        user_id=current_user.id,
+        skip=skip,
+        limit=limit,
+    )
+    return sources
+
+
+@router.post("/discoverable/{source_id}/enable")
+def enable_discoverable_source(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    source_id: uuid.UUID,
+) -> Any:
+    """
+    Enable a discoverable source for the current user.
+
+    Once enabled, this source will be included in agent knowledge queries.
+    """
+    success = knowledge_source_service.enable_discoverable_source(
+        session=session,
+        source_id=source_id,
+        user_id=current_user.id,
+    )
+    if not success:
+        raise HTTPException(
+            status_code=404,
+            detail="Discoverable source not found or not available"
+        )
+    return {"ok": True}
+
+
+@router.post("/discoverable/{source_id}/disable")
+def disable_discoverable_source(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    source_id: uuid.UUID,
+) -> Any:
+    """
+    Disable a discoverable source for the current user.
+
+    Once disabled, this source will no longer be included in agent knowledge queries.
+    """
+    success = knowledge_source_service.disable_discoverable_source(
+        session=session,
+        source_id=source_id,
+        user_id=current_user.id,
+    )
+    if not success:
+        raise HTTPException(
+            status_code=404,
+            detail="Enabled discoverable source not found"
+        )
+    return {"ok": True}
