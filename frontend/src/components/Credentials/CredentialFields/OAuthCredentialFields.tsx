@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { RefreshCw, CheckCircle2, ChevronDown, ChevronUp } from "lucide-react"
+import { RefreshCw, CheckCircle2, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react"
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import {
@@ -115,6 +115,7 @@ export function OAuthCredentialFields({
   }
 
   const isAuthorized = metadata && metadata.user_email
+  const isExpired = metadata?.expires_at ? metadata.expires_at * 1000 < Date.now() : false
 
   return (
     <Card>
@@ -162,7 +163,7 @@ export function OAuthCredentialFields({
             {/* Authorization Status */}
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-5 w-5 text-green-500" />
-              <span className="font-medium">Active</span>
+              <span className="font-medium">Authorised</span>
             </div>
 
             {/* Account Email - Inline */}
@@ -173,7 +174,7 @@ export function OAuthCredentialFields({
 
             {/* Expiration - Inline */}
             {metadata.expires_at && (
-              <div className="flex items-baseline gap-2">
+              <div className="flex items-center gap-2">
                 <span className="text-sm text-muted-foreground">Expires:</span>
                 <span
                   className="text-sm font-medium"
@@ -184,6 +185,12 @@ export function OAuthCredentialFields({
                     fallback="soon"
                   />
                 </span>
+                {isExpired && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-500">
+                    <AlertTriangle className="h-3 w-3" />
+                    Expired
+                  </span>
+                )}
               </div>
             )}
 

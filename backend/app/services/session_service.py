@@ -712,6 +712,34 @@ class SessionService:
             elif environment.status == "running":
                 logger.info(f"Environment {environment.id} is running, starting stream for session {session_id}")
 
+                # Refresh expiring OAuth credentials before streaming
+                # This ensures the agent has valid tokens for the expected stream duration
+                from app.services.credentials_service import CredentialsService
+
+                try:
+                    credentials_refreshed = await CredentialsService.refresh_expiring_credentials_for_agent(
+                        session=db,
+                        agent_id=agent.id
+                    )
+
+                    if credentials_refreshed:
+                        logger.info(
+                            f"Credentials were refreshed for agent {agent.id}, "
+                            f"syncing to environment {environment.id}"
+                        )
+                        # Sync refreshed credentials to the agent environment
+                        await CredentialsService.sync_credentials_to_agent_environments(
+                            session=db,
+                            agent_id=agent.id
+                        )
+                        logger.info(f"Credentials synced to environment {environment.id}")
+                except Exception as e:
+                    # Log error but don't block streaming - credentials might still work
+                    logger.error(
+                        f"Error refreshing/syncing credentials for agent {agent.id}: {e}",
+                        exc_info=True
+                    )
+
                 # Environment is ready - start streaming in background
                 # The actual streaming will be done by process_pending_messages
                 create_task_with_error_logging(

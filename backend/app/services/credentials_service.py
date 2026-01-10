@@ -1129,3 +1129,112 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             session=session,
             agent_id=agent_id
         )
+
+    # OAuth credential types that have refresh tokens and expiration
+    OAUTH_CREDENTIAL_TYPES = {
+        "gmail_oauth",
+        "gmail_oauth_readonly",
+        "gdrive_oauth",
+        "gdrive_oauth_readonly",
+        "gcalendar_oauth",
+        "gcalendar_oauth_readonly",
+    }
+
+    # Threshold for refreshing credentials before streaming (10 minutes)
+    CREDENTIAL_REFRESH_THRESHOLD_SECONDS = 10 * 60
+
+    @staticmethod
+    async def refresh_expiring_credentials_for_agent(
+        session: Session,
+        agent_id: uuid.UUID
+    ) -> bool:
+        """
+        Check and refresh OAuth credentials that are expiring soon for an agent.
+
+        This method is called before initiating a stream to ensure all OAuth
+        credentials shared with the agent have valid access tokens for the
+        expected duration of the stream (up to 10 minutes).
+
+        Args:
+            session: Database session
+            agent_id: Agent ID to check credentials for
+
+        Returns:
+            True if any credentials were refreshed, False otherwise
+        """
+        from datetime import datetime, timezone
+        from app.services.oauth_credentials_service import OAuthCredentialsService
+        from app import crud
+
+        credentials_refreshed = False
+        now = datetime.now(timezone.utc).timestamp()
+        threshold = now + CredentialsService.CREDENTIAL_REFRESH_THRESHOLD_SECONDS
+
+        # Get all credentials linked to this agent
+        credentials = crud.get_agent_credentials(session=session, agent_id=agent_id)
+
+        if not credentials:
+            logger.debug(f"No credentials linked to agent {agent_id}")
+            return False
+
+        for credential in credentials:
+            # Only check OAuth credential types
+            if credential.type.value not in CredentialsService.OAUTH_CREDENTIAL_TYPES:
+                continue
+
+            try:
+                # Decrypt credential data to check expiration
+                credential_data = crud.get_credential_with_data(
+                    session=session,
+                    credential=credential
+                )
+
+                expires_at = credential_data.get("expires_at")
+                if expires_at is None:
+                    logger.warning(
+                        f"OAuth credential {credential.id} has no expires_at field, "
+                        f"skipping refresh check"
+                    )
+                    continue
+
+                # Check if credential expires within threshold
+                if expires_at <= threshold:
+                    time_until_expiry = expires_at - now
+                    logger.info(
+                        f"Credential {credential.id} ({credential.type.value}) expires in "
+                        f"{time_until_expiry:.0f} seconds, refreshing..."
+                    )
+
+                    try:
+                        # Refresh the credential
+                        await OAuthCredentialsService.refresh_oauth_token(
+                            session=session,
+                            credential=credential
+                        )
+                        credentials_refreshed = True
+                        logger.info(f"Successfully refreshed credential {credential.id}")
+                    except ValueError as ve:
+                        # No refresh token available
+                        logger.warning(
+                            f"Cannot refresh credential {credential.id}: {ve}. "
+                            f"User may need to re-authorize."
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to refresh credential {credential.id}: {e}",
+                            exc_info=True
+                        )
+                else:
+                    time_until_expiry = expires_at - now
+                    logger.debug(
+                        f"Credential {credential.id} ({credential.type.value}) is valid for "
+                        f"{time_until_expiry:.0f} more seconds, no refresh needed"
+                    )
+
+            except Exception as e:
+                logger.error(
+                    f"Error checking credential {credential.id}: {e}",
+                    exc_info=True
+                )
+
+        return credentials_refreshed

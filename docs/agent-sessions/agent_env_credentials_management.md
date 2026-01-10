@@ -14,6 +14,7 @@ Agents can access user-provided credentials (email, APIs, databases) to perform 
 2. **User shares credential with agent** → Link created (`AgentCredentialLink`)
 3. **Environment starts/rebuilds** → Credentials synced to container
 4. **User updates credential** → Auto-syncs to all running environments
+5. **Stream initiated** → OAuth tokens refreshed if expiring soon, then synced
 
 ### File Structure in Agent Environment
 
@@ -34,7 +35,13 @@ workspace/
 - `redact_credential_data()` - Redacts sensitive fields only if they have values
 - `_process_api_token_credential()` - Processes API Token credentials to generate ready-to-use HTTP headers
 - `sync_credentials_to_agent_environments()` - Syncs to all running environments
+- `refresh_expiring_credentials_for_agent()` - Refreshes OAuth tokens expiring within 10 minutes
 - Event handlers: `event_credential_updated()`, `event_credential_deleted()`, `event_credential_shared()`, `event_credential_unshared()`
+
+**`OAuthCredentialsService`** (`backend/app/services/oauth_credentials_service.py`)
+- `refresh_oauth_token()` - Refreshes OAuth access token using refresh token
+- `initiate_oauth_flow()` - Starts OAuth authorization flow
+- `handle_oauth_callback()` - Handles OAuth callback and stores tokens
 
 **`EnvironmentLifecycleManager`** (`backend/app/services/environment_lifecycle.py`)
 - `_sync_agent_data()` - Syncs prompts and credentials after start/rebuild
@@ -170,6 +177,40 @@ Credentials automatically sync to running environments when:
 - Only syncs to **running** environments (stopped environments sync on next start)
 - Errors logged but don't block other environments from syncing
 
+## OAuth Token Refresh
+
+OAuth credentials (Gmail, Drive, Calendar) have short-lived access tokens (~1 hour). The backend automatically refreshes these tokens before they expire.
+
+### Pre-Stream Refresh
+
+Before initiating a stream (`SessionService.initiate_stream()`):
+1. Checks all OAuth credentials linked to the agent
+2. Refreshes any tokens expiring within **10 minutes** (expected max stream duration)
+3. Syncs refreshed credentials to the agent-env
+4. Then starts streaming
+
+This ensures the agent always has valid tokens for the duration of the stream.
+
+### Refresh Flow
+
+```
+Stream initiated → Check OAuth credentials → Token expires in <10 min?
+                                                    ↓ (yes)
+                                            Refresh via Google API
+                                                    ↓
+                                            Sync to agent-env
+                                                    ↓
+                                            Start streaming
+```
+
+### Implementation Details
+
+- **Threshold**: `CREDENTIAL_REFRESH_THRESHOLD_SECONDS = 600` (10 minutes)
+- **OAuth types**: `gmail_oauth`, `gmail_oauth_readonly`, `gdrive_oauth`, `gdrive_oauth_readonly`, `gcalendar_oauth`, `gcalendar_oauth_readonly`
+- **Blocking**: Refresh is synchronous before streaming starts
+- **Error handling**: Refresh failures are logged but don't block streaming (graceful degradation)
+- **Refresh token**: Stored in backend only, never exposed to agent-env
+
 ## Prompt Integration
 
 The building agent's prompt includes `credentials/README.md` content via:
@@ -208,3 +249,4 @@ Building agent receives:
 - Handle errors gracefully - credentials might be invalid or expired
 - Close connections properly when done
 - Never hardcode credentials - always read from the credentials file
+- OAuth tokens are auto-refreshed before each stream - no manual refresh needed
