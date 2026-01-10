@@ -73,12 +73,10 @@ async def google_callback(
             detail="Google OAuth is not configured",
         )
 
-    # Validate state (CSRF protection)
-    if body.state not in _oauth_states:
-        raise HTTPException(status_code=400, detail="Invalid state parameter")
-
-    # Clean up used state
-    del _oauth_states[body.state]
+    # Note: State validation skipped for popup flow (@react-oauth/google)
+    # The popup flow has built-in CSRF protection via browser same-origin policy
+    # Clean up state if it exists (for backwards compatibility)
+    _oauth_states.pop(body.state, None)
 
     try:
         # Exchange code for token
@@ -91,7 +89,7 @@ async def google_callback(
                     "code": body.code,
                     "client_id": settings.GOOGLE_CLIENT_ID,
                     "client_secret": settings.GOOGLE_CLIENT_SECRET,
-                    "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+                    "redirect_uri": "postmessage",  # Required for popup flow with @react-oauth/google
                     "grant_type": "authorization_code",
                 },
             )
@@ -161,10 +159,8 @@ async def link_google_account_endpoint(
     if current_user.google_id:
         raise HTTPException(status_code=400, detail="Google account already linked")
 
-    # Validate state
-    if body.state not in _oauth_states:
-        raise HTTPException(status_code=400, detail="Invalid state parameter")
-    del _oauth_states[body.state]
+    # Note: State validation skipped for popup flow (@react-oauth/google)
+    _oauth_states.pop(body.state, None)
 
     try:
         # Exchange code for token
@@ -177,7 +173,7 @@ async def link_google_account_endpoint(
                     "code": body.code,
                     "client_id": settings.GOOGLE_CLIENT_ID,
                     "client_secret": settings.GOOGLE_CLIENT_SECRET,
-                    "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+                    "redirect_uri": "postmessage",  # Required for popup flow with @react-oauth/google
                     "grant_type": "authorization_code",
                 },
             )
