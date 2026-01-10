@@ -167,12 +167,6 @@ export function KnowledgeSourceConfigurationTab({
             </div>
           </div>
           <div>
-            <Label>Workspace Access</Label>
-            <Badge variant="outline" className="mt-1">
-              {source.workspace_access_type === "all" ? "All Workspaces" : "Specific"}
-            </Badge>
-          </div>
-          <div>
             <Label>Last Sync</Label>
             <p className="text-sm text-muted-foreground mt-1">
               {source.last_sync_at

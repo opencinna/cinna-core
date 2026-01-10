@@ -1,10 +1,9 @@
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, Link } from "@tanstack/react-router"
 import { useState, useEffect } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { Plus, BookOpen, GitBranch, Check, X, Clock, AlertCircle } from "lucide-react"
+import { Plus, BookOpen, Check, X, Clock, AlertCircle } from "lucide-react"
 
 import { KnowledgeSourcesService } from "@/client"
-import type { AIKnowledgeGitRepoPublic } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -15,13 +14,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Switch } from "@/components/ui/switch"
 import PendingItems from "@/components/Pending/PendingItems"
-import useCustomToast from "@/hooks/useCustomToast"
 import { AddSourceModal } from "@/components/KnowledgeSources/AddSourceModal"
-import { EditSourceModal } from "@/components/KnowledgeSources/EditSourceModal"
 import { usePageHeader } from "@/routes/_layout"
-import { useNavigate } from "@tanstack/react-router"
 
 export const Route = createFileRoute("/_layout/knowledge-sources")({
   component: KnowledgeSourcesPage,
@@ -70,44 +65,10 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function KnowledgeSourcesList() {
-  const navigate = useNavigate()
-  const { showSuccessToast, showErrorToast } = useCustomToast()
-  const queryClient = useQueryClient()
-  const [editingSource, setEditingSource] = useState<AIKnowledgeGitRepoPublic | null>(null)
-
   const { data: sources, isLoading, error } = useQuery({
     queryKey: ["knowledge-sources"],
     queryFn: () => KnowledgeSourcesService.listKnowledgeSources(),
   })
-
-  const handleToggleEnabled = async (source: AIKnowledgeGitRepoPublic, enabled: boolean) => {
-    try {
-      if (enabled) {
-        await KnowledgeSourcesService.enableKnowledgeSource({ sourceId: source.id })
-        showSuccessToast(`${source.name} is now active`)
-      } else {
-        await KnowledgeSourcesService.disableKnowledgeSource({ sourceId: source.id })
-        showSuccessToast(`${source.name} is now inactive`)
-      }
-      queryClient.invalidateQueries({ queryKey: ["knowledge-sources"] })
-    } catch (error: any) {
-      showErrorToast(error.message || "Failed to update source")
-    }
-  }
-
-  const handleDelete = async (sourceId: string) => {
-    if (!confirm("Are you sure you want to delete this knowledge source? This will also delete all associated articles.")) {
-      return
-    }
-
-    try {
-      await KnowledgeSourcesService.deleteKnowledgeSource({ sourceId })
-      showSuccessToast("Knowledge source has been removed")
-      queryClient.invalidateQueries({ queryKey: ["knowledge-sources"] })
-    } catch (error: any) {
-      showErrorToast(error.message || "Failed to delete source")
-    }
-  }
 
   if (isLoading) {
     return <PendingItems />
@@ -136,97 +97,45 @@ function KnowledgeSourcesList() {
   }
 
   return (
-    <>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Name</TableHead>
-            <TableHead>Repository</TableHead>
-            <TableHead>Branch</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Enabled</TableHead>
-            <TableHead>Articles</TableHead>
-            <TableHead>Last Sync</TableHead>
-            <TableHead>Workspace Access</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Name</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead>Articles</TableHead>
+          <TableHead>Last Sync</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {sources.map((source) => (
+          <TableRow
+            key={source.id}
+            className={!source.is_enabled ? "opacity-60" : ""}
+          >
+            <TableCell className="font-medium">
+              <Link
+                to="/knowledge-source/$sourceId"
+                params={{ sourceId: source.id }}
+                className="text-primary hover:underline"
+              >
+                {source.name}
+              </Link>
+            </TableCell>
+            <TableCell>
+              <StatusBadge status={source.status || "disconnected"} />
+            </TableCell>
+            <TableCell>
+              <Badge variant="secondary">{source.article_count}</Badge>
+            </TableCell>
+            <TableCell className="text-xs text-muted-foreground">
+              {source.last_sync_at
+                ? new Date(source.last_sync_at).toLocaleDateString()
+                : "Never"}
+            </TableCell>
           </TableRow>
-        </TableHeader>
-        <TableBody>
-          {sources.map((source) => (
-            <TableRow
-              key={source.id}
-              className={!source.is_enabled ? "opacity-60" : ""}
-            >
-              <TableCell className="font-medium">{source.name}</TableCell>
-              <TableCell className="font-mono text-xs max-w-xs truncate">{source.git_url}</TableCell>
-              <TableCell>
-                <div className="flex items-center gap-1">
-                  <GitBranch className="h-3 w-3" />
-                  <span className="text-xs">{source.branch}</span>
-                </div>
-              </TableCell>
-              <TableCell>
-                <StatusBadge status={source.status} />
-              </TableCell>
-              <TableCell>
-                <Switch
-                  checked={source.is_enabled}
-                  onCheckedChange={(checked) => handleToggleEnabled(source, checked)}
-                />
-              </TableCell>
-              <TableCell>
-                <Badge variant="secondary">{source.article_count}</Badge>
-              </TableCell>
-              <TableCell className="text-xs text-muted-foreground">
-                {source.last_sync_at
-                  ? new Date(source.last_sync_at).toLocaleDateString()
-                  : "Never"}
-              </TableCell>
-              <TableCell>
-                <Badge variant="outline">
-                  {source.workspace_access_type === "all" ? "All Workspaces" : "Specific"}
-                </Badge>
-              </TableCell>
-              <TableCell className="text-right space-x-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => navigate({ to: "/knowledge-source/$sourceId", params: { sourceId: source.id } })}
-                >
-                  View
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setEditingSource(source)}
-                >
-                  Edit
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleDelete(source.id)}
-                >
-                  Delete
-                </Button>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-
-      {editingSource && (
-        <EditSourceModal
-          source={editingSource}
-          open={true}
-          onOpenChange={(open) => !open && setEditingSource(null)}
-          onSuccess={() => {
-            queryClient.invalidateQueries({ queryKey: ["knowledge-sources"] })
-            setEditingSource(null)
-          }}
-        />
-      )}
-    </>
+        ))}
+      </TableBody>
+    </Table>
   )
 }
 

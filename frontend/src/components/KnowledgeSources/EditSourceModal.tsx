@@ -20,9 +20,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import useCustomToast from "@/hooks/useCustomToast"
-import { KnowledgeSourcesService, SshKeysService, UserWorkspacesService } from "@/client"
+import { KnowledgeSourcesService, SshKeysService } from "@/client"
 import type {
   AIKnowledgeGitRepoPublic,
   Body_update_knowledge_source_api_v1_knowledge_sources__source_id__put as UpdateSourceData,
@@ -53,13 +52,8 @@ export function EditSourceModal({ source, open, onOpenChange, onSuccess }: EditS
       description: source.description || "",
       branch: source.branch,
       ssh_key_id: source.ssh_key_id || undefined,
-      workspace_access_type: source.workspace_access_type as "all" | "specific",
-      workspace_ids: [],
     },
   })
-
-  const workspaceAccessType = watch("workspace_access_type")
-  const selectedWorkspaceIds = watch("workspace_ids") || []
 
   // Load SSH keys
   const { data: sshKeys } = useQuery({
@@ -67,33 +61,12 @@ export function EditSourceModal({ source, open, onOpenChange, onSuccess }: EditS
     queryFn: () => SshKeysService.readSshKeys(),
   })
 
-  // Load workspaces
-  const { data: workspaces } = useQuery({
-    queryKey: ["user-workspaces"],
-    queryFn: () => UserWorkspacesService.listUserWorkspaces(),
-  })
-
-  const handleWorkspaceToggle = (workspaceId: string) => {
-    const currentIds = selectedWorkspaceIds || []
-    if (currentIds.includes(workspaceId)) {
-      setValue(
-        "workspace_ids",
-        currentIds.filter((id) => id !== workspaceId)
-      )
-    } else {
-      setValue("workspace_ids", [...currentIds, workspaceId])
-    }
-  }
-
   const onSubmit = async (data: UpdateSourceData) => {
     setIsSubmitting(true)
     try {
       await KnowledgeSourcesService.updateKnowledgeSource({
         sourceId: source.id,
-        requestBody: {
-          ...data,
-          workspace_ids: data.workspace_access_type === "specific" ? data.workspace_ids : undefined,
-        },
+        requestBody: data,
       })
       showSuccessToast("Changes have been saved")
       onSuccess()
@@ -176,52 +149,6 @@ export function EditSourceModal({ source, open, onOpenChange, onSuccess }: EditS
               </SelectContent>
             </Select>
           </div>
-
-          <div className="space-y-2">
-            <Label>Workspace Access</Label>
-            <RadioGroup
-              value={workspaceAccessType}
-              onValueChange={(value) => setValue("workspace_access_type", value as "all" | "specific")}
-            >
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem value="all" id="all" />
-                <Label htmlFor="all" className="font-normal">
-                  All workspaces
-                </Label>
-              </div>
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem value="specific" id="specific" />
-                <Label htmlFor="specific" className="font-normal">
-                  Specific workspaces
-                </Label>
-              </div>
-            </RadioGroup>
-          </div>
-
-          {workspaceAccessType === "specific" && (
-            <div className="space-y-2">
-              <Label>Select Workspaces</Label>
-              <div className="border rounded-md p-4 space-y-2 max-h-48 overflow-y-auto">
-                {workspaces?.data?.map((workspace) => (
-                  <div key={workspace.id} className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      id={`workspace-${workspace.id}`}
-                      checked={selectedWorkspaceIds.includes(workspace.id)}
-                      onChange={() => handleWorkspaceToggle(workspace.id)}
-                      className="rounded border-gray-300"
-                    />
-                    <Label
-                      htmlFor={`workspace-${workspace.id}`}
-                      className="font-normal cursor-pointer"
-                    >
-                      {workspace.name}
-                    </Label>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

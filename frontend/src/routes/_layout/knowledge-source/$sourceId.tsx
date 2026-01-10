@@ -1,9 +1,10 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useState, useEffect } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, EllipsisVertical, Edit } from "lucide-react"
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query"
+import { ArrowLeft, EllipsisVertical, Edit, Trash } from "lucide-react"
 
 import { KnowledgeSourcesService } from "@/client"
+import useCustomToast from "@/hooks/useCustomToast"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -27,8 +28,27 @@ function KnowledgeSourceDetailPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { setHeaderContent } = usePageHeader()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
   const [menuOpen, setMenuOpen] = useState(false)
   const [isEditModalOpen, setIsEditModalOpen] = useState(false)
+
+  const deleteMutation = useMutation({
+    mutationFn: () => KnowledgeSourcesService.deleteKnowledgeSource({ sourceId }),
+    onSuccess: () => {
+      showSuccessToast("Knowledge source deleted")
+      queryClient.invalidateQueries({ queryKey: ["knowledge-sources"] })
+      navigate({ to: "/knowledge-sources" })
+    },
+    onError: (error: any) => {
+      showErrorToast(error.message || "Failed to delete knowledge source")
+    },
+  })
+
+  const handleDelete = () => {
+    if (confirm("Are you sure you want to delete this knowledge source?")) {
+      deleteMutation.mutate()
+    }
+  }
 
   const {
     data: source,
@@ -68,6 +88,13 @@ function KnowledgeSourceDetailPage() {
               <DropdownMenuItem onClick={() => setIsEditModalOpen(true)}>
                 <Edit className="mr-2 h-4 w-4" />
                 Edit Source
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={handleDelete}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash className="mr-2 h-4 w-4" />
+                Delete Source
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
