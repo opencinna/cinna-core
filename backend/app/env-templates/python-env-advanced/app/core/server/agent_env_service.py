@@ -710,15 +710,15 @@ class AgentEnvService:
         lower = filename.lower()
         return any(lower.endswith(ext) for ext in AgentEnvService.SQLITE_EXTENSIONS)
 
-    def get_database_tables(self, relative_path: str) -> list[str]:
+    def get_database_tables(self, relative_path: str) -> list[dict]:
         """
-        Get list of table names from SQLite database.
+        Get list of tables and views from SQLite database.
 
         Args:
             relative_path: Path to SQLite file relative to workspace
 
         Returns:
-            List of table names (tables and views combined)
+            List of dicts with 'name' and 'type' keys (type is 'table' or 'view')
 
         Raises:
             ValueError: If path is invalid
@@ -742,13 +742,13 @@ class AgentEnvService:
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
             )
-            tables = [row[0] for row in cursor.fetchall()]
+            tables = [{"name": row[0], "type": "table"} for row in cursor.fetchall()]
 
             # Get views
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='view' ORDER BY name"
             )
-            views = [row[0] for row in cursor.fetchall()]
+            views = [{"name": row[0], "type": "view"} for row in cursor.fetchall()]
 
             conn.close()
 

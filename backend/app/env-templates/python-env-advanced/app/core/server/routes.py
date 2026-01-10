@@ -18,6 +18,7 @@ from .models import (
     CredentialsUpdate,
     WorkspaceTreeResponse,
     FileUploadResponse,
+    DatabaseTableEntry,
     SQLiteDatabaseSchema,
     SQLiteQueryRequest,
     SQLiteQueryResult
@@ -595,15 +596,15 @@ async def upload_file_to_workspace(
 # SQLite Database Endpoints
 
 @router.get("/database/tables/{path:path}", dependencies=[Depends(verify_auth_token)])
-async def get_database_tables(path: str) -> list[str]:
+async def get_database_tables(path: str) -> list[DatabaseTableEntry]:
     """
-    Get list of table names from SQLite database.
+    Get list of tables and views from SQLite database.
 
     Args:
         path: Relative path to SQLite file from workspace root
 
     Returns:
-        List of table and view names
+        List of table/view entries with name and type
 
     Raises:
         400: Invalid path
@@ -612,7 +613,7 @@ async def get_database_tables(path: str) -> list[str]:
     """
     try:
         tables = agent_env_service.get_database_tables(path)
-        return tables
+        return [DatabaseTableEntry(**t) for t in tables]
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except IOError as e:

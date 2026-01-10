@@ -108,6 +108,10 @@ export function TreeItemRenderer({
 
     if (isSQLiteFile) {
       // Toggle expansion like a folder
+      // If currently collapsed (will expand), trigger a re-fetch to get fresh data
+      if (!isExpanded && onFetchDatabaseTables) {
+        onFetchDatabaseTables(currentPath)
+      }
       onToggleFolder(currentPath)
     } else if (isViewableFile) {
       // Open file viewer in new tab
@@ -196,7 +200,10 @@ export function TreeItemRenderer({
                 style={{ paddingLeft: `${(level + 1) * 12 + 48}px` }}
                 onClick={() => handleTableClick(table.name)}
               >
-                <Table2 className="h-4 w-4 text-orange-400 shrink-0" />
+                <Table2
+                  className={`h-4 w-4 shrink-0 ${table.tableType === "view" ? "text-purple-500" : "text-blue-400"}`}
+                  title={table.tableType === "view" ? "View" : "Table"}
+                />
                 <span className="text-sm">{table.name}</span>
               </div>
             ))}

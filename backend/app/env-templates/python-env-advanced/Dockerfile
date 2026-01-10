@@ -10,6 +10,7 @@ ENV PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y \
     curl \
     git \
+    sqlite3 \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 

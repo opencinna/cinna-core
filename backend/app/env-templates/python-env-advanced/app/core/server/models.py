@@ -94,6 +94,12 @@ class FileUploadResponse(BaseModel):
 
 # SQLite Database Models
 
+class DatabaseTableEntry(BaseModel):
+    """Simple table/view entry with name and type"""
+    name: str
+    type: str  # "table" | "view"
+
+
 class SQLiteColumnInfo(BaseModel):
     """Column information for a SQLite table/view"""
     name: str

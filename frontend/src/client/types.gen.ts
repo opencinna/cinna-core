@@ -1606,7 +1606,9 @@ export type WorkspaceGetDatabaseTablesData = {
     path: string;
 };
 
-export type WorkspaceGetDatabaseTablesResponse = (Array<(string)>);
+export type WorkspaceGetDatabaseTablesResponse = (Array<{
+    [key: string]: unknown;
+}>);
 
 export type WorkspaceGetDatabaseSchemaData = {
     envId: string;

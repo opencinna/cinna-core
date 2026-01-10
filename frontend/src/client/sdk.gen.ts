@@ -2893,20 +2893,20 @@ export class WorkspaceService {
     
     /**
      * Get Database Tables
-     * Get list of table names from SQLite database.
+     * Get list of tables and views from SQLite database.
      *
      * Args:
      * env_id: Environment ID
      * path: Relative path to SQLite file from workspace root
      *
      * Returns:
-     * List of table and view names
+     * List of dicts with 'name' and 'type' keys
      *
      * Permissions: User must own the agent
      * @param data The data for the request.
      * @param data.envId
      * @param data.path
-     * @returns string Successful Response
+     * @returns unknown Successful Response
      * @throws ApiError
      */
     public static getDatabaseTables(data: WorkspaceGetDatabaseTablesData): CancelablePromise<WorkspaceGetDatabaseTablesResponse> {

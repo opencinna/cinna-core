@@ -808,15 +808,15 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
 
     # === SQLite Database Methods ===
 
-    async def get_database_tables(self, path: str) -> list[str]:
+    async def get_database_tables(self, path: str) -> list[dict]:
         """
-        Get list of table names from SQLite database.
+        Get list of tables and views from SQLite database.
 
         Args:
             path: Relative path to SQLite file from workspace root
 
         Returns:
-            List of table and view names
+            List of dicts with 'name' and 'type' keys
         """
         import urllib.parse
         encoded_path = urllib.parse.quote(path, safe='/')

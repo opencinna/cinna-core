@@ -68,31 +68,27 @@ export function EnvironmentPanel({ isOpen, environmentId }: EnvironmentPanelProp
   const handleFetchDatabaseTables = useCallback(async (dbPath: string) => {
     if (!environmentId) return
 
-    // Set loading state first, then check if already loaded
-    setDatabaseTables(prev => {
-      // Don't refetch if already loaded or loading
-      if (prev[dbPath]?.tables.length > 0 || prev[dbPath]?.loading) return prev
-      return {
-        ...prev,
-        [dbPath]: { tables: [], loading: true, error: null }
-      }
-    })
-
-    // Check current state to avoid duplicate fetches
+    // Check if already loading to avoid concurrent fetches
     const currentState = databaseTables[dbPath]
-    if (currentState?.tables.length > 0 || currentState?.loading) return
+    if (currentState?.loading) return
+
+    // Set loading state (always re-fetch to get fresh data on expand)
+    setDatabaseTables(prev => ({
+      ...prev,
+      [dbPath]: { tables: prev[dbPath]?.tables || [], loading: true, error: null }
+    }))
 
     try {
-      const tableNames = await WorkspaceService.getDatabaseTables({
+      const tableEntries = await WorkspaceService.getDatabaseTables({
         envId: environmentId,
         path: dbPath
       })
 
-      // Convert table names to DatabaseTableItem objects
-      const tables: DatabaseTableItem[] = tableNames.map(name => ({
+      // Convert API response to DatabaseTableItem objects
+      const tables: DatabaseTableItem[] = tableEntries.map(entry => ({
         type: "database_table" as const,
-        name,
-        tableType: "table" as const, // API returns just names, assume table (views included)
+        name: entry.name,
+        tableType: entry.type as "table" | "view",
         databasePath: dbPath
       }))
 

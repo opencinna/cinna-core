@@ -230,16 +230,16 @@ async def get_database_tables(
     current_user: CurrentUser,
     env_id: uuid.UUID,
     path: str
-) -> list[str]:
+) -> list[dict]:
     """
-    Get list of table names from SQLite database.
+    Get list of tables and views from SQLite database.
 
     Args:
         env_id: Environment ID
         path: Relative path to SQLite file from workspace root
 
     Returns:
-        List of table and view names
+        List of dicts with 'name' and 'type' keys
 
     Permissions: User must own the agent
     """
