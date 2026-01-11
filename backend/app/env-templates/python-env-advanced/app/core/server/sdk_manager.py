@@ -8,6 +8,7 @@ from pathlib import Path
 from .prompt_generator import PromptGenerator
 from .sdk_utils import SessionLogger, format_message_for_debug, format_sdk_message
 from .active_session_manager import active_session_manager
+from .agent_env_service import AgentEnvService
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,9 @@ class ClaudeCodeSDKManager:
         logs_dir = Path(self.workspace_dir) / "logs"
         self.session_logger = SessionLogger(logs_dir, dump_enabled=dump_llm_session)
 
+        # Initialize agent env service for plugin management
+        self.agent_env_service = AgentEnvService(self.workspace_dir)
+
     async def send_message_stream(
         self,
         message: str,
@@ -233,6 +237,22 @@ class ClaudeCodeSDKManager:
                         logger.warning(f"Could not import agent handover tool: {tool_import_error}")
                     except Exception as tool_error:
                         logger.warning(f"Could not setup agent handover tool: {tool_error}")
+
+                # Load plugins for current mode
+                try:
+                    active_plugins = self.agent_env_service.get_active_plugins_for_mode(mode)
+                    if active_plugins:
+                        # Build plugins array for SDK options
+                        plugins = [
+                            {"type": "local", "path": plugin["path"]}
+                            for plugin in active_plugins
+                        ]
+                        options.plugins = plugins
+                        logger.info(f"Loaded {len(plugins)} plugins for {mode} mode: {[p['path'] for p in plugins]}")
+                    else:
+                        logger.debug(f"No plugins configured for {mode} mode")
+                except Exception as plugin_error:
+                    logger.warning(f"Could not load plugins for {mode} mode: {plugin_error}")
 
                 # Set model based on mode
                 # Conversation mode: use Haiku for faster, cheaper responses

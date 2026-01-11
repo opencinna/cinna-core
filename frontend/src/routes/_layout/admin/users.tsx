@@ -17,12 +17,12 @@ function getUsersQueryOptions() {
   }
 }
 
-export const Route = createFileRoute("/_layout/admin")({
-  component: Admin,
+export const Route = createFileRoute("/_layout/admin/users")({
+  component: AdminUsers,
   head: () => ({
     meta: [
       {
-        title: "Admin - Workflow Runner",
+        title: "Users - Admin - Workflow Runner",
       },
     ],
   }),
@@ -48,7 +48,7 @@ function UsersTable() {
   )
 }
 
-function Admin() {
+function AdminUsers() {
   const { setHeaderContent } = usePageHeader()
 
   useEffect(() => {

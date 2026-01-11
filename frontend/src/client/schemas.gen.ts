@@ -962,6 +962,279 @@ export const AgentEnvironmentsPublicSchema = {
     title: 'AgentEnvironmentsPublic'
 } as const;
 
+export const AgentPluginLinkCreateSchema = {
+    properties: {
+        plugin_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Plugin Id'
+        },
+        conversation_mode: {
+            type: 'boolean',
+            title: 'Conversation Mode',
+            default: true
+        },
+        building_mode: {
+            type: 'boolean',
+            title: 'Building Mode',
+            default: true
+        }
+    },
+    type: 'object',
+    required: ['plugin_id'],
+    title: 'AgentPluginLinkCreate',
+    description: 'Schema for creating an agent plugin link.'
+} as const;
+
+export const AgentPluginLinkPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        plugin_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Plugin Id'
+        },
+        installed_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Version'
+        },
+        installed_commit_hash: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Commit Hash'
+        },
+        conversation_mode: {
+            type: 'boolean',
+            title: 'Conversation Mode'
+        },
+        building_mode: {
+            type: 'boolean',
+            title: 'Building Mode'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'agent_id', 'plugin_id', 'installed_version', 'installed_commit_hash', 'conversation_mode', 'building_mode', 'created_at', 'updated_at'],
+    title: 'AgentPluginLinkPublic',
+    description: 'Public schema for agent plugin link.'
+} as const;
+
+export const AgentPluginLinkUpdateSchema = {
+    properties: {
+        conversation_mode: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Conversation Mode'
+        },
+        building_mode: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Building Mode'
+        }
+    },
+    type: 'object',
+    title: 'AgentPluginLinkUpdate',
+    description: 'Schema for updating an agent plugin link.'
+} as const;
+
+export const AgentPluginLinkWithUpdateInfoSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        plugin_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Plugin Id'
+        },
+        installed_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Version'
+        },
+        installed_commit_hash: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Commit Hash'
+        },
+        conversation_mode: {
+            type: 'boolean',
+            title: 'Conversation Mode'
+        },
+        building_mode: {
+            type: 'boolean',
+            title: 'Building Mode'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        has_update: {
+            type: 'boolean',
+            title: 'Has Update',
+            default: false
+        },
+        latest_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Version'
+        },
+        latest_commit_hash: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Commit Hash'
+        },
+        plugin_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Plugin Name'
+        },
+        plugin_description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Plugin Description'
+        },
+        plugin_category: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Plugin Category'
+        },
+        marketplace_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Marketplace Name'
+        }
+    },
+    type: 'object',
+    required: ['id', 'agent_id', 'plugin_id', 'installed_version', 'installed_commit_hash', 'conversation_mode', 'building_mode', 'created_at', 'updated_at'],
+    title: 'AgentPluginLinkWithUpdateInfo',
+    description: 'Extended schema including update availability info.'
+} as const;
+
+export const AgentPluginLinksPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentPluginLinkWithUpdateInfo'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AgentPluginLinksPublic',
+    description: 'List response for agent plugin links.'
+} as const;
+
 export const AgentPublicSchema = {
     properties: {
         id: {
@@ -2406,6 +2679,511 @@ export const KnowledgeQueryResponseRetrievalSchema = {
     description: 'Response for retrieval step (full articles).'
 } as const;
 
+export const LLMPluginMarketplaceCreateSchema = {
+    properties: {
+        url: {
+            type: 'string',
+            title: 'Url'
+        },
+        git_branch: {
+            type: 'string',
+            title: 'Git Branch',
+            default: 'main'
+        },
+        ssh_key_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ssh Key Id'
+        },
+        public_discovery: {
+            type: 'boolean',
+            title: 'Public Discovery',
+            default: false
+        },
+        type: {
+            type: 'string',
+            title: 'Type',
+            default: 'claude'
+        }
+    },
+    type: 'object',
+    required: ['url'],
+    title: 'LLMPluginMarketplaceCreate',
+    description: `Schema for creating a plugin marketplace.
+
+Only url is required. Other fields like name, description, owner_name, and
+owner_email will be automatically extracted from the repository's
+marketplace.json during sync.`
+} as const;
+
+export const LLMPluginMarketplacePluginPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        marketplace_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Marketplace Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Version'
+        },
+        author_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Author Name'
+        },
+        author_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Author Email'
+        },
+        category: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Category'
+        },
+        homepage: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Homepage'
+        },
+        source_path: {
+            type: 'string',
+            title: 'Source Path'
+        },
+        source_type: {
+            '$ref': '#/components/schemas/PluginSourceType'
+        },
+        source_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Url'
+        },
+        source_branch: {
+            type: 'string',
+            title: 'Source Branch'
+        },
+        source_commit_hash: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Commit Hash'
+        },
+        plugin_type: {
+            type: 'string',
+            title: 'Plugin Type'
+        },
+        commit_hash: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Commit Hash'
+        },
+        config: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Config'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        marketplace_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Marketplace Name'
+        }
+    },
+    type: 'object',
+    required: ['id', 'marketplace_id', 'name', 'description', 'version', 'author_name', 'author_email', 'category', 'homepage', 'source_path', 'source_type', 'source_url', 'source_branch', 'source_commit_hash', 'plugin_type', 'commit_hash', 'config', 'created_at', 'updated_at'],
+    title: 'LLMPluginMarketplacePluginPublic',
+    description: 'Public schema for marketplace plugin.'
+} as const;
+
+export const LLMPluginMarketplacePluginsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/LLMPluginMarketplacePluginPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'LLMPluginMarketplacePluginsPublic',
+    description: 'List response for marketplace plugins.'
+} as const;
+
+export const LLMPluginMarketplacePublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        owner_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Name'
+        },
+        owner_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Email'
+        },
+        url: {
+            type: 'string',
+            title: 'Url'
+        },
+        git_branch: {
+            type: 'string',
+            title: 'Git Branch'
+        },
+        ssh_key_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ssh Key Id'
+        },
+        public_discovery: {
+            type: 'boolean',
+            title: 'Public Discovery'
+        },
+        type: {
+            type: 'string',
+            title: 'Type'
+        },
+        status: {
+            '$ref': '#/components/schemas/MarketplaceStatus'
+        },
+        status_message: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status Message'
+        },
+        last_sync_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Sync At'
+        },
+        sync_commit_hash: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Sync Commit Hash'
+        },
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        plugin_count: {
+            type: 'integer',
+            title: 'Plugin Count',
+            default: 0
+        }
+    },
+    type: 'object',
+    required: ['id', 'name', 'description', 'owner_name', 'owner_email', 'url', 'git_branch', 'ssh_key_id', 'public_discovery', 'type', 'status', 'status_message', 'last_sync_at', 'sync_commit_hash', 'user_id', 'created_at', 'updated_at'],
+    title: 'LLMPluginMarketplacePublic',
+    description: 'Public schema for plugin marketplace.'
+} as const;
+
+export const LLMPluginMarketplaceUpdateSchema = {
+    properties: {
+        name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        owner_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Name'
+        },
+        owner_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Email'
+        },
+        url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Url'
+        },
+        git_branch: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Git Branch'
+        },
+        ssh_key_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ssh Key Id'
+        },
+        public_discovery: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Public Discovery'
+        },
+        type: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Type'
+        }
+    },
+    type: 'object',
+    title: 'LLMPluginMarketplaceUpdate',
+    description: 'Schema for updating a plugin marketplace.'
+} as const;
+
+export const LLMPluginMarketplacesPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/LLMPluginMarketplacePublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'LLMPluginMarketplacesPublic',
+    description: 'List response for plugin marketplaces.'
+} as const;
+
+export const MarketplaceStatusSchema = {
+    type: 'string',
+    enum: ['pending', 'connected', 'error', 'disconnected'],
+    title: 'MarketplaceStatus',
+    description: 'Status of a plugin marketplace.'
+} as const;
+
 export const MessageSchema = {
     properties: {
         message: {
@@ -2729,6 +3507,13 @@ export const OAuthRefreshResponseSchema = {
     type: 'object',
     required: ['message', 'expires_at'],
     title: 'OAuthRefreshResponse'
+} as const;
+
+export const PluginSourceTypeSchema = {
+    type: 'string',
+    enum: ['local', 'url'],
+    title: 'PluginSourceType',
+    description: 'Type of plugin source.'
 } as const;
 
 export const PrivateUserCreateSchema = {

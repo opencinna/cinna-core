@@ -138,6 +138,25 @@ from .knowledge import (
     ArticleListItem,
     ArticleContent,
 )
+from .llm_plugin import (
+    LLMPluginMarketplace,
+    LLMPluginMarketplaceCreate,
+    LLMPluginMarketplaceUpdate,
+    LLMPluginMarketplacePublic,
+    LLMPluginMarketplacesPublic,
+    LLMPluginMarketplacePlugin,
+    LLMPluginMarketplacePluginPublic,
+    LLMPluginMarketplacePluginsPublic,
+    AgentPluginLink,
+    AgentPluginLinkCreate,
+    AgentPluginLinkUpdate,
+    AgentPluginLinkPublic,
+    AgentPluginLinkWithPlugin,
+    AgentPluginLinkWithUpdateInfo,
+    AgentPluginLinksPublic,
+    MarketplaceStatus,
+    PluginSourceType,
+)
 
 __all__ = [
     # Core
@@ -270,4 +289,22 @@ __all__ = [
     "RefreshKnowledgeResponse",
     "ArticleListItem",
     "ArticleContent",
+    # LLM Plugin Management
+    "LLMPluginMarketplace",
+    "LLMPluginMarketplaceCreate",
+    "LLMPluginMarketplaceUpdate",
+    "LLMPluginMarketplacePublic",
+    "LLMPluginMarketplacesPublic",
+    "LLMPluginMarketplacePlugin",
+    "LLMPluginMarketplacePluginPublic",
+    "LLMPluginMarketplacePluginsPublic",
+    "AgentPluginLink",
+    "AgentPluginLinkCreate",
+    "AgentPluginLinkUpdate",
+    "AgentPluginLinkPublic",
+    "AgentPluginLinkWithPlugin",
+    "AgentPluginLinkWithUpdateInfo",
+    "AgentPluginLinksPublic",
+    "MarketplaceStatus",
+    "PluginSourceType",
 ]

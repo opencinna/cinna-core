@@ -10,6 +10,7 @@ from app.api.routes import (
     items,
     knowledge,
     knowledge_sources,
+    llm_plugins,
     login,
     messages,
     oauth,
@@ -44,6 +45,7 @@ api_router.include_router(events.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(knowledge_sources.router)
 api_router.include_router(files.router)
+api_router.include_router(llm_plugins.router)
 
 
 if settings.ENVIRONMENT == "local":

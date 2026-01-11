@@ -21,7 +21,6 @@ import { Route as LayoutKnowledgeSourcesRouteImport } from './routes/_layout/kno
 import { Route as LayoutItemsRouteImport } from './routes/_layout/items'
 import { Route as LayoutCredentialsRouteImport } from './routes/_layout/credentials'
 import { Route as LayoutAgentsRouteImport } from './routes/_layout/agents'
-import { Route as LayoutAdminRouteImport } from './routes/_layout/admin'
 import { Route as LayoutActivitiesRouteImport } from './routes/_layout/activities'
 import { Route as CredentialsOauthCallbackRouteImport } from './routes/credentials/oauth/callback'
 import { Route as LayoutSessionSessionIdRouteImport } from './routes/_layout/session/$sessionId'
@@ -29,9 +28,13 @@ import { Route as LayoutKnowledgeSourceSourceIdRouteImport } from './routes/_lay
 import { Route as LayoutCredentialCredentialIdRouteImport } from './routes/_layout/credential/$credentialId'
 import { Route as LayoutAgentCreatingRouteImport } from './routes/_layout/agent/creating'
 import { Route as LayoutAgentAgentIdRouteImport } from './routes/_layout/agent/$agentId'
+import { Route as LayoutAdminUsersRouteImport } from './routes/_layout/admin/users'
+import { Route as LayoutAdminMarketplacesRouteImport } from './routes/_layout/admin/marketplaces'
 import { Route as LayoutEnvironmentEnvIdFileRouteImport } from './routes/_layout/environment/$envId/file'
 import { Route as LayoutEnvironmentEnvIdDatabaseRouteImport } from './routes/_layout/environment/$envId/database'
 import { Route as LayoutAgentAgentIdConversationsRouteImport } from './routes/_layout/agent/$agentId/conversations'
+import { Route as LayoutAdminMarketplaceMarketplaceIdRouteImport } from './routes/_layout/admin/marketplace/$marketplaceId'
+import { Route as LayoutAdminMarketplacePluginPluginIdRouteImport } from './routes/_layout/admin/marketplace/plugin/$pluginId'
 
 const SignupRoute = SignupRouteImport.update({
   id: '/signup',
@@ -92,11 +95,6 @@ const LayoutAgentsRoute = LayoutAgentsRouteImport.update({
   path: '/agents',
   getParentRoute: () => LayoutRoute,
 } as any)
-const LayoutAdminRoute = LayoutAdminRouteImport.update({
-  id: '/admin',
-  path: '/admin',
-  getParentRoute: () => LayoutRoute,
-} as any)
 const LayoutActivitiesRoute = LayoutActivitiesRouteImport.update({
   id: '/activities',
   path: '/activities',
@@ -135,6 +133,16 @@ const LayoutAgentAgentIdRoute = LayoutAgentAgentIdRouteImport.update({
   path: '/agent/$agentId',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutAdminUsersRoute = LayoutAdminUsersRouteImport.update({
+  id: '/admin/users',
+  path: '/admin/users',
+  getParentRoute: () => LayoutRoute,
+} as any)
+const LayoutAdminMarketplacesRoute = LayoutAdminMarketplacesRouteImport.update({
+  id: '/admin/marketplaces',
+  path: '/admin/marketplaces',
+  getParentRoute: () => LayoutRoute,
+} as any)
 const LayoutEnvironmentEnvIdFileRoute =
   LayoutEnvironmentEnvIdFileRouteImport.update({
     id: '/environment/$envId/file',
@@ -153,6 +161,18 @@ const LayoutAgentAgentIdConversationsRoute =
     path: '/conversations',
     getParentRoute: () => LayoutAgentAgentIdRoute,
   } as any)
+const LayoutAdminMarketplaceMarketplaceIdRoute =
+  LayoutAdminMarketplaceMarketplaceIdRouteImport.update({
+    id: '/admin/marketplace/$marketplaceId',
+    path: '/admin/marketplace/$marketplaceId',
+    getParentRoute: () => LayoutRoute,
+  } as any)
+const LayoutAdminMarketplacePluginPluginIdRoute =
+  LayoutAdminMarketplacePluginPluginIdRouteImport.update({
+    id: '/admin/marketplace/plugin/$pluginId',
+    path: '/admin/marketplace/plugin/$pluginId',
+    getParentRoute: () => LayoutRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
@@ -160,7 +180,6 @@ export interface FileRoutesByFullPath {
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
   '/activities': typeof LayoutActivitiesRoute
-  '/admin': typeof LayoutAdminRoute
   '/agents': typeof LayoutAgentsRoute
   '/credentials': typeof LayoutCredentialsRoute
   '/items': typeof LayoutItemsRoute
@@ -168,15 +187,19 @@ export interface FileRoutesByFullPath {
   '/sessions': typeof LayoutSessionsRoute
   '/settings': typeof LayoutSettingsRoute
   '/': typeof LayoutIndexRoute
+  '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
+  '/admin/users': typeof LayoutAdminUsersRoute
   '/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
   '/agent/creating': typeof LayoutAgentCreatingRoute
   '/credential/$credentialId': typeof LayoutCredentialCredentialIdRoute
   '/knowledge-source/$sourceId': typeof LayoutKnowledgeSourceSourceIdRoute
   '/session/$sessionId': typeof LayoutSessionSessionIdRoute
   '/credentials/oauth/callback': typeof CredentialsOauthCallbackRoute
+  '/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
   '/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
   '/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
+  '/admin/marketplace/plugin/$pluginId': typeof LayoutAdminMarketplacePluginPluginIdRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
@@ -184,7 +207,6 @@ export interface FileRoutesByTo {
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
   '/activities': typeof LayoutActivitiesRoute
-  '/admin': typeof LayoutAdminRoute
   '/agents': typeof LayoutAgentsRoute
   '/credentials': typeof LayoutCredentialsRoute
   '/items': typeof LayoutItemsRoute
@@ -192,15 +214,19 @@ export interface FileRoutesByTo {
   '/sessions': typeof LayoutSessionsRoute
   '/settings': typeof LayoutSettingsRoute
   '/': typeof LayoutIndexRoute
+  '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
+  '/admin/users': typeof LayoutAdminUsersRoute
   '/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
   '/agent/creating': typeof LayoutAgentCreatingRoute
   '/credential/$credentialId': typeof LayoutCredentialCredentialIdRoute
   '/knowledge-source/$sourceId': typeof LayoutKnowledgeSourceSourceIdRoute
   '/session/$sessionId': typeof LayoutSessionSessionIdRoute
   '/credentials/oauth/callback': typeof CredentialsOauthCallbackRoute
+  '/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
   '/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
   '/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
+  '/admin/marketplace/plugin/$pluginId': typeof LayoutAdminMarketplacePluginPluginIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -210,7 +236,6 @@ export interface FileRoutesById {
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
   '/_layout/activities': typeof LayoutActivitiesRoute
-  '/_layout/admin': typeof LayoutAdminRoute
   '/_layout/agents': typeof LayoutAgentsRoute
   '/_layout/credentials': typeof LayoutCredentialsRoute
   '/_layout/items': typeof LayoutItemsRoute
@@ -218,15 +243,19 @@ export interface FileRoutesById {
   '/_layout/sessions': typeof LayoutSessionsRoute
   '/_layout/settings': typeof LayoutSettingsRoute
   '/_layout/': typeof LayoutIndexRoute
+  '/_layout/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
+  '/_layout/admin/users': typeof LayoutAdminUsersRoute
   '/_layout/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
   '/_layout/agent/creating': typeof LayoutAgentCreatingRoute
   '/_layout/credential/$credentialId': typeof LayoutCredentialCredentialIdRoute
   '/_layout/knowledge-source/$sourceId': typeof LayoutKnowledgeSourceSourceIdRoute
   '/_layout/session/$sessionId': typeof LayoutSessionSessionIdRoute
   '/credentials/oauth/callback': typeof CredentialsOauthCallbackRoute
+  '/_layout/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
   '/_layout/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
   '/_layout/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/_layout/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
+  '/_layout/admin/marketplace/plugin/$pluginId': typeof LayoutAdminMarketplacePluginPluginIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -236,7 +265,6 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/signup'
     | '/activities'
-    | '/admin'
     | '/agents'
     | '/credentials'
     | '/items'
@@ -244,15 +272,19 @@ export interface FileRouteTypes {
     | '/sessions'
     | '/settings'
     | '/'
+    | '/admin/marketplaces'
+    | '/admin/users'
     | '/agent/$agentId'
     | '/agent/creating'
     | '/credential/$credentialId'
     | '/knowledge-source/$sourceId'
     | '/session/$sessionId'
     | '/credentials/oauth/callback'
+    | '/admin/marketplace/$marketplaceId'
     | '/agent/$agentId/conversations'
     | '/environment/$envId/database'
     | '/environment/$envId/file'
+    | '/admin/marketplace/plugin/$pluginId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -260,7 +292,6 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/signup'
     | '/activities'
-    | '/admin'
     | '/agents'
     | '/credentials'
     | '/items'
@@ -268,15 +299,19 @@ export interface FileRouteTypes {
     | '/sessions'
     | '/settings'
     | '/'
+    | '/admin/marketplaces'
+    | '/admin/users'
     | '/agent/$agentId'
     | '/agent/creating'
     | '/credential/$credentialId'
     | '/knowledge-source/$sourceId'
     | '/session/$sessionId'
     | '/credentials/oauth/callback'
+    | '/admin/marketplace/$marketplaceId'
     | '/agent/$agentId/conversations'
     | '/environment/$envId/database'
     | '/environment/$envId/file'
+    | '/admin/marketplace/plugin/$pluginId'
   id:
     | '__root__'
     | '/_layout'
@@ -285,7 +320,6 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/signup'
     | '/_layout/activities'
-    | '/_layout/admin'
     | '/_layout/agents'
     | '/_layout/credentials'
     | '/_layout/items'
@@ -293,15 +327,19 @@ export interface FileRouteTypes {
     | '/_layout/sessions'
     | '/_layout/settings'
     | '/_layout/'
+    | '/_layout/admin/marketplaces'
+    | '/_layout/admin/users'
     | '/_layout/agent/$agentId'
     | '/_layout/agent/creating'
     | '/_layout/credential/$credentialId'
     | '/_layout/knowledge-source/$sourceId'
     | '/_layout/session/$sessionId'
     | '/credentials/oauth/callback'
+    | '/_layout/admin/marketplace/$marketplaceId'
     | '/_layout/agent/$agentId/conversations'
     | '/_layout/environment/$envId/database'
     | '/_layout/environment/$envId/file'
+    | '/_layout/admin/marketplace/plugin/$pluginId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -399,13 +437,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAgentsRouteImport
       parentRoute: typeof LayoutRoute
     }
-    '/_layout/admin': {
-      id: '/_layout/admin'
-      path: '/admin'
-      fullPath: '/admin'
-      preLoaderRoute: typeof LayoutAdminRouteImport
-      parentRoute: typeof LayoutRoute
-    }
     '/_layout/activities': {
       id: '/_layout/activities'
       path: '/activities'
@@ -455,6 +486,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAgentAgentIdRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/admin/users': {
+      id: '/_layout/admin/users'
+      path: '/admin/users'
+      fullPath: '/admin/users'
+      preLoaderRoute: typeof LayoutAdminUsersRouteImport
+      parentRoute: typeof LayoutRoute
+    }
+    '/_layout/admin/marketplaces': {
+      id: '/_layout/admin/marketplaces'
+      path: '/admin/marketplaces'
+      fullPath: '/admin/marketplaces'
+      preLoaderRoute: typeof LayoutAdminMarketplacesRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/environment/$envId/file': {
       id: '/_layout/environment/$envId/file'
       path: '/environment/$envId/file'
@@ -476,6 +521,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAgentAgentIdConversationsRouteImport
       parentRoute: typeof LayoutAgentAgentIdRoute
     }
+    '/_layout/admin/marketplace/$marketplaceId': {
+      id: '/_layout/admin/marketplace/$marketplaceId'
+      path: '/admin/marketplace/$marketplaceId'
+      fullPath: '/admin/marketplace/$marketplaceId'
+      preLoaderRoute: typeof LayoutAdminMarketplaceMarketplaceIdRouteImport
+      parentRoute: typeof LayoutRoute
+    }
+    '/_layout/admin/marketplace/plugin/$pluginId': {
+      id: '/_layout/admin/marketplace/plugin/$pluginId'
+      path: '/admin/marketplace/plugin/$pluginId'
+      fullPath: '/admin/marketplace/plugin/$pluginId'
+      preLoaderRoute: typeof LayoutAdminMarketplacePluginPluginIdRouteImport
+      parentRoute: typeof LayoutRoute
+    }
   }
 }
 
@@ -492,7 +551,6 @@ const LayoutAgentAgentIdRouteWithChildren =
 
 interface LayoutRouteChildren {
   LayoutActivitiesRoute: typeof LayoutActivitiesRoute
-  LayoutAdminRoute: typeof LayoutAdminRoute
   LayoutAgentsRoute: typeof LayoutAgentsRoute
   LayoutCredentialsRoute: typeof LayoutCredentialsRoute
   LayoutItemsRoute: typeof LayoutItemsRoute
@@ -500,18 +558,21 @@ interface LayoutRouteChildren {
   LayoutSessionsRoute: typeof LayoutSessionsRoute
   LayoutSettingsRoute: typeof LayoutSettingsRoute
   LayoutIndexRoute: typeof LayoutIndexRoute
+  LayoutAdminMarketplacesRoute: typeof LayoutAdminMarketplacesRoute
+  LayoutAdminUsersRoute: typeof LayoutAdminUsersRoute
   LayoutAgentAgentIdRoute: typeof LayoutAgentAgentIdRouteWithChildren
   LayoutAgentCreatingRoute: typeof LayoutAgentCreatingRoute
   LayoutCredentialCredentialIdRoute: typeof LayoutCredentialCredentialIdRoute
   LayoutKnowledgeSourceSourceIdRoute: typeof LayoutKnowledgeSourceSourceIdRoute
   LayoutSessionSessionIdRoute: typeof LayoutSessionSessionIdRoute
+  LayoutAdminMarketplaceMarketplaceIdRoute: typeof LayoutAdminMarketplaceMarketplaceIdRoute
   LayoutEnvironmentEnvIdDatabaseRoute: typeof LayoutEnvironmentEnvIdDatabaseRoute
   LayoutEnvironmentEnvIdFileRoute: typeof LayoutEnvironmentEnvIdFileRoute
+  LayoutAdminMarketplacePluginPluginIdRoute: typeof LayoutAdminMarketplacePluginPluginIdRoute
 }
 
 const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutActivitiesRoute: LayoutActivitiesRoute,
-  LayoutAdminRoute: LayoutAdminRoute,
   LayoutAgentsRoute: LayoutAgentsRoute,
   LayoutCredentialsRoute: LayoutCredentialsRoute,
   LayoutItemsRoute: LayoutItemsRoute,
@@ -519,13 +580,19 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutSessionsRoute: LayoutSessionsRoute,
   LayoutSettingsRoute: LayoutSettingsRoute,
   LayoutIndexRoute: LayoutIndexRoute,
+  LayoutAdminMarketplacesRoute: LayoutAdminMarketplacesRoute,
+  LayoutAdminUsersRoute: LayoutAdminUsersRoute,
   LayoutAgentAgentIdRoute: LayoutAgentAgentIdRouteWithChildren,
   LayoutAgentCreatingRoute: LayoutAgentCreatingRoute,
   LayoutCredentialCredentialIdRoute: LayoutCredentialCredentialIdRoute,
   LayoutKnowledgeSourceSourceIdRoute: LayoutKnowledgeSourceSourceIdRoute,
   LayoutSessionSessionIdRoute: LayoutSessionSessionIdRoute,
+  LayoutAdminMarketplaceMarketplaceIdRoute:
+    LayoutAdminMarketplaceMarketplaceIdRoute,
   LayoutEnvironmentEnvIdDatabaseRoute: LayoutEnvironmentEnvIdDatabaseRoute,
   LayoutEnvironmentEnvIdFileRoute: LayoutEnvironmentEnvIdFileRoute,
+  LayoutAdminMarketplacePluginPluginIdRoute:
+    LayoutAdminMarketplacePluginPluginIdRoute,
 }
 
 const LayoutRouteWithChildren =

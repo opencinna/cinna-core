@@ -22,6 +22,7 @@ class AgentEnvService:
     - Read/write agent prompt files (WORKFLOW_PROMPT.md, ENTRYPOINT_PROMPT.md)
     - Manage workspace configuration
     - Validate file operations
+    - Manage plugins
     """
 
     def __init__(self, workspace_dir: str):
@@ -34,6 +35,7 @@ class AgentEnvService:
         self.workspace_dir = Path(workspace_dir)
         self.docs_dir = self.workspace_dir / "docs"
         self.credentials_dir = self.workspace_dir / "credentials"
+        self.plugins_dir = self.workspace_dir / "plugins"
 
     def get_agent_prompts(self) -> Tuple[Optional[str], Optional[str]]:
         """
@@ -1025,3 +1027,131 @@ class AgentEnvService:
                 "error": str(e),
                 "error_type": "syntax_error" if "syntax" in str(e).lower() else "execution_error"
             }
+
+    # =========================================================================
+    # Plugin Management Methods
+    # =========================================================================
+
+    def update_plugins(
+        self,
+        active_plugins: list[dict],
+        settings_json: dict,
+        plugin_files: dict[str, dict[str, str]]
+    ) -> list[str]:
+        """
+        Update plugins in workspace plugins directory.
+
+        Creates the following structure:
+        /app/workspace/plugins/
+        ├── settings.json
+        └── [marketplace_name]/
+            └── [plugin_name]/
+                └── (plugin files)
+
+        Args:
+            active_plugins: List of plugin info dicts with marketplace_name, plugin_name, etc.
+            settings_json: Settings dictionary to write as settings.json
+            plugin_files: Dict mapping "marketplace/plugin" -> {relative_path: base64_content}
+
+        Returns:
+            List of updated paths
+
+        Raises:
+            IOError: If file operations fail
+        """
+        import base64
+
+        # Ensure plugins directory exists
+        self.plugins_dir.mkdir(parents=True, exist_ok=True)
+
+        updated_paths = []
+
+        try:
+            # Write plugin files
+            for plugin_key, files in plugin_files.items():
+                # plugin_key format: "marketplace_name/plugin_name"
+                parts = plugin_key.split("/", 1)
+                if len(parts) != 2:
+                    logger.warning(f"Invalid plugin key format: {plugin_key}")
+                    continue
+
+                marketplace_name, plugin_name = parts
+                plugin_dir = self.plugins_dir / marketplace_name / plugin_name
+
+                # Create plugin directory
+                plugin_dir.mkdir(parents=True, exist_ok=True)
+
+                # Write each file
+                for relative_path, base64_content in files.items():
+                    file_path = plugin_dir / relative_path
+
+                    # Create parent directories if needed
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+                    # Decode and write file content
+                    try:
+                        content = base64.b64decode(base64_content)
+                        file_path.write_bytes(content)
+                        updated_paths.append(str(file_path.relative_to(self.workspace_dir)))
+                        logger.debug(f"Wrote plugin file: {file_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to write plugin file {file_path}: {e}")
+
+                logger.info(f"Updated plugin: {marketplace_name}/{plugin_name}")
+
+            # Write settings.json
+            settings_file = self.plugins_dir / "settings.json"
+            with open(settings_file, 'w', encoding='utf-8') as f:
+                json.dump(settings_json, f, indent=2)
+            updated_paths.append("plugins/settings.json")
+            logger.info(f"Updated plugins/settings.json with {len(active_plugins)} active plugins")
+
+            return updated_paths
+
+        except Exception as e:
+            logger.error(f"Failed to update plugins: {e}")
+            raise IOError(f"Failed to update plugins: {str(e)}")
+
+    def get_plugins_settings(self) -> dict:
+        """
+        Get current plugins settings from settings.json.
+
+        Returns:
+            Dictionary with active_plugins list, or empty structure if not found
+        """
+        settings_file = self.plugins_dir / "settings.json"
+
+        if not settings_file.exists():
+            logger.debug(f"plugins/settings.json not found at {settings_file}")
+            return {"active_plugins": []}
+
+        try:
+            with open(settings_file, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+                logger.info(f"Read plugins/settings.json ({len(settings.get('active_plugins', []))} plugins)")
+                return settings
+        except Exception as e:
+            logger.error(f"Failed to read plugins/settings.json: {e}")
+            return {"active_plugins": []}
+
+    def get_active_plugins_for_mode(self, mode: str) -> list[dict]:
+        """
+        Get active plugins filtered by mode.
+
+        Args:
+            mode: "conversation" or "building"
+
+        Returns:
+            List of plugin dicts that are active for the specified mode
+        """
+        settings = self.get_plugins_settings()
+        active_plugins = settings.get("active_plugins", [])
+
+        if mode == "conversation":
+            return [p for p in active_plugins if p.get("conversation_mode", False)]
+        elif mode == "building":
+            return [p for p in active_plugins if p.get("building_mode", False)]
+        else:
+            # If mode is not specified, return all active plugins
+            logger.warning(f"Unknown mode '{mode}', returning all active plugins")
+            return active_plugins

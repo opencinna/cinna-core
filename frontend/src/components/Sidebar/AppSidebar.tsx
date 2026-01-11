@@ -1,5 +1,5 @@
 import { Link as RouterLink, useRouterState } from "@tanstack/react-router"
-import { Bot, Home, Key, MessageSquare, Users, Bell, BookOpen } from "lucide-react"
+import { Bot, Home, Key, MessageSquare, Bell, BookOpen } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 
 import { SidebarAppearance } from "@/components/Common/Appearance"
@@ -21,6 +21,7 @@ import {
 import useAuth from "@/hooks/useAuth"
 import { type Item, Main } from "./Main"
 import { User } from "./User"
+import { AdminMenu } from "./AdminMenu"
 import { ActivitiesService } from "@/client"
 import { cn } from "@/lib/utils"
 import { useMultiEventSubscription, EventTypes } from "@/hooks/useEventBus"
@@ -110,33 +111,6 @@ function KnowledgeSourcesMenu() {
           <RouterLink to="/knowledge-sources" onClick={handleMenuClick}>
             <BookOpen />
             <span>Knowledge</span>
-          </RouterLink>
-        </SidebarMenuButton>
-      </SidebarMenuItem>
-    </SidebarMenu>
-  )
-}
-
-function AdminMenu() {
-  const { isMobile, setOpenMobile } = useSidebar()
-  const router = useRouterState()
-  const currentPath = router.location.pathname
-
-  const handleMenuClick = () => {
-    if (isMobile) {
-      setOpenMobile(false)
-    }
-  }
-
-  const isActive = currentPath === "/admin"
-
-  return (
-    <SidebarMenu>
-      <SidebarMenuItem>
-        <SidebarMenuButton tooltip="Admin" isActive={isActive} asChild>
-          <RouterLink to="/admin" onClick={handleMenuClick}>
-            <Users />
-            <span>Admin</span>
           </RouterLink>
         </SidebarMenuButton>
       </SidebarMenuItem>

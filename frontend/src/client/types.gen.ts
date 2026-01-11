@@ -120,6 +120,68 @@ export type AgentEnvironmentUpdate = {
 } | null);
 };
 
+/**
+ * Schema for creating an agent plugin link.
+ */
+export type AgentPluginLinkCreate = {
+    plugin_id: string;
+    conversation_mode?: boolean;
+    building_mode?: boolean;
+};
+
+/**
+ * Public schema for agent plugin link.
+ */
+export type AgentPluginLinkPublic = {
+    id: string;
+    agent_id: string;
+    plugin_id: string;
+    installed_version: (string | null);
+    installed_commit_hash: (string | null);
+    conversation_mode: boolean;
+    building_mode: boolean;
+    created_at: string;
+    updated_at: string;
+};
+
+/**
+ * List response for agent plugin links.
+ */
+export type AgentPluginLinksPublic = {
+    data: Array<AgentPluginLinkWithUpdateInfo>;
+    count: number;
+};
+
+/**
+ * Schema for updating an agent plugin link.
+ */
+export type AgentPluginLinkUpdate = {
+    conversation_mode?: (boolean | null);
+    building_mode?: (boolean | null);
+};
+
+/**
+ * Extended schema including update availability info.
+ */
+export type AgentPluginLinkWithUpdateInfo = {
+    id: string;
+    agent_id: string;
+    plugin_id: string;
+    installed_version: (string | null);
+    installed_commit_hash: (string | null);
+    conversation_mode: boolean;
+    building_mode: boolean;
+    created_at: string;
+    updated_at: string;
+    has_update?: boolean;
+    latest_version?: (string | null);
+    latest_commit_hash?: (string | null);
+    plugin_name?: (string | null);
+    plugin_description?: (string | null);
+    plugin_category?: (string | null);
+    marketplace_name?: (string | null);
+};
+
 export type AgentPublic = {
     id: string;
     name: string;
@@ -553,6 +615,109 @@ export type KnowledgeQueryResponseRetrieval = {
     articles: Array<ArticleContent>;
 };
 
+/**
+ * Schema for creating a plugin marketplace.
+ *
+ * Only url is required. Other fields like name, description, owner_name, and
+ * owner_email will be automatically extracted from the repository's
+ * marketplace.json during sync.
+ */
+export type LLMPluginMarketplaceCreate = {
+    url: string;
+    git_branch?: string;
+    ssh_key_id?: (string | null);
+    public_discovery?: boolean;
+    type?: string;
+};
+
+/**
+ * Public schema for marketplace plugin.
+ */
+export type LLMPluginMarketplacePluginPublic = {
+    id: string;
+    marketplace_id: string;
+    name: string;
+    description: (string | null);
+    version: (string | null);
+    author_name: (string | null);
+    author_email: (string | null);
+    category: (string | null);
+    homepage: (string | null);
+    source_path: string;
+    source_type: PluginSourceType;
+    source_url: (string | null);
+    source_branch: string;
+    source_commit_hash: (string | null);
+    plugin_type: string;
+    commit_hash: (string | null);
+    config: ({
+    [key: string]: unknown;
+} | null);
+    created_at: string;
+    updated_at: string;
+    marketplace_name?: (string | null);
+};
+
+/**
+ * List response for marketplace plugins.
+ */
+export type LLMPluginMarketplacePluginsPublic = {
+    data: Array<LLMPluginMarketplacePluginPublic>;
+    count: number;
+};
+
+/**
+ * Public schema for plugin marketplace.
+ */
+export type LLMPluginMarketplacePublic = {
+    id: string;
+    name: string;
+    description: (string | null);
+    owner_name: (string | null);
+    owner_email: (string | null);
+    url: string;
+    git_branch: string;
+    ssh_key_id: (string | null);
+    public_discovery: boolean;
+    type: string;
+    status: MarketplaceStatus;
+    status_message: (string | null);
+    last_sync_at: (string | null);
+    sync_commit_hash: (string | null);
+    user_id: string;
+    created_at: string;
+    updated_at: string;
+    plugin_count?: number;
+};
+
+/**
+ * List response for plugin marketplaces.
+ */
+export type LLMPluginMarketplacesPublic = {
+    data: Array<LLMPluginMarketplacePublic>;
+    count: number;
+};
+
+/**
+ * Schema for updating a plugin marketplace.
+ */
+export type LLMPluginMarketplaceUpdate = {
+    name?: (string | null);
+    description?: (string | null);
+    owner_name?: (string | null);
+    owner_email?: (string | null);
+    url?: (string | null);
+    git_branch?: (string | null);
+    ssh_key_id?: (string | null);
+    public_discovery?: (boolean | null);
+    type?: (string | null);
+};
+
+/**
+ * Status of a plugin marketplace.
+ */
+export type MarketplaceStatus = 'pending' | 'connected' | 'error' | 'disconnected';
+
 export type Message = {
     message: string;
 };
@@ -623,6 +788,11 @@ export type OAuthRefreshResponse = {
     message: string;
     expires_at: (number | null);
 };
+
+/**
+ * Type of plugin source.
+ */
+export type PluginSourceType = 'local' | 'url';
 
 export type PrivateUserCreate = {
     email: string;
@@ -1356,6 +1526,91 @@ export type KnowledgeSourcesDisableDiscoverableSourceData = {
 };
 
 export type KnowledgeSourcesDisableDiscoverableSourceResponse = (unknown);
+
+export type LlmPluginsCreateMarketplaceData = {
+    requestBody: LLMPluginMarketplaceCreate;
+};
+
+export type LlmPluginsCreateMarketplaceResponse = (LLMPluginMarketplacePublic);
+
+export type LlmPluginsListMarketplacesData = {
+    includePublic?: boolean;
+};
+
+export type LlmPluginsListMarketplacesResponse = (LLMPluginMarketplacesPublic);
+
+export type LlmPluginsGetMarketplaceData = {
+    marketplaceId: string;
+};
+
+export type LlmPluginsGetMarketplaceResponse = (LLMPluginMarketplacePublic);
+
+export type LlmPluginsUpdateMarketplaceData = {
+    marketplaceId: string;
+    requestBody: LLMPluginMarketplaceUpdate;
+};
+
+export type LlmPluginsUpdateMarketplaceResponse = (LLMPluginMarketplacePublic);
+
+export type LlmPluginsDeleteMarketplaceData = {
+    marketplaceId: string;
+};
+
+export type LlmPluginsDeleteMarketplaceResponse = (Message);
+
+export type LlmPluginsSyncMarketplaceData = {
+    marketplaceId: string;
+};
+
+export type LlmPluginsSyncMarketplaceResponse = (LLMPluginMarketplacePublic);
+
+export type LlmPluginsDiscoverPluginsData = {
+    category?: (string | null);
+    search?: (string | null);
+};
+
+export type LlmPluginsDiscoverPluginsResponse = (LLMPluginMarketplacePluginsPublic);
+
+export type LlmPluginsGetPluginData = {
+    pluginId: string;
+};
+
+export type LlmPluginsGetPluginResponse = (LLMPluginMarketplacePluginPublic);
+
+export type LlmPluginsListAgentPluginsData = {
+    agentId: string;
+};
+
+export type LlmPluginsListAgentPluginsResponse = (AgentPluginLinksPublic);
+
+export type LlmPluginsInstallAgentPluginData = {
+    agentId: string;
+    requestBody: AgentPluginLinkCreate;
+};
+
+export type LlmPluginsInstallAgentPluginResponse = (AgentPluginLinkPublic);
+
+export type LlmPluginsUninstallAgentPluginData = {
+    agentId: string;
+    linkId: string;
+};
+
+export type LlmPluginsUninstallAgentPluginResponse = (Message);
+
+export type LlmPluginsUpdateAgentPluginData = {
+    agentId: string;
+    linkId: string;
+    requestBody: AgentPluginLinkUpdate;
+};
+
+export type LlmPluginsUpdateAgentPluginResponse = (AgentPluginLinkPublic);
+
+export type LlmPluginsUpgradeAgentPluginData = {
+    agentId: string;
+    linkId: string;
+};
+
+export type LlmPluginsUpgradeAgentPluginResponse = (AgentPluginLinkWithUpdateInfo);
 
 export type LoginLoginAccessTokenData = {
     formData: Body_login_login_access_token;

@@ -4,7 +4,7 @@ import logging
 import asyncio
 from pathlib import Path
 from uuid import UUID
-from sqlmodel import Session
+from sqlmodel import Session, select
 from sqlalchemy.orm.attributes import flag_modified
 from typing import Optional
 from datetime import datetime, timedelta
@@ -248,6 +248,77 @@ class EnvironmentLifecycleManager:
             agent_id=agent.id
         )
         await adapter.set_credentials(credentials_data)
+
+        # Sync plugins to environment
+        environment.status_message = "Syncing plugins..."
+        db_session.add(environment)
+        db_session.commit()
+
+        await self._sync_plugins_to_environment(db_session, environment, agent)
+
+    async def _sync_plugins_to_environment(
+        self,
+        db_session: Session,
+        environment: AgentEnvironment,
+        agent: Agent
+    ):
+        """
+        Sync installed plugins to the agent environment.
+
+        Args:
+            db_session: Database session
+            environment: Environment instance
+            agent: Agent instance
+        """
+        from app.services.llm_plugin_service import LLMPluginService
+
+        adapter = self.get_adapter(environment)
+
+        # Prepare plugin data
+        plugins_data = LLMPluginService.prepare_plugins_for_environment(
+            session=db_session,
+            agent_id=agent.id
+        )
+
+        # Get plugin files for each installed plugin
+        plugin_files = {}
+        for plugin_info in plugins_data.get("active_plugins", []):
+            # Find the plugin link to get plugin_id
+            from app.models.llm_plugin import AgentPluginLink, LLMPluginMarketplacePlugin
+            link = db_session.exec(
+                select(AgentPluginLink).where(
+                    AgentPluginLink.agent_id == agent.id
+                ).join(LLMPluginMarketplacePlugin).where(
+                    LLMPluginMarketplacePlugin.name == plugin_info["plugin_name"]
+                )
+            ).first()
+
+            if link:
+                try:
+                    files = LLMPluginService.get_plugin_files(
+                        session=db_session,
+                        plugin_id=link.plugin_id,
+                        commit_hash=plugin_info.get("commit_hash"),
+                        user_id=agent.owner_id
+                    )
+                    # Encode files as base64 for JSON transport
+                    import base64
+                    encoded_files = {
+                        path: base64.b64encode(content).decode('utf-8')
+                        for path, content in files.items()
+                    }
+                    plugin_key = f"{plugin_info['marketplace_name']}/{plugin_info['plugin_name']}"
+                    plugin_files[plugin_key] = encoded_files
+                except Exception as e:
+                    logger.warning(f"Failed to get files for plugin {plugin_info['plugin_name']}: {e}")
+
+        # Combine plugins data with files
+        full_plugins_data = {
+            **plugins_data,
+            "plugin_files": plugin_files,
+        }
+
+        await adapter.set_plugins(full_plugins_data)
 
     async def _setup_new_container(
         self,

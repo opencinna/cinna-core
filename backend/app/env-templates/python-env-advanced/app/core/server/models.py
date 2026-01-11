@@ -144,3 +144,28 @@ class SQLiteQueryResult(BaseModel):
     rows_affected: int | None = None  # For DML queries
     error: str | None = None  # Error message if query failed
     error_type: str | None = None  # "syntax_error" | "timeout" | "file_error" | "execution_error"
+
+
+# Plugin Models
+
+class PluginInfo(BaseModel):
+    """Information about a single plugin"""
+    marketplace_name: str
+    plugin_name: str
+    path: str  # Full path in workspace: /app/workspace/plugins/[marketplace]/[plugin]
+    conversation_mode: bool
+    building_mode: bool
+    version: str | None = None
+    commit_hash: str | None = None
+
+
+class PluginsUpdate(BaseModel):
+    """Update plugins in workspace"""
+    active_plugins: list[PluginInfo]  # List of plugins to sync
+    settings_json: dict  # Settings JSON to write
+    plugin_files: dict[str, dict[str, str]]  # {plugin_key: {relative_path: base64_content}}
+
+
+class PluginsSettingsResponse(BaseModel):
+    """Current plugins settings"""
+    active_plugins: list[PluginInfo]

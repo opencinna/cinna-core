@@ -243,6 +243,32 @@ class EnvironmentAdapter(ABC):
         """
         pass
 
+    @abstractmethod
+    async def set_plugins(self, plugins_data: dict) -> bool:
+        """
+        Set or update plugins in the environment.
+
+        Args:
+            plugins_data: Dictionary containing:
+                - active_plugins: List of plugin configs
+                - settings_json: Settings file content
+                - plugin_files: Dict mapping plugin paths to file contents
+
+        Returns:
+            True if plugins set successfully
+        """
+        pass
+
+    @abstractmethod
+    async def get_plugins_settings(self) -> dict:
+        """
+        Get current plugins settings from environment.
+
+        Returns:
+            Current plugins settings dictionary
+        """
+        pass
+
     # === File Operations ===
 
     @abstractmethod

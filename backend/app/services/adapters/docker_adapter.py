@@ -489,6 +489,53 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
             logger.error(f"Failed to set credentials: {e}")
             raise Exception(f"Failed to set credentials: {e}")
 
+    async def set_plugins(self, plugins_data: dict) -> bool:
+        """
+        Update plugins in workspace via HTTP API.
+
+        Args:
+            plugins_data: Dictionary with keys:
+                - active_plugins: List of plugin configs
+                - settings_json: Settings file content
+                - plugin_files: Dict mapping plugin paths to file contents (base64 encoded)
+
+        Returns:
+            True if successful
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.base_url}/config/plugins",
+                    json=plugins_data,
+                    headers=self._get_headers(),
+                    timeout=30.0  # Longer timeout for plugin file transfers
+                )
+                response.raise_for_status()
+                return True
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to set plugins: {e}")
+            raise Exception(f"Failed to set plugins: {e}")
+
+    async def get_plugins_settings(self) -> dict:
+        """
+        Get current plugins settings from environment.
+
+        Returns:
+            Current plugins settings dictionary
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/config/plugins/settings",
+                    headers=self._get_headers(),
+                    timeout=10.0
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to get plugins settings: {e}")
+            raise Exception(f"Failed to get plugins settings: {e}")
+
     async def upload_file(self, file: File) -> bool:
         """Upload file to container workspace via volume."""
         try:

@@ -21,7 +21,9 @@ from .models import (
     DatabaseTableEntry,
     SQLiteDatabaseSchema,
     SQLiteQueryRequest,
-    SQLiteQueryResult
+    SQLiteQueryResult,
+    PluginsUpdate,
+    PluginsSettingsResponse,
 )
 from .sdk_manager import sdk_manager
 from .agent_env_service import AgentEnvService
@@ -416,6 +418,90 @@ async def update_credentials(credentials: CredentialsUpdate):
             status_code=500,
             detail=f"Failed to update credentials: {str(e)}"
         )
+
+
+@router.post("/config/plugins", dependencies=[Depends(verify_auth_token)])
+async def update_plugins(plugins: PluginsUpdate):
+    """
+    Update plugins in workspace plugins directory.
+
+    Creates the following structure:
+    ./plugins/
+    ├── settings.json (active plugins configuration)
+    └── [marketplace_name]/
+        └── [plugin_name]/
+            └── (plugin files)
+
+    This is called by the backend when:
+    - Environment starts (sync plugins)
+    - User installs/updates/uninstalls plugins
+    """
+    try:
+        # Convert PluginInfo models to dicts for internal use
+        active_plugins_dicts = [
+            {
+                "marketplace_name": p.marketplace_name,
+                "plugin_name": p.plugin_name,
+                "path": p.path,
+                "conversation_mode": p.conversation_mode,
+                "building_mode": p.building_mode,
+                "version": p.version,
+                "commit_hash": p.commit_hash,
+            }
+            for p in plugins.active_plugins
+        ]
+
+        updated_files = agent_env_service.update_plugins(
+            active_plugins=active_plugins_dicts,
+            settings_json=plugins.settings_json,
+            plugin_files=plugins.plugin_files
+        )
+
+        return {
+            "status": "ok",
+            "message": f"Updated {len(updated_files)} file(s)",
+            "updated_files": updated_files,
+            "plugins_count": len(plugins.active_plugins)
+        }
+    except IOError as e:
+        logger.error(f"Failed to update plugins: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update plugins: {str(e)}"
+        )
+
+
+@router.get("/config/plugins/settings", dependencies=[Depends(verify_auth_token)])
+async def get_plugins_settings() -> PluginsSettingsResponse:
+    """
+    Get current plugins settings from settings.json.
+
+    Returns the active plugins configuration including:
+    - marketplace_name: Name of the marketplace
+    - plugin_name: Name of the plugin
+    - path: Full path to plugin in workspace
+    - conversation_mode: Whether plugin is enabled for conversation mode
+    - building_mode: Whether plugin is enabled for building mode
+    """
+    settings = agent_env_service.get_plugins_settings()
+
+    # Convert to PluginInfo models
+    from .models import PluginInfo
+
+    active_plugins = [
+        PluginInfo(
+            marketplace_name=p.get("marketplace_name", ""),
+            plugin_name=p.get("plugin_name", ""),
+            path=p.get("path", ""),
+            conversation_mode=p.get("conversation_mode", False),
+            building_mode=p.get("building_mode", False),
+            version=p.get("version"),
+            commit_hash=p.get("commit_hash"),
+        )
+        for p in settings.get("active_plugins", [])
+    ]
+
+    return PluginsSettingsResponse(active_plugins=active_plugins)
 
 
 @router.get("/workspace/tree", dependencies=[Depends(verify_auth_token)])

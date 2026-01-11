@@ -76,24 +76,26 @@ def create_ssh_key_file(private_key: str, passphrase: Optional[str] = None):
             logger.warning(f"Failed to remove temporary SSH key file {key_path}: {e}")
 
 
-def create_git_ssh_command(ssh_key_path: str) -> str:
+def create_git_ssh_command(ssh_key_path: Optional[str] = None) -> str:
     """
-    Create a Git SSH command with the specified SSH key.
+    Create a Git SSH command with optional SSH key.
 
     Args:
-        ssh_key_path: Path to the SSH private key file
+        ssh_key_path: Optional path to the SSH private key file
 
     Returns:
         SSH command string for Git
     """
     # Disable strict host key checking for ease of use
     # In production, you might want to configure known_hosts properly
-    return (
-        f'ssh -i "{ssh_key_path}" '
-        f'-o StrictHostKeyChecking=no '
-        f'-o UserKnownHostsFile=/dev/null '
-        f'-o LogLevel=ERROR'
+    base_options = (
+        '-o StrictHostKeyChecking=no '
+        '-o UserKnownHostsFile=/dev/null '
+        '-o LogLevel=ERROR'
     )
+    if ssh_key_path:
+        return f'ssh -i "{ssh_key_path}" {base_options}'
+    return f'ssh {base_options}'
 
 
 def convert_https_to_ssh_url(git_url: str) -> str:
@@ -137,6 +139,46 @@ def convert_https_to_ssh_url(git_url: str) -> str:
     return git_url
 
 
+def convert_ssh_to_https_url(git_url: str) -> str:
+    """
+    Convert SSH Git URL to HTTPS format.
+
+    This is useful for public repositories when no SSH key is provided,
+    as HTTPS allows anonymous access to public repos.
+
+    Args:
+        git_url: Git repository URL (SSH or HTTPS format)
+
+    Returns:
+        HTTPS format URL (https://host/owner/repo.git)
+
+    Examples:
+        git@github.com:owner/repo.git -> https://github.com/owner/repo.git
+        git@github.com:owner/repo -> https://github.com/owner/repo.git
+        https://github.com/owner/repo.git -> https://github.com/owner/repo.git (unchanged)
+    """
+    # If already HTTPS format, return as-is
+    if git_url.startswith('https://') or git_url.startswith('http://'):
+        return git_url
+
+    # Parse SSH URL
+    # Match patterns like: git@github.com:owner/repo.git or git@github.com:owner/repo
+    ssh_pattern = r'git@([^:]+):(.+?)(?:\.git)?$'
+    match = re.match(ssh_pattern, git_url)
+
+    if match:
+        host = match.group(1)
+        path = match.group(2)
+        # Convert to HTTPS format: https://host/path.git
+        https_url = f"https://{host}/{path}.git"
+        logger.info(f"Converted SSH URL to HTTPS: {git_url} -> {https_url}")
+        return https_url
+
+    # If no match, return original URL
+    logger.warning(f"Could not convert URL to HTTPS format: {git_url}")
+    return git_url
+
+
 def verify_repository_access(
     git_url: str,
     branch: str = "main",
@@ -154,13 +196,17 @@ def verify_repository_access(
         Tuple of (accessible: bool, message: str)
     """
     try:
-        # Convert HTTPS to SSH if SSH key is provided
+        # Convert URL based on authentication method:
+        # - If SSH key is provided: convert to SSH URL (for private repos)
+        # - If no SSH key: convert to HTTPS URL (for public repos)
         if ssh_key_path:
             git_url = convert_https_to_ssh_url(git_url)
+        else:
+            git_url = convert_ssh_to_https_url(git_url)
 
-        # Set up SSH command if key provided
+        # Set up SSH command for SSH URLs (to disable strict host key checking)
         env = os.environ.copy()
-        if ssh_key_path:
+        if git_url.startswith('git@'):
             env['GIT_SSH_COMMAND'] = create_git_ssh_command(ssh_key_path)
 
         # Use git ls-remote to check access without cloning
@@ -226,13 +272,17 @@ def clone_repository(
         GitOperationError: For other Git errors
     """
     try:
-        # Convert HTTPS to SSH if SSH key is provided
+        # Convert URL based on authentication method:
+        # - If SSH key is provided: convert to SSH URL (for private repos)
+        # - If no SSH key: convert to HTTPS URL (for public repos)
         if ssh_key_path:
             git_url = convert_https_to_ssh_url(git_url)
+        else:
+            git_url = convert_ssh_to_https_url(git_url)
 
-        # Set up SSH command if key provided
+        # Set up SSH command for SSH URLs (to disable strict host key checking)
         env = os.environ.copy()
-        if ssh_key_path:
+        if git_url.startswith('git@'):
             env['GIT_SSH_COMMAND'] = create_git_ssh_command(ssh_key_path)
 
         logger.info(f"Cloning repository {git_url} to {destination}")
@@ -371,14 +421,30 @@ def pull_repository(
         GitOperationError: If pull fails
     """
     try:
-        # Set up SSH command if key provided
-        env = os.environ.copy()
+        repo = Repo(repo_path)
+
+        # Get remote URL
+        remote_url = repo.remotes.origin.url if repo.remotes else ""
+
+        # Convert URL based on authentication method:
+        # - If SSH key is provided: use SSH URL (for private repos)
+        # - If no SSH key: use HTTPS URL (for public repos)
         if ssh_key_path:
+            target_url = convert_https_to_ssh_url(remote_url)
+        else:
+            target_url = convert_ssh_to_https_url(remote_url)
+
+        # Update remote URL if it changed
+        if target_url != remote_url and repo.remotes:
+            repo.remotes.origin.set_url(target_url)
+            logger.info(f"Updated remote URL from {remote_url} to {target_url}")
+
+        # Set up SSH command for SSH URLs (to disable strict host key checking)
+        env = os.environ.copy()
+        if target_url.startswith('git@'):
             env['GIT_SSH_COMMAND'] = create_git_ssh_command(ssh_key_path)
 
         logger.info(f"Pulling latest changes for repository at {repo_path}")
-
-        repo = Repo(repo_path)
 
         # Ensure we're on the correct branch
         if repo.active_branch.name != branch:
