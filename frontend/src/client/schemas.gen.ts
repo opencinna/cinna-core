@@ -2630,6 +2630,11 @@ export const OAuthConfigSchema = {
         google_enabled: {
             type: 'boolean',
             title: 'Google Enabled'
+        },
+        allow_email_change: {
+            type: 'boolean',
+            title: 'Allow Email Change',
+            default: true
         }
     },
     type: 'object',

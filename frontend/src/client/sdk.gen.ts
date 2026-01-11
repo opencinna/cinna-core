@@ -2028,7 +2028,7 @@ export class MessagesService {
 export class OauthService {
     /**
      * Get Oauth Config
-     * Get OAuth provider availability.
+     * Get OAuth provider availability and auth settings.
      * @returns OAuthConfig Successful Response
      * @throws ApiError
      */

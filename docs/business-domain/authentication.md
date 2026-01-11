@@ -29,6 +29,7 @@ Central service for OAuth and Google-related authentication logic.
 | Method | Purpose |
 |--------|---------|
 | `is_google_oauth_enabled()` | Check if Google OAuth is configured |
+| `is_email_domain_allowed()` | Check if email domain is in whitelist |
 | `generate_oauth_state()` | Create CSRF state token for OAuth flow |
 | `build_google_authorization_url()` | Build Google OAuth redirect URL |
 | `exchange_google_code()` | Exchange authorization code for tokens |
@@ -114,6 +115,26 @@ Settings in `backend/app/core/config.py`:
 | `GOOGLE_REDIRECT_URI` | OAuth callback URL |
 | `google_oauth_enabled` | Computed property - true if client ID/secret configured |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | JWT token lifetime |
+| `AUTH_WHITELIST_USER_DOMAINS` | Comma-separated allowed domains for registration (e.g., `"example.com,company.org"`) |
+| `auth_whitelist_domains` | Computed property - parsed list of allowed domains |
+| `allow_user_email_change` | Computed property - false when whitelist is active |
+
+## Domain Whitelist
+
+Restrict new user registration to specific email domains.
+
+**Configuration**: Set `AUTH_WHITELIST_USER_DOMAINS` in `.env`:
+```
+AUTH_WHITELIST_USER_DOMAINS=example.com,company.org
+```
+
+**Behavior**:
+- New users (signup or OAuth) must have email from whitelisted domain
+- Existing users are not affected
+- Admin-created users (`POST /api/v1/users/`) bypass whitelist
+- When whitelist is active, users cannot change their email (`PATCH /me`)
+
+**Validation**: `AuthService.is_email_domain_allowed(email)` checks domain against whitelist
 
 ## Related Files
 

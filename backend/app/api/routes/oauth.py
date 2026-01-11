@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, SessionDep
+from app.core.config import settings
 from app.models import Message, OAuthConfig, Token
 from app.services.auth_service import AuthService
 
@@ -15,8 +16,11 @@ class GoogleCallbackRequest(BaseModel):
 
 @router.get("/oauth/config")
 def get_oauth_config() -> OAuthConfig:
-    """Get OAuth provider availability."""
-    return OAuthConfig(google_enabled=AuthService.is_google_oauth_enabled())
+    """Get OAuth provider availability and auth settings."""
+    return OAuthConfig(
+        google_enabled=AuthService.is_google_oauth_enabled(),
+        allow_email_change=settings.allow_user_email_change,
+    )
 
 
 @router.get("/google/authorize")

@@ -1,10 +1,10 @@
 import { zodResolver } from "@hookform/resolvers/zod"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 
-import { UsersService, type UserUpdateMe } from "@/client"
+import { OauthService, UsersService, type UserUpdateMe } from "@/client"
 import { Button } from "@/components/ui/button"
 import {
   Form,
@@ -39,6 +39,12 @@ const UserInformation = () => {
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const [editMode, setEditMode] = useState(false)
   const { user: currentUser } = useAuth()
+
+  const { data: oauthConfig } = useQuery({
+    queryKey: ["oauthConfig"],
+    queryFn: () => OauthService.getOauthConfig(),
+  })
+  const allowEmailChange = oauthConfig?.allow_email_change ?? true
 
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
@@ -158,7 +164,7 @@ const UserInformation = () => {
             control={form.control}
             name="email"
             render={({ field }) =>
-              editMode ? (
+              editMode && allowEmailChange ? (
                 <FormItem>
                   <FormLabel>Email</FormLabel>
                   <FormControl>

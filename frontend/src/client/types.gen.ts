@@ -608,6 +608,7 @@ export type OAuthCallbackResponse = {
 
 export type OAuthConfig = {
     google_enabled: boolean;
+    allow_email_change?: boolean;
 };
 
 export type OAuthMetadataResponse = {

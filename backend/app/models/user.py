@@ -93,6 +93,7 @@ class SetPassword(SQLModel):
 
 class OAuthConfig(SQLModel):
     google_enabled: bool
+    allow_email_change: bool = True
 
 
 # AI Service Credentials schemas

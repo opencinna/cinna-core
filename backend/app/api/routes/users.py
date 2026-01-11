@@ -30,6 +30,7 @@ from app.models.user import (
     AIServiceCredentialsUpdate,
     UserPublicWithAICredentials,
 )
+from app.services.auth_service import AuthService
 from app.utils import generate_new_account_email, send_email
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -90,6 +91,12 @@ def update_user_me(
     """
 
     if user_in.email:
+        # Block email change if not allowed (domain whitelist is active)
+        if not settings.allow_user_email_change:
+            raise HTTPException(
+                status_code=403,
+                detail="Email changes are not allowed",
+            )
         existing_user = crud.get_user_by_email(session=session, email=user_in.email)
         if existing_user and existing_user.id != current_user.id:
             raise HTTPException(
@@ -179,6 +186,13 @@ def register_user(session: SessionDep, user_in: UserRegister) -> Any:
     """
     Create new user without the need to be logged in.
     """
+    # Check domain whitelist for new user registration
+    if not AuthService.is_email_domain_allowed(user_in.email):
+        raise HTTPException(
+            status_code=403,
+            detail="Registration is restricted to specific email domains",
+        )
+
     user = crud.get_user_by_email(session=session, email=user_in.email)
     if user:
         raise HTTPException(

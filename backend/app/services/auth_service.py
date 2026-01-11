@@ -38,6 +38,25 @@ class AuthService:
         return settings.google_oauth_enabled
 
     @classmethod
+    def is_email_domain_allowed(cls, email: str) -> bool:
+        """
+        Check if email domain is allowed for registration.
+
+        Returns True if:
+        - No whitelist is configured (all domains allowed)
+        - Email domain is in the whitelist
+        """
+        whitelist = settings.auth_whitelist_domains
+        if not whitelist:
+            return True
+
+        # Extract domain from email
+        if "@" not in email:
+            return False
+        domain = email.split("@")[1].lower()
+        return domain in whitelist
+
+    @classmethod
     def generate_oauth_state(cls) -> str:
         """
         Generate a CSRF state token for OAuth flow.
@@ -168,7 +187,16 @@ class AuthService:
 
         Returns:
             Created User
+
+        Raises:
+            ValueError: If email domain is not in whitelist
         """
+        # Check domain whitelist for new user registration
+        if not cls.is_email_domain_allowed(email):
+            raise ValueError(
+                "Registration is restricted to specific email domains"
+            )
+
         db_obj = User(
             email=email,
             google_id=google_id,

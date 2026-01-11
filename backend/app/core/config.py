@@ -108,6 +108,25 @@ class Settings(BaseSettings):
     def google_oauth_enabled(self) -> bool:
         return bool(self.GOOGLE_CLIENT_ID and self.GOOGLE_CLIENT_SECRET)
 
+    # Auth domain whitelist - comma-separated list of allowed domains for new user registration
+    # Example: "example.com,company.org" - only emails from these domains can register
+    # Admin can still create users with any email
+    AUTH_WHITELIST_USER_DOMAINS: str | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def auth_whitelist_domains(self) -> list[str]:
+        """Parse comma-separated domains into list"""
+        if not self.AUTH_WHITELIST_USER_DOMAINS:
+            return []
+        return [d.strip().lower() for d in self.AUTH_WHITELIST_USER_DOMAINS.split(",") if d.strip()]
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def allow_user_email_change(self) -> bool:
+        """Allow users to change their email. Disabled when domain whitelist is active."""
+        return len(self.auth_whitelist_domains) == 0
+
     # Google AI Configuration (for ADK agents)
     GOOGLE_API_KEY: str | None = None
 
