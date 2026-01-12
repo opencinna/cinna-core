@@ -9,6 +9,7 @@ This service handles:
 - Plugin sync to agent environments
 """
 
+import base64
 import json
 import logging
 import os
@@ -31,9 +32,12 @@ from app.models.llm_plugin import (
     AgentPluginLink,
     AgentPluginLinkCreate,
     AgentPluginLinkUpdate,
+    AgentPluginLinkPublic,
     AgentPluginLinkWithUpdateInfo,
     MarketplaceStatus,
     PluginSourceType,
+    EnvironmentSyncStatus,
+    PluginSyncResponse,
 )
 from app.models.environment import AgentEnvironment
 from app.services.git_operations import (
@@ -840,6 +844,7 @@ class LLMPluginService:
                 installed_commit_hash=link.installed_commit_hash,
                 conversation_mode=link.conversation_mode,
                 building_mode=link.building_mode,
+                disabled=link.disabled,
                 created_at=link.created_at,
                 updated_at=link.updated_at,
                 has_update=has_update,
@@ -886,6 +891,8 @@ class LLMPluginService:
             link.conversation_mode = data.conversation_mode
         if data.building_mode is not None:
             link.building_mode = data.building_mode
+        if data.disabled is not None:
+            link.disabled = data.disabled
 
         link.updated_at = datetime.utcnow()
         session.add(link)
@@ -956,7 +963,10 @@ class LLMPluginService:
             mode: Optional filter by mode ("conversation" or "building")
 
         Returns:
-            Dictionary with plugin data for environment
+            Dictionary with plugin data for environment:
+            - all_plugins: All plugins (for file sync, includes disabled)
+            - active_plugins: Only enabled plugins (for context)
+            - settings_json: Settings containing only active plugins
         """
         links = LLMPluginService.get_agent_plugins(session, agent_id)
 
@@ -966,6 +976,7 @@ class LLMPluginService:
         elif mode == "building":
             links = [l for l in links if l.building_mode]
 
+        all_plugins = []
         active_plugins = []
         for link in links:
             # Get plugin and marketplace info
@@ -977,17 +988,24 @@ class LLMPluginService:
             if not marketplace:
                 continue
 
-            active_plugins.append({
+            plugin_data = {
                 "marketplace_name": marketplace.name,
                 "plugin_name": plugin.name,
                 "path": f"/app/workspace/plugins/{marketplace.name}/{plugin.name}",
                 "conversation_mode": link.conversation_mode,
                 "building_mode": link.building_mode,
+                "disabled": link.disabled,
                 "version": link.installed_version,
                 "commit_hash": link.installed_commit_hash,
-            })
+            }
+            all_plugins.append(plugin_data)
+
+            # Only add to active_plugins if not disabled
+            if not link.disabled:
+                active_plugins.append(plugin_data)
 
         return {
+            "all_plugins": all_plugins,
             "active_plugins": active_plugins,
             "settings_json": {"active_plugins": active_plugins},
         }
@@ -1237,28 +1255,65 @@ class LLMPluginService:
     async def sync_plugins_to_agent_environments(
         session: Session,
         agent_id: uuid.UUID,
-        user_id: uuid.UUID
-    ):
+        user_id: uuid.UUID,
+        plugin_link: AgentPluginLink | None = None
+    ) -> PluginSyncResponse:
         """
-        Sync plugins to all running environments of an agent.
+        Sync plugins to all running and suspended environments of an agent.
+
+        For suspended environments, activates them first before syncing.
 
         Args:
             session: Database session
             agent_id: Agent ID
             user_id: User ID (for SSH key access)
+            plugin_link: Optional plugin link that triggered the sync
+
+        Returns:
+            PluginSyncResponse with detailed status per environment
         """
         from app.services.environment_service import EnvironmentService
+        from sqlalchemy import or_
 
-        # Get all running environments
+        environments_synced = []
+        successful_syncs = 0
+        failed_syncs = 0
+
+        # Get all running and suspended environments
         statement = select(AgentEnvironment).where(
             AgentEnvironment.agent_id == agent_id,
-            AgentEnvironment.status == "running"
+            or_(
+                AgentEnvironment.status == "running",
+                AgentEnvironment.status == "suspended"
+            )
         )
-        running_environments = session.exec(statement).all()
+        environments = list(session.exec(statement).all())
 
-        if not running_environments:
-            logger.info(f"No running environments for agent {agent_id}, skipping plugin sync")
-            return
+        if not environments:
+            logger.info(f"No running/suspended environments for agent {agent_id}, skipping plugin sync")
+            plugin_link_public = None
+            if plugin_link:
+                plugin_link_public = AgentPluginLinkPublic(
+                    id=plugin_link.id,
+                    agent_id=plugin_link.agent_id,
+                    plugin_id=plugin_link.plugin_id,
+                    installed_version=plugin_link.installed_version,
+                    installed_commit_hash=plugin_link.installed_commit_hash,
+                    conversation_mode=plugin_link.conversation_mode,
+                    building_mode=plugin_link.building_mode,
+                    disabled=plugin_link.disabled,
+                    created_at=plugin_link.created_at,
+                    updated_at=plugin_link.updated_at,
+                )
+            return PluginSyncResponse(
+                success=True,
+                message="No environments to sync",
+                plugin_link=plugin_link_public,
+                environments_synced=[],
+                total_environments=0,
+                successful_syncs=0,
+                failed_syncs=0,
+            )
 
         # Prepare plugin data once
         plugins_data = LLMPluginService.prepare_plugins_for_environment(
@@ -1266,9 +1321,10 @@ class LLMPluginService:
             agent_id=agent_id
         )
 
-        # Get plugin files for each installed plugin
+        # Get plugin files for ALL plugins (including disabled) for file sync
+        # Files are base64 encoded for JSON transport
         plugin_files = {}
-        for plugin_info in plugins_data.get("active_plugins", []):
+        for plugin_info in plugins_data.get("all_plugins", []):
             # Find the plugin link to get plugin_id
             link = session.exec(
                 select(AgentPluginLink).where(
@@ -1286,8 +1342,13 @@ class LLMPluginService:
                         commit_hash=plugin_info.get("commit_hash"),
                         user_id=user_id
                     )
+                    # Base64 encode file contents for JSON serialization
+                    encoded_files = {
+                        path: base64.b64encode(content).decode('utf-8')
+                        for path, content in files.items()
+                    }
                     plugin_key = f"{plugin_info['marketplace_name']}/{plugin_info['plugin_name']}"
-                    plugin_files[plugin_key] = files
+                    plugin_files[plugin_key] = encoded_files
                 except Exception as e:
                     logger.error(f"Failed to get files for plugin {plugin_info['plugin_name']}: {e}")
 
@@ -1301,12 +1362,78 @@ class LLMPluginService:
         lifecycle_manager = EnvironmentService.get_lifecycle_manager()
 
         # Sync to each environment
-        for env in running_environments:
+        for env in environments:
+            was_suspended = env.status == "suspended"
             try:
+                # Activate suspended environments first
+                if was_suspended:
+                    logger.info(f"Activating suspended environment {env.id} before plugin sync")
+                    try:
+                        await lifecycle_manager.activate_suspended_environment(env)
+                        # Refresh environment status
+                        session.refresh(env)
+                    except Exception as activate_error:
+                        logger.error(f"Failed to activate environment {env.id}: {activate_error}")
+                        environments_synced.append(EnvironmentSyncStatus(
+                            environment_id=env.id,
+                            instance_name=env.instance_name or str(env.id),
+                            status="error",
+                            error_message=f"Failed to activate: {str(activate_error)}",
+                            was_suspended=True,
+                        ))
+                        failed_syncs += 1
+                        continue
+
                 logger.info(f"Syncing plugins to environment {env.id}")
                 adapter = lifecycle_manager.get_adapter(env)
                 await adapter.set_plugins(full_plugins_data)
                 logger.info(f"Successfully synced plugins to environment {env.id}")
+
+                environments_synced.append(EnvironmentSyncStatus(
+                    environment_id=env.id,
+                    instance_name=env.instance_name or str(env.id),
+                    status="activated_and_synced" if was_suspended else "success",
+                    error_message=None,
+                    was_suspended=was_suspended,
+                ))
+                successful_syncs += 1
+
             except Exception as e:
                 logger.error(f"Failed to sync plugins to environment {env.id}: {e}")
+                environments_synced.append(EnvironmentSyncStatus(
+                    environment_id=env.id,
+                    instance_name=env.instance_name or str(env.id),
+                    status="error",
+                    error_message=str(e),
+                    was_suspended=was_suspended,
+                ))
+                failed_syncs += 1
                 # Continue with other environments even if one fails
+
+        # Build response
+        plugin_link_public = None
+        if plugin_link:
+            plugin_link_public = AgentPluginLinkPublic(
+                id=plugin_link.id,
+                agent_id=plugin_link.agent_id,
+                plugin_id=plugin_link.plugin_id,
+                installed_version=plugin_link.installed_version,
+                installed_commit_hash=plugin_link.installed_commit_hash,
+                conversation_mode=plugin_link.conversation_mode,
+                building_mode=plugin_link.building_mode,
+                disabled=plugin_link.disabled,
+                created_at=plugin_link.created_at,
+                updated_at=plugin_link.updated_at,
+            )
+
+        return PluginSyncResponse(
+            success=failed_syncs == 0,
+            message=f"Synced to {successful_syncs}/{len(environments)} environments" + (
+                f" ({failed_syncs} failed)" if failed_syncs > 0 else ""
+            ),
+            plugin_link=plugin_link_public,
+            environments_synced=environments_synced,
+            total_environments=len(environments),
+            successful_syncs=successful_syncs,
+            failed_syncs=failed_syncs,
+        )

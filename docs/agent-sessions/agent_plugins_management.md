@@ -27,6 +27,14 @@ Plugins can be enabled per agent for:
 
 Toggle independently allows different plugins for different use cases.
 
+### Enable/Disable State
+
+Plugins can be disabled without uninstalling:
+- **Disabled plugins**: Files remain synced to environments, but plugin is not loaded into SDK context
+- **Enabled plugins**: Files synced and plugin loaded based on mode settings
+
+This allows quick toggling without re-downloading plugin files.
+
 ### Git-Based Version Tracking
 
 When installing plugins, the system stores:
@@ -47,6 +55,14 @@ This enables:
 4. Environment starts → _sync_plugins_to_environment() copies plugin files to /app/workspace/plugins/
 5. SDK initialized → Loads plugins from local paths based on session mode
 ```
+
+### Plugin Sync on Changes
+
+When plugins are installed, updated, upgraded, or enabled/disabled:
+1. Backend updates AgentPluginLink record
+2. Syncs to all **running** and **suspended** environments for that agent
+3. Suspended environments are **activated first** before syncing
+4. Returns detailed `PluginSyncResponse` with per-environment status
 
 ## Database Models
 
@@ -86,6 +102,33 @@ Links installed plugins to agents.
 | `agent_id`, `plugin_id` | Links agent to plugin |
 | `installed_version`, `installed_commit_hash` | Version pinning |
 | `conversation_mode`, `building_mode` | Per-mode activation |
+| `disabled` | Whether plugin is disabled (files sync but not loaded) |
+
+### PluginSyncResponse
+
+Response model for plugin sync operations.
+
+| Field | Purpose |
+|-------|---------|
+| `success` | Whether all syncs succeeded |
+| `message` | Summary message |
+| `plugin_link` | Updated plugin link (for install/update) |
+| `environments_synced` | List of per-environment status |
+| `total_environments` | Total environments attempted |
+| `successful_syncs` | Number of successful syncs |
+| `failed_syncs` | Number of failed syncs |
+
+### EnvironmentSyncStatus
+
+Status of plugin sync for a single environment.
+
+| Field | Purpose |
+|-------|---------|
+| `environment_id` | Environment UUID |
+| `instance_name` | Environment instance name |
+| `status` | "success", "error", "activated_and_synced", "skipped" |
+| `error_message` | Error details if failed |
+| `was_suspended` | Whether environment was suspended and activated |
 
 ## Backend Service
 
@@ -107,13 +150,18 @@ Main service class with methods organized by responsibility:
 **Agent Plugin Management**:
 - `install_plugin_for_agent()` - Creates AgentPluginLink with version pinning
 - `uninstall_plugin_from_agent()` - Removes plugin link
-- `get_agent_plugins()` - Returns plugins with `has_update` flag
+- `get_agent_plugins()` - Returns plugins with `has_update` and `disabled` flags
+- `update_plugin_modes()` - Updates conversation/building/disabled flags
 - `upgrade_agent_plugin()` - Updates to latest version/commit
 
 **Plugin File Operations**:
 - `get_plugin_files()` - Extracts plugin directory for sync
 - `_get_local_plugin_files()` - From marketplace repo cache
 - `_get_url_plugin_files()` - From external plugin repo cache
+
+**Environment Sync**:
+- `prepare_plugins_for_environment()` - Returns `all_plugins` (for file sync) and `active_plugins` (enabled only)
+- `sync_plugins_to_agent_environments()` - Syncs to running/suspended environments, returns `PluginSyncResponse`
 
 ## Environment Integration
 
@@ -127,13 +175,22 @@ Method `_sync_plugins_to_environment()` called during `_sync_dynamic_data()`:
 3. Encodes files as base64 for JSON transport
 4. Sends to environment via `adapter.set_plugins()`
 
+### Plugin Sync on Changes
+
+When plugins are modified (install/uninstall/update/upgrade/enable/disable):
+1. API route calls `sync_plugins_to_agent_environments()`
+2. Function queries for both **running** and **suspended** environments
+3. For suspended environments: calls `lifecycle_manager.activate_suspended_environment()` first
+4. Syncs plugin files (all plugins) and settings (active plugins only)
+5. Returns `PluginSyncResponse` with per-environment status
+
 ### Docker Adapter
 
 **File**: `backend/app/services/adapters/docker_adapter.py`
 
 Method `set_plugins()`:
 - HTTP POST to `/config/plugins` endpoint in agent-env
-- Sends plugin files and settings.json content
+- Sends plugin files (base64 encoded) and settings.json content
 
 ### Agent-Env Server
 
@@ -183,11 +240,14 @@ In `send_message_stream()`:
       "plugin_name": "pyright-lsp",
       "path": "/app/workspace/plugins/claude-plugins-official/pyright-lsp",
       "conversation_mode": true,
-      "building_mode": true
+      "building_mode": true,
+      "disabled": false
     }
   ]
 }
 ```
+
+Note: `active_plugins` only contains enabled plugins (disabled=false). Disabled plugins have their files synced but are not included in the settings.
 
 ## API Routes
 
@@ -213,13 +273,13 @@ In `send_message_stream()`:
 
 ### Agent Plugin Routes
 
-| Endpoint | Purpose |
-|----------|---------|
-| `GET /api/v1/agents/{agent_id}/plugins` | List installed plugins (includes `has_update` flag) |
-| `POST /api/v1/agents/{agent_id}/plugins` | Install plugin |
-| `DELETE /api/v1/agents/{agent_id}/plugins/{link_id}` | Uninstall plugin |
-| `PUT /api/v1/agents/{agent_id}/plugins/{link_id}` | Update mode flags |
-| `POST /api/v1/agents/{agent_id}/plugins/{link_id}/upgrade` | Upgrade to latest version |
+| Endpoint | Response | Purpose |
+|----------|----------|---------|
+| `GET /api/v1/llm-plugins/agents/{agent_id}/plugins` | `AgentPluginLinksPublic` | List installed plugins (includes `has_update`, `disabled` flags) |
+| `POST /api/v1/llm-plugins/agents/{agent_id}/plugins` | `PluginSyncResponse` | Install plugin, sync to environments |
+| `DELETE /api/v1/llm-plugins/agents/{agent_id}/plugins/{link_id}` | `PluginSyncResponse` | Uninstall plugin, sync to environments |
+| `PUT /api/v1/llm-plugins/agents/{agent_id}/plugins/{link_id}` | `PluginSyncResponse` | Update mode/disabled flags, sync to environments |
+| `POST /api/v1/llm-plugins/agents/{agent_id}/plugins/{link_id}/upgrade` | `PluginSyncResponse` | Upgrade to latest version, sync to environments |
 
 ## Frontend Components
 
@@ -242,8 +302,19 @@ In `send_message_stream()`:
 | `frontend/src/components/Agents/InstallPluginModal.tsx` | Mode selection during install |
 
 **AgentPluginsTab** has two sections:
-1. **Installed Plugins**: Table with mode toggles, upgrade/uninstall actions
+1. **Installed Plugins**: Table with columns:
+   - Enable/disable switch (first column, no header)
+   - Plugin name, version, category, description
+   - Conversation mode toggle
+   - Building mode toggle
+   - Actions: Upgrade (if update available), Uninstall
 2. **Discover Plugins**: Searchable grid with install button per plugin
+
+**UI Behavior**:
+- Disabled plugins shown with reduced opacity
+- Chat/Build toggles disabled when plugin is disabled
+- Sync errors show detailed dialog with per-environment status
+- Success syncs show simple toast notification
 
 ## Claude Marketplace Format
 
@@ -284,7 +355,7 @@ For URL-based plugins, the external repo should contain `.claude-plugin/plugin.j
 
 | File | Purpose |
 |------|---------|
-| `backend/app/models/llm_plugin.py` | Database models and schemas |
+| `backend/app/models/llm_plugin.py` | Database models and schemas (including PluginSyncResponse) |
 | `backend/app/services/llm_plugin_service.py` | Main business logic |
 | `backend/app/services/git_operations.py` | Git clone/pull operations |
 | `backend/app/api/routes/llm_plugins.py` | API endpoints |
@@ -331,5 +402,7 @@ The marketplace SSH key reference follows the same pattern as `AIKnowledgeGitRep
 2. **Centralized Discovery**: Curated marketplaces for plugin distribution
 3. **Version Control**: Git-based tracking ensures reproducibility
 4. **Mode Flexibility**: Different plugins for conversation vs building modes
-5. **Update Control**: Explicit upgrades prevent unexpected behavior changes
-6. **Multi-Format Support**: Parser architecture allows future marketplace formats
+5. **Enable/Disable**: Quick toggle without uninstalling
+6. **Update Control**: Explicit upgrades prevent unexpected behavior changes
+7. **Sync Visibility**: Detailed feedback on which environments synced successfully
+8. **Multi-Format Support**: Parser architecture allows future marketplace formats

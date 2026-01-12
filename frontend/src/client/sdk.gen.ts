@@ -2040,11 +2040,13 @@ export class LlmPluginsService {
      * The plugin will be:
      * - Locked to current version (installed_version, installed_commit_hash)
      * - Enabled for conversation/building mode as specified
-     * - Synced to running environments
+     * - Synced to running and suspended environments (suspended ones will be activated first)
+     *
+     * Returns sync status for all environments.
      * @param data The data for the request.
      * @param data.agentId
      * @param data.requestBody
-     * @returns AgentPluginLinkPublic Successful Response
+     * @returns PluginSyncResponse Successful Response
      * @throws ApiError
      */
     public static installAgentPlugin(data: LlmPluginsInstallAgentPluginData): CancelablePromise<LlmPluginsInstallAgentPluginResponse> {
@@ -2067,10 +2069,11 @@ export class LlmPluginsService {
      * Uninstall a plugin from an agent.
      *
      * The plugin will be removed and environments will be synced.
+     * Returns sync status for all environments.
      * @param data The data for the request.
      * @param data.agentId
      * @param data.linkId
-     * @returns Message Successful Response
+     * @returns PluginSyncResponse Successful Response
      * @throws ApiError
      */
     public static uninstallAgentPlugin(data: LlmPluginsUninstallAgentPluginData): CancelablePromise<LlmPluginsUninstallAgentPluginResponse> {
@@ -2089,14 +2092,15 @@ export class LlmPluginsService {
     
     /**
      * Update Agent Plugin
-     * Update plugin mode flags (conversation_mode, building_mode).
+     * Update plugin mode flags (conversation_mode, building_mode, disabled).
      *
-     * Changes will be synced to running environments.
+     * Changes will be synced to running and suspended environments.
+     * Returns sync status for all environments.
      * @param data The data for the request.
      * @param data.agentId
      * @param data.linkId
      * @param data.requestBody
-     * @returns AgentPluginLinkPublic Successful Response
+     * @returns PluginSyncResponse Successful Response
      * @throws ApiError
      */
     public static updateAgentPlugin(data: LlmPluginsUpdateAgentPluginData): CancelablePromise<LlmPluginsUpdateAgentPluginResponse> {
@@ -2121,10 +2125,11 @@ export class LlmPluginsService {
      *
      * Updates installed_version and installed_commit_hash to match
      * the current values in the marketplace.
+     * Returns sync status for all environments.
      * @param data The data for the request.
      * @param data.agentId
      * @param data.linkId
-     * @returns AgentPluginLinkWithUpdateInfo Successful Response
+     * @returns PluginSyncResponse Successful Response
      * @throws ApiError
      */
     public static upgradeAgentPlugin(data: LlmPluginsUpgradeAgentPluginData): CancelablePromise<LlmPluginsUpgradeAgentPluginResponse> {

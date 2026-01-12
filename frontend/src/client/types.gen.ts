@@ -127,6 +127,7 @@ export type AgentPluginLinkCreate = {
     plugin_id: string;
     conversation_mode?: boolean;
     building_mode?: boolean;
+    disabled?: boolean;
 };
 
 /**
@@ -140,6 +141,7 @@ export type AgentPluginLinkPublic = {
     installed_commit_hash: (string | null);
     conversation_mode: boolean;
     building_mode: boolean;
+    disabled: boolean;
     created_at: string;
     updated_at: string;
 };
@@ -158,6 +160,7 @@ export type AgentPluginLinksPublic = {
 export type AgentPluginLinkUpdate = {
     conversation_mode?: (boolean | null);
     building_mode?: (boolean | null);
+    disabled?: (boolean | null);
 };
 
 /**
@@ -171,6 +174,7 @@ export type AgentPluginLinkWithUpdateInfo = {
     installed_commit_hash: (string | null);
     conversation_mode: boolean;
     building_mode: boolean;
+    disabled: boolean;
     created_at: string;
     updated_at: string;
     has_update?: boolean;
@@ -416,6 +420,17 @@ export type DiscoverableSourcePublic = {
     article_count?: number;
     owner_username?: (string | null);
     is_enabled_by_user?: boolean;
+};
+
+/**
+ * Status of plugin sync for a single environment.
+ */
+export type EnvironmentSyncStatus = {
+    environment_id: string;
+    instance_name: string;
+    status: string;
+    error_message?: (string | null);
+    was_suspended?: boolean;
 };
 
 /**
@@ -793,6 +808,19 @@ export type OAuthRefreshResponse = {
  * Type of plugin source.
  */
 export type PluginSourceType = 'local' | 'url';
+
+/**
+ * Response model for plugin sync operations.
+ */
+export type PluginSyncResponse = {
+    success: boolean;
+    message: string;
+    plugin_link?: (AgentPluginLinkPublic | null);
+    environments_synced?: Array<EnvironmentSyncStatus>;
+    total_environments?: number;
+    successful_syncs?: number;
+    failed_syncs?: number;
+};
 
 export type PrivateUserCreate = {
     email: string;
@@ -1590,14 +1618,14 @@ export type LlmPluginsInstallAgentPluginData = {
     requestBody: AgentPluginLinkCreate;
 };
 
-export type LlmPluginsInstallAgentPluginResponse = (AgentPluginLinkPublic);
+export type LlmPluginsInstallAgentPluginResponse = (PluginSyncResponse);
 
 export type LlmPluginsUninstallAgentPluginData = {
     agentId: string;
     linkId: string;
 };
 
-export type LlmPluginsUninstallAgentPluginResponse = (Message);
+export type LlmPluginsUninstallAgentPluginResponse = (PluginSyncResponse);
 
 export type LlmPluginsUpdateAgentPluginData = {
     agentId: string;
@@ -1605,14 +1633,14 @@ export type LlmPluginsUpdateAgentPluginData = {
     requestBody: AgentPluginLinkUpdate;
 };
 
-export type LlmPluginsUpdateAgentPluginResponse = (AgentPluginLinkPublic);
+export type LlmPluginsUpdateAgentPluginResponse = (PluginSyncResponse);
 
 export type LlmPluginsUpgradeAgentPluginData = {
     agentId: string;
     linkId: string;
 };
 
-export type LlmPluginsUpgradeAgentPluginResponse = (AgentPluginLinkWithUpdateInfo);
+export type LlmPluginsUpgradeAgentPluginResponse = (PluginSyncResponse);
 
 export type LoginLoginAccessTokenData = {
     formData: Body_login_login_access_token;

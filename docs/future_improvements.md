@@ -9,6 +9,11 @@ Original articles shows main points used by the original Claude so far: https://
 We need better than that, with heuristic control over and post-validation of the prompt-conversation direction.
 Here is a good overview on how to do that: https://www.lakera.ai/blog/guide-to-prompt-injection
 
+### Automatic plugins discovery
+
+Also add logic of manual approval / recommendations to show them in the UI correctly.
+How it could work: https://claudemarketplaces.com/about
+
 ### Improved handover processing
 
 When background-executed session (via CRON) is over and according to the session logs

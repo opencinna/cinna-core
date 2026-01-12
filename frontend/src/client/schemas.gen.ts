@@ -978,6 +978,11 @@ export const AgentPluginLinkCreateSchema = {
             type: 'boolean',
             title: 'Building Mode',
             default: true
+        },
+        disabled: {
+            type: 'boolean',
+            title: 'Disabled',
+            default: false
         }
     },
     type: 'object',
@@ -1033,6 +1038,10 @@ export const AgentPluginLinkPublicSchema = {
             type: 'boolean',
             title: 'Building Mode'
         },
+        disabled: {
+            type: 'boolean',
+            title: 'Disabled'
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -1045,7 +1054,7 @@ export const AgentPluginLinkPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'agent_id', 'plugin_id', 'installed_version', 'installed_commit_hash', 'conversation_mode', 'building_mode', 'created_at', 'updated_at'],
+    required: ['id', 'agent_id', 'plugin_id', 'installed_version', 'installed_commit_hash', 'conversation_mode', 'building_mode', 'disabled', 'created_at', 'updated_at'],
     title: 'AgentPluginLinkPublic',
     description: 'Public schema for agent plugin link.'
 } as const;
@@ -1073,6 +1082,17 @@ export const AgentPluginLinkUpdateSchema = {
                 }
             ],
             title: 'Building Mode'
+        },
+        disabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Disabled'
         }
     },
     type: 'object',
@@ -1126,6 +1146,10 @@ export const AgentPluginLinkWithUpdateInfoSchema = {
         building_mode: {
             type: 'boolean',
             title: 'Building Mode'
+        },
+        disabled: {
+            type: 'boolean',
+            title: 'Disabled'
         },
         created_at: {
             type: 'string',
@@ -1210,7 +1234,7 @@ export const AgentPluginLinkWithUpdateInfoSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'agent_id', 'plugin_id', 'installed_version', 'installed_commit_hash', 'conversation_mode', 'building_mode', 'created_at', 'updated_at'],
+    required: ['id', 'agent_id', 'plugin_id', 'installed_version', 'installed_commit_hash', 'conversation_mode', 'building_mode', 'disabled', 'created_at', 'updated_at'],
     title: 'AgentPluginLinkWithUpdateInfo',
     description: 'Extended schema including update availability info.'
 } as const;
@@ -2025,6 +2049,44 @@ export const DiscoverableSourcePublicSchema = {
     required: ['id', 'name', 'status'],
     title: 'DiscoverableSourcePublic',
     description: 'Public schema for discoverable knowledge sources.'
+} as const;
+
+export const EnvironmentSyncStatusSchema = {
+    properties: {
+        environment_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Environment Id'
+        },
+        instance_name: {
+            type: 'string',
+            title: 'Instance Name'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        error_message: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error Message'
+        },
+        was_suspended: {
+            type: 'boolean',
+            title: 'Was Suspended',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['environment_id', 'instance_name', 'status'],
+    title: 'EnvironmentSyncStatus',
+    description: 'Status of plugin sync for a single environment.'
 } as const;
 
 export const EventBroadcastSchema = {
@@ -3514,6 +3576,56 @@ export const PluginSourceTypeSchema = {
     enum: ['local', 'url'],
     title: 'PluginSourceType',
     description: 'Type of plugin source.'
+} as const;
+
+export const PluginSyncResponseSchema = {
+    properties: {
+        success: {
+            type: 'boolean',
+            title: 'Success'
+        },
+        message: {
+            type: 'string',
+            title: 'Message'
+        },
+        plugin_link: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AgentPluginLinkPublic'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        environments_synced: {
+            items: {
+                '$ref': '#/components/schemas/EnvironmentSyncStatus'
+            },
+            type: 'array',
+            title: 'Environments Synced',
+            default: []
+        },
+        total_environments: {
+            type: 'integer',
+            title: 'Total Environments',
+            default: 0
+        },
+        successful_syncs: {
+            type: 'integer',
+            title: 'Successful Syncs',
+            default: 0
+        },
+        failed_syncs: {
+            type: 'integer',
+            title: 'Failed Syncs',
+            default: 0
+        }
+    },
+    type: 'object',
+    required: ['success', 'message'],
+    title: 'PluginSyncResponse',
+    description: 'Response model for plugin sync operations.'
 } as const;
 
 export const PrivateUserCreateSchema = {

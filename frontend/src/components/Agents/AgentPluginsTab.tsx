@@ -7,12 +7,17 @@ import {
   Search,
   ChevronLeft,
   ChevronRight,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  Zap,
 } from "lucide-react"
 import { useState, useEffect } from "react"
 
 import type {
   AgentPluginLinkWithUpdateInfo,
   LLMPluginMarketplacePluginPublic,
+  PluginSyncResponse,
 } from "@/client"
 import { LlmPluginsService } from "@/client"
 import { Badge } from "@/components/ui/badge"
@@ -35,6 +40,13 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 import { InstallPluginModal } from "./InstallPluginModal"
@@ -54,6 +66,19 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [currentPage, setCurrentPage] = useState(1)
   const PLUGINS_PER_PAGE = 30
+
+  // Sync progress dialog state
+  const [syncProgress, setSyncProgress] = useState<{
+    isOpen: boolean
+    title: string
+    isLoading: boolean
+    syncResult: PluginSyncResponse | null
+  }>({
+    isOpen: false,
+    title: "",
+    isLoading: false,
+    syncResult: null,
+  })
 
   // Debounce search input
   useEffect(() => {
@@ -120,10 +145,21 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
           building_mode: buildingMode,
         },
       }),
-    onSuccess: () => {
-      showSuccessToast("Plugin installed successfully")
+    onSuccess: (data) => {
       setIsInstallDialogOpen(false)
       setSelectedPlugin(null)
+      // Check if sync had any failures
+      if (data.failed_syncs && data.failed_syncs > 0) {
+        // Show dialog with error details
+        setSyncProgress({
+          isOpen: true,
+          title: "Plugin Installed",
+          isLoading: false,
+          syncResult: data,
+        })
+      } else {
+        showSuccessToast("Plugin installed successfully")
+      }
     },
     onError: handleError.bind(showErrorToast),
     onSettled: () => {
@@ -150,10 +186,12 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
       linkId,
       conversationMode,
       buildingMode,
+      disabled,
     }: {
       linkId: string
       conversationMode?: boolean | null
       buildingMode?: boolean | null
+      disabled?: boolean | null
     }) =>
       LlmPluginsService.updateAgentPlugin({
         agentId,
@@ -161,12 +199,33 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
         requestBody: {
           conversation_mode: conversationMode,
           building_mode: buildingMode,
+          disabled: disabled,
         },
       }),
-    onSuccess: () => {
-      showSuccessToast("Plugin modes updated")
+    onSuccess: (data, variables) => {
+      // Check if sync had any failures
+      if (data.failed_syncs && data.failed_syncs > 0) {
+        // Show dialog with error details
+        setSyncProgress({
+          isOpen: true,
+          title: variables.disabled !== undefined
+            ? (variables.disabled ? "Plugin Disabled" : "Plugin Enabled")
+            : "Plugin Updated",
+          isLoading: false,
+          syncResult: data,
+        })
+      } else {
+        // Just show success toast
+        if (variables.disabled !== undefined && variables.disabled !== null) {
+          showSuccessToast(variables.disabled ? "Plugin disabled" : "Plugin enabled")
+        } else {
+          showSuccessToast("Plugin modes updated")
+        }
+      }
     },
-    onError: handleError.bind(showErrorToast),
+    onError: (error: unknown) => {
+      handleError.call(showErrorToast, error as Parameters<typeof handleError>[0])
+    },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["agent-plugins", agentId] })
     },
@@ -208,6 +267,13 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
         mode === "conversation" ? !plugin.conversation_mode : undefined,
       buildingMode:
         mode === "building" ? !plugin.building_mode : undefined,
+    })
+  }
+
+  const handleDisableToggle = (plugin: AgentPluginLinkWithUpdateInfo) => {
+    updateModeMutation.mutate({
+      linkId: plugin.id,
+      disabled: !plugin.disabled,
     })
   }
 
@@ -271,6 +337,7 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
             <Table className="table-fixed w-full">
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-[50px]"></TableHead>
                   <TableHead className="w-auto">Plugin</TableHead>
                   <TableHead className="text-center w-[70px]">
                     <div className="flex items-center justify-center gap-1">
@@ -284,12 +351,20 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
                       Build
                     </div>
                   </TableHead>
-                  <TableHead className="w-[120px]">Actions</TableHead>
+                  <TableHead className="w-[120px]"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {installedPlugins.map((plugin) => (
-                  <TableRow key={plugin.id}>
+                  <TableRow key={plugin.id} className={plugin.disabled ? "opacity-50" : ""}>
+                    <TableCell className="text-center">
+                      <Switch
+                        checked={!plugin.disabled}
+                        onCheckedChange={() => handleDisableToggle(plugin)}
+                        disabled={updateModeMutation.isPending}
+                        className="data-[state=checked]:bg-green-500"
+                      />
+                    </TableCell>
                     <TableCell className="overflow-hidden">
                       <div className="flex flex-col gap-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
@@ -301,7 +376,7 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
                               v{plugin.installed_version}
                             </Badge>
                           )}
-                          {plugin.has_update && (
+                          {plugin.has_update && !plugin.disabled && (
                             <Badge
                               variant="default"
                               className="text-xs bg-blue-500 hover:bg-blue-600"
@@ -329,7 +404,7 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
                         onCheckedChange={() =>
                           handleModeToggle(plugin, "conversation")
                         }
-                        disabled={updateModeMutation.isPending}
+                        disabled={updateModeMutation.isPending || plugin.disabled}
                         className="data-[state=checked]:bg-blue-500"
                       />
                     </TableCell>
@@ -339,13 +414,13 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
                         onCheckedChange={() =>
                           handleModeToggle(plugin, "building")
                         }
-                        disabled={updateModeMutation.isPending}
+                        disabled={updateModeMutation.isPending || plugin.disabled}
                         className="data-[state=checked]:bg-orange-500"
                       />
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
-                        {plugin.has_update && (
+                        {plugin.has_update && !plugin.disabled && (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -481,6 +556,72 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
         onInstall={handleInstall}
         isLoading={installMutation.isPending}
       />
+
+      {/* Sync Error Dialog - only shown when there are sync failures */}
+      <Dialog
+        open={syncProgress.isOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSyncProgress({ isOpen: false, title: "", isLoading: false, syncResult: null })
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              {syncProgress.title} - Sync Issues
+            </DialogTitle>
+            <DialogDescription>
+              {syncProgress.syncResult?.message}
+            </DialogDescription>
+          </DialogHeader>
+          {syncProgress.syncResult && (
+            <div className="space-y-3 mt-2">
+              {syncProgress.syncResult.environments_synced && syncProgress.syncResult.environments_synced.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Environment Status:</p>
+                  <div className="space-y-1 max-h-60 overflow-y-auto">
+                    {syncProgress.syncResult.environments_synced?.map((env) => (
+                      <div
+                        key={env.environment_id}
+                        className="flex items-center justify-between p-2 rounded-md bg-muted text-sm"
+                      >
+                        <div className="flex items-center gap-2">
+                          {env.status === "success" || env.status === "activated_and_synced" ? (
+                            <CheckCircle2 className="h-4 w-4 text-green-500" />
+                          ) : (
+                            <XCircle className="h-4 w-4 text-red-500" />
+                          )}
+                          <span>{env.instance_name}</span>
+                          {env.was_suspended && (
+                            <Badge variant="outline" className="text-xs">
+                              <Zap className="h-3 w-3 mr-1" />
+                              Activated
+                            </Badge>
+                          )}
+                        </div>
+                        {env.error_message && (
+                          <span className="text-xs text-red-500 max-w-[200px] truncate" title={env.error_message}>
+                            {env.error_message}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="flex justify-end">
+                <Button
+                  onClick={() => setSyncProgress({ isOpen: false, title: "", isLoading: false, syncResult: null })}
+                >
+                  Close
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

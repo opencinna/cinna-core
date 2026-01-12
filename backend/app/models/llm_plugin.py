@@ -229,6 +229,7 @@ class AgentPluginLinkBase(SQLModel):
 
     conversation_mode: bool = Field(default=True)
     building_mode: bool = Field(default=True)
+    disabled: bool = Field(default=False)
 
 
 class AgentPluginLink(AgentPluginLinkBase, table=True):
@@ -261,6 +262,7 @@ class AgentPluginLinkCreate(SQLModel):
     plugin_id: uuid.UUID
     conversation_mode: bool = True
     building_mode: bool = True
+    disabled: bool = False
 
 
 class AgentPluginLinkUpdate(SQLModel):
@@ -268,6 +270,7 @@ class AgentPluginLinkUpdate(SQLModel):
 
     conversation_mode: Optional[bool] = None
     building_mode: Optional[bool] = None
+    disabled: Optional[bool] = None
 
 
 class AgentPluginLinkPublic(SQLModel):
@@ -280,6 +283,7 @@ class AgentPluginLinkPublic(SQLModel):
     installed_commit_hash: Optional[str]
     conversation_mode: bool
     building_mode: bool
+    disabled: bool
     created_at: datetime
     updated_at: datetime
 
@@ -307,3 +311,30 @@ class AgentPluginLinksPublic(SQLModel):
 
     data: list[AgentPluginLinkWithUpdateInfo]
     count: int
+
+
+# =============================================================================
+# Plugin Sync Response Models
+# =============================================================================
+
+
+class EnvironmentSyncStatus(SQLModel):
+    """Status of plugin sync for a single environment."""
+
+    environment_id: uuid.UUID
+    instance_name: str
+    status: str  # "success", "error", "activated_and_synced", "skipped"
+    error_message: Optional[str] = None
+    was_suspended: bool = False
+
+
+class PluginSyncResponse(SQLModel):
+    """Response model for plugin sync operations."""
+
+    success: bool
+    message: str
+    plugin_link: Optional[AgentPluginLinkPublic] = None
+    environments_synced: list[EnvironmentSyncStatus] = []
+    total_environments: int = 0
+    successful_syncs: int = 0
+    failed_syncs: int = 0

@@ -34,6 +34,7 @@ from app.models.llm_plugin import (
     AgentPluginLinkPublic,
     AgentPluginLinkWithUpdateInfo,
     AgentPluginLinksPublic,
+    PluginSyncResponse,
 )
 from app.services.llm_plugin_service import LLMPluginService
 
@@ -334,7 +335,7 @@ def list_agent_plugins(
     return AgentPluginLinksPublic(data=plugins, count=len(plugins))
 
 
-@router.post("/agents/{agent_id}/plugins", response_model=AgentPluginLinkPublic)
+@router.post("/agents/{agent_id}/plugins", response_model=PluginSyncResponse)
 async def install_agent_plugin(
     *,
     session: SessionDep,
@@ -348,7 +349,9 @@ async def install_agent_plugin(
     The plugin will be:
     - Locked to current version (installed_version, installed_commit_hash)
     - Enabled for conversation/building mode as specified
-    - Synced to running environments
+    - Synced to running and suspended environments (suspended ones will be activated first)
+
+    Returns sync status for all environments.
     """
     # Verify agent access
     agent = session.get(Agent, agent_id)
@@ -375,39 +378,31 @@ async def install_agent_plugin(
             data=data,
         )
 
-        # Sync to running environments
-        await LLMPluginService.sync_plugins_to_agent_environments(
+        # Sync to running/suspended environments
+        sync_response = await LLMPluginService.sync_plugins_to_agent_environments(
             session=session,
             agent_id=agent_id,
             user_id=current_user.id,
+            plugin_link=link,
         )
 
-        return AgentPluginLinkPublic(
-            id=link.id,
-            agent_id=link.agent_id,
-            plugin_id=link.plugin_id,
-            installed_version=link.installed_version,
-            installed_commit_hash=link.installed_commit_hash,
-            conversation_mode=link.conversation_mode,
-            building_mode=link.building_mode,
-            created_at=link.created_at,
-            updated_at=link.updated_at,
-        )
+        return sync_response
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.delete("/agents/{agent_id}/plugins/{link_id}")
+@router.delete("/agents/{agent_id}/plugins/{link_id}", response_model=PluginSyncResponse)
 async def uninstall_agent_plugin(
     session: SessionDep,
     current_user: CurrentUser,
     agent_id: uuid.UUID,
     link_id: uuid.UUID,
-) -> Message:
+) -> Any:
     """
     Uninstall a plugin from an agent.
 
     The plugin will be removed and environments will be synced.
+    Returns sync status for all environments.
     """
     # Verify agent access
     agent = session.get(Agent, agent_id)
@@ -424,17 +419,19 @@ async def uninstall_agent_plugin(
     if not deleted:
         raise HTTPException(status_code=404, detail="Plugin link not found")
 
-    # Sync to running environments
-    await LLMPluginService.sync_plugins_to_agent_environments(
+    # Sync to running/suspended environments
+    sync_response = await LLMPluginService.sync_plugins_to_agent_environments(
         session=session,
         agent_id=agent_id,
         user_id=current_user.id,
     )
 
-    return Message(message="Plugin uninstalled successfully")
+    # Override message for uninstall
+    sync_response.message = f"Plugin uninstalled. {sync_response.message}"
+    return sync_response
 
 
-@router.put("/agents/{agent_id}/plugins/{link_id}", response_model=AgentPluginLinkPublic)
+@router.put("/agents/{agent_id}/plugins/{link_id}", response_model=PluginSyncResponse)
 async def update_agent_plugin(
     *,
     session: SessionDep,
@@ -444,9 +441,10 @@ async def update_agent_plugin(
     data: AgentPluginLinkUpdate,
 ) -> Any:
     """
-    Update plugin mode flags (conversation_mode, building_mode).
+    Update plugin mode flags (conversation_mode, building_mode, disabled).
 
-    Changes will be synced to running environments.
+    Changes will be synced to running and suspended environments.
+    Returns sync status for all environments.
     """
     # Verify agent access
     agent = session.get(Agent, agent_id)
@@ -464,27 +462,18 @@ async def update_agent_plugin(
     if not link:
         raise HTTPException(status_code=404, detail="Plugin link not found")
 
-    # Sync to running environments
-    await LLMPluginService.sync_plugins_to_agent_environments(
+    # Sync to running/suspended environments
+    sync_response = await LLMPluginService.sync_plugins_to_agent_environments(
         session=session,
         agent_id=agent_id,
         user_id=current_user.id,
+        plugin_link=link,
     )
 
-    return AgentPluginLinkPublic(
-        id=link.id,
-        agent_id=link.agent_id,
-        plugin_id=link.plugin_id,
-        installed_version=link.installed_version,
-        installed_commit_hash=link.installed_commit_hash,
-        conversation_mode=link.conversation_mode,
-        building_mode=link.building_mode,
-        created_at=link.created_at,
-        updated_at=link.updated_at,
-    )
+    return sync_response
 
 
-@router.post("/agents/{agent_id}/plugins/{link_id}/upgrade", response_model=AgentPluginLinkWithUpdateInfo)
+@router.post("/agents/{agent_id}/plugins/{link_id}/upgrade", response_model=PluginSyncResponse)
 async def upgrade_agent_plugin(
     session: SessionDep,
     current_user: CurrentUser,
@@ -496,6 +485,7 @@ async def upgrade_agent_plugin(
 
     Updates installed_version and installed_commit_hash to match
     the current values in the marketplace.
+    Returns sync status for all environments.
     """
     # Verify agent access
     agent = session.get(Agent, agent_id)
@@ -512,30 +502,14 @@ async def upgrade_agent_plugin(
     if not link:
         raise HTTPException(status_code=404, detail="Plugin link not found")
 
-    # Sync to running environments
-    await LLMPluginService.sync_plugins_to_agent_environments(
+    # Sync to running/suspended environments
+    sync_response = await LLMPluginService.sync_plugins_to_agent_environments(
         session=session,
         agent_id=agent_id,
         user_id=current_user.id,
+        plugin_link=link,
     )
 
-    # Get full info for response
-    plugins = LLMPluginService.get_agent_plugins(session, agent_id)
-    upgraded_plugin = next((p for p in plugins if p.id == link_id), None)
-
-    if upgraded_plugin:
-        return upgraded_plugin
-
-    # Fallback if not found in list
-    return AgentPluginLinkWithUpdateInfo(
-        id=link.id,
-        agent_id=link.agent_id,
-        plugin_id=link.plugin_id,
-        installed_version=link.installed_version,
-        installed_commit_hash=link.installed_commit_hash,
-        conversation_mode=link.conversation_mode,
-        building_mode=link.building_mode,
-        created_at=link.created_at,
-        updated_at=link.updated_at,
-        has_update=False,
-    )
+    # Override message for upgrade
+    sync_response.message = f"Plugin upgraded. {sync_response.message}"
+    return sync_response
