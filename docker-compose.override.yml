@@ -1,22 +1,10 @@
 services:
 
-  db:
-    restart: "no"
-    ports:
-      - "5476:5432"
-
-  adminer:
-    image: adminer
-    restart: "no"
-    depends_on:
-      - db
-    environment:
-      - ADMINER_DESIGN=pepa-linha-dark
-    ports:
-      - "8099:8080"
-
   backend:
     restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
     build:
       context: ./backend
     # command: sleep infinity  # Infinite loop to keep container alive doing nothing
@@ -42,11 +30,42 @@ services:
       # Host path for agent environments (used by docker-compose volume mounts)
       HOST_AGENT_ENVIRONMENTS_DIR: "${PWD}/backend/agent-environments"
 
+  db:
+    image: postgres:17
+    restart: "no"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      retries: 5
+      start_period: 30s
+      timeout: 10s
+    ports:
+      - "5476:5432"
+    volumes:
+      - app-db-data:/var/lib/postgresql/data/pgdata
+    env_file:
+      - .env
+    environment:
+      - PGDATA=/var/lib/postgresql/data/pgdata
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
+      - POSTGRES_USER=${POSTGRES_USER?Variable not set}
+      - POSTGRES_DB=${POSTGRES_DB?Variable not set}
+
   mailcatcher:
     image: schickling/mailcatcher
     ports:
       - "1080:1080"
       - "1025:1025"
+
+  adminer:
+    image: adminer
+    restart: "no"
+    depends_on:
+      - db
+    environment:
+      - ADMINER_DESIGN=pepa-linha-dark
+    ports:
+      - "8099:8080"
 
   frontend:
     restart: "no"
@@ -63,3 +82,4 @@ services:
 
 volumes:
   frontend_node_modules:
+  app-db-data:
