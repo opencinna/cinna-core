@@ -2,6 +2,13 @@
 
 ## User Scenarios and Features
 
+### Improved sandboxing for Agent-Env
+
+Original articles shows main points used by the original Claude so far: https://support.claude.com/en/articles/12111783-create-and-edit-files-with-claude
+
+We need better than that, with heuristic control over and post-validation of the prompt-conversation direction.
+Here is a good overview on how to do that: https://www.lakera.ai/blog/guide-to-prompt-injection
+
 ### Improved handover processing
 
 When background-executed session (via CRON) is over and according to the session logs
