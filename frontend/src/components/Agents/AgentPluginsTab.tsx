@@ -268,18 +268,17 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
               </p>
             </div>
           ) : (
-            <Table>
+            <Table className="table-fixed w-full">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Plugin</TableHead>
-                  <TableHead>Version</TableHead>
-                  <TableHead className="text-center">
+                  <TableHead className="w-auto">Plugin</TableHead>
+                  <TableHead className="text-center w-[70px]">
                     <div className="flex items-center justify-center gap-1">
                       <MessageCircle className="h-4 w-4" />
                       Chat
                     </div>
                   </TableHead>
-                  <TableHead className="text-center">
+                  <TableHead className="text-center w-[70px]">
                     <div className="flex items-center justify-center gap-1">
                       <Wrench className="h-4 w-4" />
                       Build
@@ -291,11 +290,26 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
               <TableBody>
                 {installedPlugins.map((plugin) => (
                   <TableRow key={plugin.id}>
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        <span className="font-medium">
-                          {plugin.plugin_name || "Unknown Plugin"}
-                        </span>
+                    <TableCell className="overflow-hidden">
+                      <div className="flex flex-col gap-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium">
+                            {plugin.plugin_name || "Unknown Plugin"}
+                          </span>
+                          {plugin.installed_version && (
+                            <Badge variant="secondary" className="text-xs">
+                              v{plugin.installed_version}
+                            </Badge>
+                          )}
+                          {plugin.has_update && (
+                            <Badge
+                              variant="default"
+                              className="text-xs bg-blue-500 hover:bg-blue-600"
+                            >
+                              Update to v{plugin.latest_version}
+                            </Badge>
+                          )}
+                        </div>
                         {plugin.plugin_category && (
                           <Badge variant="outline" className="text-xs w-fit">
                             <Tag className="mr-1 h-3 w-3" />
@@ -303,26 +317,9 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
                           </Badge>
                         )}
                         {plugin.plugin_description && (
-                          <span className="text-xs text-muted-foreground line-clamp-1">
+                          <span className="text-xs text-muted-foreground break-words whitespace-normal">
                             {plugin.plugin_description}
                           </span>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        {plugin.installed_version && (
-                          <Badge variant="secondary" className="text-xs w-fit">
-                            v{plugin.installed_version}
-                          </Badge>
-                        )}
-                        {plugin.has_update && (
-                          <Badge
-                            variant="default"
-                            className="text-xs w-fit bg-blue-500 hover:bg-blue-600"
-                          >
-                            Update to v{plugin.latest_version}
-                          </Badge>
                         )}
                       </div>
                     </TableCell>
