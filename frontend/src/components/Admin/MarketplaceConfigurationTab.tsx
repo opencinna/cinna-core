@@ -22,6 +22,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Switch } from "@/components/ui/switch"
 import useCustomToast from "@/hooks/useCustomToast"
 
 interface MarketplaceConfigurationTabProps {
@@ -86,6 +87,22 @@ export function MarketplaceConfigurationTab({
     },
   })
 
+  const updateMutation = useMutation({
+    mutationFn: (public_discovery: boolean) =>
+      LlmPluginsService.updateMarketplace({
+        marketplaceId,
+        requestBody: { public_discovery },
+      }),
+    onSuccess: () => {
+      showSuccessToast("Marketplace visibility updated")
+      queryClient.invalidateQueries({ queryKey: ["marketplace", marketplaceId] })
+      queryClient.invalidateQueries({ queryKey: ["marketplaces"] })
+    },
+    onError: (error: any) => {
+      showErrorToast(error.message || "Failed to update marketplace")
+    },
+  })
+
   return (
     <Card>
       <CardHeader>
@@ -130,19 +147,26 @@ export function MarketplaceConfigurationTab({
             </Badge>
           </div>
           <div>
-            <Label>Visibility</Label>
-            <div className="flex items-center gap-1 mt-1">
-              {marketplace.public_discovery ? (
-                <>
-                  <Globe className="h-3 w-3" />
-                  <span className="text-sm">Public</span>
-                </>
-              ) : (
-                <>
-                  <Lock className="h-3 w-3" />
-                  <span className="text-sm">Private</span>
-                </>
-              )}
+            <Label>Publicly Discoverable</Label>
+            <div className="flex items-center gap-2 mt-1">
+              <Switch
+                checked={marketplace.public_discovery}
+                onCheckedChange={(checked) => updateMutation.mutate(checked)}
+                disabled={updateMutation.isPending}
+              />
+              <div className="flex items-center gap-1">
+                {marketplace.public_discovery ? (
+                  <>
+                    <Globe className="h-3 w-3" />
+                    <span className="text-sm">Public</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="h-3 w-3" />
+                    <span className="text-sm">Private</span>
+                  </>
+                )}
+              </div>
             </div>
           </div>
           <div>
