@@ -18,7 +18,7 @@ export function AgentHandoverToolBlock({
   // Fetch agent data to get color preset
   const { data: agent } = useQuery({
     queryKey: ["agent", targetAgentId],
-    queryFn: () => AgentsService.readAgent({ agentId: targetAgentId }),
+    queryFn: () => AgentsService.readAgent({ id: targetAgentId }),
     enabled: !!targetAgentId,
   })
 

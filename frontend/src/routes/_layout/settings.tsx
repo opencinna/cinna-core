@@ -56,7 +56,7 @@ function UserSettings() {
   let finalTabs = allTabs
 
   // Hide "Set Password" tab if user already has password
-  if (currentUser.has_password) {
+  if (currentUser && 'has_password' in currentUser && currentUser.has_password) {
     finalTabs = finalTabs.filter((tab) => tab.value !== "set-password")
   } else {
     // Hide "Change Password" tab if no password set

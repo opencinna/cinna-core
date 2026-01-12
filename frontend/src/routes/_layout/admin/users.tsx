@@ -34,7 +34,7 @@ function UsersTableContent() {
 
   const tableData: UserTableData[] = users.data.map((user: UserPublic) => ({
     ...user,
-    isCurrentUser: currentUser?.id === user.id,
+    isCurrentUser: currentUser && 'id' in currentUser ? currentUser.id === user.id : false,
   }))
 
   return <DataTable columns={columns} data={tableData} />

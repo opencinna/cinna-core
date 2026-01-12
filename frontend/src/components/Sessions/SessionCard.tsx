@@ -35,6 +35,7 @@ export function SessionCard({ session, agentName, agentColorPreset }: SessionCar
     <Link
       to="/session/$sessionId"
       params={{ sessionId: session.id }}
+      search={{ initialMessage: undefined, fileIds: undefined }}
       className="block"
     >
       <Card className="p-4 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 cursor-pointer">

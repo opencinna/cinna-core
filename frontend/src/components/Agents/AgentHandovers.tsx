@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery } from "@tanstack/react-query"
 import { Sparkles, Trash2, Plus, Bot } from "lucide-react"
 import type { AgentPublic, HandoverConfigPublic } from "@/client"
 import { AgentsService } from "@/client"
@@ -30,7 +30,6 @@ interface AgentHandoversProps {
 }
 
 export function AgentHandovers({ agent }: AgentHandoversProps) {
-  const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const { activeWorkspaceId } = useWorkspace()
 

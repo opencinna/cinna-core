@@ -24,7 +24,7 @@ import {
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import useCustomToast from "@/hooks/useCustomToast"
 import { KnowledgeSourcesService, SshKeysService, UserWorkspacesService } from "@/client"
-import type { Body_create_knowledge_source_api_v1_knowledge_sources__post as CreateSourceData } from "@/client"
+import type { AIKnowledgeGitRepoCreate as CreateSourceData } from "@/client"
 import { Loader2 } from "lucide-react"
 
 interface AddSourceModalProps {
@@ -74,7 +74,7 @@ export function AddSourceModal({ open, onOpenChange, onSuccess }: AddSourceModal
   // Load workspaces
   const { data: workspaces } = useQuery({
     queryKey: ["user-workspaces"],
-    queryFn: () => UserWorkspacesService.listUserWorkspaces(),
+    queryFn: () => UserWorkspacesService.readWorkspaces(),
   })
 
   const handleWorkspaceToggle = (workspaceId: string) => {
@@ -245,7 +245,7 @@ export function AddSourceModal({ open, onOpenChange, onSuccess }: AddSourceModal
             <div className="space-y-2">
               <Label>Select Workspaces</Label>
               <div className="border rounded-md p-4 space-y-2 max-h-48 overflow-y-auto">
-                {workspaces?.data?.map((workspace) => (
+                {workspaces?.data?.map((workspace: { id: string; name: string }) => (
                   <div key={workspace.id} className="flex items-center space-x-2">
                     <input
                       type="checkbox"

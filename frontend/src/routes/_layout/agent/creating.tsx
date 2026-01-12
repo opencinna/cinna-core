@@ -3,7 +3,6 @@ import { useEffect, useState, useRef, useCallback } from "react"
 import { CheckCircle2, Circle, Loader2, XCircle, AlertTriangle, Key } from "lucide-react"
 import { OpenAPI, CredentialsService, AgentsService, SessionsService } from "@/client"
 import { useQuery } from "@tanstack/react-query"
-import type { CredentialPublic } from "@/client"
 import useWorkspace from "@/hooks/useWorkspace"
 
 type SearchParams = {
@@ -86,7 +85,7 @@ function AgentCreating() {
 
         // Get the access token from OpenAPI config
         const token = typeof OpenAPI.TOKEN === "function"
-          ? await OpenAPI.TOKEN()
+          ? await OpenAPI.TOKEN({} as any)
           : OpenAPI.TOKEN || ""
 
         if (!token) {
@@ -202,7 +201,7 @@ function AgentCreating() {
       navigate({
         to: "/session/$sessionId",
         params: { sessionId },
-        search: { initialMessage: description },
+        search: { initialMessage: description, fileIds: undefined },
       })
     } catch (err: any) {
       console.error("Error during session start:", err)
@@ -210,7 +209,7 @@ function AgentCreating() {
       navigate({
         to: "/session/$sessionId",
         params: { sessionId },
-        search: { initialMessage: description },
+        search: { initialMessage: description, fileIds: undefined },
       })
     }
   }, [sessionId, agentId, selectedCredentialIds, navigate, description])
@@ -335,7 +334,7 @@ function AgentCreating() {
             {/* Left Column: Progress Steps */}
             <div className="space-y-4">
               <h3 className="font-semibold text-sm text-muted-foreground mb-4">Progress</h3>
-              {steps.map((step, index) => (
+              {steps.map((step) => (
                 <div key={step.id} className="flex items-start gap-3">
                   <div className="flex-shrink-0 mt-0.5">{getStepIcon(step.status)}</div>
                   <div className="flex-1 min-w-0">

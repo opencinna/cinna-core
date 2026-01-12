@@ -50,7 +50,7 @@ function Dashboard() {
 
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const { showSuccessToast, showErrorToast } = useCustomToast()
+  const { showErrorToast } = useCustomToast()
   const { activeWorkspaceId } = useWorkspace()
 
   const {

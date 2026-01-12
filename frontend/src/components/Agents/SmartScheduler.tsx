@@ -29,10 +29,10 @@ export function SmartScheduler({
   const [input, setInput] = useState("")
   const [schedule, setSchedule] = useState<{
     success: boolean
-    description?: string
-    cron_string?: string
-    next_execution?: string
-    error?: string
+    description?: string | null
+    cron_string?: string | null
+    next_execution?: string | null
+    error?: string | null
   } | null>(null)
   const [hasChanges, setHasChanges] = useState(false)
 

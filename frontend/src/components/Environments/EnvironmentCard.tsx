@@ -4,8 +4,7 @@ import { Card } from "@/components/ui/card"
 import { EnvironmentsService } from "@/client"
 import type { AgentEnvironmentPublic } from "@/client"
 import { EnvironmentStatusBadge } from "./EnvironmentStatusBadge"
-import { Badge } from "@/components/ui/badge"
-import { CheckCircle2, Play, Trash2, RefreshCw, Pause, Loader2 } from "lucide-react"
+import { Play, Trash2, RefreshCw, Pause, Loader2 } from "lucide-react"
 import useCustomToast from "@/hooks/useCustomToast"
 
 interface EnvironmentCardProps {

@@ -22,7 +22,25 @@ const useAuth = () => {
 
   const { data: user } = useQuery<UserPublic | null, Error>({
     queryKey: ["currentUser"],
-    queryFn: UsersService.readUserMe,
+    queryFn: async () => {
+      try {
+        const userData = await UsersService.readUserMe()
+        // If user is inactive, clear token and redirect to login
+        if (userData && !userData.is_active) {
+          localStorage.removeItem("access_token")
+          navigate({ to: "/login" })
+          return null
+        }
+        return userData
+      } catch (error: any) {
+        // If user not found (404) or unauthorized (401), clear token and redirect to login
+        if (error?.status === 404 || error?.status === 401) {
+          localStorage.removeItem("access_token")
+          navigate({ to: "/login" })
+        }
+        throw error
+      }
+    },
     enabled: isLoggedIn(),
     retry: (failureCount, error: any) => {
       // Don't retry on 404 or 401 errors
@@ -30,20 +48,6 @@ const useAuth = () => {
         return false
       }
       return failureCount < 3
-    },
-    onError: (error: any) => {
-      // If user not found (404) or unauthorized (401), clear token and redirect to login
-      if (error?.status === 404 || error?.status === 401) {
-        localStorage.removeItem("access_token")
-        navigate({ to: "/login" })
-      }
-    },
-    onSuccess: (data) => {
-      // If user is inactive, clear token and redirect to login
-      if (data && !data.is_active) {
-        localStorage.removeItem("access_token")
-        navigate({ to: "/login" })
-      }
     },
   })
 

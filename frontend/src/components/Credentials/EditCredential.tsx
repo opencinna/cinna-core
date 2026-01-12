@@ -31,7 +31,7 @@ import {
 const formSchema = z.object({
   name: z.string().min(1, { message: "Name is required" }),
   notes: z.string().optional(),
-  credential_data: z.record(z.any()).optional(),
+  credential_data: z.record(z.string(), z.any()).optional(),
 })
 
 type FormData = z.infer<typeof formSchema>

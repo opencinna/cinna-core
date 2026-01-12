@@ -223,6 +223,7 @@ function ActivitiesList() {
       navigate({
         to: "/session/$sessionId",
         params: { sessionId: activity.session_id },
+        search: { initialMessage: undefined, fileIds: undefined },
       })
     }
   }

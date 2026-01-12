@@ -80,6 +80,7 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
               <Link
                 to="/session/$sessionId"
                 params={{ sessionId: forwardedToSessionId }}
+                search={{ initialMessage: undefined, fileIds: undefined }}
                 className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 underline underline-offset-2"
               >
                 <span>View session</span>

@@ -26,13 +26,14 @@ export function WorkspaceTabContent({
   databaseTables,
   onFetchDatabaseTables,
 }: WorkspaceTabContentProps) {
-  const hasContent = data[0]?.children && data[0].children.length > 0
+  const firstItem = data[0]
+  const hasContent = firstItem && firstItem.type === "folder" && firstItem.children.length > 0
 
   return (
     <TabsContent value={value} className="flex-1 overflow-auto px-4 pb-4">
-      {hasContent ? (
+      {hasContent && firstItem.type === "folder" ? (
         <div className="space-y-1">
-          {data[0].children.map((item, index) => (
+          {firstItem.children.map((item: TreeItem, index: number) => (
             <TreeItemRenderer
               key={index}
               item={item}

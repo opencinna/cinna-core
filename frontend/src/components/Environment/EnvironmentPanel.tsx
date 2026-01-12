@@ -167,7 +167,7 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
       })
 
       // Convert API response to DatabaseTableItem objects
-      const tables: DatabaseTableItem[] = tableEntries.map(entry => ({
+      const tables: DatabaseTableItem[] = (tableEntries as Array<{ name: string; type: string }>).map((entry) => ({
         type: "database_table" as const,
         name: entry.name,
         tableType: entry.type as "table" | "view",

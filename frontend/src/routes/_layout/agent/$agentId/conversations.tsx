@@ -2,7 +2,6 @@ import { createFileRoute } from "@tanstack/react-router"
 import { useEffect, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { SessionsService, AgentsService } from "@/client"
-import type { SessionPublicExtended } from "@/client"
 import { AgentConversations } from "@/components/Sessions/AgentConversations"
 import PendingItems from "@/components/Pending/PendingItems"
 import { usePageHeader } from "@/routes/_layout"
@@ -22,7 +21,7 @@ function AgentConversationsPage() {
     isLoading: agentLoading,
   } = useQuery({
     queryKey: ["agent", agentId],
-    queryFn: () => AgentsService.getAgent({ id: agentId }),
+    queryFn: () => AgentsService.readAgent({ id: agentId }),
   })
 
   const {

@@ -8,8 +8,7 @@
  */
 
 import { useEffect, useRef, useCallback, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
-import { eventService, EventData, EventHandler, EventTypes, ConnectionStatus } from "@/services/eventService"
+import { eventService, EventHandler, EventTypes, ConnectionStatus } from "@/services/eventService"
 import useAuth from "./useAuth"
 
 /**
@@ -21,9 +20,9 @@ export function useEventBusConnection() {
   const hasInitialized = useRef(false)
 
   useEffect(() => {
-    if (user && !hasInitialized.current) {
+    if (user && 'id' in user && !hasInitialized.current) {
       console.log("[useEventBusConnection] Initializing event bus for user:", user.id)
-      eventService.connect(user.id)
+      eventService.connect(user.id as string)
       hasInitialized.current = true
     }
 

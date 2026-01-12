@@ -59,7 +59,7 @@ function SessionsList() {
         groups.set(agentId, {
           agentId,
           agentName,
-          agentColorPreset: session.agent_ui_color_preset,
+          agentColorPreset: session.agent_ui_color_preset ?? null,
           sessions: [],
         })
       }

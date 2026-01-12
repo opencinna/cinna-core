@@ -17,9 +17,7 @@ export function FileUploadModal({ open, onOpenChange, onFileUploaded }: FileUplo
 
   const uploadFile = useMutation({
     mutationFn: (file: File) => {
-      const formData = new FormData()
-      formData.append('file', file)
-      return FilesService.uploadFile({ formData })
+      return FilesService.uploadFile({ formData: { file } })
     },
     onSuccess: (data) => {
       onFileUploaded(data)

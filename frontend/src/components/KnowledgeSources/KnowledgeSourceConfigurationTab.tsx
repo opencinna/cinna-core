@@ -9,7 +9,7 @@ import {
   Key,
 } from "lucide-react"
 
-import type { KnowledgeSourceRead } from "@/client"
+import type { AIKnowledgeGitRepoPublic as KnowledgeSourceRead } from "@/client"
 import { KnowledgeSourcesService } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -163,7 +163,7 @@ export function KnowledgeSourceConfigurationTab({
           <div>
             <Label>Status</Label>
             <div className="mt-1">
-              <StatusBadge status={source.status} />
+              <StatusBadge status={source.status || "disconnected"} />
             </div>
           </div>
           <div>

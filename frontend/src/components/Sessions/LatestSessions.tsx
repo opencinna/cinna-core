@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { SessionsService } from "@/client"
 import type { SessionPublicExtended } from "@/client"
-import { MessageSquare, Clock, Wrench, MessageCircle } from "lucide-react"
+import { Clock, Wrench, MessageCircle } from "lucide-react"
 import { AnimatedPlaceholder } from "@/components/Common/AnimatedPlaceholder"
 import { RelativeTime } from "@/components/Common/RelativeTime"
 import { getColorPreset } from "@/utils/colorPresets"
@@ -25,7 +25,7 @@ export function LatestSessions({ limit = 8 }: LatestSessionsProps) {
         limit: limitValue as number,
         orderBy: "last_message_at",
         orderDesc: true,
-        userWorkspaceId: workspaceId ?? "",
+        userWorkspaceId: (workspaceId ?? "") as string,
       })
     },
   })
@@ -41,6 +41,7 @@ export function LatestSessions({ limit = 8 }: LatestSessionsProps) {
     navigate({
       to: "/session/$sessionId",
       params: { sessionId },
+      search: { initialMessage: undefined, fileIds: undefined },
     })
   }
 

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { BookOpen, AlertCircle } from "lucide-react"
 
-import type { KnowledgeSourceRead } from "@/client"
+import type { AIKnowledgeGitRepoPublic as KnowledgeSourceRead } from "@/client"
 import { KnowledgeSourcesService } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import {

@@ -2,7 +2,7 @@ import { useMemo } from "react"
 import { Terminal } from "lucide-react"
 
 interface CompactBashBlockProps {
-  command?: string
+  command?: string  // Reserved for future use
 }
 
 const funnyMessages = [
@@ -16,7 +16,7 @@ const funnyMessages = [
   "Waking up the electrons"
 ]
 
-export function CompactBashBlock({ command }: CompactBashBlockProps) {
+export function CompactBashBlock({ command: _command }: CompactBashBlockProps) {
   // Pick one random message and keep it static
   const randomMessage = useMemo(
     () => funnyMessages[Math.floor(Math.random() * funnyMessages.length)],

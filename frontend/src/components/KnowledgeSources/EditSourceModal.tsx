@@ -25,7 +25,7 @@ import useCustomToast from "@/hooks/useCustomToast"
 import { KnowledgeSourcesService, SshKeysService } from "@/client"
 import type {
   AIKnowledgeGitRepoPublic,
-  Body_update_knowledge_source_api_v1_knowledge_sources__source_id__put as UpdateSourceData,
+  AIKnowledgeGitRepoUpdate as UpdateSourceData,
 } from "@/client"
 import { Loader2 } from "lucide-react"
 import { useState } from "react"

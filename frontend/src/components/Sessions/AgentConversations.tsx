@@ -76,6 +76,7 @@ export function AgentConversations({
     navigate({
       to: "/session/$sessionId",
       params: { sessionId },
+      search: { initialMessage: undefined, fileIds: undefined },
     })
   }
 

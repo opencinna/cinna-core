@@ -84,7 +84,7 @@ function ChatInterface() {
 
   const { sendMessage, stopMessage, isStreaming, streamingEvents, isInterruptPending } = useMessageStream({
     sessionId,
-    sessionMode: session?.mode,
+    sessionMode: session?.mode as "conversation" | "building" | undefined,
     onSuccess: () => {
       // Messages are already refreshed by the hook
       // Agent cache is also refreshed if building mode
@@ -136,7 +136,7 @@ function ChatInterface() {
       navigate({
         to: "/session/$sessionId",
         params: { sessionId },
-        search: {},
+        search: { initialMessage: undefined, fileIds: undefined },
         replace: true,
       })
     }

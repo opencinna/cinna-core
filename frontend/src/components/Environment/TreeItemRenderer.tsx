@@ -44,9 +44,9 @@ export function TreeItemRenderer({
               <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
             )}
             {isExpanded ? (
-              <FolderOpen className="h-4 w-4 text-blue-400 shrink-0" title={item.modified} />
+              <FolderOpen className="h-4 w-4 text-blue-400 shrink-0" />
             ) : (
-              <Folder className="h-4 w-4 text-blue-400 shrink-0" title={item.modified} />
+              <Folder className="h-4 w-4 text-blue-400 shrink-0" />
             )}
             <p className="text-sm font-medium truncate" title={item.name}>{item.name}</p>
             <span className="text-xs text-muted-foreground/60 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ml-auto mr-2">
@@ -202,7 +202,6 @@ export function TreeItemRenderer({
               >
                 <Table2
                   className={`h-4 w-4 shrink-0 ${table.tableType === "view" ? "text-purple-500" : "text-blue-400"}`}
-                  title={table.tableType === "view" ? "View" : "Table"}
                 />
                 <span className="text-sm">{table.name}</span>
               </div>
