@@ -183,9 +183,16 @@ docker compose exec backend alembic current                  # Check version
 
 ### Client Generation (after backend changes)
 ```bash
-bash scripts/generate-client.sh                              # From project root
+source ./backend/.venv/bin/activate && make gen-client       # From project root
 ```
 Regenerates `frontend/src/client/` from backend OpenAPI spec
+
+### Type Checking (Frontend)
+No `npm run typecheck` command exists. Use `npx tsc --noEmit` with grep to check specific files:
+```bash
+cd frontend && npx tsc --noEmit 2>&1 | grep -E "(ComponentA|ComponentB)" | head -20
+```
+Replace `ComponentA|ComponentB` with the actual component/file names you're checking. Avoid running full typecheck on entire codebase.
 
 ### Development
 ```bash
