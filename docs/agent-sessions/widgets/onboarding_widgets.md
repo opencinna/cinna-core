@@ -78,7 +78,7 @@ Dashboard (checks credentials status)
 
 **GettingStartedModal:** `frontend/src/components/Onboarding/GettingStartedModal.tsx`
 - Encyclopedia-style dialog with sidebar navigation
-- Three articles with inter-article navigation support
+- Four articles with inter-article navigation support
 - Left sidebar: Table of contents with article icons
 - Right content: Article content with formatted sections
 
@@ -92,18 +92,25 @@ Dashboard (checks credentials status)
 
 Articles defined in `GettingStartedModal.tsx:articles[]`:
 
-1. **How to Build An Agent** (`build-agent`)
+1. **Gmail Agent Quick Start** (`gmail-quickstart`) - *Default article*
+   - Visual 3-step flow with clickable cards
+   - Step 1: Prepare credentials (links to `share-credentials`)
+   - Step 2: Create agent & share credentials (links to `build-agent`)
+   - Step 3: Start conversation (links to `conversation-vs-building`)
+   - Color-coded steps with gradient connectors
+
+2. **How to Build An Agent** (`build-agent`)
    - Writing build prompts with example
    - How Building mode creates scripts
    - Tips for better agents
    - Clickable callout linking to credentials article
 
-2. **How to Share Credentials** (`share-credentials`)
+3. **How to Share Credentials** (`share-credentials`)
    - Why credentials matter for external services
    - Step-by-step Gmail OAuth setup guide
    - Other credential types overview
 
-3. **Conversation vs Building** (`conversation-vs-building`)
+4. **Conversation vs Building** (`conversation-vs-building`)
    - Two modes explanation with visual toggle representations
    - Building mode: setup, powerful model, code generation
    - Conversation mode: daily use, faster model, task execution
@@ -196,6 +203,6 @@ hasAnthropicKey = true → render Dashboard + GettingStartedModal
 
 ---
 
-**Document Version:** 1.1
-**Last Updated:** 2025-01-13
+**Document Version:** 1.2
+**Last Updated:** 2026-01-13
 **Status:** Complete

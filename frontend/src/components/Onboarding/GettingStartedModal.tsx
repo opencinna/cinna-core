@@ -6,7 +6,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { BookOpen, Key, Bot, ChevronRight, Sparkles, ArrowRight, ToggleRight } from "lucide-react"
+import { BookOpen, Key, Bot, ChevronRight, Sparkles, ArrowRight, ToggleRight, Mail, MessageSquare } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface GettingStartedModalProps {
@@ -14,7 +14,7 @@ interface GettingStartedModalProps {
   onOpenChange: (open: boolean) => void
 }
 
-type ArticleId = "build-agent" | "share-credentials" | "conversation-vs-building"
+type ArticleId = "gmail-quickstart" | "build-agent" | "share-credentials" | "conversation-vs-building"
 
 interface Article {
   id: ArticleId
@@ -24,6 +24,97 @@ interface Article {
 }
 
 const articles: Article[] = [
+  {
+    id: "gmail-quickstart",
+    title: "Gmail Agent Quick Start",
+    icon: <Mail className="h-4 w-4" />,
+    content: (onNavigate) => (
+      <div className="space-y-5">
+        <p className="text-sm text-muted-foreground leading-relaxed">
+          Set up your first Gmail parsing agent in 3 simple steps. Click any step to learn more.
+        </p>
+
+        {/* Flow Steps */}
+        <div className="flex flex-col gap-3">
+          {/* Step 1 */}
+          <button
+            onClick={() => onNavigate("share-credentials")}
+            className="group relative p-4 rounded-xl border-2 border-amber-200 dark:border-amber-800 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/40 dark:to-orange-950/40 hover:border-amber-400 dark:hover:border-amber-600 transition-all text-left"
+          >
+            <div className="flex items-start gap-4">
+              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-amber-500 text-white flex items-center justify-center font-bold text-lg shadow-md">
+                1
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="font-semibold text-amber-700 dark:text-amber-300 flex items-center gap-2">
+                  Prepare Your Credentials
+                  <ArrowRight className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </h4>
+                <p className="text-sm text-amber-600/80 dark:text-amber-400/80 mt-1">
+                  Go to <strong>Sidebar → Credentials</strong> and add Gmail OAuth (ReadOnly) to authorize email access.
+                </p>
+              </div>
+              <Key className="h-5 w-5 text-amber-500 dark:text-amber-400 flex-shrink-0" />
+            </div>
+          </button>
+
+          {/* Connector */}
+          <div className="flex justify-center">
+            <div className="w-0.5 h-4 bg-gradient-to-b from-amber-300 to-violet-300 dark:from-amber-600 dark:to-violet-600" />
+          </div>
+
+          {/* Step 2 */}
+          <button
+            onClick={() => onNavigate("build-agent")}
+            className="group relative p-4 rounded-xl border-2 border-violet-200 dark:border-violet-800 bg-gradient-to-br from-violet-50 to-purple-50 dark:from-violet-950/40 dark:to-purple-950/40 hover:border-violet-400 dark:hover:border-violet-600 transition-all text-left"
+          >
+            <div className="flex items-start gap-4">
+              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-violet-500 text-white flex items-center justify-center font-bold text-lg shadow-md">
+                2
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="font-semibold text-violet-700 dark:text-violet-300 flex items-center gap-2">
+                  Create Agent & Share Credentials
+                  <ArrowRight className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </h4>
+                <p className="text-sm text-violet-600/80 dark:text-violet-400/80 mt-1">
+                  Click <strong>+ New Agent</strong>, describe your goal, and select credentials during agent creation.
+                </p>
+              </div>
+              <Bot className="h-5 w-5 text-violet-500 dark:text-violet-400 flex-shrink-0" />
+            </div>
+          </button>
+
+          {/* Connector */}
+          <div className="flex justify-center">
+            <div className="w-0.5 h-4 bg-gradient-to-b from-violet-300 to-green-300 dark:from-violet-600 dark:to-green-600" />
+          </div>
+
+          {/* Step 3 */}
+          <button
+            onClick={() => onNavigate("conversation-vs-building")}
+            className="group relative p-4 rounded-xl border-2 border-green-200 dark:border-green-800 bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-950/40 dark:to-emerald-950/40 hover:border-green-400 dark:hover:border-green-600 transition-all text-left"
+          >
+            <div className="flex items-start gap-4">
+              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-green-500 text-white flex items-center justify-center font-bold text-lg shadow-md">
+                3
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="font-semibold text-green-700 dark:text-green-300 flex items-center gap-2">
+                  Start Conversation
+                  <ArrowRight className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </h4>
+                <p className="text-sm text-green-600/80 dark:text-green-400/80 mt-1">
+                  Chat in <strong>Building mode</strong> to create scripts, then switch to <strong>Conversation mode</strong> for daily use.
+                </p>
+              </div>
+              <MessageSquare className="h-5 w-5 text-green-500 dark:text-green-400 flex-shrink-0" />
+            </div>
+          </button>
+        </div>
+      </div>
+    ),
+  },
   {
     id: "build-agent",
     title: "How to Build An Agent",
@@ -201,7 +292,7 @@ const articles: Article[] = [
 ]
 
 export function GettingStartedModal({ open, onOpenChange }: GettingStartedModalProps) {
-  const [selectedArticle, setSelectedArticle] = useState<ArticleId>("build-agent")
+  const [selectedArticle, setSelectedArticle] = useState<ArticleId>("gmail-quickstart")
 
   const currentArticle = articles.find((a) => a.id === selectedArticle) || articles[0]
 

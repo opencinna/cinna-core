@@ -2,6 +2,11 @@
 
 ## User Scenarios and Features
 
+### Prompt refining on the main screen
+
+User can click 'magic button' and agent would consider current mode, selected agent if there is one (taking it's prompts),
+or if its a new agent, then consider recommendations on new agent building.
+
 ### Improved sandboxing for Agent-Env
 
 Original articles shows main points used by the original Claude so far: https://support.claude.com/en/articles/12111783-create-and-edit-files-with-claude
