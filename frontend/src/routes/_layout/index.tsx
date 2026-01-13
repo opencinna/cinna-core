@@ -30,6 +30,7 @@ import { FileUploadModal } from "@/components/Chat/FileUploadModal"
 import { FileBadge } from "@/components/Chat/FileBadge"
 import { ApiKeyOnboarding } from "@/components/Onboarding/ApiKeyOnboarding"
 import { GettingStartedModal } from "@/components/Onboarding/GettingStartedModal"
+import { DashboardHeader } from "@/components/Dashboard/DashboardHeader"
 
 export const Route = createFileRoute("/_layout/")({
   component: Dashboard,
@@ -169,12 +170,7 @@ function Dashboard() {
   )
 
   useEffect(() => {
-    setHeaderContent(
-      <div className="min-w-0">
-        <h1 className="text-lg font-semibold truncate">Dashboard</h1>
-        <p className="text-xs text-muted-foreground">Start a new conversation with your agent</p>
-      </div>
-    )
+    setHeaderContent(<DashboardHeader />)
     return () => setHeaderContent(null)
   }, [setHeaderContent])
 
