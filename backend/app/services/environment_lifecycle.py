@@ -1003,6 +1003,8 @@ class EnvironmentLifecycleManager:
         logger.debug(f"Generating .env files for environment {environment.id}")
 
         # 1. Generate root .env file for docker-compose (without ANTHROPIC_API_KEY)
+        agent_personal_database_url = ''  # To be implemented
+        agent_container_log_level = 'INFO'
         env_content = f"""# Environment Identification
 ENV_ID={environment.id}
 AGENT_ID={agent.id}
@@ -1018,8 +1020,8 @@ BACKEND_URL=http://backend:8000
 # Security
 AGENT_AUTH_TOKEN={auth_token}
 
-# Database (optional - for agent to access main DB)
-DATABASE_URL={settings.SQLALCHEMY_DATABASE_URI}
+# Database (private database for the agent)
+DATABASE_URL={agent_personal_database_url}
 
 # Resource Limits
 CPU_LIMIT={environment.config.get('cpu_limit', '1.0')}
@@ -1028,7 +1030,7 @@ CPU_RESERVATION={environment.config.get('cpu_reservation', '0.25')}
 MEMORY_RESERVATION={environment.config.get('memory_reservation', '128M')}
 
 # Logging
-LOG_LEVEL=INFO
+LOG_LEVEL={agent_container_log_level}
 
 # Claude Code Configuration
 CLAUDE_CODE_WORKSPACE=/app/app

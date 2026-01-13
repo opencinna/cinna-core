@@ -787,10 +787,11 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             ValueError: If credential not found or permission denied
         """
         # Verify credential exists and user owns it
+        # Credentials are always private - only owner can access
         credential = session.get(Credential, credential_id)
         if not credential:
             raise ValueError("Credential not found")
-        if not is_superuser and credential.owner_id != owner_id:
+        if credential.owner_id != owner_id:
             raise ValueError("Not enough permissions")
 
         # Update credential
@@ -831,10 +832,11 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             ValueError: If credential not found or permission denied
         """
         # Verify credential exists and user owns it
+        # Credentials are always private - only owner can access
         credential = session.get(Credential, credential_id)
         if not credential:
             raise ValueError("Credential not found")
-        if not is_superuser and credential.owner_id != owner_id:
+        if credential.owner_id != owner_id:
             raise ValueError("Not enough permissions")
 
         # Get affected agents BEFORE deletion (links will be cascade deleted)
@@ -875,10 +877,11 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             ValueError: If credential not found or permission denied
         """
         # Verify credential exists and user owns it
+        # Credentials are always private - only owner can access
         credential = session.get(Credential, credential_id)
         if not credential:
             raise ValueError("Credential not found")
-        if not is_superuser and credential.owner_id != owner_id:
+        if credential.owner_id != owner_id:
             raise ValueError("Not enough permissions")
 
         # Decrypt the credential data
@@ -943,10 +946,11 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             raise ValueError("Not enough permissions to access this agent")
 
         # Verify credential exists and user owns it
+        # Credentials are always private - only owner can access
         credential = session.get(Credential, credential_id)
         if not credential:
             raise ValueError("Credential not found")
-        if not is_superuser and credential.owner_id != owner_id:
+        if credential.owner_id != owner_id:
             raise ValueError("Not enough permissions to access this credential")
 
         # Link credential to agent

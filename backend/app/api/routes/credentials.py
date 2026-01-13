@@ -52,33 +52,23 @@ def read_credentials(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid workspace ID format")
 
-    if current_user.is_superuser:
-        count_statement = select(func.count()).select_from(Credential)
-        statement = select(Credential)
+    # Credentials are always private - only return credentials owned by current user
+    count_statement = (
+        select(func.count())
+        .select_from(Credential)
+        .where(Credential.owner_id == current_user.id)
+    )
+    statement = (
+        select(Credential)
+        .where(Credential.owner_id == current_user.id)
+    )
 
-        if apply_filter:
-            count_statement = count_statement.where(Credential.user_workspace_id == workspace_filter)
-            statement = statement.where(Credential.user_workspace_id == workspace_filter)
+    if apply_filter:
+        count_statement = count_statement.where(Credential.user_workspace_id == workspace_filter)
+        statement = statement.where(Credential.user_workspace_id == workspace_filter)
 
-        count = session.exec(count_statement).one()
-        credentials = session.exec(statement.offset(skip).limit(limit)).all()
-    else:
-        count_statement = (
-            select(func.count())
-            .select_from(Credential)
-            .where(Credential.owner_id == current_user.id)
-        )
-        statement = (
-            select(Credential)
-            .where(Credential.owner_id == current_user.id)
-        )
-
-        if apply_filter:
-            count_statement = count_statement.where(Credential.user_workspace_id == workspace_filter)
-            statement = statement.where(Credential.user_workspace_id == workspace_filter)
-
-        count = session.exec(count_statement).one()
-        credentials = session.exec(statement.offset(skip).limit(limit)).all()
+    count = session.exec(count_statement).one()
+    credentials = session.exec(statement.offset(skip).limit(limit)).all()
 
     return CredentialsPublic(data=credentials, count=count)
 
@@ -93,7 +83,8 @@ def read_credential(
     credential = session.get(Credential, id)
     if not credential:
         raise HTTPException(status_code=404, detail="Credential not found")
-    if not current_user.is_superuser and (credential.owner_id != current_user.id):
+    # Credentials are always private - only owner can access
+    if credential.owner_id != current_user.id:
         raise HTTPException(status_code=400, detail="Not enough permissions")
     return credential
 

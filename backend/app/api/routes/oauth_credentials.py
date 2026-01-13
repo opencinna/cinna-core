@@ -56,10 +56,11 @@ def oauth_authorize(
     Only the credential owner can initiate OAuth.
     """
     # Verify credential exists and user owns it
+    # Credentials are always private - only owner can access
     credential = session.get(Credential, credential_id)
     if not credential:
         raise HTTPException(status_code=404, detail="Credential not found")
-    if not current_user.is_superuser and (credential.owner_id != current_user.id):
+    if credential.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
     try:
@@ -127,10 +128,11 @@ def get_oauth_metadata(
     Only the credential owner can view metadata.
     """
     # Verify credential exists and user owns it
+    # Credentials are always private - only owner can access
     credential = session.get(Credential, credential_id)
     if not credential:
         raise HTTPException(status_code=404, detail="Credential not found")
-    if not current_user.is_superuser and (credential.owner_id != current_user.id):
+    if credential.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
     # Extract OAuth metadata using service
@@ -161,10 +163,11 @@ async def refresh_oauth_token(
     Only the credential owner can refresh tokens.
     """
     # Verify credential exists and user owns it
+    # Credentials are always private - only owner can access
     credential = session.get(Credential, credential_id)
     if not credential:
         raise HTTPException(status_code=404, detail="Credential not found")
-    if not current_user.is_superuser and (credential.owner_id != current_user.id):
+    if credential.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
     try:
