@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 PRE_ALLOWED_TOOLS = frozenset([
     "Read", "Edit", "Glob", "Grep", "Bash", "Write", "WebFetch", "WebSearch", "TodoWrite",
     "Task", "Skill", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "NotebookEdit",
-    "KillShell", "TaskOutput",  # Additional built-in tools
+    "KillShell", "TaskOutput",
+    # Additional built-in tools
+    "mcp__knowledge__query_integration_knowledge", "mcp__handover__agent_handover"
 ])
 
 
