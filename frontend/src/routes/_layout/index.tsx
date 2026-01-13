@@ -3,7 +3,7 @@ import { useEffect, useState, useMemo, KeyboardEvent, DragEvent } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 
-import { AgentsService, SessionsService, FilesService } from "@/client"
+import { AgentsService, SessionsService, FilesService, UsersService } from "@/client"
 import type { SessionCreate, FileUploadPublic } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -23,6 +23,7 @@ import { RotatingHints } from "@/components/Common/RotatingHints"
 import { LatestSessions } from "@/components/Sessions/LatestSessions"
 import { FileUploadModal } from "@/components/Chat/FileUploadModal"
 import { FileBadge } from "@/components/Chat/FileBadge"
+import { ApiKeyOnboarding } from "@/components/Onboarding/ApiKeyOnboarding"
 
 export const Route = createFileRoute("/_layout/")({
   component: Dashboard,
@@ -52,6 +53,17 @@ function Dashboard() {
   const navigate = useNavigate()
   const { showErrorToast } = useCustomToast()
   const { activeWorkspaceId } = useWorkspace()
+
+  // Check if user has AI credentials configured
+  const {
+    data: credentialsStatus,
+    isLoading: credentialsLoading,
+  } = useQuery({
+    queryKey: ["aiCredentialsStatus"],
+    queryFn: () => UsersService.getAiCredentialsStatus(),
+  })
+
+  const hasAnthropicKey = credentialsStatus?.has_anthropic_api_key ?? false
 
   const {
     data: agentsData,
@@ -320,8 +332,19 @@ function Dashboard() {
     }
   }
 
-  if (agentsLoading) {
+  if (agentsLoading || credentialsLoading) {
     return <PendingItems />
+  }
+
+  // Show onboarding if user doesn't have Anthropic API key
+  if (!hasAnthropicKey) {
+    return (
+      <ApiKeyOnboarding
+        onComplete={() => {
+          queryClient.invalidateQueries({ queryKey: ["aiCredentialsStatus"] })
+        }}
+      />
+    )
   }
 
   if (agents.length > 0 && agentsWithActiveEnv.length === 0) {
