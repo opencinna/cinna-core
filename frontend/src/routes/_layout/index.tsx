@@ -3,17 +3,22 @@ import { useEffect, useState, useMemo, KeyboardEvent, DragEvent } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 
-import { AgentsService, SessionsService, FilesService, UsersService } from "@/client"
+import { AgentsService, SessionsService, FilesService, UsersService, UtilsService } from "@/client"
 import type { SessionCreate, FileUploadPublic } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { Send, Bot, Paperclip, Plus } from "lucide-react"
+import { Send, Bot, Paperclip, Plus, Sparkles } from "lucide-react"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { usePageHeader } from "@/routes/_layout"
 import useCustomToast from "@/hooks/useCustomToast"
 import useWorkspace from "@/hooks/useWorkspace"
@@ -50,6 +55,7 @@ function Dashboard() {
   const [showFileModal, setShowFileModal] = useState(false)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   const [showGettingStarted, setShowGettingStarted] = useState(false)
+  const [isHoveringInput, setIsHoveringInput] = useState(false)
 
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -129,6 +135,30 @@ function Dashboard() {
     },
     onSuccess: (data) => {
       setAttachedFiles(prev => [...prev, data])
+    },
+  })
+
+  const refineMutation = useMutation({
+    mutationFn: () =>
+      UtilsService.refinePrompt({
+        requestBody: {
+          user_input: message,
+          has_files_attached: attachedFiles.length > 0,
+          agent_id: selectedAgentId && selectedAgentId !== NEW_AGENT_ID ? selectedAgentId : null,
+          mode: mode,
+          is_new_agent: selectedAgentId === NEW_AGENT_ID,
+        },
+      }),
+    onSuccess: (data) => {
+      if (data.success && data.refined_prompt) {
+        setMessage(data.refined_prompt)
+        setInputMode("manual")
+      } else if (data.error) {
+        showErrorToast(data.error)
+      }
+    },
+    onError: (error: Error) => {
+      showErrorToast(error.message || "Failed to refine prompt")
     },
   })
 
@@ -417,6 +447,8 @@ function Dashboard() {
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
+              onMouseEnter={() => setIsHoveringInput(true)}
+              onMouseLeave={() => setIsHoveringInput(false)}
             >
               <Textarea
                 value={message}
@@ -429,7 +461,7 @@ function Dashboard() {
                       ? "Describe what you want the agent to do and what result you expect..."
                       : "Type your message to start a conversation..."
                 }
-                className={`min-h-[120px] max-h-[300px] resize-none text-base transition-colors ${
+                className={`min-h-[120px] max-h-[300px] resize-none text-base transition-colors pr-12 ${
                   mode === "building"
                     ? "border-orange-400 bg-orange-50 dark:bg-orange-950/20 focus-visible:ring-orange-400"
                     : ""
@@ -437,11 +469,41 @@ function Dashboard() {
                   isDraggingOver ? 'border-primary border-2 bg-primary/5' : ''
                 }`}
                 rows={4}
+                disabled={refineMutation.isPending}
+                readOnly={refineMutation.isPending}
               />
               {isDraggingOver && (
                 <div className="absolute inset-0 flex items-center justify-center bg-primary/10 border-2 border-primary border-dashed rounded-md pointer-events-none">
                   <p className="text-sm font-medium text-primary">Drop files to attach</p>
                 </div>
+              )}
+              {/* Refine Prompt Button - appears on hover */}
+              {message.trim() && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => refineMutation.mutate()}
+                      disabled={refineMutation.isPending}
+                      className={`
+                        absolute bottom-3 right-3
+                        p-1.5 rounded-md
+                        transition-all duration-200
+                        ${isHoveringInput || refineMutation.isPending ? 'opacity-100' : 'opacity-0'}
+                        ${refineMutation.isPending
+                          ? 'text-amber-500 cursor-wait'
+                          : 'text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10 cursor-pointer'}
+                      `}
+                    >
+                      <Sparkles
+                        className={`h-4 w-4 ${refineMutation.isPending ? 'animate-pulse' : ''}`}
+                      />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    <p>Refine prompt with AI</p>
+                  </TooltipContent>
+                </Tooltip>
               )}
             </div>
 

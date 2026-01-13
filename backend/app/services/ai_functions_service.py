@@ -8,10 +8,14 @@ This service encapsulates fast, cheap LLM calls for tasks like:
 """
 import logging
 from typing import Optional
+from uuid import UUID
+
+from sqlmodel import Session
 
 from app.core.config import settings
-from app.agents import generate_agent_config, generate_conversation_title, generate_handover_prompt, generate_sql_query
+from app.agents import generate_agent_config, generate_conversation_title, generate_handover_prompt, generate_sql_query, refine_prompt
 from app.agents.schedule_generator import generate_agent_schedule
+from app.models.agent import Agent
 
 logger = logging.getLogger(__name__)
 
@@ -258,4 +262,75 @@ class AIFunctionsService:
             return {
                 "success": False,
                 "error": f"Failed to generate SQL query: {str(e)}"
+            }
+
+    @staticmethod
+    def refine_user_prompt(
+        db: Session,
+        user_input: str,
+        has_files_attached: bool,
+        agent_id: UUID | None,
+        owner_id: UUID,
+        mode: str,
+        is_new_agent: bool,
+    ) -> dict:
+        """
+        Refine a user's prompt to make it more effective.
+
+        Args:
+            db: Database session
+            user_input: The user's current input text
+            has_files_attached: Whether files are attached to the message
+            agent_id: ID of the agent (if any) - will be fetched from DB
+            owner_id: ID of the user (to verify agent ownership)
+            mode: Session mode - "building" or "conversation"
+            is_new_agent: Whether this is a new agent being created
+
+        Returns:
+            dict with keys:
+                - success: bool
+                - refined_prompt: The improved prompt text (if success)
+                - error: Error message (if not success)
+
+        Raises:
+            ValueError: If GOOGLE_API_KEY is not configured
+        """
+        try:
+            api_key = AIFunctionsService._get_api_key()
+
+            # Fetch agent details if agent_id is provided
+            agent_name = None
+            entrypoint_prompt = None
+            workflow_prompt = None
+
+            if agent_id:
+                agent = db.get(Agent, agent_id)
+                if agent and agent.owner_id == owner_id:
+                    agent_name = agent.name
+                    entrypoint_prompt = agent.entrypoint_prompt
+                    workflow_prompt = agent.workflow_prompt
+
+            result = refine_prompt(
+                user_input=user_input,
+                has_files_attached=has_files_attached,
+                agent_name=agent_name,
+                entrypoint_prompt=entrypoint_prompt,
+                workflow_prompt=workflow_prompt,
+                mode=mode,
+                is_new_agent=is_new_agent,
+                api_key=api_key,
+            )
+            logger.info(
+                f"Refined prompt: {result.get('success')} - "
+                f"{result.get('refined_prompt', '')[:50] if result.get('success') else result.get('error')}"
+            )
+            return result
+        except ValueError:
+            # Re-raise configuration errors
+            raise
+        except Exception as e:
+            logger.error(f"Failed to refine prompt: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": f"Failed to refine prompt: {str(e)}"
             }

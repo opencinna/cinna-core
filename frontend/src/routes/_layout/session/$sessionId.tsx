@@ -360,6 +360,8 @@ function ChatInterface() {
             ? "Agent is responding..."
             : "Type your message..."
         }
+        agentId={session?.agent_id ?? undefined}
+        mode={session?.mode as "building" | "conversation" | undefined}
       />
     </div>
   )

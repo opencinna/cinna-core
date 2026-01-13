@@ -8,13 +8,19 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Send, Square, Loader2, Plus, Paperclip } from "lucide-react"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { Send, Square, Loader2, Plus, Paperclip, Sparkles } from "lucide-react"
 import { RotatingHints } from "@/components/Common/RotatingHints"
 import { FileUploadModal } from "./FileUploadModal"
 import { GettingStartedModal } from "@/components/Onboarding/GettingStartedModal"
 import { FileBadge } from "./FileBadge"
-import { FilesService } from "@/client"
+import { FilesService, UtilsService } from "@/client"
 import type { FileUploadPublic } from "@/client"
+import useCustomToast from "@/hooks/useCustomToast"
 
 interface MessageInputProps {
   onSend: (content: string, fileIds?: string[]) => void
@@ -22,6 +28,9 @@ interface MessageInputProps {
   sendDisabled?: boolean
   isInterruptPending?: boolean
   placeholder?: string
+  agentId?: string
+  mode?: "building" | "conversation"
+  isNewAgent?: boolean
 }
 
 export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
@@ -31,12 +40,40 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
     sendDisabled = false,
     isInterruptPending = false,
     placeholder = "Type your message...",
+    agentId,
+    mode = "conversation",
+    isNewAgent = false,
   }, ref) {
     const [message, setMessage] = useState("")
     const [attachedFiles, setAttachedFiles] = useState<FileUploadPublic[]>([])
     const [showFileModal, setShowFileModal] = useState(false)
     const [isDraggingOver, setIsDraggingOver] = useState(false)
     const [showGettingStarted, setShowGettingStarted] = useState(false)
+    const [isHovering, setIsHovering] = useState(false)
+    const { showErrorToast } = useCustomToast()
+
+    const refineMutation = useMutation({
+      mutationFn: () =>
+        UtilsService.refinePrompt({
+          requestBody: {
+            user_input: message,
+            has_files_attached: attachedFiles.length > 0,
+            agent_id: agentId || null,
+            mode: mode,
+            is_new_agent: isNewAgent,
+          },
+        }),
+      onSuccess: (data) => {
+        if (data.success && data.refined_prompt) {
+          setMessage(data.refined_prompt)
+        } else if (data.error) {
+          showErrorToast(data.error)
+        }
+      },
+      onError: (error: Error) => {
+        showErrorToast(error.message || "Failed to refine prompt")
+      },
+    })
 
     const deleteMutation = useMutation({
       mutationFn: (fileId: string) => FilesService.deleteFile({ fileId }),
@@ -138,10 +175,12 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
 
           {/* Textarea with drag-drop support */}
           <div
-            className="relative flex-1 max-h-[60px]"
+            className="relative flex-1 max-h-[60px] group"
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
+            onMouseEnter={() => setIsHovering(true)}
+            onMouseLeave={() => setIsHovering(false)}
           >
             <Textarea
               ref={ref}
@@ -149,16 +188,46 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
               onChange={(e) => setMessage(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={placeholder}
-              className={`min-h-[60px] max-h-[200px] resize-none transition-colors ${
+              className={`min-h-[60px] max-h-[200px] resize-none transition-colors pr-12 ${
                 isDraggingOver ? 'border-primary border-2 bg-primary/5' : ''
               }`}
               rows={2}
-              disabled={sendDisabled}
+              disabled={sendDisabled || refineMutation.isPending}
+              readOnly={refineMutation.isPending}
             />
             {isDraggingOver && (
               <div className="absolute inset-0 flex items-center justify-center bg-primary/10 border-2 border-primary border-dashed rounded-md pointer-events-none">
                 <p className="text-sm font-medium text-primary">Drop files to attach</p>
               </div>
+            )}
+            {/* Refine Prompt Button - appears on hover */}
+            {message.trim() && !sendDisabled && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => refineMutation.mutate()}
+                    disabled={refineMutation.isPending}
+                    className={`
+                      absolute bottom-2 right-2
+                      p-1.5 rounded-md
+                      transition-all duration-200
+                      ${isHovering || refineMutation.isPending ? 'opacity-100' : 'opacity-0'}
+                      ${refineMutation.isPending
+                        ? 'text-amber-500 cursor-wait'
+                        : 'text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10 cursor-pointer'}
+                    `}
+                  >
+                    <Sparkles
+                      className={`h-4 w-4 ${refineMutation.isPending ? 'animate-pulse' : ''}`}
+                      style={refineMutation.isPending ? {} : undefined}
+                    />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  <p>Refine prompt with AI</p>
+                </TooltipContent>
+              </Tooltip>
             )}
           </div>
 

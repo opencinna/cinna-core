@@ -855,6 +855,26 @@ export type PrivateUserCreate = {
 };
 
 /**
+ * Request body for prompt refinement.
+ */
+export type RefinePromptRequest = {
+    user_input: string;
+    has_files_attached?: boolean;
+    agent_id?: (string | null);
+    mode?: string;
+    is_new_agent?: boolean;
+};
+
+/**
+ * Response from prompt refinement.
+ */
+export type RefinePromptResponse = {
+    success: boolean;
+    refined_prompt?: (string | null);
+    error?: (string | null);
+};
+
+/**
  * Response for refresh knowledge endpoint.
  */
 export type RefreshKnowledgeResponse = {
@@ -1958,6 +1978,12 @@ export type UtilsTestEmailData = {
 export type UtilsTestEmailResponse = (Message);
 
 export type UtilsHealthCheckResponse = (boolean);
+
+export type UtilsRefinePromptData = {
+    requestBody: RefinePromptRequest;
+};
+
+export type UtilsRefinePromptResponse = (RefinePromptResponse);
 
 export type WorkspaceGetWorkspaceTreeData = {
     envId: string;

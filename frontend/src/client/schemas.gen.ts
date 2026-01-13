@@ -3721,6 +3721,80 @@ export const PrivateUserCreateSchema = {
     title: 'PrivateUserCreate'
 } as const;
 
+export const RefinePromptRequestSchema = {
+    properties: {
+        user_input: {
+            type: 'string',
+            title: 'User Input'
+        },
+        has_files_attached: {
+            type: 'boolean',
+            title: 'Has Files Attached',
+            default: false
+        },
+        agent_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Id'
+        },
+        mode: {
+            type: 'string',
+            title: 'Mode',
+            default: 'conversation'
+        },
+        is_new_agent: {
+            type: 'boolean',
+            title: 'Is New Agent',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['user_input'],
+    title: 'RefinePromptRequest',
+    description: 'Request body for prompt refinement.'
+} as const;
+
+export const RefinePromptResponseSchema = {
+    properties: {
+        success: {
+            type: 'boolean',
+            title: 'Success'
+        },
+        refined_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Refined Prompt'
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        }
+    },
+    type: 'object',
+    required: ['success'],
+    title: 'RefinePromptResponse',
+    description: 'Response from prompt refinement.'
+} as const;
+
 export const RefreshKnowledgeResponseSchema = {
     properties: {
         status: {
