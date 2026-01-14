@@ -1,11 +1,21 @@
 """
 Utility functions for SDK management, logging, and debugging.
+
+This module provides shared utilities used by SDK adapters:
+- SessionLogger: Logs SDK session interactions for debugging
+- format_message_for_debug: Formats SDK messages for debug output
+- format_sdk_message: DEPRECATED - use adapter-specific formatting
+
+Note: The format_sdk_message function is deprecated. Each adapter now
+handles message formatting internally via their _format_message method.
+See adapters/claude_code.py for the ClaudeCode implementation.
 """
 import logging
 import json
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+import warnings
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +204,11 @@ def format_sdk_message(message_obj, session_id: str, interrupt_initiated: bool =
     """
     Format SDK message object into standard dictionary for API responses.
 
+    DEPRECATED: This function is deprecated. Each SDK adapter now handles
+    message formatting internally via their _format_message method.
+    See adapters/claude_code.py:ClaudeCodeAdapter._format_message() for
+    the current implementation.
+
     Args:
         message_obj: SDK message object (AssistantMessage, ResultMessage, SystemMessage, etc.)
         session_id: Current session ID
@@ -202,6 +217,12 @@ def format_sdk_message(message_obj, session_id: str, interrupt_initiated: bool =
     Returns:
         Formatted message dict, or None to skip this message
     """
+    warnings.warn(
+        "format_sdk_message is deprecated. Use adapter-specific formatting instead. "
+        "See adapters/claude_code.py:ClaudeCodeAdapter._format_message()",
+        DeprecationWarning,
+        stacklevel=2
+    )
     from claude_agent_sdk import (
         AssistantMessage,
         TextBlock,

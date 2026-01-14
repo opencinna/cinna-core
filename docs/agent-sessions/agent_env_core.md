@@ -24,10 +24,16 @@ app/core/server/
 ├── main.py                 # FastAPI entry point
 ├── routes.py               # HTTP API endpoints
 ├── models.py               # Pydantic request/response models
-├── sdk_manager.py          # SDK session orchestration
+├── sdk_manager.py          # Multi-adapter SDK manager
 ├── prompt_generator.py     # System prompt generation
 ├── agent_env_service.py    # Business logic for workspace operations
-└── sdk_utils.py            # Logging, debugging, message formatting
+├── sdk_utils.py            # Logging, debugging utilities
+├── active_session_manager.py  # Session interrupt tracking
+└── adapters/               # SDK adapter implementations
+    ├── __init__.py         # Package exports
+    ├── base.py             # SDKEvent, SDKConfig, BaseSDKAdapter, AdapterRegistry
+    ├── claude_code.py      # ClaudeCodeAdapter for claude-code/* variants
+    └── google_adk.py       # GoogleADKAdapter placeholder for google-adk-wr/*
 ```
 
 ### Design Principles
@@ -42,29 +48,73 @@ app/core/server/
 
 ### 1. SDK Manager (`sdk_manager.py`)
 
-**Purpose**: Orchestrate SDK sessions and stream responses
+**Purpose**: Multi-adapter SDK orchestration and routing
+
+**Architecture**: Uses a pluggable adapter system to support multiple SDK providers:
+
+```
+SDKManager
+    ├── _get_adapter(mode) → selects adapter based on SDK_ADAPTER_* ENV vars
+    ├── send_message_stream() → delegates to adapter, converts SDKEvent to dict
+    └── AdapterRegistry → dynamic adapter registration and instantiation
+```
 
 **Responsibilities**:
-- Initialize SDK clients (Claude, future: OpenAI, etc.)
-- Configure session options (tools, permissions, workspace)
-- Set model based on mode (Haiku for conversation, Sonnet for building)
-- Stream messages and responses
-- Coordinate with PromptGenerator and SessionLogger
+- Route requests to appropriate adapter based on environment configuration
+- Convert unified `SDKEvent` objects to dict format for backward compatibility
+- Manage adapter lifecycle and caching per mode
 
-**Key Methods**:
-- `send_message_stream()`: Main entry point for message handling
-  - Parameters: `message`, `session_id`, `mode`, `agent_sdk`, `system_prompt`
-  - Yields: Stream of events (`assistant`, `tool`, `done`, `error`)
+**Key Classes**:
+- `SDKManager`: Main orchestrator, reads ENV config, delegates to adapters
+- `SDKConfig`: Configuration from environment variables (`SDKConfig.from_env(mode)`)
+- `AdapterRegistry`: Dynamic adapter registration and instantiation
 
-**Model Selection**:
-- **Conversation Mode**: Uses `model="haiku"` (fast, cost-effective)
-- **Building Mode**: Uses default model (Sonnet, better code generation)
+**Environment Variables**:
+- `SDK_ADAPTER_BUILDING`: Adapter ID for building mode (e.g., `claude-code/anthropic`)
+- `SDK_ADAPTER_CONVERSATION`: Adapter ID for conversation mode
 
-**Dependencies**:
-- `PromptGenerator`: For system prompt construction
-- `SessionLogger`: For debug logging and session dumps
+**Adapter Selection Flow**:
+1. `SDKManager.send_message_stream()` receives request with `mode` parameter
+2. `_get_adapter(mode)` reads `SDK_ADAPTER_{MODE}` from ENV
+3. `SDKConfig.from_env(mode)` parses adapter ID (e.g., `claude-code/minimax`)
+4. `AdapterRegistry.create_adapter(config)` instantiates correct adapter
+5. Adapter streams `SDKEvent` objects, manager converts to dicts
+
+**Unified Event Format** (`SDKEvent`):
+```python
+@dataclass
+class SDKEvent:
+    type: SDKEventType  # SESSION_CREATED, ASSISTANT, TOOL_USE, DONE, ERROR, etc.
+    content: str        # Human-readable message
+    session_id: str     # SDK session ID
+    metadata: dict      # Additional event-specific data
+```
 
 **File**: `backend/app/env-templates/python-env-advanced/app/core/server/sdk_manager.py`
+
+### 1a. SDK Adapters (`adapters/`)
+
+**Purpose**: SDK-specific implementations that produce unified events
+
+**Base Adapter** (`adapters/base.py`):
+- `BaseSDKAdapter`: Abstract base class with `send_message_stream()` and `interrupt_session()`
+- `SDKEventType`: Enum of event types (SESSION_CREATED, ASSISTANT, TOOL_USE, etc.)
+- `SDKEvent`: Unified event dataclass with `to_dict()` method
+- `AdapterRegistry`: Decorator-based adapter registration
+
+**Claude Code Adapter** (`adapters/claude_code.py`):
+- Handles `claude-code/anthropic` and `claude-code/minimax` variants
+- Configures Claude SDK client with appropriate settings files
+- Converts Claude SDK messages to `SDKEvent` format
+- Manages session tracking, interrupts, and error handling
+
+**Google ADK Adapter** (`adapters/google_adk.py`):
+- Placeholder for `google-adk-wr/gemini` and `google-adk-wr/vertex`
+- Returns "not implemented" error (future implementation)
+
+**Model Selection** (in ClaudeCodeAdapter):
+- **Conversation Mode**: Uses `model="haiku"` (fast, cost-effective)
+- **Building Mode**: Uses default model (Sonnet, better code generation)
 
 ### 2. Prompt Generator (`prompt_generator.py`)
 
@@ -362,6 +412,15 @@ Events: {
 - `AGENT_ID`: Agent UUID
 - `AGENT_AUTH_TOKEN`: JWT bearer token for backend API authentication (10-year expiration)
 
+**SDK Adapter Configuration**:
+- `SDK_ADAPTER_BUILDING`: Adapter ID for building mode (default: `claude-code/anthropic`)
+- `SDK_ADAPTER_CONVERSATION`: Adapter ID for conversation mode (default: `claude-code/anthropic`)
+
+**Adapter ID Format**: `<adapter-type>/<provider>`
+- `claude-code/anthropic` - Claude Code SDK with Anthropic
+- `claude-code/minimax` - Claude Code SDK with MiniMax
+- `google-adk-wr/gemini` - Google ADK with Gemini (placeholder)
+
 **Optional**:
 - `CLAUDE_CODE_PERMISSION_MODE`: Permission mode for SDK (default: `acceptEdits`)
 - `DUMP_LLM_SESSION`: Enable session logging (`true`/`false`, default: `false`)
@@ -612,18 +671,25 @@ Events: {
 
 ## Future Enhancements
 
-### Multi-SDK Support
+### Multi-SDK Support (Partially Implemented)
 
-**Planned SDKs**:
-- `agent_sdk="openai"` → GPT-4 with function calling
-- `agent_sdk="google-adk"` → Vertex AI agents
-- `agent_sdk="anthropic-api"` → Direct API (no Claude Code preset)
+**Current Status**: Multi-adapter architecture is in place with pluggable adapters.
 
-**Implementation Path**:
-1. Create SDK-specific managers (e.g., `OpenAISDKManager`)
-2. Update routing in `routes.py` based on `agent_sdk`
-3. Add SDK-specific prompt generators
-4. Update frontend to support SDK selection
+**Implemented Adapters**:
+- `claude-code/anthropic` - Claude Code SDK with Anthropic (default)
+- `claude-code/minimax` - Claude Code SDK with MiniMax
+
+**Placeholder Adapters** (not yet implemented):
+- `google-adk-wr/gemini` - Google ADK with Gemini
+- `google-adk-wr/vertex` - Google ADK with Vertex AI
+
+**Adding New Adapters**:
+1. Create new adapter class in `adapters/` directory
+2. Inherit from `BaseSDKAdapter`
+3. Implement `send_message_stream()` and `interrupt_session()` methods
+4. Use `@AdapterRegistry.register` decorator
+5. Convert SDK-specific messages to `SDKEvent` format
+6. Add required API key validation in backend `environment_service.py`
 
 ### Prompt Versioning
 
@@ -658,6 +724,11 @@ Events: {
 - `backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py`
 - `backend/app/env-templates/python-env-advanced/app/core/server/sdk_utils.py`
 - `backend/app/env-templates/python-env-advanced/app/core/server/models.py`
+- `backend/app/env-templates/python-env-advanced/app/core/server/active_session_manager.py`
+- `backend/app/env-templates/python-env-advanced/app/core/server/adapters/`
+  - `base.py` - SDKEvent, SDKEventType, SDKConfig, BaseSDKAdapter, AdapterRegistry
+  - `claude_code.py` - ClaudeCodeAdapter for claude-code/* variants
+  - `google_adk.py` - GoogleADKAdapter placeholder for google-adk-wr/*
 
 ### Backend Integration
 

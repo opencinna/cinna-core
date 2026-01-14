@@ -17,7 +17,6 @@ class Session(SQLModel, table=True):
     )
     title: str | None = None
     mode: str = "conversation"  # "building" | "conversation"
-    agent_sdk: str = "claude"  # SDK to use: "claude" (more options can be added later)
     status: str = "active"  # "active" | "paused" | "completed" | "error"
     interaction_status: str = ""  # "" (default/nothing happens) | "running" (active stream with agent-env) | "pending_stream" (waiting for env to activate or user to send next message)
     pending_messages_count: int = 0  # Number of user messages with sent_to_agent_status='pending'
@@ -53,7 +52,6 @@ class SessionCreate(SQLModel):
     agent_id: uuid.UUID  # Will use active environment
     title: str | None = None
     mode: str = "conversation"  # "building" | "conversation"
-    agent_sdk: str = "claude"  # SDK to use: "claude" (more options can be added later)
 
 
 class SessionUpdate(SQLModel):
@@ -61,7 +59,6 @@ class SessionUpdate(SQLModel):
     status: str | None = None
     interaction_status: str | None = None
     mode: str | None = None
-    agent_sdk: str | None = None
 
 
 class SessionPublic(SQLModel):
@@ -71,7 +68,6 @@ class SessionPublic(SQLModel):
     user_workspace_id: uuid.UUID | None
     title: str | None
     mode: str
-    agent_sdk: str
     status: str
     interaction_status: str
     pending_messages_count: int

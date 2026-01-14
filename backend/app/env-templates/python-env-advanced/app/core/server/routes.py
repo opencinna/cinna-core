@@ -37,7 +37,7 @@ ENV_ID = os.getenv("ENV_ID", "unknown")
 AGENT_ID = os.getenv("AGENT_ID", "unknown")
 ENV_NAME = os.getenv("ENV_NAME", "unknown")
 AGENT_AUTH_TOKEN = os.getenv("AGENT_AUTH_TOKEN")
-WORKSPACE_DIR = os.getenv("CLAUDE_CODE_WORKSPACE", "/app/app")
+WORKSPACE_DIR = os.getenv("CLAUDE_CODE_WORKSPACE", "/app/workspace")
 
 # Initialize agent environment service
 agent_env_service = AgentEnvService(WORKSPACE_DIR)
@@ -114,40 +114,32 @@ async def chat(request: ChatRequest) -> ChatResponse:
     """
     Handle chat messages.
 
-    Routes to appropriate SDK based on agent_sdk parameter:
-    - claude: Claude SDK (supports both building and conversation modes)
+    Uses Claude SDK for both building and conversation modes.
+    SDK configuration (Anthropic vs MiniMax) is determined by settings files in the environment.
     """
-    if request.agent_sdk == "claude":
-        # Use Claude SDK for both building and conversation modes
-        response_content = []
-        new_session_id = request.session_id
+    response_content = []
+    new_session_id = request.session_id
 
-        async for chunk in sdk_manager.send_message_stream(
-            message=request.message,
-            session_id=request.session_id,
-            backend_session_id=request.backend_session_id,
-            system_prompt=request.system_prompt,  # Only use explicit override if provided
-            mode=request.mode,
-            agent_sdk=request.agent_sdk,
-        ):
-            # Capture session ID from session_created event
-            if chunk["type"] == "session_created":
-                new_session_id = chunk["session_id"]
+    async for chunk in sdk_manager.send_message_stream(
+        message=request.message,
+        session_id=request.session_id,
+        backend_session_id=request.backend_session_id,
+        system_prompt=request.system_prompt,  # Only use explicit override if provided
+        mode=request.mode,
+    ):
+        # Capture session ID from session_created event
+        if chunk["type"] == "session_created":
+            new_session_id = chunk["session_id"]
 
-            # Collect content
-            if chunk.get("content"):
-                response_content.append(chunk["content"])
+        # Collect content
+        if chunk.get("content"):
+            response_content.append(chunk["content"])
 
-        return ChatResponse(
-            response="\n".join(response_content),
-            session_id=new_session_id,
-            metadata={"mode": request.mode, "sdk": request.agent_sdk}
-        )
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported agent_sdk: {request.agent_sdk}. Currently only 'claude' is supported."
-        )
+    return ChatResponse(
+        response="\n".join(response_content),
+        session_id=new_session_id,
+        metadata={"mode": request.mode}
+    )
 
 
 @router.post("/chat/stream", dependencies=[Depends(verify_auth_token)])
@@ -162,75 +154,70 @@ async def chat_stream(request: ChatRequest):
       "session_id": str,
       ...
     }
+
+    SDK configuration (Anthropic vs MiniMax) is determined by settings files in the environment.
     """
-    if request.agent_sdk == "claude":
-        logger.info(f"Starting stream for mode={request.mode}, sdk={request.agent_sdk}, sdk_session_id={request.session_id}, backend_session_id={request.backend_session_id}, message={request.message[:50]}...")
+    logger.info(f"Starting stream for mode={request.mode}, sdk_session_id={request.session_id}, backend_session_id={request.backend_session_id}, message={request.message[:50]}...")
 
-        async def event_stream():
-            """Generate SSE events from SDK stream"""
-            event_count = 0
-            session_id_for_cleanup = request.session_id
-            try:
-                logger.info("Calling sdk_manager.send_message_stream()...")
-                async for chunk in sdk_manager.send_message_stream(
-                    message=request.message,
-                    session_id=request.session_id,
-                    backend_session_id=request.backend_session_id,
-                    system_prompt=request.system_prompt,  # Only use explicit override if provided
-                    mode=request.mode,
-                    agent_sdk=request.agent_sdk,
-                ):
-                    event_count += 1
-                    logger.info(f"[Stream event #{event_count}] Received chunk type={chunk.get('type')}, content_length={len(chunk.get('content', ''))}")
+    async def event_stream():
+        """Generate SSE events from SDK stream"""
+        event_count = 0
+        session_id_for_cleanup = request.session_id
+        try:
+            logger.info("Calling sdk_manager.send_message_stream()...")
+            async for chunk in sdk_manager.send_message_stream(
+                message=request.message,
+                session_id=request.session_id,
+                backend_session_id=request.backend_session_id,
+                system_prompt=request.system_prompt,  # Only use explicit override if provided
+                mode=request.mode,
+            ):
+                event_count += 1
+                logger.info(f"[Stream event #{event_count}] Received chunk type={chunk.get('type')}, content_length={len(chunk.get('content', ''))}")
 
-                    # Capture session_id for cleanup if this is a new session
-                    if chunk.get("type") == "session_created" and chunk.get("session_id"):
-                        session_id_for_cleanup = chunk.get("session_id")
+                # Capture session_id for cleanup if this is a new session
+                if chunk.get("type") == "session_created" and chunk.get("session_id"):
+                    session_id_for_cleanup = chunk.get("session_id")
 
-                    # Format as SSE event
-                    event_data = json.dumps(chunk)
-                    try:
-                        yield f"data: {event_data}\n\n"
-                    except (ConnectionResetError, BrokenPipeError) as conn_error:
-                        logger.warning(f"Client disconnected while streaming (event #{event_count}): {conn_error}")
-                        # Backend disconnected - SDK manager will continue and clean up in finally block
-                        # We can't send more data, so break the loop
-                        break
-
-                logger.info(f"SDK stream completed. Total events: {event_count}")
-
-                # Send done event
-                logger.info("Sending final done event")
+                # Format as SSE event
+                event_data = json.dumps(chunk)
                 try:
-                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                    yield f"data: {event_data}\n\n"
                 except (ConnectionResetError, BrokenPipeError) as conn_error:
-                    logger.warning(f"Client disconnected before done event: {conn_error}")
+                    logger.warning(f"Client disconnected while streaming (event #{event_count}): {conn_error}")
+                    # Backend disconnected - SDK manager will continue and clean up in finally block
+                    # We can't send more data, so break the loop
+                    break
 
-            except Exception as e:
-                logger.error(f"Stream error: {e}", exc_info=True)
-                error_event = json.dumps({
-                    "type": "error",
-                    "content": str(e),
-                    "error_type": type(e).__name__,
-                })
-                try:
-                    yield f"data: {error_event}\n\n"
-                except (ConnectionResetError, BrokenPipeError):
-                    logger.warning("Client disconnected before error event could be sent")
+            logger.info(f"SDK stream completed. Total events: {event_count}")
 
-        return StreamingResponse(
-            event_stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",  # Disable nginx buffering
-            }
-        )
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported agent_sdk: {request.agent_sdk}. Currently only 'claude' is supported."
-        )
+            # Send done event
+            logger.info("Sending final done event")
+            try:
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            except (ConnectionResetError, BrokenPipeError) as conn_error:
+                logger.warning(f"Client disconnected before done event: {conn_error}")
+
+        except Exception as e:
+            logger.error(f"Stream error: {e}", exc_info=True)
+            error_event = json.dumps({
+                "type": "error",
+                "content": str(e),
+                "error_type": type(e).__name__,
+            })
+            try:
+                yield f"data: {error_event}\n\n"
+            except (ConnectionResetError, BrokenPipeError):
+                logger.warning("Client disconnected before error event could be sent")
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        }
+    )
 
 
 @router.post("/chat/interrupt/{session_id}", dependencies=[Depends(verify_auth_token)])

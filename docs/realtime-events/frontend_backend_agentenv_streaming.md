@@ -64,11 +64,12 @@ Orchestrates pending message processing and environment activation:
 - Event format: `{session_id, event_type, data, timestamp}`
 - Uses Socket.IO server's room-based broadcasting
 
-**Agent Environment** (unchanged):
+**Agent Environment** (multi-adapter architecture):
 - Receives message via SSE stream (`routes.py:chat_stream`)
-- Creates/resumes SDK client via `sdk_manager.py:send_message_stream`
-- Streams responses via SDK
-- Yields SSE events (assistant, tool, thinking, result)
+- `sdk_manager.py:SDKManager` selects adapter based on `SDK_ADAPTER_*` ENV variables
+- Adapter (e.g., `ClaudeCodeAdapter`) creates/resumes SDK client
+- Streams responses via SDK, converts to unified `SDKEvent` format
+- Yields SSE events (session_created, assistant, tool, thinking, done, error, interrupted)
 
 ### 2. Streaming Response
 
@@ -337,10 +338,14 @@ Backend-to-agent-env SSE errors handled same as before, yielded as error events,
 - `services/active_streaming_manager.py` - Stream tracking
 - `main.py` - Event handler registration on startup
 
-### Agent Environment (unchanged)
+### Agent Environment (multi-adapter architecture)
 - `env-templates/python-env-advanced/app/core/server/routes.py` - SSE endpoints
-- `env-templates/python-env-advanced/app/core/server/sdk_manager.py` - SDK streaming
-- `env-templates/python-env-advanced/app/core/server/sdk_utils.py` - Message formatting
+- `env-templates/python-env-advanced/app/core/server/sdk_manager.py` - Multi-adapter SDK manager
+- `env-templates/python-env-advanced/app/core/server/adapters/` - Adapter implementations
+  - `base.py` - `SDKEvent`, `SDKEventType`, `SDKConfig`, `BaseSDKAdapter`, `AdapterRegistry`
+  - `claude_code.py` - `ClaudeCodeAdapter` for claude-code/* variants
+  - `google_adk.py` - `GoogleADKAdapter` placeholder for google-adk-wr/*
+- `env-templates/python-env-advanced/app/core/server/sdk_utils.py` - Logging utilities
 - `env-templates/python-env-advanced/app/core/server/active_session_manager.py` - Interrupt tracking
 
 ## Transport Layer Summary

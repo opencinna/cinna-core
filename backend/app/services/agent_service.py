@@ -423,7 +423,6 @@ class AgentService:
                 agent_id=target_agent_id,
                 title=f"Handover from {target_agent_name}",
                 mode="conversation",
-                agent_sdk="claude"
             )
 
             new_session = SessionService.create_session(

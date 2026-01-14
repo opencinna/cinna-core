@@ -402,7 +402,6 @@ class MessageService:
                 auth_headers = MessageService.get_auth_headers(environment)
                 external_session_id = chat_session.session_metadata.get("external_session_id")
                 session_mode = chat_session.mode or "conversation"
-                agent_sdk = chat_session.agent_sdk or "claude"
                 environment_id = environment.id
 
                 # Store message IDs for marking as sent later
@@ -428,7 +427,6 @@ class MessageService:
                 auth_headers=auth_headers,
                 user_message_content=concatenated_content,
                 session_mode=session_mode,
-                agent_sdk=agent_sdk,
                 external_session_id=external_session_id,
                 get_fresh_db_session=get_fresh_db_session
             ):
@@ -577,7 +575,6 @@ class MessageService:
         auth_headers: dict,
         user_message: str,
         mode: str,
-        agent_sdk: str = "claude",
         external_session_id: str | None = None,
         backend_session_id: str | None = None
     ) -> AsyncIterator[dict]:
@@ -597,7 +594,6 @@ class MessageService:
             auth_headers: Authentication headers
             user_message: User's message content
             mode: Session mode ("building" or "conversation")
-            agent_sdk: SDK to use ("claude" is currently the only option)
             external_session_id: Optional external SDK session ID for resumption
 
         Yields:
@@ -609,14 +605,13 @@ class MessageService:
         payload = {
             "message": user_message,
             "mode": mode,
-            "agent_sdk": agent_sdk,
             "session_id": external_session_id,
             "backend_session_id": backend_session_id,
         }
 
         logger.info(
             f"Sending message to {base_url}/chat/stream "
-            f"(mode={mode}, agent_sdk={agent_sdk}, external_session_id={external_session_id})"
+            f"(mode={mode}, external_session_id={external_session_id})"
         )
 
         try:
@@ -670,7 +665,6 @@ class MessageService:
         auth_headers: dict,
         user_message_content: str,
         session_mode: str,
-        agent_sdk: str,
         external_session_id: str | None,
         get_fresh_db_session: callable
     ) -> AsyncIterator[dict]:
@@ -692,7 +686,6 @@ class MessageService:
             auth_headers: Environment auth headers
             user_message_content: User's message
             session_mode: "building" or "conversation"
-            agent_sdk: SDK to use ("claude" is currently the only option)
             external_session_id: External SDK session ID (None for new)
             get_fresh_db_session: Callable that returns a fresh DB session (context manager)
 
@@ -733,7 +726,6 @@ class MessageService:
                     "session_id": str(session_id),
                     "environment_id": str(environment_id),
                     "session_mode": session_mode,
-                    "agent_sdk": agent_sdk
                 },
                 user_id=user_id
             )
@@ -751,7 +743,6 @@ class MessageService:
         response_metadata = {
             "external_session_id": external_session_id,
             "mode": session_mode,
-            "agent_sdk": agent_sdk
         }
 
         try:
@@ -761,7 +752,6 @@ class MessageService:
                 auth_headers=auth_headers,
                 user_message=user_message_content,
                 mode=session_mode,
-                agent_sdk=agent_sdk,
                 external_session_id=external_session_id,
                 backend_session_id=str(session_id)
             ):
@@ -894,7 +884,7 @@ class MessageService:
                                         db=db,
                                         session=chat_session_db,
                                         external_session_id=new_external_session_id
-                                        # sdk_type will default to chat_session_db.agent_sdk
+                                        # sdk_type is optional
                                     )
                         await asyncio.to_thread(_store_session_id)
 
@@ -964,7 +954,6 @@ class MessageService:
                             initial_metadata = {
                                 "external_session_id": new_external_session_id,
                                 "mode": session_mode,
-                                "agent_sdk": agent_sdk,
                                 "streaming_in_progress": True  # Mark as incomplete
                             }
                             message = MessageService.create_message(

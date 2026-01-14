@@ -21,6 +21,9 @@ services:
       - CLAUDE_CODE_PERMISSION_MODE=acceptEdits
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - DUMP_LLM_SESSION=${DUMP_LLM_SESSION:-true}
+      # SDK Adapter Configuration - tells agent-env which adapter to use per mode
+      - SDK_ADAPTER_BUILDING=${SDK_ADAPTER_BUILDING:-claude-code/anthropic}
+      - SDK_ADAPTER_CONVERSATION=${SDK_ADAPTER_CONVERSATION:-claude-code/anthropic}
 
     # NO port exposure - communication via agent-bridge network only
     # Backend connects via http://agent-${ENV_ID}:${AGENT_PORT}

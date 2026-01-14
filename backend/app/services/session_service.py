@@ -29,7 +29,6 @@ class SessionService:
             user_workspace_id=agent.user_workspace_id,
             title=data.title,
             mode=data.mode,
-            agent_sdk=data.agent_sdk,
         )
         db_session.add(session)
         db_session.commit()
@@ -142,7 +141,7 @@ class SessionService:
     def set_external_session_id(
         db: DBSession,
         session: Session,
-        external_session_id: str,
+        external_session_id: str | None,
         sdk_type: str | None = None
     ) -> Session:
         """
@@ -152,11 +151,17 @@ class SessionService:
         Args:
             db: Database session
             session: Session to update
-            external_session_id: External SDK session ID
-            sdk_type: SDK type (if None, uses session.agent_sdk)
+            external_session_id: External SDK session ID (None to clear)
+            sdk_type: SDK type (optional)
         """
-        session.session_metadata["external_session_id"] = external_session_id
-        session.session_metadata["sdk_type"] = sdk_type or session.agent_sdk
+        if external_session_id is not None:
+            session.session_metadata["external_session_id"] = external_session_id
+            if sdk_type:
+                session.session_metadata["sdk_type"] = sdk_type
+        else:
+            # Clear external session ID
+            session.session_metadata.pop("external_session_id", None)
+            session.session_metadata.pop("sdk_type", None)
 
         # Mark metadata as modified for SQLAlchemy
         flag_modified(session, "session_metadata")

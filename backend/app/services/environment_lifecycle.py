@@ -1082,9 +1082,11 @@ CLAUDE_CODE_PERMISSION_MODE=acceptEdits
 # AI Service Credentials (passed to container)
 {anthropic_env_line}
 
-# SDK Configuration
-AGENT_SDK_CONVERSATION={sdk_conversation}
-AGENT_SDK_BUILDING={sdk_building}
+# SDK Adapter Configuration
+# These variables tell the agent-env which adapter to use for each mode
+# Format: <adapter-type>/<provider> (e.g., claude-code/anthropic, claude-code/minimax, google-adk-wr/gemini)
+SDK_ADAPTER_BUILDING={sdk_building}
+SDK_ADAPTER_CONVERSATION={sdk_conversation}
 """
 
         env_path = instance_dir / ".env"
