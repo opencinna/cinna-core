@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Trash2, AlertCircle } from "lucide-react"
+import { Trash2, AlertCircle, MessageCircle, Wrench } from "lucide-react"
 import { UsersService } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -252,7 +252,7 @@ export function AICredentialsSettings() {
             Select default AI SDKs for new environments. These can be overridden per environment.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-6">
+        <CardContent className="space-y-4">
           {/* Validation Warning */}
           {missingKeyWarning && (
             <Alert variant="destructive">
@@ -262,14 +262,26 @@ export function AICredentialsSettings() {
           )}
 
           {/* Conversation Mode SDK */}
-          <div className="space-y-2">
-            <Label htmlFor="sdk-conversation">Conversation Mode SDK</Label>
+          <div className="flex items-center justify-between gap-4 py-2">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-500/10">
+                <MessageCircle className="h-4 w-4 text-blue-500" />
+              </div>
+              <div>
+                <Label htmlFor="sdk-conversation" className="text-sm font-medium">
+                  Conversation Mode
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Following predefined workflows
+                </p>
+              </div>
+            </div>
             <Select
               value={status?.default_sdk_conversation || "claude-code/anthropic"}
               onValueChange={(value) => updateSdkMutation.mutate({ default_sdk_conversation: value })}
               disabled={updateSdkMutation.isPending}
             >
-              <SelectTrigger id="sdk-conversation">
+              <SelectTrigger id="sdk-conversation" className="w-[180px]">
                 <SelectValue placeholder="Select SDK" />
               </SelectTrigger>
               <SelectContent>
@@ -281,20 +293,29 @@ export function AICredentialsSettings() {
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-sm text-muted-foreground">
-              SDK used when chatting with agents
-            </p>
           </div>
 
           {/* Building Mode SDK */}
-          <div className="space-y-2">
-            <Label htmlFor="sdk-building">Building Mode SDK</Label>
+          <div className="flex items-center justify-between gap-4 py-2">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-orange-500/10">
+                <Wrench className="h-4 w-4 text-orange-500" />
+              </div>
+              <div>
+                <Label htmlFor="sdk-building" className="text-sm font-medium">
+                  Building Mode
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Building workflows and integrations
+                </p>
+              </div>
+            </div>
             <Select
               value={status?.default_sdk_building || "claude-code/anthropic"}
               onValueChange={(value) => updateSdkMutation.mutate({ default_sdk_building: value })}
               disabled={updateSdkMutation.isPending}
             >
-              <SelectTrigger id="sdk-building">
+              <SelectTrigger id="sdk-building" className="w-[180px]">
                 <SelectValue placeholder="Select SDK" />
               </SelectTrigger>
               <SelectContent>
@@ -306,9 +327,6 @@ export function AICredentialsSettings() {
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-sm text-muted-foreground">
-              SDK used when agents build and execute tasks
-            </p>
           </div>
         </CardContent>
       </Card>

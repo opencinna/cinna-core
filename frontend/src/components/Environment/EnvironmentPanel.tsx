@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Tabs } from "@/components/ui/tabs"
-import { WorkspaceService, OpenAPI, AgentsService, CredentialsService } from "@/client"
+import { WorkspaceService, OpenAPI, AgentsService, CredentialsService, EnvironmentsService } from "@/client"
 import type { AxiosRequestConfig } from "axios"
 import { TabHeader } from "./TabHeader"
 import { WorkspaceTabContent } from "./WorkspaceTabContent"
 import { CredentialsTabContent } from "./CredentialsTabContent"
 import { LoadingState, ErrorState, NoEnvironmentState } from "./StateComponents"
+import { MessageCircle, Wrench } from "lucide-react"
 import { convertFileNodeToTreeItem, type FileNode } from "./utils"
 import type { TreeItem, DatabaseTableItem } from "./types"
 import useWorkspace from "@/hooks/useWorkspace"
@@ -20,6 +21,9 @@ interface WorkspaceTreeResponse {
   docs?: FileNode
   uploads?: FileNode
 }
+
+// Default SDK identifier
+const DEFAULT_SDK = "claude-code/anthropic"
 
 interface EnvironmentPanelProps {
   isOpen: boolean
@@ -64,6 +68,13 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
 
   const agentCredentials = agentCredentialsData?.data || []
   const allCredentials = allCredentialsData?.data || []
+
+  // Fetch environment details to get SDK info
+  const { data: environmentData } = useQuery({
+    queryKey: ["environment", environmentId],
+    queryFn: () => EnvironmentsService.getEnvironment({ id: environmentId! }),
+    enabled: isOpen && !!environmentId,
+  })
 
   // Check if a credential is shared with the agent
   const isCredentialShared = useCallback((credentialId: string) => {
@@ -327,6 +338,20 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
           )
         )}
       </Tabs>
+
+      {/* SDK Status Footer */}
+      {environmentData && (
+        <div className="px-3 py-2 border-t border-border text-xs text-muted-foreground opacity-30 flex items-center gap-3">
+          <div className="flex items-center gap-1">
+            <MessageCircle className="h-3 w-3" />
+            <span>{environmentData.agent_sdk_conversation || DEFAULT_SDK}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <Wrench className="h-3 w-3" />
+            <span>{environmentData.agent_sdk_building || DEFAULT_SDK}</span>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

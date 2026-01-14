@@ -2,26 +2,28 @@
 
 ## Purpose
 
-Enable users to select different AI SDK providers (Anthropic Claude or MiniMax M2) per agent environment, with automatic configuration and API key management.
+Enable users to select different AI SDK providers (Anthropic Claude or MiniMax M2) per agent environment, with automatic configuration, API key management, and user-level default preferences.
 
 ## Feature Overview
 
 **Flow:**
 1. User saves API keys (Anthropic, MiniMax) in User Settings
-2. User creates environment → selects SDK for conversation mode and building mode
-3. Backend validates user has required API keys for selected SDKs
-4. Backend generates environment with SDK-specific configuration files
-5. Agent-env detects settings files at runtime and configures SDK client accordingly
+2. User optionally sets default SDK preferences for conversation and building modes
+3. User creates environment → SDK defaults populated from user preferences (can override per environment)
+4. Backend validates user has required API keys for selected SDKs
+5. Backend generates environment with SDK-specific configuration files
+6. Agent-env detects settings files at runtime and configures SDK client accordingly
 
 ## Architecture
 
 ```
-User Settings → Environment Creation → Env Generation → Agent-Env Runtime
-(API Keys)      (SDK Selection)        (Settings Files)  (SDK Client Config)
+User Settings → Default SDK Prefs → Environment Creation → Env Generation → Agent-Env Runtime
+(API Keys)      (User Defaults)     (SDK Selection)        (Settings Files)  (SDK Client Config)
 ```
 
 **Configuration Locations:**
 - **User API Keys:** `ai_service_credentials` table (encrypted)
+- **User Default SDKs:** `user` table fields (`default_sdk_conversation`, `default_sdk_building`)
 - **Environment SDK Selection:** `agent_environment` table fields
 - **SDK Settings Files:** `{instance_dir}/app/core/.claude/` (auto-generated)
 
@@ -53,8 +55,15 @@ User Settings → Environment Creation → Env Generation → Agent-Env Runtime
 **Migrations:**
 - Phase 1: (minimax_api_key added to ai_service_credentials - existing)
 - Phase 2: `backend/app/alembic/versions/776395044d2b_add_agent_sdk_fields_to_environment.py`
+- Phase 3: `backend/app/alembic/versions/c8d9e0f1a2b3_add_default_sdk_fields_to_user.py`
 
 **Models:**
+
+**User:** `backend/app/models/user.py`
+- `User` - Added `default_sdk_conversation`, `default_sdk_building` fields
+- `UserUpdateMe` - Added SDK preference fields for user updates
+- `UserPublic` - Exposes SDK defaults in API responses
+- SDK Constants: `SDK_ANTHROPIC`, `SDK_MINIMAX`, `VALID_SDK_OPTIONS`
 
 **User AI Credentials:** `backend/app/models/user.py`
 - `AIServiceCredentials` - Added `minimax_api_key: str | None`
@@ -70,9 +79,11 @@ User Settings → Environment Creation → Env Generation → Agent-Env Runtime
 
 ### API Routes
 
-**User AI Credentials:** `backend/app/api/routes/users.py`
-- `GET /api/v1/users/me/ai-credentials/status` - Returns `has_minimax_api_key` flag
-- `PUT /api/v1/users/me/ai-credentials` - Accepts `minimax_api_key` for update
+**User Settings:** `backend/app/api/routes/users.py`
+- `GET /api/v1/users/me` - Returns user with `default_sdk_conversation`, `default_sdk_building`
+- `PATCH /api/v1/users/me` - Updates user SDK defaults (validates against `VALID_SDK_OPTIONS`)
+- `GET /api/v1/users/me/ai-credentials/status` - Returns `has_minimax_api_key` flag + SDK defaults
+- `PATCH /api/v1/users/me/ai-credentials` - Accepts `minimax_api_key` for update
 
 **Environment Creation:** `backend/app/api/routes/agents.py`
 - `POST /api/v1/agents/{id}/environments` - Accepts `agent_sdk_conversation`, `agent_sdk_building`
@@ -82,7 +93,7 @@ User Settings → Environment Creation → Env Generation → Agent-Env Runtime
 **Environment Service:** `backend/app/services/environment_service.py`
 - SDK Constants: `SDK_ANTHROPIC`, `SDK_MINIMAX`, `DEFAULT_SDK`, `VALID_SDK_OPTIONS`
 - `SDK_API_KEY_MAP` - Maps SDK IDs to required API key field names
-- `create_environment()` - Validates SDK values, checks user has required API keys
+- `create_environment()` - Uses user's default SDK preferences, validates values, checks API keys
 
 **Environment Lifecycle:** `backend/app/services/environment_lifecycle.py`
 - `create_environment_instance()` - Accepts `minimax_api_key` parameter
@@ -103,12 +114,16 @@ User Settings → Environment Creation → Env Generation → Agent-Env Runtime
 ### Components
 
 **AI Credentials Settings:** `frontend/src/components/UserSettings/AICredentials.tsx`
-- MiniMax API key input field with save/delete mutations
-- Shows configured status badge
-- Link to MiniMax Platform for obtaining keys
+- Two-column layout: API credentials (left) + Default SDK Preferences (right)
+- Left card: Anthropic and MiniMax API key inputs with save/delete mutations
+- Right card: Dropdowns for default conversation and building mode SDKs
+- UI-level validation: Shows alert when selected SDK is missing required API key
+- SDK options show "(API key required)" indicator when key not configured
+- Helper: `SDK_OPTIONS` array, `getSDKDisplayName()`, `hasRequiredKey()`
 
 **Add Environment Dialog:** `frontend/src/components/Environments/AddEnvironment.tsx`
 - Dropdown selects for `agent_sdk_conversation` and `agent_sdk_building`
+- Defaults populated from user's SDK preferences
 - Validates user has required API keys before enabling create button
 - Shows warning if keys are missing with link to settings
 
@@ -121,7 +136,12 @@ User Settings → Environment Creation → Env Generation → Agent-Env Runtime
 
 **AI Credentials Query:** `useQuery(["aiCredentialsStatus"])`
 - Fetches `has_anthropic_api_key`, `has_minimax_api_key` flags
-- Used by AddEnvironment to validate SDK selection
+- Fetches `default_sdk_conversation`, `default_sdk_building` preferences
+- Used by AICredentials for SDK preference display and AddEnvironment for defaults
+
+**SDK Update Mutation:** `useMutation` in AICredentials
+- Calls `UsersService.updateUserMe()` with SDK preference changes
+- Invalidates both `aiCredentialsStatus` and `currentUser` queries
 
 ## Agent-Env Implementation
 
@@ -152,10 +172,11 @@ User Settings → Environment Creation → Env Generation → Agent-Env Runtime
 ## Key Integration Points
 
 **Environment Creation Flow:** `backend/app/services/environment_service.py:create_environment()`
-1. Validate SDK values in allowed list
-2. Check user has required API keys via `SDK_API_KEY_MAP`
-3. Create environment record with SDK fields
-4. Pass API keys to background task
+1. Get SDK values from request, or fall back to user's defaults, or global default
+2. Validate SDK values in allowed list
+3. Check user has required API keys via `SDK_API_KEY_MAP`
+4. Create environment record with SDK fields
+5. Pass API keys to background task
 
 **Env Generation Flow:** `backend/app/services/environment_lifecycle.py:_generate_env_file()`
 1. Determine which SDKs are used (conversation, building)
@@ -181,7 +202,9 @@ User Settings → Environment Creation → Env Generation → Agent-Env Runtime
 - Models: `backend/app/models/user.py`, `backend/app/models/environment.py`
 - Services: `backend/app/services/environment_service.py`, `backend/app/services/environment_lifecycle.py`
 - Routes: `backend/app/api/routes/users.py`, `backend/app/api/routes/agents.py`
-- Migration: `backend/app/alembic/versions/776395044d2b_add_agent_sdk_fields_to_environment.py`
+- Migrations:
+  - `backend/app/alembic/versions/776395044d2b_add_agent_sdk_fields_to_environment.py`
+  - `backend/app/alembic/versions/c8d9e0f1a2b3_add_default_sdk_fields_to_user.py`
 
 **Frontend:**
 - Components: `frontend/src/components/UserSettings/AICredentials.tsx`, `frontend/src/components/Environments/AddEnvironment.tsx`, `frontend/src/components/Environments/EnvironmentCard.tsx`
@@ -194,13 +217,13 @@ User Settings → Environment Creation → Env Generation → Agent-Env Runtime
 ## Constraints
 
 - SDK selection is **immutable** after environment creation
-- Empty SDK fields default to `claude-code/anthropic` for backward compatibility
+- Empty SDK fields default to user's preferences, then `claude-code/anthropic` for backward compatibility
 - User must have valid API key before creating environment with that SDK
 - MiniMax uses Anthropic-compatible API format (same client, different base URL)
 - Settings files are regenerated after environment rebuild
 
 ---
 
-**Document Version:** 1.0
+**Document Version:** 1.1
 **Last Updated:** 2026-01-14
-**Status:** Fully Implemented (Phase 1 + Phase 2)
+**Status:** Fully Implemented (Phase 1 + Phase 2 + Phase 3: User Default SDK Preferences)
