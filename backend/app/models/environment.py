@@ -21,6 +21,9 @@ class AgentEnvironment(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     last_health_check: datetime | None = None
     last_activity_at: datetime | None = None  # Last time environment was actively used (message sent, session opened, etc.)
+    # SDK selection for agent (immutable after creation)
+    agent_sdk_conversation: str | None = None  # "claude-code/anthropic" | "claude-code/minimax"
+    agent_sdk_building: str | None = None  # "claude-code/anthropic" | "claude-code/minimax"
 
 
 # Pydantic Schemas
@@ -30,6 +33,8 @@ class AgentEnvironmentCreate(SQLModel):
     instance_name: str = "Instance"
     type: str = "docker"  # "docker" | "remote_ssh" | "remote_http"
     config: dict = {}
+    agent_sdk_conversation: str | None = None  # "claude-code/anthropic" | "claude-code/minimax"
+    agent_sdk_building: str | None = None  # "claude-code/anthropic" | "claude-code/minimax"
 
 
 class AgentEnvironmentUpdate(SQLModel):
@@ -51,6 +56,8 @@ class AgentEnvironmentPublic(SQLModel):
     updated_at: datetime
     last_health_check: datetime | None
     last_activity_at: datetime | None
+    agent_sdk_conversation: str | None
+    agent_sdk_building: str | None
 
 
 class AgentEnvironmentsPublic(SQLModel):

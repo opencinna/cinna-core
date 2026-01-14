@@ -332,6 +332,17 @@ export const AIServiceCredentialsSchema = {
                 }
             ],
             title: 'Google Ai Api Key'
+        },
+        minimax_api_key: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Minimax Api Key'
         }
     },
     type: 'object',
@@ -373,6 +384,17 @@ export const AIServiceCredentialsUpdateSchema = {
                 }
             ],
             title: 'Google Ai Api Key'
+        },
+        minimax_api_key: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Minimax Api Key'
         }
     },
     type: 'object',
@@ -819,6 +841,28 @@ export const AgentEnvironmentCreateSchema = {
             type: 'object',
             title: 'Config',
             default: {}
+        },
+        agent_sdk_conversation: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Sdk Conversation'
+        },
+        agent_sdk_building: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Sdk Building'
         }
     },
     type: 'object',
@@ -906,10 +950,32 @@ export const AgentEnvironmentPublicSchema = {
                 }
             ],
             title: 'Last Activity At'
+        },
+        agent_sdk_conversation: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Sdk Conversation'
+        },
+        agent_sdk_building: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Sdk Building'
         }
     },
     type: 'object',
-    required: ['id', 'agent_id', 'env_name', 'env_version', 'instance_name', 'type', 'status', 'status_message', 'is_active', 'created_at', 'updated_at', 'last_health_check', 'last_activity_at'],
+    required: ['id', 'agent_id', 'env_name', 'env_version', 'instance_name', 'type', 'status', 'status_message', 'is_active', 'created_at', 'updated_at', 'last_health_check', 'last_activity_at', 'agent_sdk_conversation', 'agent_sdk_building'],
     title: 'AgentEnvironmentPublic'
 } as const;
 
@@ -4562,6 +4628,30 @@ export const UserPublicSchema = {
             type: 'boolean',
             title: 'Has Password',
             default: false
+        },
+        default_sdk_conversation: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Sdk Conversation',
+            default: 'claude-code/anthropic'
+        },
+        default_sdk_building: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Sdk Building',
+            default: 'claude-code/anthropic'
         }
     },
     type: 'object',
@@ -4626,6 +4716,30 @@ export const UserPublicWithAICredentialsSchema = {
             title: 'Has Password',
             default: false
         },
+        default_sdk_conversation: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Sdk Conversation',
+            default: 'claude-code/anthropic'
+        },
+        default_sdk_building: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Sdk Building',
+            default: 'claude-code/anthropic'
+        },
         has_anthropic_api_key: {
             type: 'boolean',
             title: 'Has Anthropic Api Key',
@@ -4639,6 +4753,11 @@ export const UserPublicWithAICredentialsSchema = {
         has_google_ai_api_key: {
             type: 'boolean',
             title: 'Has Google Ai Api Key',
+            default: false
+        },
+        has_minimax_api_key: {
+            type: 'boolean',
+            title: 'Has Minimax Api Key',
             default: false
         }
     },
@@ -4785,6 +4904,30 @@ export const UserUpdateMeSchema = {
                 }
             ],
             title: 'Username'
+        },
+        default_sdk_conversation: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 50
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Sdk Conversation'
+        },
+        default_sdk_building: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 50
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Sdk Building'
         }
     },
     type: 'object',

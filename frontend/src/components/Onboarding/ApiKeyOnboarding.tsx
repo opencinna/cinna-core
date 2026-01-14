@@ -142,7 +142,7 @@ export function ApiKeyOnboarding({ onComplete }: ApiKeyOnboardingProps) {
           <p>
             Get your API key from{" "}
             <a
-              href="https://platform.claude.ai/settings/keys"
+              href="https://platform.claude.com/settings/keys"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-violet-600 dark:text-violet-400 hover:underline font-medium"

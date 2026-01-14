@@ -13,6 +13,18 @@ from .environment_lifecycle import EnvironmentLifecycleManager
 
 logger = logging.getLogger(__name__)
 
+# SDK Provider Constants
+SDK_ANTHROPIC = "claude-code/anthropic"
+SDK_MINIMAX = "claude-code/minimax"
+DEFAULT_SDK = SDK_ANTHROPIC
+VALID_SDK_OPTIONS = [SDK_ANTHROPIC, SDK_MINIMAX]
+
+# SDK to required API key mapping
+SDK_API_KEY_MAP = {
+    SDK_ANTHROPIC: "anthropic_api_key",
+    SDK_MINIMAX: "minimax_api_key",
+}
+
 
 def generate_environment_name() -> str:
     """Generate a memorable 3-word name with dashes (e.g., 'brave-blue-dragon')"""
@@ -77,7 +89,8 @@ class EnvironmentService:
         env_id: UUID,
         agent_id: UUID,
         anthropic_api_key: str | None = None,
-        auto_start: bool = False
+        auto_start: bool = False,
+        minimax_api_key: str | None = None
     ):
         """
         Background task to create environment instance.
@@ -88,6 +101,7 @@ class EnvironmentService:
             agent_id: Agent ID
             anthropic_api_key: User's Anthropic API key
             auto_start: If True, automatically start and activate after build
+            minimax_api_key: User's MiniMax API key
         """
         # Create new database session for background task
         with Session(engine) as session:
@@ -102,7 +116,7 @@ class EnvironmentService:
                 # Run creation process
                 lifecycle_manager = EnvironmentService.get_lifecycle_manager()
                 await lifecycle_manager.create_environment_instance(
-                    session, environment, agent, anthropic_api_key
+                    session, environment, agent, anthropic_api_key, minimax_api_key
                 )
 
                 # Auto-start if requested (typically for default agent environments)
@@ -205,9 +219,10 @@ class EnvironmentService:
         Create environment for agent.
 
         Steps:
-        1. Create DB record with status "creating"
-        2. Spawn background task to build Docker instance (non-blocking)
-        3. Return immediately - client can poll status endpoint
+        1. Validate SDK values and required API keys
+        2. Create DB record with status "creating"
+        3. Spawn background task to build Docker instance (non-blocking)
+        4. Return immediately - client can poll status endpoint
 
         Args:
             session: Database session
@@ -226,7 +241,31 @@ class EnvironmentService:
 
         # Get user's AI credentials
         ai_credentials = crud.get_user_ai_credentials(user=user)
+
+        # Normalize SDK values (use user's defaults, then fall back to global default)
+        sdk_conversation = data.agent_sdk_conversation or user.default_sdk_conversation or DEFAULT_SDK
+        sdk_building = data.agent_sdk_building or user.default_sdk_building or DEFAULT_SDK
+
+        # Validate SDK values
+        if sdk_conversation not in VALID_SDK_OPTIONS:
+            raise ValueError(f"Invalid agent_sdk_conversation: {sdk_conversation}. Valid options: {VALID_SDK_OPTIONS}")
+        if sdk_building not in VALID_SDK_OPTIONS:
+            raise ValueError(f"Invalid agent_sdk_building: {sdk_building}. Valid options: {VALID_SDK_OPTIONS}")
+
+        # Collect required SDKs and validate user has API keys
+        required_sdks = set([sdk_conversation, sdk_building])
+        for sdk in required_sdks:
+            required_key = SDK_API_KEY_MAP.get(sdk)
+            if required_key and ai_credentials:
+                key_value = getattr(ai_credentials, required_key, None)
+                if not key_value:
+                    raise ValueError(f"Missing required API key '{required_key}' for SDK '{sdk}'. Please add it in user settings.")
+            elif required_key and not ai_credentials:
+                raise ValueError(f"Missing required API key '{required_key}' for SDK '{sdk}'. Please add it in user settings.")
+
+        # Get API keys for the selected SDKs
         anthropic_api_key = ai_credentials.anthropic_api_key if ai_credentials else None
+        minimax_api_key = ai_credentials.minimax_api_key if ai_credentials else None
 
         # Generate a memorable instance name if not provided
         instance_name = data.instance_name if data.instance_name != "Instance" else generate_environment_name()
@@ -237,7 +276,9 @@ class EnvironmentService:
                 "agent_id": agent_id,
                 "instance_name": instance_name,
                 "status": "creating",
-                "status_message": "Initializing environment creation..."
+                "status_message": "Initializing environment creation...",
+                "agent_sdk_conversation": sdk_conversation,
+                "agent_sdk_building": sdk_building,
             }
         )
         session.add(environment)
@@ -248,7 +289,7 @@ class EnvironmentService:
         # This allows the API to return immediately while the build happens asynchronously
         asyncio.create_task(
             EnvironmentService._create_environment_background(
-                environment.id, agent_id, anthropic_api_key, auto_start
+                environment.id, agent_id, anthropic_api_key, auto_start, minimax_api_key
             )
         )
 

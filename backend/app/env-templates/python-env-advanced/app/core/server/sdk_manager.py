@@ -254,6 +254,15 @@ class ClaudeCodeSDKManager:
                     stderr=stderr_capture,  # Capture CLI stderr output
                 )
 
+                # Check for SDK settings file (used for MiniMax and other custom SDK configurations)
+                # Settings files are created by backend when environment uses a non-default SDK
+                # Files are stored in /app/core/.claude/ which is part of the core directory
+                settings_file_name = "building_settings.json" if mode == "building" else "conversation_settings.json"
+                settings_file_path = Path("/app/core/.claude") / settings_file_name
+                if settings_file_path.exists():
+                    options.settings = str(settings_file_path)
+                    logger.info(f"Using SDK settings file: {settings_file_path}")
+
                 # Add custom tools for building mode
                 if mode == "building":
                     try:

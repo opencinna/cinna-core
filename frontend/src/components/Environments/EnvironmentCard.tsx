@@ -1,11 +1,19 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
 import { EnvironmentsService } from "@/client"
 import type { AgentEnvironmentPublic } from "@/client"
 import { EnvironmentStatusBadge } from "./EnvironmentStatusBadge"
-import { Play, Trash2, RefreshCw, Pause, Loader2 } from "lucide-react"
+import { Play, Trash2, RefreshCw, Pause, Loader2, Wrench, MessageCircle } from "lucide-react"
 import useCustomToast from "@/hooks/useCustomToast"
+
+// Helper to get SDK display name
+const getSDKDisplayName = (sdk: string | null | undefined): string => {
+  if (!sdk || sdk === "claude-code/anthropic") return "Anthropic"
+  if (sdk === "claude-code/minimax") return "MiniMax"
+  return sdk
+}
 
 interface EnvironmentCardProps {
   environment: AgentEnvironmentPublic
@@ -116,6 +124,17 @@ export function EnvironmentCard({ environment, agentId, onActivate }: Environmen
               <span className="font-medium">Status:</span>{" "}
               <EnvironmentStatusBadge status={environment.status} />
             </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-medium">SDK:</span>
+              <Badge variant="outline" className="text-xs gap-1">
+                <MessageCircle className="h-3 w-3" />
+                {getSDKDisplayName(environment.agent_sdk_conversation)}
+              </Badge>
+              <Badge variant="outline" className="text-xs gap-1">
+                <Wrench className="h-3 w-3" />
+                {getSDKDisplayName(environment.agent_sdk_building)}
+              </Badge>
+            </div>
             {environment.last_health_check && (
               <p>
                 <span className="font-medium">Last health check:</span>{" "}

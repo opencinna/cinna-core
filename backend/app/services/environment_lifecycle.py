@@ -107,7 +107,8 @@ class EnvironmentLifecycleManager:
         db_session: Session,
         environment: AgentEnvironment,
         agent: Agent,
-        anthropic_api_key: str | None = None
+        anthropic_api_key: str | None = None,
+        minimax_api_key: str | None = None
     ) -> bool:
         """
         Create environment instance:
@@ -121,6 +122,7 @@ class EnvironmentLifecycleManager:
             environment: Environment model
             agent: Agent model
             anthropic_api_key: User's Anthropic API key (optional)
+            minimax_api_key: User's MiniMax API key (optional)
 
         Returns:
             True if creation successful
@@ -166,7 +168,7 @@ class EnvironmentLifecycleManager:
             logger.debug(f"Allocated port {port} for environment {environment.id}")
 
             # 4. Update configuration files (auth token, compose, env)
-            self._update_environment_config(db_session, instance_dir, environment, agent, anthropic_api_key)
+            self._update_environment_config(db_session, instance_dir, environment, agent, anthropic_api_key, minimax_api_key)
 
             # 6. Build image
             environment.status = "building"
@@ -749,6 +751,28 @@ class EnvironmentLifecycleManager:
                 was_running=was_running
             )
 
+            # Regenerate SDK settings files after core replacement (MiniMax settings)
+            # These files are in /app/core/.claude/ which gets replaced during rebuild
+            sdk_conversation = environment.agent_sdk_conversation or "claude-code/anthropic"
+            sdk_building = environment.agent_sdk_building or "claude-code/anthropic"
+            uses_minimax = sdk_conversation == "claude-code/minimax" or sdk_building == "claude-code/minimax"
+
+            if uses_minimax:
+                # Fetch minimax API key from user credentials
+                user = db_session.get(User, agent.owner_id)
+                if user:
+                    ai_credentials = crud.get_user_ai_credentials(user=user)
+                    minimax_api_key = ai_credentials.minimax_api_key if ai_credentials else None
+                    if minimax_api_key:
+                        self._generate_minimax_settings_files(
+                            instance_dir,
+                            environment,
+                            minimax_api_key,
+                            sdk_building,
+                            sdk_conversation
+                        )
+                        logger.info(f"Regenerated MiniMax settings files after rebuild for environment {environment.id}")
+
             # If container was restarted, setup new container and sync data
             if was_running:
                 # Setup new container (install packages, etc.)
@@ -897,7 +921,8 @@ class EnvironmentLifecycleManager:
         instance_dir: Path,
         environment: AgentEnvironment,
         agent: Agent,
-        anthropic_api_key: str | None = None
+        anthropic_api_key: str | None = None,
+        minimax_api_key: str | None = None
     ):
         """
         Update environment configuration files.
@@ -906,6 +931,7 @@ class EnvironmentLifecycleManager:
         1. Auth token (JWT)
         2. docker-compose.yml
         3. .env file
+        4. SDK-specific settings files (for MiniMax)
 
         This should be called:
         - During initial environment creation
@@ -918,6 +944,7 @@ class EnvironmentLifecycleManager:
             environment: Environment model
             agent: Agent model
             anthropic_api_key: User's Anthropic API key (optional, if not provided will fetch from user settings)
+            minimax_api_key: User's MiniMax API key (optional, if not provided will fetch from user settings)
         """
         # 1. Generate new auth token
         auth_token = self._generate_auth_token(agent.owner_id)
@@ -930,20 +957,23 @@ class EnvironmentLifecycleManager:
         if not port:
             raise ValueError(f"Port not configured for environment {environment.id}")
 
-        # 3. Fetch ANTHROPIC_API_KEY from user AI credentials if not explicitly provided
-        if anthropic_api_key is None:
-            user = db_session.get(User, agent.owner_id)
-            if user:
-                ai_credentials = crud.get_user_ai_credentials(user=user)
-                anthropic_api_key = ai_credentials.anthropic_api_key if ai_credentials else None
-                if anthropic_api_key:
+        # 3. Fetch API keys from user AI credentials if not explicitly provided
+        user = db_session.get(User, agent.owner_id)
+        if user:
+            ai_credentials = crud.get_user_ai_credentials(user=user)
+            if ai_credentials:
+                if anthropic_api_key is None and ai_credentials.anthropic_api_key:
+                    anthropic_api_key = ai_credentials.anthropic_api_key
                     logger.debug(f"Fetched ANTHROPIC_API_KEY from user settings for environment {environment.id}")
+                if minimax_api_key is None and ai_credentials.minimax_api_key:
+                    minimax_api_key = ai_credentials.minimax_api_key
+                    logger.debug(f"Fetched MINIMAX_API_KEY from user settings for environment {environment.id}")
 
         # 4. Generate docker-compose.yml
         self._generate_compose_file(instance_dir, environment, agent, port, auth_token)
 
-        # 5. Generate .env file
-        self._generate_env_file(instance_dir, environment, agent, port, auth_token, anthropic_api_key)
+        # 5. Generate .env file and SDK settings files
+        self._generate_env_file(instance_dir, environment, agent, port, auth_token, anthropic_api_key, minimax_api_key)
 
         logger.info(f"Updated configuration files for environment {environment.id}")
 
@@ -997,14 +1027,27 @@ class EnvironmentLifecycleManager:
         agent: Agent,
         port: int,
         auth_token: str,
-        anthropic_api_key: str | None = None
+        anthropic_api_key: str | None = None,
+        minimax_api_key: str | None = None
     ):
-        """Generate .env files for docker-compose and application."""
+        """Generate .env files for docker-compose and application, and SDK settings files."""
         logger.debug(f"Generating .env files for environment {environment.id}")
 
-        # 1. Generate root .env file for docker-compose (without ANTHROPIC_API_KEY)
+        # Determine SDK providers for each mode (default to anthropic for backward compatibility)
+        sdk_conversation = environment.agent_sdk_conversation or "claude-code/anthropic"
+        sdk_building = environment.agent_sdk_building or "claude-code/anthropic"
+
+        # Check if Anthropic SDK is used in any mode
+        uses_anthropic = sdk_conversation == "claude-code/anthropic" or sdk_building == "claude-code/anthropic"
+        uses_minimax = sdk_conversation == "claude-code/minimax" or sdk_building == "claude-code/minimax"
+
+        # 1. Generate root .env file for docker-compose
         agent_personal_database_url = ''  # To be implemented
         agent_container_log_level = 'INFO'
+
+        # Only include ANTHROPIC_API_KEY if Anthropic SDK is used
+        anthropic_env_line = f"ANTHROPIC_API_KEY={anthropic_api_key or ''}" if uses_anthropic else "# ANTHROPIC_API_KEY not used (MiniMax SDK configured)"
+
         env_content = f"""# Environment Identification
 ENV_ID={environment.id}
 AGENT_ID={agent.id}
@@ -1037,7 +1080,11 @@ CLAUDE_CODE_WORKSPACE=/app/app
 CLAUDE_CODE_PERMISSION_MODE=acceptEdits
 
 # AI Service Credentials (passed to container)
-ANTHROPIC_API_KEY={anthropic_api_key or ''}
+{anthropic_env_line}
+
+# SDK Configuration
+AGENT_SDK_CONVERSATION={sdk_conversation}
+AGENT_SDK_BUILDING={sdk_building}
 """
 
         env_path = instance_dir / ".env"
@@ -1045,9 +1092,8 @@ ANTHROPIC_API_KEY={anthropic_api_key or ''}
             f.write(env_content)
 
         # 2. Generate app/.env file for application-specific variables (if needed)
-        # Note: ANTHROPIC_API_KEY is now provided via container environment variables
         app_env_content = """# Application-specific environment variables can be added here
-# Note: ANTHROPIC_API_KEY is provided via container environment variables
+# Note: API keys are provided via container environment variables or SDK settings files
 """
 
         app_dir = instance_dir / "app"
@@ -1055,6 +1101,76 @@ ANTHROPIC_API_KEY={anthropic_api_key or ''}
         app_env_path = app_dir / ".env"
         with open(app_env_path, 'w') as f:
             f.write(app_env_content)
+
+        # 3. Generate MiniMax SDK settings files if MiniMax is used
+        if uses_minimax and minimax_api_key:
+            self._generate_minimax_settings_files(
+                instance_dir,
+                environment,
+                minimax_api_key,
+                sdk_building,
+                sdk_conversation
+            )
+
+    def _generate_minimax_settings_files(
+        self,
+        instance_dir: Path,
+        environment: AgentEnvironment,
+        minimax_api_key: str,
+        sdk_building: str,
+        sdk_conversation: str
+    ):
+        """
+        Generate MiniMax SDK settings files in the core .claude folder.
+
+        These files are used by Claude Code SDK to configure the MiniMax API endpoint.
+        Files are placed in /app/core/.claude/ which is part of the core directory.
+
+        Note: Since core files are replaced during rebuild, this method must be called
+        AFTER the core files are copied from template.
+
+        Args:
+            instance_dir: Environment instance directory
+            environment: Environment model
+            minimax_api_key: User's MiniMax API key
+            sdk_building: SDK for building mode
+            sdk_conversation: SDK for conversation mode
+        """
+        import json
+
+        # Settings content for MiniMax
+        minimax_settings = {
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+                "ANTHROPIC_AUTH_TOKEN": minimax_api_key,
+                "API_TIMEOUT_MS": "3000000",
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": 1,
+                "ANTHROPIC_MODEL": "MiniMax-M2.1",
+                "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2.1-lightning",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": "MiniMax-M2.1",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": "MiniMax-M2.1",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "MiniMax-M2.1"
+            }
+        }
+
+        # Create .claude directory in core folder
+        # Inside container this will be at /app/core/.claude/
+        claude_settings_dir = instance_dir / "app" / "core" / ".claude"
+        claude_settings_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate building settings file if building mode uses MiniMax
+        if sdk_building == "claude-code/minimax":
+            building_settings_path = claude_settings_dir / "building_settings.json"
+            with open(building_settings_path, 'w') as f:
+                json.dump(minimax_settings, f, indent=2)
+            logger.info(f"Generated MiniMax building settings for environment {environment.id}")
+
+        # Generate conversation settings file if conversation mode uses MiniMax
+        if sdk_conversation == "claude-code/minimax":
+            conversation_settings_path = claude_settings_dir / "conversation_settings.json"
+            with open(conversation_settings_path, 'w') as f:
+                json.dump(minimax_settings, f, indent=2)
+            logger.info(f"Generated MiniMax conversation settings for environment {environment.id}")
 
     def _allocate_port(self) -> int:
         """Allocate available port."""

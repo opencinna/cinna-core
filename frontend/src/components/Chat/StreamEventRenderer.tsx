@@ -1,3 +1,4 @@
+import { Lightbulb } from "lucide-react"
 import { ToolCallBlock } from "./ToolCallBlock"
 import { MarkdownRenderer } from "./MarkdownRenderer"
 
@@ -45,11 +46,16 @@ export function StreamEventRenderer({ events, conversationModeUi = "detailed" }:
               className="prose dark:prose-invert max-w-none prose-p:leading-normal prose-p:my-2 prose-ul:my-2 prose-li:my-0"
             />
           )
-        } else if (event.type === "thinking" && event.content.trim()) {
-          // Render thinking block
+        } else if (event.type === "thinking" && event.content.trim() && conversationModeUi !== "compact") {
+          // Render thinking block - strip [Thinking] prefix if present (hidden in compact mode)
+          const thinkingContent = event.content.replace(/^\[Thinking\]\s*/i, "")
           return (
-            <div key={idx} className="text-xs italic text-muted-foreground bg-muted/50 rounded px-3 py-2">
-              {event.content}
+            <div key={idx} className="flex items-start gap-2 text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2">
+              <Lightbulb className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+              <MarkdownRenderer
+                content={thinkingContent}
+                className="prose dark:prose-invert max-w-none text-xs prose-p:text-xs prose-p:leading-tight prose-p:my-0.5 prose-ul:my-0.5 prose-ul:text-xs prose-li:my-0 prose-li:leading-tight prose-headings:text-xs prose-headings:my-1 prose-code:text-xs"
+              />
             </div>
           )
         } else if (event.type === "system" && event.content.trim()) {

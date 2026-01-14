@@ -4,6 +4,12 @@ from pydantic import EmailStr
 from sqlmodel import Field, Relationship, SQLModel, Column, Text
 
 
+# SDK constants
+SDK_ANTHROPIC = "claude-code/anthropic"
+SDK_MINIMAX = "claude-code/minimax"
+VALID_SDK_OPTIONS = [SDK_ANTHROPIC, SDK_MINIMAX]
+
+
 # Shared properties
 class UserBase(SQLModel):
     email: EmailStr = Field(unique=True, index=True, max_length=255)
@@ -34,6 +40,8 @@ class UserUpdateMe(SQLModel):
     full_name: str | None = Field(default=None, max_length=255)
     email: EmailStr | None = Field(default=None, max_length=255)
     username: str | None = Field(default=None, max_length=50, regex=r"^[a-zA-Z0-9_]*$")
+    default_sdk_conversation: str | None = Field(default=None, max_length=50)
+    default_sdk_building: str | None = Field(default=None, max_length=50)
 
 
 class UpdatePassword(SQLModel):
@@ -48,6 +56,9 @@ class User(UserBase, table=True):
     google_id: str | None = Field(default=None, max_length=255, unique=True, index=True)
     # AI Service Credentials (encrypted JSON)
     ai_credentials_encrypted: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    # Default SDK preferences for new environments
+    default_sdk_conversation: str | None = Field(default=SDK_ANTHROPIC, max_length=50)
+    default_sdk_building: str | None = Field(default=SDK_ANTHROPIC, max_length=50)
     items: List["app.models.item.Item"] = Relationship(back_populates="owner", cascade_delete=True)
     agents: List["app.models.agent.Agent"] = Relationship(back_populates="owner", cascade_delete=True)
     credentials: List["app.models.credential.Credential"] = Relationship(back_populates="owner", cascade_delete=True)
@@ -58,6 +69,8 @@ class UserPublic(UserBase):
     id: uuid.UUID
     has_google_account: bool = False
     has_password: bool = False
+    default_sdk_conversation: str | None = SDK_ANTHROPIC
+    default_sdk_building: str | None = SDK_ANTHROPIC
 
 
 class UsersPublic(SQLModel):
@@ -102,6 +115,7 @@ class AIServiceCredentials(SQLModel):
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None  # For future use
     google_ai_api_key: str | None = None  # For future use
+    minimax_api_key: str | None = None
 
 
 class AIServiceCredentialsUpdate(SQLModel):
@@ -109,6 +123,7 @@ class AIServiceCredentialsUpdate(SQLModel):
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
     google_ai_api_key: str | None = None
+    minimax_api_key: str | None = None
 
 
 class UserPublicWithAICredentials(UserPublic):
@@ -116,3 +131,4 @@ class UserPublicWithAICredentials(UserPublic):
     has_anthropic_api_key: bool = False
     has_openai_api_key: bool = False
     has_google_ai_api_key: bool = False
+    has_minimax_api_key: bool = False

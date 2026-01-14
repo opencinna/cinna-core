@@ -90,6 +90,8 @@ export type AgentEnvironmentCreate = {
     config?: {
         [key: string]: unknown;
     };
+    agent_sdk_conversation?: (string | null);
+    agent_sdk_building?: (string | null);
 };
 
 export type AgentEnvironmentPublic = {
@@ -106,6 +108,8 @@ export type AgentEnvironmentPublic = {
     updated_at: string;
     last_health_check: (string | null);
     last_activity_at: (string | null);
+    agent_sdk_conversation: (string | null);
+    agent_sdk_building: (string | null);
 };
 
 export type AgentEnvironmentsPublic = {
@@ -304,6 +308,7 @@ export type AIServiceCredentials = {
     anthropic_api_key?: (string | null);
     openai_api_key?: (string | null);
     google_ai_api_key?: (string | null);
+    minimax_api_key?: (string | null);
 };
 
 /**
@@ -313,6 +318,7 @@ export type AIServiceCredentialsUpdate = {
     anthropic_api_key?: (string | null);
     openai_api_key?: (string | null);
     google_ai_api_key?: (string | null);
+    minimax_api_key?: (string | null);
 };
 
 /**
@@ -1038,6 +1044,8 @@ export type UserPublic = {
     id: string;
     has_google_account?: boolean;
     has_password?: boolean;
+    default_sdk_conversation?: (string | null);
+    default_sdk_building?: (string | null);
 };
 
 /**
@@ -1052,9 +1060,12 @@ export type UserPublicWithAICredentials = {
     id: string;
     has_google_account?: boolean;
     has_password?: boolean;
+    default_sdk_conversation?: (string | null);
+    default_sdk_building?: (string | null);
     has_anthropic_api_key?: boolean;
     has_openai_api_key?: boolean;
     has_google_ai_api_key?: boolean;
+    has_minimax_api_key?: boolean;
 };
 
 export type UserRegister = {
@@ -1081,6 +1092,8 @@ export type UserUpdateMe = {
     full_name?: (string | null);
     email?: (string | null);
     username?: (string | null);
+    default_sdk_conversation?: (string | null);
+    default_sdk_building?: (string | null);
 };
 
 export type UserWorkspaceCreate = {

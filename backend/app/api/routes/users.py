@@ -29,6 +29,7 @@ from app.models.user import (
     AIServiceCredentials,
     AIServiceCredentialsUpdate,
     UserPublicWithAICredentials,
+    VALID_SDK_OPTIONS,
 )
 from app.services.auth_service import AuthService
 from app.utils import generate_new_account_email, send_email
@@ -102,6 +103,17 @@ def update_user_me(
             raise HTTPException(
                 status_code=409, detail="User with this email already exists"
             )
+    # Validate SDK values if provided
+    if user_in.default_sdk_conversation and user_in.default_sdk_conversation not in VALID_SDK_OPTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid SDK for conversation mode. Must be one of: {VALID_SDK_OPTIONS}",
+        )
+    if user_in.default_sdk_building and user_in.default_sdk_building not in VALID_SDK_OPTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid SDK for building mode. Must be one of: {VALID_SDK_OPTIONS}",
+        )
     user_data = user_in.model_dump(exclude_unset=True)
     current_user.sqlmodel_update(user_data)
     session.add(current_user)
@@ -292,6 +304,7 @@ def get_ai_credentials_status(
         has_anthropic_api_key=bool(credentials and credentials.anthropic_api_key),
         has_openai_api_key=bool(credentials and credentials.openai_api_key),
         has_google_ai_api_key=bool(credentials and credentials.google_ai_api_key),
+        has_minimax_api_key=bool(credentials and credentials.minimax_api_key),
     )
 
 
