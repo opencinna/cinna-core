@@ -58,13 +58,13 @@ export function LatestSessions({ limit = 8 }: LatestSessionsProps) {
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5 flex-wrap">
+                  <div className="flex items-center gap-1.5 min-w-0">
                     {session.mode === "building" ? (
                       <Wrench className="h-3.5 w-3.5 text-orange-500 shrink-0" />
                     ) : (
                       <MessageCircle className="h-3.5 w-3.5 text-blue-500 shrink-0" />
                     )}
-                    <p className="text-sm text-foreground truncate">
+                    <p className="text-sm text-foreground truncate min-w-0">
                       {session.title ? session.title : <AnimatedPlaceholder className="text-xs" />}
                     </p>
                     {session.agent_name && (
