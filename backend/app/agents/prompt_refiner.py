@@ -1,7 +1,9 @@
 """
 Prompt refiner - helps users write better prompts for their AI agents.
+
+Uses the provider manager for cascade provider selection.
 """
-from google.genai import Client
+from .provider_manager import get_provider_manager
 
 
 def refine_prompt(
@@ -12,7 +14,6 @@ def refine_prompt(
     workflow_prompt: str | None,
     mode: str,
     is_new_agent: bool,
-    api_key: str,
 ) -> dict:
     """
     Refine a user's prompt to make it more effective for the AI agent.
@@ -25,7 +26,6 @@ def refine_prompt(
         workflow_prompt: Agent's workflow prompt (if any)
         mode: Session mode - "building" or "conversation"
         is_new_agent: Whether this is a new agent being created
-        api_key: Google API key for Gemini
 
     Returns:
         dict with keys:
@@ -33,7 +33,7 @@ def refine_prompt(
             - refined_prompt: The improved prompt text (if success)
             - error: Error message (if not success)
     """
-    client = Client(api_key=api_key)
+    manager = get_provider_manager()
 
     # Build context about the agent
     agent_context = ""
@@ -100,12 +100,10 @@ Return ONLY the refined prompt text, without any markdown formatting, quotes, or
 Do not include phrases like "Here's the refined prompt:" - just output the prompt itself."""
 
     try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-lite",
-            contents=prompt,
-        )
+        # Generate using provider manager (cascade fallback)
+        response = manager.generate_content(prompt)
 
-        refined = response.text.strip()
+        refined = response.text
 
         # Remove quotes if present
         if (refined.startswith('"') and refined.endswith('"')) or (

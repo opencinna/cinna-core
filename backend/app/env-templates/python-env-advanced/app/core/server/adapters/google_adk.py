@@ -19,7 +19,6 @@ import json
 import logging
 import os
 import subprocess
-import uuid
 import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -42,9 +41,6 @@ from .google_adk_wr_prompts import get_combined_tool_prompts
 from .sqlite_session_service import SQLiteSessionService, create_sqlite_session_service
 
 logger = logging.getLogger(__name__)
-
-# Store for tracking running bash processes (per-adapter instance)
-_bash_processes: dict[str, subprocess.Popen] = {}
 
 
 @dataclass
@@ -188,65 +184,6 @@ def _get_workspace_dir(fallback_dir: str) -> str:
     return os.environ.get("CLAUDE_CODE_WORKSPACE", fallback_dir)
 
 
-def _execute_bash_command(command: str, working_dir: str) -> dict:
-    """
-    Execute a bash command and return the initial status.
-    Used as a long-running function tool for Google ADK.
-
-    Args:
-        command: The bash command to execute.
-        working_dir: Fallback working directory for command execution.
-
-    Returns:
-        A dictionary with the process ticket-id and initial status.
-    """
-    ticket_id = str(uuid.uuid4())
-
-    # Use CLAUDE_CODE_WORKSPACE env var if set, otherwise fallback to working_dir
-    effective_working_dir = _get_workspace_dir(working_dir)
-
-    # Start the process
-    process = subprocess.Popen(
-        command,
-        shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        cwd=effective_working_dir,
-    )
-
-    # Store the process for later retrieval
-    _bash_processes[ticket_id] = process
-
-    return {
-        "status": "pending",
-        "ticket-id": ticket_id,
-        "command": command,
-        "message": f"Bash command started with ticket-id: {ticket_id}",
-    }
-
-
-def _get_bash_result(ticket_id: str) -> dict:
-    """Wait for bash process to complete and return results."""
-    if ticket_id not in _bash_processes:
-        return {"status": "error", "error": f"Unknown ticket-id: {ticket_id}"}
-
-    process = _bash_processes[ticket_id]
-    stdout, stderr = process.communicate()  # Wait for completion
-    return_code = process.returncode
-
-    # Clean up
-    del _bash_processes[ticket_id]
-
-    return {
-        "status": "completed",
-        "ticket-id": ticket_id,
-        "return_code": return_code,
-        "stdout": stdout,
-        "stderr": stderr,
-    }
-
-
 class AgentFactory:
     """
     Factory for creating Google ADK agents based on provider type.
@@ -279,13 +216,13 @@ class AgentFactory:
         from google.adk.agents import Agent
         from google.adk.models.lite_llm import LiteLlm
         from google.adk.runners import Runner
-        from google.adk.tools import LongRunningFunctionTool, FunctionTool
+        from google.adk.tools import FunctionTool
 
         # Set environment variables for LiteLLM/OpenAI compatibility
         os.environ["OPENAI_API_BASE"] = api_base
         os.environ["OPENAI_API_KEY"] = api_key
 
-        # Create Bash tool as a long-running function
+        # Create Bash tool as a regular function tool (synchronous execution)
         def Bash(command: str) -> dict:
             """
             Execute a shell command in the workspace environment.
@@ -301,9 +238,30 @@ class AgentFactory:
             Returns:
                 dict: Contains return_code, stdout, and stderr from command execution.
             """
-            return _execute_bash_command(command, working_dir)
+            # Use CLAUDE_CODE_WORKSPACE env var if set, otherwise fallback to working_dir
+            effective_working_dir = _get_workspace_dir(working_dir)
 
-        bash_tool = LongRunningFunctionTool(func=Bash)
+            # Execute command synchronously
+            process = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=effective_working_dir,
+            )
+            stdout, stderr = process.communicate()
+            return_code = process.returncode
+
+            return {
+                "status": "completed",
+                "command": command,
+                "return_code": return_code,
+                "stdout": stdout,
+                "stderr": stderr,
+            }
+
+        bash_tool = FunctionTool(func=Bash)
 
         # Create Read tool as a simple function tool
         def Read(file_path: str) -> dict:
@@ -802,7 +760,7 @@ class GoogleADKAdapter(BaseSDKAdapter):
         Handles:
         - Text responses -> SDKEventType.ASSISTANT
         - Function calls -> SDKEventType.TOOL_USE
-        - Function responses -> handles long-running tool completion
+        - Function responses -> SDKEventType.TOOL_RESULT
         """
         if not event.content or not event.content.parts:
             return
@@ -832,55 +790,35 @@ class GoogleADKAdapter(BaseSDKAdapter):
                     metadata={"tool_input": dict(func_call.args) if func_call.args else {}},
                 )
 
-            # Handle function response (from long-running tool)
+            # Handle function response (tool result)
             if hasattr(part, "function_response") and part.function_response:
                 func_resp = part.function_response
                 response_data = func_resp.response
 
-                # If this is a pending bash command, get the result
-                if (
-                    isinstance(response_data, dict)
-                    and response_data.get("status") == "pending"
-                    and "ticket-id" in response_data
-                ):
-                    ticket_id = response_data["ticket-id"]
-                    logger.info(f"Waiting for bash command (ticket: {ticket_id})...")
+                # Format tool result for display
+                if isinstance(response_data, dict):
+                    stdout = str(response_data.get("stdout", ""))[:500]
+                    stderr = str(response_data.get("stderr", ""))[:500]
+                    return_code = response_data.get("return_code")
 
-                    # Get the actual result
-                    result = _get_bash_result(ticket_id)
-                    logger.info(f"Bash result: return_code={result.get('return_code')}")
+                    if return_code is not None:
+                        result_content = f"Return code: {return_code}"
+                        if stdout:
+                            result_content += f"\nstdout: {stdout}"
+                        if stderr:
+                            result_content += f"\nstderr: {stderr}"
+                    else:
+                        # For non-bash tools (like Read), just show the response
+                        result_content = str(response_data)[:500]
+                else:
+                    result_content = str(response_data)[:500]
 
-                    # Yield tool result event
-                    stdout = result.get("stdout", "")[:500]
-                    stderr = result.get("stderr", "")[:500]
-                    result_content = f"Return code: {result.get('return_code')}"
-                    if stdout:
-                        result_content += f"\nstdout: {stdout}"
-                    if stderr:
-                        result_content += f"\nstderr: {stderr}"
-
-                    yield SDKEvent(
-                        type=SDKEventType.TOOL_RESULT,
-                        content=result_content,
-                        session_id=self._current_session_id,
-                        metadata={"result": result},
-                    )
-
-                    # Send result back to agent and process continuation
-                    from google.genai import types
-                    updated_response = func_resp.model_copy(deep=True)
-                    updated_response.response = result
-
-                    async for resume_event in self._runner.run_async(
-                        user_id="agent_user",
-                        session_id=self._current_session_id,
-                        new_message=types.Content(
-                            role="user",
-                            parts=[types.Part(function_response=updated_response)],
-                        ),
-                    ):
-                        async for sdk_event in self._process_adk_event(resume_event):
-                            yield sdk_event
+                yield SDKEvent(
+                    type=SDKEventType.TOOL_RESULT,
+                    content=result_content,
+                    session_id=self._current_session_id,
+                    metadata={"result": response_data if isinstance(response_data, dict) else {"raw": str(response_data)}},
+                )
 
             # Handle text response
             if hasattr(part, "text") and part.text:

@@ -1,16 +1,18 @@
 """
 SQL generator - creates SQLite SQL queries from natural language descriptions.
+
+Uses the provider manager for cascade provider selection.
 """
 import json
 import re
-from google.genai import Client
+
+from .provider_manager import get_provider_manager
 
 
 def generate_sql_query(
     user_request: str,
     database_schema: dict,
     current_query: str | None,
-    api_key: str
 ) -> dict:
     """
     Generate SQL query from natural language description.
@@ -19,7 +21,6 @@ def generate_sql_query(
         user_request: User's natural language request (e.g., "select all records from May 2025")
         database_schema: Database schema with tables, views, and columns
         current_query: Current SQL query in the editor (if any)
-        api_key: Google API key for Gemini
 
     Returns:
         dict with keys:
@@ -27,8 +28,8 @@ def generate_sql_query(
             - sql: Generated SQL query (if success)
             - error: Error message or clarifying questions (if not success)
     """
-    # Create Google GenAI client
-    client = Client(api_key=api_key)
+    # Get provider manager
+    manager = get_provider_manager()
 
     # Format schema for the prompt
     schema_description = _format_schema_for_prompt(database_schema)
@@ -69,14 +70,11 @@ If you CANNOT generate the query (unclear request, missing information, etc.):
 Respond with ONLY the JSON object, no markdown formatting or additional text.
 """
 
-    # Generate content
-    response = client.models.generate_content(
-        model="gemini-2.5-flash-lite",
-        contents=prompt,
-    )
+    # Generate content using provider manager (cascade fallback)
+    response = manager.generate_content(prompt)
 
     # Parse response
-    response_text = response.text.strip()
+    response_text = response.text
 
     # Try to extract JSON from response
     try:

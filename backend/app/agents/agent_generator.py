@@ -7,10 +7,11 @@ This module generates:
 3. Workflow prompt (system prompt for conversation mode)
 
 Prompts are loaded from external .md files for easy maintenance.
+Uses the provider manager for cascade provider selection.
 """
-import json
 from pathlib import Path
-from google.genai import Client
+
+from .provider_manager import get_provider_manager
 
 
 # Paths to prompt template files
@@ -27,18 +28,17 @@ def _load_prompt_template(file_path: Path) -> str:
         raise RuntimeError(f"Failed to load prompt template from {file_path}: {e}")
 
 
-def generate_agent_name(description: str, api_key: str) -> str:
+def generate_agent_name(description: str) -> str:
     """
     Generate a concise agent name from description.
 
     Args:
         description: User's description of what the agent should do
-        api_key: Google API key for Gemini
 
     Returns:
         str: Concise agent name (max 50 characters)
     """
-    client = Client(api_key=api_key)
+    manager = get_provider_manager()
 
     prompt = f"""Generate a concise name for an agent based on this description:
 
@@ -54,27 +54,23 @@ Return ONLY the name, nothing else.
 Example: "Sales Report Generator"
 """
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash-lite",
-        contents=prompt,
-    )
+    response = manager.generate_content(prompt)
 
-    name = response.text.strip().strip('"').strip("'")
+    name = response.text.strip('"').strip("'")
     return name[:50]  # Ensure max length
 
 
-def generate_entrypoint_prompt(description: str, api_key: str) -> str:
+def generate_entrypoint_prompt(description: str) -> str:
     """
     Generate human-like entrypoint prompt from description.
 
     Args:
         description: User's description of what the agent should do
-        api_key: Google API key for Gemini
 
     Returns:
         str: Natural, conversational trigger message
     """
-    client = Client(api_key=api_key)
+    manager = get_provider_manager()
 
     # Load entrypoint generator prompt template
     template = _load_prompt_template(ENTRYPOINT_GENERATOR_PROMPT)
@@ -92,13 +88,10 @@ def generate_entrypoint_prompt(description: str, api_key: str) -> str:
 
 Generate the entrypoint prompt now. Remember: natural, conversational, 1-2 sentences maximum."""
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash-lite",
-        contents=prompt,
-    )
+    response = manager.generate_content(prompt)
 
     # Clean up response
-    entrypoint = response.text.strip()
+    entrypoint = response.text
 
     # Remove any markdown code blocks
     if entrypoint.startswith("```"):
@@ -109,18 +102,17 @@ Generate the entrypoint prompt now. Remember: natural, conversational, 1-2 sente
     return entrypoint
 
 
-def generate_workflow_prompt(description: str, api_key: str) -> str:
+def generate_workflow_prompt(description: str) -> str:
     """
     Generate comprehensive workflow prompt from description.
 
     Args:
         description: User's description of what the agent should do
-        api_key: Google API key for Gemini
 
     Returns:
         str: Detailed system prompt for conversation mode agent
     """
-    client = Client(api_key=api_key)
+    manager = get_provider_manager()
 
     # Load workflow generator prompt template
     template = _load_prompt_template(WORKFLOW_GENERATOR_PROMPT)
@@ -138,13 +130,10 @@ def generate_workflow_prompt(description: str, api_key: str) -> str:
 
 Generate the workflow prompt now. Include role, execution steps, and data presentation guidelines."""
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash-lite",
-        contents=prompt,
-    )
+    response = manager.generate_content(prompt)
 
     # Clean up response
-    workflow = response.text.strip()
+    workflow = response.text
 
     # Remove outer markdown code blocks if present
     if workflow.startswith("```markdown"):
@@ -159,7 +148,7 @@ Generate the workflow prompt now. Include role, execution steps, and data presen
     return workflow
 
 
-def generate_agent_config(description: str, api_key: str) -> dict:
+def generate_agent_config(description: str) -> dict:
     """
     Generate complete agent configuration from description.
 
@@ -170,7 +159,6 @@ def generate_agent_config(description: str, api_key: str) -> dict:
 
     Args:
         description: User's description of what the agent should do
-        api_key: Google API key for Gemini
 
     Returns:
         dict with keys:
@@ -180,9 +168,9 @@ def generate_agent_config(description: str, api_key: str) -> dict:
     """
     try:
         # Generate all components
-        name = generate_agent_name(description, api_key)
-        entrypoint = generate_entrypoint_prompt(description, api_key)
-        workflow = generate_workflow_prompt(description, api_key)
+        name = generate_agent_name(description)
+        entrypoint = generate_entrypoint_prompt(description)
+        workflow = generate_workflow_prompt(description)
 
         return {
             "name": name,

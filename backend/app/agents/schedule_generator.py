@@ -3,12 +3,14 @@ Schedule generator - converts natural language to CRON expressions.
 
 This module generates CRON schedules from natural language input using AI.
 It handles timezone conversion and validates minimum execution frequency.
+Uses the provider manager for cascade provider selection.
 """
 import json
 from pathlib import Path
 from datetime import datetime
 import pytz
-from google.genai import Client
+
+from .provider_manager import get_provider_manager
 
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
@@ -26,7 +28,6 @@ def _load_prompt_template(file_path: Path) -> str:
 def generate_agent_schedule(
     natural_language: str,
     timezone: str,
-    api_key: str
 ) -> dict:
     """
     Convert natural language schedule to CRON string.
@@ -34,13 +35,12 @@ def generate_agent_schedule(
     Args:
         natural_language: User's input (e.g., "every workday at 7 AM")
         timezone: IANA timezone (e.g., "Europe/Berlin")
-        api_key: Google API key
 
     Returns:
         Dict with success, description, cron_string, or error
     """
     try:
-        client = Client(api_key=api_key)
+        manager = get_provider_manager()
 
         # Load prompt template
         template = _load_prompt_template(SCHEDULE_PROMPT)
@@ -63,14 +63,11 @@ Current time: {current_time.isoformat()}
 Generate the schedule configuration in JSON format.
 """
 
-        # Call LLM
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-lite",
-            contents=prompt,
-        )
+        # Call LLM using provider manager (cascade fallback)
+        response = manager.generate_content(prompt)
 
         # Parse response (expected to be JSON)
-        response_text = response.text.strip()
+        response_text = response.text
 
         # Remove markdown code blocks if present
         if response_text.startswith("```json"):

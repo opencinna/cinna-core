@@ -1,20 +1,27 @@
 """
-AI Functions Service - provides simple LLM processing utilities using Google ADK.
+AI Functions Service - provides simple LLM processing utilities.
 
 This service encapsulates fast, cheap LLM calls for tasks like:
 - Generating agent configurations from descriptions
 - Creating conversation titles from messages
 - Other text generation tasks
+
+Supports multiple providers with cascade fallback via AI_FUNCTIONS_PROVIDERS env variable.
 """
 import logging
-from typing import Optional
 from uuid import UUID
 
 from sqlmodel import Session
 
-from app.core.config import settings
-from app.agents import generate_agent_config, generate_conversation_title, generate_handover_prompt, generate_sql_query, refine_prompt
+from app.agents import (
+    generate_agent_config,
+    generate_conversation_title,
+    generate_handover_prompt as generate_handover_prompt_from_agents,
+    generate_sql_query,
+    refine_prompt,
+)
 from app.agents.schedule_generator import generate_agent_schedule
+from app.agents.provider_manager import get_provider_manager
 from app.models.agent import Agent
 
 logger = logging.getLogger(__name__)
@@ -22,21 +29,6 @@ logger = logging.getLogger(__name__)
 
 class AIFunctionsService:
     """Service for simple AI-powered text generation tasks."""
-
-    @staticmethod
-    def _get_api_key() -> str:
-        """
-        Get Google API key from settings.
-
-        Raises:
-            ValueError: If GOOGLE_API_KEY is not configured
-        """
-        if not settings.GOOGLE_API_KEY:
-            raise ValueError(
-                "GOOGLE_API_KEY is not configured. "
-                "Please set it in your .env file to use AI functions."
-            )
-        return settings.GOOGLE_API_KEY
 
     @staticmethod
     def generate_agent_configuration(description: str) -> dict:
@@ -58,21 +50,16 @@ class AIFunctionsService:
                 - workflow_prompt: Detailed system prompt (str)
 
         Raises:
-            ValueError: If GOOGLE_API_KEY is not configured
-            Exception: If agent generation fails
+            Exception: If agent generation fails and no fallback is available
         """
         try:
-            api_key = AIFunctionsService._get_api_key()
-            config = generate_agent_config(description, api_key)
+            config = generate_agent_config(description)
             logger.info(
                 f"Generated agent config: {config.get('name', 'Unknown')} "
                 f"(entrypoint: {len(config.get('entrypoint_prompt', ''))} chars, "
                 f"workflow: {len(config.get('workflow_prompt', ''))} chars)"
             )
             return config
-        except ValueError:
-            # Re-raise configuration errors
-            raise
         except Exception as e:
             logger.error(f"Failed to generate agent config: {e}", exc_info=True)
             # Return fallback configuration
@@ -92,18 +79,11 @@ class AIFunctionsService:
 
         Returns:
             str: Concise title (max 100 chars)
-
-        Raises:
-            ValueError: If GOOGLE_API_KEY is not configured
         """
         try:
-            api_key = AIFunctionsService._get_api_key()
-            title = generate_conversation_title(message_content, api_key)
+            title = generate_conversation_title(message_content)
             logger.info(f"Generated session title: {title}")
             return title
-        except ValueError:
-            # Re-raise configuration errors
-            raise
         except Exception as e:
             logger.error(f"Failed to generate session title: {e}", exc_info=True)
             # Return fallback title (truncated message)
@@ -131,21 +111,14 @@ class AIFunctionsService:
         Note:
             The CRON string is in local time. The caller must convert to UTC
             using AgentSchedulerService.convert_local_cron_to_utc().
-
-        Raises:
-            ValueError: If GOOGLE_API_KEY is not configured
         """
         try:
-            api_key = AIFunctionsService._get_api_key()
-            result = generate_agent_schedule(natural_language, timezone, api_key)
+            result = generate_agent_schedule(natural_language, timezone)
             logger.info(
                 f"Generated schedule: {result.get('success')} - "
                 f"{result.get('description') or result.get('error')}"
             )
             return result
-        except ValueError:
-            # Re-raise configuration errors
-            raise
         except Exception as e:
             logger.error(f"Failed to generate schedule: {e}", exc_info=True)
             return {
@@ -178,29 +151,21 @@ class AIFunctionsService:
                 - success: bool
                 - handover_prompt: Generated prompt (if success)
                 - error: Error message (if not success)
-
-        Raises:
-            ValueError: If GOOGLE_API_KEY is not configured
         """
         try:
-            api_key = AIFunctionsService._get_api_key()
-            result = generate_handover_prompt(
+            result = generate_handover_prompt_from_agents(
                 source_agent_name=source_agent_name,
                 source_entrypoint=source_entrypoint,
                 source_workflow=source_workflow,
                 target_agent_name=target_agent_name,
                 target_entrypoint=target_entrypoint,
                 target_workflow=target_workflow,
-                api_key=api_key
             )
             logger.info(
                 f"Generated handover prompt: {result.get('success')} - "
                 f"{result.get('handover_prompt', '')[:50] if result.get('success') else result.get('error')}"
             )
             return result
-        except ValueError:
-            # Re-raise configuration errors
-            raise
         except Exception as e:
             logger.error(f"Failed to generate handover prompt: {e}", exc_info=True)
             return {
@@ -211,12 +176,22 @@ class AIFunctionsService:
     @staticmethod
     def is_available() -> bool:
         """
-        Check if AI functions are available (GOOGLE_API_KEY is configured).
+        Check if AI functions are available (at least one provider is configured).
 
         Returns:
             bool: True if AI functions can be used, False otherwise
         """
-        return bool(settings.GOOGLE_API_KEY)
+        return get_provider_manager().is_available()
+
+    @staticmethod
+    def get_available_providers() -> list[str]:
+        """
+        Get list of available AI function providers.
+
+        Returns:
+            list[str]: Names of available providers in priority order
+        """
+        return get_provider_manager().get_available_providers()
 
     @staticmethod
     def generate_sql(
@@ -237,26 +212,18 @@ class AIFunctionsService:
                 - success: bool
                 - sql: Generated SQL query (if success)
                 - error: Error message or clarifying questions (if not success)
-
-        Raises:
-            ValueError: If GOOGLE_API_KEY is not configured
         """
         try:
-            api_key = AIFunctionsService._get_api_key()
             result = generate_sql_query(
                 user_request=user_request,
                 database_schema=database_schema,
                 current_query=current_query,
-                api_key=api_key
             )
             logger.info(
                 f"Generated SQL: {result.get('success')} - "
                 f"{result.get('sql', '')[:50] if result.get('success') else result.get('error')}"
             )
             return result
-        except ValueError:
-            # Re-raise configuration errors
-            raise
         except Exception as e:
             logger.error(f"Failed to generate SQL: {e}", exc_info=True)
             return {
@@ -291,13 +258,8 @@ class AIFunctionsService:
                 - success: bool
                 - refined_prompt: The improved prompt text (if success)
                 - error: Error message (if not success)
-
-        Raises:
-            ValueError: If GOOGLE_API_KEY is not configured
         """
         try:
-            api_key = AIFunctionsService._get_api_key()
-
             # Fetch agent details if agent_id is provided
             agent_name = None
             entrypoint_prompt = None
@@ -318,16 +280,12 @@ class AIFunctionsService:
                 workflow_prompt=workflow_prompt,
                 mode=mode,
                 is_new_agent=is_new_agent,
-                api_key=api_key,
             )
             logger.info(
                 f"Refined prompt: {result.get('success')} - "
                 f"{result.get('refined_prompt', '')[:50] if result.get('success') else result.get('error')}"
             )
             return result
-        except ValueError:
-            # Re-raise configuration errors
-            raise
         except Exception as e:
             logger.error(f"Failed to refine prompt: {e}", exc_info=True)
             return {

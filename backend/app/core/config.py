@@ -130,6 +130,24 @@ class Settings(BaseSettings):
     # Google AI Configuration (for ADK agents)
     GOOGLE_API_KEY: str | None = None
 
+    # AI Functions Provider Configuration
+    # Comma-separated list of providers to try in order (cascade fallback)
+    # Supported: "gemini", "openai-compatible"
+    # Example: "openai-compatible,gemini" - try openai-compatible first, fall back to gemini
+    AI_FUNCTIONS_PROVIDERS: str = "gemini"
+
+    # OpenAI-compatible provider settings (for AI functions)
+    # Used when "openai-compatible" is in AI_FUNCTIONS_PROVIDERS
+    OPENAI_COMPATIBLE_BASE_URL: str | None = None
+    OPENAI_COMPATIBLE_API_KEY: str | None = None
+    OPENAI_COMPATIBLE_MODEL: str = "gpt-4o-mini"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def ai_functions_provider_list(self) -> list[str]:
+        """Parse comma-separated providers into ordered list"""
+        return [p.strip().lower() for p in self.AI_FUNCTIONS_PROVIDERS.split(",") if p.strip()]
+
     # Environment Management
     # Paths for environment templates and instances
     # Default for local dev: "backend/app/env-templates" and "backend/app/agent-environments"

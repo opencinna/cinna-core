@@ -2,7 +2,7 @@
 
 ## Overview
 
-AI Functions provide simple, fast LLM-powered utilities for text generation tasks like creating conversation titles, generating agent configurations, and other quick processing needs. They use Google's Gemini Flash model for cheap, fast inference.
+AI Functions provide simple, fast LLM-powered utilities for text generation tasks like creating conversation titles, generating agent configurations, and other quick processing needs. They support multiple LLM providers with cascade fallback for reliability.
 
 ## Architecture
 
@@ -10,7 +10,25 @@ AI Functions provide simple, fast LLM-powered utilities for text generation task
 
 - **`backend/app/services/ai_functions_service.py`** - Service layer that encapsulates AI function calls
 - **`backend/app/agents/`** - Individual agent implementations for specific tasks
-- **`backend/app/core/config.py`** - Configuration for `GOOGLE_API_KEY`
+- **`backend/app/agents/providers/`** - Provider implementations for different LLM backends
+- **`backend/app/agents/provider_manager.py`** - Cascade provider selection logic
+- **`backend/app/core/config.py`** - Configuration for providers and API keys
+
+### Multi-Provider Support
+
+AI Functions support multiple LLM providers with cascade fallback:
+
+1. **Gemini** - Google Gemini via google-genai SDK (default)
+2. **OpenAI-Compatible** - Any OpenAI-compatible endpoint via litellm (Ollama, vLLM, local deployments)
+
+Configure provider order with `AI_FUNCTIONS_PROVIDERS` environment variable:
+```bash
+# Try OpenAI-compatible first, fall back to Gemini
+AI_FUNCTIONS_PROVIDERS=openai-compatible,gemini
+
+# Only use Gemini (default)
+AI_FUNCTIONS_PROVIDERS=gemini
+```
 
 ### Current Implementations
 
@@ -46,18 +64,19 @@ AI Functions provide simple, fast LLM-powered utilities for text generation task
 
 ## Implementation Pattern
 
-All AI functions follow this simple pattern:
+All AI functions follow this simple pattern using the provider manager:
 
-1. **Use Google GenAI Client directly** (not ADK)
-   - Import: `from google.genai import Client`
-   - Create client with API key: `Client(api_key=api_key)`
+1. **Use the Provider Manager** (not direct client)
+   - Import: `from .provider_manager import get_provider_manager`
+   - Get manager: `manager = get_provider_manager()`
 
 2. **Simple synchronous calls**
-   - Use `client.models.generate_content(model="gemini-2.5-flash-lite", contents=prompt)`
-   - Extract response: `response.text.strip()`
+   - Use `manager.generate_content(prompt)` for automatic provider cascade
+   - Extract response: `response.text`
 
 3. **Graceful fallbacks**
-   - Always include fallback logic if API call fails
+   - Provider manager handles cascade fallback automatically
+   - Always include application-level fallback logic for complete failures
    - Return sensible defaults
 
 ## Adding New AI Functions
@@ -66,15 +85,21 @@ All AI functions follow this simple pattern:
 
 Create a new file in `backend/app/agents/` (e.g., `my_new_agent.py`):
 
-```
-def my_function(input_data: str, api_key: str) -> str:
-    client = Client(api_key=api_key)
+```python
+"""
+My new agent - description of what it does.
+
+Uses the provider manager for cascade provider selection.
+"""
+from .provider_manager import get_provider_manager
+
+
+def my_function(input_data: str) -> str:
+    """Generate something from input data."""
+    manager = get_provider_manager()
     prompt = f"Your prompt here with {input_data}"
-    response = client.models.generate_content(
-        model="gemini-2.5-flash-lite",
-        contents=prompt,
-    )
-    return response.text.strip()
+    response = manager.generate_content(prompt)
+    return response.text
 ```
 
 ### Step 2: Export from `__init__.py`
@@ -93,12 +118,9 @@ Add method to `AIFunctionsService` in `backend/app/services/ai_functions_service
 @staticmethod
 def my_service_method(input_data: str) -> str:
     try:
-        api_key = AIFunctionsService._get_api_key()
-        result = my_function(input_data, api_key)
+        result = my_function(input_data)
         logger.info(f"Generated result: {result}")
         return result
-    except ValueError:
-        raise  # Re-raise config errors
     except Exception as e:
         logger.error(f"Failed: {e}", exc_info=True)
         return "fallback value"
@@ -143,23 +165,58 @@ else:
 
 ## Configuration
 
-### Environment Variable
+### Environment Variables
 
 Add to `.env`:
-```
+
+```bash
+# Provider selection (comma-separated, tried in order)
+AI_FUNCTIONS_PROVIDERS=gemini  # Default
+
+# Gemini provider settings
 GOOGLE_API_KEY=your-api-key-here
+
+# OpenAI-compatible provider settings (for local/custom endpoints)
+OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1  # e.g., Ollama
+OPENAI_COMPATIBLE_API_KEY=optional-api-key
+OPENAI_COMPATIBLE_MODEL=llama3.2:latest
 ```
 
-Get API key from: https://makersuite.google.com/app/apikey
+### Provider Configuration
+
+**Gemini (default)**
+- Get API key from: https://makersuite.google.com/app/apikey
+- Default model: `gemini-2.5-flash-lite` (fast, cheap)
+
+**OpenAI-Compatible**
+- Works with: Ollama, vLLM, LM Studio, any OpenAI-compatible API
+- Set `OPENAI_COMPATIBLE_BASE_URL` to your endpoint
+- API key optional for local deployments
+
+### Example Configurations
+
+**Local development with Ollama fallback:**
+```bash
+AI_FUNCTIONS_PROVIDERS=openai-compatible,gemini
+OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1
+OPENAI_COMPATIBLE_MODEL=llama3.2:latest
+GOOGLE_API_KEY=your-backup-key
+```
+
+**Cloud-only (Gemini):**
+```bash
+AI_FUNCTIONS_PROVIDERS=gemini
+GOOGLE_API_KEY=your-api-key
+```
 
 ### Model Selection
 
-Current model: `gemini-2.5-flash-lite`
-- Fast and cheap
-- Good for simple text generation
-- Sufficient for titles, names, short descriptions
+Gemini models:
+- `gemini-2.5-flash-lite` - Fast and cheap (default)
+- `gemini-2.5-flash` - Balanced performance
+- `gemini-2.5-pro` - Best quality
 
-For more complex tasks, consider upgrading to `gemini-2.5-flash` or `gemini-2.5-pro`.
+For OpenAI-compatible, model depends on your endpoint (e.g., `llama3.2:latest`, `gpt-4o-mini`).
 
 ## Testing
 
@@ -173,16 +230,99 @@ When adding new AI functions:
 ## Common Pitfalls
 
 ### ❌ Don't Use ADK for Simple Tasks
-Google ADK (Agent Development Kit) is for complex multi-agent workflows. For simple text generation, use `google.genai.Client` directly.
+Google ADK (Agent Development Kit) is for complex multi-agent workflows. For simple text generation, use the provider manager.
 
 ### ❌ Don't Make Async Functions
-Unless integrating with async routes, keep AI functions synchronous. The GenAI client handles I/O internally.
+Unless integrating with async routes, keep AI functions synchronous. The provider manager handles I/O internally.
 
 ### ❌ Don't Forget Error Handling
-Network issues, API errors, and quota limits can occur. Always wrap calls and provide fallbacks.
+Network issues, API errors, and quota limits can occur. The provider manager handles cascade fallback, but always provide application-level fallbacks.
 
 ### ❌ Don't Hardcode API Keys
-Always use `settings.GOOGLE_API_KEY` from config, never hardcode keys in code.
+Always use settings from config via the provider manager, never hardcode keys in code.
+
+### ❌ Don't Bypass the Provider Manager
+Always use `get_provider_manager().generate_content()` instead of creating direct clients. This ensures cascade fallback works correctly.
+
+## Adding New Providers
+
+To add a new LLM provider:
+
+### Step 1: Create Provider Implementation
+
+Create a new file in `backend/app/agents/providers/` (e.g., `my_provider.py`):
+
+```python
+"""
+My Provider - description of what it supports.
+"""
+import logging
+from typing import Optional
+
+from app.core.config import settings
+from .base import BaseAIProvider, ProviderResponse, ProviderError
+
+logger = logging.getLogger(__name__)
+
+
+class MyProvider(BaseAIProvider):
+    """My provider implementation."""
+
+    PROVIDER_NAME = "my-provider"
+
+    def __init__(self, api_key: Optional[str] = None):
+        self._api_key = api_key or settings.MY_PROVIDER_API_KEY
+
+    def is_available(self) -> bool:
+        return bool(self._api_key)
+
+    def generate_content(self, prompt: str, model: Optional[str] = None) -> ProviderResponse:
+        if not self.is_available():
+            raise ProviderError("MY_PROVIDER_API_KEY not configured", self.PROVIDER_NAME)
+
+        try:
+            # Your LLM client implementation here
+            text = "..."  # Generated text
+            return ProviderResponse(
+                text=text,
+                provider_name=self.PROVIDER_NAME,
+                model=model or "default-model",
+            )
+        except Exception as e:
+            raise ProviderError(f"Failed: {e}", self.PROVIDER_NAME, recoverable=True)
+```
+
+### Step 2: Register Provider
+
+Add to `backend/app/agents/provider_manager.py`:
+
+```python
+from .providers import MyProvider
+
+PROVIDER_REGISTRY: dict[str, type[BaseAIProvider]] = {
+    "gemini": GeminiProvider,
+    "openai-compatible": OpenAICompatibleProvider,
+    "my-provider": MyProvider,  # Add here
+}
+```
+
+### Step 3: Export from `__init__.py`
+
+Add to `backend/app/agents/providers/__init__.py`:
+```python
+from .my_provider import MyProvider
+__all__ = [..., "MyProvider"]
+```
+
+### Step 4: Add Configuration
+
+Add to `backend/app/core/config.py`:
+```python
+MY_PROVIDER_API_KEY: str | None = None
+MY_PROVIDER_MODEL: str = "default-model"
+```
+
+Now users can add `my-provider` to `AI_FUNCTIONS_PROVIDERS` in their `.env`.
 
 ## Prompt Template Files
 
@@ -207,6 +347,7 @@ The agent generator uses prompt templates stored in markdown files:
 **Implementation Pattern**:
 ```python
 from pathlib import Path
+from .provider_manager import get_provider_manager
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 ENTRYPOINT_PROMPT = PROMPTS_DIR / "entrypoint_generator_prompt.md"
@@ -214,10 +355,12 @@ ENTRYPOINT_PROMPT = PROMPTS_DIR / "entrypoint_generator_prompt.md"
 def _load_prompt_template(file_path: Path) -> str:
     return file_path.read_text(encoding="utf-8")
 
-def generate_entrypoint(description: str, api_key: str) -> str:
+def generate_entrypoint(description: str) -> str:
+    manager = get_provider_manager()
     template = _load_prompt_template(ENTRYPOINT_PROMPT)
     prompt = f"{template}\n\n---\n\n## User's Description\n\n{description}"
-    # ... generate with LLM
+    response = manager.generate_content(prompt)
+    return response.text
 ```
 
 **Key Principles for Prompt Templates**:

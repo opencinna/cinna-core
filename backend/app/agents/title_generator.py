@@ -1,23 +1,21 @@
 """
 Title generator - creates concise conversation titles from first message.
+
+Uses the provider manager for cascade provider selection.
 """
-from google.genai import Client
+from .provider_manager import get_provider_manager
 
 
-def generate_conversation_title(message_content: str, api_key: str) -> str:
+def generate_conversation_title(message_content: str) -> str:
     """
     Generate a concise title for a conversation based on the first message.
 
     Args:
         message_content: First message from the user
-        api_key: Google API key for Gemini
 
     Returns:
         str: Concise title for the conversation (max 100 chars)
     """
-    # Create Google GenAI client
-    client = Client(api_key=api_key)
-
     # Create prompt
     prompt = f"""You are an AI assistant that creates concise conversation titles.
 
@@ -29,14 +27,12 @@ User's message: {message_content}
 Return ONLY the title text, without any quotes, markdown, or formatting.
 """
 
-    # Generate content
-    response = client.models.generate_content(
-        model="gemini-2.5-flash-lite",
-        contents=prompt,
-    )
+    # Generate content using provider manager (cascade fallback)
+    manager = get_provider_manager()
+    response = manager.generate_content(prompt)
 
     # Extract title
-    title = response.text.strip()
+    title = response.text
 
     # Remove quotes if present
     if (title.startswith('"') and title.endswith('"')) or (

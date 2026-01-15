@@ -3,9 +3,11 @@ Handover prompt generator - creates handover prompts between agents.
 
 This module generates handover prompts that define when and how
 one agent should trigger another agent with specific context.
+Uses the provider manager for cascade provider selection.
 """
 from pathlib import Path
-from google.genai import Client
+
+from .provider_manager import get_provider_manager
 
 
 # Paths to prompt template files
@@ -28,7 +30,6 @@ def generate_handover_prompt(
     target_agent_name: str,
     target_entrypoint: str | None,
     target_workflow: str | None,
-    api_key: str
 ) -> dict:
     """
     Generate handover prompt from source to target agent.
@@ -40,7 +41,6 @@ def generate_handover_prompt(
         target_agent_name: Name of the agent receiving the handover
         target_entrypoint: Target agent's entrypoint prompt
         target_workflow: Target agent's workflow prompt
-        api_key: Google API key for Gemini
 
     Returns:
         dict with keys:
@@ -49,7 +49,7 @@ def generate_handover_prompt(
             - error: Error message (if not success)
     """
     try:
-        client = Client(api_key=api_key)
+        manager = get_provider_manager()
 
         # Load template
         template = _load_prompt_template(HANDOVER_PROMPT_TEMPLATE)
@@ -83,14 +83,11 @@ def generate_handover_prompt(
 Generate the handover prompt now. Remember: 2-3 sentences maximum, include condition, context, and example.
 """
 
-        # Call LLM
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-lite",
-            contents=prompt,
-        )
+        # Call LLM using provider manager (cascade fallback)
+        response = manager.generate_content(prompt)
 
         # Clean up response
-        handover_prompt = response.text.strip()
+        handover_prompt = response.text
 
         # Remove any markdown code blocks
         if handover_prompt.startswith("```"):
