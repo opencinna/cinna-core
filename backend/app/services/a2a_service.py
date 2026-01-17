@@ -84,7 +84,7 @@ class A2AService:
             description="AI Agent",  # Minimal description required by schema
             url=f"{base_url}/api/v1/a2a/{agent.id}/",
             version="1.0.0",
-            protocolVersion="1.0",
+            protocolVersion="0.3.0",  # Library default version for stable mode
             defaultInputModes=["text/plain"],
             defaultOutputModes=["text/plain"],
             capabilities=capabilities,
@@ -164,7 +164,7 @@ class A2AService:
             description=agent.description or "AI Agent",
             url=f"{base_url}/api/v1/a2a/{agent.id}/",
             version=version,
-            protocolVersion="1.0",
+            protocolVersion="0.3.0",  # Library default version for stable mode
             defaultInputModes=["text/plain"],
             defaultOutputModes=["text/plain"],
             capabilities=capabilities,

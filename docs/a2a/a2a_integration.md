@@ -44,6 +44,51 @@ A2A Event Mapper ─────────→ Centralized A2A protocol mapping
 
 **Key Principle:** No direct database queries in A2A code. All data access goes through `SessionService` and `MessageService`.
 
+## A2A Protocol v1.0 Support
+
+The implementation supports both the current a2a library format (v0.3.0 draft) and the A2A Protocol v1.0 specification through an adapter layer.
+
+### Protocol Version Selection
+
+| Header | Behavior |
+|--------|----------|
+| (none) | v1.0 format (default) |
+| `X-A2A-Stable: 1` | Legacy format (v0.3.0 draft) |
+
+### Key Transformations
+
+**Method Names (Inbound):**
+
+| v1.0 Method | Internal Method |
+|-------------|-----------------|
+| `SendMessage` | `message/send` |
+| `SendStreamingMessage` | `message/stream` |
+| `GetTask` | `tasks/get` |
+| `CancelTask` | `tasks/cancel` |
+| `ListTasks` | `tasks/list` |
+
+**AgentCard (Outbound):**
+
+| v0.3.0 Field | v1.0 Field |
+|--------------|------------|
+| `protocolVersion` (string) | `protocolVersions` (array) |
+| `url` (string) | `supportedInterfaces` (array of `{url, transport}`) |
+| `supportsAuthenticatedExtendedCard` | `capabilities.extendedAgentCard` |
+
+**Task/Message Responses:**
+- v1.0 responses include `"kind": "task"` or `"kind": "message"` discriminator field
+
+### Adapter Implementation
+
+**File:** `backend/app/services/a2a_v1_adapter.py`
+
+- `A2AV1Adapter.should_use_v1(request)` - Check header for protocol version
+- `A2AV1Adapter.transform_request_inbound(body)` - Transform v1.0 method names
+- `A2AV1Adapter.transform_agent_card_outbound(card)` - Transform AgentCard structure
+- `A2AV1Adapter.transform_task_outbound(task)` - Add `kind` discriminator
+
+See **[a2a_v1_support.md](./a2a_v1_support.md)** for detailed specification.
+
 ## Data/State Lifecycle
 
 ### A2A Concepts to Internal Model Mapping
@@ -137,11 +182,16 @@ Example: `https://api.example.com/api/v1/a2a/123e4567-e89b-12d3-a456-42661417400
 \* Auth optional only when A2A is enabled - returns public card without auth, extended card with auth
 
 **JSON-RPC Methods:**
-- `message/send` - Synchronous message, returns Task
-- `message/stream` - SSE streaming response
-- `tasks/get` - Get task status and history
-- `tasks/cancel` - Cancel running task
-- `tasks/list` - List tasks for agent (custom extension)
+
+| v1.0 Method | Internal Method | Description |
+|-------------|-----------------|-------------|
+| `SendMessage` | `message/send` | Synchronous message, returns Task |
+| `SendStreamingMessage` | `message/stream` | SSE streaming response |
+| `GetTask` | `tasks/get` | Get task status and history |
+| `CancelTask` | `tasks/cancel` | Cancel running task |
+| `ListTasks` | `tasks/list` | List tasks for agent (custom extension) |
+
+Note: v1.0 method names are used by default. Use `X-A2A-Stable: 1` header for internal method names.
 
 ### Services
 
@@ -371,6 +421,7 @@ data: {"jsonrpc":"2.0","id":"<request_id>","result":{"kind":"status-update","tas
 - `backend/app/services/a2a_request_handler.py` - Request handling (uses service layer)
 - `backend/app/services/a2a_event_mapper.py` - Centralized A2A mapping logic
 - `backend/app/services/a2a_task_store.py` - Task store adapter (uses service layer)
+- `backend/app/services/a2a_v1_adapter.py` - A2A Protocol v1.0 adapter
 
 ### Backend - Core Services (used by A2A)
 - `backend/app/services/session_service.py` - Session operations
@@ -420,6 +471,6 @@ When an A2A client sends a message without a task_id (or with invalid task_id):
 
 ---
 
-**Document Version:** 1.6
-**Last Updated:** 2026-01-16
-**Status:** Phase 1 Implementation Complete (with Access Tokens, SSE Streaming, Refactored Session Creation, Public/Extended Agent Card)
+**Document Version:** 1.7
+**Last Updated:** 2026-01-17
+**Status:** Phase 1 Implementation Complete (with Access Tokens, SSE Streaming, Refactored Session Creation, Public/Extended Agent Card, A2A Protocol v1.0 Support)

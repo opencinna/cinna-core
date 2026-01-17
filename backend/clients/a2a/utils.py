@@ -361,22 +361,41 @@ def extract_text_from_task(task: Task) -> str:
 class A2AConnection:
     """Manages A2A connection and message exchange."""
 
-    def __init__(self, agent_url: str, access_token: str, logger: SessionLogger | None = None):
+    def __init__(
+        self,
+        agent_url: str,
+        access_token: str,
+        logger: SessionLogger | None = None,
+        use_stable: bool = False,
+    ):
         """Initialize A2A connection.
 
         Args:
             agent_url: Base URL of the A2A agent
             access_token: JWT access token for authentication
             logger: Optional SessionLogger for payload logging
+            use_stable: If True, use X-A2A-Stable: 1 header for legacy protocol format
         """
         self.agent_url = agent_url.rstrip("/")
         self.access_token = access_token
         self.logger = logger
+        self.use_stable = use_stable
         self.task_id: str | None = None
         self.context_id: str | None = None
         self.httpx_client: httpx.AsyncClient | None = None
         self.a2a_client: Client | None = None
         self.agent_card: AgentCard | None = None
+
+    def _get_headers(self) -> dict[str, str]:
+        """Get HTTP headers for requests.
+
+        Returns:
+            Dictionary of headers including auth and optional stable header
+        """
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        if self.use_stable:
+            headers["X-A2A-Stable"] = "1"
+        return headers
 
     async def connect(self) -> bool:
         """Connect to the agent and fetch the agent card.
@@ -433,10 +452,12 @@ class A2AConnection:
 
         # Step 2: Fetch extended card (with authentication)
         print(f"\nFetching extended agent card (authenticated)...")
+        if self.use_stable:
+            print("  Using stable protocol mode (X-A2A-Stable: 1)")
 
-        # Create httpx client with auth header
+        # Create httpx client with auth header (and optional stable header)
         self.httpx_client = httpx.AsyncClient(
-            headers={"Authorization": f"Bearer {self.access_token}"},
+            headers=self._get_headers(),
             timeout=httpx.Timeout(60.0, connect=10.0),
             follow_redirects=True,
         )
@@ -475,7 +496,7 @@ class A2AConnection:
                 # (301/302 redirects convert POST to GET, breaking SSE streaming)
                 await self.httpx_client.aclose()
                 self.httpx_client = httpx.AsyncClient(
-                    headers={"Authorization": f"Bearer {self.access_token}"},
+                    headers=self._get_headers(),
                     timeout=httpx.Timeout(60.0, connect=10.0),
                     follow_redirects=True,
                 )

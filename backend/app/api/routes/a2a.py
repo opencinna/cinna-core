@@ -26,6 +26,7 @@ from app.services.a2a_service import A2AService
 from app.services.a2a_request_handler import A2ARequestHandler
 from app.services.a2a_task_store import DatabaseTaskStore
 from app.services.access_token_service import AccessTokenService
+from app.services.a2a_v1_adapter import A2AV1Adapter
 from app.core.db import engine
 
 logger = logging.getLogger(__name__)
@@ -185,6 +186,9 @@ async def get_agent_card(
     if forwarded_proto == "https" and base_url.startswith("http://"):
         base_url = "https://" + base_url[7:]
 
+    # Check if v1.0 format should be used
+    use_v1 = A2AV1Adapter.should_use_v1(request)
+
     # If not authenticated
     if not auth or not auth.is_authenticated():
         # Only allow public access if A2A is enabled
@@ -192,6 +196,8 @@ async def get_agent_card(
             raise HTTPException(status_code=401, detail="Not authenticated")
         # Return minimal public card
         card_dict = A2AService.get_public_agent_card_dict(agent, base_url)
+        if use_v1:
+            card_dict = A2AV1Adapter.transform_agent_card_outbound(card_dict)
         return JSONResponse(content=card_dict)
 
     # Authenticated - check permissions
@@ -202,6 +208,8 @@ async def get_agent_card(
 
     # Return full extended card
     card_dict = A2AService.get_agent_card_dict(agent, environment, base_url)
+    if use_v1:
+        card_dict = A2AV1Adapter.transform_agent_card_outbound(card_dict)
     return JSONResponse(content=card_dict)
 
 
@@ -265,6 +273,11 @@ async def handle_jsonrpc(
     if jsonrpc != "2.0":
         return _jsonrpc_error(body.get("id"), -32600, "Invalid Request: jsonrpc must be '2.0'")
 
+    # Check if v1.0 format should be used and transform method names
+    use_v1 = A2AV1Adapter.should_use_v1(request)
+    if use_v1:
+        body = A2AV1Adapter.transform_request_inbound(body)
+
     method = body.get("method")
     request_id = body.get("id")
     params = body.get("params", {})
@@ -324,12 +337,18 @@ async def handle_jsonrpc(
 
             # Synchronous message handling
             task = await handler.handle_message_send(params)
-            return _jsonrpc_success(request_id, task.model_dump(by_alias=True, exclude_none=True))
+            result = task.model_dump(by_alias=True, exclude_none=True)
+            if use_v1:
+                result = A2AV1Adapter.transform_task_outbound(result)
+            return _jsonrpc_success(request_id, result)
 
         elif method == "tasks/get":
             task = await handler.handle_tasks_get(params)
             if task:
-                return _jsonrpc_success(request_id, task.model_dump(by_alias=True, exclude_none=True))
+                result = task.model_dump(by_alias=True, exclude_none=True)
+                if use_v1:
+                    result = A2AV1Adapter.transform_task_outbound(result)
+                return _jsonrpc_success(request_id, result)
             else:
                 return _jsonrpc_error(request_id, -32001, "Task not found")
 
@@ -343,10 +362,10 @@ async def handle_jsonrpc(
         elif method == "tasks/list":
             # Custom extension to A2A protocol - list tasks for this agent
             tasks = await handler.handle_tasks_list(params)
-            return _jsonrpc_success(
-                request_id,
-                [task.model_dump(by_alias=True, exclude_none=True) for task in tasks]
-            )
+            task_results = [task.model_dump(by_alias=True, exclude_none=True) for task in tasks]
+            if use_v1:
+                task_results = [A2AV1Adapter.transform_task_outbound(t) for t in task_results]
+            return _jsonrpc_success(request_id, task_results)
 
         else:
             return _jsonrpc_error(request_id, -32601, f"Method not found: {method}")

@@ -6,11 +6,13 @@ This script connects to an A2A-compatible agent. Agents can be selected from
 a local cache (agents.json) or added by providing a URL.
 
 Usage:
-    python run_a2a_agent.py
+    python run_a2a_agent.py       # Use stable/legacy protocol format (default)
+    python run_a2a_agent.py --v1  # Use A2A v1.0 protocol format
 
 The script maintains a local cache of agents in agents.json for easy reuse.
 """
 
+import argparse
 import asyncio
 from pathlib import Path
 
@@ -349,13 +351,35 @@ def select_agent(cache: AgentCache) -> CachedAgent | None:
         return select_agent(cache)  # Retry
 
 
-async def main() -> None:
-    """Main entry point."""
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Interactive A2A Client for testing agent communication."
+    )
+    parser.add_argument(
+        "--v1",
+        action="store_true",
+        dest="use_v1",
+        help="Use A2A v1.0 protocol format (without X-A2A-Stable header)",
+    )
+    return parser.parse_args()
+
+
+async def main(use_v1: bool = False) -> None:
+    """Main entry point.
+
+    Args:
+        use_v1: If True, use A2A v1.0 protocol format (no X-A2A-Stable header)
+    """
     logs_dir = Path(__file__).parent / "logs"
     cache = AgentCache()
 
     print("\n" + "=" * 60)
     print("Interactive A2A Client")
+    if use_v1:
+        print("Protocol: A2A v1.0")
+    else:
+        print("Protocol: Stable/Legacy (X-A2A-Stable: 1)")
     print("=" * 60)
 
     while True:
@@ -377,7 +401,12 @@ async def main() -> None:
 
         # Create connection and run client
         logger = SessionLogger(logs_dir)
-        connection = A2AConnection(selected.url, selected.token, logger)
+        connection = A2AConnection(
+            selected.url,
+            selected.token,
+            logger,
+            use_stable=not use_v1,  # Default to stable, unless --v1 flag is passed
+        )
         client = InteractiveChatClient(connection)
 
         await client.run()
@@ -394,7 +423,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    args = parse_args()
     try:
-        asyncio.run(main())
+        asyncio.run(main(use_v1=args.use_v1))
     except KeyboardInterrupt:
         print("\nGoodbye!")
