@@ -8,6 +8,7 @@ including connection management, message handling, and payload logging.
 import json
 import os
 import sys
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -25,6 +26,186 @@ from a2a.types import (
     Task,
     TextPart,
 )
+
+
+@dataclass
+class CachedAgent:
+    """Represents a cached agent configuration."""
+
+    name: str
+    url: str
+    token: str
+    description: str = ""
+    added_at: str = field(default_factory=lambda: datetime.now().isoformat())
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "name": self.name,
+            "url": self.url,
+            "token": self.token,
+            "description": self.description,
+            "added_at": self.added_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CachedAgent":
+        """Create from dictionary."""
+        return cls(
+            name=data.get("name", "Unknown Agent"),
+            url=data.get("url", ""),
+            token=data.get("token", ""),
+            description=data.get("description", ""),
+            added_at=data.get("added_at", datetime.now().isoformat()),
+        )
+
+
+class AgentCache:
+    """Manages the local cache of agents in agents.json."""
+
+    def __init__(self, cache_file: Path | None = None):
+        """Initialize agent cache.
+
+        Args:
+            cache_file: Path to agents.json. Defaults to agents.json in same directory.
+        """
+        if cache_file is None:
+            cache_file = Path(__file__).parent / "agents.json"
+        self.cache_file = cache_file
+
+    def load_agents(self) -> list[CachedAgent]:
+        """Load agents from cache file.
+
+        Returns:
+            List of cached agents
+        """
+        if not self.cache_file.exists():
+            return []
+
+        try:
+            with open(self.cache_file) as f:
+                data = json.load(f)
+                return [CachedAgent.from_dict(agent) for agent in data]
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Warning: Could not load agents cache: {e}")
+            return []
+
+    def save_agents(self, agents: list[CachedAgent]) -> None:
+        """Save agents to cache file.
+
+        Args:
+            agents: List of agents to save
+        """
+        try:
+            with open(self.cache_file, "w") as f:
+                json.dump([agent.to_dict() for agent in agents], f, indent=2)
+        except OSError as e:
+            print(f"Warning: Could not save agents cache: {e}")
+
+    def add_agent(self, agent: CachedAgent) -> None:
+        """Add or update an agent in the cache.
+
+        Args:
+            agent: Agent to add or update
+        """
+        agents = self.load_agents()
+        # Remove existing agent with same URL if exists
+        agents = [a for a in agents if a.url != agent.url]
+        agents.append(agent)
+        self.save_agents(agents)
+
+    def remove_agent(self, url: str) -> bool:
+        """Remove an agent from cache by URL.
+
+        Args:
+            url: URL of agent to remove
+
+        Returns:
+            True if agent was removed, False if not found
+        """
+        agents = self.load_agents()
+        original_count = len(agents)
+        agents = [a for a in agents if a.url != url]
+        if len(agents) < original_count:
+            self.save_agents(agents)
+            return True
+        return False
+
+
+async def fetch_public_agent_card(url: str) -> tuple[AgentCard | None, bool, str | None]:
+    """Fetch public agent card from URL.
+
+    Args:
+        url: Agent URL
+
+    Returns:
+        Tuple of (agent_card, requires_auth, error_message)
+        - agent_card: The public agent card if successful
+        - requires_auth: True if the agent requires authentication
+        - error_message: Error message if failed, None if successful
+    """
+    agent_url = url.rstrip("/") + "/"
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            follow_redirects=True,
+        ) as client:
+            response = await client.get(agent_url)
+            response.raise_for_status()
+
+            card_data = response.json()
+            card = AgentCard(**card_data)
+
+            # Check if agent requires authentication for extended card
+            requires_auth = getattr(card, "supportsAuthenticatedExtendedCard", False)
+
+            return card, requires_auth, None
+
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            return None, True, "Agent requires authentication"
+        return None, False, f"HTTP Error: {e.response.status_code}"
+    except Exception as e:
+        return None, False, f"Failed to fetch agent card: {e}"
+
+
+async def verify_agent_token(url: str, token: str) -> tuple[AgentCard | None, str | None]:
+    """Verify token by fetching extended agent card.
+
+    Args:
+        url: Agent URL
+        token: Access token to verify
+
+    Returns:
+        Tuple of (agent_card, error_message)
+        - agent_card: The extended agent card if successful
+        - error_message: Error message if failed, None if successful
+    """
+    agent_url = url.rstrip("/") + "/"
+
+    try:
+        async with httpx.AsyncClient(
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            follow_redirects=True,
+        ) as client:
+            response = await client.get(agent_url)
+            response.raise_for_status()
+
+            card_data = response.json()
+            card = AgentCard(**card_data)
+
+            return card, None
+
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            return None, "Invalid or expired token"
+        if e.response.status_code == 403:
+            return None, "Access forbidden - check token permissions"
+        return None, f"HTTP Error: {e.response.status_code}"
+    except Exception as e:
+        return None, f"Failed to verify token: {e}"
 
 
 class SessionLogger:
