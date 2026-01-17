@@ -17,7 +17,6 @@ import DeleteAgent from "@/components/Agents/DeleteAgent"
 import PendingItems from "@/components/Pending/PendingItems"
 import { HashTabs } from "@/components/Common/HashTabs"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import {
   DropdownMenu,
   DropdownMenuContent,
