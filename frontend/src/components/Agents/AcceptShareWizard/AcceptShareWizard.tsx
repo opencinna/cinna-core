@@ -10,6 +10,7 @@ import { AgentSharesService } from "@/client"
 import type { PendingSharePublic } from "@/client"
 
 import { WizardStepOverview } from "./WizardStepOverview"
+import { WizardStepAICredentials } from "./WizardStepAICredentials"
 import { WizardStepCredentials } from "./WizardStepCredentials"
 import { WizardStepConfirm } from "./WizardStepConfirm"
 
@@ -20,7 +21,12 @@ interface AcceptShareWizardProps {
   onComplete: () => void
 }
 
-type WizardStep = "overview" | "credentials" | "confirm"
+interface AICredentialSelections {
+  conversationCredentialId: string | null
+  buildingCredentialId: string | null
+}
+
+type WizardStep = "overview" | "ai_credentials" | "credentials" | "confirm"
 
 export function AcceptShareWizard({
   open,
@@ -32,6 +38,10 @@ export function AcceptShareWizard({
   const [credentialsData, setCredentialsData] = useState<
     Record<string, Record<string, string>>
   >({})
+  const [aiCredentialSelections, setAICredentialSelections] = useState<AICredentialSelections>({
+    conversationCredentialId: null,
+    buildingCredentialId: null,
+  })
 
   const acceptMutation = useMutation({
     mutationFn: () =>
@@ -39,6 +49,12 @@ export function AcceptShareWizard({
         shareId: share.id,
         requestBody: {
           credentials: credentialsData,
+          ai_credential_selections: aiCredentialSelections.conversationCredentialId || aiCredentialSelections.buildingCredentialId
+            ? {
+                conversation_credential_id: aiCredentialSelections.conversationCredentialId || undefined,
+                building_credential_id: aiCredentialSelections.buildingCredentialId || undefined,
+              }
+            : undefined,
         },
       }),
     onSuccess: () => {
@@ -50,13 +66,31 @@ export function AcceptShareWizard({
   const resetWizard = () => {
     setCurrentStep("overview")
     setCredentialsData({})
+    setAICredentialSelections({
+      conversationCredentialId: null,
+      buildingCredentialId: null,
+    })
   }
 
   const needsCredentialSetup =
     share.credentials_required?.some((c) => !c.allow_sharing) ?? false
 
+  // Determine if AI credentials step is needed
+  // Skip if owner provided AI credentials OR if no AI credential types required
+  const needsAICredentialStep =
+    !share.ai_credentials_provided &&
+    (share.required_ai_credential_types?.length ?? 0) > 0
+
   const handleNext = () => {
     if (currentStep === "overview") {
+      if (needsAICredentialStep) {
+        setCurrentStep("ai_credentials")
+      } else if (needsCredentialSetup) {
+        setCurrentStep("credentials")
+      } else {
+        setCurrentStep("confirm")
+      }
+    } else if (currentStep === "ai_credentials") {
       if (needsCredentialSetup) {
         setCurrentStep("credentials")
       } else {
@@ -71,10 +105,18 @@ export function AcceptShareWizard({
     if (currentStep === "confirm") {
       if (needsCredentialSetup) {
         setCurrentStep("credentials")
+      } else if (needsAICredentialStep) {
+        setCurrentStep("ai_credentials")
       } else {
         setCurrentStep("overview")
       }
     } else if (currentStep === "credentials") {
+      if (needsAICredentialStep) {
+        setCurrentStep("ai_credentials")
+      } else {
+        setCurrentStep("overview")
+      }
+    } else if (currentStep === "ai_credentials") {
       setCurrentStep("overview")
     }
   }
@@ -83,6 +125,10 @@ export function AcceptShareWizard({
     data: Record<string, Record<string, string>>
   ) => {
     setCredentialsData(data)
+  }
+
+  const handleAICredentialsChange = (selections: AICredentialSelections) => {
+    setAICredentialSelections(selections)
   }
 
   const handleAccept = () => {
@@ -95,13 +141,15 @@ export function AcceptShareWizard({
   }
 
   // Calculate step numbers
-  const totalSteps = needsCredentialSetup ? 3 : 2
-  const currentStepNumber =
-    currentStep === "overview"
-      ? 1
-      : currentStep === "credentials"
-        ? 2
-        : totalSteps
+  const totalSteps = 1 + (needsAICredentialStep ? 1 : 0) + (needsCredentialSetup ? 1 : 0) + 1 // overview + ai_creds? + creds? + confirm
+  let currentStepNumber = 1
+  if (currentStep === "ai_credentials") {
+    currentStepNumber = 2
+  } else if (currentStep === "credentials") {
+    currentStepNumber = needsAICredentialStep ? 3 : 2
+  } else if (currentStep === "confirm") {
+    currentStepNumber = totalSteps
+  }
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -120,14 +168,25 @@ export function AcceptShareWizard({
             active={currentStep === "overview"}
             completed={currentStepNumber > 1}
           />
-          {needsCredentialSetup && (
+          {needsAICredentialStep && (
             <>
               <StepConnector />
               <StepIndicator
                 step={2}
+                label="AI Credentials"
+                active={currentStep === "ai_credentials"}
+                completed={currentStepNumber > 2}
+              />
+            </>
+          )}
+          {needsCredentialSetup && (
+            <>
+              <StepConnector />
+              <StepIndicator
+                step={needsAICredentialStep ? 3 : 2}
                 label="Credentials"
                 active={currentStep === "credentials"}
-                completed={currentStepNumber > 2}
+                completed={currentStepNumber > (needsAICredentialStep ? 3 : 2)}
               />
             </>
           )}
@@ -146,6 +205,16 @@ export function AcceptShareWizard({
             share={share}
             onNext={handleNext}
             onCancel={handleClose}
+          />
+        )}
+
+        {currentStep === "ai_credentials" && (
+          <WizardStepAICredentials
+            share={share}
+            aiCredentialSelections={aiCredentialSelections}
+            onChange={handleAICredentialsChange}
+            onNext={handleNext}
+            onBack={handleBack}
           />
         )}
 

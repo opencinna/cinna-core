@@ -11,30 +11,34 @@ Multi-step dialog wizard that guides users through accepting a shared agent, han
 2. User clicks "Accept" on pending share card
 3. Wizard opens with step indicator
 4. Step 1 (Overview): Review agent details, access level, what they'll receive
-5. Step 2 (Credentials): Configure non-shareable credentials (skipped if all shared)
-6. Step 3 (Confirm): Review summary and accept
-7. Clone agent created, wizard closes, agents list refreshes
+5. Step 2 (AI Credentials): Select AI credentials or see owner-provided ones (conditional)
+6. Step 3 (Integration Credentials): Configure non-shareable credentials (conditional)
+7. Step 4 (Confirm): Review summary and accept
+8. Clone agent created, wizard closes, agents list refreshes
 
 **Key Concepts:**
-- **Dynamic Step Count**: 2 steps if all credentials are shareable, 3 steps if setup required
-- **Credential Categories**: Shareable (ready to use) vs Setup Required (user must configure)
-- **Skip Option**: Users can skip credential setup and configure later
-- **Clone Creation**: Calls `AgentSharesService.acceptShare()` with credentials data
+- **Dynamic Step Count**: 2-4 steps based on AI credentials and integration credentials requirements
+- **AI Credential Categories**: Owner-provided (ready to use) vs User-selected (choose from own credentials)
+- **Integration Credential Categories**: Shareable (ready to use) vs Setup Required (user must configure)
+- **Skip Option**: Users can skip integration credential setup and configure later
+- **Clone Creation**: Calls `AgentSharesService.acceptShare()` with credentials and AI credential selections
 
 ## Architecture
 
 ```
 PendingAgentCard → AcceptShareWizard → WizardSteps → AgentSharesService.acceptShare()
                            │
-                    ┌──────┴──────┐
-                    │             │
-             WizardStepOverview   WizardStepCredentials
-                    │                    │
-                    └────────────────────┘
-                              │
-                     WizardStepConfirm
-                              │
-                     AgentCloneService.create_clone()
+                    ┌──────┴──────────────────────┐
+                    │             │               │
+             WizardStepOverview   │    WizardStepCredentials
+                    │             │               │
+                    │   WizardStepAICredentials   │
+                    │             │               │
+                    └─────────────┴───────────────┘
+                                  │
+                         WizardStepConfirm
+                                  │
+                         AgentCloneService.create_clone()
 ```
 
 ## Data/State Lifecycle
@@ -43,17 +47,32 @@ PendingAgentCard → AcceptShareWizard → WizardSteps → AgentSharesService.ac
 
 | State | Type | Description |
 |-------|------|-------------|
-| `currentStep` | `"overview" \| "credentials" \| "confirm"` | Active wizard step |
-| `credentialsData` | `Record<string, Record<string, string>>` | User-provided credential values |
+| `currentStep` | `"overview" \| "ai_credentials" \| "credentials" \| "confirm"` | Active wizard step |
+| `credentialsData` | `Record<string, Record<string, string>>` | User-provided integration credential values |
+| `aiCredentialSelections` | `{conversationCredentialId, buildingCredentialId}` | User's AI credential selections |
 
 ### Step Navigation Logic
 
 | Condition | Step Progression |
 |-----------|------------------|
-| All credentials shareable | Overview → Confirm (2 steps) |
-| Has non-shareable credentials | Overview → Credentials → Confirm (3 steps) |
+| AI creds provided + all integration creds shareable | Overview → Confirm (2 steps) |
+| AI creds provided + has non-shareable integration creds | Overview → Credentials → Confirm (3 steps) |
+| AI creds needed + all integration creds shareable | Overview → AI Credentials → Confirm (3 steps) |
+| AI creds needed + has non-shareable integration creds | Overview → AI Credentials → Credentials → Confirm (4 steps) |
 
-### Credential Requirement Categories
+**AI Credentials Step Condition:**
+- Shown when `!share.ai_credentials_provided && share.required_ai_credential_types.length > 0`
+
+### AI Credential Categories
+
+| Category | Condition | UI Treatment |
+|----------|-----------|--------------|
+| Provided by Owner | `share.ai_credentials_provided` | Green section, "Provided by owner" badge |
+| User Default Available | User has default for SDK type | Green badge, "Using default: [Name]" |
+| Selection Required | No default, user has credentials | Dropdown to select credential |
+| Setup Required | No credentials for SDK type | Error message, link to Settings |
+
+### Integration Credential Requirement Categories
 
 | Category | `allow_sharing` | UI Treatment |
 |----------|-----------------|--------------|
@@ -69,19 +88,28 @@ PendingAgentCard → AcceptShareWizard → WizardSteps → AgentSharesService.ac
 - `share_mode` - "user" or "builder"
 - `shared_by_email`, `shared_by_name`
 - `credentials_required` - List of `CredentialRequirement`
+- `ai_credentials_provided` - Whether owner is providing AI credentials
+- `conversation_ai_credential_name` - Name of provided conversation credential (if any)
+- `building_ai_credential_name` - Name of provided building credential (if any)
+- `required_ai_credential_types` - List of `AICredentialRequirement`
 
 **CredentialRequirement:** `backend/app/models/agent_share.py`
 - `name` - Credential name
 - `type` - Credential type (e.g., "api_token", "gmail_oauth")
 - `allow_sharing` - Whether owner has enabled sharing
 
+**AICredentialRequirement:** `backend/app/models/agent_share.py`
+- `sdk_type` - SDK type (e.g., "anthropic", "minimax")
+- `purpose` - "conversation" or "building"
+
 ### Clone Creation
 
 When wizard completes, `AgentCloneService.create_clone()` creates:
 - Agent record with `is_clone=true`, `parent_agent_id` set
-- Environment for clone (same template as parent)
+- Environment for clone (same template and SDK settings as parent)
 - Workspace files copied from parent
-- Credentials: shared (via `CredentialShare`) or placeholders
+- Integration credentials: shared (via `CredentialShare`) or placeholders
+- AI credentials: shared (via `AICredentialShare`) or linked to recipient's credentials
 
 ## Backend Implementation
 
@@ -108,8 +136,13 @@ When wizard completes, `AgentCloneService.create_clone()` creates:
 
 ### Request/Response Models
 
-**AcceptShareRequest:** `backend/app/api/routes/agent_shares.py:53`
+**AcceptShareRequest:** `backend/app/api/routes/agent_shares.py`
 - `credentials` - Optional dict `{credential_name: {field: value}}`
+- `ai_credential_selections` - Optional dict `{conversation_credential_id, building_credential_id}`
+
+**AICredentialSelections:** `backend/app/api/routes/agent_shares.py`
+- `conversation_credential_id` - UUID of user's AI credential for conversation SDK
+- `building_credential_id` - UUID of user's AI credential for building SDK
 
 ## Frontend Implementation
 
@@ -117,16 +150,24 @@ When wizard completes, `AgentCloneService.create_clone()` creates:
 
 **AcceptShareWizard:** `frontend/src/components/Agents/AcceptShareWizard/AcceptShareWizard.tsx`
 - Main dialog container with step indicator
-- Manages wizard state and navigation
-- Handles accept mutation via `AgentSharesService.acceptShare()`
+- Manages wizard state (`currentStep`, `credentialsData`, `aiCredentialSelections`)
+- Dynamic step navigation based on AI credentials and integration credentials requirements
+- Handles accept mutation via `AgentSharesService.acceptShare()` with AI credential selections
 
 **WizardStepOverview:** `frontend/src/components/Agents/AcceptShareWizard/WizardStepOverview.tsx`
 - Displays agent info, sharer details
 - Explains access level (User vs Builder permissions)
 - Lists what recipient will receive (copy, prompts, scripts, updates)
 
+**WizardStepAICredentials:** `frontend/src/components/Agents/AcceptShareWizard/WizardStepAICredentials.tsx`
+- Shows AI credential status for required SDK types
+- If owner provided: Green section showing "Provided by owner" with credential names
+- If user must provide: Queries user's AI credentials via `AiCredentialsService.listAiCredentials()`
+- Shows default credentials with green badge or dropdown for selection
+- Validates all required SDK types have credentials before allowing Continue
+
 **WizardStepCredentials:** `frontend/src/components/Agents/AcceptShareWizard/WizardStepCredentials.tsx`
-- Groups credentials: Ready to Use vs Setup Required
+- Groups integration credentials: Ready to Use vs Setup Required
 - Renders input fields for non-shareable credentials
 - Allows "Skip for now" to proceed without configuring
 
@@ -156,12 +197,19 @@ When wizard completes, `AgentCloneService.create_clone()` creates:
 
 **React Query Usage:**
 - `useMutation()` for `AgentSharesService.acceptShare()`
+- `useQuery()` for `AiCredentialsService.listAiCredentials()` in AI credentials step
 - Query invalidation on success: `["agents"]`, `["pendingShares"]`
 
 **Component Props:**
 - `open` / `onOpenChange` - Dialog visibility control
 - `share` - `PendingSharePublic` object with all share details
 - `onComplete` - Callback after successful acceptance
+
+**AI Credentials Step Props:**
+- `share` - Contains `ai_credentials_provided`, `required_ai_credential_types`
+- `aiCredentialSelections` - Current selections `{conversationCredentialId, buildingCredentialId}`
+- `onChange` - Callback to update selections
+- `onNext` / `onBack` - Navigation callbacks
 
 ## Security Features
 
@@ -210,8 +258,9 @@ When wizard completes, `AgentCloneService.create_clone()` creates:
 
 - `frontend/src/components/Agents/AcceptShareWizard/AcceptShareWizard.tsx` - Main wizard container
 - `frontend/src/components/Agents/AcceptShareWizard/WizardStepOverview.tsx` - Step 1: Agent overview
-- `frontend/src/components/Agents/AcceptShareWizard/WizardStepCredentials.tsx` - Step 2: Credential setup
-- `frontend/src/components/Agents/AcceptShareWizard/WizardStepConfirm.tsx` - Step 3: Confirmation
+- `frontend/src/components/Agents/AcceptShareWizard/WizardStepAICredentials.tsx` - Step 2: AI credentials (conditional)
+- `frontend/src/components/Agents/AcceptShareWizard/WizardStepCredentials.tsx` - Step 3: Integration credential setup (conditional)
+- `frontend/src/components/Agents/AcceptShareWizard/WizardStepConfirm.tsx` - Final step: Confirmation
 - `frontend/src/components/Agents/AcceptShareWizard/index.ts` - Module export
 
 ### Frontend - Related Components
@@ -241,10 +290,10 @@ When wizard completes, `AgentCloneService.create_clone()` creates:
 ### Related Documentation
 
 - `docs/business-domain/shared_agents_management.md` - Full sharing feature overview
-- `docs/business-domain/ai_credentials_management.md` - AI credentials integration (planned)
+- `docs/business-domain/ai_credentials_management.md` - AI credentials management (Phase 2 implemented)
 
 ---
 
-**Document Version:** 1.0
+**Document Version:** 2.0
 **Last Updated:** 2026-01-17
-**Status:** Complete
+**Status:** Complete (AI Credentials step added)

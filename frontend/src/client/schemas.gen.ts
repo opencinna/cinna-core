@@ -111,6 +111,55 @@ export const AICredentialPublicSchema = {
     description: 'Public AI credential (no sensitive data)'
 } as const;
 
+export const AICredentialRequirementSchema = {
+    properties: {
+        sdk_type: {
+            type: 'string',
+            title: 'Sdk Type'
+        },
+        purpose: {
+            type: 'string',
+            title: 'Purpose'
+        }
+    },
+    type: 'object',
+    required: ['sdk_type', 'purpose'],
+    title: 'AICredentialRequirement',
+    description: 'Info about an AI credential type required for agent'
+} as const;
+
+export const AICredentialSelectionsSchema = {
+    properties: {
+        conversation_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Conversation Credential Id'
+        },
+        building_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Building Credential Id'
+        }
+    },
+    type: 'object',
+    title: 'AICredentialSelections',
+    description: 'AI credential selections for accepting a share.'
+} as const;
+
 export const AICredentialTypeSchema = {
     type: 'string',
     enum: ['anthropic', 'minimax', 'openai_compatible'],
@@ -676,6 +725,16 @@ export const AcceptShareRequestSchema = {
                 }
             ],
             title: 'Credentials'
+        },
+        ai_credential_selections: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AICredentialSelections'
+                },
+                {
+                    type: 'null'
+                }
+            ]
         }
     },
     type: 'object',
@@ -1386,6 +1445,35 @@ export const AgentEnvironmentCreateSchema = {
                 }
             ],
             title: 'Agent Sdk Building'
+        },
+        use_default_ai_credentials: {
+            type: 'boolean',
+            title: 'Use Default Ai Credentials',
+            default: true
+        },
+        conversation_ai_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Conversation Ai Credential Id'
+        },
+        building_ai_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Building Ai Credential Id'
         }
     },
     type: 'object',
@@ -1495,10 +1583,38 @@ export const AgentEnvironmentPublicSchema = {
                 }
             ],
             title: 'Agent Sdk Building'
+        },
+        use_default_ai_credentials: {
+            type: 'boolean',
+            title: 'Use Default Ai Credentials'
+        },
+        conversation_ai_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Conversation Ai Credential Id'
+        },
+        building_ai_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Building Ai Credential Id'
         }
     },
     type: 'object',
-    required: ['id', 'agent_id', 'env_name', 'env_version', 'instance_name', 'type', 'status', 'status_message', 'is_active', 'created_at', 'updated_at', 'last_health_check', 'last_activity_at', 'agent_sdk_conversation', 'agent_sdk_building'],
+    required: ['id', 'agent_id', 'env_name', 'env_version', 'instance_name', 'type', 'status', 'status_message', 'is_active', 'created_at', 'updated_at', 'last_health_check', 'last_activity_at', 'agent_sdk_conversation', 'agent_sdk_building', 'use_default_ai_credentials', 'conversation_ai_credential_id', 'building_ai_credential_id'],
     title: 'AgentEnvironmentPublic'
 } as const;
 
@@ -2139,6 +2255,35 @@ export const AgentShareCreateSchema = {
         share_mode: {
             type: 'string',
             title: 'Share Mode'
+        },
+        provide_ai_credentials: {
+            type: 'boolean',
+            title: 'Provide Ai Credentials',
+            default: false
+        },
+        conversation_ai_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Conversation Ai Credential Id'
+        },
+        building_ai_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Building Ai Credential Id'
         }
     },
     type: 'object',
@@ -4726,6 +4871,41 @@ export const PendingSharePublicSchema = {
             },
             type: 'array',
             title: 'Credentials Required'
+        },
+        ai_credentials_provided: {
+            type: 'boolean',
+            title: 'Ai Credentials Provided',
+            default: false
+        },
+        conversation_ai_credential_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Conversation Ai Credential Name'
+        },
+        building_ai_credential_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Building Ai Credential Name'
+        },
+        required_ai_credential_types: {
+            items: {
+                '$ref': '#/components/schemas/AICredentialRequirement'
+            },
+            type: 'array',
+            title: 'Required Ai Credential Types',
+            default: []
         }
     },
     type: 'object',

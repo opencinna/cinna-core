@@ -55,6 +55,15 @@ from .ai_credential import (
     AICredentialType,
     AICredentialData,
 )
+from .ai_credential_share import (
+    AICredentialShare,
+    AICredentialShareBase,
+    AICredentialSharePublic,
+    AICredentialShareCreate,
+    AICredentialSharesPublic,
+    SharedAICredentialPublic,
+    SharedAICredentialsPublic,
+)
 from .credential_share import (
     CredentialShare,
     CredentialShareBase,
@@ -74,6 +83,7 @@ from .agent_share import (
     PendingSharePublic,
     PendingSharesPublic,
     CredentialRequirement,
+    AICredentialRequirement,
     ShareStatus,
     ShareMode,
 )
@@ -261,6 +271,14 @@ __all__ = [
     "AICredentialsPublic",
     "AICredentialType",
     "AICredentialData",
+    # AI Credential Shares
+    "AICredentialShare",
+    "AICredentialShareBase",
+    "AICredentialSharePublic",
+    "AICredentialShareCreate",
+    "AICredentialSharesPublic",
+    "SharedAICredentialPublic",
+    "SharedAICredentialsPublic",
     # Credential Shares
     "CredentialShare",
     "CredentialShareBase",
@@ -279,6 +297,7 @@ __all__ = [
     "PendingSharePublic",
     "PendingSharesPublic",
     "CredentialRequirement",
+    "AICredentialRequirement",
     "ShareStatus",
     "ShareMode",
     # Items

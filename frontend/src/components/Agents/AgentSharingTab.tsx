@@ -1,9 +1,9 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Share2, Info, Link2Off, Plus, Trash2, Send, Loader2, User, Wrench, RotateCcw } from "lucide-react"
+import { Share2, Info, Link2Off, Plus, Trash2, Send, Loader2, User, Wrench, RotateCcw, Key, MessageCircle } from "lucide-react"
 
 import type { AgentPublic, AgentSharePublic } from "@/client"
-import { AgentSharesService } from "@/client"
+import { AgentSharesService, AiCredentialsService, AgentsService } from "@/client"
 import {
   Card,
   CardContent,
@@ -25,6 +25,14 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Switch } from "@/components/ui/switch"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Dialog,
   DialogContent,
@@ -35,6 +43,13 @@ import {
 
 import { RevokeShareDialog } from "./ShareManagement/RevokeShareDialog"
 import { UpdateModeToggle, DetachDialog } from "./CloneManagement"
+
+// SDK to credential type mapping
+const SDK_TO_CRED_TYPE: Record<string, string> = {
+  "claude-code/anthropic": "anthropic",
+  "claude-code/minimax": "minimax",
+  "google-adk-wr/openai-compatible": "openai_compatible",
+}
 
 interface AgentSharingTabProps {
   agent: AgentPublic
@@ -48,6 +63,9 @@ export function AgentSharingTab({ agent }: AgentSharingTabProps) {
   const [reshareShare, setReshareShare] = useState<AgentSharePublic | null>(null)
   const [newShareEmail, setNewShareEmail] = useState("")
   const [newShareMode, setNewShareMode] = useState<"user" | "builder">("user")
+  const [provideAiCredentials, setProvideAiCredentials] = useState(false)
+  const [conversationCredentialId, setConversationCredentialId] = useState<string | null>(null)
+  const [buildingCredentialId, setBuildingCredentialId] = useState<string | null>(null)
 
   const queryClient = useQueryClient()
 
@@ -58,6 +76,37 @@ export function AgentSharingTab({ agent }: AgentSharingTabProps) {
     enabled: !agent.is_clone,
   })
 
+  // Fetch agent's environment to get SDK types
+  const { data: environments } = useQuery({
+    queryKey: ["environments", agent.id],
+    queryFn: () => AgentsService.listAgentEnvironments({ id: agent.id }),
+    enabled: !agent.is_clone && provideAiCredentials,
+  })
+
+  // Get active environment's SDK types
+  const activeEnv = environments?.data.find((e: { id: string }) => e.id === agent.active_environment_id)
+  const conversationSdkType = activeEnv?.agent_sdk_conversation
+    ? SDK_TO_CRED_TYPE[activeEnv.agent_sdk_conversation]
+    : null
+  const buildingSdkType = activeEnv?.agent_sdk_building
+    ? SDK_TO_CRED_TYPE[activeEnv.agent_sdk_building]
+    : null
+
+  // Fetch AI credentials when providing
+  const { data: aiCredentials } = useQuery({
+    queryKey: ["aiCredentialsList"],
+    queryFn: () => AiCredentialsService.listAiCredentials(),
+    enabled: !agent.is_clone && provideAiCredentials,
+  })
+
+  // Filter credentials by SDK type
+  const conversationCredentials = aiCredentials?.data.filter(
+    c => c.type === conversationSdkType
+  ) || []
+  const buildingCredentials = aiCredentials?.data.filter(
+    c => c.type === buildingSdkType
+  ) || []
+
   // Create share mutation
   const shareMutation = useMutation({
     mutationFn: () =>
@@ -66,12 +115,18 @@ export function AgentSharingTab({ agent }: AgentSharingTabProps) {
         requestBody: {
           shared_with_email: newShareEmail,
           share_mode: newShareMode,
+          provide_ai_credentials: provideAiCredentials,
+          conversation_ai_credential_id: provideAiCredentials ? (conversationCredentialId || undefined) : undefined,
+          building_ai_credential_id: provideAiCredentials ? (buildingCredentialId || undefined) : undefined,
         },
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["agentShares", agent.id] })
       setNewShareEmail("")
       setNewShareMode("user")
+      setProvideAiCredentials(false)
+      setConversationCredentialId(null)
+      setBuildingCredentialId(null)
       setShowAddForm(false)
     },
   })
@@ -375,26 +430,134 @@ export function AgentSharingTab({ agent }: AgentSharingTabProps) {
 
             <div className="space-y-3">
               <Label>Access Level</Label>
-              <RadioGroup value={newShareMode} onValueChange={(v) => setNewShareMode(v as "user" | "builder")}>
-                <div className="flex items-start space-x-3 p-3 border rounded-lg">
-                  <RadioGroupItem value="user" id="share-user" className="mt-1" />
-                  <div>
-                    <Label htmlFor="share-user" className="font-medium cursor-pointer">User Access</Label>
+              <RadioGroup value={newShareMode} onValueChange={(v) => {
+                setNewShareMode(v as "user" | "builder")
+                // Clear building credential when switching to user mode
+                if (v === "user") {
+                  setBuildingCredentialId(null)
+                }
+              }}>
+                <label
+                  htmlFor="share-user"
+                  className={`flex items-start gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
+                    newShareMode === "user"
+                      ? "border-blue-500 bg-blue-50 dark:bg-blue-950/20"
+                      : "hover:bg-muted/50"
+                  }`}
+                >
+                  <RadioGroupItem value="user" id="share-user" className="sr-only" />
+                  <MessageCircle className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
+                  <div className="flex-1">
+                    <span className="font-medium">Conversation Access</span>
                     <p className="text-sm text-muted-foreground">
-                      Can use the agent in conversation mode. Configuration is read-only.
+                      Can use the agent in conversation mode only.
                     </p>
                   </div>
-                </div>
-                <div className="flex items-start space-x-3 p-3 border rounded-lg">
-                  <RadioGroupItem value="builder" id="share-builder" className="mt-1" />
-                  <div>
-                    <Label htmlFor="share-builder" className="font-medium cursor-pointer">Builder Access</Label>
+                </label>
+                <label
+                  htmlFor="share-builder"
+                  className={`flex items-start gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
+                    newShareMode === "builder"
+                      ? "border-orange-500 bg-orange-50 dark:bg-orange-950/20"
+                      : "hover:bg-muted/50"
+                  }`}
+                >
+                  <RadioGroupItem value="builder" id="share-builder" className="sr-only" />
+                  <Wrench className="h-4 w-4 text-orange-500 mt-0.5 shrink-0" />
+                  <div className="flex-1">
+                    <span className="font-medium">Builder Access</span>
                     <p className="text-sm text-muted-foreground">
                       Full access to modify prompts, scripts, and configuration.
                     </p>
                   </div>
-                </div>
+                </label>
               </RadioGroup>
+            </div>
+
+            {/* AI Credentials Provision */}
+            <div className="border-t pt-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="provide-ai-credentials" className="flex items-center gap-2">
+                    <Key className="h-4 w-4" />
+                    Provide AI Credentials
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    {provideAiCredentials
+                      ? "Recipient will use your AI credentials"
+                      : "Recipient must use their own AI credentials"}
+                  </p>
+                </div>
+                <Switch
+                  id="provide-ai-credentials"
+                  checked={provideAiCredentials}
+                  onCheckedChange={setProvideAiCredentials}
+                />
+              </div>
+
+              {provideAiCredentials && (
+                <div className="space-y-4 pl-4 border-l-2 border-muted">
+                  {conversationSdkType && (
+                    <div className="space-y-2">
+                      <Label htmlFor="share-conv-cred">Conversation AI Credential</Label>
+                      <Select
+                        value={conversationCredentialId || ""}
+                        onValueChange={(v) => setConversationCredentialId(v || null)}
+                      >
+                        <SelectTrigger id="share-conv-cred">
+                          <SelectValue placeholder="Select credential..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {conversationCredentials.length === 0 ? (
+                            <div className="py-2 px-2 text-sm text-muted-foreground">
+                              No {conversationSdkType} credentials found
+                            </div>
+                          ) : (
+                            conversationCredentials.map((cred) => (
+                              <SelectItem key={cred.id} value={cred.id}>
+                                {cred.name} {cred.is_default && "(default)"}
+                              </SelectItem>
+                            ))
+                          )}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {newShareMode === "builder" && buildingSdkType && buildingSdkType !== conversationSdkType && (
+                    <div className="space-y-2">
+                      <Label htmlFor="share-build-cred">Building AI Credential</Label>
+                      <Select
+                        value={buildingCredentialId || ""}
+                        onValueChange={(v) => setBuildingCredentialId(v || null)}
+                      >
+                        <SelectTrigger id="share-build-cred">
+                          <SelectValue placeholder="Select credential..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {buildingCredentials.length === 0 ? (
+                            <div className="py-2 px-2 text-sm text-muted-foreground">
+                              No {buildingSdkType} credentials found
+                            </div>
+                          ) : (
+                            buildingCredentials.map((cred) => (
+                              <SelectItem key={cred.id} value={cred.id}>
+                                {cred.name} {cred.is_default && "(default)"}
+                              </SelectItem>
+                            ))
+                          )}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {!activeEnv && (
+                    <p className="text-sm text-muted-foreground">
+                      Loading environment configuration...
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             {shareMutation.error && (

@@ -1000,6 +1000,7 @@ export class AgentSharesService {
      * - Agent must not be a clone
      * - Target user must exist
      * - Cannot share with yourself
+     * - If providing AI credentials, they must be owned by you
      * @param data The data for the request.
      * @param data.agentId
      * @param data.requestBody
@@ -1113,7 +1114,9 @@ export class AgentSharesService {
      * Accept Share
      * Accept a pending share and create your clone.
      *
-     * Optionally provide credential values for non-shareable credentials.
+     * Optionally provide:
+     * - credential values for non-shareable credentials
+     * - ai_credential_selections if the share doesn't provide AI credentials
      * @param data The data for the request.
      * @param data.shareId
      * @param data.requestBody

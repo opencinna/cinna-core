@@ -14,6 +14,7 @@ from fastapi import HTTPException
 
 from app.models.agent import Agent
 from app.models.agent_share import AgentShare, ShareMode, ShareStatus
+from app.models.ai_credential import AICredential
 from app.models.user import User
 
 
@@ -26,7 +27,10 @@ class AgentShareService:
         agent_id: UUID,
         owner_id: UUID,
         shared_with_email: str,
-        share_mode: str
+        share_mode: str,
+        provide_ai_credentials: bool = False,
+        conversation_ai_credential_id: UUID | None = None,
+        building_ai_credential_id: UUID | None = None
     ) -> AgentShare:
         """
         Initiate sharing an agent with another user.
@@ -39,6 +43,7 @@ class AgentShareService:
         4. Target user must exist (by email)
         5. Cannot share with yourself
         6. Cannot create duplicate share (unique constraint)
+        7. If providing AI credentials, they must be owned by owner
 
         Returns: AgentShare with status="pending"
         """
@@ -73,6 +78,23 @@ class AgentShareService:
         if target_user.id == owner_id:
             raise HTTPException(status_code=400, detail="Cannot share with yourself")
 
+        # 7. Validate AI credentials if provided
+        if provide_ai_credentials:
+            if conversation_ai_credential_id:
+                conv_cred = session.get(AICredential, conversation_ai_credential_id)
+                if not conv_cred or conv_cred.owner_id != owner_id:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Conversation AI credential not found or not owned by you"
+                    )
+            if building_ai_credential_id:
+                build_cred = session.get(AICredential, building_ai_credential_id)
+                if not build_cred or build_cred.owner_id != owner_id:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Building AI credential not found or not owned by you"
+                    )
+
         # 6. Check for existing share
         stmt = select(AgentShare).where(
             AgentShare.original_agent_id == agent_id,
@@ -92,6 +114,9 @@ class AgentShareService:
                 existing.accepted_at = None
                 existing.declined_at = None
                 existing.cloned_agent_id = None
+                existing.provide_ai_credentials = provide_ai_credentials
+                existing.conversation_ai_credential_id = conversation_ai_credential_id if provide_ai_credentials else None
+                existing.building_ai_credential_id = building_ai_credential_id if provide_ai_credentials else None
                 session.add(existing)
                 session.commit()
                 session.refresh(existing)
@@ -104,7 +129,10 @@ class AgentShareService:
             shared_by_user_id=owner_id,
             share_mode=share_mode,
             status=ShareStatus.PENDING,
-            shared_at=datetime.utcnow()
+            shared_at=datetime.utcnow(),
+            provide_ai_credentials=provide_ai_credentials,
+            conversation_ai_credential_id=conversation_ai_credential_id if provide_ai_credentials else None,
+            building_ai_credential_id=building_ai_credential_id if provide_ai_credentials else None
         )
         session.add(share)
         session.commit()
@@ -116,7 +144,8 @@ class AgentShareService:
         session: Session,
         share_id: UUID,
         recipient_id: UUID,
-        credentials_data: dict | None = None
+        credentials_data: dict | None = None,
+        ai_credential_selections: dict | None = None
     ) -> Agent:
         """
         Accept a pending share and create the clone.
@@ -130,6 +159,13 @@ class AgentShareService:
         1. Create cloned agent via AgentCloneService
         2. Update share record status
         3. Return created clone
+
+        Args:
+            session: Database session
+            share_id: Share ID
+            recipient_id: Recipient user ID
+            credentials_data: Optional dict of {credential_id: {field: value}} for placeholders
+            ai_credential_selections: Optional dict with conversation_credential_id/building_credential_id
 
         Returns: Created Agent (the clone)
         """
@@ -157,13 +193,15 @@ class AgentShareService:
         if not original_agent:
             raise HTTPException(status_code=404, detail="Original agent no longer exists")
 
-        # Create the clone
+        # Create the clone with share info
         clone = await AgentCloneService.create_clone(
             session=session,
             original_agent=original_agent,
             recipient_id=recipient_id,
             clone_mode=share.share_mode,
-            credentials_data=credentials_data or {}
+            credentials_data=credentials_data or {},
+            share=share,
+            ai_credential_selections=ai_credential_selections
         )
 
         # Update share record

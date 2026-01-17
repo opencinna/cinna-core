@@ -22,8 +22,10 @@ from app.models.credential import Credential
 from app.models.credential_share import CredentialShare
 from app.models.environment import AgentEnvironment, AgentEnvironmentCreate
 from app.models.link_models import AgentCredentialLink
+from app.models.agent_share import AgentShare
 from app.core.config import settings
 from app.services.environment_service import EnvironmentService
+from app.services.ai_credentials_service import ai_credentials_service
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +39,9 @@ class AgentCloneService:
         original_agent: Agent,
         recipient_id: UUID,
         clone_mode: str,
-        credentials_data: dict | None = None
+        credentials_data: dict | None = None,
+        share: AgentShare | None = None,
+        ai_credential_selections: dict | None = None
     ) -> Agent:
         """
         Create a clone of an agent for a recipient.
@@ -47,7 +51,8 @@ class AgentCloneService:
         2. Create Environment for clone
         3. Copy workspace files from original environment
         4. Setup credentials (link shared, create placeholders)
-        5. Return clone
+        5. Setup AI credentials (from share or user's own)
+        6. Return clone
 
         Args:
             session: Database session
@@ -55,6 +60,8 @@ class AgentCloneService:
             recipient_id: UUID of the user receiving the clone
             clone_mode: "user" or "builder"
             credentials_data: Optional dict of {credential_id: {field: value}} for placeholders
+            share: Optional AgentShare with AI credential provision info
+            ai_credential_selections: Optional dict with conversation_credential_id/building_credential_id
 
         Returns:
             The created clone Agent
@@ -97,15 +104,61 @@ class AgentCloneService:
             original_env = session.get(AgentEnvironment, original_agent.active_environment_id)
 
         # Create environment with same template as original
-        env_name = original_env.env_name if original_env else settings.DEFAULT_AGENT_ENV_NAME
+        env_name = settings.DEFAULT_AGENT_ENV_NAME
         env_version = original_env.env_version if original_env else settings.DEFAULT_AGENT_ENV_VERSION
+        sdk_conversation = original_env.agent_sdk_conversation if original_env else None
+        # Only include building SDK if clone_mode is "builder" (user mode doesn't need building)
+        sdk_building = original_env.agent_sdk_building if original_env and clone_mode == "builder" else None
+
+        # Determine AI credential configuration for environment
+        # Always use use_default_ai_credentials=False for clones so that EnvironmentService
+        # uses the named credentials table (ai_credential) with proper fallback to defaults,
+        # rather than the old profile-based credentials (ai_credentials_encrypted)
+        use_default_ai_credentials = False
+        conversation_ai_credential_id = None
+        building_ai_credential_id = None
+
+        # If owner provided AI credentials via the share
+        if share and share.provide_ai_credentials:
+            # Create AI credential shares for the recipient
+            if share.conversation_ai_credential_id:
+                ai_credentials_service.share_credential(
+                    session=session,
+                    credential_id=share.conversation_ai_credential_id,
+                    owner_id=share.shared_by_user_id,
+                    recipient_id=recipient_id
+                )
+                conversation_ai_credential_id = share.conversation_ai_credential_id
+
+            # Only set building credentials if clone_mode is "builder"
+            if clone_mode == "builder" and share.building_ai_credential_id:
+                ai_credentials_service.share_credential(
+                    session=session,
+                    credential_id=share.building_ai_credential_id,
+                    owner_id=share.shared_by_user_id,
+                    recipient_id=recipient_id
+                )
+                building_ai_credential_id = share.building_ai_credential_id
+        elif ai_credential_selections:
+            # User provided their own credential selections
+            selected_conv = ai_credential_selections.get("conversation_credential_id")
+            selected_build = ai_credential_selections.get("building_credential_id") if clone_mode == "builder" else None
+            conversation_ai_credential_id = selected_conv
+            building_ai_credential_id = selected_build
+        # If neither owner provided nor user selected, leave credential IDs as None
+        # EnvironmentService will fall back to recipient's default named credentials
 
         env_data = AgentEnvironmentCreate(
             env_name=env_name,
             env_version=env_version,
             instance_name="Default",
             type="docker",
-            config={}
+            config={},
+            agent_sdk_conversation=sdk_conversation,
+            agent_sdk_building=sdk_building,
+            use_default_ai_credentials=use_default_ai_credentials,
+            conversation_ai_credential_id=conversation_ai_credential_id,
+            building_ai_credential_id=building_ai_credential_id
         )
 
         # Get recipient user for environment creation

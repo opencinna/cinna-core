@@ -20,6 +20,11 @@ from app.models.ai_credential import (
     AICredentialType,
     AICredentialPublic,
 )
+from app.models.ai_credential_share import (
+    AICredentialShare,
+    AICredentialSharePublic,
+    SharedAICredentialPublic,
+)
 from app.models.user import User, AIServiceCredentials, AIServiceCredentialsUpdate
 from app import crud
 
@@ -295,6 +300,169 @@ class AICredentialsService:
         session.refresh(user)
 
         logger.info(f"Cleared {cred_type} from user profile after default deleted")
+
+    # ============= Sharing Methods =============
+
+    def get_credential_for_use(
+        self,
+        session: Session,
+        credential_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> AICredentialData | None:
+        """
+        Get decrypted credential data if user owns it or has a share.
+        Returns None if credential doesn't exist or user has no access.
+        """
+        credential = session.get(AICredential, credential_id)
+        if not credential:
+            return None
+
+        # Check if user owns the credential
+        if credential.owner_id == user_id:
+            return self._decrypt_credential(credential)
+
+        # Check if user has a share
+        statement = select(AICredentialShare).where(
+            AICredentialShare.ai_credential_id == credential_id,
+            AICredentialShare.shared_with_user_id == user_id,
+        )
+        share = session.exec(statement).first()
+        if share:
+            return self._decrypt_credential(credential)
+
+        return None
+
+    def can_access_credential(
+        self,
+        session: Session,
+        credential_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> bool:
+        """Check if user can access a credential (owns or has share)"""
+        credential = session.get(AICredential, credential_id)
+        if not credential:
+            return False
+
+        # Check ownership
+        if credential.owner_id == user_id:
+            return True
+
+        # Check share
+        statement = select(AICredentialShare).where(
+            AICredentialShare.ai_credential_id == credential_id,
+            AICredentialShare.shared_with_user_id == user_id,
+        )
+        return session.exec(statement).first() is not None
+
+    def share_credential(
+        self,
+        session: Session,
+        credential_id: uuid.UUID,
+        owner_id: uuid.UUID,
+        recipient_id: uuid.UUID,
+    ) -> AICredentialShare:
+        """
+        Create a share for an AI credential.
+        Owner must own the credential, and share must not already exist.
+        """
+        # Verify credential exists and is owned by owner
+        credential = session.get(AICredential, credential_id)
+        if not credential:
+            raise HTTPException(status_code=404, detail="AI credential not found")
+        if credential.owner_id != owner_id:
+            raise HTTPException(status_code=403, detail="Only the owner can share this credential")
+
+        # Can't share with yourself
+        if owner_id == recipient_id:
+            raise HTTPException(status_code=400, detail="Cannot share credential with yourself")
+
+        # Check if share already exists
+        statement = select(AICredentialShare).where(
+            AICredentialShare.ai_credential_id == credential_id,
+            AICredentialShare.shared_with_user_id == recipient_id,
+        )
+        existing_share = session.exec(statement).first()
+        if existing_share:
+            # Share already exists, return it
+            return existing_share
+
+        # Create new share
+        share = AICredentialShare(
+            ai_credential_id=credential_id,
+            shared_with_user_id=recipient_id,
+            shared_by_user_id=owner_id,
+        )
+        session.add(share)
+        session.commit()
+        session.refresh(share)
+
+        logger.info(f"Created AI credential share: {credential_id} -> user {recipient_id}")
+        return share
+
+    def revoke_share(
+        self,
+        session: Session,
+        credential_id: uuid.UUID,
+        owner_id: uuid.UUID,
+        recipient_id: uuid.UUID,
+    ) -> None:
+        """Revoke a credential share"""
+        # Verify credential exists and is owned by owner
+        credential = session.get(AICredential, credential_id)
+        if not credential:
+            raise HTTPException(status_code=404, detail="AI credential not found")
+        if credential.owner_id != owner_id:
+            raise HTTPException(status_code=403, detail="Only the owner can revoke shares")
+
+        # Find and delete the share
+        statement = select(AICredentialShare).where(
+            AICredentialShare.ai_credential_id == credential_id,
+            AICredentialShare.shared_with_user_id == recipient_id,
+        )
+        share = session.exec(statement).first()
+        if share:
+            session.delete(share)
+            session.commit()
+            logger.info(f"Revoked AI credential share: {credential_id} -> user {recipient_id}")
+
+    def list_shared_with_me(
+        self,
+        session: Session,
+        user_id: uuid.UUID,
+    ) -> list[SharedAICredentialPublic]:
+        """List AI credentials shared with the current user"""
+        statement = (
+            select(AICredentialShare)
+            .where(AICredentialShare.shared_with_user_id == user_id)
+            .order_by(AICredentialShare.shared_at.desc())
+        )
+        shares = session.exec(statement).all()
+
+        result = []
+        for share in shares:
+            credential = session.get(AICredential, share.ai_credential_id)
+            owner = session.get(User, credential.owner_id) if credential else None
+            if credential and owner:
+                result.append(SharedAICredentialPublic(
+                    id=credential.id,
+                    name=credential.name,
+                    type=credential.type.value,
+                    owner_id=credential.owner_id,
+                    owner_email=owner.email,
+                    shared_at=share.shared_at,
+                ))
+        return result
+
+    def get_credential_public_info(
+        self,
+        session: Session,
+        credential_id: uuid.UUID,
+    ) -> tuple[str, str] | None:
+        """Get credential name and type (for display purposes, no auth check)"""
+        credential = session.get(AICredential, credential_id)
+        if not credential:
+            return None
+        return (credential.name, credential.type.value)
 
 
 # Singleton instance

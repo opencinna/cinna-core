@@ -24,6 +24,14 @@ class AgentEnvironment(SQLModel, table=True):
     # SDK selection for agent (immutable after creation)
     agent_sdk_conversation: str | None = None  # "claude-code/anthropic" | "claude-code/minimax"
     agent_sdk_building: str | None = None  # "claude-code/anthropic" | "claude-code/minimax"
+    # AI credential linking (if False, use explicitly linked credentials)
+    use_default_ai_credentials: bool = Field(default=True)
+    conversation_ai_credential_id: uuid.UUID | None = Field(
+        default=None, foreign_key="ai_credential.id", ondelete="SET NULL"
+    )
+    building_ai_credential_id: uuid.UUID | None = Field(
+        default=None, foreign_key="ai_credential.id", ondelete="SET NULL"
+    )
 
 
 # Pydantic Schemas
@@ -35,6 +43,10 @@ class AgentEnvironmentCreate(SQLModel):
     config: dict = {}
     agent_sdk_conversation: str | None = None  # "claude-code/anthropic" | "claude-code/minimax"
     agent_sdk_building: str | None = None  # "claude-code/anthropic" | "claude-code/minimax"
+    # AI credential linking
+    use_default_ai_credentials: bool = True
+    conversation_ai_credential_id: uuid.UUID | None = None
+    building_ai_credential_id: uuid.UUID | None = None
 
 
 class AgentEnvironmentUpdate(SQLModel):
@@ -58,6 +70,10 @@ class AgentEnvironmentPublic(SQLModel):
     last_activity_at: datetime | None
     agent_sdk_conversation: str | None
     agent_sdk_building: str | None
+    # AI credential linking
+    use_default_ai_credentials: bool
+    conversation_ai_credential_id: uuid.UUID | None
+    building_ai_credential_id: uuid.UUID | None
 
 
 class AgentEnvironmentsPublic(SQLModel):

@@ -5,6 +5,7 @@ from sqlmodel import Field, Relationship, SQLModel
 
 if TYPE_CHECKING:
     from app.models.agent import Agent
+    from app.models.ai_credential import AICredential
     from app.models.user import User
 
 
@@ -49,6 +50,15 @@ class AgentShare(AgentShareBase, table=True):
     # Reference to created clone (after acceptance)
     cloned_agent_id: uuid_module.UUID | None = Field(default=None, foreign_key="agent.id")
 
+    # AI credential provision (owner can provide their AI credentials to recipient)
+    provide_ai_credentials: bool = Field(default=False)
+    conversation_ai_credential_id: uuid_module.UUID | None = Field(
+        default=None, foreign_key="ai_credential.id", ondelete="SET NULL"
+    )
+    building_ai_credential_id: uuid_module.UUID | None = Field(
+        default=None, foreign_key="ai_credential.id", ondelete="SET NULL"
+    )
+
     # Relationships
     original_agent: "Agent" = Relationship(
         sa_relationship_kwargs={"foreign_keys": "[AgentShare.original_agent_id]"}
@@ -61,6 +71,12 @@ class AgentShare(AgentShareBase, table=True):
     )
     shared_by_user: "User" = Relationship(
         sa_relationship_kwargs={"foreign_keys": "[AgentShare.shared_by_user_id]"}
+    )
+    conversation_ai_credential: Optional["AICredential"] = Relationship(
+        sa_relationship_kwargs={"foreign_keys": "[AgentShare.conversation_ai_credential_id]"}
+    )
+    building_ai_credential: Optional["AICredential"] = Relationship(
+        sa_relationship_kwargs={"foreign_keys": "[AgentShare.building_ai_credential_id]"}
     )
 
 
@@ -82,6 +98,10 @@ class AgentShareCreate(SQLModel):
     """Input for creating a new share"""
     shared_with_email: str
     share_mode: str  # "user" | "builder"
+    # AI credential provision options
+    provide_ai_credentials: bool = False
+    conversation_ai_credential_id: uuid_module.UUID | None = None
+    building_ai_credential_id: uuid_module.UUID | None = None
 
 
 class AgentShareUpdate(SQLModel):
@@ -102,6 +122,12 @@ class CredentialRequirement(SQLModel):
     allow_sharing: bool
 
 
+class AICredentialRequirement(SQLModel):
+    """Info about an AI credential type required for agent"""
+    sdk_type: str  # e.g., "anthropic", "minimax"
+    purpose: str  # "conversation" | "building"
+
+
 class PendingSharePublic(SQLModel):
     """Pending share for recipient view (includes agent details)"""
     id: uuid_module.UUID
@@ -115,6 +141,12 @@ class PendingSharePublic(SQLModel):
 
     # Credentials info for acceptance wizard
     credentials_required: list[CredentialRequirement]
+
+    # AI credential provision info
+    ai_credentials_provided: bool = False
+    conversation_ai_credential_name: str | None = None
+    building_ai_credential_name: str | None = None
+    required_ai_credential_types: list[AICredentialRequirement] = []
 
 
 class PendingSharesPublic(SQLModel):

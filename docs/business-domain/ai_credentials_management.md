@@ -6,16 +6,14 @@ Enable users to manage multiple named AI credentials (API keys) for different SD
 
 ## Feature Overview
 
-**Current Implementation (Phase 1):**
-1. User creates named AI credentials (e.g., "Production Anthropic", "Testing OpenAI")
-2. User marks one credential of each type as "default"
-3. Default credential values auto-sync to user's profile fields (`ai_credentials_encrypted`)
-4. Existing environment creation continues to work via synced profile fields
-
-**Future Phases (Not Yet Implemented):**
+- User creates named AI credentials (e.g., "Production Anthropic", "Testing OpenAI")
+- User marks one credential of each type as "default"
+- Default credential values auto-sync to user's profile fields (`ai_credentials_encrypted`)
+- Existing environment creation continues to work via synced profile fields
 - Explicit credential linking to agent environments
 - Owner-provided credentials during agent sharing
-- Environment SDK settings synchronization during clone creation
+- AI credentials step in accept share wizard
+- Clone credential setup with sharing support
 
 ## Architecture
 
@@ -238,7 +236,7 @@ When `set_default()` is called:
 - `frontend/src/client/sdk.gen.ts` - `AiCredentialsService`
 - `frontend/src/client/types.gen.ts` - TypeScript types
 
-## Planned Features (Phase 2)
+## Phase 2 Implementation Details
 
 ### Environment Credential Linking
 
@@ -249,13 +247,15 @@ When `set_default()` is called:
 - `conversation_ai_credential_id` (UUID, nullable) - Explicit link for conversation SDK
 - `building_ai_credential_id` (UUID, nullable) - Explicit link for building SDK
 
+**Migration:** `backend/app/alembic/versions/k1f2g3h4i5j6_add_env_ai_credentials.py`
+
 **Service Updates:** `backend/app/services/environment_service.py`
-- `create_environment()` - Resolve defaults from AICredential table or validate linked credentials
-- `resolve_ai_credentials_for_environment()` - Get actual credential data for container injection
+- `SDK_TO_CREDENTIAL_TYPE` mapping at line 24 - Maps SDK IDs to AI credential types
+- `create_environment()` - Resolves defaults from AICredential table or validates linked credentials
 
 **Frontend Updates:** `frontend/src/components/Environments/AddEnvironment.tsx`
-- Add "Use Default AI Credentials" switch (default: ON)
-- When OFF: Show credential dropdowns for conversation/building modes
+- "Use Default AI Credentials" switch (default: ON)
+- When OFF: Credential dropdowns for conversation/building modes filtered by SDK type
 - Validation: Check defaults exist or explicit credentials selected
 
 ### Agent Share Credential Provision
@@ -266,20 +266,22 @@ When `set_default()` is called:
 - `provide_ai_credentials` (BOOLEAN, default false) - Owner provides credentials
 - `conversation_ai_credential_id` (UUID, nullable) - Owner's credential for conversation SDK
 - `building_ai_credential_id` (UUID, nullable) - Owner's credential for building SDK
+- `AICredentialRequirement` schema - SDK type and purpose for wizard
 
 **New Model:** `backend/app/models/ai_credential_share.py`
-- Junction table linking shared credentials to recipients
-- Similar pattern to existing `CredentialShare`
+- `AICredentialShare` table - Junction for sharing credentials with recipients
+- `AICredentialSharePublic`, `AICredentialShareCreate` schemas
+
+**Migration:** `backend/app/alembic/versions/j0e1f2g3h4i5_add_share_ai_credentials.py`
 
 **Service Updates:** `backend/app/services/agent_share_service.py`
-- `share_agent()` - Accept optional credential provision fields
-- Validate credentials exist and belong to owner
-- Validate credentials match required SDKs for share mode
+- `share_agent()` - Accepts `provide_ai_credentials`, `conversation_ai_credential_id`, `building_ai_credential_id`
+- Validates credentials exist and belong to owner
 
 **Frontend Updates:** `frontend/src/components/Agents/AgentSharingTab.tsx`
-- Add "Provide AI Credentials" switch in share dialog
-- When ON: Show credential dropdowns based on agent's active environment SDKs
-- Info alert explaining credential sharing implications
+- "Provide AI Credentials" switch in share dialog
+- When ON: Credential dropdowns based on agent's active environment SDKs
+- Info text explaining credential sharing implications
 
 ### Accept Share Wizard AI Credentials Step
 
@@ -288,42 +290,65 @@ When `set_default()` is called:
 **New Component:** `frontend/src/components/Agents/AcceptShareWizard/WizardStepAICredentials.tsx`
 
 **If owner provided credentials:**
-- Show "Ready to Use" section
-- Badge: "Provided by owner"
+- Green section: "AI Credentials Provided"
+- Shows credential names with "Provided by owner" badge
 - No action needed from recipient
 
 **If owner did NOT provide credentials:**
-- Show required SDKs based on share mode
-- Check if recipient has matching default credentials
-- If YES: Show "Using your default: [Name]" with green badge
-- If NO: Dropdown to select from existing credentials or link to Settings
+- Shows required SDKs based on agent's environment
+- Checks if recipient has matching default credentials
+- If defaults exist: Shows "Using default: [Name]" with green badge
+- If no defaults: Dropdown to select from existing credentials
+- If no credentials: Error message with link to Settings
 
-**Blocker validation:**
-- If any required SDK lacks credentials → disable Continue button
-- Show "Cannot create clone without [SDK Type] credentials" error
+**Validation:**
+- Continue button disabled until all required SDK types have credentials
+- Both explicit selection and default fallback are valid
 
 **Wizard Flow Update:** `frontend/src/components/Agents/AcceptShareWizard/AcceptShareWizard.tsx`
-- New step order: Overview → AI Credentials → Integration Credentials → Confirm
-- Skip AI Credentials step if owner provided all needed credentials
+- Step type: `"overview" | "ai_credentials" | "credentials" | "confirm"`
+- State: `aiCredentialSelections` with `conversationCredentialId`, `buildingCredentialId`
+- AI Credentials step shown when `!share.ai_credentials_provided && required_ai_credential_types.length > 0`
+- Accept mutation includes `ai_credential_selections` in request body
 
 ### Clone Credential Setup
 
 **Service Updates:** `backend/app/services/agent_clone_service.py`
 
 **`create_clone()` changes:**
-1. Get original agent's active environment SDK settings
-2. Clone environment with same SDK settings
+1. Gets original agent's active environment SDK settings
+2. Creates clone environment with same SDK settings
 3. If share has `provide_ai_credentials=true`:
-   - Create `AICredentialShare` links for recipient
-   - Link clone environment to shared credentials
+   - Creates `AICredentialShare` links for recipient via `AICredentialsService.share_credential()`
+   - Links clone environment to shared credentials
 4. If share has `provide_ai_credentials=false`:
-   - Use recipient's credentials selected in wizard
-   - If recipient has matching defaults, use those
+   - Uses recipient's credentials selected in wizard (from `ai_credential_selections`)
+   - Falls back to recipient's default credentials if not explicitly selected
 
-**`push_updates()` changes:**
-- Include environment SDK settings in update payload
-- If parent's active environment SDK changed, update clone's environment
-- Do NOT change credential links (credentials belong to clone owner)
+### AI Credential Sharing Table
+
+**New Table:** `ai_credential_shares`
+
+**Migration:** `backend/app/alembic/versions/i9d0e1f2g3h4_add_ai_credential_shares.py`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `ai_credential_id` | UUID | FK to ai_credential.id (CASCADE) |
+| `shared_with_user_id` | UUID | FK to user.id (CASCADE) |
+| `shared_by_user_id` | UUID | FK to user.id |
+| `shared_at` | DATETIME | When share was created |
+
+**Indexes:**
+- `ix_ai_credential_shares_credential` - (ai_credential_id)
+- `ix_ai_credential_shares_recipient` - (shared_with_user_id)
+
+**Service Methods:** `backend/app/services/ai_credentials_service.py`
+- `share_credential(session, credential_id, owner_id, recipient_id)` - Creates share link
+- `can_access_credential(session, credential_id, user_id)` - Checks ownership or share access
+- `get_credential_for_use(session, credential_id, user_id)` - Returns decrypted data if accessible
+- `revoke_share(session, credential_id, recipient_id)` - Removes share link
+- `list_shared_with_me(session, user_id)` - Lists credentials shared with user
 
 ## Implementation Scenarios
 
@@ -391,8 +416,40 @@ When `set_default()` is called:
 - `docs/agent-sessions/agent_env_docker.md` - Environment architecture
 - `docs/security_credentials_whitelist.md` - Credential encryption pattern
 
+## Phase 2 File Locations Reference
+
+### Backend - Models
+
+- `backend/app/models/ai_credential_share.py` - AICredentialShare model and schemas
+- `backend/app/models/agent_share.py` - Updated with AI credential provision fields
+- `backend/app/models/environment.py` - Updated with AI credential linking fields
+
+### Backend - Migrations
+
+- `backend/app/alembic/versions/i9d0e1f2g3h4_add_ai_credential_shares.py` - AI credential shares table
+- `backend/app/alembic/versions/j0e1f2g3h4i5_add_share_ai_credentials.py` - Agent share AI credential fields
+- `backend/app/alembic/versions/k1f2g3h4i5j6_add_env_ai_credentials.py` - Environment AI credential fields
+
+### Backend - Services
+
+- `backend/app/services/ai_credentials_service.py` - Sharing methods added
+- `backend/app/services/environment_service.py` - SDK to credential type mapping
+- `backend/app/services/agent_share_service.py` - AI credential provision handling
+- `backend/app/services/agent_clone_service.py` - Clone AI credential setup
+
+### Backend - Routes
+
+- `backend/app/api/routes/agent_shares.py` - Updated endpoints for AI credentials
+
+### Frontend - Components
+
+- `frontend/src/components/Environments/AddEnvironment.tsx` - Credential selection UI
+- `frontend/src/components/Agents/AgentSharingTab.tsx` - Share dialog AI credentials
+- `frontend/src/components/Agents/AcceptShareWizard/WizardStepAICredentials.tsx` - New wizard step
+- `frontend/src/components/Agents/AcceptShareWizard/AcceptShareWizard.tsx` - Updated wizard flow
+
 ---
 
-**Document Version:** 2.0
+**Document Version:** 3.0
 **Last Updated:** 2026-01-17
-**Status:** Phase 1 Implemented (Core CRUD + Auto-Sync), Phase 2 Planned
+**Status:** Implemented

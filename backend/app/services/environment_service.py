@@ -7,9 +7,11 @@ from typing import Any
 from sqlmodel import Session, select
 from sqlalchemy.orm.attributes import flag_modified
 from app.models import AgentEnvironment, AgentEnvironmentCreate, AgentEnvironmentUpdate, Agent, User
+from app.models.ai_credential import AICredentialType
 from app import crud
 from app.core.db import engine
 from .environment_lifecycle import EnvironmentLifecycleManager
+from .ai_credentials_service import ai_credentials_service
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,13 @@ SDK_API_KEY_MAP = {
     SDK_ANTHROPIC: "anthropic_api_key",
     SDK_MINIMAX: "minimax_api_key",
     SDK_OPENAI_COMPATIBLE: "openai_compatible_api_key",
+}
+
+# SDK to AICredentialType mapping
+SDK_TO_CREDENTIAL_TYPE = {
+    SDK_ANTHROPIC: AICredentialType.ANTHROPIC,
+    SDK_MINIMAX: AICredentialType.MINIMAX,
+    SDK_OPENAI_COMPATIBLE: AICredentialType.OPENAI_COMPATIBLE,
 }
 
 
@@ -249,36 +258,141 @@ class EnvironmentService:
         if not agent:
             raise ValueError(f"Agent {agent_id} not found")
 
-        # Get user's AI credentials
-        ai_credentials = crud.get_user_ai_credentials(user=user)
-
         # Normalize SDK values (use user's defaults, then fall back to global default)
+        # Conversation SDK is always required
         sdk_conversation = data.agent_sdk_conversation or user.default_sdk_conversation or DEFAULT_SDK
-        sdk_building = data.agent_sdk_building or user.default_sdk_building or DEFAULT_SDK
+        # Building SDK can be None (e.g., for user-mode clones that don't need building)
+        # Only apply defaults if not explicitly set to None
+        if data.agent_sdk_building is None:
+            # Explicitly None means "not needed" (e.g., user-mode clones)
+            sdk_building = None
+        else:
+            sdk_building = data.agent_sdk_building or user.default_sdk_building or DEFAULT_SDK
 
         # Validate SDK values
         if sdk_conversation not in VALID_SDK_OPTIONS:
             raise ValueError(f"Invalid agent_sdk_conversation: {sdk_conversation}. Valid options: {VALID_SDK_OPTIONS}")
-        if sdk_building not in VALID_SDK_OPTIONS:
+        if sdk_building is not None and sdk_building not in VALID_SDK_OPTIONS:
             raise ValueError(f"Invalid agent_sdk_building: {sdk_building}. Valid options: {VALID_SDK_OPTIONS}")
 
-        # Collect required SDKs and validate user has API keys
-        required_sdks = set([sdk_conversation, sdk_building])
-        for sdk in required_sdks:
-            required_key = SDK_API_KEY_MAP.get(sdk)
-            if required_key and ai_credentials:
-                key_value = getattr(ai_credentials, required_key, None)
-                if not key_value:
-                    raise ValueError(f"Missing required API key '{required_key}' for SDK '{sdk}'. Please add it in user settings.")
-            elif required_key and not ai_credentials:
-                raise ValueError(f"Missing required API key '{required_key}' for SDK '{sdk}'. Please add it in user settings.")
+        # Initialize API key variables
+        anthropic_api_key = None
+        minimax_api_key = None
+        openai_compatible_api_key = None
+        openai_compatible_base_url = None
+        openai_compatible_model = None
 
-        # Get API keys for the selected SDKs
-        anthropic_api_key = ai_credentials.anthropic_api_key if ai_credentials else None
-        minimax_api_key = ai_credentials.minimax_api_key if ai_credentials else None
-        openai_compatible_api_key = ai_credentials.openai_compatible_api_key if ai_credentials else None
-        openai_compatible_base_url = ai_credentials.openai_compatible_base_url if ai_credentials else None
-        openai_compatible_model = ai_credentials.openai_compatible_model if ai_credentials else None
+        # Credential IDs for storing on the environment
+        conversation_ai_credential_id = None
+        building_ai_credential_id = None
+
+        if data.use_default_ai_credentials:
+            # Use user's default AI credentials from profile (existing behavior)
+            ai_credentials = crud.get_user_ai_credentials(user=user)
+
+            # Collect required SDKs and validate user has API keys
+            required_sdks = set([sdk_conversation, sdk_building])
+            for sdk in required_sdks:
+                required_key = SDK_API_KEY_MAP.get(sdk)
+                if required_key and ai_credentials:
+                    key_value = getattr(ai_credentials, required_key, None)
+                    if not key_value:
+                        raise ValueError(f"Missing required API key '{required_key}' for SDK '{sdk}'. Please add it in user settings.")
+                elif required_key and not ai_credentials:
+                    raise ValueError(f"Missing required API key '{required_key}' for SDK '{sdk}'. Please add it in user settings.")
+
+            # Get API keys from user's default credentials
+            anthropic_api_key = ai_credentials.anthropic_api_key if ai_credentials else None
+            minimax_api_key = ai_credentials.minimax_api_key if ai_credentials else None
+            openai_compatible_api_key = ai_credentials.openai_compatible_api_key if ai_credentials else None
+            openai_compatible_base_url = ai_credentials.openai_compatible_base_url if ai_credentials else None
+            openai_compatible_model = ai_credentials.openai_compatible_model if ai_credentials else None
+        else:
+            # Resolve conversation credential
+            if data.conversation_ai_credential_id:
+                conv_cred_data = ai_credentials_service.get_credential_for_use(
+                    session, data.conversation_ai_credential_id, user.id
+                )
+                if not conv_cred_data:
+                    raise ValueError("Cannot access the specified conversation AI credential")
+                conversation_ai_credential_id = data.conversation_ai_credential_id
+                # Map to appropriate API key based on SDK
+                cred_type = SDK_TO_CREDENTIAL_TYPE.get(sdk_conversation)
+                if cred_type == AICredentialType.ANTHROPIC:
+                    anthropic_api_key = conv_cred_data.api_key
+                elif cred_type == AICredentialType.MINIMAX:
+                    minimax_api_key = conv_cred_data.api_key
+                elif cred_type == AICredentialType.OPENAI_COMPATIBLE:
+                    openai_compatible_api_key = conv_cred_data.api_key
+                    openai_compatible_base_url = conv_cred_data.base_url
+                    openai_compatible_model = conv_cred_data.model
+            else:
+                # Fall back to user's default for conversation SDK
+                cred_type = SDK_TO_CREDENTIAL_TYPE.get(sdk_conversation)
+                if cred_type:
+                    default_cred = ai_credentials_service.get_default_for_type(session, user.id, cred_type)
+                    if default_cred:
+                        conv_cred_data = ai_credentials_service._decrypt_credential(default_cred)
+                        if cred_type == AICredentialType.ANTHROPIC:
+                            anthropic_api_key = conv_cred_data.api_key
+                        elif cred_type == AICredentialType.MINIMAX:
+                            minimax_api_key = conv_cred_data.api_key
+                        elif cred_type == AICredentialType.OPENAI_COMPATIBLE:
+                            openai_compatible_api_key = conv_cred_data.api_key
+                            openai_compatible_base_url = conv_cred_data.base_url
+                            openai_compatible_model = conv_cred_data.model
+                    else:
+                        logger.info(f"DEBUG env_service - No default credential found for type {cred_type}")
+
+            # Resolve building credential
+            if data.building_ai_credential_id:
+                build_cred_data = ai_credentials_service.get_credential_for_use(
+                    session, data.building_ai_credential_id, user.id
+                )
+                if not build_cred_data:
+                    raise ValueError("Cannot access the specified building AI credential")
+                building_ai_credential_id = data.building_ai_credential_id
+                # Map to appropriate API key based on SDK
+                cred_type = SDK_TO_CREDENTIAL_TYPE.get(sdk_building)
+                if cred_type == AICredentialType.ANTHROPIC:
+                    anthropic_api_key = build_cred_data.api_key
+                elif cred_type == AICredentialType.MINIMAX:
+                    minimax_api_key = build_cred_data.api_key
+                elif cred_type == AICredentialType.OPENAI_COMPATIBLE:
+                    openai_compatible_api_key = build_cred_data.api_key
+                    openai_compatible_base_url = build_cred_data.base_url
+                    openai_compatible_model = build_cred_data.model
+            else:
+                # Fall back to user's default for building SDK if not same as conversation
+                if sdk_building != sdk_conversation or not data.conversation_ai_credential_id:
+                    cred_type = SDK_TO_CREDENTIAL_TYPE.get(sdk_building)
+                    if cred_type:
+                        default_cred = ai_credentials_service.get_default_for_type(session, user.id, cred_type)
+                        if default_cred:
+                            build_cred_data = ai_credentials_service._decrypt_credential(default_cred)
+                            if cred_type == AICredentialType.ANTHROPIC:
+                                anthropic_api_key = build_cred_data.api_key
+                            elif cred_type == AICredentialType.MINIMAX:
+                                minimax_api_key = build_cred_data.api_key
+                            elif cred_type == AICredentialType.OPENAI_COMPATIBLE:
+                                openai_compatible_api_key = build_cred_data.api_key
+                                openai_compatible_base_url = build_cred_data.base_url
+                                openai_compatible_model = build_cred_data.model
+
+            # Validate that we have the required API keys
+            required_sdks = set([sdk_conversation, sdk_building])
+            for sdk in required_sdks:
+                required_key = SDK_API_KEY_MAP.get(sdk)
+                if required_key:
+                    key_value = None
+                    if required_key == "anthropic_api_key":
+                        key_value = anthropic_api_key
+                    elif required_key == "minimax_api_key":
+                        key_value = minimax_api_key
+                    elif required_key == "openai_compatible_api_key":
+                        key_value = openai_compatible_api_key
+                    if not key_value:
+                        raise ValueError(f"Missing required API key for SDK '{sdk}'. Please select an AI credential or set a default.")
 
         # Generate a memorable instance name if not provided
         instance_name = data.instance_name if data.instance_name != "Instance" else generate_environment_name()
@@ -292,6 +406,9 @@ class EnvironmentService:
                 "status_message": "Initializing environment creation...",
                 "agent_sdk_conversation": sdk_conversation,
                 "agent_sdk_building": sdk_building,
+                "use_default_ai_credentials": data.use_default_ai_credentials,
+                "conversation_ai_credential_id": conversation_ai_credential_id,
+                "building_ai_credential_id": building_ai_credential_id,
             }
         )
         session.add(environment)

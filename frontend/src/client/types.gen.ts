@@ -7,6 +7,7 @@ export type AcceptShareRequest = {
     credentials?: ({
     [key: string]: unknown;
 } | null);
+    ai_credential_selections?: (AICredentialSelections | null);
 };
 
 /**
@@ -160,6 +161,9 @@ export type AgentEnvironmentCreate = {
     };
     agent_sdk_conversation?: (string | null);
     agent_sdk_building?: (string | null);
+    use_default_ai_credentials?: boolean;
+    conversation_ai_credential_id?: (string | null);
+    building_ai_credential_id?: (string | null);
 };
 
 export type AgentEnvironmentPublic = {
@@ -178,6 +182,9 @@ export type AgentEnvironmentPublic = {
     last_activity_at: (string | null);
     agent_sdk_conversation: (string | null);
     agent_sdk_building: (string | null);
+    use_default_ai_credentials: boolean;
+    conversation_ai_credential_id: (string | null);
+    building_ai_credential_id: (string | null);
 };
 
 export type AgentEnvironmentsPublic = {
@@ -318,6 +325,9 @@ export type AgentSdkConfig = {
 export type AgentShareCreate = {
     shared_with_email: string;
     share_mode: string;
+    provide_ai_credentials?: boolean;
+    conversation_ai_credential_id?: (string | null);
+    building_ai_credential_id?: (string | null);
 };
 
 /**
@@ -388,6 +398,22 @@ export type AICredentialPublic = {
     model?: (string | null);
     created_at: string;
     updated_at: string;
+};
+
+/**
+ * Info about an AI credential type required for agent
+ */
+export type AICredentialRequirement = {
+    sdk_type: string;
+    purpose: string;
+};
+
+/**
+ * AI credential selections for accepting a share.
+ */
+export type AICredentialSelections = {
+    conversation_credential_id?: (string | null);
+    building_credential_id?: (string | null);
 };
 
 /**
@@ -1077,6 +1103,10 @@ export type PendingSharePublic = {
     shared_by_email: string;
     shared_by_name: (string | null);
     credentials_required: Array<CredentialRequirement>;
+    ai_credentials_provided?: boolean;
+    conversation_ai_credential_name?: (string | null);
+    building_ai_credential_name?: (string | null);
+    required_ai_credential_types?: Array<AICredentialRequirement>;
 };
 
 /**

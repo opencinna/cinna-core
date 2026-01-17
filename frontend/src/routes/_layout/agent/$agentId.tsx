@@ -127,9 +127,10 @@ function AgentDetail() {
     { value: "sharing", title: agent.is_clone ? "Clone Settings" : "Sharing", content: <AgentSharingTab agent={agent} /> },
   ]
 
-  // Filter tabs for user mode clones - only show interface, configuration, and clone settings
+  // Filter tabs for user mode clones - show interface, configuration, environments, and clone settings
+  // Environments is allowed since it doesn't expose credential values
   const tabs = isUserModeClone
-    ? allTabs.filter(tab => ["interface", "configuration", "sharing"].includes(tab.value))
+    ? allTabs.filter(tab => ["interface", "configuration", "environments", "sharing"].includes(tab.value))
     : allTabs
 
   const handleUpdateApplied = () => {

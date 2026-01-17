@@ -41,18 +41,29 @@ from app.models.agent_share import (
     PendingSharePublic,
     PendingSharesPublic,
     CredentialRequirement,
+    AICredentialRequirement,
 )
 from app.models.credential import Credential
+from app.models.environment import AgentEnvironment
 from app.models.link_models import AgentCredentialLink
 from app.models.user import User
+from app.services.ai_credentials_service import ai_credentials_service
+from app.services.environment_service import SDK_TO_CREDENTIAL_TYPE
 
 router = APIRouter(tags=["agent-shares"])
 
 
 # Request/Response models
+class AICredentialSelections(BaseModel):
+    """AI credential selections for accepting a share."""
+    conversation_credential_id: UUID | None = None
+    building_credential_id: UUID | None = None
+
+
 class AcceptShareRequest(BaseModel):
     """Request body for accepting a share."""
     credentials: dict | None = None  # {credential_id: {field: value}}
+    ai_credential_selections: AICredentialSelections | None = None
 
 
 class RevokeResponse(BaseModel):
@@ -105,13 +116,17 @@ async def share_agent(
     - Agent must not be a clone
     - Target user must exist
     - Cannot share with yourself
+    - If providing AI credentials, they must be owned by you
     """
     share = await AgentShareService.share_agent(
         session=session,
         agent_id=agent_id,
         owner_id=current_user.id,
         shared_with_email=share_data.shared_with_email,
-        share_mode=share_data.share_mode
+        share_mode=share_data.share_mode,
+        provide_ai_credentials=share_data.provide_ai_credentials,
+        conversation_ai_credential_id=share_data.conversation_ai_credential_id,
+        building_ai_credential_id=share_data.building_ai_credential_id
     )
     return _share_to_public(session, share)
 
@@ -216,14 +231,23 @@ async def accept_share(
     """
     Accept a pending share and create your clone.
 
-    Optionally provide credential values for non-shareable credentials.
+    Optionally provide:
+    - credential values for non-shareable credentials
+    - ai_credential_selections if the share doesn't provide AI credentials
     """
     credentials = request.credentials if request else None
+    ai_selections = None
+    if request and request.ai_credential_selections:
+        ai_selections = {
+            "conversation_credential_id": request.ai_credential_selections.conversation_credential_id,
+            "building_credential_id": request.ai_credential_selections.building_credential_id
+        }
     clone = await AgentShareService.accept_share(
         session=session,
         share_id=share_id,
         recipient_id=current_user.id,
-        credentials_data=credentials
+        credentials_data=credentials,
+        ai_credential_selections=ai_selections
     )
     return _agent_to_public(session, clone)
 
@@ -321,6 +345,53 @@ def _share_to_pending_public(session, share: AgentShare) -> PendingSharePublic:
                     )
                 )
 
+    # Get AI credential info
+    ai_credentials_provided = share.provide_ai_credentials
+    conversation_ai_credential_name = None
+    building_ai_credential_name = None
+    required_ai_credential_types = []
+
+    # Get provided credential names
+    if share.conversation_ai_credential_id:
+        info = ai_credentials_service.get_credential_public_info(session, share.conversation_ai_credential_id)
+        if info:
+            conversation_ai_credential_name = info[0]
+
+    if share.building_ai_credential_id:
+        info = ai_credentials_service.get_credential_public_info(session, share.building_ai_credential_id)
+        if info:
+            building_ai_credential_name = info[0]
+
+    # Determine required AI credential types based on agent's active environment SDKs
+    if original_agent and original_agent.active_environment_id:
+        env = session.get(AgentEnvironment, original_agent.active_environment_id)
+        if env:
+            sdk_conversation = env.agent_sdk_conversation
+            sdk_building = env.agent_sdk_building
+
+            # Conversation SDK type
+            if sdk_conversation and sdk_conversation in SDK_TO_CREDENTIAL_TYPE:
+                cred_type = SDK_TO_CREDENTIAL_TYPE[sdk_conversation]
+                required_ai_credential_types.append(
+                    AICredentialRequirement(
+                        sdk_type=cred_type.value,
+                        purpose="conversation"
+                    )
+                )
+
+            # Building SDK type (only if share_mode is "builder" and different from conversation)
+            if share.share_mode == "builder" and sdk_building and sdk_building in SDK_TO_CREDENTIAL_TYPE:
+                cred_type = SDK_TO_CREDENTIAL_TYPE[sdk_building]
+                # Check if we already added this type for conversation
+                existing_types = [r.sdk_type for r in required_ai_credential_types]
+                if cred_type.value not in existing_types:
+                    required_ai_credential_types.append(
+                        AICredentialRequirement(
+                            sdk_type=cred_type.value,
+                            purpose="building"
+                        )
+                    )
+
     return PendingSharePublic(
         id=share.id,
         original_agent_id=share.original_agent_id,
@@ -330,7 +401,11 @@ def _share_to_pending_public(session, share: AgentShare) -> PendingSharePublic:
         shared_at=share.shared_at,
         shared_by_email=shared_by_user.email if shared_by_user else "Unknown",
         shared_by_name=shared_by_user.full_name if shared_by_user else None,
-        credentials_required=credentials_required
+        credentials_required=credentials_required,
+        ai_credentials_provided=ai_credentials_provided,
+        conversation_ai_credential_name=conversation_ai_credential_name,
+        building_ai_credential_name=building_ai_credential_name,
+        required_ai_credential_types=required_ai_credential_types
     )
 
 
