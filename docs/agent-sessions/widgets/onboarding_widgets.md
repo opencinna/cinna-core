@@ -48,22 +48,44 @@ Dashboard (checks credentials status)
 - `GET /api/v1/users/me/ai-credentials/status` - Check if user has API key configured
 - `backend/app/api/routes/users.py:get_ai_credentials_status()`
 - Returns: `UserPublicWithAICredentials` with `has_anthropic_api_key` boolean
+- Queries `ai_credential` table for default credentials of each type via `ai_credentials_service.get_default_for_type()`
 
 **AI Credentials Update:**
 - `PATCH /api/v1/users/me/ai-credentials` - Save/update API key
 - `backend/app/api/routes/users.py:update_ai_credentials()`
 - Accepts: `AIServiceCredentialsUpdate` with optional `anthropic_api_key`
+- Creates `AICredential` record and sets as default (auto-syncs to user profile for backward compatibility)
+
+### Service
+
+- `backend/app/services/ai_credentials_service.py:get_default_for_type()` - Query default credential by type
+- `backend/app/services/ai_credentials_service.py:create_credential()` - Create new named credential
+- `backend/app/services/ai_credentials_service.py:update_credential()` - Update existing credential
+- `backend/app/services/ai_credentials_service.py:set_default()` - Set as default, auto-syncs to user profile
 
 ### Models
 
-- `backend/app/models/user.py` - User model with `ai_credentials_encrypted` field
-- `backend/app/crud.py:get_user_ai_credentials()` - Decrypt and return credentials
-- `backend/app/crud.py:update_user_ai_credentials()` - Encrypt and save credentials
+- `backend/app/models/ai_credential.py` - AICredential model and schemas
+- `backend/app/models/user.py` - User model with `ai_credentials_encrypted` field (backward compat)
 
 ### Database
 
-- Migration: `backend/app/alembic/versions/998040e1ade4_add_ai_credentials_encrypted_to_users.py`
-- Field: `ai_credentials_encrypted` (encrypted JSON blob)
+- Table: `ai_credential` - Named AI credentials storage
+- Migration: `backend/app/alembic/versions/h8c9d0e1f2g3_add_ai_credentials_table.py`
+- Backward compat field: `user.ai_credentials_encrypted` (auto-synced from defaults)
+
+### Data Flow
+
+```
+User enters API key → update_ai_credentials()
+    ↓
+Check for existing default via get_default_for_type()
+    ↓
+[Exists] → update_credential() → sync to user profile
+[Not exists] → create_credential() → set_default() → sync to user profile
+    ↓
+Credentials status check queries ai_credential table
+```
 
 ## Frontend Implementation
 
@@ -186,9 +208,10 @@ hasAnthropicKey = true → render Dashboard + GettingStartedModal
 ## File Locations Reference
 
 ### Backend
-- `backend/app/api/routes/users.py` - AI credentials endpoints
-- `backend/app/models/user.py` - User model with credentials field
-- `backend/app/crud.py` - Credentials CRUD operations
+- `backend/app/api/routes/users.py` - AI credentials endpoints (status check, update)
+- `backend/app/services/ai_credentials_service.py` - Credential CRUD and default management
+- `backend/app/models/ai_credential.py` - AICredential model and schemas
+- `backend/app/models/user.py` - User model with backward compat credentials field
 
 ### Frontend
 - `frontend/src/components/Onboarding/ApiKeyOnboarding.tsx` - API key input screen
@@ -198,11 +221,12 @@ hasAnthropicKey = true → render Dashboard + GettingStartedModal
 - `frontend/src/routes/_layout/index.tsx` - Dashboard with onboarding integration
 
 ### Related Documentation
+- `docs/business-domain/ai_credentials_management.md` - Full AI credentials feature reference
 - `docs/agent-sessions/agent_env_building_prompt.md` - Building mode concepts
 - `docs/agent-sessions/business_logic.md` - Session modes overview
 
 ---
 
-**Document Version:** 1.2
-**Last Updated:** 2026-01-13
+**Document Version:** 1.3
+**Last Updated:** 2026-01-17
 **Status:** Complete
