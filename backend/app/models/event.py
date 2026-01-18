@@ -44,6 +44,10 @@ class EventType:
     STREAM_ERROR = "stream_error"
     STREAM_INTERRUPTED = "stream_interrupted"
 
+    # To-do progress events (from TodoWrite tool)
+    TODO_LIST_UPDATED = "todo_list_updated"      # Session-level to-do update
+    TASK_TODO_UPDATED = "task_todo_updated"      # Task-level to-do update (propagated from session)
+
     # Generic notification
     NOTIFICATION = "notification"
 

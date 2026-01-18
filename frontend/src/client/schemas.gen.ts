@@ -4178,6 +4178,18 @@ export const InputTaskPublicExtendedSchema = {
             type: 'array',
             title: 'Refinement History'
         },
+        todo_progress: {
+            anyOf: [
+                {
+                    items: {},
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Todo Progress'
+        },
         sessions_count: {
             type: 'integer',
             title: 'Sessions Count',
@@ -6101,6 +6113,18 @@ export const SessionPublicSchema = {
             type: 'integer',
             title: 'Pending Messages Count'
         },
+        todo_progress: {
+            anyOf: [
+                {
+                    items: {},
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Todo Progress'
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -6208,6 +6232,18 @@ export const SessionPublicExtendedSchema = {
         pending_messages_count: {
             type: 'integer',
             title: 'Pending Messages Count'
+        },
+        todo_progress: {
+            anyOf: [
+                {
+                    items: {},
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Todo Progress'
         },
         created_at: {
             type: 'string',

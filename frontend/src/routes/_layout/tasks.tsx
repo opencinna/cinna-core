@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { Plus, MessageSquare, Play, Sparkles, Circle, CheckCircle2, List, Archive, Loader2, MoreVertical, Trash2, Layers } from "lucide-react"
 
 import { TasksService, AgentsService } from "@/client"
@@ -9,7 +9,9 @@ import { usePageHeader } from "@/routes/_layout"
 import { TaskStatusBadge } from "@/components/Tasks/TaskStatusBadge"
 import { CreateTaskDialog } from "@/components/Tasks/CreateTaskDialog"
 import { TaskSessionsModal } from "@/components/Tasks/TaskSessionsModal"
+import { TaskTodoProgress, type TodoItem } from "@/components/Tasks/TaskTodoProgress"
 import { RelativeTime } from "@/components/Common/RelativeTime"
+import { useEventSubscription, EventTypes } from "@/hooks/useEventBus"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -36,6 +38,18 @@ function TasksList() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active")
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [sessionsModalTaskId, setSessionsModalTaskId] = useState<string | null>(null)
+
+  // Real-time to-do progress tracking for tasks
+  const [taskTodos, setTaskTodos] = useState<Record<string, TodoItem[]>>({})
+
+  // Subscribe to TASK_TODO_UPDATED events for real-time updates
+  const handleTodoUpdate = useCallback((event: { meta?: { task_id?: string; todos?: TodoItem[] } }) => {
+    const { task_id, todos } = event.meta || {}
+    if (task_id && todos) {
+      setTaskTodos((prev) => ({ ...prev, [task_id]: todos }))
+    }
+  }, [])
+  useEventSubscription(EventTypes.TASK_TODO_UPDATED, handleTodoUpdate)
 
   const autoRefineMutation = useMutation({
     mutationFn: (taskId: string) =>
@@ -150,6 +164,21 @@ function TasksList() {
       }),
     select: (data) => data.count,
   })
+
+  // Initialize taskTodos from API response (persisted todos)
+  useEffect(() => {
+    if (tasksData?.data) {
+      const initialTodos: Record<string, TodoItem[]> = {}
+      for (const task of tasksData.data) {
+        if (task.todo_progress && Array.isArray(task.todo_progress) && task.todo_progress.length > 0) {
+          initialTodos[task.id] = task.todo_progress as TodoItem[]
+        }
+      }
+      if (Object.keys(initialTodos).length > 0) {
+        setTaskTodos((prev) => ({ ...initialTodos, ...prev }))
+      }
+    }
+  }, [tasksData?.data])
 
   useEffect(() => {
     setHeaderContent(
@@ -326,6 +355,10 @@ function TasksList() {
                                   {(task.refinement_history as Array<{ role: string }>).filter((m) => m.role === "user").length} refinements
                                 </span>
                               )}
+                            {/* To-do progress (real-time updates) */}
+                            {taskTodos[task.id] && taskTodos[task.id].length > 0 && (
+                              <TaskTodoProgress todos={taskTodos[task.id]} className="mt-0" />
+                            )}
                           </div>
                         </div>
 

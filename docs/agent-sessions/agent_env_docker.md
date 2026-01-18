@@ -297,6 +297,9 @@ The environment lifecycle uses standard Docker operations:
    - Sync prompts to `workspace/docs/` via `DockerEnvironmentAdapter.set_agent_prompts()`
    - Sync credentials via `DockerEnvironmentAdapter.set_credentials()`
 8. Update database status to `running`
+9. Emit `ENVIRONMENT_ACTIVATED` event to process any pending sessions
+   - Critical for handovers or messages that arrived while environment was building/starting
+   - `SessionService.handle_environment_activated()` finds sessions with `pending_stream` status and initiates streaming
 
 **Optimization**: Restarting an existing stopped container skips package installation (step 6), making restarts much faster.
 
@@ -332,6 +335,7 @@ The environment lifecycle uses standard Docker operations:
    - Run full container setup via `_setup_new_container()` (install packages)
    - Sync dynamic data via `_sync_dynamic_data()` (prompts, credentials)
 9. Update status to `running` or `stopped`
+10. **If was running**: Emit `ENVIRONMENT_ACTIVATED` event to process any pending sessions
 
 **Key Point**: Rebuild creates a NEW container (not restarting old one), so full container setup is required.
 

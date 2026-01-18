@@ -443,6 +443,22 @@ class EnvironmentLifecycleManager:
             db_session.add(environment)
             db_session.commit()
 
+            # Emit ENVIRONMENT_ACTIVATED event to process any pending sessions
+            # This is critical for handovers that occur while environment is building/starting
+            from app.services.event_service import event_service
+            from app.models.event import EventType
+            await event_service.emit_event(
+                event_type=EventType.ENVIRONMENT_ACTIVATED,
+                model_id=environment.id,
+                user_id=agent.owner_id,
+                meta={
+                    "environment_id": str(environment.id),
+                    "agent_id": str(agent.id),
+                    "instance_name": environment.instance_name
+                }
+            )
+            logger.info(f"Emitted ENVIRONMENT_ACTIVATED event for environment {environment.id}")
+
             return True
 
         except Exception as e:
@@ -815,12 +831,28 @@ class EnvironmentLifecycleManager:
                 environment.status = "running"
                 environment.status_message = "Environment rebuilt and restarted"
                 environment.last_health_check = datetime.utcnow()
+                db_session.add(environment)
+                db_session.commit()
+
+                # Emit ENVIRONMENT_ACTIVATED event to process any pending sessions
+                from app.services.event_service import event_service
+                from app.models.event import EventType
+                await event_service.emit_event(
+                    event_type=EventType.ENVIRONMENT_ACTIVATED,
+                    model_id=environment.id,
+                    user_id=agent.owner_id,
+                    meta={
+                        "environment_id": str(environment.id),
+                        "agent_id": str(agent.id),
+                        "instance_name": environment.instance_name
+                    }
+                )
+                logger.info(f"Emitted ENVIRONMENT_ACTIVATED event for rebuilt environment {environment.id}")
             else:
                 environment.status = "stopped"
                 environment.status_message = "Environment rebuilt successfully"
-
-            db_session.add(environment)
-            db_session.commit()
+                db_session.add(environment)
+                db_session.commit()
 
             logger.info(f"Environment {environment.id} rebuilt successfully")
             return True

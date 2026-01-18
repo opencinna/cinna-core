@@ -139,6 +139,11 @@ def on_startup():
         event_type=EventType.STREAM_ERROR,
         handler=InputTaskService.handle_stream_error
     )
+    # To-do progress tracking: propagate session to-do updates to tasks
+    event_service.register_handler(
+        event_type=EventType.TODO_LIST_UPDATED,
+        handler=InputTaskService.handle_todo_list_updated
+    )
 
     logger.info("Registered backend event handlers (EnvironmentService, ActivityService, SessionService, InputTaskService)")
 

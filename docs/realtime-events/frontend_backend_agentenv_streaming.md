@@ -44,13 +44,21 @@ The system implements a three-layer streaming architecture with **WebSocket** fo
 
 **Backend Service** (`session_service.py:initiate_stream`):
 Orchestrates pending message processing and environment activation:
-1. Checks if environment needs activation (suspended/inactive)
+1. Checks if environment needs activation (suspended/building/starting/activating)
 2. If activation needed:
-   - Activates environment in background task
-   - Environment sends `agent_usage_intent` event when ready
-   - Event handler calls `process_pending_messages()` to start streaming
-3. If environment already active:
+   - If suspended: Activates environment in background task
+   - Marks session as `pending_stream` regardless of environment state
+   - `ENVIRONMENT_ACTIVATED` event is emitted by lifecycle methods when environment becomes "running"
+   - `SessionService.handle_environment_activated()` processes all pending sessions for that environment
+3. If environment already active ("running"):
    - Immediately processes pending messages via `process_pending_messages()`
+
+**Note**: `ENVIRONMENT_ACTIVATED` is emitted from all code paths that transition an environment to "running":
+- `activate_suspended_environment()` - reactivating suspended environments
+- `start_environment()` - initial start or restart
+- `rebuild_environment()` - after rebuild if was previously running
+
+This event-driven approach ensures sessions are processed regardless of how the environment became active.
 4. `process_pending_messages()` handles streaming:
    - Emits `STREAM_STARTED` backend event (triggers activity creation)
    - Streams from agent-env via SSE
@@ -73,18 +81,20 @@ Orchestrates pending message processing and environment activation:
 
 ### 2. Streaming Response
 
-**Event Types** (unchanged):
+**Event Types**:
 - `stream_started` - Backend processing started (WebSocket only)
 - `user_message_created` - User message saved (WebSocket only)
 - `session_created` - External session ID created
 - `assistant` - Text response from agent
-- `tool` - Tool use event
+- `tool` - Tool use event (includes TodoWrite detection, see below)
 - `thinking` - Agent reasoning
 - `system` - System notification
 - `interrupted` - Message was interrupted
 - `error` - Error occurred
 - `stream_completed` - Stream finished (WebSocket only)
 - `done` - Agent processing complete
+- `todo_list_updated` - TodoWrite tool detected, todos saved to session (backend event)
+- `task_todo_updated` - Task-level todo update propagated from session (backend event)
 
 **Event Flow**:
 ```
@@ -111,9 +121,14 @@ Agent Env SDK → Agent Env Server → Backend Service → WebSocket Room → Fr
 - Collects events in memory
 - Captures external session ID early
 - Creates agent message placeholder on first `assistant` event
+- **Detects TodoWrite tool calls**: When a `tool` event with name `todowrite` is received:
+  - Extracts todos from `metadata.tool_input.todos`
+  - Updates `Session.todo_progress` in database
+  - Emits `TODO_LIST_UPDATED` backend event with session_id and todos
+  - `InputTaskService.handle_todo_list_updated()` handler propagates to linked task
 - Saves final agent response when stream completes
 - Emits `STREAM_COMPLETED`/`STREAM_ERROR`/`STREAM_INTERRUPTED` backend events
-- Backend event handlers (ActivityService, EnvironmentService) react to events
+- Backend event handlers (ActivityService, EnvironmentService, InputTaskService) react to events
 - Tracked by `ActiveStreamingManager`
 
 ### 3. WebSocket vs SSE
@@ -184,6 +199,40 @@ SDK sessions persist across messages for context continuity (unchanged).
 **API** (`session_service.py`):
 - `get_external_session_id(session)` - Retrieve for current SDK
 - `set_external_session_id(db, session, external_session_id)` - Store/clear
+
+### Todo Progress Tracking
+
+When an agent uses the TodoWrite tool during message processing, the system tracks and propagates the progress:
+
+**Data Flow:**
+```
+Agent uses TodoWrite → Backend detects tool event → Session.todo_progress updated
+                                                  ↓
+                                            TODO_LIST_UPDATED event emitted
+                                                  ↓
+                              InputTaskService.handle_todo_list_updated() handler
+                                                  ↓
+                                   If session linked to task via source_task_id:
+                                     - Save to InputTask.todo_progress
+                                     - Emit TASK_TODO_UPDATED event
+                                                  ↓
+                              Frontend Tasks list receives event via WebSocket
+                                                  ↓
+                                   TaskTodoProgress component updates UI
+```
+
+**Storage:**
+- `Session.todo_progress` - JSON array of todo items, updated during streaming
+- `InputTask.todo_progress` - JSON array persisted from session, survives page refresh
+
+**Todo Item Structure:**
+```json
+{
+  "content": "Run the build",
+  "activeForm": "Running the build",
+  "status": "pending" | "in_progress" | "completed"
+}
+```
 
 ### Active Stream Tracking
 
@@ -328,15 +377,20 @@ Backend-to-agent-env SSE errors handled same as before, yielded as error events,
 - `components/Chat/StreamEventRenderer.tsx` - Streaming event rendering
 - `components/Chat/MessageList.tsx` - Message list, filters in-progress placeholders
 - `components/Chat/StreamingMessage.tsx` - Real-time streaming display
+- `components/Tasks/TaskTodoProgress.tsx` - Todo progress display component for tasks
+- `routes/_layout/tasks.tsx` - Tasks list with real-time todo progress updates
 
 ### Backend
 - `api/routes/messages.py` - Message endpoint with file handling and streaming initiation (line 116)
 - `services/session_service.py` - initiate_stream(), process_pending_messages(), environment activation logic
-- `services/message_service.py` - prepare_user_message_with_files(), stream_message_with_events()
+- `services/message_service.py` - prepare_user_message_with_files(), stream_message_with_events(), TodoWrite detection
 - `services/event_service.py` - EventService with emit_stream_event() and backend event handlers
 - `services/activity_service.py` - Event handlers for streaming lifecycle (handle_stream_started, etc.)
+- `services/input_task_service.py` - handle_todo_list_updated() for task todo propagation
 - `services/active_streaming_manager.py` - Stream tracking
-- `main.py` - Event handler registration on startup
+- `models/session.py` - Session model with todo_progress field
+- `models/input_task.py` - InputTask model with todo_progress field
+- `main.py` - Event handler registration on startup (includes TODO_LIST_UPDATED handler)
 
 ### Agent Environment (multi-adapter architecture)
 - `env-templates/python-env-advanced/app/core/server/routes.py` - SSE endpoints

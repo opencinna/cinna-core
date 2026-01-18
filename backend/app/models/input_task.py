@@ -60,6 +60,8 @@ class InputTask(InputTaskBase, table=True):
     )
     status: str = Field(default=InputTaskStatus.NEW)
     refinement_history: list = Field(default_factory=list, sa_column=Column(JSON))
+    # To-do progress tracking from TodoWrite tool (list of TodoItem dicts)
+    todo_progress: list | None = Field(default=None, sa_column=Column(JSON))
     error_message: str | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -111,6 +113,7 @@ class InputTaskPublicExtended(InputTaskPublic):
     """Extended response with agent name and sessions count"""
     agent_name: str | None = None
     refinement_history: list = Field(default_factory=list)
+    todo_progress: list | None = None
     sessions_count: int = 0
     latest_session_id: uuid.UUID | None = None
 

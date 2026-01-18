@@ -51,7 +51,20 @@ Frontend Components                    Backend Services
 **Agents**: `agent_created`, `agent_updated`, `agent_deleted`
 **Environments**: `environment_activating`, `environment_activated`, `environment_activation_failed`, `environment_suspended`
 **Streaming**: `stream_started`, `stream_completed`, `stream_error`, `stream_interrupted`
+**Todo Progress**: `todo_list_updated`, `task_todo_updated`
 **Generic**: `notification`
+
+### Environment Activation Events
+
+`ENVIRONMENT_ACTIVATED` is emitted whenever an environment transitions to "running" status:
+- **`activate_suspended_environment()`**: When a suspended environment is reactivated
+- **`start_environment()`**: When an environment starts for the first time or restarts
+- **`rebuild_environment()`**: When an environment is rebuilt and was previously running
+
+This ensures any sessions waiting for the environment (with `pending_stream` status) are processed, regardless of how the environment became active. Critical for:
+- Handovers that target an agent while its environment is building/starting
+- Messages sent while environment is activating
+- Multiple concurrent requests waiting for the same environment
 
 ## Key Files
 
@@ -146,6 +159,16 @@ When chat streaming occurs, `MessageService` emits events at each stage:
 - `STREAM_ERROR` → `ActivityService` creates error activity
 - `STREAM_INTERRUPTED` → `ActivityService` cleans up running activity
 
+**Example Use Case**: Todo Progress Tracking
+
+When an agent uses the TodoWrite tool during message processing:
+- `MessageService` detects the tool call and updates `Session.todo_progress`
+- `TODO_LIST_UPDATED` event is emitted with session_id and todos array
+- `InputTaskService.handle_todo_list_updated()` receives the event:
+  - If session is linked to a task (via `source_task_id`), saves todos to `InputTask.todo_progress`
+  - Emits `TASK_TODO_UPDATED` event for frontend real-time updates
+- Frontend subscribes to `TASK_TODO_UPDATED` to update the Tasks list UI in real-time
+
 ```python
 # Message service emits event after stream finishes
 await event_service.emit_event(
@@ -190,6 +213,24 @@ function LatestSessions() {
   })
 
   // ... component code
+}
+```
+
+**3. Subscribe to Todo Progress Updates** (example from Tasks list):
+```tsx
+import { useEventSubscription, EventTypes } from "@/hooks/useEventBus"
+
+function TasksList() {
+  const [taskTodos, setTaskTodos] = useState<Record<string, TodoItem[]>>({})
+
+  useEventSubscription(EventTypes.TASK_TODO_UPDATED, (event) => {
+    const { task_id, todos } = event.meta || {}
+    if (task_id && todos) {
+      setTaskTodos((prev) => ({ ...prev, [task_id]: todos }))
+    }
+  })
+
+  // Render task cards with TaskTodoProgress component
 }
 ```
 
@@ -517,6 +558,7 @@ Event handlers using these patterns:
 - `backend/app/services/session_service.py` - `handle_environment_activated()`
 - `backend/app/services/activity_service.py` - `handle_stream_started()`, `handle_stream_completed()`
 - `backend/app/services/environment_service.py` - `handle_stream_completed_event()`
+- `backend/app/services/input_task_service.py` - `handle_stream_started()`, `handle_stream_completed()`, `handle_stream_error()`, `handle_todo_list_updated()`
 - `backend/app/services/event_service.py` - `agent_usage_intent` WebSocket handler
 
 ## Extension Points

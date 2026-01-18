@@ -949,6 +949,37 @@ class MessageService:
                         tools_needing_approval.add(tool_name)
                         logger.info(f"Tool '{tool_name}' flagged as needing approval")
 
+                    # Detect TodoWrite tool calls for progress tracking
+                    if tool_name.lower() == "todowrite":
+                        tool_input = event.get("metadata", {}).get("tool_input", {})
+                        todos = tool_input.get("todos", [])
+                        if todos:
+                            # Update session's todo_progress and emit event
+                            def _update_todo_progress():
+                                with get_fresh_db_session() as db:
+                                    session_db = db.get(ChatSession, session_id)
+                                    if session_db:
+                                        session_db.todo_progress = todos
+                                        db.add(session_db)
+                                        db.commit()
+                                        logger.info(f"Updated todo_progress for session {session_id} with {len(todos)} items")
+                            await asyncio.to_thread(_update_todo_progress)
+
+                            # Emit TODO_LIST_UPDATED event
+                            try:
+                                await event_service.emit_event(
+                                    event_type=EventType.TODO_LIST_UPDATED,
+                                    model_id=session_id,
+                                    user_id=user_id,
+                                    meta={
+                                        "session_id": str(session_id),
+                                        "todos": todos
+                                    }
+                                )
+                                logger.info(f"Emitted TODO_LIST_UPDATED event for session {session_id}")
+                            except Exception as e:
+                                logger.error(f"Failed to emit TODO_LIST_UPDATED event: {e}", exc_info=True)
+
                 # Store raw event for visualization (exclude done/error events from storage)
                 if event.get("type") not in ["done", "error", "session_created"]:
                     event_copy = {

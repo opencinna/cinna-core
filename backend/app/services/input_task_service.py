@@ -1065,3 +1065,57 @@ class InputTaskService:
 
         except Exception as e:
             logger.error(f"Error handling STREAM_ERROR for task sync: {e}", exc_info=True)
+
+    @staticmethod
+    async def handle_todo_list_updated(event_data: dict[str, Any]) -> None:
+        """
+        React to TODO_LIST_UPDATED events.
+        If the session is linked to a task, save todos to task and emit TASK_TODO_UPDATED.
+
+        Args:
+            event_data: Full event dict with type, model_id, meta, user_id, timestamp
+        """
+        from app.services.event_service import event_service
+        from app.models.event import EventType
+
+        try:
+            meta = event_data.get("meta", {})
+            session_id = meta.get("session_id")
+            todos = meta.get("todos", [])
+            user_id = event_data.get("user_id")
+
+            if not session_id:
+                logger.debug("TODO_LIST_UPDATED event missing session_id, skipping")
+                return
+
+            with DBSession(engine) as db:
+                session = db.get(Session, UUID(session_id))
+                if not session or not session.source_task_id:
+                    return  # Session not linked to a task
+
+                task_id = session.source_task_id
+
+                # Save todos to task for persistence
+                task = db.get(InputTask, task_id)
+                if task:
+                    task.todo_progress = todos
+                    task.updated_at = datetime.utcnow()
+                    db.add(task)
+                    db.commit()
+                    logger.info(f"Saved todo_progress to task {task_id}")
+
+            # Emit task-level event for real-time updates
+            await event_service.emit_event(
+                event_type=EventType.TASK_TODO_UPDATED,
+                model_id=task_id,
+                user_id=UUID(user_id) if user_id else None,
+                meta={
+                    "task_id": str(task_id),
+                    "session_id": session_id,
+                    "todos": todos
+                }
+            )
+            logger.info(f"Emitted TASK_TODO_UPDATED for task {task_id}")
+
+        except Exception as e:
+            logger.error(f"Error handling TODO_LIST_UPDATED for task sync: {e}", exc_info=True)

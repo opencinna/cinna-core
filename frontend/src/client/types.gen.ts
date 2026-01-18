@@ -926,6 +926,7 @@ export type InputTaskPublicExtended = {
     archived_at: (string | null);
     agent_name?: (string | null);
     refinement_history?: Array<unknown>;
+    todo_progress?: (Array<unknown> | null);
     sessions_count?: number;
     latest_session_id?: (string | null);
 };
@@ -1346,6 +1347,7 @@ export type SessionPublic = {
     status: string;
     interaction_status: string;
     pending_messages_count: number;
+    todo_progress?: (Array<unknown> | null);
     created_at: string;
     updated_at: string;
     last_message_at: (string | null);
@@ -1366,6 +1368,7 @@ export type SessionPublicExtended = {
     status: string;
     interaction_status: string;
     pending_messages_count: number;
+    todo_progress?: (Array<unknown> | null);
     created_at: string;
     updated_at: string;
     last_message_at: (string | null);

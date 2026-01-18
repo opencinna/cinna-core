@@ -72,6 +72,7 @@ When a task has connected sessions (via `source_task_id`), the task status autom
 - `STREAM_STARTED` → syncs task to `RUNNING`
 - `STREAM_COMPLETED` → computes and syncs status from all sessions
 - `STREAM_ERROR` → syncs task to `ERROR`
+- `TODO_LIST_UPDATED` → propagates session todo progress to linked task, emits `TASK_TODO_UPDATED`
 
 ### Refinement History Structure
 
@@ -80,11 +81,41 @@ Stored as JSON array in `InputTask.refinement_history`:
 - Append-only for audit trail
 - Last 5 items passed as context to AI refiner
 
+### Todo Progress Tracking
+
+When an agent uses the TodoWrite tool during execution, the progress is tracked for real-time display:
+
+**Data Structure** (stored in `Session.todo_progress` and `InputTask.todo_progress`):
+```json
+[
+  {"content": "Run the build", "activeForm": "Running the build", "status": "completed"},
+  {"content": "Fix type errors", "activeForm": "Fixing type errors", "status": "in_progress"},
+  {"content": "Update tests", "activeForm": "Updating tests", "status": "pending"}
+]
+```
+
+**Event Flow:**
+1. Agent calls TodoWrite tool during message processing
+2. `MessageService.stream_message_with_events()` detects the tool call
+3. Session's `todo_progress` is updated in database
+4. `TODO_LIST_UPDATED` event is emitted with session_id and todos
+5. `InputTaskService.handle_todo_list_updated()` handler:
+   - Checks if session is linked to a task via `source_task_id`
+   - Saves todos to task's `todo_progress` for persistence
+   - Emits `TASK_TODO_UPDATED` event for frontend real-time updates
+
+**Frontend Display:**
+- `TaskTodoProgress` component shows horizontal progress indicator
+- Each todo is a circle (pending), spinning loader (in_progress), or checkmark (completed)
+- Tooltip shows full task content on hover
+- Current in-progress step shown as text hint
+
 ## Database Schema
 
 **Migrations:**
 - `backend/app/alembic/versions/l2g3h4i5j6k7_add_input_task_table.py` - Creates `input_task` table, adds `source_task_id` to `session`
 - `backend/app/alembic/versions/o5j6k7l8m9n0_add_agent_initiated_fields_to_input_task.py` - Adds agent handover fields
+- `backend/app/alembic/versions/p6k7l8m9n0o1_add_todo_progress_to_session.py` - Adds `todo_progress` JSON field to session and input_task tables
 
 **Models:** `backend/app/models/input_task.py`
 - `InputTask` - Database table with:
@@ -92,6 +123,7 @@ Stored as JSON array in `InputTask.refinement_history`:
   - Agent fields: selected_agent_id, session_id, user_workspace_id
   - **Agent-initiated fields**: `agent_initiated` (bool), `auto_execute` (bool), `source_session_id` (UUID, FK to session)
   - History: refinement_history (JSON array)
+  - **Todo progress**: `todo_progress` (JSON array) - Tracks TodoWrite tool progress from agent execution
   - Timestamps: created_at, updated_at, executed_at, completed_at, archived_at
 - `InputTaskCreate`, `InputTaskUpdate` - API input schemas (Create includes agent_initiated, auto_execute, source_session_id)
 - `InputTaskPublic`, `InputTaskPublicExtended` - API response schemas (extended includes agent_name)
@@ -101,7 +133,8 @@ Stored as JSON array in `InputTask.refinement_history`:
 
 **Session Model Update:** `backend/app/models/session.py`
 - Added `source_task_id: uuid.UUID | None` with FK to `input_task.id`
-- Included in `SessionPublic` schema
+- Added `todo_progress: list | None` (JSON) - Stores TodoWrite tool progress during agent execution
+- Both fields included in `SessionPublic` schema
 
 ## Backend Implementation
 
@@ -165,6 +198,12 @@ Stored as JSON array in `InputTask.refinement_history`:
   - Returns `(success, session, error)` tuple
   - Used by agent handover flow
 
+*Event Handlers (static async methods):*
+- `handle_stream_started()` - Syncs task status to RUNNING
+- `handle_stream_completed()` - Computes and syncs status from all linked sessions
+- `handle_stream_error()` - Syncs task status to ERROR
+- `handle_todo_list_updated()` - Propagates session todo progress to linked task, emits `TASK_TODO_UPDATED` event
+
 **SessionService Updates:** `backend/app/services/session_service.py`
 - `create_session()` - Now accepts optional `source_task_id` parameter
 - `list_task_sessions()` - List sessions by source_task_id
@@ -223,6 +262,13 @@ Stored as JSON array in `InputTask.refinement_history`:
 - Input for new refinement comments
 - Calls `TasksService.refineTask()` on submit
 - Shows loading state during AI processing
+
+**TaskTodoProgress:** `frontend/src/components/Tasks/TaskTodoProgress.tsx`
+- Horizontal progress indicator for agent's TodoWrite tool usage
+- Shows circles for each todo item (pending/in_progress/completed)
+- Tooltip on hover shows full task content
+- Displays current in-progress step as text hint
+- Subscribes to `TASK_TODO_UPDATED` events for real-time updates
 
 ### Sidebar Integration
 
@@ -327,6 +373,7 @@ When an agent triggers a handover to another agent:
 - `frontend/src/components/Tasks/TaskStatusBadge.tsx`
 - `frontend/src/components/Tasks/CreateTaskDialog.tsx`
 - `frontend/src/components/Tasks/RefinementChat.tsx`
+- `frontend/src/components/Tasks/TaskTodoProgress.tsx`
 - `frontend/src/components/Sidebar/AppSidebar.tsx`
 
 **Frontend - Client (auto-generated):**
@@ -335,9 +382,17 @@ When an agent triggers a handover to another agent:
 
 ---
 
-**Document Version:** 2.3
+**Document Version:** 2.4
 **Last Updated:** 2026-01-18
 **Status:** Implementation Complete
+
+**Changes in v2.4:**
+- Added `todo_progress` JSON field to Session and InputTask models for TodoWrite tool tracking
+- Added `TODO_LIST_UPDATED` and `TASK_TODO_UPDATED` event types
+- Added `InputTaskService.handle_todo_list_updated()` event handler for propagating session todos to tasks
+- Added `TaskTodoProgress` frontend component for real-time progress display
+- Tasks list now subscribes to `TASK_TODO_UPDATED` events for live updates
+- Migration: `p6k7l8m9n0o1_add_todo_progress_to_session.py`
 
 **Changes in v2.3:**
 - Refactored routes to be thin controllers delegating to service layer
