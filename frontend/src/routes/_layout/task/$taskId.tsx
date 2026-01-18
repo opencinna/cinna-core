@@ -1,31 +1,24 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { useEffect, useState } from "react"
+import { useEffect, useState, KeyboardEvent, useRef } from "react"
 import {
   Play,
   ArrowLeft,
   Edit,
   Loader2,
+  Send,
+  Check,
+  EllipsisVertical,
   Trash2,
-  FileText,
-  ExternalLink,
+  Bot,
 } from "lucide-react"
 
 import { TasksService, AgentsService } from "@/client"
 import PendingItems from "@/components/Pending/PendingItems"
 import { usePageHeader } from "@/routes/_layout"
-import { TaskStatusBadge } from "@/components/Tasks/TaskStatusBadge"
-import { RefinementChat, type RefinementHistoryItem } from "@/components/Tasks/RefinementChat"
+import type { RefinementHistoryItem } from "@/components/Tasks/RefinementChat"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,9 +29,22 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import useWorkspace from "@/hooks/useWorkspace"
 import useCustomToast from "@/hooks/useCustomToast"
-import { RelativeTime } from "@/components/Common/RelativeTime"
+import { MarkdownRenderer } from "@/components/Chat/MarkdownRenderer"
+import { getColorPreset } from "@/utils/colorPresets"
 import { cn } from "@/lib/utils"
 
 export const Route = createFileRoute("/_layout/task/$taskId")({
@@ -56,6 +62,11 @@ function TaskDetail() {
   const [isEditing, setIsEditing] = useState(false)
   const [editedDescription, setEditedDescription] = useState("")
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [agentSelectorOpen, setAgentSelectorOpen] = useState(false)
+  const [refinementComment, setRefinementComment] = useState("")
+  const [chatHistoryOpen, setChatHistoryOpen] = useState(false)
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false)
+  const refinementInputRef = useRef<HTMLTextAreaElement>(null)
 
   const {
     data: task,
@@ -87,10 +98,13 @@ function TaskDetail() {
   const updateMutation = useMutation({
     mutationFn: (data: { current_description?: string; selected_agent_id?: string }) =>
       TasksService.updateTask({ id: taskId, requestBody: data }),
-    onSuccess: () => {
+    onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ["task", taskId] })
-      setIsEditing(false)
-      showSuccessToast("Task updated")
+      // Only show toast and exit editing mode for description changes
+      if (variables.current_description !== undefined) {
+        setIsEditing(false)
+        showSuccessToast("Task updated")
+      }
     },
     onError: (error) => {
       showErrorToast((error as Error).message || "Failed to update task")
@@ -130,6 +144,28 @@ function TaskDetail() {
     },
   })
 
+  const refineMutation = useMutation({
+    mutationFn: (userComment: string) =>
+      TasksService.refineTask({
+        id: taskId,
+        requestBody: { user_comment: userComment },
+      }),
+    onSuccess: (result) => {
+      if (result.success && result.refined_description) {
+        queryClient.invalidateQueries({ queryKey: ["task", taskId] })
+        setEditedDescription(result.refined_description)
+      }
+      setRefinementComment("")
+    },
+    onError: (error) => {
+      showErrorToast((error as Error).message || "Failed to refine task")
+    },
+  })
+
+  // Get selected agent info for header
+  const headerSelectedAgent = agentsData?.data?.find(a => a.id === task?.selected_agent_id)
+  const headerAgentColorPreset = headerSelectedAgent ? getColorPreset(headerSelectedAgent.ui_color_preset) : null
+
   useEffect(() => {
     setHeaderContent(
       <div className="flex items-center gap-4 w-full">
@@ -148,20 +184,56 @@ function TaskDetail() {
         </div>
         {task && (
           <div className="flex items-center gap-2">
-            <TaskStatusBadge status={task.status} />
+            {/* Edit Task button */}
             <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setDeleteDialogOpen(true)}
+              variant="outline"
+              size="sm"
+              onClick={() => setIsEditing(!isEditing)}
+              className="h-8"
             >
-              <Trash2 className="h-4 w-4" />
+              <Edit className="h-4 w-4 mr-1.5" />
+              Edit Task
             </Button>
+            {/* Agent selector in header with robot icon */}
+            <button
+              onClick={() => setAgentSelectorOpen(true)}
+              disabled={updateMutation.isPending}
+              className={cn(
+                "h-8 px-3 rounded-md text-sm font-medium transition-all flex items-center gap-1.5",
+                headerAgentColorPreset
+                  ? `${headerAgentColorPreset.badgeBg} ${headerAgentColorPreset.badgeText} ${headerAgentColorPreset.badgeHover}`
+                  : "bg-muted text-muted-foreground hover:bg-muted/80"
+              )}
+            >
+              <Bot className="h-4 w-4" />
+              {headerSelectedAgent ? headerSelectedAgent.name : "Select Agent"}
+            </button>
+            {/* Dropdown menu */}
+            <DropdownMenu open={headerMenuOpen} onOpenChange={setHeaderMenuOpen}>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon">
+                  <EllipsisVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onClick={() => {
+                    setHeaderMenuOpen(false)
+                    setDeleteDialogOpen(true)
+                  }}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete Task
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         )}
       </div>
     )
     return () => setHeaderContent(null)
-  }, [setHeaderContent, task, navigate])
+  }, [setHeaderContent, task, navigate, headerSelectedAgent, headerAgentColorPreset, headerMenuOpen, updateMutation.isPending, isEditing])
 
   useEffect(() => {
     if (task) {
@@ -177,12 +249,25 @@ function TaskDetail() {
     }
   }
 
-  const handleAgentChange = (agentId: string) => {
+  const handleAgentSelect = (agentId: string) => {
     updateMutation.mutate({ selected_agent_id: agentId || undefined })
+    setAgentSelectorOpen(false)
+    // Focus the refinement input after modal closes
+    setTimeout(() => {
+      refinementInputRef.current?.focus()
+    }, 100)
   }
 
-  const handleRefined = (newDescription: string) => {
-    setEditedDescription(newDescription)
+  const handleRefinementSubmit = () => {
+    if (!refinementComment.trim() || refineMutation.isPending) return
+    refineMutation.mutate(refinementComment.trim())
+  }
+
+  const handleRefinementKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault()
+      handleRefinementSubmit()
+    }
   }
 
   if (isLoading) {
@@ -210,24 +295,20 @@ function TaskDetail() {
     task.selected_agent_id &&
     !["running", "pending_input", "completed", "archived"].includes(task.status)
 
-  const handleGoToSession = (sessionId: string) => {
-    navigate({
-      to: "/session/$sessionId",
-      params: { sessionId },
-      search: { initialMessage: undefined, fileIds: undefined },
-    })
-  }
+  // Get the latest AI reply from refinement history
+  const refinementHistory = (task.refinement_history || []) as RefinementHistoryItem[]
+  const latestAiReply = [...refinementHistory].reverse().find(item => item.role === "ai")
 
   return (
-    <div className="h-full overflow-hidden flex">
-      {/* Left panel - Task description */}
-      <div className="w-1/2 border-r flex flex-col">
-        <div className="p-4 border-b">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-medium">Task Description</h2>
-            <div className="flex items-center gap-2">
-              {isEditing ? (
-                <>
+    <div className="flex flex-col h-full">
+      {/* Main content - centered task text */}
+      <div className="flex-1 overflow-auto flex items-start justify-center p-6">
+        <div className="w-full max-w-3xl">
+          {isEditing ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Editing task description</span>
+                <div className="flex items-center gap-2">
                   <Button
                     variant="ghost"
                     size="sm"
@@ -249,155 +330,163 @@ function TaskDetail() {
                       "Save"
                     )}
                   </Button>
-                </>
-              ) : (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setIsEditing(true)}
+                </div>
+              </div>
+              <Textarea
+                value={editedDescription}
+                onChange={(e) => setEditedDescription(e.target.value)}
+                className="min-h-[300px] resize-none text-base"
+                placeholder="Task description..."
+              />
+            </div>
+          ) : (
+            <div className="prose prose-lg dark:prose-invert max-w-none">
+              <MarkdownRenderer
+                content={task.current_description}
+                className="text-base leading-relaxed"
+              />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Footer with 3 sections - full height elements */}
+      <div className="border-t bg-background/60 p-4 shrink-0 relative">
+        {/* Chat history overlay - game console style, 1/3 width aligned left */}
+        {chatHistoryOpen && refinementHistory.length > 0 && (
+          <div
+            className="absolute bottom-full left-4 w-1/3 bg-slate-900/90 backdrop-blur-sm border border-slate-700 rounded-t-lg max-h-[50vh] overflow-y-auto"
+            onClick={() => setChatHistoryOpen(false)}
+          >
+            <div className="p-3 space-y-2">
+              {refinementHistory.map((item, index) => (
+                <div
+                  key={index}
+                  className={cn(
+                    "flex gap-2",
+                    item.role === "user" ? "flex-row-reverse" : ""
+                  )}
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  <Edit className="h-4 w-4 mr-1" />
-                  Edit
-                </Button>
-              )}
+                  <div
+                    className={cn(
+                      "max-w-[85%] rounded-lg px-2.5 py-1.5",
+                      item.role === "user"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-slate-800 text-slate-200"
+                    )}
+                  >
+                    <p className="text-xs whitespace-pre-wrap">{item.content}</p>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
+        )}
 
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Agent</Label>
-              <Select
-                value={task.selected_agent_id || ""}
-                onValueChange={handleAgentChange}
-                disabled={updateMutation.isPending}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select an agent" />
-                </SelectTrigger>
-                <SelectContent>
-                  {agents.map((agent) => (
-                    <SelectItem key={agent.id} value={agent.id}>
-                      {agent.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <Button
-              className="w-full"
-              onClick={() => executeMutation.mutate()}
-              disabled={!canExecute || executeMutation.isPending}
+        <div className="flex items-stretch gap-2 max-w-7xl mx-auto h-[80px]">
+          {/* Left section - Latest AI reply (fills space to left, 30% transparent, compact) */}
+          {latestAiReply && (
+            <div
+              className={cn(
+                "flex-1 min-w-0 rounded-md px-2.5 py-2 cursor-pointer transition-all overflow-hidden relative",
+                "bg-slate-500/30 dark:bg-slate-600/30",
+                "border border-slate-400/30 dark:border-slate-500/30",
+                "hover:bg-slate-500/40 dark:hover:bg-slate-600/40"
+              )}
+              onClick={() => setChatHistoryOpen(!chatHistoryOpen)}
             >
-              {executeMutation.isPending ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Executing...
-                </>
+              <Bot className="h-3 w-3 text-slate-400/60 dark:text-slate-500/60 absolute top-1.5 left-1.5" />
+              <p className="text-xs text-slate-600 dark:text-slate-300 line-clamp-4 leading-relaxed pl-4">
+                {latestAiReply.content}
+              </p>
+            </div>
+          )}
+
+          {/* Center section - Message input (full height) */}
+          <div className={cn("min-w-0", latestAiReply ? "flex-[2]" : "flex-1")}>
+            <Textarea
+              ref={refinementInputRef}
+              value={refinementComment}
+              onChange={(e) => setRefinementComment(e.target.value)}
+              onKeyDown={handleRefinementKeyDown}
+              placeholder="Add details, ask for changes, or request clarification..."
+              className="h-full resize-none text-sm"
+              disabled={refineMutation.isPending}
+            />
+          </div>
+
+          {/* Right section - Big square buttons */}
+          <div className="flex items-stretch gap-2 shrink-0">
+            {/* Send message button - big square */}
+            <Button
+              variant="outline"
+              onClick={handleRefinementSubmit}
+              disabled={!refinementComment.trim() || refineMutation.isPending}
+              className="h-full w-[80px] flex-col gap-1"
+            >
+              {refineMutation.isPending ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
               ) : (
                 <>
-                  <Play className="h-4 w-4 mr-2" />
-                  {sessions.length > 0 ? "Run Again" : "Execute Task"}
+                  <Send className="h-5 w-5" />
+                  <span className="text-xs">Send</span>
                 </>
               )}
             </Button>
 
-            {/* Sessions list */}
-            {sessions.length > 0 && (
-              <div className="mt-4 pt-4 border-t">
-                <Label className="text-xs text-muted-foreground">
-                  Sessions ({sessions.length})
-                </Label>
-                <div className="mt-2 space-y-2 max-h-40 overflow-y-auto">
-                  {sessions.map((session) => (
-                    <button
-                      key={session.id}
-                      onClick={() => handleGoToSession(session.id)}
-                      className={cn(
-                        "w-full flex items-center justify-between p-2 rounded-md text-left text-sm",
-                        "hover:bg-muted transition-colors",
-                        session.status === "active" && "bg-emerald-50 dark:bg-emerald-900/20"
-                      )}
-                    >
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={cn(
-                              "w-2 h-2 rounded-full",
-                              session.status === "active"
-                                ? "bg-emerald-500"
-                                : session.status === "completed"
-                                  ? "bg-slate-400"
-                                  : session.status === "error"
-                                    ? "bg-red-500"
-                                    : "bg-yellow-500"
-                            )}
-                          />
-                          <span className="truncate">
-                            {session.title || "Untitled Session"}
-                          </span>
-                        </div>
-                        <RelativeTime
-                          timestamp={session.created_at}
-                          className="text-xs text-muted-foreground mt-0.5"
-                        />
-                      </div>
-                      <ExternalLink className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                    </button>
-                  ))}
-                </div>
-              </div>
+            {/* Execute button - big square prominent */}
+            <Button
+              onClick={() => executeMutation.mutate()}
+              disabled={!canExecute || executeMutation.isPending}
+              className="h-full w-[80px] flex-col gap-1"
+            >
+              {executeMutation.isPending ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <>
+                  <Play className="h-5 w-5" />
+                  <span className="text-xs">{sessions.length > 0 ? "Run Again" : "Execute"}</span>
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Agent selection modal */}
+      <Dialog open={agentSelectorOpen} onOpenChange={setAgentSelectorOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Select Agent</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-wrap gap-2 pt-4">
+            {agents.map((agent) => {
+              const colorPreset = getColorPreset(agent.ui_color_preset)
+              const isSelected = task.selected_agent_id === agent.id
+              return (
+                <button
+                  key={agent.id}
+                  className={cn(
+                    "cursor-pointer px-4 py-2 text-sm rounded-md transition-all flex items-center gap-2",
+                    colorPreset.badgeBg,
+                    colorPreset.badgeText,
+                    colorPreset.badgeHover,
+                    isSelected && colorPreset.badgeOutline
+                  )}
+                  onClick={() => handleAgentSelect(agent.id)}
+                >
+                  {agent.name}
+                  {isSelected && <Check className="h-4 w-4" />}
+                </button>
+              )
+            })}
+            {agents.length === 0 && (
+              <p className="text-sm text-muted-foreground">No agents available</p>
             )}
           </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4">
-          {isEditing ? (
-            <Textarea
-              value={editedDescription}
-              onChange={(e) => setEditedDescription(e.target.value)}
-              className="h-full resize-none"
-              placeholder="Task description..."
-            />
-          ) : (
-            <div className="prose prose-sm dark:prose-invert max-w-none">
-              <p className="whitespace-pre-wrap">{task.current_description}</p>
-            </div>
-          )}
-        </div>
-
-        {/* Original message (read-only) */}
-        {task.original_message !== task.current_description && (
-          <div className="p-4 border-t bg-muted/30">
-            <div className="flex items-center gap-2 mb-2">
-              <FileText className="h-4 w-4 text-muted-foreground" />
-              <span className="text-xs text-muted-foreground font-medium">
-                Original Request
-              </span>
-            </div>
-            <p className="text-xs text-muted-foreground line-clamp-3">
-              {task.original_message}
-            </p>
-          </div>
-        )}
-      </div>
-
-      {/* Right panel - Refinement chat */}
-      <div className="w-1/2 flex flex-col">
-        <div className="p-4 border-b">
-          <h2 className="font-medium">AI Refinement</h2>
-          <p className="text-xs text-muted-foreground mt-1">
-            Chat with AI to clarify and improve your task description
-          </p>
-        </div>
-        <div className="flex-1 overflow-hidden">
-          <RefinementChat
-            taskId={taskId}
-            history={(task.refinement_history || []) as RefinementHistoryItem[]}
-            onRefined={handleRefined}
-          />
-        </div>
-      </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Delete confirmation dialog */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
