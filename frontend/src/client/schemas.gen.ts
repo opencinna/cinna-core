@@ -5927,6 +5927,18 @@ export const SessionPublicSchema = {
             ],
             title: 'Access Token Id'
         },
+        source_task_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Task Id'
+        },
         title: {
             anyOf: [
                 {
@@ -5978,7 +5990,7 @@ export const SessionPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'environment_id', 'user_id', 'user_workspace_id', 'access_token_id', 'title', 'mode', 'status', 'interaction_status', 'pending_messages_count', 'created_at', 'updated_at', 'last_message_at'],
+    required: ['id', 'environment_id', 'user_id', 'user_workspace_id', 'access_token_id', 'source_task_id', 'title', 'mode', 'status', 'interaction_status', 'pending_messages_count', 'created_at', 'updated_at', 'last_message_at'],
     title: 'SessionPublic'
 } as const;
 
@@ -6022,6 +6034,18 @@ export const SessionPublicExtendedSchema = {
                 }
             ],
             title: 'Access Token Id'
+        },
+        source_task_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Task Id'
         },
         title: {
             anyOf: [
@@ -6130,7 +6154,7 @@ export const SessionPublicExtendedSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'environment_id', 'user_id', 'user_workspace_id', 'access_token_id', 'title', 'mode', 'status', 'interaction_status', 'pending_messages_count', 'created_at', 'updated_at', 'last_message_at'],
+    required: ['id', 'environment_id', 'user_id', 'user_workspace_id', 'access_token_id', 'source_task_id', 'title', 'mode', 'status', 'interaction_status', 'pending_messages_count', 'created_at', 'updated_at', 'last_message_at'],
     title: 'SessionPublicExtended',
     description: 'Session with external session metadata'
 } as const;
@@ -6184,6 +6208,25 @@ export const SessionUpdateSchema = {
     },
     type: 'object',
     title: 'SessionUpdate'
+} as const;
+
+export const SessionsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/SessionPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'SessionsPublic'
 } as const;
 
 export const SessionsPublicExtendedSchema = {

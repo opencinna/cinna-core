@@ -19,6 +19,10 @@ class Session(SQLModel, table=True):
     access_token_id: uuid.UUID | None = Field(
         default=None, foreign_key="agent_access_tokens.id", ondelete="SET NULL"
     )
+    # Track which input task spawned this session (for task management)
+    source_task_id: uuid.UUID | None = Field(
+        default=None, foreign_key="input_task.id", ondelete="SET NULL"
+    )
     title: str | None = None
     mode: str = "conversation"  # "building" | "conversation"
     status: str = "active"  # "active" | "paused" | "completed" | "error"
@@ -71,6 +75,7 @@ class SessionPublic(SQLModel):
     user_id: uuid.UUID
     user_workspace_id: uuid.UUID | None
     access_token_id: uuid.UUID | None
+    source_task_id: uuid.UUID | None
     title: str | None
     mode: str
     status: str

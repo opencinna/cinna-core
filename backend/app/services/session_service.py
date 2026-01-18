@@ -19,6 +19,7 @@ class SessionService:
         user_id: UUID,
         data: SessionCreate,
         access_token_id: UUID | None = None,
+        source_task_id: UUID | None = None,
     ) -> Session | None:
         """
         Create session using agent's active environment.
@@ -28,6 +29,7 @@ class SessionService:
             user_id: User ID creating the session
             data: Session creation data
             access_token_id: Optional access token ID (for A2A token-created sessions)
+            source_task_id: Optional task ID that spawned this session (for task management)
         """
         # Get agent to find active environment
         agent = db_session.get(Agent, data.agent_id)
@@ -39,6 +41,7 @@ class SessionService:
             user_id=user_id,
             user_workspace_id=agent.user_workspace_id,
             access_token_id=access_token_id,
+            source_task_id=source_task_id,
             title=data.title,
             mode=data.mode,
         )
@@ -200,6 +203,37 @@ class SessionService:
         # Filter by access token if provided
         if access_token_id is not None:
             query = query.where(Session.access_token_id == access_token_id)
+
+        return list(db_session.exec(query).all())
+
+    @staticmethod
+    def list_task_sessions(
+        db_session: DBSession,
+        task_id: UUID,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[Session]:
+        """
+        List sessions spawned by a specific task.
+
+        Args:
+            db_session: Database session
+            task_id: Task UUID to filter by
+            limit: Max number of sessions to return
+            offset: Offset for pagination
+
+        Returns:
+            List of Session objects ordered by created_at descending
+        """
+        from sqlmodel import desc
+
+        query = (
+            select(Session)
+            .where(Session.source_task_id == task_id)
+            .order_by(desc(Session.created_at))
+            .offset(offset)
+            .limit(limit)
+        )
 
         return list(db_session.exec(query).all())
 

@@ -1324,6 +1324,7 @@ export type SessionPublic = {
     user_id: string;
     user_workspace_id: (string | null);
     access_token_id: (string | null);
+    source_task_id: (string | null);
     title: (string | null);
     mode: string;
     status: string;
@@ -1343,6 +1344,7 @@ export type SessionPublicExtended = {
     user_id: string;
     user_workspace_id: (string | null);
     access_token_id: (string | null);
+    source_task_id: (string | null);
     title: (string | null);
     mode: string;
     status: string;
@@ -1356,6 +1358,11 @@ export type SessionPublicExtended = {
     agent_id?: (string | null);
     agent_name?: (string | null);
     agent_ui_color_preset?: (string | null);
+};
+
+export type SessionsPublic = {
+    data: Array<SessionPublic>;
+    count: number;
 };
 
 export type SessionsPublicExtended = {
@@ -2558,6 +2565,14 @@ export type TasksArchiveTaskData = {
 };
 
 export type TasksArchiveTaskResponse = (InputTaskPublic);
+
+export type TasksListTaskSessionsData = {
+    id: string;
+    limit?: number;
+    skip?: number;
+};
+
+export type TasksListTaskSessionsResponse = (SessionsPublic);
 
 export type UsersReadUsersData = {
     limit?: number;

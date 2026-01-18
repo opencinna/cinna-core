@@ -24,6 +24,8 @@ from app.models import (
     ExecuteTaskRequest,
     ExecuteTaskResponse,
     SessionCreate,
+    SessionsPublic,
+    SessionPublic,
     Message,
     Agent,
 )
@@ -333,7 +335,10 @@ def execute_task(
         mode=execute_in.mode,
     )
     new_session = SessionService.create_session(
-        db_session=session, user_id=current_user.id, data=session_data
+        db_session=session,
+        user_id=current_user.id,
+        data=session_data,
+        source_task_id=task.id,
     )
 
     if not new_session:
@@ -380,3 +385,34 @@ def archive_task(
     )
 
     return updated_task
+
+
+@router.get("/{id}/sessions", response_model=SessionsPublic)
+def list_task_sessions(
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+    skip: int = 0,
+    limit: int = 20,
+) -> Any:
+    """
+    List all sessions spawned by this task.
+
+    A single task can trigger multiple sessions (e.g., retries, re-runs).
+    """
+    task = session.get(InputTask, id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Verify ownership
+    if not current_user.is_superuser and task.owner_id != current_user.id:
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    sessions = SessionService.list_task_sessions(
+        db_session=session, task_id=id, limit=limit, offset=skip
+    )
+
+    return SessionsPublic(
+        data=[SessionPublic(**s.model_dump()) for s in sessions],
+        count=len(sessions),
+    )

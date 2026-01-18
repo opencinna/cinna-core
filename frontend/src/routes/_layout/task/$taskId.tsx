@@ -8,6 +8,7 @@ import {
   Loader2,
   Trash2,
   FileText,
+  ExternalLink,
 } from "lucide-react"
 
 import { TasksService, AgentsService } from "@/client"
@@ -37,6 +38,8 @@ import {
 } from "@/components/ui/alert-dialog"
 import useWorkspace from "@/hooks/useWorkspace"
 import useCustomToast from "@/hooks/useCustomToast"
+import { RelativeTime } from "@/components/Common/RelativeTime"
+import { cn } from "@/lib/utils"
 
 export const Route = createFileRoute("/_layout/task/$taskId")({
   component: TaskDetail,
@@ -75,6 +78,12 @@ function TaskDetail() {
     },
   })
 
+  // Fetch sessions spawned by this task
+  const { data: sessionsData } = useQuery({
+    queryKey: ["task-sessions", taskId],
+    queryFn: () => TasksService.listTaskSessions({ id: taskId }),
+  })
+
   const updateMutation = useMutation({
     mutationFn: (data: { current_description?: string; selected_agent_id?: string }) =>
       TasksService.updateTask({ id: taskId, requestBody: data }),
@@ -94,6 +103,7 @@ function TaskDetail() {
     onSuccess: (result) => {
       if (result.success && result.session_id) {
         queryClient.invalidateQueries({ queryKey: ["task", taskId] })
+        queryClient.invalidateQueries({ queryKey: ["task-sessions", taskId] })
         navigate({
           to: "/session/$sessionId",
           params: { sessionId: result.session_id },
@@ -195,9 +205,18 @@ function TaskDetail() {
   }
 
   const agents = agentsData?.data || []
+  const sessions = sessionsData?.data || []
   const canExecute =
     task.selected_agent_id &&
     !["running", "pending_input", "completed", "archived"].includes(task.status)
+
+  const handleGoToSession = (sessionId: string) => {
+    navigate({
+      to: "/session/$sessionId",
+      params: { sessionId },
+      search: { initialMessage: undefined, fileIds: undefined },
+    })
+  }
 
   return (
     <div className="h-full overflow-hidden flex">
@@ -278,10 +297,57 @@ function TaskDetail() {
               ) : (
                 <>
                   <Play className="h-4 w-4 mr-2" />
-                  Execute Task
+                  {sessions.length > 0 ? "Run Again" : "Execute Task"}
                 </>
               )}
             </Button>
+
+            {/* Sessions list */}
+            {sessions.length > 0 && (
+              <div className="mt-4 pt-4 border-t">
+                <Label className="text-xs text-muted-foreground">
+                  Sessions ({sessions.length})
+                </Label>
+                <div className="mt-2 space-y-2 max-h-40 overflow-y-auto">
+                  {sessions.map((session) => (
+                    <button
+                      key={session.id}
+                      onClick={() => handleGoToSession(session.id)}
+                      className={cn(
+                        "w-full flex items-center justify-between p-2 rounded-md text-left text-sm",
+                        "hover:bg-muted transition-colors",
+                        session.status === "active" && "bg-emerald-50 dark:bg-emerald-900/20"
+                      )}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={cn(
+                              "w-2 h-2 rounded-full",
+                              session.status === "active"
+                                ? "bg-emerald-500"
+                                : session.status === "completed"
+                                  ? "bg-slate-400"
+                                  : session.status === "error"
+                                    ? "bg-red-500"
+                                    : "bg-yellow-500"
+                            )}
+                          />
+                          <span className="truncate">
+                            {session.title || "Untitled Session"}
+                          </span>
+                        </div>
+                        <RelativeTime
+                          timestamp={session.created_at}
+                          className="text-xs text-muted-foreground mt-0.5"
+                        />
+                      </div>
+                      <ExternalLink className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

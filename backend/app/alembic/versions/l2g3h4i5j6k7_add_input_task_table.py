@@ -1,10 +1,11 @@
-"""add input_task table
+"""add input_task table and session.source_task_id
 
 Revision ID: l2g3h4i5j6k7
 Revises: k1f2g3h4i5j6
 Create Date: 2026-01-17
 
 Adds input_task table for task management workflow.
+Adds source_task_id to session table for tracking which task spawned it.
 """
 from alembic import op
 import sqlalchemy as sa
@@ -49,7 +50,25 @@ def upgrade():
         unique=False
     )
 
+    # Add source_task_id to session table (must be after input_task is created)
+    op.add_column(
+        'session',
+        sa.Column('source_task_id', sa.Uuid(), nullable=True)
+    )
+    op.create_foreign_key(
+        'fk_session_source_task_id',
+        'session',
+        'input_task',
+        ['source_task_id'],
+        ['id'],
+        ondelete='SET NULL'
+    )
+
 
 def downgrade():
+    # Remove source_task_id from session table first
+    op.drop_constraint('fk_session_source_task_id', 'session', type_='foreignkey')
+    op.drop_column('session', 'source_task_id')
+
     op.drop_index('ix_input_task_owner_status', table_name='input_task')
     op.drop_table('input_task')
