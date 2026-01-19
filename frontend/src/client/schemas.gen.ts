@@ -2760,6 +2760,109 @@ export const CheckAccessResponseSchema = {
     description: 'Response for check access endpoint.'
 } as const;
 
+export const CreateAgentTaskRequestSchema = {
+    properties: {
+        task_message: {
+            type: 'string',
+            title: 'Task Message'
+        },
+        target_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Target Agent Id'
+        },
+        target_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Target Agent Name'
+        },
+        source_session_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Source Session Id'
+        }
+    },
+    type: 'object',
+    required: ['task_message', 'source_session_id'],
+    title: 'CreateAgentTaskRequest',
+    description: `Request to create a task (with or without target agent).
+
+If target_agent_id is provided: Direct handover (task auto-executes)
+If target_agent_id is None: Inbox task (user reviews and executes manually)`
+} as const;
+
+export const CreateAgentTaskResponseSchema = {
+    properties: {
+        success: {
+            type: 'boolean',
+            title: 'Success'
+        },
+        task_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Task Id'
+        },
+        session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Id'
+        },
+        message: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Message'
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        }
+    },
+    type: 'object',
+    required: ['success'],
+    title: 'CreateAgentTaskResponse',
+    description: 'Response from task creation.'
+} as const;
+
 export const CredentialCreateSchema = {
     properties: {
         name: {
@@ -3444,18 +3547,32 @@ export const EventBroadcastSchema = {
 
 export const ExecuteHandoverRequestSchema = {
     properties: {
-        target_agent_id: {
+        task_message: {
             type: 'string',
-            format: 'uuid',
+            title: 'Task Message'
+        },
+        target_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Target Agent Id'
         },
         target_agent_name: {
-            type: 'string',
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Target Agent Name'
-        },
-        handover_message: {
-            type: 'string',
-            title: 'Handover Message'
         },
         source_session_id: {
             type: 'string',
@@ -3464,9 +3581,10 @@ export const ExecuteHandoverRequestSchema = {
         }
     },
     type: 'object',
-    required: ['target_agent_id', 'target_agent_name', 'handover_message', 'source_session_id'],
+    required: ['task_message', 'source_session_id'],
     title: 'ExecuteHandoverRequest',
-    description: 'Request to execute a handover to another agent.'
+    description: `Deprecated: Use CreateAgentTaskRequest instead.
+Request to execute a handover to another agent.`
 } as const;
 
 export const ExecuteHandoverResponseSchema = {
@@ -3486,6 +3604,18 @@ export const ExecuteHandoverResponseSchema = {
                 }
             ],
             title: 'Task Id'
+        },
+        session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Id'
         },
         message: {
             anyOf: [
@@ -3513,7 +3643,8 @@ export const ExecuteHandoverResponseSchema = {
     type: 'object',
     required: ['success'],
     title: 'ExecuteHandoverResponse',
-    description: 'Response from handover execution.'
+    description: `Deprecated: Use CreateAgentTaskResponse instead.
+Response from handover execution.`
 } as const;
 
 export const ExecuteTaskRequestSchema = {

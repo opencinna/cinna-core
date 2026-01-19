@@ -90,18 +90,13 @@ export function ToolCallBlock({ toolName, toolInput, conversationModeUi = "detai
     return <KnowledgeQueryToolBlock query={toolInput.query} articleIds={toolInput.article_ids} />
   }
 
-  // Special rendering for Agent Handover tool
-  if (
-    toolNameLower === "mcp__handover__agent_handover" &&
-    toolInput?.target_agent_id &&
-    toolInput?.target_agent_name &&
-    toolInput?.handover_message
-  ) {
+  // Special rendering for Create Agent Task tool (handles both direct handover and inbox task)
+  if (toolNameLower === "mcp__task__create_agent_task" && toolInput?.task_message) {
     return (
       <AgentHandoverToolBlock
         targetAgentId={toolInput.target_agent_id}
         targetAgentName={toolInput.target_agent_name}
-        handoverMessage={toolInput.handover_message}
+        taskMessage={toolInput.task_message}
       />
     )
   }

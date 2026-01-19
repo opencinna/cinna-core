@@ -578,6 +578,30 @@ export type CheckAccessResponse = {
     message: string;
 };
 
+/**
+ * Request to create a task (with or without target agent).
+ *
+ * If target_agent_id is provided: Direct handover (task auto-executes)
+ * If target_agent_id is None: Inbox task (user reviews and executes manually)
+ */
+export type CreateAgentTaskRequest = {
+    task_message: string;
+    target_agent_id?: (string | null);
+    target_agent_name?: (string | null);
+    source_session_id: string;
+};
+
+/**
+ * Response from task creation.
+ */
+export type CreateAgentTaskResponse = {
+    success: boolean;
+    task_id?: (string | null);
+    session_id?: (string | null);
+    message?: (string | null);
+    error?: (string | null);
+};
+
 export type CredentialCreate = {
     name: string;
     type: CredentialType;
@@ -755,21 +779,24 @@ export type EventBroadcast = {
 };
 
 /**
+ * Deprecated: Use CreateAgentTaskRequest instead.
  * Request to execute a handover to another agent.
  */
 export type ExecuteHandoverRequest = {
-    target_agent_id: string;
-    target_agent_name: string;
-    handover_message: string;
+    task_message: string;
+    target_agent_id?: (string | null);
+    target_agent_name?: (string | null);
     source_session_id: string;
 };
 
 /**
+ * Deprecated: Use CreateAgentTaskResponse instead.
  * Response from handover execution.
  */
 export type ExecuteHandoverResponse = {
     success: boolean;
     task_id?: (string | null);
+    session_id?: (string | null);
     message?: (string | null);
     error?: (string | null);
 };
@@ -1830,6 +1857,12 @@ export type AgentsGenerateHandoverPromptEndpointData = {
 };
 
 export type AgentsGenerateHandoverPromptEndpointResponse = (GenerateHandoverPromptResponse);
+
+export type AgentsCreateAgentTaskData = {
+    requestBody: CreateAgentTaskRequest;
+};
+
+export type AgentsCreateAgentTaskResponse = (CreateAgentTaskResponse);
 
 export type AgentsExecuteHandoverData = {
     requestBody: ExecuteHandoverRequest;

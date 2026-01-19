@@ -355,11 +355,11 @@ async def update_agent_handover_config(config: AgentHandoverUpdate):
 
     Updates ./docs/agent_handover_config.json with:
     - handovers: Array of configured handover targets (id, name, prompt)
-    - handover_prompt: Instructions for using handover tool in conversation mode
+    - handover_prompt: Instructions for using create_agent_task tool in conversation mode
 
     This is called by the backend when user updates handover configurations in the UI.
     The handover_prompt is appended to the conversation mode system prompt, and the
-    handovers list is used by the agent_handover tool to validate handover targets.
+    handovers list is used by the create_agent_task tool to validate direct handover targets.
     """
     try:
         agent_env_service.update_agent_handover_config(

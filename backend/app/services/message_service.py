@@ -19,7 +19,7 @@ PRE_ALLOWED_TOOLS = frozenset([
     "Task", "Skill", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "NotebookEdit",
     "KillShell", "TaskOutput",
     # Additional built-in tools
-    "mcp__knowledge__query_integration_knowledge", "mcp__handover__agent_handover"
+    "mcp__knowledge__query_integration_knowledge", "mcp__task__create_agent_task"
 ])
 
 
