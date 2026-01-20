@@ -49,6 +49,18 @@ class MessageFile(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class InputTaskFile(SQLModel, table=True):
+    """Junction table linking input tasks to files"""
+
+    __tablename__ = "input_task_files"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    task_id: uuid.UUID = Field(foreign_key="input_task.id", ondelete="CASCADE")
+    file_id: uuid.UUID = Field(foreign_key="file_uploads.id", ondelete="CASCADE")
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 # Pydantic schemas (keep existing ones)
 class FileUploadPublic(SQLModel):
     """Response schema for file upload"""

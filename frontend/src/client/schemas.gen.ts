@@ -3688,6 +3688,20 @@ export const ExecuteTaskResponseSchema = {
                 }
             ],
             title: 'Error'
+        },
+        file_ids: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'File Ids'
         }
     },
     type: 'object',
@@ -4006,6 +4020,21 @@ export const InputTaskCreateSchema = {
                 }
             ],
             title: 'Source Session Id'
+        },
+        file_ids: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string',
+                        format: 'uuid'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'File Ids'
         }
     },
     type: 'object',
@@ -4337,6 +4366,13 @@ export const InputTaskPublicExtendedSchema = {
                 }
             ],
             title: 'Latest Session Id'
+        },
+        attached_files: {
+            items: {
+                '$ref': '#/components/schemas/FileUploadPublic'
+            },
+            type: 'array',
+            title: 'Attached Files'
         }
     },
     type: 'object',

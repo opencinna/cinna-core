@@ -815,6 +815,7 @@ export type ExecuteTaskResponse = {
     success: boolean;
     session_id?: (string | null);
     error?: (string | null);
+    file_ids?: (Array<(string)> | null);
 };
 
 /**
@@ -908,6 +909,7 @@ export type InputTaskCreate = {
     agent_initiated?: boolean;
     auto_execute?: boolean;
     source_session_id?: (string | null);
+    file_ids?: (Array<(string)> | null);
 };
 
 export type InputTaskPublic = {
@@ -956,6 +958,7 @@ export type InputTaskPublicExtended = {
     todo_progress?: (Array<unknown> | null);
     sessions_count?: number;
     latest_session_id?: (string | null);
+    attached_files?: Array<FileUploadPublic>;
 };
 
 export type InputTasksPublicExtended = {
@@ -2625,6 +2628,20 @@ export type TasksListTaskSessionsData = {
 };
 
 export type TasksListTaskSessionsResponse = (SessionsPublic);
+
+export type TasksAttachFileToTaskData = {
+    fileId: string;
+    id: string;
+};
+
+export type TasksAttachFileToTaskResponse = (FileUploadPublic);
+
+export type TasksDetachFileFromTaskData = {
+    fileId: string;
+    id: string;
+};
+
+export type TasksDetachFileFromTaskResponse = (Message);
 
 export type UsersReadUsersData = {
     limit?: number;

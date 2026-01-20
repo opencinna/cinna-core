@@ -6,9 +6,10 @@ an AI-assisted preparation workflow.
 """
 import uuid
 from datetime import datetime
-from typing import List, Optional
 from sqlmodel import Field, SQLModel, Column
 from sqlalchemy import JSON
+
+from app.models.file_upload import FileUploadPublic
 
 
 class InputTaskStatus:
@@ -79,6 +80,8 @@ class InputTaskCreate(SQLModel):
     agent_initiated: bool = False
     auto_execute: bool = False
     source_session_id: uuid.UUID | None = None
+    # File attachments
+    file_ids: list[uuid.UUID] | None = None
 
 
 # Update schema
@@ -116,6 +119,7 @@ class InputTaskPublicExtended(InputTaskPublic):
     todo_progress: list | None = None
     sessions_count: int = 0
     latest_session_id: uuid.UUID | None = None
+    attached_files: list[FileUploadPublic] = Field(default_factory=list)
 
 
 class InputTasksPublic(SQLModel):
@@ -153,3 +157,4 @@ class ExecuteTaskResponse(SQLModel):
     success: bool
     session_id: uuid.UUID | None = None
     error: str | None = None
+    file_ids: list[str] | None = None

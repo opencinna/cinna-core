@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Share2, Trash2, Users, AlertTriangle } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 
@@ -130,11 +130,17 @@ export function CredentialSharing({ credential }: CredentialSharingProps) {
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false)
   const [isDisableDialogOpen, setIsDisableDialogOpen] = useState(false)
+  const [allowSharing, setAllowSharing] = useState(credential.allow_sharing ?? false)
+
+  // Sync local state when prop changes (e.g., after query refetch)
+  useEffect(() => {
+    setAllowSharing(credential.allow_sharing ?? false)
+  }, [credential.allow_sharing])
 
   const { data: sharesData, isLoading: sharesLoading } = useQuery({
     queryKey: ["credential-shares", credential.id],
     queryFn: () => CredentialsService.getCredentialShares({ credentialId: credential.id }),
-    enabled: credential.allow_sharing === true,
+    enabled: allowSharing,
   })
 
   const shareForm = useForm<ShareFormData>({
@@ -162,14 +168,15 @@ export function CredentialSharing({ credential }: CredentialSharingProps) {
   })
 
   const toggleSharingMutation = useMutation({
-    mutationFn: (allowSharing: boolean) =>
+    mutationFn: (newAllowSharing: boolean) =>
       CredentialsService.updateCredentialSharing({
         credentialId: credential.id,
-        requestBody: { allow_sharing: allowSharing },
+        requestBody: { allow_sharing: newAllowSharing },
       }),
-    onSuccess: (_, allowSharing) => {
+    onSuccess: (_, newAllowSharing) => {
+      setAllowSharing(newAllowSharing)
       showSuccessToast(
-        allowSharing
+        newAllowSharing
           ? "Sharing enabled for this credential"
           : "Sharing disabled. All shares have been revoked."
       )
@@ -217,14 +224,14 @@ export function CredentialSharing({ credential }: CredentialSharingProps) {
           </div>
           <Switch
             id="allow-sharing"
-            checked={credential.allow_sharing ?? false}
+            checked={allowSharing}
             onCheckedChange={handleToggleSharing}
             disabled={toggleSharingMutation.isPending}
           />
         </div>
 
         {/* Shares List (only when sharing is enabled) */}
-        {credential.allow_sharing && (
+        {allowSharing && (
           <>
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-medium">

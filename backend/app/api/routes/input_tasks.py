@@ -24,6 +24,7 @@ from app.models import (
     SessionPublic,
     Message,
 )
+from app.models.file_upload import FileUploadPublic
 from app.services.input_task_service import (
     InputTaskService,
     InputTaskError,
@@ -162,9 +163,17 @@ def delete_task(
 ) -> Message:
     """
     Delete an input task.
+
+    Cleans up any attached files (marks them for garbage collection) before deleting.
     """
     try:
         task = InputTaskService.get_task_with_ownership_check(
+            db_session=session,
+            task_id=id,
+            user_id=current_user.id,
+        )
+        # Clean up attached files before deleting task
+        InputTaskService.cleanup_task_files(
             db_session=session,
             task_id=id,
             user_id=current_user.id,
@@ -226,6 +235,7 @@ def execute_task(
     Execute a task by creating a session and sending the task description as the initial message.
 
     Requires a selected_agent_id to be set on the task.
+    Returns attached file_ids so the frontend can pass them to the session.
     """
     try:
         task = InputTaskService.get_task_with_ownership_check(
@@ -244,7 +254,14 @@ def execute_task(
         if not success:
             return ExecuteTaskResponse(success=False, error=error)
 
-        return ExecuteTaskResponse(success=True, session_id=new_session.id)
+        # Get attached file IDs to pass to session
+        file_ids = InputTaskService.get_task_file_ids(db_session=session, task_id=id)
+
+        return ExecuteTaskResponse(
+            success=True,
+            session_id=new_session.id,
+            file_ids=file_ids if file_ids else None,
+        )
     except InputTaskError as e:
         _handle_service_error(e)
 
@@ -300,5 +317,87 @@ def list_task_sessions(
             data=[SessionPublic(**s.model_dump()) for s in sessions],
             count=len(sessions),
         )
+    except InputTaskError as e:
+        _handle_service_error(e)
+
+
+@router.post("/{id}/files/{file_id}", response_model=FileUploadPublic)
+def attach_file_to_task(
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+    file_id: uuid.UUID,
+) -> Any:
+    """
+    Attach an uploaded file to a task.
+
+    The file must already be uploaded via the /files endpoint.
+    """
+    try:
+        # Verify task exists and user has access
+        InputTaskService.get_task_with_ownership_check(
+            db_session=session,
+            task_id=id,
+            user_id=current_user.id,
+        )
+
+        # Attach the file
+        links = InputTaskService.attach_files_to_task(
+            db_session=session,
+            task_id=id,
+            file_ids=[file_id],
+            user_id=current_user.id,
+        )
+
+        if not links:
+            raise HTTPException(
+                status_code=400,
+                detail="File not found or already attached",
+            )
+
+        # Return the file info
+        from app.models.file_upload import FileUpload
+        file = session.get(FileUpload, file_id)
+        return FileUploadPublic.model_validate(file)
+
+    except InputTaskError as e:
+        _handle_service_error(e)
+
+
+@router.delete("/{id}/files/{file_id}")
+def detach_file_from_task(
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+    file_id: uuid.UUID,
+) -> Message:
+    """
+    Remove a file from a task.
+
+    The file will be marked for garbage collection if it's a temporary upload.
+    """
+    try:
+        # Verify task exists and user has access
+        InputTaskService.get_task_with_ownership_check(
+            db_session=session,
+            task_id=id,
+            user_id=current_user.id,
+        )
+
+        success = InputTaskService.detach_file_from_task(
+            db_session=session,
+            task_id=id,
+            file_id=file_id,
+            user_id=current_user.id,
+        )
+
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="File not attached to this task",
+            )
+
+        return Message(message="File removed from task")
+
     except InputTaskError as e:
         _handle_service_error(e)

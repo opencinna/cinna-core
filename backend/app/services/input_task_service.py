@@ -192,7 +192,7 @@ class InputTaskService:
         user_id: UUID,
     ) -> InputTaskPublicExtended:
         """
-        Get task with extended info (agent name, sessions count).
+        Get task with extended info (agent name, sessions count, attached files).
 
         Args:
             db_session: Database session
@@ -206,6 +206,8 @@ class InputTaskService:
             TaskNotFoundError: If task doesn't exist
             PermissionDeniedError: If user doesn't own the task
         """
+        from app.models.file_upload import FileUploadPublic
+
         result = InputTaskService.get_task_with_agent(db_session=db_session, task_id=task_id)
         if not result:
             raise TaskNotFoundError()
@@ -219,11 +221,16 @@ class InputTaskService:
             db_session=db_session, task_id=task_id
         )
 
+        # Get attached files
+        attached_files = InputTaskService.get_task_files(db_session=db_session, task_id=task_id)
+        attached_files_public = [FileUploadPublic.model_validate(f) for f in attached_files]
+
         return InputTaskPublicExtended(
             **task.model_dump(),
             agent_name=agent_name,
             sessions_count=sessions_count,
             latest_session_id=latest_session_id,
+            attached_files=attached_files_public,
         )
 
     @staticmethod
@@ -297,7 +304,7 @@ class InputTaskService:
         Args:
             db_session: Database session
             user_id: User ID creating the task
-            data: Task creation data (including agent_initiated, auto_execute, source_session_id)
+            data: Task creation data (including agent_initiated, auto_execute, source_session_id, file_ids)
         """
         task = InputTask(
             owner_id=user_id,
@@ -314,6 +321,16 @@ class InputTaskService:
         db_session.add(task)
         db_session.commit()
         db_session.refresh(task)
+
+        # Attach files if provided
+        if data.file_ids:
+            InputTaskService.attach_files_to_task(
+                db_session=db_session,
+                task_id=task.id,
+                file_ids=data.file_ids,
+                user_id=user_id,
+            )
+
         return task
 
     @staticmethod
@@ -1119,3 +1136,192 @@ class InputTaskService:
 
         except Exception as e:
             logger.error(f"Error handling TODO_LIST_UPDATED for task sync: {e}", exc_info=True)
+
+    # ==================== File Attachment Methods ====================
+
+    @staticmethod
+    def attach_files_to_task(
+        db_session: DBSession,
+        task_id: UUID,
+        file_ids: list[UUID],
+        user_id: UUID,
+    ) -> list:
+        """
+        Attach files to a task.
+
+        Args:
+            db_session: Database session
+            task_id: Task UUID
+            file_ids: List of file UUIDs to attach
+            user_id: User ID (for ownership verification)
+
+        Returns:
+            List of InputTaskFile junction records created
+        """
+        from app.models.file_upload import FileUpload, InputTaskFile
+
+        created_links = []
+        for file_id in file_ids:
+            # Verify file exists and user owns it
+            file = db_session.get(FileUpload, file_id)
+            if not file or file.user_id != user_id:
+                logger.warning(f"File {file_id} not found or not owned by user {user_id}")
+                continue
+
+            # Check if already linked
+            existing = db_session.exec(
+                select(InputTaskFile).where(
+                    InputTaskFile.task_id == task_id,
+                    InputTaskFile.file_id == file_id,
+                )
+            ).first()
+
+            if existing:
+                continue  # Already linked
+
+            # Create link
+            link = InputTaskFile(task_id=task_id, file_id=file_id)
+            db_session.add(link)
+            created_links.append(link)
+
+        if created_links:
+            db_session.commit()
+            for link in created_links:
+                db_session.refresh(link)
+
+        return created_links
+
+    @staticmethod
+    def get_task_files(
+        db_session: DBSession,
+        task_id: UUID,
+    ) -> list:
+        """
+        Get all files attached to a task.
+
+        Args:
+            db_session: Database session
+            task_id: Task UUID
+
+        Returns:
+            List of FileUpload records
+        """
+        from app.models.file_upload import FileUpload, InputTaskFile
+
+        statement = (
+            select(FileUpload)
+            .join(InputTaskFile, FileUpload.id == InputTaskFile.file_id)
+            .where(InputTaskFile.task_id == task_id)
+        )
+        return list(db_session.exec(statement).all())
+
+    @staticmethod
+    def get_task_file_ids(
+        db_session: DBSession,
+        task_id: UUID,
+    ) -> list[str]:
+        """
+        Get all file IDs attached to a task as strings.
+
+        Args:
+            db_session: Database session
+            task_id: Task UUID
+
+        Returns:
+            List of file ID strings
+        """
+        from app.models.file_upload import InputTaskFile
+
+        statement = select(InputTaskFile.file_id).where(InputTaskFile.task_id == task_id)
+        return [str(fid) for fid in db_session.exec(statement).all()]
+
+    @staticmethod
+    def detach_file_from_task(
+        db_session: DBSession,
+        task_id: UUID,
+        file_id: UUID,
+        user_id: UUID,
+        mark_for_deletion: bool = True,
+    ) -> bool:
+        """
+        Remove a file from a task.
+
+        Args:
+            db_session: Database session
+            task_id: Task UUID
+            file_id: File UUID to remove
+            user_id: User ID (for ownership verification)
+            mark_for_deletion: If True, mark the file for garbage collection
+
+        Returns:
+            True if file was detached, False otherwise
+        """
+        from app.models.file_upload import FileUpload, InputTaskFile
+
+        # Find the link
+        link = db_session.exec(
+            select(InputTaskFile).where(
+                InputTaskFile.task_id == task_id,
+                InputTaskFile.file_id == file_id,
+            )
+        ).first()
+
+        if not link:
+            return False
+
+        # Remove the link
+        db_session.delete(link)
+
+        # Optionally mark file for deletion if temporary
+        if mark_for_deletion:
+            file = db_session.get(FileUpload, file_id)
+            if file and file.user_id == user_id and file.status == "temporary":
+                file.status = "marked_for_deletion"
+                file.marked_for_deletion_at = datetime.utcnow()
+                db_session.add(file)
+
+        db_session.commit()
+        return True
+
+    @staticmethod
+    def cleanup_task_files(
+        db_session: DBSession,
+        task_id: UUID,
+        user_id: UUID,
+    ) -> int:
+        """
+        Clean up all files attached to a task (mark for deletion).
+
+        Used when a task is deleted without being executed.
+
+        Args:
+            db_session: Database session
+            task_id: Task UUID
+            user_id: User ID (for ownership verification)
+
+        Returns:
+            Number of files marked for deletion
+        """
+        from app.models.file_upload import FileUpload, InputTaskFile
+
+        # Get all attached files
+        statement = (
+            select(FileUpload)
+            .join(InputTaskFile, FileUpload.id == InputTaskFile.file_id)
+            .where(InputTaskFile.task_id == task_id)
+            .where(FileUpload.user_id == user_id)
+            .where(FileUpload.status == "temporary")
+        )
+        files = db_session.exec(statement).all()
+
+        count = 0
+        for file in files:
+            file.status = "marked_for_deletion"
+            file.marked_for_deletion_at = datetime.utcnow()
+            db_session.add(file)
+            count += 1
+
+        if count > 0:
+            db_session.commit()
+
+        return count

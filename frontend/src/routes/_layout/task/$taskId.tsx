@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { useEffect, useState, KeyboardEvent, useRef, useCallback } from "react"
+import { useEffect, useState, KeyboardEvent, useRef, useCallback, DragEvent } from "react"
 import {
   Play,
   ArrowLeft,
@@ -16,13 +16,17 @@ import {
   Sparkles,
   Layers,
   ExternalLink,
+  Plus,
 } from "lucide-react"
 
-import { TasksService, AgentsService } from "@/client"
+import { TasksService, AgentsService, FilesService } from "@/client"
+import type { FileUploadPublic } from "@/client"
 import PendingItems from "@/components/Pending/PendingItems"
 import { usePageHeader } from "@/routes/_layout"
 import type { RefinementHistoryItem } from "@/components/Tasks/RefinementChat"
 import { TaskSessionsModal } from "@/components/Tasks/TaskSessionsModal"
+import { FileUploadModal } from "@/components/Chat/FileUploadModal"
+import { FileBadge } from "@/components/Chat/FileBadge"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -74,6 +78,9 @@ function TaskDetail() {
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false)
   const [selectedText, setSelectedText] = useState<string | null>(null)
   const [sessionsModalOpen, setSessionsModalOpen] = useState(false)
+  const [showFileModal, setShowFileModal] = useState(false)
+  const [isDraggingOver, setIsDraggingOver] = useState(false)
+  const [attachedFiles, setAttachedFiles] = useState<FileUploadPublic[]>([])
   const refinementInputRef = useRef<HTMLTextAreaElement>(null)
   const taskBodyRef = useRef<HTMLDivElement>(null)
 
@@ -130,7 +137,10 @@ function TaskDetail() {
         navigate({
           to: "/session/$sessionId",
           params: { sessionId: result.session_id },
-          search: { initialMessage: task?.current_description, fileIds: undefined },
+          search: {
+            initialMessage: task?.current_description,
+            fileIds: result.file_ids?.join(',') ?? undefined,
+          },
         })
       } else {
         showErrorToast(result.error || "Failed to execute task")
@@ -190,6 +200,44 @@ function TaskDetail() {
     },
     onError: (error) => {
       showErrorToast((error as Error).message || "Failed to auto-refine task")
+    },
+  })
+
+  // File upload mutation
+  const uploadFileMutation = useMutation({
+    mutationFn: (file: File) => FilesService.uploadFile({ formData: { file } }),
+    onSuccess: (uploadedFile) => {
+      // After upload, attach to task
+      attachFileMutation.mutate(uploadedFile.id)
+    },
+    onError: (error) => {
+      showErrorToast((error as Error).message || "Failed to upload file")
+    },
+  })
+
+  // Attach file to task mutation
+  const attachFileMutation = useMutation({
+    mutationFn: (fileId: string) =>
+      TasksService.attachFileToTask({ id: taskId, fileId }),
+    onSuccess: (file) => {
+      setAttachedFiles((prev) => [...prev, file])
+      queryClient.invalidateQueries({ queryKey: ["task", taskId] })
+    },
+    onError: (error) => {
+      showErrorToast((error as Error).message || "Failed to attach file")
+    },
+  })
+
+  // Detach file from task mutation
+  const detachFileMutation = useMutation({
+    mutationFn: (fileId: string) =>
+      TasksService.detachFileFromTask({ id: taskId, fileId }),
+    onSuccess: (_, fileId) => {
+      setAttachedFiles((prev) => prev.filter((f) => f.id !== fileId))
+      queryClient.invalidateQueries({ queryKey: ["task", taskId] })
+    },
+    onError: (error) => {
+      showErrorToast((error as Error).message || "Failed to remove file")
     },
   })
 
@@ -276,6 +324,52 @@ function TaskDetail() {
   useEffect(() => {
     setSelectedText(null)
   }, [task?.current_description])
+
+  // Sync attached files from task data
+  useEffect(() => {
+    if (task?.attached_files) {
+      setAttachedFiles(task.attached_files)
+    }
+  }, [task?.attached_files])
+
+  // Drag-drop handlers for file upload
+  const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDraggingOver(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    // Only set to false if we're leaving the container, not entering a child
+    if (e.currentTarget === e.target) {
+      setIsDraggingOver(false)
+    }
+  }, [])
+
+  const handleDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDraggingOver(false)
+
+    const files = Array.from(e.dataTransfer.files)
+    for (const file of files) {
+      // Validate file size (100MB)
+      if (file.size > 100 * 1024 * 1024) {
+        showErrorToast(`File ${file.name} is too large (max 100MB)`)
+        continue
+      }
+      uploadFileMutation.mutate(file)
+    }
+  }, [uploadFileMutation, showErrorToast])
+
+  // Handle file upload from modal
+  const handleFileUploaded = useCallback((file: FileUploadPublic) => {
+    // File is already uploaded, just attach it to the task
+    attachFileMutation.mutate(file.id)
+    setShowFileModal(false)
+  }, [attachFileMutation])
 
   // Handle text selection in the task body
   const handleTextSelection = useCallback(() => {
@@ -374,7 +468,22 @@ function TaskDetail() {
   const latestAiReply = [...refinementHistory].reverse().find(item => item.role === "ai")
 
   return (
-    <div className="flex flex-col h-full" onClick={handleContainerClick}>
+    <div
+      className={cn(
+        "flex flex-col h-full transition-colors",
+        isDraggingOver && "border-2 border-dashed border-primary bg-primary/5"
+      )}
+      onClick={handleContainerClick}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Drag overlay */}
+      {isDraggingOver && (
+        <div className="absolute inset-0 flex items-center justify-center bg-background/80 z-50 pointer-events-none">
+          <div className="text-lg font-medium text-primary">Drop files to attach</div>
+        </div>
+      )}
       {/* Main content - centered task text */}
       <div className="flex-1 overflow-auto flex items-start justify-center p-6">
         <div className="w-full max-w-3xl">
@@ -486,6 +595,19 @@ function TaskDetail() {
           </div>
         )}
 
+        {/* Attached files display */}
+        {attachedFiles.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-3 max-w-7xl mx-auto">
+            {attachedFiles.map((file) => (
+              <FileBadge
+                key={file.id}
+                file={file}
+                onRemove={() => detachFileMutation.mutate(file.id)}
+              />
+            ))}
+          </div>
+        )}
+
         <div className="flex items-stretch gap-2 max-w-7xl mx-auto h-[80px]">
           {/* Left section - Latest AI reply (fills space to left, 30% transparent, compact) */}
           {latestAiReply && (
@@ -517,6 +639,22 @@ function TaskDetail() {
               disabled={refineMutation.isPending}
             />
           </div>
+
+          {/* Attach file button */}
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => setShowFileModal(true)}
+            disabled={uploadFileMutation.isPending || attachFileMutation.isPending}
+            className="h-full w-[48px] shrink-0"
+            title="Attach files"
+          >
+            {uploadFileMutation.isPending || attachFileMutation.isPending ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <Plus className="h-5 w-5" />
+            )}
+          </Button>
 
           {/* Right section - Big square buttons */}
           <div className="flex items-stretch gap-2 shrink-0">
@@ -669,6 +807,13 @@ function TaskDetail() {
         taskId={taskId}
         open={sessionsModalOpen}
         onOpenChange={setSessionsModalOpen}
+      />
+
+      {/* File upload modal */}
+      <FileUploadModal
+        open={showFileModal}
+        onOpenChange={setShowFileModal}
+        onFileUploaded={handleFileUploaded}
       />
     </div>
   )
