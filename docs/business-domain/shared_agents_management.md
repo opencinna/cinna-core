@@ -359,7 +359,9 @@ Service methods in `AgentSharesService`:
 | Action | Clone Owner |
 |--------|-------------|
 | View Configuration | Read-only |
-| Edit Configuration | No |
+| Edit Prompts | No |
+| Edit Scheduler | Yes |
+| Edit Handover Config | Yes |
 | Conversation Mode | Yes |
 | Building Mode | No |
 | Apply Update / Detach | Yes |
@@ -369,9 +371,37 @@ Service methods in `AgentSharesService`:
 | Action | Clone Owner |
 |--------|-------------|
 | Full Configuration | Yes |
+| Edit Scheduler | Yes |
+| Edit Handover Config | Yes |
 | Building Mode | Yes |
 | Share | No (while clone) |
 | Apply Update / Detach | Yes |
+
+### Clone-Specific Configurations
+
+Certain configurations are **always editable by clone owners** regardless of clone mode, and are **never affected by push updates** from the parent agent:
+
+| Configuration | Editable by Clone Owner | Synced During Push Updates |
+|--------------|------------------------|---------------------------|
+| **Scheduler** | Yes (both modes) | No |
+| **Handover Config** | Yes (both modes) | No |
+| **Interface Settings** | Yes (both modes) | No |
+| **Prompts** | Builder mode only | Yes |
+| **Scripts** | Builder mode only | Yes |
+| **Knowledge** | Builder mode only | Yes |
+
+**Rationale for Clone-Specific Configs**:
+
+1. **Scheduler**: Clone owners may have different automation needs, timezones, and execution patterns than the original owner.
+
+2. **Handover Config**: Handover requires ownership of both source and target agents. Clone owners have different agent portfolios than the original owner, so their handover targets must be different.
+
+3. **Interface Settings**: Clone owners may want different UI configurations (conversation view, terminology, etc.).
+
+**Important**: When a parent pushes updates to clones:
+- Only workspace files (scripts, docs, knowledge) are synced
+- Clone-specific configurations (scheduler, handover, interface) remain unchanged
+- This ensures clones can be customized for the recipient's workflow while still receiving core functionality updates
 
 ## File Locations Reference
 

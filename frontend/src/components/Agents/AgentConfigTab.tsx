@@ -107,10 +107,10 @@ export function AgentConfigTab({ agent, readOnly = false }: AgentConfigTabProps)
       </div>
 
       {/* Third Row: Scheduler and Handovers (side by side) */}
+      {/* Note: Scheduler and Handovers are always editable for agent owner (including clone owners) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Scheduler Card - hidden for read-only mode */}
-        {!readOnly && (
-          <Card>
+        {/* Scheduler Card */}
+        <Card>
             <CardHeader>
               <div className="flex items-start justify-between">
                 <div className="space-y-1.5">
@@ -152,10 +152,9 @@ export function AgentConfigTab({ agent, readOnly = false }: AgentConfigTabProps)
               />
             </CardContent>
           </Card>
-        )}
 
-        {/* Handover to Agents */}
-        <AgentHandovers agent={agent} readOnly={readOnly} />
+        {/* Handover to Agents - always editable for agent owner (including clone owners) */}
+        <AgentHandovers agent={agent} />
       </div>
 
       {/* Modals */}

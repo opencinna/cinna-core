@@ -233,6 +233,45 @@ Located in the **Agent Configuration Tab** (`AgentConfigTab.tsx`), below the Wor
   - Temporarily pausing automation
   - Debugging issues without losing config
 
+### Cloned Agents and Handover Configuration
+
+**Key Principle**: Each clone has independent handover configuration from its parent.
+
+**Why Handovers Are Clone-Specific**:
+1. **Access Control** - Handover requires ownership of both source and target agents
+2. **Different Target Agents** - Clone owner likely has different agents than the original owner
+3. **Independent Workflows** - Clones may be used in different workflow contexts
+
+**Behavior During Agent Sharing**:
+- When an agent is shared/cloned, handover configs are **NOT copied** to the clone
+- The clone starts with **empty handover configuration**
+- The workspace file (`agent_handover_config.json`) may contain stale data from the parent, but this is overwritten on first environment activation via `_sync_dynamic_data()`
+
+**Clone Owner Capabilities**:
+- Clone owners (both "user" and "builder" modes) can create, edit, and delete their own handover configs
+- Target agents must be agents the clone owner has access to
+- Handover UI is available in the Configuration tab for all clone owners
+
+**Behavior During Push Updates**:
+- When the parent agent owner pushes updates to clones, **handover configs are NOT synced**
+- Push updates only sync workspace files (scripts, docs, knowledge)
+- Each clone's handover configuration remains completely independent
+- This is intentional: handover targets are user-specific and should not be overwritten
+
+**Example Scenario**:
+```
+Original Agent (Owner: Alice)
+├── Handover Config → "Analysis Agent" (owned by Alice)
+│
+└── Clone (Owner: Bob)
+    ├── Initially: No handover configs
+    └── Bob creates: Handover Config → "Bob's Action Agent"
+
+When Alice pushes updates:
+- Bob's prompts and scripts are updated
+- Bob's handover config remains unchanged (still points to "Bob's Action Agent")
+```
+
 ## Integration with Agent Runtime
 
 ### Runtime Implementation

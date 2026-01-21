@@ -143,6 +143,43 @@ Display: "Every day at 7:00 AM, Central European Time"
 - User can update prompts without affecting scheduler
 - Both can be updated in the same session but saved separately
 
+### Cloned Agents and Scheduler
+
+**Key Principle**: Each clone has independent scheduler configuration from its parent.
+
+**Clone Owner Capabilities**:
+- Clone owners (both "user" and "builder" modes) can create, edit, and delete their own schedules
+- Scheduler UI is always available in the Configuration tab for clone owners
+- Clone's schedule is completely independent from parent's schedule
+
+**Behavior During Agent Sharing**:
+- When an agent is shared/cloned, the scheduler configuration is **NOT copied** to the clone
+- The clone starts with **no scheduler** configured
+- Clone owner must set up their own schedule if needed
+
+**Behavior During Push Updates**:
+- When the parent agent owner pushes updates to clones, **scheduler configs are NOT synced**
+- Push updates only sync workspace files (scripts, docs, knowledge)
+- Each clone's scheduler configuration remains completely independent
+- This is intentional: clone owners may have different:
+  - Automation needs and frequencies
+  - Timezones
+  - Business hours and availability
+
+**Example Scenario**:
+```
+Original Agent (Owner: Alice, Timezone: US/Eastern)
+├── Schedule: "Every weekday at 9 AM Eastern"
+│
+└── Clone (Owner: Bob, Timezone: Europe/Berlin)
+    ├── Initially: No schedule configured
+    └── Bob creates: "Every weekday at 8 AM Berlin time"
+
+When Alice pushes updates:
+- Bob's prompts and scripts are updated
+- Bob's schedule remains unchanged (still "Every weekday at 8 AM Berlin time")
+```
+
 ### State Management
 
 **Changes are not auto-saved**
