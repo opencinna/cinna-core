@@ -579,6 +579,31 @@ export type CheckAccessResponse = {
 };
 
 /**
+ * Public representation of an update request (for API responses)
+ */
+export type CloneUpdateRequestPublic = {
+    copy_files_folder: boolean;
+    rebuild_environment: boolean;
+    id: string;
+    clone_agent_id: string;
+    parent_agent_id: string;
+    parent_agent_name?: (string | null);
+    pushed_by_email?: (string | null);
+    status: string;
+    created_at: string;
+    applied_at?: (string | null);
+    dismissed_at?: (string | null);
+};
+
+/**
+ * List response for clone update requests
+ */
+export type CloneUpdateRequestsPublic = {
+    data: Array<CloneUpdateRequestPublic>;
+    count: number;
+};
+
+/**
  * Request to create a task (with or without target agent).
  *
  * If target_agent_id is provided: Direct handover (task auto-executes)
@@ -1280,6 +1305,14 @@ export type PrivateUserCreate = {
 };
 
 /**
+ * Request body for pushing updates to clones
+ */
+export type PushUpdateActionsRequest = {
+    copy_files_folder?: boolean;
+    rebuild_environment?: boolean;
+};
+
+/**
  * Response for push updates action.
  */
 export type PushUpdatesResponse = {
@@ -1958,6 +1991,7 @@ export type AgentSharesDetachCloneResponse = (AgentPublic);
 
 export type AgentSharesPushUpdatesToClonesData = {
     agentId: string;
+    requestBody?: (PushUpdateActionsRequest | null);
 };
 
 export type AgentSharesPushUpdatesToClonesResponse = (PushUpdatesResponse);
@@ -1980,6 +2014,18 @@ export type AgentSharesSetUpdateModeData = {
 };
 
 export type AgentSharesSetUpdateModeResponse = (AgentPublic);
+
+export type AgentSharesGetPendingUpdateRequestsData = {
+    agentId: string;
+};
+
+export type AgentSharesGetPendingUpdateRequestsResponse = (CloneUpdateRequestsPublic);
+
+export type AgentSharesDismissUpdateRequestData = {
+    requestId: string;
+};
+
+export type AgentSharesDismissUpdateRequestResponse = (CloneUpdateRequestPublic);
 
 export type AiCredentialsListAiCredentialsResponse = (AICredentialsPublic);
 

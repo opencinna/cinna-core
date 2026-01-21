@@ -43,6 +43,12 @@ from app.models.agent_share import (
     CredentialRequirement,
     AICredentialRequirement,
 )
+from app.models.clone_update_request import (
+    CloneUpdateRequest,
+    CloneUpdateRequestPublic,
+    CloneUpdateRequestsPublic,
+    PushUpdateActionsRequest,
+)
 from app.models.credential import Credential
 from app.models.environment import AgentEnvironment
 from app.models.link_models import AgentCredentialLink
@@ -464,21 +470,31 @@ def _agent_to_public(session, agent: Agent) -> AgentPublic:
 @router.post("/agents/{agent_id}/shares/push-updates", response_model=PushUpdatesResponse)
 async def push_updates_to_clones(
     agent_id: UUID,
-    session: SessionDep,
-    current_user: CurrentUser
+    request: PushUpdateActionsRequest | None = None,
+    session: SessionDep = None,
+    current_user: CurrentUser = None
 ):
     """
     Push updates to all clones of an agent.
+
+    Optionally specify actions to perform:
+    - copy_files_folder: Copy the files folder to clones
+    - rebuild_environment: Rebuild the environment for clones
 
     Queues updates for all clones. Automatic mode clones will receive
     updates immediately. Manual mode clones will show "Update Available".
 
     Returns count of clones updated.
     """
+    copy_files_folder = request.copy_files_folder if request else False
+    rebuild_environment = request.rebuild_environment if request else False
+
     result = await AgentCloneService.push_updates(
         session=session,
         original_agent_id=agent_id,
-        owner_id=current_user.id
+        owner_id=current_user.id,
+        copy_files_folder=copy_files_folder,
+        rebuild_environment=rebuild_environment
     )
     return PushUpdatesResponse(**result)
 
@@ -542,3 +558,73 @@ async def set_update_mode(
         update_mode=request.update_mode
     )
     return _agent_to_public(session, clone)
+
+
+# ============ UPDATE REQUEST OPERATIONS ============
+
+@router.get("/agents/{agent_id}/update-requests", response_model=CloneUpdateRequestsPublic)
+async def get_pending_update_requests(
+    agent_id: UUID,
+    session: SessionDep,
+    current_user: CurrentUser
+):
+    """
+    Get pending update requests for a clone.
+
+    Returns list of update requests that have been pushed from the parent
+    and are waiting to be applied or dismissed.
+    """
+    requests = await AgentCloneService.get_pending_update_requests(
+        session=session,
+        clone_id=agent_id,
+        clone_owner_id=current_user.id
+    )
+    return CloneUpdateRequestsPublic(
+        data=[_update_request_to_public(session, r) for r in requests],
+        count=len(requests)
+    )
+
+
+@router.post("/update-requests/{request_id}/dismiss", response_model=CloneUpdateRequestPublic)
+async def dismiss_update_request(
+    request_id: UUID,
+    session: SessionDep,
+    current_user: CurrentUser
+):
+    """
+    Dismiss an update request.
+
+    The update request will be marked as dismissed and the pending update
+    flag on the clone will be cleared if there are no other pending requests.
+    """
+    request = await AgentCloneService.dismiss_update_request(
+        session=session,
+        request_id=request_id,
+        clone_owner_id=current_user.id
+    )
+    return _update_request_to_public(session, request)
+
+
+def _update_request_to_public(session, request: CloneUpdateRequest) -> CloneUpdateRequestPublic:
+    """Convert CloneUpdateRequest to public representation."""
+    # Resolve parent agent name
+    parent_agent = session.get(Agent, request.parent_agent_id)
+    parent_agent_name = parent_agent.name if parent_agent else None
+
+    # Resolve pushed_by email
+    pushed_by_user = session.get(User, request.pushed_by_user_id)
+    pushed_by_email = pushed_by_user.email if pushed_by_user else None
+
+    return CloneUpdateRequestPublic(
+        id=request.id,
+        clone_agent_id=request.clone_agent_id,
+        parent_agent_id=request.parent_agent_id,
+        parent_agent_name=parent_agent_name,
+        pushed_by_email=pushed_by_email,
+        copy_files_folder=request.copy_files_folder,
+        rebuild_environment=request.rebuild_environment,
+        status=request.status,
+        created_at=request.created_at,
+        applied_at=request.applied_at,
+        dismissed_at=request.dismissed_at
+    )

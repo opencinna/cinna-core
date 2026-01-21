@@ -87,6 +87,14 @@ from .agent_share import (
     ShareStatus,
     ShareMode,
 )
+from .clone_update_request import (
+    CloneUpdateRequest,
+    CloneUpdateRequestBase,
+    CloneUpdateRequestPublic,
+    CloneUpdateRequestsPublic,
+    PushUpdateActionsRequest,
+    UpdateRequestStatus,
+)
 from .item import (
     Item,
     ItemCreate,
@@ -317,6 +325,13 @@ __all__ = [
     "AICredentialRequirement",
     "ShareStatus",
     "ShareMode",
+    # Clone Update Requests
+    "CloneUpdateRequest",
+    "CloneUpdateRequestBase",
+    "CloneUpdateRequestPublic",
+    "CloneUpdateRequestsPublic",
+    "PushUpdateActionsRequest",
+    "UpdateRequestStatus",
     # Items
     "Item",
     "ItemCreate",

@@ -23,6 +23,7 @@ from app.models.credential_share import CredentialShare
 from app.models.environment import AgentEnvironment, AgentEnvironmentCreate
 from app.models.link_models import AgentCredentialLink
 from app.models.agent_share import AgentShare
+from app.models.clone_update_request import CloneUpdateRequest, UpdateRequestStatus
 from app.core.config import settings
 from app.services.environment_service import EnvironmentService
 from app.services.ai_credentials_service import ai_credentials_service
@@ -223,23 +224,31 @@ class AgentCloneService:
     @staticmethod
     async def copy_workspace(
         original_env_id: UUID,
-        clone_env_id: UUID
+        clone_env_id: UUID,
+        include_files_folder: bool = True
     ) -> None:
         """
         Copy workspace files from original environment to clone.
 
-        Copies (Original Agent ownership - synced from parent to clones):
+        Standard copy (always included):
         - app/workspace/scripts/ (all agent scripts)
         - app/workspace/docs/ (WORKFLOW_PROMPT.md, ENTRYPOINT_PROMPT.md)
         - app/workspace/knowledge/ (integration docs if any)
+        - app/workspace/workspace_requirements.txt (agent-installed Python packages)
+
+        Optional copy (when include_files_folder=True):
         - app/workspace/files/ (generated reports, CSV files, SQLite DBs, local caches)
         - app/workspace/uploads/ (user-uploaded files)
-        - app/workspace/workspace_requirements.txt (agent-installed Python packages)
 
         Does NOT copy (Environment Runtime - not synced):
         - app/workspace/logs/ (session logs)
         - app/workspace/databases/ (runtime SQLite DBs)
         - app/workspace/credentials/ (handled separately via dynamic sync)
+
+        Args:
+            original_env_id: Source environment ID
+            clone_env_id: Target environment ID
+            include_files_folder: Whether to copy files/ and uploads/ directories
         """
         # Get workspace paths
         instances_dir = Path(settings.ENV_INSTANCES_DIR)
@@ -254,14 +263,19 @@ class AgentCloneService:
             logger.warning(f"Clone workspace not found: {clone_workspace}")
             return
 
-        # Directories to copy (Original Agent ownership)
+        # Standard directories to copy (always included)
         dirs_to_copy = [
             ("app/workspace/scripts", "app/workspace/scripts"),
             ("app/workspace/docs", "app/workspace/docs"),
             ("app/workspace/knowledge", "app/workspace/knowledge"),
-            ("app/workspace/files", "app/workspace/files"),  # Reports, caches, CSVs
-            ("app/workspace/uploads", "app/workspace/uploads"),  # User-uploaded files
         ]
+
+        # Optional directories (files folder)
+        if include_files_folder:
+            dirs_to_copy.extend([
+                ("app/workspace/files", "app/workspace/files"),  # Reports, caches, CSVs
+                ("app/workspace/uploads", "app/workspace/uploads"),  # User-uploaded files
+            ])
 
         # Single files to copy
         files_to_copy = [
@@ -529,7 +543,9 @@ class AgentCloneService:
     async def push_updates(
         session: Session,
         original_agent_id: UUID,
-        owner_id: UUID
+        owner_id: UUID,
+        copy_files_folder: bool = False,
+        rebuild_environment: bool = False
     ) -> dict:
         """
         Queue updates to all clones of an agent.
@@ -537,9 +553,17 @@ class AgentCloneService:
         Process:
         1. Verify ownership
         2. Find all clones (parent_agent_id = original_agent_id)
-        3. Set pending_update=True for all clones
-        4. For automatic mode clones: trigger immediate apply
-        5. Return count and details
+        3. Create CloneUpdateRequest for each clone with the specified actions
+        4. Set pending_update=True for all clones
+        5. For automatic mode clones: trigger immediate apply
+        6. Return count and details
+
+        Args:
+            session: Database session
+            original_agent_id: The parent agent ID
+            owner_id: The owner of the parent agent
+            copy_files_folder: Whether to copy the files folder
+            rebuild_environment: Whether to rebuild the environment
 
         Returns: {
             "clones_queued": int,
@@ -571,23 +595,26 @@ class AgentCloneService:
         pending_manual = 0
 
         for clone in clones:
+            # 3. Create CloneUpdateRequest record for each clone
+            update_request = CloneUpdateRequest(
+                clone_agent_id=clone.id,
+                parent_agent_id=original_agent_id,
+                pushed_by_user_id=owner_id,
+                copy_files_folder=copy_files_folder,
+                rebuild_environment=rebuild_environment,
+                status=UpdateRequestStatus.PENDING
+            )
+            session.add(update_request)
+
+            # 4. Set pending_update on clone
             clone.pending_update = True
             clone.pending_update_at = datetime.utcnow()
             session.add(clone)
 
+            # Always queue the request - automatic updates will be applied
+            # when the agent environment is inactive (handled by separate logic)
             if clone.update_mode == "automatic":
-                # For MVP: apply immediately
-                try:
-                    await AgentCloneService._apply_update_internal(
-                        session=session,
-                        clone=clone,
-                        parent=original
-                    )
-                    auto_updated += 1
-                except Exception as e:
-                    # Log error, keep pending_update=True
-                    logger.error(f"Failed to auto-update clone {clone.id}: {e}")
-                    pending_manual += 1
+                auto_updated += 1
             else:
                 pending_manual += 1
 
@@ -634,9 +661,12 @@ class AgentCloneService:
         Process:
         1. Get clone and parent
         2. Verify pending update exists
-        3. Sync workspace files
-        4. Update last_sync_at
-        5. Clear pending_update flag
+        3. Get pending update requests to determine what actions to apply
+        4. Sync workspace files (standard update)
+        5. Apply optional actions (copy_files_folder, rebuild_environment)
+        6. Update last_sync_at
+        7. Clear pending_update flag
+        8. Mark all pending update requests as applied
 
         Returns: Updated clone
         """
@@ -659,18 +689,46 @@ class AgentCloneService:
                 detail="Parent agent no longer exists. Consider detaching this clone."
             )
 
-        # Sync workspace files
+        # Get pending update requests to determine actions
+        stmt = select(CloneUpdateRequest).where(
+            CloneUpdateRequest.clone_agent_id == clone_id,
+            CloneUpdateRequest.status == UpdateRequestStatus.PENDING
+        )
+        pending_requests = list(session.exec(stmt).all())
+
+        # Determine what actions to apply (merge all pending requests)
+        should_copy_files = any(req.copy_files_folder for req in pending_requests)
+        should_rebuild_env = any(req.rebuild_environment for req in pending_requests)
+
+        # Sync workspace files (standard update always happens)
+        # include_files_folder is True only if any request has copy_files_folder=True
         if parent.active_environment_id and clone.active_environment_id:
             await AgentCloneService.copy_workspace(
                 original_env_id=parent.active_environment_id,
-                clone_env_id=clone.active_environment_id
+                clone_env_id=clone.active_environment_id,
+                include_files_folder=should_copy_files
             )
+            logger.info(f"Copied workspace to clone {clone_id} (include_files={should_copy_files})")
+
+        # Handle rebuild environment action
+        if should_rebuild_env:
+            # TODO: Implement environment rebuild logic
+            # This should trigger a rebuild of the clone's environment
+            # For now, just log that it was requested
+            logger.info(f"Environment rebuild requested for clone {clone_id} (not yet implemented)")
 
         # Update clone record
         clone.last_sync_at = datetime.utcnow()
         clone.pending_update = False
         clone.pending_update_at = None
         session.add(clone)
+
+        # Mark all pending update requests as applied
+        for req in pending_requests:
+            req.status = UpdateRequestStatus.APPLIED
+            req.applied_at = datetime.utcnow()
+            session.add(req)
+
         session.commit()
         session.refresh(clone)
 
@@ -753,3 +811,90 @@ class AgentCloneService:
 
         logger.info(f"Set update mode for clone {clone_id} to {update_mode}")
         return clone
+
+    # ============ UPDATE REQUEST MANAGEMENT ============
+
+    @staticmethod
+    async def get_pending_update_requests(
+        session: Session,
+        clone_id: UUID,
+        clone_owner_id: UUID
+    ) -> list[CloneUpdateRequest]:
+        """
+        Get pending update requests for a clone.
+
+        Args:
+            session: Database session
+            clone_id: The clone agent ID
+            clone_owner_id: The owner of the clone
+
+        Returns:
+            List of pending CloneUpdateRequest records
+        """
+        clone = session.get(Agent, clone_id)
+        if not clone:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if clone.owner_id != clone_owner_id:
+            raise HTTPException(status_code=403, detail="Not your agent")
+        if not clone.is_clone:
+            return []
+
+        stmt = select(CloneUpdateRequest).where(
+            CloneUpdateRequest.clone_agent_id == clone_id,
+            CloneUpdateRequest.status == UpdateRequestStatus.PENDING
+        ).order_by(CloneUpdateRequest.created_at.desc())
+
+        return list(session.exec(stmt).all())
+
+    @staticmethod
+    async def dismiss_update_request(
+        session: Session,
+        request_id: UUID,
+        clone_owner_id: UUID
+    ) -> CloneUpdateRequest:
+        """
+        Dismiss an update request.
+
+        Args:
+            session: Database session
+            request_id: The update request ID
+            clone_owner_id: The owner of the clone
+
+        Returns:
+            The dismissed CloneUpdateRequest
+        """
+        update_request = session.get(CloneUpdateRequest, request_id)
+        if not update_request:
+            raise HTTPException(status_code=404, detail="Update request not found")
+
+        # Verify the clone belongs to the user
+        clone = session.get(Agent, update_request.clone_agent_id)
+        if not clone or clone.owner_id != clone_owner_id:
+            raise HTTPException(status_code=403, detail="Not your agent")
+
+        if update_request.status != UpdateRequestStatus.PENDING:
+            raise HTTPException(status_code=400, detail="Update request is not pending")
+
+        update_request.status = UpdateRequestStatus.DISMISSED
+        update_request.dismissed_at = datetime.utcnow()
+        session.add(update_request)
+
+        # Check if there are other pending requests for this clone
+        stmt = select(CloneUpdateRequest).where(
+            CloneUpdateRequest.clone_agent_id == update_request.clone_agent_id,
+            CloneUpdateRequest.status == UpdateRequestStatus.PENDING,
+            CloneUpdateRequest.id != request_id
+        )
+        other_pending = session.exec(stmt).first()
+
+        # If no other pending requests, clear the clone's pending_update flag
+        if not other_pending and clone:
+            clone.pending_update = False
+            clone.pending_update_at = None
+            session.add(clone)
+
+        session.commit()
+        session.refresh(update_request)
+
+        logger.info(f"Dismissed update request {request_id} for clone {update_request.clone_agent_id}")
+        return update_request

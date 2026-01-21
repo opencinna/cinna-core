@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Share2, Info, Link2Off, Plus, Trash2, Send, Loader2, User, Wrench, RotateCcw, Key, MessageCircle } from "lucide-react"
+import { Share2, Info, Link2Off, Plus, Trash2, Loader2, User, Wrench, RotateCcw, Key, MessageCircle, Send, FolderSync, RefreshCw, Clock } from "lucide-react"
 
 import type { AgentPublic, AgentSharePublic } from "@/client"
 import { AgentSharesService, AiCredentialsService, AgentsService } from "@/client"
@@ -42,7 +42,7 @@ import {
 } from "@/components/ui/dialog"
 
 import { RevokeShareDialog } from "./ShareManagement/RevokeShareDialog"
-import { UpdateModeToggle, DetachDialog } from "./CloneManagement"
+import { UpdateModeToggle, DetachDialog, PushUpdatesModal } from "./CloneManagement"
 
 // SDK to credential type mapping
 const SDK_TO_CRED_TYPE: Record<string, string> = {
@@ -58,6 +58,7 @@ interface AgentSharingTabProps {
 export function AgentSharingTab({ agent }: AgentSharingTabProps) {
   const [detachDialogOpen, setDetachDialogOpen] = useState(false)
   const [showAddForm, setShowAddForm] = useState(false)
+  const [showPushUpdatesModal, setShowPushUpdatesModal] = useState(false)
   const [revokeShare, setRevokeShare] = useState<AgentSharePublic | null>(null)
   const [removeShare, setRemoveShare] = useState<AgentSharePublic | null>(null)
   const [reshareShare, setReshareShare] = useState<AgentSharePublic | null>(null)
@@ -74,6 +75,13 @@ export function AgentSharingTab({ agent }: AgentSharingTabProps) {
     queryKey: ["agentShares", agent.id],
     queryFn: () => AgentSharesService.getAgentShares({ agentId: agent.id }),
     enabled: !agent.is_clone,
+  })
+
+  // Fetch pending update requests for clones
+  const { data: updateRequests } = useQuery({
+    queryKey: ["updateRequests", agent.id],
+    queryFn: () => AgentSharesService.getPendingUpdateRequests({ agentId: agent.id }),
+    enabled: agent.is_clone && agent.pending_update,
   })
 
   // Fetch agent's environment to get SDK types
@@ -131,13 +139,6 @@ export function AgentSharingTab({ agent }: AgentSharingTabProps) {
     },
   })
 
-  // Push updates mutation
-  const pushMutation = useMutation({
-    mutationFn: () => AgentSharesService.pushUpdatesToClones({ agentId: agent.id }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["agentShares", agent.id] })
-    },
-  })
 
   // Remove share record mutation (for deleted/declined/revoked shares cleanup)
   const removeShareMutation = useMutation({
@@ -189,10 +190,66 @@ export function AgentSharingTab({ agent }: AgentSharingTabProps) {
 
   const allShares = shares?.data || []
 
+  const pendingRequests = updateRequests?.data || []
+
   // If this is a clone, show clone settings
   if (agent.is_clone) {
     return (
       <div className="space-y-6">
+        {/* Pending update requests section */}
+        {pendingRequests.length > 0 && (
+          <Card className="border-blue-200 bg-blue-50/50 dark:border-blue-800 dark:bg-blue-950/20">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-blue-700 dark:text-blue-300">
+                <Clock className="h-5 w-5" />
+                Pending Update Requests
+              </CardTitle>
+              <CardDescription>
+                The owner has pushed updates that are waiting to be applied.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {pendingRequests.map((request) => (
+                <div
+                  key={request.id}
+                  className="p-3 border rounded-lg bg-white dark:bg-gray-900"
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="space-y-2">
+                      <div className="text-sm">
+                        <span className="text-muted-foreground">Pushed by: </span>
+                        <span className="font-medium">{request.pushed_by_email}</span>
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        {new Date(request.created_at).toLocaleString()}
+                      </div>
+                      {(request.copy_files_folder || request.rebuild_environment) && (
+                        <div className="flex gap-2 pt-1">
+                          {request.copy_files_folder && (
+                            <Badge variant="secondary" className="flex items-center gap-1">
+                              <FolderSync className="h-3 w-3" />
+                              Copy Files
+                            </Badge>
+                          )}
+                          {request.rebuild_environment && (
+                            <Badge variant="secondary" className="flex items-center gap-1">
+                              <RefreshCw className="h-3 w-3" />
+                              Rebuild Env
+                            </Badge>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <p className="text-sm text-muted-foreground pt-2">
+                Use the "Apply Update" button in the agent header to apply these changes.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -278,10 +335,16 @@ export function AgentSharingTab({ agent }: AgentSharingTabProps) {
                 Share this agent with other users. They'll receive a clone they can use.
               </CardDescription>
             </div>
-            <Button onClick={() => setShowAddForm(true)}>
-              <Plus className="h-4 w-4 mr-2" />
-              Share agent
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setShowPushUpdatesModal(true)}>
+                <Send className="h-4 w-4 mr-2" />
+                Push Updates
+              </Button>
+              <Button onClick={() => setShowAddForm(true)}>
+                <Plus className="h-4 w-4 mr-2" />
+                Share Agent
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -323,21 +386,6 @@ export function AgentSharingTab({ agent }: AgentSharingTabProps) {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
-                        {share.status === "accepted" && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => pushMutation.mutate()}
-                            disabled={pushMutation.isPending}
-                            title="Push updates to all clones"
-                          >
-                            {pushMutation.isPending ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Send className="h-4 w-4" />
-                            )}
-                          </Button>
-                        )}
                         {share.status !== "revoked" && share.status !== "deleted" && share.status !== "declined" && (
                           <Button
                             variant="ghost"
@@ -376,16 +424,6 @@ export function AgentSharingTab({ agent }: AgentSharingTabProps) {
             </Table>
           )}
 
-          {/* Push updates success message */}
-          {pushMutation.isSuccess && (
-            <Alert className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950">
-              <Info className="h-4 w-4 text-green-600 dark:text-green-400" />
-              <AlertDescription className="text-green-800 dark:text-green-200">
-                Updates pushed! Automatic clones will update immediately.
-                Manual clones will see "Update Available".
-              </AlertDescription>
-            </Alert>
-          )}
         </CardContent>
       </Card>
 
@@ -686,6 +724,13 @@ export function AgentSharingTab({ agent }: AgentSharingTabProps) {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Push updates modal */}
+      <PushUpdatesModal
+        open={showPushUpdatesModal}
+        onOpenChange={setShowPushUpdatesModal}
+        agentId={agent.id}
+      />
     </div>
   )
 }

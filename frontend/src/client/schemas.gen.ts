@@ -2760,6 +2760,113 @@ export const CheckAccessResponseSchema = {
     description: 'Response for check access endpoint.'
 } as const;
 
+export const CloneUpdateRequestPublicSchema = {
+    properties: {
+        copy_files_folder: {
+            type: 'boolean',
+            title: 'Copy Files Folder'
+        },
+        rebuild_environment: {
+            type: 'boolean',
+            title: 'Rebuild Environment'
+        },
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        clone_agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Clone Agent Id'
+        },
+        parent_agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Parent Agent Id'
+        },
+        parent_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Parent Agent Name'
+        },
+        pushed_by_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Pushed By Email'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        applied_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Applied At'
+        },
+        dismissed_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Dismissed At'
+        }
+    },
+    type: 'object',
+    required: ['copy_files_folder', 'rebuild_environment', 'id', 'clone_agent_id', 'parent_agent_id', 'status', 'created_at'],
+    title: 'CloneUpdateRequestPublic',
+    description: 'Public representation of an update request (for API responses)'
+} as const;
+
+export const CloneUpdateRequestsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/CloneUpdateRequestPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'CloneUpdateRequestsPublic',
+    description: 'List response for clone update requests'
+} as const;
+
 export const CreateAgentTaskRequestSchema = {
     properties: {
         task_message: {
@@ -5784,6 +5891,24 @@ export const PrivateUserCreateSchema = {
     type: 'object',
     required: ['email', 'password', 'full_name'],
     title: 'PrivateUserCreate'
+} as const;
+
+export const PushUpdateActionsRequestSchema = {
+    properties: {
+        copy_files_folder: {
+            type: 'boolean',
+            title: 'Copy Files Folder',
+            default: false
+        },
+        rebuild_environment: {
+            type: 'boolean',
+            title: 'Rebuild Environment',
+            default: false
+        }
+    },
+    type: 'object',
+    title: 'PushUpdateActionsRequest',
+    description: 'Request body for pushing updates to clones'
 } as const;
 
 export const PushUpdatesResponseSchema = {
