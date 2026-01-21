@@ -1,6 +1,11 @@
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
   Card,
   CardContent,
   CardFooter,
@@ -8,7 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import type { PendingSharePublic } from "@/client"
-import { User, Calendar } from "lucide-react"
+import { User, Wrench, MessageCircle } from "lucide-react"
 
 interface PendingAgentCardProps {
   share: PendingSharePublic
@@ -23,7 +28,7 @@ export function PendingAgentCard({
   onDecline,
   isLoading = false,
 }: PendingAgentCardProps) {
-  const modeLabel = share.share_mode === "builder" ? "Builder Access" : "User Access"
+  const modeLabel = share.share_mode === "builder" ? "Builder Access" : "Conversation Access"
   const modeColor =
     share.share_mode === "builder"
       ? "bg-purple-100 text-purple-800"
@@ -53,18 +58,23 @@ export function PendingAgentCard({
           <span className="truncate">Shared by: {share.shared_by_email}</span>
         </div>
 
-        <div className="flex items-center text-sm text-muted-foreground mb-3">
-          <Calendar className="h-4 w-4 mr-2 shrink-0" />
-          <span>{new Date(share.shared_at).toLocaleDateString()}</span>
-        </div>
-
-        <Badge className={modeColor}>{modeLabel}</Badge>
-
-        <p className="text-xs text-muted-foreground mt-2">
-          {share.share_mode === "builder"
-            ? "Full access: You can modify prompts, scripts, and settings"
-            : "User access: You can use the agent but not modify its configuration"}
-        </p>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge className={modeColor}>
+              {share.share_mode === "builder" ? (
+                <Wrench className="h-3 w-3 mr-1" />
+              ) : (
+                <MessageCircle className="h-3 w-3 mr-1" />
+              )}
+              {modeLabel}
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent>
+            {share.share_mode === "builder"
+              ? "Full access: You can modify prompts, scripts, and settings"
+              : "Conversation access: You can use the agent but not modify its configuration"}
+          </TooltipContent>
+        </Tooltip>
       </CardContent>
 
       <CardFooter className="flex justify-end gap-2 pt-3 border-t">

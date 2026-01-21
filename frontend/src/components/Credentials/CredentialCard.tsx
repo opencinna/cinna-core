@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router"
-import { Key, Mail, Database, AtSign, Share2, Users } from "lucide-react"
+import { Key, Mail, Database, AtSign, Share2, Users, AlertTriangle } from "lucide-react"
 
 import type { CredentialPublic } from "@/client"
 import {
@@ -68,6 +68,7 @@ function getCredentialTypeLabel(type: string): string {
 
 export function CredentialCard({ credential }: CredentialCardProps) {
   const shareCount = credential.share_count ?? 0
+  const isIncomplete = credential.status === "incomplete"
 
   return (
     <Link
@@ -99,6 +100,21 @@ export function CredentialCard({ credential }: CredentialCardProps) {
             <Badge variant="secondary">
               {getCredentialTypeLabel(credential.type)}
             </Badge>
+            {isIncomplete && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="destructive" className="gap-1">
+                      <AlertTriangle className="h-3 w-3" />
+                      Incomplete
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    This credential is missing required configuration. Click to complete setup.
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
             {credential.allow_sharing && (
               <TooltipProvider>
                 <Tooltip>

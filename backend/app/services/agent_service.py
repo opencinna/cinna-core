@@ -18,6 +18,42 @@ from app.core.db import engine
 logger = logging.getLogger(__name__)
 
 
+def _generate_description_background(agent_id: UUID, workflow_prompt: str, agent_name: str | None):
+    """
+    Background task to generate agent description from workflow prompt.
+
+    Runs in a separate thread to avoid blocking the main request.
+    Creates its own database session for the update.
+    """
+    from sqlmodel import Session as SQLSession
+
+    try:
+        if not AIFunctionsService.is_available():
+            logger.debug("AI functions not available, skipping description generation")
+            return
+
+        # Generate description
+        description = AIFunctionsService.generate_description_from_workflow(
+            workflow_prompt=workflow_prompt,
+            agent_name=agent_name
+        )
+
+        # Update agent in database with new session
+        with SQLSession(engine) as db_session:
+            agent = db_session.get(Agent, agent_id)
+            if agent:
+                agent.description = description
+                agent.updated_at = datetime.utcnow()
+                db_session.add(agent)
+                db_session.commit()
+                logger.info(f"Updated agent {agent_id} description: {description[:50]}...")
+            else:
+                logger.warning(f"Agent {agent_id} not found for description update")
+
+    except Exception as e:
+        logger.error(f"Failed to generate description for agent {agent_id}: {e}", exc_info=True)
+
+
 def _increment_version(version: str) -> str:
     """Increment the patch version of a semantic version string."""
     try:
@@ -122,6 +158,54 @@ class AgentService:
         return session.exec(statement).first()
 
     @staticmethod
+    def handle_workflow_prompt_change(
+        agent: Agent,
+        new_workflow_prompt: str,
+        trigger_description_update: bool = True
+    ) -> None:
+        """
+        Handle workflow_prompt change - regenerate A2A skills and trigger description update.
+
+        This method should be called whenever workflow_prompt changes, regardless of source
+        (API update, sync from agent-env, etc.). It ensures consistent behavior across all
+        update paths.
+
+        Args:
+            agent: The agent being updated (must be attached to a session)
+            new_workflow_prompt: The new workflow prompt value
+            trigger_description_update: If True, triggers background description generation
+
+        Note:
+            This method modifies the agent object but does NOT commit the transaction.
+            The caller is responsible for committing.
+        """
+        import threading
+
+        # Regenerate A2A skills
+        try:
+            new_skills = generate_a2a_skills(new_workflow_prompt)
+            current_version = agent.a2a_config.get("version", "1.0.0") if agent.a2a_config else "1.0.0"
+            agent.a2a_config = {
+                "skills": new_skills,
+                "version": _increment_version(current_version),
+                "generated_at": datetime.utcnow().isoformat()
+            }
+            flag_modified(agent, "a2a_config")
+            logger.info(f"Regenerated A2A skills for agent {agent.id}: {len(new_skills)} skills")
+        except Exception as e:
+            logger.warning(f"Failed to generate A2A skills for agent {agent.id}: {e}")
+
+        # Trigger background description generation
+        if trigger_description_update:
+            thread = threading.Thread(
+                target=_generate_description_background,
+                args=(agent.id, new_workflow_prompt, agent.name),
+                daemon=True
+            )
+            thread.start()
+            logger.info(f"Triggered background description generation for agent {agent.id}")
+
+    @staticmethod
     def update_agent(session: Session, agent_id: UUID, data: AgentUpdate) -> Agent | None:
         """Update agent"""
         agent = session.get(Agent, agent_id)
@@ -130,20 +214,13 @@ class AgentService:
 
         update_dict = data.model_dump(exclude_unset=True)
 
-        # Regenerate A2A skills when workflow_prompt changes
+        # Handle workflow_prompt change with unified method
         if "workflow_prompt" in update_dict and update_dict["workflow_prompt"] != agent.workflow_prompt:
-            try:
-                new_skills = generate_a2a_skills(update_dict["workflow_prompt"])
-                current_version = agent.a2a_config.get("version", "1.0.0") if agent.a2a_config else "1.0.0"
-                agent.a2a_config = {
-                    "skills": new_skills,
-                    "version": _increment_version(current_version),
-                    "generated_at": datetime.utcnow().isoformat()
-                }
-                flag_modified(agent, "a2a_config")
-                logger.info(f"Regenerated A2A skills for agent {agent_id}: {len(new_skills)} skills")
-            except Exception as e:
-                logger.warning(f"Failed to generate A2A skills for agent {agent_id}: {e}")
+            AgentService.handle_workflow_prompt_change(
+                agent=agent,
+                new_workflow_prompt=update_dict["workflow_prompt"],
+                trigger_description_update=True
+            )
 
         agent.sqlmodel_update(update_dict)
 

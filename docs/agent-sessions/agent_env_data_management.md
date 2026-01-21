@@ -54,8 +54,23 @@ Agent Model → Environment Lifecycle → Docker Container → Workspace Files
 | Data | Storage | Sync Behavior | Notes |
 |------|---------|---------------|-------|
 | Integration credentials | agent_config | Dynamic | Links via `AgentCredentialLink`, synced to `/app/workspace/credentials/` |
+| AI credentials | environment | On Start | Resolved via `conversation_ai_credential_id` / `building_ai_credential_id` on environment |
 | Agent SDK config | agent_config | Static (Clone) | Copied during clone, not updated |
 | A2A config | agent_config | Static (Clone) | Agent-to-agent communication settings |
+
+### AI Credential Resolution
+
+AI credentials (Anthropic, MiniMax, OpenAI Compatible) are resolved during environment start/rebuild:
+
+| Scenario | Resolution Behavior |
+|----------|---------------------|
+| Credentials assigned on environment | Use **only** assigned credentials (supports shared via `AICredentialShare`) |
+| Assigned credential not accessible | Warning logged, no fallback (environment may fail to start) |
+| No credentials assigned | Fall back to user's default profile credentials |
+
+**Key Point**: When credentials are specifically assigned (e.g., shared credentials for cloned agents), the system does **not** fall back to the user's own credentials. This ensures cloned agents always use the credentials the owner shared.
+
+**Implementation**: `backend/app/services/environment_lifecycle.py:_update_environment_config()`
 
 ### Environment Runtime Data (Not Synced)
 

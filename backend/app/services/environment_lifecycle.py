@@ -800,39 +800,96 @@ class EnvironmentLifecycleManager:
             uses_openai_compatible = sdk_conversation == "google-adk-wr/openai-compatible" or sdk_building == "google-adk-wr/openai-compatible"
 
             # Fetch user credentials for SDK settings regeneration
+            # If specific credentials are assigned, use ONLY those (no fallback to user profile)
             user = db_session.get(User, agent.owner_id)
+            minimax_api_key = None
+            openai_compatible_api_key = None
+            openai_compatible_base_url = None
+            openai_compatible_model = None
+
+            # Track if specific credentials are assigned (to prevent fallback)
+            has_assigned_credentials = (
+                environment.conversation_ai_credential_id is not None or
+                environment.building_ai_credential_id is not None
+            )
+
             if user:
-                ai_credentials = crud.get_user_ai_credentials(user=user)
+                from app.services.ai_credentials_service import ai_credentials_service
+                from app.models.ai_credential import AICredentialType
+
+                SDK_TO_CREDENTIAL_TYPE = {
+                    "claude-code/anthropic": AICredentialType.ANTHROPIC,
+                    "claude-code/minimax": AICredentialType.MINIMAX,
+                    "google-adk-wr/openai-compatible": AICredentialType.OPENAI_COMPATIBLE,
+                }
+
+                # Use assigned credentials from environment (handles shared credentials)
+                if environment.conversation_ai_credential_id:
+                    conv_cred_data = ai_credentials_service.get_credential_for_use(
+                        db_session, environment.conversation_ai_credential_id, user.id
+                    )
+                    if conv_cred_data:
+                        cred_type = SDK_TO_CREDENTIAL_TYPE.get(sdk_conversation)
+                        if cred_type == AICredentialType.MINIMAX:
+                            minimax_api_key = conv_cred_data.api_key
+                        elif cred_type == AICredentialType.OPENAI_COMPATIBLE:
+                            openai_compatible_api_key = conv_cred_data.api_key
+                            openai_compatible_base_url = conv_cred_data.base_url
+                            openai_compatible_model = conv_cred_data.model
+                    else:
+                        logger.warning(f"Assigned conversation credential {environment.conversation_ai_credential_id} not accessible during rebuild for environment {environment.id}")
+
+                if environment.building_ai_credential_id:
+                    build_cred_data = ai_credentials_service.get_credential_for_use(
+                        db_session, environment.building_ai_credential_id, user.id
+                    )
+                    if build_cred_data:
+                        cred_type = SDK_TO_CREDENTIAL_TYPE.get(sdk_building)
+                        if cred_type == AICredentialType.MINIMAX and minimax_api_key is None:
+                            minimax_api_key = build_cred_data.api_key
+                        elif cred_type == AICredentialType.OPENAI_COMPATIBLE and openai_compatible_api_key is None:
+                            openai_compatible_api_key = build_cred_data.api_key
+                            openai_compatible_base_url = build_cred_data.base_url
+                            openai_compatible_model = build_cred_data.model
+                    else:
+                        logger.warning(f"Assigned building credential {environment.building_ai_credential_id} not accessible during rebuild for environment {environment.id}")
+
+                # Fall back to user profile credentials ONLY if no specific credentials are assigned
+                if not has_assigned_credentials:
+                    ai_credentials = crud.get_user_ai_credentials(user=user)
+                    if ai_credentials:
+                        if minimax_api_key is None and ai_credentials.minimax_api_key:
+                            minimax_api_key = ai_credentials.minimax_api_key
+                        if openai_compatible_api_key is None and ai_credentials.openai_compatible_api_key:
+                            openai_compatible_api_key = ai_credentials.openai_compatible_api_key
+                        if openai_compatible_base_url is None and ai_credentials.openai_compatible_base_url:
+                            openai_compatible_base_url = ai_credentials.openai_compatible_base_url
+                        if openai_compatible_model is None and ai_credentials.openai_compatible_model:
+                            openai_compatible_model = ai_credentials.openai_compatible_model
 
                 # Regenerate MiniMax settings if needed
-                if uses_minimax:
-                    minimax_api_key = ai_credentials.minimax_api_key if ai_credentials else None
-                    if minimax_api_key:
-                        self._generate_minimax_settings_files(
-                            instance_dir,
-                            environment,
-                            minimax_api_key,
-                            sdk_building,
-                            sdk_conversation
-                        )
-                        logger.info(f"Regenerated MiniMax settings files after rebuild for environment {environment.id}")
+                if uses_minimax and minimax_api_key:
+                    self._generate_minimax_settings_files(
+                        instance_dir,
+                        environment,
+                        minimax_api_key,
+                        sdk_building,
+                        sdk_conversation
+                    )
+                    logger.info(f"Regenerated MiniMax settings files after rebuild for environment {environment.id}")
 
                 # Regenerate OpenAI Compatible settings if needed
-                if uses_openai_compatible and ai_credentials:
-                    openai_compatible_api_key = ai_credentials.openai_compatible_api_key
-                    openai_compatible_base_url = ai_credentials.openai_compatible_base_url
-                    openai_compatible_model = ai_credentials.openai_compatible_model
-                    if openai_compatible_api_key and openai_compatible_base_url:
-                        self._generate_openai_compatible_settings_files(
-                            instance_dir,
-                            environment,
-                            openai_compatible_api_key,
-                            openai_compatible_base_url,
-                            openai_compatible_model or "gpt-4",
-                            sdk_building,
-                            sdk_conversation
-                        )
-                        logger.info(f"Regenerated OpenAI Compatible settings files after rebuild for environment {environment.id}")
+                if uses_openai_compatible and openai_compatible_api_key and openai_compatible_base_url:
+                    self._generate_openai_compatible_settings_files(
+                        instance_dir,
+                        environment,
+                        openai_compatible_api_key,
+                        openai_compatible_base_url,
+                        openai_compatible_model or "gpt-4",
+                        sdk_building,
+                        sdk_conversation
+                    )
+                    logger.info(f"Regenerated OpenAI Compatible settings files after rebuild for environment {environment.id}")
 
             # If container was restarted, setup new container and sync data
             if was_running:
@@ -1040,27 +1097,97 @@ class EnvironmentLifecycleManager:
         if not port:
             raise ValueError(f"Port not configured for environment {environment.id}")
 
-        # 3. Fetch API keys from user AI credentials if not explicitly provided
+        # 3. Fetch API keys - use assigned credentials if set, otherwise fall back to user profile
+        #    If specific credentials are assigned to the environment, use ONLY those (no fallback)
+        #    This is critical for cloned agents that use shared AI credentials
         user = db_session.get(User, agent.owner_id)
-        if user:
+
+        from app.services.ai_credentials_service import ai_credentials_service
+        from app.models.ai_credential import AICredentialType
+
+        # SDK to credential type mapping
+        SDK_TO_CREDENTIAL_TYPE = {
+            "claude-code/anthropic": AICredentialType.ANTHROPIC,
+            "claude-code/minimax": AICredentialType.MINIMAX,
+            "google-adk-wr/openai-compatible": AICredentialType.OPENAI_COMPATIBLE,
+        }
+
+        sdk_conversation = environment.agent_sdk_conversation or "claude-code/anthropic"
+        sdk_building = environment.agent_sdk_building or "claude-code/anthropic"
+
+        # Track if specific credentials are assigned (to prevent fallback)
+        has_assigned_conversation_credential = environment.conversation_ai_credential_id is not None
+        has_assigned_building_credential = environment.building_ai_credential_id is not None
+
+        # Resolve conversation credential if stored on environment
+        if environment.conversation_ai_credential_id and user:
+            conv_cred_data = ai_credentials_service.get_credential_for_use(
+                db_session, environment.conversation_ai_credential_id, user.id
+            )
+            if conv_cred_data:
+                cred_type = SDK_TO_CREDENTIAL_TYPE.get(sdk_conversation)
+                if cred_type == AICredentialType.ANTHROPIC and anthropic_api_key is None:
+                    anthropic_api_key = conv_cred_data.api_key
+                    logger.debug(f"Fetched ANTHROPIC_API_KEY from assigned credential for environment {environment.id}")
+                elif cred_type == AICredentialType.MINIMAX and minimax_api_key is None:
+                    minimax_api_key = conv_cred_data.api_key
+                    logger.debug(f"Fetched MINIMAX_API_KEY from assigned credential for environment {environment.id}")
+                elif cred_type == AICredentialType.OPENAI_COMPATIBLE:
+                    if openai_compatible_api_key is None:
+                        openai_compatible_api_key = conv_cred_data.api_key
+                        logger.debug(f"Fetched OPENAI_COMPATIBLE_API_KEY from assigned credential for environment {environment.id}")
+                    if openai_compatible_base_url is None:
+                        openai_compatible_base_url = conv_cred_data.base_url
+                    if openai_compatible_model is None:
+                        openai_compatible_model = conv_cred_data.model
+            else:
+                logger.warning(f"Assigned conversation credential {environment.conversation_ai_credential_id} not accessible for environment {environment.id}")
+
+        # Resolve building credential if stored on environment
+        if environment.building_ai_credential_id and user:
+            build_cred_data = ai_credentials_service.get_credential_for_use(
+                db_session, environment.building_ai_credential_id, user.id
+            )
+            if build_cred_data:
+                cred_type = SDK_TO_CREDENTIAL_TYPE.get(sdk_building)
+                if cred_type == AICredentialType.ANTHROPIC and anthropic_api_key is None:
+                    anthropic_api_key = build_cred_data.api_key
+                    logger.debug(f"Fetched ANTHROPIC_API_KEY from assigned building credential for environment {environment.id}")
+                elif cred_type == AICredentialType.MINIMAX and minimax_api_key is None:
+                    minimax_api_key = build_cred_data.api_key
+                    logger.debug(f"Fetched MINIMAX_API_KEY from assigned building credential for environment {environment.id}")
+                elif cred_type == AICredentialType.OPENAI_COMPATIBLE:
+                    if openai_compatible_api_key is None:
+                        openai_compatible_api_key = build_cred_data.api_key
+                        logger.debug(f"Fetched OPENAI_COMPATIBLE_API_KEY from assigned building credential for environment {environment.id}")
+                    if openai_compatible_base_url is None:
+                        openai_compatible_base_url = build_cred_data.base_url
+                    if openai_compatible_model is None:
+                        openai_compatible_model = build_cred_data.model
+            else:
+                logger.warning(f"Assigned building credential {environment.building_ai_credential_id} not accessible for environment {environment.id}")
+
+        # Fall back to user's profile credentials ONLY if no specific credentials are assigned
+        # If credentials were specifically assigned but not accessible, do NOT fall back
+        if user and not has_assigned_conversation_credential and not has_assigned_building_credential:
             ai_credentials = crud.get_user_ai_credentials(user=user)
             if ai_credentials:
                 if anthropic_api_key is None and ai_credentials.anthropic_api_key:
                     anthropic_api_key = ai_credentials.anthropic_api_key
-                    logger.debug(f"Fetched ANTHROPIC_API_KEY from user settings for environment {environment.id}")
+                    logger.debug(f"Fetched ANTHROPIC_API_KEY from user profile for environment {environment.id}")
                 if minimax_api_key is None and ai_credentials.minimax_api_key:
                     minimax_api_key = ai_credentials.minimax_api_key
-                    logger.debug(f"Fetched MINIMAX_API_KEY from user settings for environment {environment.id}")
+                    logger.debug(f"Fetched MINIMAX_API_KEY from user profile for environment {environment.id}")
                 # Fetch OpenAI Compatible credentials
                 if openai_compatible_api_key is None and ai_credentials.openai_compatible_api_key:
                     openai_compatible_api_key = ai_credentials.openai_compatible_api_key
-                    logger.debug(f"Fetched OPENAI_COMPATIBLE_API_KEY from user settings for environment {environment.id}")
+                    logger.debug(f"Fetched OPENAI_COMPATIBLE_API_KEY from user profile for environment {environment.id}")
                 if openai_compatible_base_url is None and ai_credentials.openai_compatible_base_url:
                     openai_compatible_base_url = ai_credentials.openai_compatible_base_url
-                    logger.debug(f"Fetched OPENAI_COMPATIBLE_BASE_URL from user settings for environment {environment.id}")
+                    logger.debug(f"Fetched OPENAI_COMPATIBLE_BASE_URL from user profile for environment {environment.id}")
                 if openai_compatible_model is None and ai_credentials.openai_compatible_model:
                     openai_compatible_model = ai_credentials.openai_compatible_model
-                    logger.debug(f"Fetched OPENAI_COMPATIBLE_MODEL from user settings for environment {environment.id}")
+                    logger.debug(f"Fetched OPENAI_COMPATIBLE_MODEL from user profile for environment {environment.id}")
 
         # 4. Generate docker-compose.yml
         self._generate_compose_file(instance_dir, environment, agent, port, auth_token)

@@ -1148,6 +1148,49 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         "gcalendar_oauth_readonly",
     }
 
+    # Required fields for each credential type to be considered "complete"
+    REQUIRED_FIELDS = {
+        "email_imap": ["host", "port", "login", "password"],
+        "odoo": ["url", "database_name", "login", "api_token"],
+        "gmail_oauth": ["access_token"],
+        "gmail_oauth_readonly": ["access_token"],
+        "gdrive_oauth": ["access_token"],
+        "gdrive_oauth_readonly": ["access_token"],
+        "gcalendar_oauth": ["access_token"],
+        "gcalendar_oauth_readonly": ["access_token"],
+        "api_token": ["api_token_type", "api_token"],
+    }
+
+    @staticmethod
+    def check_credential_completeness(credential_type: str, credential_data: dict | None) -> str:
+        """
+        Check if a credential has all required fields populated.
+
+        Args:
+            credential_type: Type of credential (email_imap, odoo, gmail_oauth, etc.)
+            credential_data: Decrypted credential data dictionary
+
+        Returns:
+            "complete" if all required fields are present and non-empty,
+            "incomplete" otherwise
+        """
+        if not credential_data:
+            return "incomplete"
+
+        required_fields = CredentialsService.REQUIRED_FIELDS.get(credential_type, [])
+
+        if not required_fields:
+            # Unknown credential type - assume complete if it has any data
+            return "complete" if credential_data else "incomplete"
+
+        for field in required_fields:
+            value = credential_data.get(field)
+            # Check if field exists and has a non-empty value
+            if value is None or value == "":
+                return "incomplete"
+
+        return "complete"
+
     # Threshold for refreshing credentials before streaming (10 minutes)
     CREDENTIAL_REFRESH_THRESHOLD_SECONDS = 10 * 60
 

@@ -32,8 +32,143 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
   const streamRoomRef = useRef<string | null>(null)
   // Track if we've already checked for active streams on mount
   const hasCheckedForActiveStream = useRef(false)
+  // Track if stream complete has been called to prevent duplicate calls
+  const streamCompleteCalledRef = useRef(false)
+
+  // Define handleStreamComplete FIRST (before handleStreamEvent uses it)
+  const handleStreamComplete = useCallback(async (wasInterrupted: boolean) => {
+    // Cleanup subscriptions
+    if (streamSubscriptionRef.current) {
+      eventService.unsubscribe(streamSubscriptionRef.current)
+      streamSubscriptionRef.current = null
+    }
+    if (streamRoomRef.current) {
+      await eventService.unsubscribeFromRoom(streamRoomRef.current)
+      streamRoomRef.current = null
+    }
+
+    // Wait a short delay for backend to finish saving the message
+    await new Promise(resolve => setTimeout(resolve, 300))
+
+    // Use refetchQueries instead of invalidateQueries for messages
+    // refetchQueries actually waits for the data to be fetched, while
+    // invalidateQueries only marks queries as stale and triggers background refetch
+    // This ensures the new message is in the cache before we clear streaming state
+    await queryClient.refetchQueries({ queryKey: ["messages", sessionId] })
+
+    // Now safe to clear streaming state - messages are loaded
+    setIsStreaming(false)
+    setStreamingEvents([])
+
+    // Invalidate other queries (these can be background)
+    await queryClient.invalidateQueries({ queryKey: ["session", sessionId] })
+    await queryClient.invalidateQueries({ queryKey: ["sessions"] })
+
+    // Poll for AI-generated title
+    let pollAttempt = 0
+    const pollForTitle = async () => {
+      pollAttempt++
+      const currentSession = queryClient.getQueryData(["session", sessionId]) as any
+      if (currentSession?.title) {
+        return
+      }
+      await queryClient.invalidateQueries({ queryKey: ["session", sessionId] })
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] })
+
+      const nextDelay = pollAttempt <= 3 ? 500 : 2000
+      setTimeout(pollForTitle, nextDelay)
+    }
+    setTimeout(pollForTitle, 500)
+
+    // Invalidate agent caches if building mode
+    if (sessionMode === "building") {
+      await queryClient.invalidateQueries({ queryKey: ["agent"] })
+      await queryClient.invalidateQueries({ queryKey: ["agents"] })
+    }
+
+    onSuccess?.()
+  }, [sessionId, sessionMode, queryClient, onSuccess])
+
+  // Now define handleStreamEvent (uses handleStreamComplete)
+  const handleStreamEvent = useCallback((event: any) => {
+    const { session_id, event_type, data } = event
+
+    // Verify event is for current session
+    if (session_id !== sessionId) {
+      return
+    }
+
+    // Handle different event types
+    switch (event_type) {
+      case "stream_started":
+        streamCompleteCalledRef.current = false // Reset for new stream
+        break
+
+      case "user_message_created":
+        // User message already added optimistically
+        break
+
+      case "assistant":
+      case "tool":
+      case "thinking":
+      case "system":
+        // Add to streaming events for real-time display
+        const structuredEvent: StructuredStreamEvent = {
+          type: data.type,
+          content: data.content || "",
+          tool_name: data.tool_name,
+          metadata: data.metadata,
+        }
+        setStreamingEvents(prev => [...prev, structuredEvent])
+        break
+
+      case "interrupted":
+        if (streamCompleteCalledRef.current) {
+          return
+        }
+        streamCompleteCalledRef.current = true
+        setIsInterruptPending(false)
+        handleStreamComplete(true)
+        break
+
+      case "error":
+        console.error("Stream error:", data)
+        if (streamCompleteCalledRef.current) {
+          return
+        }
+        streamCompleteCalledRef.current = true
+        setIsInterruptPending(false)
+        handleStreamComplete(false)
+        break
+
+      case "stream_completed":
+        if (streamCompleteCalledRef.current) {
+          return
+        }
+        streamCompleteCalledRef.current = true
+        setIsInterruptPending(false)
+        handleStreamComplete(false)
+        break
+
+      case "done":
+        if (streamCompleteCalledRef.current) {
+          return
+        }
+        streamCompleteCalledRef.current = true
+        setIsInterruptPending(false)
+        handleStreamComplete(false)
+        break
+
+      default:
+        // Unknown event type, ignore
+        break
+    }
+  }, [sessionId, handleStreamComplete])
 
   const sendMessage = useCallback(async (content: string, answersToMessageId?: string, fileIds?: string[]) => {
+    // Reset stream complete flag for new message
+    streamCompleteCalledRef.current = false
+
     setIsStreaming(true)
     setStreamingEvents([])
     setIsInterruptPending(false)
@@ -119,9 +254,6 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
         throw new Error(`Failed to send message: ${response.status} - ${errorText}`)
       }
 
-      const data = await response.json()
-      console.log("Message processing started:", data)
-
       // Immediately refresh messages to get the real message with files
       // This replaces the optimistic message (which has empty files array)
       // with the actual message from the backend that includes attached files
@@ -160,121 +292,9 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
 
       onError?.(error instanceof Error ? error : new Error(String(error)))
     }
-  }, [sessionId, sessionMode, queryClient, onSuccess, onError])
-
-  const handleStreamEvent = useCallback((event: any) => {
-    console.log("Received stream event:", event)
-
-    const { session_id, event_type, data } = event
-
-    // Verify event is for current session
-    if (session_id !== sessionId) {
-      return
-    }
-
-    // Handle different event types
-    switch (event_type) {
-      case "stream_started":
-        console.log("Stream started")
-        break
-
-      case "user_message_created":
-        // User message already added optimistically
-        console.log("User message created:", data)
-        break
-
-      case "assistant":
-      case "tool":
-      case "thinking":
-      case "system":
-        // Add to streaming events for real-time display
-        const structuredEvent: StructuredStreamEvent = {
-          type: data.type,
-          content: data.content || "",
-          tool_name: data.tool_name,
-          metadata: data.metadata,
-        }
-        setStreamingEvents(prev => [...prev, structuredEvent])
-        break
-
-      case "interrupted":
-        console.log("Stream interrupted")
-        setIsInterruptPending(false)
-        handleStreamComplete(true)
-        break
-
-      case "error":
-        console.error("Stream error:", data)
-        setIsInterruptPending(false)
-        handleStreamComplete(false)
-        break
-
-      case "stream_completed":
-        console.log("Stream completed")
-        setIsInterruptPending(false)
-        handleStreamComplete(false)
-        break
-
-      case "done":
-        console.log("Agent processing done")
-        setIsInterruptPending(false)
-        handleStreamComplete(false)
-        break
-
-      default:
-        console.log("Unknown event type:", event_type)
-    }
-  }, [sessionId])
-
-  const handleStreamComplete = useCallback(async (wasInterrupted: boolean) => {
-    console.log(`Stream ${wasInterrupted ? 'interrupted' : 'completed'}`)
-
-    // Cleanup subscriptions
-    if (streamSubscriptionRef.current) {
-      eventService.unsubscribe(streamSubscriptionRef.current)
-      streamSubscriptionRef.current = null
-    }
-    if (streamRoomRef.current) {
-      await eventService.unsubscribeFromRoom(streamRoomRef.current)
-      streamRoomRef.current = null
-    }
-
-    // Refresh messages
-    await new Promise(resolve => setTimeout(resolve, 300))
-    await queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
-    await queryClient.invalidateQueries({ queryKey: ["session", sessionId] })
-    await queryClient.invalidateQueries({ queryKey: ["sessions"] })
-
-    // Poll for AI-generated title (same as before)
-    let pollAttempt = 0
-    const pollForTitle = async () => {
-      pollAttempt++
-      const currentSession = queryClient.getQueryData(["session", sessionId]) as any
-      if (currentSession?.title) {
-        return
-      }
-      await queryClient.invalidateQueries({ queryKey: ["session", sessionId] })
-      await queryClient.invalidateQueries({ queryKey: ["sessions"] })
-
-      const nextDelay = pollAttempt <= 3 ? 500 : 2000
-      setTimeout(pollForTitle, nextDelay)
-    }
-    setTimeout(pollForTitle, 500)
-
-    // Invalidate agent caches if building mode
-    if (sessionMode === "building") {
-      console.log("Building session completed, refreshing agent data...")
-      await queryClient.invalidateQueries({ queryKey: ["agent"] })
-      await queryClient.invalidateQueries({ queryKey: ["agents"] })
-    }
-
-    setIsStreaming(false)
-    setStreamingEvents([])
-    onSuccess?.()
-  }, [sessionId, sessionMode, queryClient, onSuccess])
+  }, [sessionId, sessionMode, queryClient, handleStreamEvent, onSuccess, onError])
 
   const stopMessage = useCallback(async () => {
-    console.log("Stop button clicked")
     setIsInterruptPending(true)
 
     try {
@@ -295,10 +315,7 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
         }
       )
 
-      if (response.ok) {
-        console.log("Interrupt request sent")
-        // Wait for "interrupted" event via WebSocket
-      } else {
+      if (!response.ok) {
         console.warn("Interrupt request failed:", response.status)
         setIsInterruptPending(false)
       }
@@ -331,7 +348,7 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
       if (response.ok) {
         const data = await response.json()
         if (data.is_streaming) {
-          console.log("Detected active stream, reconnecting via WebSocket")
+          streamCompleteCalledRef.current = false // Reset for reconnection
           setIsStreaming(true)
 
           // Subscribe to streaming room
@@ -357,7 +374,10 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
               const statusData = await statusResponse.json()
               if (!statusData.is_streaming) {
                 clearInterval(pollInterval)
-                handleStreamComplete(false)
+                if (!streamCompleteCalledRef.current) {
+                  streamCompleteCalledRef.current = true
+                  handleStreamComplete(false)
+                }
               }
             }
           }, 1000)

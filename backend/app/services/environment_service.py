@@ -795,6 +795,10 @@ class EnvironmentService:
         This should be called after a building mode session completes to capture
         any updates the agent made to WORKFLOW_PROMPT.md, ENTRYPOINT_PROMPT.md, and REFINER_PROMPT.md.
 
+        When workflow_prompt changes, this also triggers:
+        - A2A skills regeneration
+        - Background description generation
+
         Args:
             session: Database session
             environment: Agent environment instance
@@ -803,6 +807,7 @@ class EnvironmentService:
         Returns:
             True if sync successful
         """
+        from app.services.agent_service import AgentService
         import logging
         logger = logging.getLogger(__name__)
 
@@ -819,9 +824,19 @@ class EnvironmentService:
 
             # Update agent if prompts have changed
             updated = False
+            workflow_prompt_changed = False
+
             if workflow_prompt and workflow_prompt != agent.workflow_prompt:
+                # Use unified handler for workflow_prompt changes
+                # This regenerates A2A skills and triggers background description update
+                AgentService.handle_workflow_prompt_change(
+                    agent=agent,
+                    new_workflow_prompt=workflow_prompt,
+                    trigger_description_update=True
+                )
                 agent.workflow_prompt = workflow_prompt
                 updated = True
+                workflow_prompt_changed = True
                 logger.info(f"Updated agent {agent.id} workflow_prompt from environment ({len(workflow_prompt)} chars)")
 
             if entrypoint_prompt and entrypoint_prompt != agent.entrypoint_prompt:

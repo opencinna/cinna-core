@@ -246,7 +246,7 @@ export function AgentSharingTab({ agent }: AgentSharingTabProps) {
           <Alert>
             <Info className="h-4 w-4" />
             <AlertDescription>
-              You have <strong>User Access</strong> to this clone.
+              You have <strong>Conversation Access</strong> to this clone.
               Configuration tabs are read-only. You can use the agent in conversation mode.
             </AlertDescription>
           </Alert>

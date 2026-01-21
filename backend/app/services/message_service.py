@@ -1039,8 +1039,11 @@ class MessageService:
                     if "num_turns" in event_metadata:
                         response_metadata["num_turns"] = event_metadata["num_turns"]
 
-                # Forward event to frontend
-                yield event
+                # Forward event to frontend (except 'done' - we'll send our own after saving message)
+                # The agent environment sends 'done' when streaming completes, but we need to wait
+                # until the message is saved with streaming_in_progress=False before telling frontend
+                if event.get("type") != "done":
+                    yield event
 
             # After stream completes, save agent response to database (non-blocking)
             if streaming_events:
@@ -1062,6 +1065,10 @@ class MessageService:
                 tool_questions_status = "unanswered" if has_questions else None
 
                 def _save_or_update_agent_message():
+                    from sqlalchemy.orm.attributes import flag_modified
+                    # Explicitly clear streaming_in_progress flag to indicate message is complete
+                    # This is critical for frontend to display the message (it filters out streaming messages)
+                    response_metadata["streaming_in_progress"] = False
                     with get_fresh_db_session() as db:
                         if agent_message_id:
                             # Update existing message that was created on first assistant event
@@ -1069,6 +1076,8 @@ class MessageService:
                             if agent_message:
                                 agent_message.content = agent_content
                                 agent_message.message_metadata = response_metadata
+                                # Force SQLAlchemy to detect JSON column change
+                                flag_modified(agent_message, "message_metadata")
                                 agent_message.tool_questions_status = tool_questions_status
                                 agent_message.status = "user_interrupted" if was_interrupted else ""
                                 agent_message.status_message = "Interrupted by user" if was_interrupted else None

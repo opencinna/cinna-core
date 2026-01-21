@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import type { PendingSharePublic } from "@/client"
-import { Info, Shield, Pencil, Check } from "lucide-react"
+import { Info, Shield, Pencil, Check, Wrench, MessageCircle } from "lucide-react"
 
 interface WizardStepOverviewProps {
   share: PendingSharePublic
@@ -47,7 +47,17 @@ export function WizardStepOverview({
           variant={isBuilder ? "default" : "secondary"}
           className="text-sm"
         >
-          {isBuilder ? "Builder Access" : "User Access"}
+          {isBuilder ? (
+            <>
+              <Wrench className="h-3 w-3 mr-1" />
+              Builder Access
+            </>
+          ) : (
+            <>
+              <MessageCircle className="h-3 w-3 mr-1" />
+              Conversation Access
+            </>
+          )}
         </Badge>
 
         <div className="text-sm space-y-2 text-muted-foreground">

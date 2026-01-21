@@ -19,9 +19,9 @@ Multi-step dialog wizard that guides users through accepting a shared agent, han
 **Key Concepts:**
 - **Dynamic Step Count**: 2-4 steps based on AI credentials and integration credentials requirements
 - **AI Credential Categories**: Owner-provided (ready to use) vs User-selected (choose from own credentials)
-- **Integration Credential Categories**: Grouped by type with dropdown selection
+- **Integration Credential Categories**: Grouped by type with dropdown selection (only types shown, not owner's credential names for privacy)
 - **Credential Selection Options**: Use shared from owner, select from existing credentials, or create new
-- **Inline Credential Creation**: Users can create new credentials directly within the wizard
+- **Inline Credential Creation**: Users can create new credentials directly within the wizard (modal opens immediately on selection)
 - **Skip Option**: Users can skip non-shareable credential setup and configure later
 - **Clone Creation**: Calls `AgentSharesService.acceptShare()` with credential selections (IDs) and AI credential selections
 
@@ -56,12 +56,14 @@ PendingAgentCard → AcceptShareWizard → WizardSteps → AgentSharesService.ac
 **CredentialSelection Structure:**
 ```typescript
 {
-  sourceCredentialName: string    // Original credential name from the agent
+  sourceCredentialName: string    // Original credential name (internal use only, not displayed to user)
   sourceCredentialType: string    // Credential type (e.g., "api_token", "gmail_oauth")
   allowSharing: boolean           // Whether the original credential allows sharing
   selectedCredentialId: string | null  // User's selected credential ID (null = use shared)
 }
 ```
+
+**Privacy Note:** Original credential names from the owner's agent are never displayed to the recipient. Only credential types are shown (e.g., "Gmail OAuth", "API Token") to protect the owner's naming conventions and potential sensitive information in credential names.
 
 ### Step Navigation Logic
 
@@ -94,7 +96,7 @@ PendingAgentCard → AcceptShareWizard → WizardSteps → AgentSharesService.ac
 **Dropdown Options for Each Credential:**
 1. "Use shared from owner" (only for shareable credentials, default selection)
 2. User's existing credentials of the same type
-3. "Create new credential..." option (opens inline creation dialog)
+3. "Create new credential..." option (immediately opens creation dialog when selected)
 
 ## Database Schema
 
@@ -187,14 +189,18 @@ When wizard completes, `AgentCloneService.create_clone()` creates:
 - Validates all required SDK types have credentials before allowing Continue
 
 **WizardStepCredentials:** `frontend/src/components/Agents/AcceptShareWizard/WizardStepCredentials.tsx`
-- Groups credentials by type with visual type badges
+- Groups credentials by type with visual type badges (credential names from owner are NOT shown for privacy)
+- Displays informational note: newly created credentials need to be configured later
 - Fetches user's existing credentials via `CredentialsService.readCredentials()`
-- For each credential, displays dropdown with:
+- For each credential type, displays dropdown with:
   - "Use shared from owner" option (for shareable credentials, default)
   - User's existing credentials of the same type
-  - "Create new credential..." option
-- Inline credential creation dialog for creating new credentials on the fly
-- Auto-selects newly created credentials
+  - "Create new credential..." option (immediately opens dialog when selected)
+- Inline credential creation dialog:
+  - Opens immediately when "Create new credential..." is selected
+  - Auto-focus on name input field
+  - Enter key submits the form
+  - Auto-selects newly created credentials after creation
 - Allows "Skip for now" for non-shareable credentials without selections
 
 **WizardStepConfirm:** `frontend/src/components/Agents/AcceptShareWizard/WizardStepConfirm.tsx`
@@ -334,6 +340,6 @@ When wizard completes, `AgentCloneService.create_clone()` creates:
 
 ---
 
-**Document Version:** 3.0
+**Document Version:** 3.1
 **Last Updated:** 2026-01-21
-**Status:** Complete (Improved Credentials Step with dropdown selection and inline creation)
+**Status:** Complete (Improved Credentials Step: type-only display for privacy, immediate modal on create, Enter to submit)

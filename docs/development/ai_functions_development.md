@@ -74,6 +74,15 @@ AI_FUNCTIONS_PROVIDERS=gemini
    - **Interactive refinement**: Supports multi-turn refinement with history tracking
    - **Selective editing**: Can focus on user-selected text portions of the task description
 
+6. **Description Generator** (`backend/app/agents/description_generator.py`)
+   - Generates short 1-2 sentence agent descriptions from workflow prompts
+   - **Auto-triggered**: Runs in background whenever workflow_prompt is updated
+   - Takes context: workflow_prompt, optional agent_name
+   - Returns: Plain text description (1-2 sentences)
+   - Used in: `backend/app/services/agent_service.py` (via `handle_workflow_prompt_change`)
+   - **Unified handling**: Called from both API updates and agent-env prompt syncs
+   - **Background execution**: Runs in a separate thread to avoid blocking requests
+
 ## Implementation Pattern
 
 All AI functions follow this simple pattern using the provider manager:
@@ -392,10 +401,11 @@ See existing implementations:
 - Structured JSON output: `backend/app/agents/sql_generator.py`
 - Context-aware refinement: `backend/app/agents/prompt_refiner.py`
 - Task description refinement: `backend/app/agents/task_refiner.py`
+- Auto-triggered generation: `backend/app/agents/description_generator.py`
 - Prompt templates: `backend/app/agents/prompts/`
 - Service integration: `backend/app/services/ai_functions_service.py`
 - Usage in routes: `backend/app/api/routes/messages.py:155-175`, `backend/app/api/routes/workspace.py`, `backend/app/api/routes/utils.py`, `backend/app/api/routes/tasks.py`
-- Usage in services: `backend/app/services/agent_service.py:132-156`
+- Usage in services: `backend/app/services/agent_service.py` (see `handle_workflow_prompt_change` and `update_agent`)
 
 ## Future Enhancements
 

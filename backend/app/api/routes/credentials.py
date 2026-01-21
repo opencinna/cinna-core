@@ -1,7 +1,9 @@
 import uuid
+import xmlrpc.client
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from sqlmodel import func, select
 
 from app.api.deps import CurrentUser, SessionDep
@@ -16,6 +18,21 @@ from app.models import (
 )
 from app.services.credentials_service import CredentialsService
 from app.services.credential_share_service import CredentialShareService
+from app import crud
+
+
+# Request/Response models for credential verification
+class OdooVerifyRequest(BaseModel):
+    url: str
+    database_name: str
+    login: str
+    api_token: str
+
+
+class OdooVerifyResponse(BaseModel):
+    success: bool
+    message: str
+    user_id: int | None = None
 
 router = APIRouter(prefix="/credentials", tags=["credentials"])
 
@@ -26,13 +43,21 @@ def _credential_to_public(
     is_shared: bool = False,
     owner_email: str | None = None
 ) -> CredentialPublic:
-    """Convert a Credential model to CredentialPublic with share_count."""
+    """Convert a Credential model to CredentialPublic with share_count and status."""
     share_count = 0
     if not is_shared:
         # Only show share_count to owners
         share_count = CredentialShareService.get_share_count_for_credential(
             session=session, credential_id=credential.id
         )
+
+    # Decrypt credential data to check completeness
+    credential_data = crud.get_credential_with_data(session=session, credential=credential)
+    status = CredentialsService.check_credential_completeness(
+        credential_type=credential.type.value,
+        credential_data=credential_data
+    )
+
     return CredentialPublic(
         id=credential.id,
         name=credential.name,
@@ -43,7 +68,10 @@ def _credential_to_public(
         user_workspace_id=credential.user_workspace_id,
         share_count=share_count,
         is_shared=is_shared,
-        owner_email=owner_email
+        owner_email=owner_email,
+        is_placeholder=credential.is_placeholder,
+        placeholder_source_id=credential.placeholder_source_id,
+        status=status
     )
 
 
@@ -227,3 +255,66 @@ async def delete_credential(
         # Service raises ValueError for not found or permission errors
         status_code = 404 if "not found" in str(e).lower() else 400
         raise HTTPException(status_code=status_code, detail=str(e))
+
+
+@router.post("/verify/odoo", response_model=OdooVerifyResponse)
+def verify_odoo_credential(
+    current_user: CurrentUser,
+    verify_data: OdooVerifyRequest,
+) -> Any:
+    """
+    Verify Odoo credentials by attempting to authenticate.
+
+    Makes an XML-RPC call to the Odoo server to verify the credentials are valid.
+    Returns the user ID if authentication is successful.
+    """
+    try:
+        # Normalize URL (remove trailing slash)
+        url = verify_data.url.rstrip("/")
+
+        # Connect to Odoo's common endpoint for authentication
+        common = xmlrpc.client.ServerProxy(
+            f"{url}/xmlrpc/2/common",
+            allow_none=True
+        )
+
+        # Attempt authentication
+        uid = common.authenticate(
+            verify_data.database_name,
+            verify_data.login,
+            verify_data.api_token,
+            {}
+        )
+
+        if uid:
+            return OdooVerifyResponse(
+                success=True,
+                message="Authentication successful",
+                user_id=uid
+            )
+        else:
+            return OdooVerifyResponse(
+                success=False,
+                message="Authentication failed: Invalid credentials or database"
+            )
+
+    except xmlrpc.client.Fault as e:
+        return OdooVerifyResponse(
+            success=False,
+            message=f"Odoo error: {e.faultString}"
+        )
+    except ConnectionRefusedError:
+        return OdooVerifyResponse(
+            success=False,
+            message="Connection refused: Unable to connect to the Odoo server"
+        )
+    except OSError as e:
+        return OdooVerifyResponse(
+            success=False,
+            message=f"Connection error: {str(e)}"
+        )
+    except Exception as e:
+        return OdooVerifyResponse(
+            success=False,
+            message=f"Verification failed: {str(e)}"
+        )

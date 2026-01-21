@@ -1207,6 +1207,19 @@ export type OAuthRefreshResponse = {
     expires_at: (number | null);
 };
 
+export type OdooVerifyRequest = {
+    url: string;
+    database_name: string;
+    login: string;
+    api_token: string;
+};
+
+export type OdooVerifyResponse = {
+    success: boolean;
+    message: string;
+    user_id?: (number | null);
+};
+
 /**
  * Pending share for recipient view (includes agent details)
  */
@@ -2068,6 +2081,12 @@ export type CredentialsReadCredentialWithDataData = {
 };
 
 export type CredentialsReadCredentialWithDataResponse = (CredentialWithData);
+
+export type CredentialsVerifyOdooCredentialData = {
+    requestBody: OdooVerifyRequest;
+};
+
+export type CredentialsVerifyOdooCredentialResponse = (OdooVerifyResponse);
 
 export type CredentialsOauthAuthorizeData = {
     credentialId: string;

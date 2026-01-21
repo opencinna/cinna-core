@@ -67,12 +67,32 @@ Share → Pending → Accept → Clone Created → Active Use
 | `pending_update` | `true` / `false` | Update queued from parent |
 | `last_sync_at` | datetime | Last successful sync |
 
-### Credential Handling
+### Integration Credential Handling
 
 | Credential Type | During Clone | Result |
 |-----------------|--------------|--------|
 | `allow_sharing=true` | CredentialShare link created | Shared read-only access |
 | `allow_sharing=false` | Placeholder created | User must configure values |
+
+### AI Credential Handling
+
+When sharing an agent, the owner can optionally provide AI credentials for the clone:
+
+| Scenario | Environment Behavior |
+|----------|---------------------|
+| Owner provides AI credentials | Credentials shared via `AICredentialShare`, stored on environment as `conversation_ai_credential_id` / `building_ai_credential_id` |
+| Recipient selects own credentials | Recipient's credential IDs stored on environment |
+| Neither provided | Environment uses recipient's default AI credentials from profile |
+
+**Important**: When AI credentials are specifically assigned to an environment (either shared or selected), the system uses **only** those credentials with **no fallback** to the user's profile credentials. This ensures:
+- Cloned agents always use the shared credentials from the original owner
+- No accidental substitution of the recipient's own credentials
+- Clear separation between shared and personal AI credentials
+
+**Resolution Priority** (in `environment_lifecycle.py:_update_environment_config`):
+1. Explicitly provided API keys (during environment creation)
+2. Named credentials stored on environment (`conversation_ai_credential_id`, `building_ai_credential_id`) - checked via `get_credential_for_use()` which handles both owned and shared credentials
+3. User's profile credentials - **only if no credentials are specifically assigned**
 
 ## Database Schema
 

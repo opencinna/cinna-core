@@ -5517,6 +5517,57 @@ export const OAuthRefreshResponseSchema = {
     title: 'OAuthRefreshResponse'
 } as const;
 
+export const OdooVerifyRequestSchema = {
+    properties: {
+        url: {
+            type: 'string',
+            title: 'Url'
+        },
+        database_name: {
+            type: 'string',
+            title: 'Database Name'
+        },
+        login: {
+            type: 'string',
+            title: 'Login'
+        },
+        api_token: {
+            type: 'string',
+            title: 'Api Token'
+        }
+    },
+    type: 'object',
+    required: ['url', 'database_name', 'login', 'api_token'],
+    title: 'OdooVerifyRequest'
+} as const;
+
+export const OdooVerifyResponseSchema = {
+    properties: {
+        success: {
+            type: 'boolean',
+            title: 'Success'
+        },
+        message: {
+            type: 'string',
+            title: 'Message'
+        },
+        user_id: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Id'
+        }
+    },
+    type: 'object',
+    required: ['success', 'message'],
+    title: 'OdooVerifyResponse'
+} as const;
+
 export const PendingSharePublicSchema = {
     properties: {
         id: {

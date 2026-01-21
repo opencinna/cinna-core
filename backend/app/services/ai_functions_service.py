@@ -15,6 +15,7 @@ from sqlmodel import Session
 
 from app.agents import (
     generate_agent_config,
+    generate_agent_description,
     generate_conversation_title,
     generate_handover_prompt as generate_handover_prompt_from_agents,
     generate_sql_query,
@@ -69,6 +70,30 @@ class AIFunctionsService:
                 "entrypoint_prompt": description,
                 "workflow_prompt": f"You are an assistant that helps with: {description}",
             }
+
+    @staticmethod
+    def generate_description_from_workflow(
+        workflow_prompt: str,
+        agent_name: str | None = None
+    ) -> str:
+        """
+        Generate a short description from a workflow prompt.
+
+        Args:
+            workflow_prompt: The agent's workflow/system prompt
+            agent_name: Optional agent name for context
+
+        Returns:
+            str: A concise 1-2 sentence description of what the agent does
+        """
+        try:
+            description = generate_agent_description(workflow_prompt, agent_name)
+            logger.info(f"Generated agent description: {description[:50]}...")
+            return description
+        except Exception as e:
+            logger.error(f"Failed to generate agent description: {e}", exc_info=True)
+            # Return a generic fallback
+            return "AI agent configured with custom workflow."
 
     @staticmethod
     def generate_session_title(message_content: str) -> str:

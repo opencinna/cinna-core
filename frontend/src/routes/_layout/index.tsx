@@ -3,11 +3,11 @@ import { useEffect, useState, useMemo, KeyboardEvent, DragEvent } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 
-import { AgentsService, SessionsService, FilesService, UsersService, UtilsService } from "@/client"
+import { AgentsService, SessionsService, FilesService, UsersService, UtilsService, AgentSharesService } from "@/client"
 import type { SessionCreate, FileUploadPublic } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { Send, Bot, Paperclip, Plus, Sparkles, Settings, MessageCircle, Wrench, AlertCircle } from "lucide-react"
+import { Send, Bot, Paperclip, Plus, Sparkles, Settings, MessageCircle, Wrench, AlertCircle, Gift } from "lucide-react"
 import {
   Select,
   SelectContent,
@@ -115,6 +115,14 @@ function Dashboard() {
       })
     },
   })
+
+  // Fetch pending shares to show indicator
+  const { data: pendingSharesData } = useQuery({
+    queryKey: ["pendingShares"],
+    queryFn: () => AgentSharesService.getPendingShares(),
+  })
+
+  const pendingSharesCount = pendingSharesData?.data?.length ?? 0
 
   const {
     data: sessionsData,
@@ -465,6 +473,18 @@ function Dashboard() {
               >
                 + New Agent
               </button>
+              {/* Pending Agents Indicator */}
+              {pendingSharesCount > 0 && (
+                <button
+                  className="cursor-pointer px-4 py-2 text-sm rounded-md transition-all border-2 border-dashed border-muted-foreground/40 bg-muted/30 text-muted-foreground hover:bg-muted/50 hover:border-muted-foreground/60 flex items-center gap-2"
+                  onClick={() => navigate({ to: "/agents" })}
+                >
+                  <Gift className="h-4 w-4" />
+                  {pendingSharesCount === 1
+                    ? "1 Agent Pending"
+                    : `${pendingSharesCount} Agents Pending`}
+                </button>
+              )}
             </div>
           </div>
 

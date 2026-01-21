@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router"
-import { Bot, Share2, AlertCircle } from "lucide-react"
+import { Bot, Share2, AlertCircle, Wrench, MessageCircle } from "lucide-react"
 
 import type { AgentPublic } from "@/client"
 import {
@@ -59,7 +59,17 @@ export function AgentCard({ agent }: AgentCardProps) {
                       : "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
                   }`}
                 >
-                  {agent.clone_mode === "builder" ? "Builder Access" : "User Access"}
+                  {agent.clone_mode === "builder" ? (
+                    <>
+                      <Wrench className="h-3 w-3 mr-1" />
+                      Builder Access
+                    </>
+                  ) : (
+                    <>
+                      <MessageCircle className="h-3 w-3 mr-1" />
+                      Conversation Access
+                    </>
+                  )}
                 </Badge>
               )}
             </div>

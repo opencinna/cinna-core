@@ -282,7 +282,10 @@ The environment lifecycle uses standard Docker operations:
 
 **Process**:
 1. Check if container exists (using `_container_exists()` helper)
-2. Update configuration files (regenerate auth token, docker-compose.yml, .env)
+2. Update configuration files via `_update_environment_config()`:
+   - Regenerate auth token
+   - Regenerate docker-compose.yml and .env files
+   - **Resolve AI credentials** (see below)
 3. Run `docker-compose up -d`:
    - If container doesn't exist: creates new container from image
    - If container exists but stopped: starts existing container
@@ -300,6 +303,16 @@ The environment lifecycle uses standard Docker operations:
 9. Emit `ENVIRONMENT_ACTIVATED` event to process any pending sessions
    - Critical for handovers or messages that arrived while environment was building/starting
    - `SessionService.handle_environment_activated()` finds sessions with `pending_stream` status and initiates streaming
+
+**AI Credential Resolution** (step 2):
+- If `conversation_ai_credential_id` or `building_ai_credential_id` is set on environment:
+  - Use **only** those credentials (via `ai_credentials_service.get_credential_for_use()`)
+  - Supports both owned and shared credentials (via `AICredentialShare`)
+  - **No fallback** to user's profile credentials if assigned credentials exist
+- If no credentials assigned on environment:
+  - Fall back to user's default profile credentials
+
+This is critical for cloned agents with shared AI credentials - ensures the clone always uses the owner's shared credentials, not the recipient's own credentials.
 
 **Optimization**: Restarting an existing stopped container skips package installation (step 6), making restarts much faster.
 

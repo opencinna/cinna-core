@@ -130,8 +130,11 @@ function AgentsGrid() {
       {/* Pending Shares Section */}
       {pendingShares.length > 0 && (
         <div className="mb-8">
-          <h2 className="text-lg font-semibold mb-4 text-muted-foreground">
-            Pending Shared Agents ({pendingShares.length})
+          <h2 className="text-lg font-semibold mb-4 text-muted-foreground flex items-center gap-2">
+            Pending Shared Agents
+            <span className="inline-flex items-center justify-center w-6 h-6 text-xs font-medium rounded-full bg-muted text-muted-foreground">
+              {pendingShares.length}
+            </span>
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 auto-rows-fr">
             {pendingShares.map((share) => (
