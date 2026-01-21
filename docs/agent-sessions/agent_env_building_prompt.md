@@ -113,7 +113,24 @@ Then use its output to call `book_vacation.py --days=5 --type=annual`.
 If booking fails, run `check_conflicts.py` to diagnose issues.
 ```
 
-### 6. Credentials Security Awareness
+### 6. Mandatory User Follow-up with AskUserQuestion
+
+**CRITICAL**: Agents must use `AskUserQuestion` tool when they cannot proceed without user input.
+
+**Building Mode - Ask when:**
+- Requirements are vague/ambiguous
+- Required credentials are missing
+- Design decisions need user preference
+- Critical assumptions would be needed
+
+**Conversation Mode - Ask when:**
+- Required parameters are missing from request
+- Request has multiple valid interpretations
+- Workflow cannot proceed without user choice
+
+**Never guess or assume** - always ask when information is mandatory.
+
+### 7. Credentials Security Awareness
 
 **Always emphasize**:
 - NEVER read `credentials.json` during building mode conversations
@@ -121,7 +138,7 @@ If booking fails, run `check_conflicts.py` to diagnose issues.
 - Review `credentials/README.md` to see available credentials
 - Ask users to share missing credentials before proceeding
 
-### 7. Conversation Agent as Bridge Between Scripts and Humans
+### 8. Conversation Agent as Bridge Between Scripts and Humans
 
 **Critical**: The conversation agent doesn't just run scripts and exit—it's a bridge.
 

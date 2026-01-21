@@ -46,6 +46,16 @@
 
 [TO BE FILLED: Rules for handling edge cases, errors, and ambiguous situations]
 
+### CRITICAL: When to Ask the User
+
+**You MUST use `AskUserQuestion` tool when:**
+- Required parameters are missing from user request
+- Request is ambiguous with multiple valid interpretations
+- Script execution requires choices only the user can make
+- Workflow cannot proceed without user confirmation
+
+**Do NOT guess or assume** - always ask when information is mandatory.
+
 ## Success Criteria
 
 [TO BE FILLED: What constitutes successful workflow execution]
