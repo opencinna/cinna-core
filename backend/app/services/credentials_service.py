@@ -1149,6 +1149,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
     }
 
     # Required fields for each credential type to be considered "complete"
+    # Note: api_token has conditional requirements handled in check_credential_completeness
     REQUIRED_FIELDS = {
         "email_imap": ["host", "port", "login", "password"],
         "odoo": ["url", "database_name", "login", "api_token"],
@@ -1158,7 +1159,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         "gdrive_oauth_readonly": ["access_token"],
         "gcalendar_oauth": ["access_token"],
         "gcalendar_oauth_readonly": ["access_token"],
-        "api_token": ["api_token_type", "api_token"],
+        "api_token": ["api_token"],  # Base requirement; api_token_template required only for custom type
     }
 
     @staticmethod
@@ -1182,6 +1183,12 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         if not required_fields:
             # Unknown credential type - assume complete if it has any data
             return "complete" if credential_data else "incomplete"
+
+        # Special handling for api_token: custom type requires api_token_template
+        if credential_type == "api_token":
+            api_token_type = credential_data.get("api_token_type", "bearer")
+            if api_token_type == "custom":
+                required_fields = ["api_token", "api_token_template"]
 
         for field in required_fields:
             value = credential_data.get(field)
