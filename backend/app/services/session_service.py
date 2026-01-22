@@ -655,9 +655,10 @@ class SessionService:
         This method encapsulates the full flow of sending a message:
         1. Gets existing session or creates new one (if agent_id provided)
         2. Validates session ownership and existence
-        3. Handles file attachments if present
-        4. Creates user message with sent_to_agent_status='pending'
-        5. Delegates to initiate_stream() for processing (if initiate_streaming=True)
+        3. If files attached and env not running, waits for environment activation
+        4. Handles file attachments if present
+        5. Creates user message with sent_to_agent_status='pending'
+        6. Delegates to initiate_stream() for processing (if initiate_streaming=True)
 
         This is the centralized entry point for sending messages to sessions,
         used by both API endpoints and internal services (like handover, A2A).
@@ -693,12 +694,16 @@ class SessionService:
         if get_fresh_db_session is None:
             get_fresh_db_session = lambda: DBSession(engine)
 
+        has_files = bool(file_ids)
+        is_new_session = False
+        environment_id: UUID | None = None
+        environment_status: str | None = None
+
+        # Phase 1: Get/create session and validate (collect IDs for later use)
         with get_fresh_db_session() as db:
             from app.models import AgentEnvironment
-            from app.services.message_service import MessageService
 
             chat_session: Session | None = None
-            is_new_session = False
 
             # Get existing session or create new one
             if session_id:
@@ -729,17 +734,45 @@ class SessionService:
             if chat_session.user_id != user_id:
                 return {"action": "error", "message": "Not enough permissions"}
 
-            # Get environment
+            # Get environment info
             environment = db.get(AgentEnvironment, chat_session.environment_id)
             if not environment:
                 return {"action": "error", "message": "Environment not found"}
 
-            # Handle file attachments if present
-            has_files = bool(file_ids)
+            environment_id = environment.id
+            environment_status = environment.status
+
+        # Phase 2: If files attached and environment not running, wait for activation
+        # This must be done BEFORE file upload because upload_files_to_agent_env
+        # requires the environment to be running.
+        if has_files and environment_status != "running":
+            logger.info(
+                f"Files attached but environment {environment_id} is {environment_status}, "
+                "waiting for environment to be ready before file upload..."
+            )
+            try:
+                await SessionService.ensure_environment_ready_for_streaming(
+                    session_id=session_id,
+                    get_fresh_db_session=get_fresh_db_session,
+                    timeout_seconds=120
+                )
+                logger.info(f"Environment {environment_id} ready for file upload")
+            except Exception as e:
+                logger.error(f"Failed to activate environment for file upload: {e}", exc_info=True)
+                return {"action": "error", "message": f"Failed to activate environment: {str(e)}"}
+
+        # Phase 3: Create message (with file upload if needed)
+        with get_fresh_db_session() as db:
+            from app.services.message_service import MessageService
+
+            # Re-fetch session in fresh context
+            chat_session = SessionService.get_session(db, session_id)
+            if not chat_session:
+                return {"action": "error", "message": "Session not found"}
 
             if has_files:
                 try:
-                    # Prepare user message with files
+                    # Prepare user message with files (uploads to agent-env)
                     user_message, message_content_for_agent = await MessageService.prepare_user_message_with_files(
                         session=db,
                         session_id=session_id,
@@ -792,7 +825,7 @@ class SessionService:
                     result["files_attached"] = len(file_ids)
                 return result
 
-        # Delegate to initiate_stream to decide when to stream
+        # Phase 4: Delegate to initiate_stream to decide when to stream
         # Note: We exit the DB session context before calling initiate_stream
         # because it will create its own fresh sessions
         result = await SessionService.initiate_stream(

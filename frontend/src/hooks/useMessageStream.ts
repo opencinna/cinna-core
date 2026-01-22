@@ -165,7 +165,12 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
     }
   }, [sessionId, handleStreamComplete])
 
-  const sendMessage = useCallback(async (content: string, answersToMessageId?: string, fileIds?: string[]) => {
+  const sendMessage = useCallback(async (
+    content: string,
+    answersToMessageId?: string,
+    fileIds?: string[],
+    fileObjects?: Array<{ id: string; filename: string; file_size: number; mime_type: string }>
+  ) => {
     // Reset stream complete flag for new message
     streamCompleteCalledRef.current = false
 
@@ -192,6 +197,7 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
       streamSubscriptionRef.current = subscriptionId
 
       // Optimistically add user message to cache
+      // If fileObjects are provided, use them for immediate display (before backend confirms)
       const tempUserMessageId = `temp-${Date.now()}`
       queryClient.setQueryData(["messages", sessionId], (old: any) => {
         if (!old) return old
@@ -205,7 +211,8 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
           timestamp: new Date().toISOString(),
           message_metadata: {},
           answers_to_message_id: answersToMessageId || null,
-          files: [],
+          // Use file objects if provided for optimistic display
+          files: fileObjects || [],
         }
 
         return {

@@ -150,7 +150,12 @@ function Dashboard() {
       navigate({
         to: "/session/$sessionId",
         params: { sessionId: session.id },
-        search: { initialMessage, fileIds: attachedFiles.map(f => f.id).join(',') } as any,
+        search: {
+          initialMessage,
+          fileIds: attachedFiles.map(f => f.id).join(','),
+          // Pass full file objects for optimistic display (files appear immediately in chat)
+          fileObjects: attachedFiles.length > 0 ? JSON.stringify(attachedFiles) : undefined,
+        } as any,
       })
     },
     onError: (error: any) => {

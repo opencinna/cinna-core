@@ -28,13 +28,15 @@ export const Route = createFileRoute("/_layout/session/$sessionId")({
     return {
       initialMessage: (search.initialMessage as string) || undefined,
       fileIds: (search.fileIds as string) || undefined,
+      // Full file objects for optimistic display (JSON string)
+      fileObjects: (search.fileObjects as string) || undefined,
     }
   },
 })
 
 function ChatInterface() {
   const { sessionId } = Route.useParams()
-  const { initialMessage, fileIds } = Route.useSearch()
+  const { initialMessage, fileIds, fileObjects } = Route.useSearch()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -95,8 +97,12 @@ function ChatInterface() {
   })
 
   const handleSendMessage = useCallback(
-    async (content: string, fileIds?: string[]) => {
-      await sendMessage(content, undefined, fileIds)
+    async (
+      content: string,
+      fileIds?: string[],
+      fileObjs?: Array<{ id: string; filename: string; file_size: number; mime_type: string }>
+    ) => {
+      await sendMessage(content, undefined, fileIds, fileObjs)
     },
     [sendMessage]
   )
@@ -130,19 +136,29 @@ function ChatInterface() {
       initialMessageSent.current = true
       // Parse fileIds from comma-separated string to array
       const fileIdsArray = fileIds ? fileIds.split(',').filter(id => id.trim()) : undefined
-      // Use the same handleSendMessage that the UI uses
-      handleSendMessage(initialMessage, fileIdsArray)
+      // Parse fileObjects JSON for optimistic display
+      let parsedFileObjects: Array<{ id: string; filename: string; file_size: number; mime_type: string }> | undefined
+      if (fileObjects) {
+        try {
+          parsedFileObjects = JSON.parse(fileObjects)
+        } catch (e) {
+          console.error("Failed to parse fileObjects:", e)
+        }
+      }
+      // Use the same handleSendMessage that the UI uses, with file objects for optimistic display
+      handleSendMessage(initialMessage, fileIdsArray, parsedFileObjects)
       // Clear the search param after sending
       navigate({
         to: "/session/$sessionId",
         params: { sessionId },
-        search: { initialMessage: undefined, fileIds: undefined },
+        search: { initialMessage: undefined, fileIds: undefined, fileObjects: undefined },
         replace: true,
       })
     }
   }, [
     initialMessage,
     fileIds,
+    fileObjects,
     isStreaming,
     session,
     messagesData,
