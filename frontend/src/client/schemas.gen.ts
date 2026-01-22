@@ -2142,6 +2142,17 @@ export const AgentPublicSchema = {
             title: 'Pending Update',
             default: false
         },
+        last_update_status: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Update Status'
+        },
         parent_agent_id: {
             anyOf: [
                 {

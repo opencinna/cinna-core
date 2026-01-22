@@ -1,9 +1,9 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { ArrowLeft, EllipsisVertical, Share2 } from "lucide-react"
 import { useState, useEffect } from "react"
 
-import { AgentsService } from "@/client"
+import { AgentsService, AgentSharesService } from "@/client"
 import { AgentConfigTab } from "@/components/Agents/AgentConfigTab"
 import { AgentIntegrationsTab } from "@/components/Agents/AgentIntegrationsTab"
 import { AgentCredentialsTab } from "@/components/Agents/AgentCredentialsTab"
@@ -47,6 +47,28 @@ function AgentDetail() {
     refetchOnMount: "always", // Always refetch when component mounts to get latest prompts
     refetchOnWindowFocus: true, // Refetch when user returns to the window
     staleTime: 0, // Consider data stale immediately to ensure fresh data
+  })
+
+  // Fetch pending update requests for clones with pending updates
+  const { data: pendingRequests } = useQuery({
+    queryKey: ["updateRequests", agentId],
+    queryFn: () => AgentSharesService.getPendingUpdateRequests({ agentId }),
+    enabled: !!agent?.is_clone && !!agent?.pending_update,
+  })
+
+  // Mutation to dismiss all pending update requests
+  const dismissMutation = useMutation({
+    mutationFn: async () => {
+      // Dismiss all pending requests
+      const requests = pendingRequests?.data || []
+      for (const req of requests) {
+        await AgentSharesService.dismissUpdateRequest({ requestId: req.id })
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agent", agentId] })
+      queryClient.invalidateQueries({ queryKey: ["updateRequests", agentId] })
+    },
   })
 
   const handleDeleteSuccess = () => {
@@ -142,8 +164,11 @@ function AgentDetail() {
         {/* Update banner for clones with pending updates */}
         {agent.is_clone && agent.pending_update && (
           <UpdateBanner
+            pendingSince={pendingRequests?.data?.[0]?.created_at}
             onApply={() => setApplyUpdateDialogOpen(true)}
+            onDismiss={() => dismissMutation.mutate()}
             isLoading={false}
+            isDismissing={dismissMutation.isPending}
           />
         )}
 

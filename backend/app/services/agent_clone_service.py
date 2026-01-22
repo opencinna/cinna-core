@@ -494,6 +494,7 @@ class AgentCloneService:
         clone.clone_mode = None
         clone.pending_update = False
         clone.pending_update_at = None
+        clone.last_update_status = None
 
         session.add(clone)
         session.commit()
@@ -534,6 +535,7 @@ class AgentCloneService:
         clone.last_sync_at = datetime.utcnow()
         clone.pending_update = False
         clone.pending_update_at = None
+        clone.last_update_status = "synced"
         session.add(clone)
         session.commit()
 
@@ -647,6 +649,7 @@ class AgentCloneService:
         clone.last_sync_at = datetime.utcnow()
         clone.pending_update = False
         clone.pending_update_at = None
+        clone.last_update_status = "synced"
         session.add(clone)
 
     @staticmethod
@@ -726,6 +729,7 @@ class AgentCloneService:
         clone.last_sync_at = datetime.utcnow()
         clone.pending_update = False
         clone.pending_update_at = None
+        clone.last_update_status = "synced"
         session.add(clone)
 
         # Mark all pending update requests as applied
@@ -892,10 +896,11 @@ class AgentCloneService:
         )
         other_pending = session.exec(stmt).first()
 
-        # If no other pending requests, clear the clone's pending_update flag
+        # If no other pending requests, clear the clone's pending_update flag and set status to dismissed
         if not other_pending and clone:
             clone.pending_update = False
             clone.pending_update_at = None
+            clone.last_update_status = "dismissed"
             session.add(clone)
 
         session.commit()

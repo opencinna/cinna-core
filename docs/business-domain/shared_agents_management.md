@@ -67,6 +67,26 @@ Share → Pending → Accept → Clone Created → Active Use
 | `pending_update` | `true` / `false` | Update queued from parent |
 | `last_sync_at` | datetime | Last successful sync |
 
+### Clone Update Request
+
+When an owner pushes updates, a `CloneUpdateRequest` record is created for each clone:
+
+| Field | Description |
+|-------|-------------|
+| `clone_agent_id` | The clone receiving the update |
+| `parent_agent_id` | The parent pushing the update |
+| `pushed_by_user_id` | The owner who pushed |
+| `copy_files_folder` | Whether to copy files/ and uploads/ folders |
+| `rebuild_environment` | Whether to rebuild the Docker environment |
+| `status` | `pending` / `applied` / `dismissed` |
+| `created_at` | When the request was created |
+| `applied_at` | When the request was applied |
+
+**Update Actions:**
+- **Standard update** (always): Syncs scripts, docs, knowledge, workspace_requirements.txt
+- **Copy files folder** (optional): Also copies files/ and uploads/ directories
+- **Rebuild environment** (optional): Triggers full Docker environment rebuild
+
 ### Integration Credential Handling
 
 | Credential Type | During Clone | Result |
@@ -124,6 +144,12 @@ When sharing an agent, the owner can optionally provide AI credentials for the c
 - Links credentials to users for read-only shared access
 - Independent from agent sharing (standalone credential sharing)
 
+**CloneUpdateRequest:** `backend/app/models/clone_update_request.py`
+- `clone_agent_id`, `parent_agent_id`, `pushed_by_user_id` - Relationship UUIDs
+- `copy_files_folder`, `rebuild_environment` - Optional actions
+- `status` - "pending", "applied", or "dismissed"
+- `created_at`, `applied_at`, `dismissed_at` - Timestamps
+
 **Credential (sharing fields):** `backend/app/models/credential.py`
 - `allow_sharing` - Whether credential can be shared
 - `is_placeholder` - Placeholder for non-shareable credentials in clones
@@ -171,13 +197,16 @@ When sharing an agent, the owner can optionally provide AI credentials for the c
 
 **AgentCloneService:** `backend/app/services/agent_clone_service.py`
 - `create_clone()` - Create clone agent, environment, copy workspace, setup credentials
-- `copy_workspace()` - Copy scripts/, docs/, knowledge/ directories
+- `copy_workspace()` - Copy workspace directories (with optional files folder)
 - `setup_clone_credentials()` - Link shareable credentials, create placeholders for private
 - `detach_clone()` - Detach clone from parent
-- `push_updates()` - Queue updates to all clones, auto-apply for automatic mode
-- `apply_update()` - Apply pending update from parent to clone
+- `push_updates()` - Queue update requests to all clones with selected actions
+- `apply_update()` - Apply pending update requests from parent to clone
 - `get_update_status()` - Get update status for a clone
 - `set_update_mode()` - Change automatic/manual update mode
+- `get_pending_update_requests()` - Get pending update requests for a clone
+- `dismiss_update_request()` - Dismiss an update request
+- `check_and_apply_automatic_updates()` - Check and apply automatic updates (called before suspension)
 
 ### Configuration
 
@@ -335,9 +364,25 @@ Service methods in `AgentSharesService`:
 **Update Push Flow:** `AgentCloneService.push_updates()`
 1. Verify ownership and non-clone status
 2. Find all clones via `parent_agent_id`
-3. Set `pending_update=True` on all clones
-4. For automatic mode: immediately apply via `_apply_update_internal()`
-5. Return counts of queued/auto-updated/pending-manual
+3. Create `CloneUpdateRequest` record for each clone with selected actions
+4. Set `pending_update=True` on all clones
+5. Return counts of queued clones (automatic mode vs manual mode)
+
+**Note:** Updates are queued, not immediately applied. For automatic mode clones, updates are applied when the environment becomes inactive (before suspension).
+
+**Automatic Update Application:** `AgentCloneService.check_and_apply_automatic_updates()`
+- Called by environment suspension scheduler before suspending an environment
+- Checks if agent is a clone with `update_mode="automatic"` and `pending_update=True`
+- Applies all pending update requests (syncs workspace, copies files if requested, rebuilds if requested)
+- Marks update requests as applied
+
+**Manual Update Application:** `AgentCloneService.apply_update()`
+1. Get all pending `CloneUpdateRequest` records for the clone
+2. Merge actions from all requests (if any request has an option enabled, that action is performed)
+3. Copy workspace (standard update always happens)
+4. Copy files folder if any request has `copy_files_folder=True`
+5. Rebuild environment if any request has `rebuild_environment=True`
+6. Mark all pending requests as applied
 
 **Credential Setup:** `AgentCloneService.setup_clone_credentials()`
 - Query `AgentCredentialLink` for original agent's credentials

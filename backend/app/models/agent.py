@@ -85,6 +85,7 @@ class Agent(AgentBase, table=True):
     update_mode: str = Field(default="automatic")  # "automatic" | "manual"
     pending_update: bool = Field(default=False)
     pending_update_at: datetime | None = Field(default=None)
+    last_update_status: str | None = Field(default=None)  # "synced" | "dismissed" | None
 
     owner: User | None = Relationship(back_populates="agents")
     credentials: List["app.models.credential.Credential"] = Relationship(
@@ -134,6 +135,7 @@ class AgentPublic(SQLModel):
     clone_mode: str | None = None
     update_mode: str = "automatic"
     pending_update: bool = False
+    last_update_status: str | None = None  # "synced" | "dismissed" | None
     parent_agent_id: uuid.UUID | None = None
     parent_agent_name: str | None = None  # Resolved from parent_agent
     shared_by_email: str | None = None  # Resolved from share record

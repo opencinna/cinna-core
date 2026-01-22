@@ -292,6 +292,7 @@ export type AgentPublic = {
     clone_mode?: (string | null);
     update_mode?: string;
     pending_update?: boolean;
+    last_update_status?: (string | null);
     parent_agent_id?: (string | null);
     parent_agent_name?: (string | null);
     shared_by_email?: (string | null);

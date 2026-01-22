@@ -44,6 +44,7 @@ export function PushUpdatesModal({
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["agentShares", agentId] })
+      queryClient.invalidateQueries({ queryKey: ["agentClones", agentId] })
       queryClient.invalidateQueries({ queryKey: ["agents"] })
       onPushed?.()
       onOpenChange(false)

@@ -459,6 +459,7 @@ def _agent_to_public(session, agent: Agent) -> AgentPublic:
         clone_mode=agent.clone_mode,
         update_mode=agent.update_mode,
         pending_update=agent.pending_update,
+        last_update_status=agent.last_update_status,
         parent_agent_id=agent.parent_agent_id,
         parent_agent_name=parent_agent_name,
         shared_by_email=shared_by_email

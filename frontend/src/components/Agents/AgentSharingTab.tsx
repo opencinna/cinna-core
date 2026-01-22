@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Share2, Info, Link2Off, Plus, Trash2, Loader2, User, Wrench, RotateCcw, Key, MessageCircle, Send, FolderSync, RefreshCw, Clock } from "lucide-react"
+import { Share2, Info, Link2Off, Plus, Trash2, Loader2, User, Wrench, RotateCcw, Key, MessageCircle, Send, FolderSync, RefreshCw, Clock, CheckCircle2, AlertCircle, XCircle } from "lucide-react"
 
 import type { AgentPublic, AgentSharePublic } from "@/client"
 import { AgentSharesService, AiCredentialsService, AgentsService } from "@/client"
@@ -82,6 +82,13 @@ export function AgentSharingTab({ agent }: AgentSharingTabProps) {
     queryKey: ["updateRequests", agent.id],
     queryFn: () => AgentSharesService.getPendingUpdateRequests({ agentId: agent.id }),
     enabled: agent.is_clone && agent.pending_update,
+  })
+
+  // Fetch clones for owners (to show sync status)
+  const { data: clones } = useQuery({
+    queryKey: ["agentClones", agent.id],
+    queryFn: () => AgentSharesService.getAgentClones({ agentId: agent.id }),
+    enabled: !agent.is_clone,
   })
 
   // Fetch agent's environment to get SDK types
@@ -191,6 +198,11 @@ export function AgentSharingTab({ agent }: AgentSharingTabProps) {
   const allShares = shares?.data || []
 
   const pendingRequests = updateRequests?.data || []
+
+  // Create a map of clone ID to clone for quick lookup
+  const cloneMap = new Map(
+    (clones || []).map((clone) => [clone.id, clone])
+  )
 
   // If this is a clone, show clone settings
   if (agent.is_clone) {
@@ -360,6 +372,7 @@ export function AgentSharingTab({ agent }: AgentSharingTabProps) {
                   <TableHead>User</TableHead>
                   <TableHead>Access</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Sync</TableHead>
                   <TableHead>Shared</TableHead>
                   <TableHead className="w-[140px]">Actions</TableHead>
                 </TableRow>
@@ -381,6 +394,38 @@ export function AgentSharingTab({ agent }: AgentSharingTabProps) {
                       </div>
                     </TableCell>
                     <TableCell>{getStatusBadge(share.status)}</TableCell>
+                    <TableCell>
+                      {share.status === "accepted" && share.cloned_agent_id ? (
+                        (() => {
+                          const clone = cloneMap.get(share.cloned_agent_id)
+                          if (!clone) return <span className="text-muted-foreground">-</span>
+                          if (clone.pending_update) {
+                            return (
+                              <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                                <AlertCircle className="h-4 w-4" />
+                                <span className="text-xs">Pending</span>
+                              </div>
+                            )
+                          }
+                          if (clone.last_update_status === "dismissed") {
+                            return (
+                              <div className="flex items-center gap-1 text-muted-foreground">
+                                <XCircle className="h-4 w-4" />
+                                <span className="text-xs">Dismissed</span>
+                              </div>
+                            )
+                          }
+                          return (
+                            <div className="flex items-center gap-1 text-green-600 dark:text-green-400">
+                              <CheckCircle2 className="h-4 w-4" />
+                              <span className="text-xs">Synced</span>
+                            </div>
+                          )
+                        })()
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-muted-foreground">
                       {new Date(share.shared_at).toLocaleDateString()}
                     </TableCell>
