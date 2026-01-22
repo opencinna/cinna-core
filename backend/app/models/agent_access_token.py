@@ -7,6 +7,7 @@ separate from regular user authentication.
 import uuid
 from datetime import datetime
 from enum import Enum
+import sqlalchemy as sa
 from sqlmodel import Field, SQLModel
 
 
@@ -25,8 +26,8 @@ class AccessTokenScope(str, Enum):
 # Shared properties
 class AgentAccessTokenBase(SQLModel):
     name: str = Field(min_length=1, max_length=255)
-    mode: AccessTokenMode = Field(default=AccessTokenMode.CONVERSATION)
-    scope: AccessTokenScope = Field(default=AccessTokenScope.LIMITED)
+    mode: AccessTokenMode = Field(default=AccessTokenMode.CONVERSATION, sa_type=sa.String(20))
+    scope: AccessTokenScope = Field(default=AccessTokenScope.LIMITED, sa_type=sa.String(20))
 
 
 # Properties to receive on token creation

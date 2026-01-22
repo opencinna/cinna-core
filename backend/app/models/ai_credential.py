@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING
 
+import sqlalchemy as sa
 from sqlmodel import Field, Relationship, SQLModel, Column, Text, Index
 
 if TYPE_CHECKING:
@@ -20,7 +21,7 @@ class AICredentialType(str, Enum):
 class AICredentialBase(SQLModel):
     """Base properties for AI credentials"""
     name: str = Field(min_length=1, max_length=255)
-    type: AICredentialType
+    type: AICredentialType = Field(..., sa_type=sa.String(50))
 
 
 # Properties to receive on creation

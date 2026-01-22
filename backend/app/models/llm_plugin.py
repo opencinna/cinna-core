@@ -12,6 +12,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+import sqlalchemy as sa
 from sqlalchemy import Column, Index, JSON
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -42,7 +43,7 @@ class LLMPluginMarketplaceBase(SQLModel):
     ssh_key_id: Optional[uuid.UUID] = Field(default=None, foreign_key="user_ssh_keys.id")
     public_discovery: bool = Field(default=False)  # Indexed via idx_marketplace_public in __table_args__
     type: str = Field(default="claude")  # Marketplace type (claude, openai, custom)
-    status: MarketplaceStatus = Field(default=MarketplaceStatus.pending)
+    status: MarketplaceStatus = Field(default=MarketplaceStatus.pending, sa_type=sa.String())
     status_message: Optional[str] = None
     last_sync_at: Optional[datetime] = None
     sync_commit_hash: Optional[str] = None
@@ -152,7 +153,7 @@ class LLMPluginMarketplacePluginBase(SQLModel):
     category: Optional[str] = None
     homepage: Optional[str] = None  # Plugin homepage URL
     source_path: str = Field(default="")  # Path within repository (for local source_type)
-    source_type: PluginSourceType = Field(default=PluginSourceType.local)  # local or url
+    source_type: PluginSourceType = Field(default=PluginSourceType.local, sa_type=sa.String())  # local or url
     source_url: Optional[str] = None  # External git URL (for url source_type)
     source_branch: str = Field(default="main")  # Git branch for external repo
     source_commit_hash: Optional[str] = None  # Commit hash from external repo (for url source_type)

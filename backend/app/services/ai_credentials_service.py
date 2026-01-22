@@ -164,9 +164,10 @@ class AICredentialsService:
         credential = self.get_credential(session, credential_id, user_id)
 
         # Unset previous default for this type
+        cred_type_value = credential.type.value if isinstance(credential.type, AICredentialType) else credential.type
         statement = select(AICredential).where(
             AICredential.owner_id == user_id,
-            AICredential.type == credential.type,
+            AICredential.type == cred_type_value,
             AICredential.is_default == True,
         )
         previous_defaults = session.exec(statement).all()
@@ -195,7 +196,7 @@ class AICredentialsService:
         """Get the default credential for a specific type"""
         statement = select(AICredential).where(
             AICredential.owner_id == user_id,
-            AICredential.type == cred_type,
+            AICredential.type == cred_type.value,
             AICredential.is_default == True,
         )
         return session.exec(statement).first()

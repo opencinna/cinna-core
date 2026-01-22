@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 from sqlmodel import Field, Relationship, SQLModel, Column
-from sqlalchemy import JSON, Index, ForeignKeyConstraint, text
+from sqlalchemy import JSON, Index, ForeignKeyConstraint, text, Text
 
 from app.models.user import User
 from app.models.link_models import AgentCredentialLink
@@ -29,7 +29,7 @@ class AgentBase(SQLModel):
     name: str = Field(min_length=1, max_length=255)
     workflow_prompt: str | None = Field(default=None)
     entrypoint_prompt: str | None = Field(default=None)
-    refiner_prompt: str | None = Field(default=None)
+    refiner_prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
 
 
 # Properties to receive on agent creation
