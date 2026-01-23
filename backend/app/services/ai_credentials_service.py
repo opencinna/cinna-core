@@ -447,7 +447,7 @@ class AICredentialsService:
                 result.append(SharedAICredentialPublic(
                     id=credential.id,
                     name=credential.name,
-                    type=credential.type.value,
+                    type=credential.type if isinstance(credential.type, str) else credential.type.value,
                     owner_id=credential.owner_id,
                     owner_email=owner.email,
                     shared_at=share.shared_at,
@@ -463,7 +463,7 @@ class AICredentialsService:
         credential = session.get(AICredential, credential_id)
         if not credential:
             return None
-        return (credential.name, credential.type.value)
+        return (credential.name, credential.type if isinstance(credential.type, str) else credential.type.value)
 
 
 # Singleton instance
