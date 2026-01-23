@@ -219,6 +219,30 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
         queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
       }, 3000)
 
+      // Start completion polling fallback in case stream_completed WebSocket event is lost
+      if (completionPollRef.current) {
+        clearInterval(completionPollRef.current)
+      }
+      completionPollRef.current = setInterval(async () => {
+        try {
+          const statusResponse = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/v1/sessions/${sessionId}/messages/streaming-status`,
+            { headers: { "Authorization": `Bearer ${token}` } }
+          )
+          if (statusResponse.ok) {
+            const statusData = await statusResponse.json()
+            if (!statusData.is_streaming) {
+              if (!streamCompleteCalledRef.current) {
+                streamCompleteCalledRef.current = true
+                handleStreamComplete(false)
+              }
+            }
+          }
+        } catch {
+          // Ignore fetch errors during polling
+        }
+      }, 3000)
+
       // Optimistically add user message to cache
       // If fileObjects are provided, use them for immediate display (before backend confirms)
       const tempUserMessageId = `temp-${Date.now()}`
@@ -306,6 +330,10 @@ export function useMessageStream({ sessionId, sessionMode, onSuccess, onError }:
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current)
         pollIntervalRef.current = null
+      }
+      if (completionPollRef.current) {
+        clearInterval(completionPollRef.current)
+        completionPollRef.current = null
       }
       if (streamSubscriptionRef.current) {
         eventService.unsubscribe(streamSubscriptionRef.current)
