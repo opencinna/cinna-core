@@ -5,12 +5,15 @@ import { MarkdownRenderer } from "./MarkdownRenderer"
 interface StreamEvent {
   type: "assistant" | "tool" | "thinking" | "system"
   content: string
+  event_seq?: number
   tool_name?: string
   metadata?: {
     tool_id?: string
     tool_input?: Record<string, any>
     model?: string
     interrupt_notification?: boolean
+    needs_approval?: boolean
+    tool_name?: string
   }
 }
 
@@ -27,11 +30,12 @@ export function StreamEventRenderer({ events, conversationModeUi = "detailed" }:
   return (
     <div className="space-y-3">
       {events.map((event, idx) => {
+        const key = event.event_seq ?? idx
         if (event.type === "tool") {
           // Render tool call with structured fields
           return (
             <ToolCallBlock
-              key={idx}
+              key={key}
               toolName={event.tool_name || "Unknown Tool"}
               toolInput={event.metadata?.tool_input}
               conversationModeUi={conversationModeUi}
@@ -41,7 +45,7 @@ export function StreamEventRenderer({ events, conversationModeUi = "detailed" }:
           // Render assistant text with markdown support
           return (
             <MarkdownRenderer
-              key={idx}
+              key={key}
               content={event.content}
               className="prose dark:prose-invert max-w-none prose-p:leading-normal prose-p:my-2 prose-ul:my-2 prose-li:my-0"
             />
@@ -50,7 +54,7 @@ export function StreamEventRenderer({ events, conversationModeUi = "detailed" }:
           // Render thinking block - strip [Thinking] prefix if present (hidden in compact mode)
           const thinkingContent = event.content.replace(/^\[Thinking\]\s*/i, "")
           return (
-            <div key={idx} className="flex items-start gap-2 text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2">
+            <div key={key} className="flex items-start gap-2 text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2">
               <Lightbulb className="h-3.5 w-3.5 mt-0.5 shrink-0" />
               <MarkdownRenderer
                 content={thinkingContent}
@@ -63,7 +67,7 @@ export function StreamEventRenderer({ events, conversationModeUi = "detailed" }:
           const isInterruptNotification = event.metadata?.interrupt_notification
           return (
             <div
-              key={idx}
+              key={key}
               className={`text-sm px-3 py-2 rounded ${
                 isInterruptNotification
                   ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 border border-yellow-200 dark:border-yellow-800/30"

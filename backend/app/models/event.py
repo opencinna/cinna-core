@@ -43,6 +43,7 @@ class EventType:
     STREAM_COMPLETED = "stream_completed"
     STREAM_ERROR = "stream_error"
     STREAM_INTERRUPTED = "stream_interrupted"
+    SESSION_INTERACTION_STATUS_CHANGED = "session_interaction_status_changed"
 
     # To-do progress events (from TodoWrite tool)
     TODO_LIST_UPDATED = "todo_list_updated"      # Session-level to-do update

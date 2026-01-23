@@ -1,17 +1,6 @@
 import { Loader2 } from "lucide-react"
 import { StreamEventRenderer } from "./StreamEventRenderer"
-
-interface StreamEvent {
-  type: "assistant" | "tool" | "thinking" | "system"
-  content: string
-  tool_name?: string
-  metadata?: {
-    tool_id?: string
-    tool_input?: Record<string, any>
-    model?: string
-    interrupt_notification?: boolean
-  }
-}
+import type { StreamEvent } from "@/hooks/useSessionStreaming"
 
 interface StreamingMessageProps {
   events: StreamEvent[]

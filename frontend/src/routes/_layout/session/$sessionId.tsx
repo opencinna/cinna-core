@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import PendingItems from "@/components/Pending/PendingItems"
 import useCustomToast from "@/hooks/useCustomToast"
-import { useMessageStream } from "@/hooks/useMessageStream"
+import { useSessionStreaming } from "@/hooks/useSessionStreaming"
 import { usePageHeader } from "@/routes/_layout"
 import { AnimatedPlaceholder } from "@/components/Common/AnimatedPlaceholder"
 import { EnvironmentPanel } from "@/components/Environment/EnvironmentPanel"
@@ -48,6 +48,8 @@ function ChatInterface() {
   const [isEnvActivating, setIsEnvActivating] = useState(false)
   const usageIntentSent = useRef(false)
 
+  const [isSessionStreaming, setIsSessionStreaming] = useState(false)
+
   const {
     data: session,
     isLoading: sessionLoading,
@@ -56,8 +58,14 @@ function ChatInterface() {
     queryKey: ["session", sessionId],
     queryFn: () => SessionsService.getSession({ id: sessionId }),
     enabled: !!sessionId,
-    refetchInterval: 10000, // Poll for status updates every 10s
+    refetchInterval: isSessionStreaming ? 3000 : 10000,
   })
+
+  // Derive streaming state from session
+  useEffect(() => {
+    const streaming = session?.interaction_status === "running" || session?.interaction_status === "pending_stream"
+    setIsSessionStreaming(streaming)
+  }, [session?.interaction_status])
 
   const {
     data: messagesData,
@@ -66,6 +74,7 @@ function ChatInterface() {
     queryKey: ["messages", sessionId],
     queryFn: () => MessagesService.getMessages({ sessionId, offset: 0, limit: 100 }),
     enabled: !!sessionId,
+    refetchInterval: isSessionStreaming ? 2000 : undefined,
   })
 
   const {
@@ -84,9 +93,10 @@ function ChatInterface() {
     enabled: !!session?.environment_id,
   })
 
-  const { sendMessage, stopMessage, isStreaming, streamingEvents, isInterruptPending } = useMessageStream({
+  const { sendMessage, stopMessage, isStreaming, streamingEvents, isInterruptPending } = useSessionStreaming({
     sessionId,
-    sessionMode: session?.mode as "conversation" | "building" | undefined,
+    session: session ? { interaction_status: session.interaction_status, mode: session.mode } : null,
+    messagesData: messagesData ? { data: messagesData.data as any } : null,
     onSuccess: () => {
       // Messages are already refreshed by the hook
       // Agent cache is also refreshed if building mode
@@ -265,6 +275,21 @@ function ChatInterface() {
       subscriptions.forEach(sub => eventService.unsubscribe(sub))
     }
   }, [session?.environment_id, showSuccessToast, showErrorToast, queryClient])
+
+  // Listen for session_interaction_status_changed WS events
+  useEffect(() => {
+    const sub = eventService.subscribe(EventTypes.SESSION_INTERACTION_STATUS_CHANGED, (event) => {
+      if (event.meta?.session_id === sessionId) {
+        // Immediately refetch session to update derived isStreaming state
+        queryClient.invalidateQueries({ queryKey: ["session", sessionId] })
+        if (event.meta?.interaction_status === "") {
+          // Streaming ended - refetch messages for final content
+          queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
+        }
+      }
+    })
+    return () => { eventService.unsubscribe(sub) }
+  }, [sessionId, queryClient])
 
   // Update header when session loads
   useEffect(() => {

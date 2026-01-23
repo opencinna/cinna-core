@@ -5,8 +5,10 @@
 The system implements a three-layer streaming architecture with **WebSocket** for frontend-backend communication and **SSE** for backend-agent-env communication. This hybrid approach eliminates browser connection limits while maintaining compatibility with the agent environment's SSE-based SDK streaming.
 
 **Key Principles**:
-- Frontend-backend streaming is decoupled via WebSocket rooms and background tasks
-- Backend-agent-env streaming remains independent using SSE
+- **DB as single source of truth** - Database always reflects current streaming content (within ~2s)
+- **WebSocket as enhancement, not requirement** - System works via polling alone; WebSocket adds real-time granularity
+- **No hidden messages** - In-progress agent messages are displayed with streaming indicator
+- **Derived UI state** - Frontend streaming state derived from `session.interaction_status`, not local state
 - Message processing continues even if frontend disconnects
 
 ## Architecture Layers
@@ -24,23 +26,82 @@ The system implements a three-layer streaming architecture with **WebSocket** fo
   Socket.IO              Messages
 ```
 
+## Core Architecture: Event Sequencing & Deduplication
+
+### The Problem
+
+When the backend flushes streaming content to DB every ~2s, and the frontend receives both DB content (via query refetch) and real-time WS events, there's a risk of rendering the same content twice or showing inconsistent state.
+
+### Solution: Index-Based Event Ordering
+
+**Backend** assigns a monotonically incrementing `event_seq` (starting from 1) to each streaming event within a stream. This index is:
+- Included in every WS event sent to the frontend
+- Stored in the DB message's `streaming_events` array (each event has its `event_seq`)
+- Used by the API to merge in-memory events with DB-persisted events
+
+**Frontend** maintains a single ordered event list, populated from two sources:
+1. **DB message** (on load/refetch): provides events up to the last flush + in-memory buffer
+2. **WebSocket** (real-time): provides new events as they arrive
+
+The frontend tracks `lastKnownSeq` (highest `event_seq` it has). Deduplication rules when receiving an event with seq=K:
+- `K <= lastKnownSeq` → **duplicate**, ignore (already have it from DB or earlier WS)
+- `K === lastKnownSeq + 1` → **next expected**, append to display list
+- `K > lastKnownSeq + 1` → **gap detected**, trigger message refetch to fill missing events
+
+### Rendering Model
+
+The frontend maintains ONE combined event list for the streaming message:
+
+```
+On page load:
+  1. Fetch messages → in-progress msg has streaming_events: [{seq:1,...}, ..., {seq:8,...}]
+  2. Set lastKnownSeq = 8
+  3. Subscribe to WS room
+  4. WS delivers seq:9, seq:10, ... → append to list
+  5. Render: all events in order (1..10+)
+
+On message refetch (every 2s):
+  1. DB now has streaming_events up to seq:12 (from API merge of DB + in-memory)
+  2. lastKnownSeq was 10 from WS
+  3. Events seq:11, seq:12 are new from DB → merge into list
+  4. Update lastKnownSeq = 12
+  5. WS continues with seq:13, 14, ...
+```
+
+### Key Properties
+
+- **No separate "base + delta" rendering** - single unified event list displayed by one component
+- **Backend controls ordering** - indices are always incremental, assigned server-side
+- **Self-healing** - gaps trigger refetch, which fills missing data from DB + in-memory buffer
+- **Idempotent** - receiving same event twice (from both DB and WS) is harmless (skip by seq)
+
+### Edge Cases
+
+| Scenario | Behavior |
+|----------|----------|
+| Page refresh | API returns ALL events (DB + in-memory buffer via ActiveStreamingManager). Zero gap. WS reconnects for live updates. |
+| WS disconnect mid-stream | Events stop arriving live. Message refetch returns complete list from API (DB + in-memory). No data loss. |
+| WS never connects | Pure polling mode. API always returns complete events. Fully functional, just not real-time. |
+| Duplicate event (same seq from DB and WS) | Skip - already in list. No double rendering. |
+| Gap detected (seq jumps) | Trigger immediate message refetch. API provides all events including in-memory ones. |
+| Backend restart mid-stream | In-memory buffer lost. DB has events up to last flush. Stream itself is also lost (background task killed). Session shows content up to last flush point. |
+
 ## Message Flow
 
 ### 1. Sending a Message
 
-**Frontend** (`useMessageStream.ts:sendMessage`):
+**Frontend** (`useSessionStreaming.ts:sendMessage`):
 - Subscribes to session-specific WebSocket room: `session_{session_id}_stream`
 - Subscribes to `stream_event` events via `eventService`
-- Starts polling fallback (invalidates messages query every 3s) to handle missed WebSocket events
 - Sends POST to `/api/v1/sessions/{session_id}/messages/stream`
 - Optimistically adds user message to cache
-- Sets streaming state
+- Invalidates session query after 200ms to detect `interaction_status` change
 
 **Backend API** (`messages.py:send_message_stream`):
 - Validates session ownership
 - Handles file attachments via `MessageService.prepare_user_message_with_files()` if present
 - Creates user message with `sent_to_agent_status='pending'`
-- Delegates to `SessionService.initiate_stream()` at line 116
+- Delegates to `SessionService.initiate_stream()`
 - Returns immediately with response: `{status: "ok", stream_room: "session_{id}_stream"}`
 
 **Backend Service** (`session_service.py:initiate_stream`):
@@ -60,17 +121,18 @@ Orchestrates pending message processing and environment activation:
 - `rebuild_environment()` - after rebuild if was previously running
 
 This event-driven approach ensures sessions are processed regardless of how the environment became active.
+
 4. `process_pending_messages()` handles streaming:
-   - Emits `STREAM_STARTED` backend event (triggers activity creation)
+   - Emits `STREAM_STARTED` backend event (triggers `handle_stream_started` which sets `interaction_status="running"`, `streaming_started_at=now`, and emits `session_interaction_status_changed` WS event)
    - Streams from agent-env via SSE
-   - Emits `STREAM_ERROR`/`STREAM_INTERRUPTED` backend events as needed
-   - Emits `STREAM_COMPLETED` backend event (triggers activity/environment handlers)
-   - Emits each streaming event to WebSocket room
-   - Emits `stream_completed` WebSocket event when done
+   - Each event gets assigned `event_seq` and appended to `ActiveStreamingManager` buffer
+   - Events flushed to DB every ~2s (non-blocking background thread)
+   - Emits each streaming event (with `event_seq`) to WebSocket room
+   - On completion: final DB update sets `streaming_in_progress=False`, emits `STREAM_COMPLETED` which triggers `handle_stream_completed` (clears `interaction_status`, `streaming_started_at`, emits `session_interaction_status_changed` to user room)
 
 **Event Service** (`event_service.py:emit_stream_event`):
 - Emits events to session-specific room: `session_{session_id}_stream`
-- Event format: `{session_id, event_type, data, timestamp}`
+- Event format: `{session_id, event_type, data: {..., event_seq}, timestamp}`
 - Uses Socket.IO server's room-based broadcasting
 
 **Agent Environment** (multi-adapter architecture):
@@ -80,20 +142,80 @@ This event-driven approach ensures sessions are processed regardless of how the 
 - Streams responses via SDK, converts to unified `SDKEvent` format
 - Yields SSE events (session_created, assistant, tool, thinking, done, error, interrupted)
 
-### 2. Streaming Response
+### 2. Incremental Persistence
 
-**Event Types**:
+**Backend** (`message_service.py:stream_message_with_events`):
+
+During streaming, the backend assigns `event_seq` to each event and periodically flushes to DB:
+
+```python
+event_seq_counter = 0
+last_flush_time = time.time()
+FLUSH_INTERVAL = 2.0  # seconds
+
+for event in sse_stream:
+    event_seq_counter += 1
+    event["event_seq"] = event_seq_counter
+
+    # Append to in-memory buffer
+    streaming_events.append(event_copy)
+    await active_streaming_manager.append_streaming_event(session_id, event_copy)
+
+    # Emit via WebSocket (includes event_seq for frontend deduplication)
+    emit_stream_event(session_id, event)
+
+    # Periodic flush to DB (non-blocking background thread)
+    if agent_message_id and (time.time() - last_flush_time >= FLUSH_INTERVAL):
+        _flush_streaming_content(agent_message_id, streaming_events, event_seq_counter)
+        last_flush_time = time.time()
+```
+
+The flush updates the agent message's:
+- `content` field with accumulated assistant text
+- `message_metadata.streaming_events` array (each event has its `event_seq`)
+- `message_metadata.streaming_in_progress = True` (cleared to `False` on completion)
+
+### 3. API Merges In-Memory Events
+
+**Backend** (`messages.py:get_messages`):
+
+When the messages API returns the message list, it checks if the session has an active stream with unflushed events:
+
+```python
+if await active_streaming_manager.is_streaming(session_id):
+    stream_data = await active_streaming_manager.get_stream_events(session_id)
+    if stream_data and stream_data["streaming_events"]:
+        # Find in-progress message
+        in_progress_msg = find_message_with_streaming_in_progress(messages)
+        if in_progress_msg:
+            # Merge: DB events + in-memory events beyond last flush
+            db_events = in_progress_msg.message_metadata["streaming_events"]
+            db_max_seq = max(e["event_seq"] for e in db_events)
+            new_events = [e for e in stream_data["streaming_events"] if e["event_seq"] > db_max_seq]
+            in_progress_msg.message_metadata["streaming_events"] = db_events + new_events
+            in_progress_msg.content = stream_data["accumulated_content"]
+```
+
+**Key properties**:
+- API always returns the most current data (DB + in-memory)
+- No gap on page refresh - API gives you everything immediately
+- Same format whether from DB or in-memory, so frontend handles them identically
+- WS becomes purely a speed optimization (sub-second delivery) rather than a data completeness requirement
+
+### 4. Streaming Response Event Types
+
 - `stream_started` - Backend processing started (WebSocket only)
 - `user_message_created` - User message saved (WebSocket only)
 - `session_created` - External session ID created
-- `assistant` - Text response from agent
-- `tool` - Tool use event (includes TodoWrite detection, see below)
-- `thinking` - Agent reasoning
-- `system` - System notification
+- `assistant` - Text response from agent (has `event_seq`)
+- `tool` - Tool use event (has `event_seq`, includes TodoWrite detection)
+- `thinking` - Agent reasoning (has `event_seq`)
+- `system` - System notification (has `event_seq`)
 - `interrupted` - Message was interrupted
 - `error` - Error occurred
 - `stream_completed` - Stream finished (WebSocket only)
 - `done` - Agent processing complete
+- `session_interaction_status_changed` - Session streaming status changed (emitted to user room)
 - `todo_list_updated` - TodoWrite tool detected, todos saved to session (backend event)
 - `task_todo_updated` - Task-level todo update propagated from session (backend event)
 
@@ -101,53 +223,95 @@ This event-driven approach ensures sessions are processed regardless of how the 
 ```
 Agent Env SDK → Agent Env Server → Backend Service → WebSocket Room → Frontend Hook
    (format)        (SSE)              (emit_stream)     (Socket.IO)     (handler)
+                                           ↓
+                                   DB flush (every 2s)
+                                           ↓
+                                   ActiveStreamingManager buffer
 ```
 
-**Frontend Handling** (`useMessageStream.ts:handleStreamEvent`):
-- Receives events via WebSocket through `eventService.subscribe("stream_event")`
-- Verifies event belongs to current session
-- Transforms into `StructuredStreamEvent[]` for real-time display
-- Updates `streamingEvents` state
-- Calls `handleStreamComplete()` on `stream_completed` or `interrupted`
-- `handleStreamComplete`: clears polling intervals, unsubscribes from room, refetches messages
+### 5. Frontend State Management
 
-**Frontend Event Service** (`eventService.ts`):
-- Listens for `stream_event` Socket.IO events
-- Routes to subscribers via `handleStreamEvent()` method
-- Manages room subscriptions via `subscribeToRoom()/unsubscribeFromRoom()`
-- Tracks active rooms in `activeRooms: Set<string>` for automatic re-subscription on reconnect
-- On Socket.IO `connect` event: re-emits `subscribe` for all tracked rooms (handles transport upgrades, network blips)
+**`useSessionStreaming` hook** (`hooks/useSessionStreaming.ts`):
 
-**Backend Processing** (`message_service.py:stream_message_with_events`):
-- Emits `STREAM_STARTED` backend event (for activity tracking)
-- Streams from agent-env via SSE
-- Collects events in memory
-- Captures external session ID early
-- Creates agent message placeholder on first `assistant` event
-- **Detects TodoWrite tool calls**: When a `tool` event with name `todowrite` is received:
-  - Extracts todos from `metadata.tool_input.todos`
-  - Updates `Session.todo_progress` in database
-  - Emits `TODO_LIST_UPDATED` backend event with session_id and todos
-  - `InputTaskService.handle_todo_list_updated()` handler propagates to linked task
-- Saves final agent response when stream completes
-- Emits `STREAM_COMPLETED`/`STREAM_ERROR`/`STREAM_INTERRUPTED` backend events
-- Backend event handlers (ActivityService, EnvironmentService, InputTaskService) react to events
-- Tracked by `ActiveStreamingManager`
+The hook derives streaming state entirely from the session query:
 
-### 3. WebSocket vs SSE
+```typescript
+// DERIVED STATE: streaming is active when session says so
+const isStreaming = session?.interaction_status === "running"
+                 || session?.interaction_status === "pending_stream"
+```
 
-**Why WebSocket for Frontend-Backend**:
-- No browser connection limits (SSE limited to 6 per domain)
-- Reliable multi-tab usage without connection failures
-- Better mobile browser support and battery efficiency
-- Faster reconnection and lower latency
-- Explicit error events and better debugging
+**Key differences from previous `useMessageStream`**:
+- No local `isStreaming` state - derived from session query
+- No `checkAndReconnectToActiveStream` - handled automatically by derived state
+- No completion polling - session query detects completion via `interaction_status` change
+- No message polling fallback - DB content always current (within 2s via incremental saves)
+- Index-based dedup prevents any double-rendering
 
-**Why SSE for Backend-AgentEnv**:
-- Agent environment SDK already uses SSE streaming
-- No need to refactor agent environment code
-- SSE sufficient for single backend-to-container connection
-- Maintains backward compatibility with existing agent environments
+**State transitions**:
+1. `isStreaming` becomes `true` → subscribe to WS room, initialize event list
+2. WS events arrive → append to list (deduplicated by `event_seq`)
+3. Message query refetches (every 2s) → merge DB events into list (fill gaps)
+4. `session_interaction_status_changed` WS event received → invalidate session query
+5. `isStreaming` becomes `false` → cleanup, refetch final messages
+
+### 6. Dynamic Polling Intervals
+
+**Session page** (`routes/_layout/session/$sessionId.tsx`):
+
+```typescript
+// Session query: faster during streaming for quicker status detection
+const sessionQuery = useQuery({
+  refetchInterval: isSessionStreaming ? 3000 : 10000,
+})
+
+// Messages query: poll during streaming for incremental content
+const messagesQuery = useQuery({
+  refetchInterval: isSessionStreaming ? 2000 : undefined,
+})
+```
+
+### 7. Session Status WebSocket Events
+
+**Backend** (`session_service.py`):
+
+When `interaction_status` changes, a WebSocket event is emitted to the user room:
+```python
+# In handle_stream_started:
+await event_service.emit_event(
+    event_type="session_interaction_status_changed",
+    model_id=session_id,
+    meta={
+        "session_id": str(session_id),
+        "interaction_status": "running",
+        "streaming_started_at": now.isoformat(),
+    },
+    user_id=user_id,
+)
+
+# In handle_stream_completed / handle_stream_error / handle_stream_interrupted:
+await event_service.emit_event(
+    event_type="session_interaction_status_changed",
+    meta={"session_id": str(session_id), "interaction_status": ""},
+    user_id=user_id,
+)
+```
+
+**Frontend** (`routes/_layout/session/$sessionId.tsx`):
+
+Subscribes to this event for immediate status detection:
+```typescript
+eventService.subscribe(EventTypes.SESSION_INTERACTION_STATUS_CHANGED, (event) => {
+  if (event.meta?.session_id === sessionId) {
+    queryClient.invalidateQueries({ queryKey: ["session", sessionId] })
+    if (event.meta?.interaction_status === "") {
+      queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
+    }
+  }
+})
+```
+
+This ensures the frontend reacts within milliseconds of streaming state changes, without waiting for the next poll interval.
 
 ## WebSocket Architecture
 
@@ -157,10 +321,10 @@ Agent Env SDK → Agent Env Server → Backend Service → WebSocket Room → Fr
 
 **Lifecycle**:
 1. Frontend subscribes to room before sending message (tracked in `activeRooms`)
-2. Backend emits all streaming events to this room
-3. Frontend receives events and updates UI (with polling fallback for missed events)
+2. Backend emits all streaming events (with `event_seq`) to this room
+3. Frontend receives events and updates unified event list (deduplicated by seq)
 4. If WebSocket reconnects: frontend automatically re-subscribes to tracked rooms
-5. Frontend unsubscribes from room when stream completes (removed from `activeRooms`)
+5. Frontend unsubscribes from room when streaming ends (derived state becomes false)
 
 **Event Service** (`event_service.py:EventService`):
 - Global singleton instance manages Socket.IO server
@@ -192,17 +356,103 @@ Agent Env SDK → Agent Env Server → Backend Service → WebSocket Room → Fr
 - Multiple clients can subscribe to same room (multi-tab support ready)
 - Automatic environment activation before streaming
 
+### WebSocket Event Format
+
+**Emitted by Backend** (`emit_stream_event`):
+```json
+{
+  "session_id": "uuid-string",
+  "event_type": "assistant|tool|thinking|system|...",
+  "data": {
+    "type": "assistant",
+    "content": "Hello...",
+    "event_seq": 42,
+    "tool_name": "Read",
+    "metadata": {...}
+  },
+  "timestamp": "2026-01-23T10:30:00.000Z"
+}
+```
+
+**Frontend Subscription** (`useSessionStreaming.ts`):
+- Subscribes to `"stream_event"` event type
+- Handler receives full event object
+- Extracts `event_seq` from `data.event_seq` (or `event.event_seq` fallback)
+- Deduplicates by seq, appends to unified list or triggers refetch on gap
+
+## WebSocket vs SSE
+
+**Why WebSocket for Frontend-Backend**:
+- No browser connection limits (SSE limited to 6 per domain)
+- Reliable multi-tab usage without connection failures
+- Better mobile browser support and battery efficiency
+- Faster reconnection and lower latency
+- Explicit error events and better debugging
+
+**Why SSE for Backend-AgentEnv**:
+- Agent environment SDK already uses SSE streaming
+- No need to refactor agent environment code
+- SSE sufficient for single backend-to-container connection
+- Maintains backward compatibility with existing agent environments
+
 ## Session Management
 
 ### External Session IDs
 
-SDK sessions persist across messages for context continuity (unchanged).
+SDK sessions persist across messages for context continuity.
 
-**Storage**: `Session.external_session_mappings` JSON field
+**Storage**: `Session.session_metadata` JSON field (key: external_session_id)
 
 **API** (`session_service.py`):
 - `get_external_session_id(session)` - Retrieve for current SDK
 - `set_external_session_id(db, session, external_session_id)` - Store/clear
+
+### Active Stream Tracking
+
+**Manager** (`active_streaming_manager.py:ActiveStreamingManager`):
+- Tracks ongoing backend-to-agent-env streams
+- Independent of frontend WebSocket connection state
+- Holds in-memory event buffer between DB flushes
+- Provides stream status and events for API response enrichment
+
+**ActiveStream dataclass**:
+```python
+@dataclass
+class ActiveStream:
+    session_id: UUID
+    external_session_id: Optional[str]
+    started_at: datetime
+    is_interrupted: bool = False
+    is_completed: bool = False
+    interrupt_pending: bool = False
+    streaming_events: list = []      # In-memory event buffer
+    last_flushed_seq: int = 0        # Last seq flushed to DB
+    accumulated_content: str = ""     # Accumulated assistant text
+```
+
+**Key Methods**:
+- `register_stream()` / `unregister_stream()` - Lifecycle management
+- `append_streaming_event()` - Add event to in-memory buffer
+- `update_last_flushed_seq()` - Track flush progress
+- `get_stream_events()` - Get buffer for API merge (returns events + accumulated_content)
+- `request_interrupt()` - Request stream interruption
+
+**Endpoint**: `GET /sessions/{id}/messages/streaming-status`
+- Uses DB `interaction_status` as primary source of truth
+- Supplements with `ActiveStreamingManager` info (duration, external_session_id)
+
+### Streaming Status
+
+The streaming status is now primarily DB-based:
+
+```python
+@router.get("/{session_id}/messages/streaming-status")
+async def get_streaming_status(...):
+    # Use DB interaction_status as primary source of truth
+    is_streaming = chat_session.interaction_status == "running"
+    # ActiveStreamingManager provides supplementary info
+    stream_info = await active_streaming_manager.get_stream_info(session_id)
+```
 
 ### Todo Progress Tracking
 
@@ -238,38 +488,55 @@ Agent uses TodoWrite → Backend detects tool event → Session.todo_progress up
 }
 ```
 
-### Active Stream Tracking
+## Frontend Display Architecture
 
-**Manager** (`active_streaming_manager.py:ActiveStreamingManager`):
-- Tracks ongoing backend-to-agent-env streams (unchanged)
-- Independent of frontend WebSocket connection state
-- Provides stream status for reconnection
+### Message Rendering
 
-**Endpoint**: `GET /sessions/{id}/messages/streaming-status` (unchanged)
+**MessageList** (`components/Chat/MessageList.tsx`):
+- Renders ALL messages including in-progress ones (no `streaming_in_progress` filter)
+- Passes `isStreamingMessage` prop to `MessageBubble` when message has `streaming_in_progress=true`
+- Shows `StreamingMessage` component at bottom with unified event list from the hook
 
-**Usage**:
-- Frontend checks on mount via `checkAndReconnectToActiveStream()`
-- Enables reconnection after page refresh
-- Starts message polling fallback (every 3s) so content appears even without WebSocket events
-- Polls streaming-status endpoint (every 2s) until stream completes
-- Shows streaming UI with progressively updated content via polling
+**MessageBubble** (`components/Chat/MessageBubble.tsx`):
+- When `isStreamingMessage=true`: shows pulsing dots indicator ("Streaming...")
+- Content updates via message query refetch (every 2s during streaming)
+- Once streaming completes: `streaming_in_progress` becomes `false`, indicator disappears
+
+**StreamingMessage** (`components/Chat/StreamingMessage.tsx`):
+- Renders the unified event list from the `useSessionStreaming` hook
+- Events are deduplicated and ordered by `event_seq`
+- Shows "Thinking..." loader when no events yet, pulsing dots while streaming
+
+**StreamEventRenderer** (`components/Chat/StreamEventRenderer.tsx`):
+- Renders individual events by type (assistant → markdown, tool → tool block, thinking → collapsible)
+- Uses `event_seq` for React keys (stable across re-renders, prevents duplicate DOM nodes)
+
+### Layout During Streaming
+
+```
+[...previous completed messages (MessageBubble)]
+[In-progress agent message (MessageBubble with isStreamingMessage=true)]
+  └─ Shows DB content (updated every 2s) with streaming indicator
+[StreamingMessage: real-time events from hook (deduplicated unified list)]
+  └─ Shows latest events from WS + DB, pulsing cursor
+```
 
 ## Interruption Handling
 
 ### User Manual Interruption
 
-**Frontend** (`useMessageStream.ts:stopMessage`):
-1. Sets `isInterruptPending = true` (shows spinner)
+**Frontend** (`useSessionStreaming.ts:stopMessage`):
+1. Sets `isInterruptPending = true` (shows spinner on stop button)
 2. Sends `POST /messages/interrupt`
-3. Waits for `interrupted` event via WebSocket
+3. Waits for `interaction_status` to clear (via session query or WS event)
 
-**Backend Interrupt Flow** (unchanged from SSE implementation):
+**Backend Interrupt Flow**:
 - `messages.py:interrupt_message` calls `active_streaming_manager.request_interrupt()`
 - If external_session_id available: forwards to agent-env immediately
 - If not available: queues as pending interrupt
 - `message_service.py` forwards pending interrupt when session ID captured
 
-**Agent Environment** (unchanged):
+**Agent Environment**:
 - Receives interrupt via `POST /chat/interrupt/{external_session_id}`
 - Sets flag in `active_session_manager`
 - Streaming loop checks flag and calls `client.interrupt()`
@@ -278,16 +545,17 @@ Agent uses TodoWrite → Backend detects tool event → Session.todo_progress up
 **Backend Response**:
 - Receives `interrupted` event from agent-env
 - Emits to WebSocket room via `emit_stream_event()`
-- Saves message with `status="user_interrupted"`
-- Sets session status to "active" (not "completed")
+- Saves message with `status="user_interrupted"`, `streaming_in_progress=False`
+- `handle_stream_interrupted` clears `interaction_status` and `streaming_started_at`
+- Emits `session_interaction_status_changed` to user room
 
 **Frontend Handling**:
-- Receives `interrupted` event via WebSocket
-- Clears `isInterruptPending` flag
-- Calls `handleStreamComplete(wasInterrupted=true)`
-- Displays interrupted badge and system notification
+- Receives `session_interaction_status_changed` event → invalidates session query
+- `isStreaming` becomes false (derived from session query)
+- Hook cleanup: unsubscribes from WS room, refetches messages
+- Displays interrupted badge on the message
 
-### Properties (unchanged)
+### Properties
 
 - SDK cleanup ensures session not corrupted
 - Partial content saved with interrupt status
@@ -301,120 +569,152 @@ Agent uses TodoWrite → Backend detects tool event → Session.todo_progress up
 **Connection Errors**:
 - Frontend: `eventService` handles reconnection automatically and re-subscribes to tracked rooms
 - Backend: No change needed - WebSocket delivery is fire-and-forget
-- Events emitted during disconnection gap are recovered via message polling fallback (every 3s)
-- Polling fallback ensures UI eventually shows correct content regardless of WebSocket reliability
+- Events missed during WS disconnection are recovered via message query polling (every 2s)
+- Message query always returns complete data (DB + in-memory merge from ActiveStreamingManager)
 
 **Backend Errors** (`initiate_stream` → `process_pending_messages`):
 - Catches exceptions during environment activation or message processing
-- Emits error event to WebSocket room via `emit_stream_event()`
-- Includes error type and message in event data
-- Frontend receives and displays error
+- Emits error event to WebSocket room
+- `handle_stream_error` clears `interaction_status` and `streaming_started_at`
+- Emits `session_interaction_status_changed` to user room
+- Frontend detects error via session query change
 
-### Session Corruption (unchanged)
+### Session Corruption
 
 Agent environment detects corruption, backend clears external_session_id, next message starts fresh.
 
-### Network Errors (unchanged)
+### Network Errors
 
-Backend-to-agent-env SSE errors handled same as before, yielded as error events, now emitted via WebSocket.
+Backend-to-agent-env SSE errors handled same as before, yielded as error events, emitted via WebSocket and saved to DB.
 
 ## Reconnection & Recovery
 
-### WebSocket Reconnection During Streaming
-
-**Problem**: Socket.IO may reconnect (transport upgrade from polling to WebSocket, network blip) and get a new socket ID. Server-side rooms for the old SID are cleared on disconnect, so events emitted to the room have no recipients.
-
-**Solution** (`eventService.ts`):
-1. `subscribeToRoom()` adds room to `activeRooms` set (persists intent even if disconnected)
-2. `unsubscribeFromRoom()` removes room from `activeRooms` set
-3. On Socket.IO `connect` event: iterates `activeRooms` and re-emits `subscribe` for each room
-4. `disconnect()` (explicit user disconnect) clears `activeRooms`
-
-**Fallback** (`useMessageStream.ts`):
-- Message polling interval (every 3s) ensures content appears even if WebSocket events are permanently lost
-- Polling starts immediately when streaming begins and stops on `handleStreamComplete`
-
-**User Experience**: If WebSocket reconnects mid-stream, room subscription is restored automatically. If events were missed during the gap, the polling fallback fills in the content from the database.
-
 ### Page Refresh During Streaming
 
-**Frontend** (`useMessageStream.ts:checkAndReconnectToActiveStream`):
-1. Runs on mount (checks `hasCheckedForActiveStream` ref)
-2. Fetches `GET /streaming-status`
-3. If streaming:
-   - Subscribes to WebSocket room
-   - Sets `isStreaming = true`
-   - Subscribes to `stream_event` via `eventService`
-   - Refreshes messages from database immediately
-   - Starts message polling fallback (every 3s) for progressive content updates
-   - Starts completion polling (every 2s) via streaming-status endpoint
-4. Cleanup: `handleStreamComplete` clears both polling intervals and unsubscribes from room
-5. Unmount: cleanup effect clears all intervals and subscriptions
+**How it works (no explicit reconnection logic needed)**:
+1. Session query loads → `interaction_status === "running"` detected
+2. `isStreaming` derived as `true` → hook subscribes to WS room
+3. Messages query loads → API merges in-memory events from ActiveStreamingManager
+4. In-progress message rendered with all events (DB + in-memory, zero gap)
+5. WS events append new events (deduplicated by `event_seq`)
+6. Content updates progressively via message polling (every 2s)
+7. When streaming ends: session query detects `interaction_status=""` → cleanup
 
-**User Experience**: Sees spinning indicator, message content appears within 3s (via polling), content updates progressively, automatically completes when stream finishes
+**User Experience**: Sees accumulated content immediately on load, streaming indicator shown, real-time events resume via WS within seconds.
+
+### Navigation from Activities to Active Session
+
+Same mechanism as page refresh - derived state from session query handles everything automatically. No special reconnection logic needed.
+
+### WebSocket Reconnection During Streaming
+
+**Problem**: Socket.IO may reconnect (transport upgrade, network blip) and get a new socket ID.
+
+**Solution** (`eventService.ts`):
+1. `subscribeToRoom()` adds room to `activeRooms` set (persists intent)
+2. On Socket.IO `connect` event: re-emits `subscribe` for all tracked rooms
+3. Any events missed during disconnection are recovered via message query refetch
+
+**User Experience**: WS reconnects and room subscription restored automatically. Missed events filled by next message query poll (within 2s). No user-visible interruption.
 
 ### Backend Restart During Streaming
 
-**Impact** (unchanged):
+**Impact**:
 - `ActiveStreamingManager` is in-memory, lost on restart
+- Background streaming task killed
+- DB has events up to last flush point (within 2s of crash)
+- `interaction_status` may be stuck at "running" (no STREAM_COMPLETED emitted)
 - WebSocket connections drop and reconnect automatically
-- Frontend checks `/streaming-status`, sees streaming=false
-- Messages already in database are visible
-- Streaming UI not shown but data preserved
+- Frontend session query will continue to show `isStreaming=true` until manually resolved
+
+**Recovery**: Requires manual intervention or a startup cleanup task to clear stale `interaction_status="running"` sessions.
 
 ## Database Schema
 
-(Unchanged - see Session and SessionMessage tables in original document)
+### Session Fields (streaming-related)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `interaction_status` | `str` | `""` (idle), `"running"` (streaming), `"pending_stream"` (waiting for env) |
+| `streaming_started_at` | `datetime | None` | When current stream started (cleared on end) |
+| `status` | `str` | `"active"`, `"completed"`, `"error"` |
+| `pending_messages_count` | `int` | Number of unsent user messages |
+
+### SessionMessage Fields (streaming-related)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `content` | `str` | Accumulated text (updated every 2s during streaming) |
+| `message_metadata.streaming_in_progress` | `bool` | Whether message is still being generated |
+| `message_metadata.streaming_events` | `list[dict]` | Array of events with `event_seq`, `type`, `content` |
+| `message_metadata.model` | `str` | Model used for generation |
+| `status` | `str` | `""`, `"user_interrupted"`, `"error"` |
 
 ## Implementation Details
 
 ### Message Sequence Ordering
 
-(Unchanged - agent message created early on first `assistant` event to ensure correct sequence numbers before tool executions)
+Agent message created early on first `assistant` event to ensure correct sequence numbers before tool executions (like handover or task creation).
 
-### WebSocket Event Format
+### Periodic Flush Implementation
 
-**Emitted by Backend** (`emit_stream_event`):
+The flush runs in a background thread (`asyncio.to_thread`) to avoid blocking the streaming loop:
+
+```python
+def _flush_streaming_content(msg_id, content, events, seq, metadata):
+    from sqlalchemy.orm.attributes import flag_modified
+    with get_fresh_db_session() as db:
+        agent_msg = db.get(SessionMessage, msg_id)
+        if agent_msg:
+            agent_msg.content = content
+            metadata["streaming_in_progress"] = True
+            metadata["streaming_events"] = events
+            agent_msg.message_metadata = metadata
+            flag_modified(agent_msg, "message_metadata")
+            db.add(agent_msg)
+            db.commit()
+
+await asyncio.to_thread(_flush_streaming_content)
+await active_streaming_manager.update_last_flushed_seq(session_id, flush_seq)
 ```
-{
-  session_id: string,
-  event_type: string,
-  data: {...event data from agent-env...},
-  timestamp: ISO string
-}
-```
 
-**Frontend Subscription** (`useMessageStream.ts`):
-- Subscribes to `"stream_event"` event type
-- Handler receives full event object
-- Verifies `session_id` matches current session
-- Routes based on `event_type`
-- Processes `data` field (original event from agent-env)
+### What Was Removed (Complexity Reduction)
+
+| Removed | Reason |
+|---------|--------|
+| `checkAndReconnectToActiveStream()` | Derived state from session query handles this |
+| Completion polling interval (15s delay + 3s poll) | Session query detects `interaction_status` change via WS event |
+| Message polling fallback (3s interval in hook) | DB always has current content via incremental saves + query refetch |
+| `streaming_in_progress` message filter | Messages shown immediately with streaming indicator |
+| Local `isStreaming` state in hook | Derived from `session.interaction_status` |
+| `streamCompleteCalledRef` guard | No duplicate completion issue with derived state |
+| `useMessageStream.ts` | Replaced by `useSessionStreaming.ts` |
 
 ## File Reference
 
 ### Frontend
-- `hooks/useMessageStream.ts` - WebSocket-based streaming, room subscription/unsubscription
+- `hooks/useSessionStreaming.ts` - Streaming hook with derived state, seq-based dedup, unified event list
 - `services/eventService.ts` - Socket.IO client, stream_event handling, room management
+- `routes/_layout/session/$sessionId.tsx` - Session page with dynamic polling and WS status listener
 - `components/Chat/MessageInput.tsx` - Send/stop UI
-- `components/Chat/MessageBubble.tsx` - Interrupted badge display
-- `components/Chat/StreamEventRenderer.tsx` - Streaming event rendering
-- `components/Chat/MessageList.tsx` - Message list, filters in-progress placeholders
-- `components/Chat/StreamingMessage.tsx` - Real-time streaming display
+- `components/Chat/MessageBubble.tsx` - Message display with streaming indicator for in-progress messages
+- `components/Chat/StreamEventRenderer.tsx` - Event rendering by type (uses `event_seq` for keys)
+- `components/Chat/MessageList.tsx` - Message list, renders in-progress messages with indicator
+- `components/Chat/StreamingMessage.tsx` - Real-time streaming display with unified event list
 - `components/Tasks/TaskTodoProgress.tsx` - Todo progress display component for tasks
 - `routes/_layout/tasks.tsx` - Tasks list with real-time todo progress updates
 
 ### Backend
-- `api/routes/messages.py` - Message endpoint with file handling and streaming initiation (line 116)
-- `services/session_service.py` - initiate_stream(), process_pending_messages(), environment activation logic
-- `services/message_service.py` - prepare_user_message_with_files(), stream_message_with_events(), TodoWrite detection
+- `api/routes/messages.py` - Message endpoints with in-memory event merge and DB-based streaming status
+- `services/session_service.py` - Stream lifecycle handlers, `session_interaction_status_changed` emission
+- `services/message_service.py` - `stream_message_with_events()` with event_seq, incremental flush, TodoWrite detection
 - `services/event_service.py` - EventService with emit_stream_event() and backend event handlers
-- `services/activity_service.py` - Event handlers for streaming lifecycle (handle_stream_started, etc.)
+- `services/active_streaming_manager.py` - Stream tracking with in-memory event buffer
+- `services/activity_service.py` - Event handlers for streaming lifecycle
 - `services/input_task_service.py` - handle_todo_list_updated() for task todo propagation
-- `services/active_streaming_manager.py` - Stream tracking
-- `models/session.py` - Session model with todo_progress field
-- `models/input_task.py` - InputTask model with todo_progress field
-- `main.py` - Event handler registration on startup (includes TODO_LIST_UPDATED handler)
+- `models/session.py` - Session model with `streaming_started_at`, `todo_progress` fields
+- `models/event.py` - EventType constants including `SESSION_INTERACTION_STATUS_CHANGED`
+- `main.py` - Event handler registration on startup
 
 ### Agent Environment (multi-adapter architecture)
 - `env-templates/python-env-advanced/app/core/server/routes.py` - SSE endpoints
@@ -432,6 +732,7 @@ Backend-to-agent-env SSE errors handled same as before, yielded as error events,
 - Room-based event broadcasting
 - Background task execution
 - Immediate HTTP response + async events
+- `session_interaction_status_changed` events for instant state updates
 
 **Backend-AgentEnv**: SSE (Server-Sent Events)
 - HTTP streaming from agent environment
@@ -448,138 +749,46 @@ Based on production debugging of streaming cancellation issues, follow these pat
 
 **Problem**: `asyncio.run()` creates a **temporary event loop** that destroys all child tasks when it completes.
 
-**Bad Example**:
-```python
-# In WebSocket handler (which is already async!)
-async def on_message(data):
-    # This creates a NEW event loop, runs the function, then DESTROYS the loop
-    self.executor.submit(
-        lambda: asyncio.run(some_async_function())  # ❌ WRONG!
-    )
-```
-
 **Correct Pattern**:
 ```python
-# Use the current event loop
 async def on_message(data):
     # Create background task in the CURRENT event loop
     asyncio.create_task(some_async_function())  # ✅ CORRECT
 ```
 
-**Why**: WebSocket handlers already run in FastAPI's event loop. Creating a new loop with `asyncio.run()` causes all tasks spawned during that function to be cancelled when the temporary loop closes.
-
 #### 2. Don't Await Functions That Create Background Tasks
 
-**Problem**: When you await a function that spawns background tasks, those tasks become children of the awaiting context. When the awaited function returns, asyncio cancels the child tasks.
-
-**Bad Example**:
-```python
-async def handle_event():
-    # initiate_stream() creates background tasks and returns immediately
-    await initiate_stream(session_id)  # ❌ WRONG - child tasks will be cancelled!
-    # When this function returns, background tasks get cancelled
-```
+**Problem**: When you await a function that spawns background tasks, those tasks become children of the awaiting context and get cancelled when it returns.
 
 **Correct Pattern**:
 ```python
 async def handle_event():
-    # Wrap in create_task to make it independent
     create_task_with_error_logging(
         initiate_stream(session_id),
         task_name=f"initiate_stream_{session_id}"
     )  # ✅ CORRECT - task is independent
 ```
 
-**Why**: Background tasks need to be independent of their creator's lifecycle. Using `create_task` creates a top-level task that won't be cancelled when the parent function returns.
-
 #### 3. Always Log Background Task Errors
 
-**Problem**: By default, background tasks that fail silently swallow exceptions, making debugging impossible.
-
-**Solution**: Use the `create_task_with_error_logging()` helper from `backend/app/utils.py`:
-
-```python
-from app.utils import create_task_with_error_logging
-
-# Usage:
-create_task_with_error_logging(
-    process_message(session_id),
-    task_name=f"process_message_{session_id}"
-)
-```
-
-**Benefits**:
-- Logs all exceptions with full stack traces
-- Logs task cancellations for debugging
-- Keeps task reference to prevent premature garbage collection
+Use `create_task_with_error_logging()` from `backend/app/utils.py` to prevent silent failures.
 
 #### 4. Avoid Passing Detached ORM Objects to Background Tasks
 
-**Problem**: SQLAlchemy objects become "detached" when their originating session closes. Background tasks with different sessions cannot use detached objects.
-
-**Bad Example**:
-```python
-async def create_background_task(db: Session):
-    environment = db.get(AgentEnvironment, env_id)
-    agent = db.get(Agent, agent_id)
-
-    # This background task will fail - objects are detached from db session!
-    create_task_with_error_logging(
-        lifecycle_manager.activate_environment(
-            db_session=get_new_session(),  # Different session!
-            environment=environment,        # ❌ Detached object
-            agent=agent                    # ❌ Detached object
-        )
-    )
-```
-
-**Correct Pattern**:
-```python
-async def create_background_task(db: Session):
-    # Store only IDs, not ORM objects
-    environment_id = some_environment.id
-    agent_id = some_agent.id
-
-    # Background task fetches fresh objects with its own session
-    async def _task_with_fresh_objects():
-        with get_new_session() as fresh_db:
-            fresh_env = fresh_db.get(AgentEnvironment, environment_id)
-            fresh_agent = fresh_db.get(Agent, agent_id)
-
-            return await lifecycle_manager.activate_environment(
-                db_session=fresh_db,
-                environment=fresh_env,
-                agent=fresh_agent
-            )
-
-    create_task_with_error_logging(
-        _task_with_fresh_objects(),
-        task_name=f"activate_env_{environment_id}"
-    )
-```
-
-**Why**: Each background task should manage its own database session and fetch fresh ORM objects. This ensures objects are properly attached and prevents SQLAlchemy errors.
+Store IDs and fetch fresh objects with a new DB session in the background task.
 
 ### Implementation Files Using These Patterns
 
-- `backend/app/utils.py` - `create_task_with_error_logging()` utility function (line 20)
-- `backend/app/services/session_service.py` - `initiate_stream()`, `process_pending_messages()`
-- `backend/app/services/event_service.py` - `agent_usage_intent` handler, background task creation for environment activation
-
-### Testing Background Task Issues
-
-When debugging streaming or background task problems:
-
-1. **Check for task cancellation logs**: `grep "was cancelled" backend.log`
-2. **Check for unhandled exceptions**: `grep "Unhandled exception" backend.log`
-3. **Verify no `asyncio.run()` in async contexts**: `grep -r "asyncio.run" backend/app/`
-4. **Look for awaited background task creators**: Search for `await` followed by functions that use `create_task`
+- `backend/app/utils.py` - `create_task_with_error_logging()` utility function
+- `backend/app/services/session_service.py` - `initiate_stream()`, `process_pending_messages()`, stream event handlers
+- `backend/app/services/event_service.py` - `agent_usage_intent` handler
+- `backend/app/services/message_service.py` - `_flush_streaming_content` (runs in background thread)
 
 ## Future Enhancements
 
 - **Multi-Tab Streaming**: Multiple frontend tabs see same stream via shared WebSocket room
-- **Persistent Stream Tracking**: Store active streams in Redis to survive backend restarts
+- **Persistent Stream Tracking**: Store active streams in Redis to survive backend restarts (fixes stale `interaction_status` issue)
+- **Startup Cleanup**: On backend start, scan for sessions with `interaction_status="running"` and reset them
 - **WebSocket Heartbeat**: Implement ping/pong for connection health monitoring
-- **Event Replay**: Buffer recent events in backend for reconnecting clients (currently mitigated by polling fallback, but true replay would provide real-time granularity without polling overhead)
 - **Compression**: Enable WebSocket compression for large streaming events
 - **Migrate Agent-Env to WebSocket**: Future consideration for full WebSocket architecture

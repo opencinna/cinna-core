@@ -1425,6 +1425,7 @@ export type SessionPublic = {
     interaction_status: string;
     pending_messages_count: number;
     todo_progress?: (Array<unknown> | null);
+    streaming_started_at?: (string | null);
     created_at: string;
     updated_at: string;
     last_message_at: (string | null);
@@ -1446,6 +1447,7 @@ export type SessionPublicExtended = {
     interaction_status: string;
     pending_messages_count: number;
     todo_progress?: (Array<unknown> | null);
+    streaming_started_at?: (string | null);
     created_at: string;
     updated_at: string;
     last_message_at: (string | null);

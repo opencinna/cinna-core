@@ -4,18 +4,7 @@ import { ArrowDown } from "lucide-react"
 import type { MessagePublic } from "@/client"
 import { MessageBubble } from "./MessageBubble"
 import { StreamingMessage } from "./StreamingMessage"
-
-interface StreamEvent {
-  type: "assistant" | "tool" | "thinking" | "system"
-  content: string
-  tool_name?: string
-  metadata?: {
-    tool_id?: string
-    tool_input?: Record<string, any>
-    model?: string
-    interrupt_notification?: boolean
-  }
-}
+import type { StreamEvent } from "@/hooks/useSessionStreaming"
 
 interface MessageListProps {
   messages: MessagePublic[]
@@ -79,7 +68,7 @@ export function MessageList({ messages, isLoading, streamingEvents, isStreaming,
         className="h-full overflow-y-auto px-6 py-6"
       >
         <div className="max-w-7xl mx-auto">
-          {messages.length === 0 ? (
+          {messages.length === 0 && !isStreaming ? (
             <div className="flex items-center justify-center min-h-[400px]">
               <p className="text-muted-foreground text-center">
                 No messages yet. Start the conversation!
@@ -87,15 +76,21 @@ export function MessageList({ messages, isLoading, streamingEvents, isStreaming,
             </div>
           ) : (
             <>
-              {messages
-                .filter((message) => {
-                  // Filter out messages that are still streaming (placeholder messages)
-                  const metadata = message.message_metadata as Record<string, any> | undefined
-                  return !metadata?.streaming_in_progress
-                })
-                .map((message) => (
-                  <MessageBubble key={message.id} message={message} onSendAnswer={onSendAnswer} onSendMessage={onSendMessage} conversationModeUi={conversationModeUi} agentId={agentId} />
-                ))}
+              {messages.map((message) => {
+                const metadata = message.message_metadata as Record<string, any> | undefined
+                const isStreamingMessage = !!metadata?.streaming_in_progress
+                return (
+                  <MessageBubble
+                    key={message.id}
+                    message={message}
+                    onSendAnswer={onSendAnswer}
+                    onSendMessage={onSendMessage}
+                    conversationModeUi={conversationModeUi}
+                    agentId={agentId}
+                    isStreamingMessage={isStreamingMessage}
+                  />
+                )
+              })}
               {isStreaming && <StreamingMessage events={streamingEvents || []} conversationModeUi={conversationModeUi} />}
               <div ref={messagesEndRef} />
             </>

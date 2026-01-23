@@ -2,6 +2,7 @@ from uuid import UUID
 from datetime import datetime
 from typing import AsyncIterator
 import json
+import time
 import httpx
 import logging
 import asyncio
@@ -471,6 +472,7 @@ class MessageService:
                 if chat_session:
                     chat_session.pending_messages_count = 0
                     chat_session.interaction_status = ""
+                    chat_session.streaming_started_at = None
                     db.add(chat_session)
                     db.commit()
 
@@ -761,6 +763,9 @@ class MessageService:
         was_interrupted = False  # Track if message was interrupted
         agent_message_id = None  # Track agent message ID for early creation
         tools_needing_approval = set()  # Track all tools that need approval in this message
+        event_seq_counter = 0  # Monotonically incrementing event sequence
+        last_flush_time = time.time()  # Track last DB flush for incremental persistence
+        FLUSH_INTERVAL = 2.0  # Flush to DB every 2 seconds
         response_metadata = {
             "external_session_id": external_session_id,
             "mode": session_mode,
@@ -982,9 +987,11 @@ class MessageService:
 
                 # Store raw event for visualization (exclude done/error events from storage)
                 if event.get("type") not in ["done", "error", "session_created"]:
+                    event_seq_counter += 1
                     event_copy = {
                         "type": event.get("type"),
                         "content": event.get("content", ""),
+                        "event_seq": event_seq_counter,
                     }
                     if event.get("tool_name"):
                         event_copy["tool_name"] = event["tool_name"]
@@ -994,6 +1001,45 @@ class MessageService:
                             if k in ["tool_id", "tool_input", "model", "needs_approval", "tool_name"]
                         }
                     streaming_events.append(event_copy)
+
+                    # Append to ActiveStreamingManager buffer for API access
+                    await active_streaming_manager.append_streaming_event(session_id, event_copy)
+
+                    # Include event_seq in the event forwarded to frontend via WS
+                    event["event_seq"] = event_seq_counter
+
+                    # Periodic flush to DB (non-blocking)
+                    if agent_message_id and (time.time() - last_flush_time >= FLUSH_INTERVAL):
+                        flush_seq = event_seq_counter
+                        flush_events = list(streaming_events)
+                        flush_content = "\n\n".join(
+                            e["content"] for e in flush_events
+                            if e["type"] == "assistant" and e.get("content")
+                        ) or "Agent is responding..."
+
+                        def _flush_streaming_content(
+                            msg_id=agent_message_id,
+                            content=flush_content,
+                            events=flush_events,
+                            seq=flush_seq,
+                            metadata=dict(response_metadata),
+                        ):
+                            from sqlalchemy.orm.attributes import flag_modified
+                            with get_fresh_db_session() as db:
+                                agent_msg = db.get(SessionMessage, msg_id)
+                                if agent_msg:
+                                    agent_msg.content = content
+                                    metadata["streaming_in_progress"] = True
+                                    metadata["streaming_events"] = events
+                                    agent_msg.message_metadata = metadata
+                                    flag_modified(agent_msg, "message_metadata")
+                                    db.add(agent_msg)
+                                    db.commit()
+
+                        await asyncio.to_thread(_flush_streaming_content)
+                        await active_streaming_manager.update_last_flushed_seq(session_id, flush_seq)
+                        last_flush_time = time.time()
+                        logger.debug(f"Flushed streaming content to DB (seq={flush_seq}) for session {session_id}")
 
                 # Create agent message in DB as soon as we receive the first "assistant" event
                 # This ensures the message exists BEFORE any tool calls execute (like handover)
@@ -1066,8 +1112,8 @@ class MessageService:
 
                 def _save_or_update_agent_message():
                     from sqlalchemy.orm.attributes import flag_modified
-                    # Explicitly clear streaming_in_progress flag to indicate message is complete
-                    # This is critical for frontend to display the message (it filters out streaming messages)
+                    # Clear streaming_in_progress flag to indicate message is complete
+                    # Frontend uses this to show/hide the streaming indicator on the message bubble
                     response_metadata["streaming_in_progress"] = False
                     with get_fresh_db_session() as db:
                         if agent_message_id:

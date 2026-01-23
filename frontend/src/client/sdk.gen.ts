@@ -3189,6 +3189,9 @@ export class MessagesService {
      * For messages with tools_needing_approval metadata, filters out tools
      * that have already been approved in the agent's allowed_tools config.
      * This prevents showing approval buttons for already-approved tools on page reload.
+     *
+     * For sessions with active streams, merges in-memory streaming events into the
+     * response so the API always returns the most current data (DB + in-memory buffer).
      * @param data The data for the request.
      * @param data.sessionId
      * @param data.limit
@@ -3280,10 +3283,8 @@ export class MessagesService {
      * Get Streaming Status
      * Check if a session is currently streaming.
      *
-     * This allows frontend to:
-     * - Detect ongoing streams after page refresh
-     * - Reconnect to active streams
-     * - Show appropriate UI state
+     * Uses DB interaction_status as the primary source of truth, with
+     * ActiveStreamingManager providing supplementary info (duration, external_session_id).
      *
      * Returns:
      * {

@@ -6479,6 +6479,18 @@ export const SessionPublicSchema = {
             ],
             title: 'Todo Progress'
         },
+        streaming_started_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Streaming Started At'
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -6598,6 +6610,18 @@ export const SessionPublicExtendedSchema = {
                 }
             ],
             title: 'Todo Progress'
+        },
+        streaming_started_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Streaming Started At'
         },
         created_at: {
             type: 'string',

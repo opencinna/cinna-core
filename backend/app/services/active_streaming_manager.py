@@ -24,6 +24,11 @@ class ActiveStream:
     is_interrupted: bool = False
     is_completed: bool = False
     interrupt_pending: bool = False  # Interrupt requested before external_session_id available
+    # In-memory event buffer for incremental persistence
+    streaming_events: list = field(default_factory=list)
+    last_flushed_seq: int = 0
+    # Accumulated assistant text content
+    accumulated_content: str = ""
 
 
 class ActiveStreamingManager:
@@ -206,6 +211,54 @@ class ActiveStreamingManager:
                 "duration_seconds": duration,
                 "is_interrupted": stream.is_interrupted,
                 "is_completed": stream.is_completed
+            }
+
+    async def append_streaming_event(self, session_id: UUID, event: dict) -> None:
+        """
+        Append a streaming event to the in-memory buffer for an active stream.
+
+        Args:
+            session_id: Backend session UUID
+            event: Event dict with event_seq already assigned
+        """
+        async with self._lock:
+            if session_id in self._active_streams:
+                stream = self._active_streams[session_id]
+                stream.streaming_events.append(event)
+                # Track accumulated assistant text
+                if event.get("type") == "assistant" and event.get("content"):
+                    stream.accumulated_content += event["content"]
+
+    async def update_last_flushed_seq(self, session_id: UUID, seq: int) -> None:
+        """
+        Update the last flushed sequence number for a stream.
+
+        Args:
+            session_id: Backend session UUID
+            seq: Last flushed event_seq
+        """
+        async with self._lock:
+            if session_id in self._active_streams:
+                self._active_streams[session_id].last_flushed_seq = seq
+
+    async def get_stream_events(self, session_id: UUID) -> Optional[dict]:
+        """
+        Get the streaming events buffer and accumulated content for an active stream.
+
+        Args:
+            session_id: Backend session UUID
+
+        Returns:
+            Dict with streaming_events, accumulated_content, and last_flushed_seq, or None
+        """
+        async with self._lock:
+            if session_id not in self._active_streams:
+                return None
+            stream = self._active_streams[session_id]
+            return {
+                "streaming_events": list(stream.streaming_events),
+                "accumulated_content": stream.accumulated_content,
+                "last_flushed_seq": stream.last_flushed_seq,
             }
 
     async def get_all_active_streams(self) -> list[dict]:

@@ -24,7 +24,7 @@ router = APIRouter(prefix="/sessions", tags=["messages"])
 
 
 @router.get("/{session_id}/messages", response_model=MessagesPublic)
-def get_messages(
+async def get_messages(
     session: SessionDep,
     current_user: CurrentUser,
     session_id: uuid.UUID,
@@ -37,6 +37,9 @@ def get_messages(
     For messages with tools_needing_approval metadata, filters out tools
     that have already been approved in the agent's allowed_tools config.
     This prevents showing approval buttons for already-approved tools on page reload.
+
+    For sessions with active streams, merges in-memory streaming events into the
+    response so the API always returns the most current data (DB + in-memory buffer).
     """
     from app.models import Agent
 
@@ -70,6 +73,32 @@ def get_messages(
                 filtered_tools = [t for t in original_tools if t not in allowed_tools]
                 # Update the metadata (this doesn't persist to DB, just affects this response)
                 msg.message_metadata["tools_needing_approval"] = filtered_tools
+
+    # Merge in-memory streaming events if session has an active stream
+    if await active_streaming_manager.is_streaming(session_id):
+        stream_data = await active_streaming_manager.get_stream_events(session_id)
+        if stream_data and stream_data["streaming_events"]:
+            # Find the in-progress message in the response
+            in_progress_msg = None
+            for msg in messages:
+                if msg.message_metadata and msg.message_metadata.get("streaming_in_progress"):
+                    in_progress_msg = msg
+                    break
+
+            if in_progress_msg:
+                # Get DB events and in-memory events
+                db_events = in_progress_msg.message_metadata.get("streaming_events", [])
+                db_max_seq = max((e.get("event_seq", 0) for e in db_events), default=0)
+                # Append in-memory events beyond last flush
+                new_events = [
+                    e for e in stream_data["streaming_events"]
+                    if e.get("event_seq", 0) > db_max_seq
+                ]
+                if new_events:
+                    in_progress_msg.message_metadata["streaming_events"] = db_events + new_events
+                # Update content with full accumulated text
+                if stream_data["accumulated_content"]:
+                    in_progress_msg.content = stream_data["accumulated_content"]
 
     return MessagesPublic(data=messages, count=len(messages))
 
@@ -218,10 +247,8 @@ async def get_streaming_status(
     """
     Check if a session is currently streaming.
 
-    This allows frontend to:
-    - Detect ongoing streams after page refresh
-    - Reconnect to active streams
-    - Show appropriate UI state
+    Uses DB interaction_status as the primary source of truth, with
+    ActiveStreamingManager providing supplementary info (duration, external_session_id).
 
     Returns:
         {
@@ -237,11 +264,18 @@ async def get_streaming_status(
     if not current_user.is_superuser and (chat_session.user_id != current_user.id):
         raise HTTPException(status_code=400, detail="Not enough permissions")
 
-    # Check if session is actively streaming
-    is_streaming = await active_streaming_manager.is_streaming(session_id)
+    # Use DB interaction_status as primary source of truth
+    is_streaming = chat_session.interaction_status == "running"
 
     if is_streaming:
+        # Get supplementary info from ActiveStreamingManager if available
         stream_info = await active_streaming_manager.get_stream_info(session_id)
+        if not stream_info:
+            # Fallback: construct from DB fields
+            stream_info = {
+                "session_id": str(session_id),
+                "started_at": chat_session.streaming_started_at.isoformat() if chat_session.streaming_started_at else None,
+            }
         return {
             "is_streaming": True,
             "stream_info": stream_info

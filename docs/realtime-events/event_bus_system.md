@@ -50,9 +50,30 @@ Frontend Components                    Backend Services
 **Activities**: `activity_created`, `activity_updated`, `activity_deleted`
 **Agents**: `agent_created`, `agent_updated`, `agent_deleted`
 **Environments**: `environment_activating`, `environment_activated`, `environment_activation_failed`, `environment_suspended`
-**Streaming**: `stream_started`, `stream_completed`, `stream_error`, `stream_interrupted`
+**Streaming**: `stream_started`, `stream_completed`, `stream_error`, `stream_interrupted`, `session_interaction_status_changed`
 **Todo Progress**: `todo_list_updated`, `task_todo_updated`
 **Generic**: `notification`
+
+### Session Interaction Status Changed
+
+**`SESSION_INTERACTION_STATUS_CHANGED`** is emitted when a session's `interaction_status` changes (streaming starts/ends):
+
+**Emitted from** (`session_service.py`):
+- `handle_stream_started()` - when streaming begins (`interaction_status: "running"`)
+- `handle_stream_completed()` - when streaming ends normally (`interaction_status: ""`)
+- `handle_stream_error()` - when streaming fails (`interaction_status: ""`)
+- `handle_stream_interrupted()` - when user interrupts (`interaction_status: ""`)
+
+**Meta payload**:
+```json
+{
+  "session_id": "uuid-string",
+  "interaction_status": "running" | "",
+  "streaming_started_at": "2026-01-23T10:30:00.000Z"  // only when "running"
+}
+```
+
+**Frontend usage**: The session page subscribes to this event to immediately invalidate the session query, providing near-instant detection of streaming state changes without waiting for the next poll interval. This enables derived streaming state (`isStreaming = session.interaction_status === "running"`) to update reactively.
 
 ### Environment Activation Events
 

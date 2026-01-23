@@ -407,6 +407,8 @@ class SessionService:
         When streaming starts:
         - Set interaction_status to "running"
         - Set status to "active"
+        - Set streaming_started_at to now
+        - Emit session_interaction_status_changed WS event
 
         Args:
             event_data: Full event dict with type, model_id, meta, user_id, timestamp
@@ -426,14 +428,33 @@ class SessionService:
                     logger.warning(f"Session {session_id} not found for STREAM_STARTED event")
                     return
 
+                now = datetime.utcnow()
                 session.interaction_status = "running"
                 session.status = "active"
-                session.updated_at = datetime.utcnow()
+                session.streaming_started_at = now
+                session.updated_at = now
+                user_id = session.user_id
 
                 db.add(session)
                 db.commit()
 
                 logger.info(f"Session {session_id} status updated to 'active' with interaction_status 'running' (STREAM_STARTED)")
+
+            # Emit session_interaction_status_changed WS event to user room
+            try:
+                from app.services.event_service import event_service
+                await event_service.emit_event(
+                    event_type="session_interaction_status_changed",
+                    model_id=UUID(session_id),
+                    meta={
+                        "session_id": session_id,
+                        "interaction_status": "running",
+                        "streaming_started_at": now.isoformat(),
+                    },
+                    user_id=user_id,
+                )
+            except Exception as ws_err:
+                logger.error(f"Failed to emit session_interaction_status_changed: {ws_err}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Error handling STREAM_STARTED event: {e}", exc_info=True)
@@ -445,9 +466,11 @@ class SessionService:
 
         When streaming completes:
         - Clear interaction_status (set to empty string)
+        - Clear streaming_started_at
         - Set status based on interruption:
           - If interrupted: "active" (user can continue)
           - If not interrupted: "completed"
+        - Emit session_interaction_status_changed WS event
 
         Args:
             event_data: Full event dict with type, model_id, meta, user_id, timestamp
@@ -469,14 +492,31 @@ class SessionService:
                     return
 
                 session.interaction_status = ""
+                session.streaming_started_at = None
                 session.status = "active" if was_interrupted else "completed"
                 session.updated_at = datetime.utcnow()
+                user_id = session.user_id
 
                 db.add(session)
                 db.commit()
 
                 status_msg = f"'active' (interrupted)" if was_interrupted else "'completed'"
                 logger.info(f"Session {session_id} status updated to {status_msg} with interaction_status cleared (STREAM_COMPLETED)")
+
+            # Emit session_interaction_status_changed WS event to user room
+            try:
+                from app.services.event_service import event_service
+                await event_service.emit_event(
+                    event_type="session_interaction_status_changed",
+                    model_id=UUID(session_id),
+                    meta={
+                        "session_id": session_id,
+                        "interaction_status": "",
+                    },
+                    user_id=user_id,
+                )
+            except Exception as ws_err:
+                logger.error(f"Failed to emit session_interaction_status_changed: {ws_err}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Error handling STREAM_COMPLETED event: {e}", exc_info=True)
@@ -488,7 +528,9 @@ class SessionService:
 
         When streaming encounters an error:
         - Clear interaction_status
+        - Clear streaming_started_at
         - Set status to "error"
+        - Emit session_interaction_status_changed WS event
 
         Args:
             event_data: Full event dict with type, model_id, meta, user_id, timestamp
@@ -510,13 +552,30 @@ class SessionService:
                     return
 
                 session.interaction_status = ""
+                session.streaming_started_at = None
                 session.status = "error"
                 session.updated_at = datetime.utcnow()
+                user_id = session.user_id
 
                 db.add(session)
                 db.commit()
 
                 logger.info(f"Session {session_id} status updated to 'error' (STREAM_ERROR: {error_type})")
+
+            # Emit session_interaction_status_changed WS event to user room
+            try:
+                from app.services.event_service import event_service
+                await event_service.emit_event(
+                    event_type="session_interaction_status_changed",
+                    model_id=UUID(session_id),
+                    meta={
+                        "session_id": session_id,
+                        "interaction_status": "",
+                    },
+                    user_id=user_id,
+                )
+            except Exception as ws_err:
+                logger.error(f"Failed to emit session_interaction_status_changed: {ws_err}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Error handling STREAM_ERROR event: {e}", exc_info=True)
@@ -528,7 +587,9 @@ class SessionService:
 
         When streaming is interrupted:
         - Clear interaction_status
+        - Clear streaming_started_at
         - Set status to "active" (user can continue)
+        - Emit session_interaction_status_changed WS event
 
         Args:
             event_data: Full event dict with type, model_id, meta, user_id, timestamp
@@ -549,13 +610,30 @@ class SessionService:
                     return
 
                 session.interaction_status = ""
+                session.streaming_started_at = None
                 session.status = "active"
                 session.updated_at = datetime.utcnow()
+                user_id = session.user_id
 
                 db.add(session)
                 db.commit()
 
                 logger.info(f"Session {session_id} status updated to 'active' with interaction_status cleared (STREAM_INTERRUPTED)")
+
+            # Emit session_interaction_status_changed WS event to user room
+            try:
+                from app.services.event_service import event_service
+                await event_service.emit_event(
+                    event_type="session_interaction_status_changed",
+                    model_id=UUID(session_id),
+                    meta={
+                        "session_id": session_id,
+                        "interaction_status": "",
+                    },
+                    user_id=user_id,
+                )
+            except Exception as ws_err:
+                logger.error(f"Failed to emit session_interaction_status_changed: {ws_err}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Error handling STREAM_INTERRUPTED event: {e}", exc_info=True)
