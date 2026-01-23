@@ -30,7 +30,7 @@ export function AgentSessionsGroup({
     navigate({
       to: "/session/$sessionId",
       params: { sessionId },
-      search: { initialMessage: undefined, fileIds: undefined },
+      search: { initialMessage: undefined, fileIds: undefined, fileObjects: undefined },
     })
   }
 

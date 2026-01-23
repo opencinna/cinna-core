@@ -140,6 +140,7 @@ function TaskDetail() {
           search: {
             initialMessage: task?.current_description,
             fileIds: result.file_ids?.join(',') ?? undefined,
+            fileObjects: undefined,
           },
         })
       } else {
@@ -702,7 +703,7 @@ function TaskDetail() {
                   navigate({
                     to: "/session/$sessionId",
                     params: { sessionId: sessions[0].id },
-                    search: { initialMessage: undefined, fileIds: undefined },
+                    search: { initialMessage: undefined, fileIds: undefined, fileObjects: undefined },
                   })
                 }}
                 className="h-full w-[80px] flex-col gap-1"

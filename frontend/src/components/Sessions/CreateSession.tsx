@@ -63,7 +63,7 @@ export function CreateSession({ variant = "default", size = "default", className
       setOpen(false)
       resetForm()
       // Navigate to the chat interface
-      navigate({ to: "/session/$sessionId", params: { sessionId: session.id }, search: { initialMessage: undefined, fileIds: undefined } })
+      navigate({ to: "/session/$sessionId", params: { sessionId: session.id }, search: { initialMessage: undefined, fileIds: undefined, fileObjects: undefined } })
     },
     onError: (error: any) => {
       showErrorToast(error.message || "Failed to create session")
