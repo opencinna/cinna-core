@@ -31,6 +31,7 @@ The system implements a three-layer streaming architecture with **WebSocket** fo
 **Frontend** (`useMessageStream.ts:sendMessage`):
 - Subscribes to session-specific WebSocket room: `session_{session_id}_stream`
 - Subscribes to `stream_event` events via `eventService`
+- Starts polling fallback (invalidates messages query every 3s) to handle missed WebSocket events
 - Sends POST to `/api/v1/sessions/{session_id}/messages/stream`
 - Optimistically adds user message to cache
 - Sets streaming state
@@ -108,12 +109,14 @@ Agent Env SDK → Agent Env Server → Backend Service → WebSocket Room → Fr
 - Transforms into `StructuredStreamEvent[]` for real-time display
 - Updates `streamingEvents` state
 - Calls `handleStreamComplete()` on `stream_completed` or `interrupted`
-- Cleans up subscriptions and unsubscribes from room
+- `handleStreamComplete`: clears polling intervals, unsubscribes from room, refetches messages
 
 **Frontend Event Service** (`eventService.ts`):
 - Listens for `stream_event` Socket.IO events
 - Routes to subscribers via `handleStreamEvent()` method
 - Manages room subscriptions via `subscribeToRoom()/unsubscribeFromRoom()`
+- Tracks active rooms in `activeRooms: Set<string>` for automatic re-subscription on reconnect
+- On Socket.IO `connect` event: re-emits `subscribe` for all tracked rooms (handles transport upgrades, network blips)
 
 **Backend Processing** (`message_service.py:stream_message_with_events`):
 - Emits `STREAM_STARTED` backend event (for activity tracking)
@@ -153,10 +156,11 @@ Agent Env SDK → Agent Env Server → Backend Service → WebSocket Room → Fr
 **Room Naming**: `session_{session_id}_stream`
 
 **Lifecycle**:
-1. Frontend subscribes to room before sending message
+1. Frontend subscribes to room before sending message (tracked in `activeRooms`)
 2. Backend emits all streaming events to this room
-3. Frontend receives events and updates UI
-4. Frontend unsubscribes from room when stream completes
+3. Frontend receives events and updates UI (with polling fallback for missed events)
+4. If WebSocket reconnects: frontend automatically re-subscribes to tracked rooms
+5. Frontend unsubscribes from room when stream completes (removed from `activeRooms`)
 
 **Event Service** (`event_service.py:EventService`):
 - Global singleton instance manages Socket.IO server
@@ -246,8 +250,9 @@ Agent uses TodoWrite → Backend detects tool event → Session.todo_progress up
 **Usage**:
 - Frontend checks on mount via `checkAndReconnectToActiveStream()`
 - Enables reconnection after page refresh
-- Polls status every 1s until stream completes
-- Shows streaming UI without active WebSocket subscription
+- Starts message polling fallback (every 3s) so content appears even without WebSocket events
+- Polls streaming-status endpoint (every 2s) until stream completes
+- Shows streaming UI with progressively updated content via polling
 
 ## Interruption Handling
 
@@ -294,9 +299,10 @@ Agent uses TodoWrite → Backend detects tool event → Session.todo_progress up
 ### WebSocket-Specific Errors
 
 **Connection Errors**:
-- Frontend: `eventService` handles reconnection automatically
+- Frontend: `eventService` handles reconnection automatically and re-subscribes to tracked rooms
 - Backend: No change needed - WebSocket delivery is fire-and-forget
-- Error events still emitted to room even if client temporarily disconnected
+- Events emitted during disconnection gap are recovered via message polling fallback (every 3s)
+- Polling fallback ensures UI eventually shows correct content regardless of WebSocket reliability
 
 **Backend Errors** (`initiate_stream` → `process_pending_messages`):
 - Catches exceptions during environment activation or message processing
@@ -314,6 +320,22 @@ Backend-to-agent-env SSE errors handled same as before, yielded as error events,
 
 ## Reconnection & Recovery
 
+### WebSocket Reconnection During Streaming
+
+**Problem**: Socket.IO may reconnect (transport upgrade from polling to WebSocket, network blip) and get a new socket ID. Server-side rooms for the old SID are cleared on disconnect, so events emitted to the room have no recipients.
+
+**Solution** (`eventService.ts`):
+1. `subscribeToRoom()` adds room to `activeRooms` set (persists intent even if disconnected)
+2. `unsubscribeFromRoom()` removes room from `activeRooms` set
+3. On Socket.IO `connect` event: iterates `activeRooms` and re-emits `subscribe` for each room
+4. `disconnect()` (explicit user disconnect) clears `activeRooms`
+
+**Fallback** (`useMessageStream.ts`):
+- Message polling interval (every 3s) ensures content appears even if WebSocket events are permanently lost
+- Polling starts immediately when streaming begins and stops on `handleStreamComplete`
+
+**User Experience**: If WebSocket reconnects mid-stream, room subscription is restored automatically. If events were missed during the gap, the polling fallback fills in the content from the database.
+
 ### Page Refresh During Streaming
 
 **Frontend** (`useMessageStream.ts:checkAndReconnectToActiveStream`):
@@ -323,11 +345,13 @@ Backend-to-agent-env SSE errors handled same as before, yielded as error events,
    - Subscribes to WebSocket room
    - Sets `isStreaming = true`
    - Subscribes to `stream_event` via `eventService`
-   - Refreshes messages from database
-   - Polls `/streaming-status` every 1s until complete
-4. Cleanup: unsubscribes when stream completes
+   - Refreshes messages from database immediately
+   - Starts message polling fallback (every 3s) for progressive content updates
+   - Starts completion polling (every 2s) via streaming-status endpoint
+4. Cleanup: `handleStreamComplete` clears both polling intervals and unsubscribes from room
+5. Unmount: cleanup effect clears all intervals and subscriptions
 
-**User Experience**: Sees spinning indicator, partial message content, automatically updates when complete, no data loss
+**User Experience**: Sees spinning indicator, message content appears within 3s (via polling), content updates progressively, automatically completes when stream finishes
 
 ### Backend Restart During Streaming
 
@@ -556,6 +580,6 @@ When debugging streaming or background task problems:
 - **Multi-Tab Streaming**: Multiple frontend tabs see same stream via shared WebSocket room
 - **Persistent Stream Tracking**: Store active streams in Redis to survive backend restarts
 - **WebSocket Heartbeat**: Implement ping/pong for connection health monitoring
-- **Event Replay**: Buffer recent events in backend for reconnecting clients
+- **Event Replay**: Buffer recent events in backend for reconnecting clients (currently mitigated by polling fallback, but true replay would provide real-time granularity without polling overhead)
 - **Compression**: Enable WebSocket compression for large streaming events
 - **Migrate Agent-Env to WebSocket**: Future consideration for full WebSocket architecture
