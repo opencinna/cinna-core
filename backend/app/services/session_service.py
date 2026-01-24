@@ -1274,6 +1274,61 @@ class SessionService:
             return environment, agent
 
     @staticmethod
+    async def _restart_errored_environment_and_wait(
+        environment_id: UUID,
+        agent_id: UUID,
+        get_fresh_db_session: callable,
+        timeout_seconds: int = 120
+    ) -> tuple[AgentEnvironment, Agent]:
+        """
+        Restart an environment that is in error state and wait for it to become ready.
+
+        Uses restart_environment() (stop + start) to recover from error state,
+        since the environment may be in a bad state that needs cleanup first.
+
+        Args:
+            environment_id: Environment UUID
+            agent_id: Agent UUID
+            get_fresh_db_session: Callable that returns a fresh DB session (context manager)
+            timeout_seconds: Maximum time to wait for restart (default 120s)
+
+        Returns:
+            tuple: (environment, agent) when ready
+
+        Raises:
+            RuntimeError: If restart fails or times out
+        """
+        from app.services.environment_lifecycle import EnvironmentLifecycleManager
+
+        logger.info(f"Restarting errored environment {environment_id} synchronously...")
+
+        with get_fresh_db_session() as db:
+            environment = db.get(AgentEnvironment, environment_id)
+            agent = db.get(Agent, agent_id)
+
+            if not environment or not agent:
+                raise RuntimeError("Environment or agent not found")
+
+            lifecycle_manager = EnvironmentLifecycleManager()
+
+            # Restart the environment (stop + start) to recover from error state
+            await lifecycle_manager.restart_environment(
+                db_session=db,
+                environment=environment,
+                agent=agent
+            )
+
+        # Refresh and verify
+        with get_fresh_db_session() as db:
+            environment = db.get(AgentEnvironment, environment_id)
+            agent = db.get(Agent, agent_id)
+
+            if environment.status != "running":
+                raise RuntimeError(f"Environment restart failed, status: {environment.status}")
+
+            return environment, agent
+
+    @staticmethod
     async def ensure_environment_ready_for_streaming(
         session_id: UUID,
         get_fresh_db_session: callable,
@@ -1357,7 +1412,16 @@ class SessionService:
                 timeout_seconds=timeout_seconds
             )
 
-        # Other statuses (error, building, etc.) - cannot proceed
+        # If error, try to restart it (stop + start) to recover
+        if initial_status == "error":
+            return await SessionService._restart_errored_environment_and_wait(
+                environment_id=environment_id,
+                agent_id=agent_id,
+                get_fresh_db_session=get_fresh_db_session,
+                timeout_seconds=timeout_seconds
+            )
+
+        # Other statuses (building, etc.) - cannot proceed
         raise RuntimeError(f"Environment is not ready for streaming, status: {initial_status}")
 
     @staticmethod
