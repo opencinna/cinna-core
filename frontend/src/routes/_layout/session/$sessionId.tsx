@@ -379,7 +379,7 @@ function ChatInterface() {
               <Button
                 variant={showSubTasks ? "secondary" : "outline"}
                 size="sm"
-                onClick={() => setShowSubTasks(!showSubTasks)}
+                onClick={() => { setShowSubTasks(!showSubTasks); setEnvPanelOpen(false) }}
                 className="gap-1.5"
               >
                 <ListTodo className="h-4 w-4" />
@@ -428,7 +428,7 @@ function ChatInterface() {
                 variant={envPanelOpen ? "secondary" : "ghost"}
                 size="sm"
                 className="shrink-0"
-                onClick={() => setEnvPanelOpen(!envPanelOpen)}
+                onClick={() => { setEnvPanelOpen(!envPanelOpen); setShowSubTasks(false) }}
               >
                 <Package className="h-4 w-4 mr-1.5" />
                 App
