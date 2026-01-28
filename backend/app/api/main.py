@@ -24,9 +24,11 @@ from app.api.routes import (
     private,
     sessions,
     ssh_keys,
+    task_triggers,
     users,
     user_workspaces,
     utils,
+    webhooks,
     workspace,
 )
 from app.core.config import settings
@@ -57,6 +59,8 @@ api_router.include_router(knowledge_sources.router)
 api_router.include_router(files.router)
 api_router.include_router(llm_plugins.router)
 api_router.include_router(input_tasks.router)
+api_router.include_router(task_triggers.router, prefix="/tasks", tags=["task-triggers"])
+api_router.include_router(webhooks.router, prefix="/hooks", tags=["webhooks"])
 api_router.include_router(a2a.router)
 
 

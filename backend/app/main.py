@@ -62,6 +62,10 @@ from app.services.environment_suspension_scheduler import (
     start_scheduler as start_suspension_scheduler,
     shutdown_scheduler as shutdown_suspension_scheduler
 )
+from app.services.task_trigger_scheduler import (
+    start_scheduler as start_task_trigger_scheduler,
+    shutdown_scheduler as shutdown_task_trigger_scheduler
+)
 
 
 @app.on_event("startup")
@@ -69,6 +73,7 @@ def on_startup():
     """Start background services on app startup"""
     start_file_cleanup_scheduler()
     start_suspension_scheduler()
+    start_task_trigger_scheduler()
 
     # Register backend event handlers
     from app.models.event import EventType
@@ -165,5 +170,6 @@ def on_shutdown():
     """Stop background services on app shutdown"""
     shutdown_file_cleanup_scheduler()
     shutdown_suspension_scheduler()
+    shutdown_task_trigger_scheduler()
     event_service.shutdown()
     logger.info("Application shutdown complete")

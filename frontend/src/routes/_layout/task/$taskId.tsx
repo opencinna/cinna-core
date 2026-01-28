@@ -17,6 +17,7 @@ import {
   Layers,
   ExternalLink,
   Plus,
+  Zap,
 } from "lucide-react"
 
 import { TasksService, AgentsService, FilesService } from "@/client"
@@ -25,6 +26,8 @@ import PendingItems from "@/components/Pending/PendingItems"
 import { usePageHeader } from "@/routes/_layout"
 import type { RefinementHistoryItem } from "@/components/Tasks/RefinementChat"
 import { TaskSessionsModal } from "@/components/Tasks/TaskSessionsModal"
+import { TriggerManagementModal } from "@/components/Tasks/Triggers/TriggerManagementModal"
+import { TaskTriggersApi } from "@/components/Tasks/Triggers/triggerApi"
 import { FileUploadModal } from "@/components/Chat/FileUploadModal"
 import { FileBadge } from "@/components/Chat/FileBadge"
 import { Button } from "@/components/ui/button"
@@ -78,6 +81,7 @@ function TaskDetail() {
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false)
   const [selectedText, setSelectedText] = useState<string | null>(null)
   const [sessionsModalOpen, setSessionsModalOpen] = useState(false)
+  const [triggerModalOpen, setTriggerModalOpen] = useState(false)
   const [showFileModal, setShowFileModal] = useState(false)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   const [attachedFiles, setAttachedFiles] = useState<FileUploadPublic[]>([])
@@ -109,6 +113,12 @@ function TaskDetail() {
   const { data: sessionsData } = useQuery({
     queryKey: ["task-sessions", taskId],
     queryFn: () => TasksService.listTaskSessions({ id: taskId }),
+  })
+
+  // Fetch trigger count for badge display
+  const { data: triggersData } = useQuery({
+    queryKey: ["task-triggers", taskId],
+    queryFn: () => TaskTriggersApi.listTriggers(taskId),
   })
 
   const updateMutation = useMutation({
@@ -270,6 +280,21 @@ function TaskDetail() {
               <Edit className="h-4 w-4 mr-1.5" />
               Edit Task
             </Button>
+            {/* Triggers button */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setTriggerModalOpen(true)}
+              className="h-8"
+            >
+              <Zap className="h-4 w-4 mr-1.5" />
+              Triggers
+              {(triggersData?.count ?? 0) > 0 && (
+                <span className="ml-1.5 bg-primary/10 text-primary rounded-full px-1.5 py-0.5 text-xs font-medium">
+                  {triggersData?.count}
+                </span>
+              )}
+            </Button>
             {/* Agent selector in header with robot icon */}
             <button
               onClick={() => setAgentSelectorOpen(true)}
@@ -309,7 +334,7 @@ function TaskDetail() {
       </div>
     )
     return () => setHeaderContent(null)
-  }, [setHeaderContent, task, navigate, headerSelectedAgent, headerAgentColorPreset, headerMenuOpen, updateMutation.isPending, isEditing])
+  }, [setHeaderContent, task, navigate, headerSelectedAgent, headerAgentColorPreset, headerMenuOpen, updateMutation.isPending, isEditing, triggersData])
 
   useEffect(() => {
     if (task) {
@@ -804,6 +829,13 @@ function TaskDetail() {
         taskId={taskId}
         open={sessionsModalOpen}
         onOpenChange={setSessionsModalOpen}
+      />
+
+      {/* Trigger management modal */}
+      <TriggerManagementModal
+        taskId={taskId}
+        open={triggerModalOpen}
+        onOpenChange={setTriggerModalOpen}
       />
 
       {/* File upload modal */}

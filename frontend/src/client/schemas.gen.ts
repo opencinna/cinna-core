@@ -7048,6 +7048,553 @@ export const SourceStatusSchema = {
     description: 'Status of a knowledge source.'
 } as const;
 
+export const TaskTriggerCreateExactDateSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        type: {
+            type: 'string',
+            const: 'exact_date',
+            title: 'Type',
+            default: 'exact_date'
+        },
+        payload_template: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 10000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Payload Template'
+        },
+        execute_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Execute At'
+        },
+        timezone: {
+            type: 'string',
+            maxLength: 100,
+            minLength: 1,
+            title: 'Timezone'
+        }
+    },
+    type: 'object',
+    required: ['name', 'execute_at', 'timezone'],
+    title: 'TaskTriggerCreateExactDate'
+} as const;
+
+export const TaskTriggerCreateScheduleSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        type: {
+            type: 'string',
+            const: 'schedule',
+            title: 'Type',
+            default: 'schedule'
+        },
+        payload_template: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 10000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Payload Template'
+        },
+        natural_language: {
+            type: 'string',
+            maxLength: 500,
+            minLength: 1,
+            title: 'Natural Language'
+        },
+        timezone: {
+            type: 'string',
+            maxLength: 100,
+            minLength: 1,
+            title: 'Timezone'
+        }
+    },
+    type: 'object',
+    required: ['name', 'natural_language', 'timezone'],
+    title: 'TaskTriggerCreateSchedule'
+} as const;
+
+export const TaskTriggerCreateWebhookSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        type: {
+            type: 'string',
+            const: 'webhook',
+            title: 'Type',
+            default: 'webhook'
+        },
+        payload_template: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 10000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Payload Template'
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'TaskTriggerCreateWebhook'
+} as const;
+
+export const TaskTriggerPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        task_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Task Id'
+        },
+        type: {
+            type: 'string',
+            title: 'Type'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled'
+        },
+        payload_template: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Payload Template'
+        },
+        cron_string: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Cron String'
+        },
+        timezone: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Timezone'
+        },
+        schedule_description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Schedule Description'
+        },
+        last_execution: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Execution'
+        },
+        next_execution: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Next Execution'
+        },
+        execute_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Execute At'
+        },
+        executed: {
+            type: 'boolean',
+            title: 'Executed',
+            default: false
+        },
+        webhook_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Webhook Id'
+        },
+        webhook_token_prefix: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Webhook Token Prefix'
+        },
+        webhook_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Webhook Url'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'task_id', 'type', 'name', 'enabled', 'payload_template', 'created_at', 'updated_at'],
+    title: 'TaskTriggerPublic'
+} as const;
+
+export const TaskTriggerPublicWithTokenSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        task_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Task Id'
+        },
+        type: {
+            type: 'string',
+            title: 'Type'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled'
+        },
+        payload_template: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Payload Template'
+        },
+        cron_string: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Cron String'
+        },
+        timezone: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Timezone'
+        },
+        schedule_description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Schedule Description'
+        },
+        last_execution: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Execution'
+        },
+        next_execution: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Next Execution'
+        },
+        execute_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Execute At'
+        },
+        executed: {
+            type: 'boolean',
+            title: 'Executed',
+            default: false
+        },
+        webhook_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Webhook Id'
+        },
+        webhook_token_prefix: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Webhook Token Prefix'
+        },
+        webhook_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Webhook Url'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        webhook_token: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Webhook Token'
+        }
+    },
+    type: 'object',
+    required: ['id', 'task_id', 'type', 'name', 'enabled', 'payload_template', 'created_at', 'updated_at'],
+    title: 'TaskTriggerPublicWithToken',
+    description: 'Returned only on webhook creation/regeneration — includes full plaintext token.'
+} as const;
+
+export const TaskTriggerUpdateSchema = {
+    properties: {
+        name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        },
+        enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Enabled'
+        },
+        payload_template: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 10000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Payload Template'
+        },
+        natural_language: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 500,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Natural Language'
+        },
+        timezone: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 100,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Timezone'
+        },
+        execute_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Execute At'
+        }
+    },
+    type: 'object',
+    title: 'TaskTriggerUpdate'
+} as const;
+
+export const TaskTriggersPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/TaskTriggerPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'TaskTriggersPublic'
+} as const;
+
 export const TokenSchema = {
     properties: {
         access_token: {

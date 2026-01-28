@@ -242,6 +242,17 @@ from .input_task import (
     ExecuteTaskRequest,
     ExecuteTaskResponse,
 )
+from .task_trigger import (
+    TaskTrigger,
+    TriggerType,
+    TaskTriggerCreateSchedule,
+    TaskTriggerCreateExactDate,
+    TaskTriggerCreateWebhook,
+    TaskTriggerUpdate,
+    TaskTriggerPublic,
+    TaskTriggerPublicWithToken,
+    TaskTriggersPublic,
+)
 
 __all__ = [
     # Core
@@ -470,4 +481,14 @@ __all__ = [
     "RefineTaskResponse",
     "ExecuteTaskRequest",
     "ExecuteTaskResponse",
+    # Task Triggers
+    "TaskTrigger",
+    "TriggerType",
+    "TaskTriggerCreateSchedule",
+    "TaskTriggerCreateExactDate",
+    "TaskTriggerCreateWebhook",
+    "TaskTriggerUpdate",
+    "TaskTriggerPublic",
+    "TaskTriggerPublicWithToken",
+    "TaskTriggersPublic",
 ]

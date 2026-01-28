@@ -430,7 +430,7 @@ function TasksList() {
                                 onClick={(e) => handleOpenPrompt(e, task.id)}
                               >
                                 <FileText className="h-4 w-4 mr-1" />
-                                Open Prompt
+                                Open Task
                               </Button>
                             ) : null}
                             <Button

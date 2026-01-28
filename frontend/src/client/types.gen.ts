@@ -1564,6 +1564,88 @@ export type SSHKeyUpdate = {
     name?: (string | null);
 };
 
+export type TaskTriggerCreateExactDate = {
+    name: string;
+    type?: "exact_date";
+    payload_template?: (string | null);
+    execute_at: string;
+    timezone: string;
+};
+
+export type TaskTriggerCreateSchedule = {
+    name: string;
+    type?: "schedule";
+    payload_template?: (string | null);
+    natural_language: string;
+    timezone: string;
+};
+
+export type TaskTriggerCreateWebhook = {
+    name: string;
+    type?: "webhook";
+    payload_template?: (string | null);
+};
+
+export type TaskTriggerPublic = {
+    id: string;
+    task_id: string;
+    type: string;
+    name: string;
+    enabled: boolean;
+    payload_template: (string | null);
+    cron_string?: (string | null);
+    timezone?: (string | null);
+    schedule_description?: (string | null);
+    last_execution?: (string | null);
+    next_execution?: (string | null);
+    execute_at?: (string | null);
+    executed?: boolean;
+    webhook_id?: (string | null);
+    webhook_token_prefix?: (string | null);
+    webhook_url?: (string | null);
+    created_at: string;
+    updated_at: string;
+};
+
+/**
+ * Returned only on webhook creation/regeneration — includes full plaintext token.
+ */
+export type TaskTriggerPublicWithToken = {
+    id: string;
+    task_id: string;
+    type: string;
+    name: string;
+    enabled: boolean;
+    payload_template: (string | null);
+    cron_string?: (string | null);
+    timezone?: (string | null);
+    schedule_description?: (string | null);
+    last_execution?: (string | null);
+    next_execution?: (string | null);
+    execute_at?: (string | null);
+    executed?: boolean;
+    webhook_id?: (string | null);
+    webhook_token_prefix?: (string | null);
+    webhook_url?: (string | null);
+    created_at: string;
+    updated_at: string;
+    webhook_token?: (string | null);
+};
+
+export type TaskTriggersPublic = {
+    data: Array<TaskTriggerPublic>;
+    count: number;
+};
+
+export type TaskTriggerUpdate = {
+    name?: (string | null);
+    enabled?: (boolean | null);
+    payload_template?: (string | null);
+    natural_language?: (string | null);
+    timezone?: (string | null);
+    execute_at?: (string | null);
+};
+
 export type Token = {
     access_token: string;
     token_type?: string;
@@ -2769,6 +2851,64 @@ export type TasksDetachFileFromTaskData = {
 
 export type TasksDetachFileFromTaskResponse = (Message);
 
+export type TaskTriggersCreateScheduleTriggerData = {
+    requestBody: TaskTriggerCreateSchedule;
+    taskId: string;
+};
+
+export type TaskTriggersCreateScheduleTriggerResponse = (TaskTriggerPublic);
+
+export type TaskTriggersCreateExactDateTriggerData = {
+    requestBody: TaskTriggerCreateExactDate;
+    taskId: string;
+};
+
+export type TaskTriggersCreateExactDateTriggerResponse = (TaskTriggerPublic);
+
+export type TaskTriggersCreateWebhookTriggerData = {
+    requestBody: TaskTriggerCreateWebhook;
+    taskId: string;
+};
+
+export type TaskTriggersCreateWebhookTriggerResponse = (TaskTriggerPublicWithToken);
+
+export type TaskTriggersListTriggersData = {
+    taskId: string;
+};
+
+export type TaskTriggersListTriggersResponse = (TaskTriggersPublic);
+
+export type TaskTriggersGetTriggerData = {
+    taskId: string;
+    triggerId: string;
+};
+
+export type TaskTriggersGetTriggerResponse = (TaskTriggerPublic);
+
+export type TaskTriggersUpdateTriggerData = {
+    requestBody: TaskTriggerUpdate;
+    taskId: string;
+    triggerId: string;
+};
+
+export type TaskTriggersUpdateTriggerResponse = (TaskTriggerPublic);
+
+export type TaskTriggersDeleteTriggerData = {
+    taskId: string;
+    triggerId: string;
+};
+
+export type TaskTriggersDeleteTriggerResponse = ({
+    [key: string]: unknown;
+});
+
+export type TaskTriggersRegenerateTokenData = {
+    taskId: string;
+    triggerId: string;
+};
+
+export type TaskTriggersRegenerateTokenResponse = (TaskTriggerPublicWithToken);
+
 export type UsersReadUsersData = {
     limit?: number;
     skip?: number;
@@ -2886,6 +3026,16 @@ export type UtilsRefinePromptData = {
 };
 
 export type UtilsRefinePromptResponse = (RefinePromptResponse);
+
+export type WebhooksExecuteWebhookData = {
+    authorization?: (string | null);
+    token?: (string | null);
+    webhookId: string;
+};
+
+export type WebhooksExecuteWebhookResponse = ({
+    [key: string]: unknown;
+});
 
 export type WorkspaceGetWorkspaceTreeData = {
     envId: string;
