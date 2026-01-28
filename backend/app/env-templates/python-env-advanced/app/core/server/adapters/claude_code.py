@@ -206,6 +206,7 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                     permission_mode=self.permission_mode,
                     cwd=self.workspace_dir,
                     stderr=stderr_capture,
+                    setting_sources=["user", "project", "local"]  # Load all settings
                 )
 
                 # Check for SDK settings file (MiniMax, etc.)
