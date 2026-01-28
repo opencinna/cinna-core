@@ -64,6 +64,8 @@ function getCredentialTypeLabel(type: string): string {
       return "Google Calendar OAuth"
     case "gcalendar_oauth_readonly":
       return "Google Calendar OAuth (Read-Only)"
+    case "google_service_account":
+      return "Google Service Account"
     case "api_token":
       return "API Token"
     default:

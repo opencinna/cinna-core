@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlmodel import func, select
 
 from app.api.deps import CurrentUser, SessionDep
+from app.models.credential import CredentialType
 from app.models import (
     Credential,
     CredentialCreate,
@@ -194,6 +195,13 @@ def create_credential(
     """
     Create new credential.
     """
+    # Validate service account JSON on create
+    if credential_in.type == CredentialType.GOOGLE_SERVICE_ACCOUNT and credential_in.credential_data:
+        try:
+            CredentialsService.validate_service_account_json(credential_in.credential_data)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
     credential = CredentialsService.create_credential(
         session=session,
         credential_in=credential_in,
@@ -217,6 +225,15 @@ async def update_credential(
     that have this credential linked.
     """
     try:
+        # Validate service account JSON on update
+        if credential_in.credential_data:
+            credential = session.get(Credential, id)
+            if credential and credential.type == CredentialType.GOOGLE_SERVICE_ACCOUNT:
+                try:
+                    CredentialsService.validate_service_account_json(credential_in.credential_data)
+                except ValueError as e:
+                    raise HTTPException(status_code=422, detail=str(e))
+
         credential = await CredentialsService.update_credential(
             session=session,
             credential_id=id,

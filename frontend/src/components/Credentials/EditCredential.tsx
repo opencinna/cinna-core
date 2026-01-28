@@ -26,6 +26,7 @@ import {
   ApiTokenCredentialForm,
   OAuthCredentialForm,
   GenericCredentialForm,
+  ServiceAccountCredentialForm,
 } from "@/components/Credentials/CredentialForms"
 
 const formSchema = z.object({
@@ -142,6 +143,10 @@ const EditCredential = ({ credential, onSuccess }: EditCredentialProps) => {
                     form={form}
                     credentialType={credential.type}
                   />
+                )}
+
+                {credential.type === "google_service_account" && (
+                  <ServiceAccountCredentialForm form={form} />
                 )}
               </div>
 

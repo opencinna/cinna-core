@@ -203,7 +203,8 @@ class AgentEnvService:
     def update_credentials(
         self,
         credentials_json: list[dict],
-        credentials_readme: str
+        credentials_readme: str,
+        service_account_files: list[dict] | None = None
     ) -> list[str]:
         """
         Update credentials in workspace credentials directory.
@@ -215,6 +216,7 @@ class AgentEnvService:
         Args:
             credentials_json: List of credentials with full data
             credentials_readme: Markdown content with redacted credentials
+            service_account_files: List of standalone SA JSON key files
 
         Returns:
             List of updated filenames
@@ -243,6 +245,26 @@ class AgentEnvService:
                 f.write(credentials_readme)
             updated_files.append("README.md")
             logger.info(f"Updated credentials/README.md ({len(credentials_readme)} chars)")
+
+            # Write standalone service account JSON files
+            if service_account_files:
+                for sa_file in service_account_files:
+                    cred_id = sa_file["credential_id"]
+                    sa_filepath = self.credentials_dir / f"{cred_id}.json"
+                    with open(sa_filepath, 'w', encoding='utf-8') as f:
+                        json.dump(sa_file["json_content"], f, indent=2)
+                    updated_files.append(f"{cred_id}.json")
+                    logger.info(f"Wrote service account file: {cred_id}.json")
+
+            # Clean up orphaned SA JSON files (not credentials.json or README.md)
+            sa_ids = {sf["credential_id"] for sf in (service_account_files or [])}
+            for existing_file in self.credentials_dir.glob("*.json"):
+                if existing_file.name == "credentials.json":
+                    continue
+                file_id = existing_file.stem
+                if file_id not in sa_ids:
+                    existing_file.unlink()
+                    logger.info(f"Removed orphaned SA file: {existing_file.name}")
 
             return updated_files
 

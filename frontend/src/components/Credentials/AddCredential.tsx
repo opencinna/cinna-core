@@ -50,6 +50,7 @@ const formSchema = z.object({
     "gdrive_oauth_readonly",
     "gcalendar_oauth",
     "gcalendar_oauth_readonly",
+    "google_service_account",
     "api_token",
   ]),
 })
@@ -163,6 +164,7 @@ const AddCredential = () => {
                         <SelectItem value="gdrive_oauth_readonly">Google Drive OAuth (Read-Only)</SelectItem>
                         <SelectItem value="gcalendar_oauth">Google Calendar OAuth</SelectItem>
                         <SelectItem value="gcalendar_oauth_readonly">Google Calendar OAuth (Read-Only)</SelectItem>
+                        <SelectItem value="google_service_account">Google Service Account</SelectItem>
                         <SelectItem value="api_token">API Token</SelectItem>
                       </SelectContent>
                     </Select>

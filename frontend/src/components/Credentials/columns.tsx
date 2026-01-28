@@ -41,6 +41,7 @@ const credentialTypeLabels: Record<string, string> = {
   gdrive_oauth_readonly: "Google Drive OAuth (Read-Only)",
   gcalendar_oauth: "Google Calendar OAuth",
   gcalendar_oauth_readonly: "Google Calendar OAuth (Read-Only)",
+  google_service_account: "Google Service Account",
   api_token: "API Token",
 }
 

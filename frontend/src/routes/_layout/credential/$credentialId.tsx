@@ -44,6 +44,7 @@ import {
   ApiTokenCredentialForm,
   OAuthCredentialForm,
   GenericCredentialForm,
+  ServiceAccountCredentialForm,
 } from "@/components/Credentials/CredentialForms"
 import { CredentialSharing } from "@/components/Credentials/CredentialSharing"
 
@@ -73,6 +74,8 @@ function getCredentialTypeLabel(type: string): string {
       return "Google Calendar OAuth"
     case "gcalendar_oauth_readonly":
       return "Google Calendar OAuth (Read-Only)"
+    case "google_service_account":
+      return "Google Service Account"
     case "api_token":
       return "API Token"
     default:
@@ -309,6 +312,10 @@ function OwnedCredentialView({ credential }: { credential: CredentialWithData })
                     form={form}
                     credentialType={credential.type}
                   />
+                )}
+
+                {credential.type === "google_service_account" && (
+                  <ServiceAccountCredentialForm form={form} />
                 )}
 
                 {form.formState.isDirty && (

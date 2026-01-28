@@ -46,6 +46,7 @@ class CredentialsUpdate(BaseModel):
     """Update credentials in workspace"""
     credentials_json: list[dict]  # Full credentials data
     credentials_readme: str  # Redacted README for agent prompt
+    service_account_files: list[dict] | None = None  # Standalone SA JSON key files
 
 
 class FileNode(BaseModel):

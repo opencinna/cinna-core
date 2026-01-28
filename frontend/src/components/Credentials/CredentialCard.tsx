@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router"
-import { Key, Mail, Database, AtSign, Share2, Users, AlertTriangle } from "lucide-react"
+import { Key, Mail, Database, AtSign, Share2, Users, AlertTriangle, FileJson } from "lucide-react"
 
 import type { CredentialPublic } from "@/client"
 import {
@@ -34,6 +34,8 @@ function getCredentialIcon(type: string) {
     case "gcalendar_oauth":
     case "gcalendar_oauth_readonly":
       return <AtSign className="h-5 w-5" />
+    case "google_service_account":
+      return <FileJson className="h-5 w-5" />
     case "api_token":
       return <Key className="h-5 w-5" />
     default:
@@ -59,6 +61,8 @@ function getCredentialTypeLabel(type: string): string {
       return "Google Calendar OAuth"
     case "gcalendar_oauth_readonly":
       return "Google Calendar OAuth (Read-Only)"
+    case "google_service_account":
+      return "Google Service Account"
     case "api_token":
       return "API Token"
     default:

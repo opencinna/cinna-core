@@ -33,6 +33,7 @@ class CredentialsService:
         "gcalendar_oauth": ["access_token", "refresh_token"],
         "gcalendar_oauth_readonly": ["access_token", "refresh_token"],
         "api_token": ["http_header_value"],
+        "google_service_account": ["private_key", "private_key_id"],
     }
 
     # WHITELIST: Fields that ARE allowed to be exposed to agent environment
@@ -43,6 +44,7 @@ class CredentialsService:
         "email_imap": ["host", "port", "login", "password", "is_ssl"],
         "odoo": ["url", "database_name", "login", "api_token"],
         "api_token": ["http_header_name", "http_header_value"],
+        "google_service_account": ["file_path", "project_id", "client_email"],
 
         # OAuth credentials: Only expose access token and metadata
         # refresh_token and client_secret are NEVER included (backend handles token refresh)
@@ -196,6 +198,55 @@ class CredentialsService:
                     "http_header_name": "Authorization",
                     "http_header_value": header_string
                 }
+
+    @staticmethod
+    def validate_service_account_json(credential_data: dict) -> None:
+        """
+        Validate that credential_data is a valid Google Service Account JSON key.
+
+        Args:
+            credential_data: Dictionary from the parsed JSON key file
+
+        Raises:
+            ValueError: If validation fails
+        """
+        if not credential_data:
+            raise ValueError("Service account JSON data is required")
+
+        sa_type = credential_data.get("type")
+        if sa_type != "service_account":
+            raise ValueError(
+                f"Invalid service account JSON: 'type' field must be 'service_account', "
+                f"got '{sa_type}'"
+            )
+
+        required_fields = ["project_id", "private_key_id", "private_key", "client_email"]
+        missing = [f for f in required_fields if not credential_data.get(f)]
+        if missing:
+            raise ValueError(
+                f"Invalid service account JSON: missing required fields: {', '.join(missing)}"
+            )
+
+    @staticmethod
+    def _process_service_account_credential(credential_data: dict, credential_id: str) -> dict:
+        """
+        Process Google Service Account credential for agent environment.
+
+        Converts the full SA JSON into a reference dict with file_path and metadata.
+        The actual JSON file is written separately by the agent environment.
+
+        Args:
+            credential_data: Full service account JSON data
+            credential_id: Credential UUID string
+
+        Returns:
+            Dict with file_path, project_id, and client_email
+        """
+        return {
+            "file_path": f"credentials/{credential_id}.json",
+            "project_id": credential_data.get("project_id", ""),
+            "client_email": credential_data.get("client_email", ""),
+        }
 
     @staticmethod
     def filter_credential_data_for_agent_env(credential_type: str, credential_data: dict) -> dict:
@@ -630,6 +681,39 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 lines.append("        break")
                 lines.append("```")
                 lines.append("")
+            elif cred_type == "google_service_account":
+                lines.append(f"### Google Service Account Credential: {cred_name}")
+                lines.append(f"**ID**: `{cred_id}`")
+                lines.append("")
+                lines.append("**Note**: This credential is stored as a standalone JSON key file. Use the `file_path` field to locate it.")
+                lines.append("")
+                lines.append("```python")
+                lines.append("import json")
+                lines.append("from google.oauth2 import service_account")
+                lines.append("from googleapiclient.discovery import build")
+                lines.append("")
+                lines.append("# Load credentials reference")
+                lines.append("with open('credentials/credentials.json', 'r') as f:")
+                lines.append("    all_credentials = json.load(f)")
+                lines.append("")
+                lines.append(f"# Find credential by ID (recommended)")
+                lines.append(f"credential_id = '{cred_id}'")
+                lines.append("for cred in all_credentials:")
+                lines.append("    if cred['id'] == credential_id:")
+                lines.append("        sa_file_path = cred['credential_data']['file_path']")
+                lines.append("        ")
+                lines.append("        # Load service account credentials from JSON file")
+                lines.append("        creds = service_account.Credentials.from_service_account_file(sa_file_path)")
+                lines.append("        ")
+                lines.append("        # Example: Use with Google Sheets API")
+                lines.append("        sheets_service = build('sheets', 'v4', credentials=creds)")
+                lines.append("        ")
+                lines.append("        # Example: Use with BigQuery")
+                lines.append("        from google.cloud import bigquery")
+                lines.append("        bq_client = bigquery.Client(credentials=creds, project=cred['credential_data']['project_id'])")
+                lines.append("        break")
+                lines.append("```")
+                lines.append("")
 
         lines.append("## Best Practices")
         lines.append("")
@@ -663,6 +747,19 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         # Get credentials with decrypted data
         credentials = CredentialsService.get_agent_credentials_with_data(session, agent_id)
 
+        # Collect service account files before filtering
+        service_account_files = []
+        for cred in credentials:
+            if cred["type"] == "google_service_account" and cred.get("credential_data"):
+                service_account_files.append({
+                    "credential_id": cred["id"],
+                    "json_content": copy.deepcopy(cred["credential_data"])
+                })
+                # Replace credential_data with processed version for credentials.json
+                cred["credential_data"] = CredentialsService._process_service_account_credential(
+                    cred["credential_data"], cred["id"]
+                )
+
         # Filter out sensitive fields that should never be exposed to agent environment
         # (e.g., refresh tokens, client secrets for OAuth credentials)
         filtered_credentials = []
@@ -681,7 +778,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
 
         return {
             "credentials_json": filtered_credentials,
-            "credentials_readme": readme_content
+            "credentials_readme": readme_content,
+            "service_account_files": service_account_files
         }
 
     @staticmethod
@@ -1160,6 +1258,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         "gcalendar_oauth": ["access_token"],
         "gcalendar_oauth_readonly": ["access_token"],
         "api_token": ["api_token"],  # Base requirement; api_token_template required only for custom type
+        "google_service_account": ["type", "project_id", "private_key", "client_email"],
     }
 
     @staticmethod

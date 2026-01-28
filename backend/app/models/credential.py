@@ -21,6 +21,7 @@ class CredentialType(str, Enum):
     GDRIVE_OAUTH_READONLY = "gdrive_oauth_readonly"
     GCALENDAR_OAUTH = "gcalendar_oauth"
     GCALENDAR_OAUTH_READONLY = "gcalendar_oauth_readonly"
+    GOOGLE_SERVICE_ACCOUNT = "google_service_account"
     API_TOKEN = "api_token"
 
 
@@ -60,6 +61,20 @@ class ApiTokenData(SQLModel):
     api_token_type: str  # "bearer" or "custom"
     api_token_template: str = "Authorization: Bearer {TOKEN}"
     api_token: str
+
+
+class GoogleServiceAccountData(SQLModel):
+    type: str  # must be "service_account"
+    project_id: str
+    private_key_id: str
+    private_key: str
+    client_email: str
+    client_id: str | None = None
+    auth_uri: str | None = None
+    token_uri: str | None = None
+    auth_provider_x509_cert_url: str | None = None
+    client_x509_cert_url: str | None = None
+    universe_domain: str | None = None
 
 
 # Properties to receive on credential creation
