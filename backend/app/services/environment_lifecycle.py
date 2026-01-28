@@ -14,7 +14,6 @@ from app.models.agent import Agent
 from app.models import User
 from app.core.config import settings
 from app.core import security
-import app.crud as crud
 from app.utils import detect_anthropic_credential_type
 from .adapters.base import EnvironmentAdapter, EnvInitConfig
 from .adapters.docker_adapter import DockerEnvironmentAdapter
@@ -873,7 +872,7 @@ class EnvironmentLifecycleManager:
 
                 # Fall back to user profile credentials ONLY if no specific credentials are assigned
                 if not has_assigned_credentials:
-                    ai_credentials = crud.get_user_ai_credentials(user=user)
+                    ai_credentials = ai_credentials_service.get_user_ai_credentials(user=user)
                     if ai_credentials:
                         if minimax_api_key is None and ai_credentials.minimax_api_key:
                             minimax_api_key = ai_credentials.minimax_api_key
@@ -1187,7 +1186,7 @@ class EnvironmentLifecycleManager:
         # Fall back to user's profile credentials ONLY if no specific credentials are assigned
         # If credentials were specifically assigned but not accessible, do NOT fall back
         if user and not has_assigned_conversation_credential and not has_assigned_building_credential:
-            ai_credentials = crud.get_user_ai_credentials(user=user)
+            ai_credentials = ai_credentials_service.get_user_ai_credentials(user=user)
             if ai_credentials:
                 if anthropic_api_key is None and ai_credentials.anthropic_api_key:
                     anthropic_api_key = ai_credentials.anthropic_api_key

@@ -5,7 +5,7 @@ This enables credential owners to grant read-only access to their credentials
 to other users, who can then use them in their own agents.
 """
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlmodel import Field, Relationship, SQLModel
@@ -53,7 +53,7 @@ class CredentialShare(CredentialShareBase, table=True):
     credential_id: uuid.UUID = Field(nullable=False)  # FK in __table_args__
     shared_with_user_id: uuid.UUID = Field(nullable=False)  # FK in __table_args__
     shared_by_user_id: uuid.UUID = Field(foreign_key="user.id", nullable=False)
-    shared_at: datetime = Field(default_factory=datetime.utcnow)
+    shared_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Relationships
     credential: "Credential" = Relationship(

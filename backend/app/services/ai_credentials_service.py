@@ -27,7 +27,6 @@ from app.models.ai_credential_share import (
     SharedAICredentialPublic,
 )
 from app.models.user import User, AIServiceCredentials, AIServiceCredentialsUpdate
-from app import crud
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +270,54 @@ class AICredentialsService:
                     detail="Model is required for OpenAI Compatible credentials",
                 )
 
+    # ============= User Profile AI Credentials (legacy encrypted field) =============
+
+    @staticmethod
+    def get_user_ai_credentials(*, user: User) -> AIServiceCredentials | None:
+        """Get decrypted AI service credentials for user."""
+        if not user.ai_credentials_encrypted:
+            return None
+
+        try:
+            decrypted_json = decrypt_field(user.ai_credentials_encrypted)
+            credential_data = json.loads(decrypted_json)
+            return AIServiceCredentials(**credential_data)
+        except Exception:
+            return None
+
+    @staticmethod
+    def update_user_ai_credentials(
+        *, session: Session, user: User, credentials_update: AIServiceCredentialsUpdate
+    ) -> User:
+        """Update AI service credentials (partial update)."""
+        existing = AICredentialsService.get_user_ai_credentials(user=user)
+        if existing:
+            current_data = existing.model_dump()
+        else:
+            current_data = {}
+
+        update_data = credentials_update.model_dump(exclude_unset=True)
+        current_data.update(update_data)
+
+        credential_data_json = json.dumps(current_data)
+        user.ai_credentials_encrypted = encrypt_field(credential_data_json)
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
+        return user
+
+    @staticmethod
+    def delete_user_ai_credentials(*, session: Session, user: User) -> User:
+        """Delete all AI service credentials."""
+        user.ai_credentials_encrypted = None
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return user
+
+    # ============= Profile Sync Helpers =============
+
     def _sync_default_to_user_profile(
         self, session: Session, user: User, credential: AICredential
     ) -> None:
@@ -291,7 +338,7 @@ class AICredentialsService:
 
         if update_data:
             credentials_update = AIServiceCredentialsUpdate(**update_data)
-            crud.update_user_ai_credentials(
+            self.update_user_ai_credentials(
                 session=session, user=user, credentials_update=credentials_update
             )
             logger.info(f"Synced default {credential.type} credential to user profile")
@@ -301,7 +348,7 @@ class AICredentialsService:
     ) -> None:
         """Clear user profile fields for a credential type when default is deleted"""
         # Get existing credentials
-        existing = crud.get_user_ai_credentials(user=user)
+        existing = self.get_user_ai_credentials(user=user)
         if not existing:
             return
 

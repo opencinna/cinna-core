@@ -1,5 +1,5 @@
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlmodel import Session, select
 from app.models import UserWorkspace, UserWorkspaceCreate, UserWorkspaceUpdate
 
@@ -42,7 +42,7 @@ class UserWorkspaceService:
 
         update_dict = data.model_dump(exclude_unset=True)
         workspace.sqlmodel_update(update_dict)
-        workspace.updated_at = datetime.utcnow()
+        workspace.updated_at = datetime.now(timezone.utc)
 
         session.add(workspace)
         session.commit()

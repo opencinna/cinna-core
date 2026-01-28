@@ -30,6 +30,10 @@ target_metadata = SQLModel.metadata
 
 
 def get_url():
+    # Prefer a URL explicitly set on the config (e.g. by tests) over the app default
+    url = config.get_main_option("sqlalchemy.url")
+    if url:
+        return url
     return str(settings.SQLALCHEMY_DATABASE_URI)
 
 

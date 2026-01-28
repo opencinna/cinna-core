@@ -105,8 +105,7 @@ def revoke_credential_share(
         )
         return Message(message="Share revoked successfully")
     except ValueError as e:
-        status_code = 404 if "not found" in str(e).lower() else 400
-        raise HTTPException(status_code=status_code, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/shared-with-me", response_model=SharedCredentialsPublic)

@@ -131,3 +131,7 @@ migrate: # run database migrations (alembic upgrade head) in the backend contain
 migration: # create a new migration (will prompt for migration name)
 	@read -p "Enter migration name: " migration_name; \
 	docker compose exec backend alembic revision --autogenerate -m "$$migration_name"
+
+.PHONY: test-backend
+test-backend: # run backend pytest suite inside the backend container
+	docker compose exec backend python -m pytest tests/ -v

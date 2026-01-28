@@ -4,14 +4,13 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import col, delete, func, select
 
-from app import crud
 from app.api.deps import (
     CurrentUser,
     SessionDep,
     get_current_active_superuser,
 )
 from app.core.config import settings
-from app.core.security import get_password_hash, verify_password
+from app.services.user_service import UserService
 from app.models import (
     Item,
     Message,
@@ -36,7 +35,6 @@ from app.models.ai_credential import (
     AICredentialCreate,
     AICredentialUpdate,
 )
-from app.services.auth_service import AuthService
 from app.services.ai_credentials_service import ai_credentials_service
 from app.utils import generate_new_account_email, send_email
 
@@ -69,14 +67,14 @@ def create_user(*, session: SessionDep, user_in: UserCreate) -> Any:
     """
     Create new user.
     """
-    user = crud.get_user_by_email(session=session, email=user_in.email)
+    user = UserService.get_user_by_email(session=session, email=user_in.email)
     if user:
         raise HTTPException(
             status_code=400,
             detail="The user with this email already exists in the system.",
         )
 
-    user = crud.create_user(session=session, user_create=user_in)
+    user = UserService.create_user(session=session, user_create=user_in)
     if settings.emails_enabled and user_in.email:
         email_data = generate_new_account_email(
             email_to=user_in.email, username=user_in.email, password=user_in.password
@@ -104,7 +102,7 @@ def update_user_me(
                 status_code=403,
                 detail="Email changes are not allowed",
             )
-        existing_user = crud.get_user_by_email(session=session, email=user_in.email)
+        existing_user = UserService.get_user_by_email(session=session, email=user_in.email)
         if existing_user and existing_user.id != current_user.id:
             raise HTTPException(
                 status_code=409, detail="User with this email already exists"
@@ -135,21 +133,15 @@ def update_password_me(
     """
     Update own password.
     """
-    if not current_user.hashed_password:
-        raise HTTPException(
-            status_code=400,
-            detail="No password set. Use set-password endpoint first.",
+    try:
+        UserService.update_password(
+            session=session,
+            user=current_user,
+            current_password=body.current_password,
+            new_password=body.new_password,
         )
-    if not verify_password(body.current_password, current_user.hashed_password):
-        raise HTTPException(status_code=400, detail="Incorrect password")
-    if body.current_password == body.new_password:
-        raise HTTPException(
-            status_code=400, detail="New password cannot be the same as the current one"
-        )
-    hashed_password = get_password_hash(body.new_password)
-    current_user.hashed_password = hashed_password
-    session.add(current_user)
-    session.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return Message(message="Password updated successfully")
 
 
@@ -160,16 +152,12 @@ def set_password_me(
     """
     Set password for user (for OAuth users who don't have one).
     """
-    if current_user.hashed_password:
-        raise HTTPException(
-            status_code=400,
-            detail="Password already set. Use update password endpoint instead.",
+    try:
+        UserService.set_password(
+            session=session, user=current_user, new_password=body.new_password
         )
-
-    hashed_password = get_password_hash(body.new_password)
-    current_user.hashed_password = hashed_password
-    session.add(current_user)
-    session.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return Message(message="Password set successfully")
 
 
@@ -204,21 +192,18 @@ def register_user(session: SessionDep, user_in: UserRegister) -> Any:
     """
     Create new user without the need to be logged in.
     """
-    # Check domain whitelist for new user registration
-    if not AuthService.is_email_domain_allowed(user_in.email):
-        raise HTTPException(
-            status_code=403,
-            detail="Registration is restricted to specific email domains",
+    try:
+        user = UserService.register_user(
+            session=session,
+            email=user_in.email,
+            password=user_in.password,
+            full_name=user_in.full_name,
         )
-
-    user = crud.get_user_by_email(session=session, email=user_in.email)
-    if user:
-        raise HTTPException(
-            status_code=400,
-            detail="The user with this email already exists in the system",
-        )
-    user_create = UserCreate.model_validate(user_in)
-    user = crud.create_user(session=session, user_create=user_create)
+    except ValueError as e:
+        detail = str(e)
+        if "restricted" in detail:
+            raise HTTPException(status_code=403, detail=detail)
+        raise HTTPException(status_code=400, detail=detail)
     return user
 
 
@@ -262,13 +247,13 @@ def update_user(
             detail="The user with this id does not exist in the system",
         )
     if user_in.email:
-        existing_user = crud.get_user_by_email(session=session, email=user_in.email)
+        existing_user = UserService.get_user_by_email(session=session, email=user_in.email)
         if existing_user and existing_user.id != user_id:
             raise HTTPException(
                 status_code=409, detail="User with this email already exists"
             )
 
-    db_user = crud.update_user(session=session, db_user=db_user, user_in=user_in)
+    db_user = UserService.update_user(session=session, db_user=db_user, user_in=user_in)
     return db_user
 
 
@@ -334,7 +319,7 @@ def get_ai_credentials(
     Get decrypted AI service credentials.
     SECURITY: Only returns to the credential owner.
     """
-    credentials = crud.get_user_ai_credentials(user=current_user)
+    credentials = ai_credentials_service.get_user_ai_credentials(user=current_user)
     if not credentials:
         return AIServiceCredentials()
     return credentials
@@ -442,5 +427,5 @@ def delete_ai_credentials(
     current_user: CurrentUser,
 ) -> Message:
     """Delete all AI service credentials"""
-    crud.delete_user_ai_credentials(session=session, user=current_user)
+    ai_credentials_service.delete_user_ai_credentials(session=session, user=current_user)
     return Message(message="AI credentials deleted successfully")

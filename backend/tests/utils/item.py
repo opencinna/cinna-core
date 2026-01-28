@@ -1,16 +1,18 @@
-from sqlmodel import Session
+from fastapi.testclient import TestClient
 
-from app import crud
-from app.models import Item, ItemCreate
-from tests.utils.user import create_random_user
+from app.core.config import settings
 from tests.utils.utils import random_lower_string
 
 
-def create_random_item(db: Session) -> Item:
-    user = create_random_user(db)
-    owner_id = user.id
-    assert owner_id is not None
+def create_random_item(client: TestClient, token_headers: dict[str, str]) -> dict:
+    """Create a random item via the API and return the response data."""
     title = random_lower_string()
     description = random_lower_string()
-    item_in = ItemCreate(title=title, description=description)
-    return crud.create_item(session=db, item_in=item_in, owner_id=owner_id)
+    data = {"title": title, "description": description}
+    r = client.post(
+        f"{settings.API_V1_STR}/items/",
+        headers=token_headers,
+        json=data,
+    )
+    assert r.status_code == 200
+    return r.json()

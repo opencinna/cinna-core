@@ -20,6 +20,7 @@ services:
       - ./backend/uv.lock:/app/uv.lock
       - ./backend/alembic.ini:/app/alembic.ini
       - ./backend/app:/app/app
+      - ./backend/tests:/app/tests
     environment:
       SMTP_HOST: "mailcatcher"
       SMTP_PORT: "1025"
@@ -29,6 +30,12 @@ services:
       ENV_INSTANCES_DIR: "/agent-environments"
       # Host path for agent environments (used by docker-compose volume mounts)
       HOST_AGENT_ENVIRONMENTS_DIR: "${PWD}/backend/agent-environments"
+      # Test database connection (separate DB for pytest)
+      TEST_DB_SERVER: "db"
+      TEST_DB_PORT: "5432"
+      TEST_DB_NAME: "app_test"
+      TEST_DB_USER: "${POSTGRES_USER}"
+      TEST_DB_PASSWORD: "${POSTGRES_PASSWORD}"
 
   db:
     image: postgres:17
@@ -43,6 +50,7 @@ services:
       - "5476:5432"
     volumes:
       - app-db-data:/var/lib/postgresql/data/pgdata
+      - ./scripts/create-test-db.sh:/docker-entrypoint-initdb.d/create-test-db.sh
     env_file:
       - .env
     environment:

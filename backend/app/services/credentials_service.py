@@ -6,8 +6,8 @@ import json
 import copy
 import logging
 from sqlmodel import Session, select
-from app.models import Credential, Agent, AgentEnvironment, CredentialCreate, CredentialUpdate
-from app import crud
+from app.core.security import encrypt_field, decrypt_field
+from app.models import Credential, Agent, AgentEnvironment, AgentCredentialLink, CredentialCreate, CredentialUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,12 @@ class CredentialsService:
     }
 
     @staticmethod
+    def decrypt_credential_data(session: Session, credential: Credential) -> dict:
+        """Decrypt and return the credential's stored data as a dict."""
+        decrypted_json = decrypt_field(credential.encrypted_data)
+        return json.loads(decrypted_json)
+
+    @staticmethod
     def get_agent_credentials_with_data(
         session: Session,
         agent_id: uuid.UUID
@@ -124,12 +130,12 @@ class CredentialsService:
             ]
         """
         # Get credentials for agent
-        credentials = crud.get_agent_credentials(session=session, agent_id=agent_id)
+        credentials = CredentialsService.get_agent_credentials(session=session, agent_id=agent_id)
 
         result = []
         for cred in credentials:
             # Decrypt credential data
-            credential_data = crud.get_credential_with_data(session=session, credential=cred)
+            credential_data = CredentialsService.decrypt_credential_data(session=session, credential=cred)
 
             # Process API Token credentials to generate HTTP header fields
             if cred.type.value == "api_token":
@@ -851,11 +857,22 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         Returns:
             Created Credential model
         """
-        return crud.create_credential(
-            session=session,
-            credential_in=credential_in,
-            owner_id=owner_id
+        credential_data = credential_in.credential_data if credential_in.credential_data is not None else {}
+        encrypted_data = encrypt_field(json.dumps(credential_data))
+
+        db_credential = Credential(
+            name=credential_in.name,
+            type=credential_in.type,
+            notes=credential_in.notes,
+            allow_sharing=credential_in.allow_sharing,
+            encrypted_data=encrypted_data,
+            owner_id=owner_id,
+            user_workspace_id=credential_in.user_workspace_id,
         )
+        session.add(db_credential)
+        session.commit()
+        session.refresh(db_credential)
+        return db_credential
 
     @staticmethod
     async def update_credential(
@@ -893,11 +910,15 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             raise ValueError("Not enough permissions")
 
         # Update credential
-        credential = crud.update_credential(
-            session=session,
-            db_credential=credential,
-            credential_in=credential_in
-        )
+        update_dict = credential_in.model_dump(exclude_unset=True)
+        if "credential_data" in update_dict:
+            encrypted_data = encrypt_field(json.dumps(update_dict["credential_data"]))
+            update_dict.pop("credential_data")
+            credential.encrypted_data = encrypted_data
+        credential.sqlmodel_update(update_dict)
+        session.add(credential)
+        session.commit()
+        session.refresh(credential)
 
         # Trigger sync to affected agent environments
         await CredentialsService.event_credential_updated(
@@ -983,7 +1004,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             raise ValueError("Not enough permissions")
 
         # Decrypt the credential data
-        credential_data = crud.get_credential_with_data(
+        credential_data = CredentialsService.decrypt_credential_data(
             session=session,
             credential=credential
         )
@@ -1014,7 +1035,12 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         Returns:
             List of Credential models
         """
-        return crud.get_agent_credentials(session=session, agent_id=agent_id)
+        statement = (
+            select(Credential)
+            .join(AgentCredentialLink)
+            .where(AgentCredentialLink.agent_id == agent_id)
+        )
+        return list(session.exec(statement).all())
 
     @staticmethod
     async def link_credential_to_agent(
@@ -1055,12 +1081,16 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         if not CredentialShareService.can_user_access_credential(session, credential_id, owner_id):
             raise ValueError("Not enough permissions to access this credential")
 
-        # Link credential to agent
-        crud.add_credential_to_agent(
-            session=session,
-            agent_id=agent_id,
-            credential_id=credential_id
-        )
+        # Link credential to agent (idempotent)
+        existing_link = session.exec(
+            select(AgentCredentialLink).where(
+                AgentCredentialLink.agent_id == agent_id,
+                AgentCredentialLink.credential_id == credential_id,
+            )
+        ).first()
+        if not existing_link:
+            session.add(AgentCredentialLink(agent_id=agent_id, credential_id=credential_id))
+            session.commit()
 
         # Sync to running environments
         await CredentialsService.event_credential_shared(
@@ -1098,11 +1128,15 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             raise ValueError("Not enough permissions to access this agent")
 
         # Unlink credential from agent
-        crud.remove_credential_from_agent(
-            session=session,
-            agent_id=agent_id,
-            credential_id=credential_id
-        )
+        link = session.exec(
+            select(AgentCredentialLink).where(
+                AgentCredentialLink.agent_id == agent_id,
+                AgentCredentialLink.credential_id == credential_id,
+            )
+        ).first()
+        if link:
+            session.delete(link)
+            session.commit()
 
         # Sync to running environments
         await CredentialsService.event_credential_unshared(
@@ -1321,14 +1355,13 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         """
         from datetime import datetime, timezone
         from app.services.oauth_credentials_service import OAuthCredentialsService
-        from app import crud
 
         credentials_refreshed = False
         now = datetime.now(timezone.utc).timestamp()
         threshold = now + CredentialsService.CREDENTIAL_REFRESH_THRESHOLD_SECONDS
 
         # Get all credentials linked to this agent
-        credentials = crud.get_agent_credentials(session=session, agent_id=agent_id)
+        credentials = CredentialsService.get_agent_credentials(session=session, agent_id=agent_id)
 
         if not credentials:
             logger.debug(f"No credentials linked to agent {agent_id}")
@@ -1341,7 +1374,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
 
             try:
                 # Decrypt credential data to check expiration
-                credential_data = crud.get_credential_with_data(
+                credential_data = CredentialsService.decrypt_credential_data(
                     session=session,
                     credential=credential
                 )

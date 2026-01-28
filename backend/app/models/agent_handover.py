@@ -38,6 +38,7 @@ class AgentHandoverConfig(SQLModel, table=True):
 
     # Relationships
     source_agent: "Agent" = Relationship(
+        back_populates="handover_configs",
         sa_relationship_kwargs={
             "foreign_keys": "[AgentHandoverConfig.source_agent_id]",
             "lazy": "joined"

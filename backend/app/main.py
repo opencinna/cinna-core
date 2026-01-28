@@ -1,5 +1,6 @@
 import sentry_sdk
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from starlette.middleware.cors import CORSMiddleware
@@ -27,33 +28,9 @@ def custom_generate_unique_id(route: APIRoute) -> str:
 if settings.SENTRY_DSN and settings.ENVIRONMENT != "local":
     sentry_sdk.init(dsn=str(settings.SENTRY_DSN), enable_tracing=True)
 
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json",
-    generate_unique_id_function=custom_generate_unique_id,
-)
 
-# Set all CORS enabled origins
-if settings.all_cors_origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.all_cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-app.include_router(api_router, prefix=settings.API_V1_STR)
-
-# Mount Socket.IO app for WebSocket support
+# Startup and shutdown imports
 from app.services.event_service import event_service
-
-# Mount the Socket.IO ASGI app at /ws
-socket_app = event_service.get_asgi_app()
-app.mount("/ws", socket_app)
-
-
-# Startup and shutdown events
 from app.services.file_cleanup_scheduler import (
     start_scheduler as start_file_cleanup_scheduler,
     shutdown_scheduler as shutdown_file_cleanup_scheduler
@@ -72,9 +49,10 @@ from app.services.agent_schedule_scheduler import (
 )
 
 
-@app.on_event("startup")
-def on_startup():
-    """Start background services on app startup"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application startup and shutdown."""
+    # --- Startup ---
     start_file_cleanup_scheduler()
     start_suspension_scheduler()
     start_task_trigger_scheduler()
@@ -111,7 +89,6 @@ def on_startup():
     )
 
     # Session service handlers for session status management
-    # These handlers update session status based on streaming events
     event_service.register_handler(
         event_type=EventType.STREAM_STARTED,
         handler=SessionService.handle_stream_started
@@ -166,16 +143,38 @@ def on_startup():
     )
 
     logger.info("Registered backend event handlers (EnvironmentService, ActivityService, SessionService, InputTaskService)")
-
     logger.info("Application startup complete")
 
+    yield
 
-@app.on_event("shutdown")
-def on_shutdown():
-    """Stop background services on app shutdown"""
+    # --- Shutdown ---
     shutdown_file_cleanup_scheduler()
     shutdown_suspension_scheduler()
     shutdown_task_trigger_scheduler()
     shutdown_agent_schedule_scheduler()
     event_service.shutdown()
     logger.info("Application shutdown complete")
+
+
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    generate_unique_id_function=custom_generate_unique_id,
+    lifespan=lifespan,
+)
+
+# Set all CORS enabled origins
+if settings.all_cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.all_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+app.include_router(api_router, prefix=settings.API_V1_STR)
+
+# Mount the Socket.IO ASGI app at /ws
+socket_app = event_service.get_asgi_app()
+app.mount("/ws", socket_app)

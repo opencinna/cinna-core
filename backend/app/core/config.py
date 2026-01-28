@@ -70,6 +70,27 @@ class Settings(BaseSettings):
             path=self.POSTGRES_DB,
         )
 
+    # Test database settings (separate DB for pytest)
+    TEST_DB_SERVER: str | None = None
+    TEST_DB_PORT: int = 5432
+    TEST_DB_NAME: str = "app_test"
+    TEST_DB_USER: str | None = None
+    TEST_DB_PASSWORD: str | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def TEST_SQLALCHEMY_DATABASE_URI(self) -> PostgresDsn | None:
+        if not self.TEST_DB_SERVER:
+            return None
+        return PostgresDsn.build(
+            scheme="postgresql+psycopg",
+            username=self.TEST_DB_USER or self.POSTGRES_USER,
+            password=self.TEST_DB_PASSWORD or self.POSTGRES_PASSWORD,
+            host=self.TEST_DB_SERVER,
+            port=self.TEST_DB_PORT,
+            path=self.TEST_DB_NAME,
+        )
+
     SMTP_TLS: bool = True
     SMTP_SSL: bool = False
     SMTP_PORT: int = 587

@@ -8,7 +8,6 @@ from sqlmodel import Session, select
 from sqlalchemy.orm.attributes import flag_modified
 from app.models import AgentEnvironment, AgentEnvironmentCreate, AgentEnvironmentUpdate, Agent, User
 from app.models.ai_credential import AICredentialType
-from app import crud
 from app.core.db import engine
 from .environment_lifecycle import EnvironmentLifecycleManager
 from .ai_credentials_service import ai_credentials_service
@@ -392,7 +391,7 @@ class EnvironmentService:
 
         if data.use_default_ai_credentials:
             # Use user's default AI credentials from profile (existing behavior)
-            ai_credentials = crud.get_user_ai_credentials(user=user)
+            ai_credentials = ai_credentials_service.get_user_ai_credentials(user=user)
 
             # Collect required SDKs and validate user has API keys
             required_sdks = set([sdk_conversation, sdk_building])

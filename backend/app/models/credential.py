@@ -123,7 +123,7 @@ class Credential(CredentialBase, table=True):
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
     )
     user_workspace_id: uuid.UUID | None = Field(
-        default=None, foreign_key="user_workspace.id", ondelete="CASCADE"
+        default=None, foreign_key="user_workspace.id", ondelete="SET NULL"
     )
 
     # Placeholder fields (for clones when original credential is not shareable)

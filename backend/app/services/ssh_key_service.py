@@ -4,7 +4,7 @@ SSH Key Service - Business logic for SSH key operations.
 import uuid
 import hashlib
 import logging
-from datetime import datetime
+from datetime import datetime, UTC
 from sqlmodel import Session, select
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -159,8 +159,8 @@ class SSHKeyService:
             private_key_encrypted=encrypted_private_key,
             passphrase_encrypted=None,  # No passphrase for generated keys
             fingerprint=fingerprint,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC)
         )
 
         session.add(ssh_key)
@@ -220,8 +220,8 @@ class SSHKeyService:
             private_key_encrypted=encrypted_private_key,
             passphrase_encrypted=encrypted_passphrase,
             fingerprint=fingerprint,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC)
         )
 
         session.add(ssh_key)
@@ -306,7 +306,7 @@ class SSHKeyService:
         # Update name if provided
         if data.name is not None:
             key.name = data.name
-            key.updated_at = datetime.utcnow()
+            key.updated_at = datetime.now(UTC)
 
         session.add(key)
         session.commit()

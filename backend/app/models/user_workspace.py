@@ -1,8 +1,12 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlmodel import Field, Relationship, SQLModel
 
 from app.models.user import User
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 # Shared properties
@@ -30,8 +34,8 @@ class UserWorkspace(UserWorkspaceBase, table=True):
     user_id: uuid.UUID = Field(
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
     )
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utc_now)
+    updated_at: datetime = Field(default_factory=_utc_now)
 
     owner: User | None = Relationship()
 

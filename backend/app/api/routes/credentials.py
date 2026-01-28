@@ -16,10 +16,10 @@ from app.models import (
     CredentialUpdate,
     CredentialWithData,
     Message,
+    UserWorkspace,
 )
 from app.services.credentials_service import CredentialsService
 from app.services.credential_share_service import CredentialShareService
-from app import crud
 
 
 # Request/Response models for credential verification
@@ -53,7 +53,7 @@ def _credential_to_public(
         )
 
     # Decrypt credential data to check completeness
-    credential_data = crud.get_credential_with_data(session=session, credential=credential)
+    credential_data = CredentialsService.decrypt_credential_data(session=session, credential=credential)
     status = CredentialsService.check_credential_completeness(
         credential_type=credential.type.value,
         credential_data=credential_data
@@ -195,6 +195,14 @@ def create_credential(
     """
     Create new credential.
     """
+    # Validate workspace ownership if workspace_id is provided
+    if credential_in.user_workspace_id is not None:
+        workspace = session.get(UserWorkspace, credential_in.user_workspace_id)
+        if not workspace:
+            raise HTTPException(status_code=400, detail="Workspace not found")
+        if workspace.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Not allowed to use this workspace")
+
     # Validate service account JSON on create
     if credential_in.type == CredentialType.GOOGLE_SERVICE_ACCOUNT and credential_in.credential_data:
         try:

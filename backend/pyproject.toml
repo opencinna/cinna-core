@@ -82,6 +82,10 @@ ignore = [
 # Preserve types, even if a file imports `from __future__ import annotations`.
 keep-runtime-typing = true
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
 [tool.coverage.run]
 source = ["app"]
 dynamic_context = "test_function"
