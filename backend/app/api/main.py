@@ -9,6 +9,7 @@ from app.api.routes import (
     ai_credentials,
     credentials,
     credential_shares,
+    email_integration,
     environments,
     events,
     files,
@@ -18,6 +19,7 @@ from app.api.routes import (
     knowledge_sources,
     llm_plugins,
     login,
+    mail_servers,
     messages,
     oauth,
     oauth_credentials,
@@ -61,6 +63,8 @@ api_router.include_router(llm_plugins.router)
 api_router.include_router(input_tasks.router)
 api_router.include_router(task_triggers.router, prefix="/tasks", tags=["task-triggers"])
 api_router.include_router(webhooks.router, prefix="/hooks", tags=["webhooks"])
+api_router.include_router(mail_servers.router)
+api_router.include_router(email_integration.router)
 api_router.include_router(a2a.router)
 
 

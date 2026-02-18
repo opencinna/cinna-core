@@ -1,6 +1,7 @@
 """
 User Service - Business logic for user management operations.
 """
+import secrets
 from typing import Any
 
 from sqlmodel import Session, select
@@ -89,6 +90,28 @@ class UserService:
             )
 
         user_create = UserCreate(email=email, password=password, full_name=full_name)
+        return UserService.create_user(session=session, user_create=user_create)
+
+    @staticmethod
+    def create_email_user(*, session: Session, email: str) -> User:
+        """
+        Create or return a user from email only (for email integration).
+
+        - Generates a random password (user doesn't receive it)
+        - Sets is_active=True
+        - Does NOT enforce AUTH_WHITELIST_DOMAINS
+        - Returns existing user if email already exists
+        """
+        existing = UserService.get_user_by_email(session=session, email=email)
+        if existing:
+            return existing
+
+        random_password = secrets.token_urlsafe(32)
+        user_create = UserCreate(
+            email=email,
+            password=random_password,
+            is_active=True,
+        )
         return UserService.create_user(session=session, user_create=user_create)
 
     @staticmethod

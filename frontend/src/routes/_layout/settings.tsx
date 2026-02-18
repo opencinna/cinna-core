@@ -6,6 +6,7 @@ import ChangePassword from "@/components/UserSettings/ChangePassword"
 import DeleteAccount from "@/components/UserSettings/DeleteAccount"
 import OAuthAccounts from "@/components/UserSettings/OAuthAccounts"
 import SetPassword from "@/components/UserSettings/SetPassword"
+import { MailServerSettings } from "@/components/UserSettings/MailServerSettings"
 import { SSHKeys } from "@/components/UserSettings/SSHKeys"
 import UserInformation from "@/components/UserSettings/UserInformation"
 import { HashTabs, TabConfig } from "@/components/Common/HashTabs"
@@ -48,6 +49,7 @@ function UserSettings() {
     { value: "set-password", title: "Set Password", content: <SetPassword /> },
     { value: "oauth", title: "Connected Accounts", content: <OAuthAccounts /> },
     { value: "ai-credentials", title: "AI Credentials", content: <AICredentialsSettings /> },
+    { value: "mail-servers", title: "Mail Servers", content: <MailServerSettings /> },
     { value: "keys", title: "SSH Keys", content: <SSHKeys /> },
     { value: "danger-zone", title: "Danger zone", content: <DeleteAccount /> },
   ]

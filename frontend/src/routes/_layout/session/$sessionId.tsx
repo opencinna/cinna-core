@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useEffect, useState, useRef, useCallback, useMemo } from "react"
-import { ArrowLeft, EllipsisVertical, Package, Loader2, ListTodo } from "lucide-react"
+import { ArrowLeft, EllipsisVertical, Mail, Package, Loader2, ListTodo, Plug } from "lucide-react"
 
 import { SessionsService, MessagesService, AgentsService, EnvironmentsService, OpenAPI } from "@/client"
 import { SubTasksPanel } from "@/components/Chat/SubTasksPanel"
@@ -366,11 +366,23 @@ function ChatInterface() {
               <h1 className="text-base font-semibold truncate">
                 {session.title ? session.title : <AnimatedPlaceholder />}
               </h1>
-              <p className="text-xs text-muted-foreground">
-                <span className={`inline-block w-2 h-2 rounded-full mr-1.5 ${
+              <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                <span className={`inline-block w-2 h-2 rounded-full ${
                   isBuilding ? "bg-orange-500" : "bg-blue-500"
                 }`} />
                 {isBuilding ? "Building Mode" : "Conversation Mode"}
+                {session.integration_type === "email" && (
+                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[10px] font-medium bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300">
+                    <Mail className="h-2.5 w-2.5" />
+                    Email
+                  </span>
+                )}
+                {session.integration_type === "a2a" && (
+                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[10px] font-medium bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300">
+                    <Plug className="h-2.5 w-2.5" />
+                    A2A
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -487,6 +499,7 @@ function ChatInterface() {
           onSendMessage={handleSendSimpleMessage}
           conversationModeUi={session.mode === "building" ? "detailed" : (agent?.conversation_mode_ui || "detailed")}
           agentId={session?.agent_id ?? undefined}
+          integrationTyp={session?.integration_type}
         />
         <EnvironmentPanel isOpen={envPanelOpen} environmentId={effectiveEnvId} agentId={session?.agent_id ?? undefined} />
         {showSubTasks && (

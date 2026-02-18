@@ -117,24 +117,36 @@ async def chat(request: ChatRequest) -> ChatResponse:
     Uses Claude SDK for both building and conversation modes.
     SDK configuration (Anthropic vs MiniMax) is determined by settings files in the environment.
     """
+    # Store session context if provided
+    if request.session_state and "session_context" in request.session_state:
+        await active_session_manager.set_current_context({
+            **request.session_state["session_context"],
+            "session_id": request.session_id,
+            "backend_session_id": request.backend_session_id,
+            "mode": request.mode,
+        })
+
     response_content = []
     new_session_id = request.session_id
 
-    async for chunk in sdk_manager.send_message_stream(
-        message=request.message,
-        session_id=request.session_id,
-        backend_session_id=request.backend_session_id,
-        system_prompt=request.system_prompt,  # Only use explicit override if provided
-        mode=request.mode,
-        session_state=request.session_state,
-    ):
-        # Capture session ID from session_created event
-        if chunk["type"] == "session_created":
-            new_session_id = chunk["session_id"]
+    try:
+        async for chunk in sdk_manager.send_message_stream(
+            message=request.message,
+            session_id=request.session_id,
+            backend_session_id=request.backend_session_id,
+            system_prompt=request.system_prompt,  # Only use explicit override if provided
+            mode=request.mode,
+            session_state=request.session_state,
+        ):
+            # Capture session ID from session_created event
+            if chunk["type"] == "session_created":
+                new_session_id = chunk["session_id"]
 
-        # Collect content
-        if chunk.get("content"):
-            response_content.append(chunk["content"])
+            # Collect content
+            if chunk.get("content"):
+                response_content.append(chunk["content"])
+    finally:
+        await active_session_manager.clear_context()
 
     return ChatResponse(
         response="\n".join(response_content),
@@ -159,6 +171,15 @@ async def chat_stream(request: ChatRequest):
     SDK configuration (Anthropic vs MiniMax) is determined by settings files in the environment.
     """
     logger.info(f"Starting stream for mode={request.mode}, sdk_session_id={request.session_id}, backend_session_id={request.backend_session_id}, message={request.message[:50]}...")
+
+    # Store session context if provided
+    if request.session_state and "session_context" in request.session_state:
+        await active_session_manager.set_current_context({
+            **request.session_state["session_context"],
+            "session_id": request.session_id,
+            "backend_session_id": request.backend_session_id,
+            "mode": request.mode,
+        })
 
     async def event_stream():
         """Generate SSE events from SDK stream"""
@@ -211,6 +232,8 @@ async def chat_stream(request: ChatRequest):
                 yield f"data: {error_event}\n\n"
             except (ConnectionResetError, BrokenPipeError):
                 logger.warning("Client disconnected before error event could be sent")
+        finally:
+            await active_session_manager.clear_context()
 
     return StreamingResponse(
         event_stream(),
@@ -276,6 +299,33 @@ async def close_sdk_session(session_id: str):
     return {
         "status": "ok",
         "message": f"Session {session_id} will be automatically cleaned up"
+    }
+
+
+@router.get("/session/context")
+async def get_session_context():
+    """
+    Get current session context metadata.
+
+    This endpoint is available without authentication (localhost-only, internal to container).
+    Agent scripts can call this to determine if the current session is email-initiated,
+    whether they're running as a clone, and what the parent agent is.
+
+    Returns:
+        Session context dict with integration_type, agent_id, is_clone, parent_agent_id, mode.
+        Returns empty context if no session is currently active.
+    """
+    context = await active_session_manager.get_current_context()
+    if context:
+        return context
+    return {
+        "session_id": None,
+        "backend_session_id": None,
+        "integration_type": None,
+        "agent_id": None,
+        "is_clone": False,
+        "parent_agent_id": None,
+        "mode": None,
     }
 
 

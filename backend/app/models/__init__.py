@@ -86,6 +86,7 @@ from .agent_share import (
     AICredentialRequirement,
     ShareStatus,
     ShareMode,
+    ShareSource,
 )
 from .clone_update_request import (
     CloneUpdateRequest,
@@ -253,6 +254,33 @@ from .task_trigger import (
     TaskTriggerPublicWithToken,
     TaskTriggersPublic,
 )
+from .agent_email_integration import (
+    AgentEmailIntegration,
+    AgentEmailIntegrationCreate,
+    AgentEmailIntegrationUpdate,
+    AgentEmailIntegrationPublic,
+    EmailAccessMode,
+    EmailCloneShareMode,
+    ProcessEmailsResult,
+)
+from .mail_server_config import (
+    MailServerConfig,
+    MailServerConfigCreate,
+    MailServerConfigUpdate,
+    MailServerConfigPublic,
+    MailServerConfigsPublic,
+    MailServerType,
+    EncryptionType,
+)
+from .email_message import (
+    EmailMessage,
+    EmailMessagePublic,
+)
+from .outgoing_email_queue import (
+    OutgoingEmailQueue,
+    OutgoingEmailQueuePublic,
+    OutgoingEmailStatus,
+)
 
 __all__ = [
     # Core
@@ -339,6 +367,7 @@ __all__ = [
     "AICredentialRequirement",
     "ShareStatus",
     "ShareMode",
+    "ShareSource",
     # Clone Update Requests
     "CloneUpdateRequest",
     "CloneUpdateRequestBase",
@@ -491,4 +520,27 @@ __all__ = [
     "TaskTriggerPublic",
     "TaskTriggerPublicWithToken",
     "TaskTriggersPublic",
+    # Agent Email Integration
+    "AgentEmailIntegration",
+    "AgentEmailIntegrationCreate",
+    "AgentEmailIntegrationUpdate",
+    "AgentEmailIntegrationPublic",
+    "EmailAccessMode",
+    "EmailCloneShareMode",
+    "ProcessEmailsResult",
+    # Mail Server Config
+    "MailServerConfig",
+    "MailServerConfigCreate",
+    "MailServerConfigUpdate",
+    "MailServerConfigPublic",
+    "MailServerConfigsPublic",
+    "MailServerType",
+    "EncryptionType",
+    # Email Messages
+    "EmailMessage",
+    "EmailMessagePublic",
+    # Outgoing Email Queue
+    "OutgoingEmailQueue",
+    "OutgoingEmailQueuePublic",
+    "OutgoingEmailStatus",
 ]

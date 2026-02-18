@@ -95,6 +95,7 @@ export function ShareManagementDialog({
             <TabsContent value="updates" className="m-0">
               <ClonesList
                 clones={clones || []}
+                shares={shares?.data || []}
                 agentId={agentId}
                 onUpdatesPushed={handleUpdatesPushed}
               />

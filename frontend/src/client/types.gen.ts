@@ -177,6 +177,39 @@ export type AgentCredentialLinkRequest = {
     credential_id: string;
 };
 
+export type AgentEmailIntegrationCreate = {
+    enabled?: boolean;
+    access_mode?: EmailAccessMode;
+    auto_approve_email_pattern?: (string | null);
+    allowed_domains?: (string | null);
+    max_clones?: number;
+    clone_share_mode?: EmailCloneShareMode;
+    agent_session_mode?: AgentSessionMode;
+    incoming_server_id?: (string | null);
+    incoming_mailbox?: (string | null);
+    outgoing_server_id?: (string | null);
+    outgoing_from_address?: (string | null);
+};
+
+export type AgentEmailIntegrationPublic = {
+    enabled?: boolean;
+    access_mode?: EmailAccessMode;
+    auto_approve_email_pattern?: (string | null);
+    allowed_domains?: (string | null);
+    max_clones?: number;
+    clone_share_mode?: EmailCloneShareMode;
+    agent_session_mode?: AgentSessionMode;
+    incoming_server_id?: (string | null);
+    incoming_mailbox?: (string | null);
+    outgoing_server_id?: (string | null);
+    outgoing_from_address?: (string | null);
+    id: string;
+    agent_id: string;
+    email_clone_count?: number;
+    created_at: string;
+    updated_at: string;
+};
+
 export type AgentEnvironmentCreate = {
     env_name: string;
     env_version?: string;
@@ -347,6 +380,8 @@ export type AgentSdkConfig = {
     allowed_tools?: Array<(string)>;
 };
 
+export type AgentSessionMode = 'clone' | 'owner';
+
 /**
  * Input for creating a new share
  */
@@ -367,6 +402,7 @@ export type AgentSharePublic = {
     original_agent_id: string;
     original_agent_name: string;
     status: string;
+    source?: string;
     shared_at: string;
     accepted_at: (string | null);
     shared_with_email: string;
@@ -789,6 +825,12 @@ export type DiscoverableSourcePublic = {
     is_enabled_by_user?: boolean;
 };
 
+export type EmailAccessMode = 'open' | 'restricted';
+
+export type EmailCloneShareMode = 'user' | 'builder';
+
+export type EncryptionType = 'ssl' | 'tls' | 'starttls' | 'none';
+
 /**
  * Status of plugin sync for a single environment.
  */
@@ -1191,6 +1233,46 @@ export type LLMPluginMarketplaceUpdate = {
     type?: (string | null);
 };
 
+export type MailServerConfigCreate = {
+    name: string;
+    server_type: MailServerType;
+    host: string;
+    port: number;
+    encryption_type?: EncryptionType;
+    username: string;
+    password: string;
+};
+
+export type MailServerConfigPublic = {
+    name: string;
+    server_type: MailServerType;
+    host: string;
+    port: number;
+    encryption_type?: EncryptionType;
+    username: string;
+    id: string;
+    user_id: string;
+    has_password?: boolean;
+    created_at: string;
+    updated_at: string;
+};
+
+export type MailServerConfigsPublic = {
+    data: Array<MailServerConfigPublic>;
+    count: number;
+};
+
+export type MailServerConfigUpdate = {
+    name?: (string | null);
+    host?: (string | null);
+    port?: (number | null);
+    encryption_type?: (EncryptionType | null);
+    username?: (string | null);
+    password?: (string | null);
+};
+
+export type MailServerType = 'imap' | 'smtp';
+
 /**
  * Status of a plugin marketplace.
  */
@@ -1339,6 +1421,14 @@ export type PrivateUserCreate = {
     is_verified?: boolean;
 };
 
+export type ProcessEmailsResult = {
+    polled?: number;
+    processed?: number;
+    pending?: number;
+    errors?: number;
+    message?: string;
+};
+
 /**
  * Request body for pushing updates to clones
  */
@@ -1470,6 +1560,9 @@ export type SessionPublic = {
     result_state?: (string | null);
     result_summary?: (string | null);
     todo_progress?: (Array<unknown> | null);
+    email_thread_id?: (string | null);
+    integration_type?: (string | null);
+    sender_email?: (string | null);
     streaming_started_at?: (string | null);
     created_at: string;
     updated_at: string;
@@ -1494,6 +1587,9 @@ export type SessionPublicExtended = {
     result_state?: (string | null);
     result_summary?: (string | null);
     todo_progress?: (Array<unknown> | null);
+    email_thread_id?: (string | null);
+    integration_type?: (string | null);
+    sender_email?: (string | null);
     streaming_started_at?: (string | null);
     created_at: string;
     updated_at: string;
@@ -2335,6 +2431,43 @@ export type CredentialsRefreshOauthTokenData = {
 
 export type CredentialsRefreshOauthTokenResponse = (OAuthRefreshResponse);
 
+export type EmailIntegrationGetEmailIntegrationData = {
+    agentId: string;
+};
+
+export type EmailIntegrationGetEmailIntegrationResponse = ((AgentEmailIntegrationPublic | null));
+
+export type EmailIntegrationCreateOrUpdateEmailIntegrationData = {
+    agentId: string;
+    requestBody: AgentEmailIntegrationCreate;
+};
+
+export type EmailIntegrationCreateOrUpdateEmailIntegrationResponse = (AgentEmailIntegrationPublic);
+
+export type EmailIntegrationDeleteEmailIntegrationData = {
+    agentId: string;
+};
+
+export type EmailIntegrationDeleteEmailIntegrationResponse = (Message);
+
+export type EmailIntegrationEnableEmailIntegrationData = {
+    agentId: string;
+};
+
+export type EmailIntegrationEnableEmailIntegrationResponse = (AgentEmailIntegrationPublic);
+
+export type EmailIntegrationDisableEmailIntegrationData = {
+    agentId: string;
+};
+
+export type EmailIntegrationDisableEmailIntegrationResponse = (AgentEmailIntegrationPublic);
+
+export type EmailIntegrationProcessEmailsData = {
+    agentId: string;
+};
+
+export type EmailIntegrationProcessEmailsResponse = (ProcessEmailsResult);
+
 export type EnvironmentsGetEnvironmentData = {
     id: string;
 };
@@ -2673,6 +2806,45 @@ export type LoginRecoverPasswordHtmlContentData = {
 };
 
 export type LoginRecoverPasswordHtmlContentResponse = (string);
+
+export type MailServersListMailServersData = {
+    limit?: number;
+    serverType?: (MailServerType | null);
+    skip?: number;
+};
+
+export type MailServersListMailServersResponse = (MailServerConfigsPublic);
+
+export type MailServersCreateMailServerData = {
+    requestBody: MailServerConfigCreate;
+};
+
+export type MailServersCreateMailServerResponse = (MailServerConfigPublic);
+
+export type MailServersGetMailServerData = {
+    serverId: string;
+};
+
+export type MailServersGetMailServerResponse = (MailServerConfigPublic);
+
+export type MailServersUpdateMailServerData = {
+    requestBody: MailServerConfigUpdate;
+    serverId: string;
+};
+
+export type MailServersUpdateMailServerResponse = (MailServerConfigPublic);
+
+export type MailServersDeleteMailServerData = {
+    serverId: string;
+};
+
+export type MailServersDeleteMailServerResponse = (Message);
+
+export type MailServersTestMailServerConnectionData = {
+    serverId: string;
+};
+
+export type MailServersTestMailServerConnectionResponse = (Message);
 
 export type MessagesGetMessagesData = {
     limit?: number;

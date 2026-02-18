@@ -22,10 +22,12 @@ class ActiveSessionManager:
 
     This allows interrupt requests to find the active client and call interrupt().
     The manager tracks sessions in memory and provides thread-safe access.
+    Also stores session context metadata for the /session/context endpoint.
     """
 
     def __init__(self):
         self._active_sessions: Dict[str, ActiveSession] = {}
+        self._current_context: Optional[dict] = None
         self._lock = asyncio.Lock()
 
     async def register_session(self, session_id: str, client: Any):
@@ -108,6 +110,33 @@ class ActiveSessionManager:
             if session_id in self._active_sessions:
                 return self._active_sessions[session_id].client
             return None
+
+    async def set_current_context(self, context: dict):
+        """
+        Store session context metadata when a stream starts.
+
+        Args:
+            context: Session context dict with integration_type, agent_id, is_clone, etc.
+        """
+        async with self._lock:
+            self._current_context = context
+            logger.info(f"Set session context: integration_type={context.get('integration_type')}")
+
+    async def get_current_context(self) -> Optional[dict]:
+        """
+        Retrieve the current session context.
+
+        Returns:
+            Session context dict if set, None otherwise
+        """
+        async with self._lock:
+            return self._current_context
+
+    async def clear_context(self):
+        """Clear the current session context when stream ends."""
+        async with self._lock:
+            self._current_context = None
+            logger.info("Cleared session context")
 
 
 # Global singleton instance

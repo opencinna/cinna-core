@@ -13,7 +13,7 @@ from sqlmodel import Session, select
 from fastapi import HTTPException
 
 from app.models.agent import Agent
-from app.models.agent_share import AgentShare, ShareMode, ShareStatus
+from app.models.agent_share import AgentShare, ShareMode, ShareSource, ShareStatus
 from app.models.ai_credential import AICredential
 from app.models.user import User
 
@@ -138,6 +138,76 @@ class AgentShareService:
         session.commit()
         session.refresh(share)
         return share
+
+    @staticmethod
+    async def create_auto_share(
+        session: Session,
+        agent_id: UUID,
+        user_id: UUID,
+        share_mode: str,
+        source: str = ShareSource.EMAIL_INTEGRATION,
+    ) -> tuple[AgentShare, "Agent"]:
+        """
+        Create a pre-accepted share and clone for email integration.
+
+        - Creates share with status='accepted' directly (no pending state)
+        - Calls AgentCloneService.create_clone() immediately
+        - Returns (share, clone_agent)
+
+        Raises ValueError if agent not found or is a clone.
+        """
+        from app.services.agent_clone_service import AgentCloneService
+
+        agent = session.get(Agent, agent_id)
+        if not agent:
+            raise ValueError("Agent not found")
+        if agent.is_clone:
+            raise ValueError("Cannot create auto-share on a clone agent")
+
+        # Check for existing share for this user
+        stmt = select(AgentShare).where(
+            AgentShare.original_agent_id == agent_id,
+            AgentShare.shared_with_user_id == user_id,
+        )
+        existing = session.exec(stmt).first()
+        if existing and existing.status == ShareStatus.ACCEPTED:
+            # Already has a share+clone - return existing
+            if existing.cloned_agent_id:
+                clone = session.get(Agent, existing.cloned_agent_id)
+                if clone:
+                    return existing, clone
+
+        # Create share record (pre-accepted)
+        share = AgentShare(
+            original_agent_id=agent_id,
+            shared_with_user_id=user_id,
+            shared_by_user_id=agent.owner_id,
+            share_mode=share_mode,
+            status=ShareStatus.ACCEPTED,
+            source=source,
+            shared_at=datetime.utcnow(),
+            accepted_at=datetime.utcnow(),
+        )
+        session.add(share)
+        session.commit()
+        session.refresh(share)
+
+        # Create clone
+        clone = await AgentCloneService.create_clone(
+            session=session,
+            original_agent=agent,
+            recipient_id=user_id,
+            clone_mode=share_mode,
+            credentials_data={},
+            share=share,
+        )
+
+        # Update share with clone reference
+        share.cloned_agent_id = clone.id
+        session.add(share)
+        session.commit()
+
+        return share, clone
 
     @staticmethod
     async def accept_share(

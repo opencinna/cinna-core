@@ -727,20 +727,30 @@ class MessageService:
             external_session_id=external_session_id
         )
 
-        # Get user_id, agent's allowed_tools, and reset result_state if needed
+        # Get user_id, agent's allowed_tools, reset result_state, and session context
         def _get_session_context_and_reset_state():
             with get_fresh_db_session() as db:
                 session_db = db.get(ChatSession, session_id)
                 user_id = session_db.user_id if session_db else None
                 allowed_tools = set()
                 previous_result_state = None
+                session_context = None
 
                 if session_db:
                     env = db.get(AgentEnvironment, environment_id)
+                    agent = None
                     if env and env.agent_id:
                         agent = db.get(Agent, env.agent_id)
                         if agent and agent.agent_sdk_config:
                             allowed_tools = set(agent.agent_sdk_config.get("allowed_tools", []))
+
+                    # Build session context for agent-env
+                    session_context = {
+                        "integration_type": session_db.integration_type,
+                        "agent_id": str(env.agent_id) if env and env.agent_id else None,
+                        "is_clone": agent.is_clone if agent else False,
+                        "parent_agent_id": str(agent.parent_agent_id) if agent and agent.parent_agent_id else None,
+                    }
 
                     # Reset result_state when user sends a new message
                     if session_db.result_state is not None:
@@ -760,8 +770,8 @@ class MessageService:
                                 db_session=db, task_id=session_db.source_task_id
                             )
 
-                return user_id, allowed_tools, previous_result_state
-        user_id, agent_allowed_tools, previous_result_state = await asyncio.to_thread(
+                return user_id, allowed_tools, previous_result_state, session_context
+        user_id, agent_allowed_tools, previous_result_state, session_context = await asyncio.to_thread(
             _get_session_context_and_reset_state
         )
 
@@ -800,8 +810,12 @@ class MessageService:
 
         # Build session_state for agent-env
         session_state = None
-        if previous_result_state:
-            session_state = {"previous_result_state": previous_result_state}
+        if previous_result_state or session_context:
+            session_state = {}
+            if previous_result_state:
+                session_state["previous_result_state"] = previous_result_state
+            if session_context:
+                session_state["session_context"] = session_context
 
         try:
             # Stream from environment

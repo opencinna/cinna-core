@@ -34,6 +34,10 @@ class Session(SQLModel, table=True):
     # Agent-declared session outcome (set via update_session_state tool)
     result_state: str | None = None  # "completed" | "needs_input" | "error"
     result_summary: str | None = None  # Agent's summary/question/error description
+    # Email integration fields
+    email_thread_id: str | None = None  # Email Message-ID for threading
+    integration_type: str | None = None  # "email" | "a2a" | null
+    sender_email: str | None = None  # Original sender email (owner mode only)
     streaming_started_at: datetime | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -90,6 +94,9 @@ class SessionPublic(SQLModel):
     result_state: str | None = None
     result_summary: str | None = None
     todo_progress: list | None = None
+    email_thread_id: str | None = None
+    integration_type: str | None = None
+    sender_email: str | None = None
     streaming_started_at: datetime | None = None
     created_at: datetime
     updated_at: datetime

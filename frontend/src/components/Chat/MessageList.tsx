@@ -15,9 +15,10 @@ interface MessageListProps {
   onSendMessage?: (content: string) => void
   conversationModeUi?: string
   agentId?: string
+  integrationTyp?: string | null
 }
 
-export function MessageList({ messages, isLoading, streamingEvents, isStreaming, onSendAnswer, onSendMessage, conversationModeUi = "detailed", agentId }: MessageListProps) {
+export function MessageList({ messages, isLoading, streamingEvents, isStreaming, onSendAnswer, onSendMessage, conversationModeUi = "detailed", agentId, integrationTyp }: MessageListProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [showScrollButton, setShowScrollButton] = useState(false)
@@ -86,6 +87,7 @@ export function MessageList({ messages, isLoading, streamingEvents, isStreaming,
                       onSendMessage={onSendMessage}
                       conversationModeUi={conversationModeUi}
                       agentId={agentId}
+                      integrationTyp={integrationTyp}
                     />
                   ))
                 }

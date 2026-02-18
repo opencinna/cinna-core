@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Trash2, User, Wrench } from "lucide-react"
+import { Mail, Trash2, User, Wrench } from "lucide-react"
 
 import type { AgentSharePublic } from "@/client"
 import { Badge } from "@/components/ui/badge"
@@ -64,7 +64,15 @@ export function ShareList({ shares, agentId, onRevoke }: ShareListProps) {
           {shares.map((share) => (
             <TableRow key={share.id}>
               <TableCell className="font-medium">
-                {share.shared_with_email}
+                <div className="flex items-center gap-1.5">
+                  {share.shared_with_email}
+                  {share.source === "email_integration" && (
+                    <Badge variant="outline" className="text-xs px-1.5 py-0 gap-0.5 text-indigo-700 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700">
+                      <Mail className="h-3 w-3" />
+                      Email
+                    </Badge>
+                  )}
+                </div>
               </TableCell>
               <TableCell>
                 <div className="flex items-center gap-1">

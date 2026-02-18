@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { AccessTokensCard } from "./AccessTokensCard"
+import { EmailIntegrationCard } from "./EmailIntegrationCard"
 
 interface AgentIntegrationsTabProps {
   agent: AgentPublic
@@ -133,8 +134,13 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
             )}
           </CardContent>
         </Card>
-        {/* Access Tokens Card - Half width, same row as A2A */}
-        {a2aEnabled && <AccessTokensCard agentId={agent.id} />}
+        {/* Access Tokens Card */}
+        <AccessTokensCard agentId={agent.id} />
+
+        {/* Email Integration Card - Half width, only for non-clone agents */}
+        {!agent.is_clone && (
+          <EmailIntegrationCard agentId={agent.id} />
+        )}
       </div>
     </div>
   )

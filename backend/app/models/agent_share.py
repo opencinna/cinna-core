@@ -27,6 +27,12 @@ class ShareMode:
     BUILDER = "builder"  # Editable config, building mode allowed
 
 
+class ShareSource:
+    """How the share was created"""
+    MANUAL = "manual"
+    EMAIL_INTEGRATION = "email_integration"
+
+
 class AgentShareBase(SQLModel):
     """Base properties for agent shares"""
     share_mode: str  # "user" | "builder"
@@ -82,6 +88,9 @@ class AgentShare(AgentShareBase, table=True):
     # Reference to created clone (after acceptance)
     cloned_agent_id: uuid_module.UUID | None = Field(default=None)  # FK in __table_args__
 
+    # How the share was created
+    source: str = Field(default="manual")  # "manual" | "email_integration"
+
     # AI credential provision (owner can provide their AI credentials to recipient)
     provide_ai_credentials: bool = Field(default=False)
     conversation_ai_credential_id: uuid_module.UUID | None = Field(
@@ -119,6 +128,7 @@ class AgentSharePublic(AgentShareBase):
     original_agent_name: str  # Resolved from original_agent
     share_mode: str
     status: str
+    source: str = "manual"
     shared_at: datetime
     accepted_at: datetime | None
     shared_with_email: str  # Resolved from shared_with_user

@@ -1524,6 +1524,238 @@ export const AgentCredentialLinkRequestSchema = {
     title: 'AgentCredentialLinkRequest'
 } as const;
 
+export const AgentEmailIntegrationCreateSchema = {
+    properties: {
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled',
+            default: false
+        },
+        access_mode: {
+            '$ref': '#/components/schemas/EmailAccessMode',
+            default: 'restricted'
+        },
+        auto_approve_email_pattern: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1024
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Auto Approve Email Pattern'
+        },
+        allowed_domains: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1024
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Allowed Domains'
+        },
+        max_clones: {
+            type: 'integer',
+            maximum: 1000,
+            minimum: 1,
+            title: 'Max Clones',
+            default: 50
+        },
+        clone_share_mode: {
+            '$ref': '#/components/schemas/EmailCloneShareMode',
+            default: 'user'
+        },
+        agent_session_mode: {
+            '$ref': '#/components/schemas/AgentSessionMode',
+            default: 'clone'
+        },
+        incoming_server_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Incoming Server Id'
+        },
+        incoming_mailbox: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Incoming Mailbox'
+        },
+        outgoing_server_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Outgoing Server Id'
+        },
+        outgoing_from_address: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Outgoing From Address'
+        }
+    },
+    type: 'object',
+    title: 'AgentEmailIntegrationCreate'
+} as const;
+
+export const AgentEmailIntegrationPublicSchema = {
+    properties: {
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled',
+            default: false
+        },
+        access_mode: {
+            '$ref': '#/components/schemas/EmailAccessMode',
+            default: 'restricted'
+        },
+        auto_approve_email_pattern: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1024
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Auto Approve Email Pattern'
+        },
+        allowed_domains: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1024
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Allowed Domains'
+        },
+        max_clones: {
+            type: 'integer',
+            maximum: 1000,
+            minimum: 1,
+            title: 'Max Clones',
+            default: 50
+        },
+        clone_share_mode: {
+            '$ref': '#/components/schemas/EmailCloneShareMode',
+            default: 'user'
+        },
+        agent_session_mode: {
+            '$ref': '#/components/schemas/AgentSessionMode',
+            default: 'clone'
+        },
+        incoming_server_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Incoming Server Id'
+        },
+        incoming_mailbox: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Incoming Mailbox'
+        },
+        outgoing_server_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Outgoing Server Id'
+        },
+        outgoing_from_address: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Outgoing From Address'
+        },
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        email_clone_count: {
+            type: 'integer',
+            title: 'Email Clone Count',
+            default: 0
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'agent_id', 'created_at', 'updated_at'],
+    title: 'AgentEmailIntegrationPublic'
+} as const;
+
 export const AgentEnvironmentCreateSchema = {
     properties: {
         env_name: {
@@ -2395,6 +2627,12 @@ export const AgentSdkConfigSchema = {
     description: 'Schema for agent SDK configuration'
 } as const;
 
+export const AgentSessionModeSchema = {
+    type: 'string',
+    enum: ['clone', 'owner'],
+    title: 'AgentSessionMode'
+} as const;
+
 export const AgentShareCreateSchema = {
     properties: {
         shared_with_email: {
@@ -2464,6 +2702,11 @@ export const AgentSharePublicSchema = {
         status: {
             type: 'string',
             title: 'Status'
+        },
+        source: {
+            type: 'string',
+            title: 'Source',
+            default: 'manual'
         },
         shared_at: {
             type: 'string',
@@ -3662,6 +3905,24 @@ export const DiscoverableSourcePublicSchema = {
     required: ['id', 'name', 'status'],
     title: 'DiscoverableSourcePublic',
     description: 'Public schema for discoverable knowledge sources.'
+} as const;
+
+export const EmailAccessModeSchema = {
+    type: 'string',
+    enum: ['open', 'restricted'],
+    title: 'EmailAccessMode'
+} as const;
+
+export const EmailCloneShareModeSchema = {
+    type: 'string',
+    enum: ['user', 'builder'],
+    title: 'EmailCloneShareMode'
+} as const;
+
+export const EncryptionTypeSchema = {
+    type: 'string',
+    enum: ['ssl', 'tls', 'starttls', 'none'],
+    title: 'EncryptionType'
 } as const;
 
 export const EnvironmentSyncStatusSchema = {
@@ -5464,6 +5725,220 @@ export const LLMPluginMarketplacesPublicSchema = {
     description: 'List response for plugin marketplaces.'
 } as const;
 
+export const MailServerConfigCreateSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        server_type: {
+            '$ref': '#/components/schemas/MailServerType'
+        },
+        host: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Host'
+        },
+        port: {
+            type: 'integer',
+            maximum: 65535,
+            minimum: 1,
+            title: 'Port'
+        },
+        encryption_type: {
+            '$ref': '#/components/schemas/EncryptionType',
+            default: 'ssl'
+        },
+        username: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Username'
+        },
+        password: {
+            type: 'string',
+            minLength: 1,
+            title: 'Password'
+        }
+    },
+    type: 'object',
+    required: ['name', 'server_type', 'host', 'port', 'username', 'password'],
+    title: 'MailServerConfigCreate'
+} as const;
+
+export const MailServerConfigPublicSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        server_type: {
+            '$ref': '#/components/schemas/MailServerType'
+        },
+        host: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Host'
+        },
+        port: {
+            type: 'integer',
+            maximum: 65535,
+            minimum: 1,
+            title: 'Port'
+        },
+        encryption_type: {
+            '$ref': '#/components/schemas/EncryptionType',
+            default: 'ssl'
+        },
+        username: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Username'
+        },
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        has_password: {
+            type: 'boolean',
+            title: 'Has Password',
+            default: true
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['name', 'server_type', 'host', 'port', 'username', 'id', 'user_id', 'created_at', 'updated_at'],
+    title: 'MailServerConfigPublic'
+} as const;
+
+export const MailServerConfigUpdateSchema = {
+    properties: {
+        name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        },
+        host: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Host'
+        },
+        port: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    maximum: 65535,
+                    minimum: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Port'
+        },
+        encryption_type: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/EncryptionType'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        username: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Username'
+        },
+        password: {
+            anyOf: [
+                {
+                    type: 'string',
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Password'
+        }
+    },
+    type: 'object',
+    title: 'MailServerConfigUpdate'
+} as const;
+
+export const MailServerConfigsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/MailServerConfigPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'MailServerConfigsPublic'
+} as const;
+
+export const MailServerTypeSchema = {
+    type: 'string',
+    enum: ['imap', 'smtp'],
+    title: 'MailServerType'
+} as const;
+
 export const MarketplaceStatusSchema = {
     type: 'string',
     enum: ['pending', 'connected', 'error', 'disconnected'],
@@ -6063,6 +6538,38 @@ export const PrivateUserCreateSchema = {
     type: 'object',
     required: ['email', 'password', 'full_name'],
     title: 'PrivateUserCreate'
+} as const;
+
+export const ProcessEmailsResultSchema = {
+    properties: {
+        polled: {
+            type: 'integer',
+            title: 'Polled',
+            default: 0
+        },
+        processed: {
+            type: 'integer',
+            title: 'Processed',
+            default: 0
+        },
+        pending: {
+            type: 'integer',
+            title: 'Pending',
+            default: 0
+        },
+        errors: {
+            type: 'integer',
+            title: 'Errors',
+            default: 0
+        },
+        message: {
+            type: 'string',
+            title: 'Message',
+            default: ''
+        }
+    },
+    type: 'object',
+    title: 'ProcessEmailsResult'
 } as const;
 
 export const PushUpdateActionsRequestSchema = {
@@ -6683,6 +7190,39 @@ export const SessionPublicSchema = {
             ],
             title: 'Todo Progress'
         },
+        email_thread_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Email Thread Id'
+        },
+        integration_type: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Integration Type'
+        },
+        sender_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Sender Email'
+        },
         streaming_started_at: {
             anyOf: [
                 {
@@ -6836,6 +7376,39 @@ export const SessionPublicExtendedSchema = {
                 }
             ],
             title: 'Todo Progress'
+        },
+        email_thread_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Email Thread Id'
+        },
+        integration_type: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Integration Type'
+        },
+        sender_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Sender Email'
         },
         streaming_started_at: {
             anyOf: [

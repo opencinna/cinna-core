@@ -1,7 +1,8 @@
+import { useMemo } from "react"
 import { useMutation } from "@tanstack/react-query"
-import { Loader2, Send, CheckCircle, Clock } from "lucide-react"
+import { Loader2, Mail, Send, CheckCircle, Clock } from "lucide-react"
 
-import type { AgentPublic } from "@/client"
+import type { AgentPublic, AgentSharePublic } from "@/client"
 import { AgentSharesService } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -17,11 +18,23 @@ import {
 
 interface ClonesListProps {
   clones: AgentPublic[]
+  shares?: AgentSharePublic[]
   agentId: string
   onUpdatesPushed: () => void
 }
 
-export function ClonesList({ clones, agentId, onUpdatesPushed }: ClonesListProps) {
+export function ClonesList({ clones, shares = [], agentId, onUpdatesPushed }: ClonesListProps) {
+  // Build set of clone IDs that were created via email integration
+  const emailCloneIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const share of shares) {
+      if (share.source === "email_integration" && share.cloned_agent_id) {
+        ids.add(share.cloned_agent_id)
+      }
+    }
+    return ids
+  }, [shares])
+
   const pushMutation = useMutation({
     mutationFn: () => AgentSharesService.pushUpdatesToClones({ agentId }),
     onSuccess: () => {
@@ -99,7 +112,15 @@ export function ClonesList({ clones, agentId, onUpdatesPushed }: ClonesListProps
           {clones.map((clone) => (
             <TableRow key={clone.id}>
               <TableCell className="font-medium">
-                {clone.name}
+                <div className="flex items-center gap-1.5">
+                  {clone.name}
+                  {emailCloneIds.has(clone.id) && (
+                    <Badge variant="outline" className="text-xs px-1.5 py-0 gap-0.5 text-indigo-700 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700">
+                      <Mail className="h-3 w-3" />
+                      Email
+                    </Badge>
+                  )}
+                </div>
               </TableCell>
               <TableCell>
                 <Badge variant="outline">

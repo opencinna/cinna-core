@@ -20,6 +20,9 @@ class SessionService:
         data: SessionCreate,
         access_token_id: UUID | None = None,
         source_task_id: UUID | None = None,
+        email_thread_id: str | None = None,
+        integration_type: str | None = None,
+        sender_email: str | None = None,
     ) -> Session | None:
         """
         Create session using agent's active environment.
@@ -30,6 +33,9 @@ class SessionService:
             data: Session creation data
             access_token_id: Optional access token ID (for A2A token-created sessions)
             source_task_id: Optional task ID that spawned this session (for task management)
+            email_thread_id: Optional email Message-ID for threading
+            integration_type: Optional integration source ("email", "a2a", etc.)
+            sender_email: Optional sender email address (owner mode: track original sender)
         """
         # Get agent to find active environment
         agent = db_session.get(Agent, data.agent_id)
@@ -44,11 +50,31 @@ class SessionService:
             source_task_id=source_task_id,
             title=data.title,
             mode=data.mode,
+            email_thread_id=email_thread_id,
+            integration_type=integration_type,
+            sender_email=sender_email,
         )
         db_session.add(session)
         db_session.commit()
         db_session.refresh(session)
         return session
+
+    @staticmethod
+    def get_session_by_email_thread(
+        db_session: DBSession,
+        clone_agent_id: UUID,
+        email_thread_id: str,
+    ) -> Session | None:
+        """Find an existing session by email thread ID on a specific clone agent."""
+        stmt = select(Session, AgentEnvironment).where(
+            Session.environment_id == AgentEnvironment.id,
+            AgentEnvironment.agent_id == clone_agent_id,
+            Session.email_thread_id == email_thread_id,
+        )
+        result = db_session.exec(stmt).first()
+        if result:
+            return result[0]
+        return None
 
     @staticmethod
     def get_session(db_session: DBSession, session_id: UUID) -> Session | None:

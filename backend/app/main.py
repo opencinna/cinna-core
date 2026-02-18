@@ -47,6 +47,14 @@ from app.services.agent_schedule_scheduler import (
     start_scheduler as start_agent_schedule_scheduler,
     shutdown_scheduler as shutdown_agent_schedule_scheduler
 )
+from app.services.email.polling_scheduler import (
+    start_scheduler as start_email_polling_scheduler,
+    shutdown_scheduler as shutdown_email_polling_scheduler
+)
+from app.services.email.sending_scheduler import (
+    start_scheduler as start_email_sending_scheduler,
+    shutdown_scheduler as shutdown_email_sending_scheduler
+)
 
 
 @asynccontextmanager
@@ -57,6 +65,8 @@ async def lifespan(app: FastAPI):
     start_suspension_scheduler()
     start_task_trigger_scheduler()
     start_agent_schedule_scheduler()
+    start_email_polling_scheduler()
+    start_email_sending_scheduler()
 
     # Register backend event handlers
     from app.models.event import EventType
@@ -142,7 +152,15 @@ async def lifespan(app: FastAPI):
         handler=InputTaskService.handle_session_state_updated
     )
 
-    logger.info("Registered backend event handlers (EnvironmentService, ActivityService, SessionService, InputTaskService)")
+    # Email sending handler: queue outgoing email when agent responds in email session
+    from app.services.email.sending_service import EmailSendingService
+
+    event_service.register_handler(
+        event_type=EventType.STREAM_COMPLETED,
+        handler=EmailSendingService.handle_stream_completed
+    )
+
+    logger.info("Registered backend event handlers (EnvironmentService, ActivityService, SessionService, InputTaskService, EmailSendingService)")
     logger.info("Application startup complete")
 
     yield
@@ -152,6 +170,8 @@ async def lifespan(app: FastAPI):
     shutdown_suspension_scheduler()
     shutdown_task_trigger_scheduler()
     shutdown_agent_schedule_scheduler()
+    shutdown_email_polling_scheduler()
+    shutdown_email_sending_scheduler()
     event_service.shutdown()
     logger.info("Application shutdown complete")
 

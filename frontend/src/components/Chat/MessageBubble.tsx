@@ -7,7 +7,7 @@ import { StreamEventRenderer } from "./StreamEventRenderer"
 import { MessageActions } from "./MessageActions"
 import { AnswerQuestionsModal } from "./AnswerQuestionsModal"
 import { FileBadge } from "./FileBadge"
-import { Info, AlertCircle, ExternalLink, CheckCircle2, HelpCircle, AlertTriangle } from "lucide-react"
+import { Info, AlertCircle, ExternalLink, CheckCircle2, HelpCircle, AlertTriangle, Mail } from "lucide-react"
 import { useToolApproval } from "@/hooks/useToolApproval"
 
 interface MessageBubbleProps {
@@ -16,9 +16,10 @@ interface MessageBubbleProps {
   onSendMessage?: (content: string) => void
   conversationModeUi?: string
   agentId?: string
+  integrationTyp?: string | null
 }
 
-export function MessageBubble({ message, onSendAnswer, onSendMessage, conversationModeUi = "detailed", agentId }: MessageBubbleProps) {
+export function MessageBubble({ message, onSendAnswer, onSendMessage, conversationModeUi = "detailed", agentId, integrationTyp }: MessageBubbleProps) {
   const [showAnswerModal, setShowAnswerModal] = useState(false)
   const approvalMessageSentRef = useRef(false)
 
@@ -222,7 +223,15 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
           >
             <div className="space-y-2">
               {isUser ? (
-                <p className="whitespace-pre-wrap break-words">{message.content}</p>
+                <>
+                  {integrationTyp === "email" && (
+                    <div className="flex items-center gap-1 text-[10px] font-medium text-indigo-600 dark:text-indigo-400 mb-1">
+                      <Mail className="h-3 w-3" />
+                      <span>via Email</span>
+                    </div>
+                  )}
+                  <p className="whitespace-pre-wrap break-words">{message.content}</p>
+                </>
               ) : (
                 <StreamEventRenderer events={streamingEvents} conversationModeUi={conversationModeUi} />
               )}
