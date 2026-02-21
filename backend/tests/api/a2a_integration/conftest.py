@@ -1,8 +1,10 @@
 """
-AI Credentials test fixtures.
+A2A integration test fixtures.
 
-Provides adapter-level environment stubbing so agent creation runs real service
-logic without Docker. Follows the same pattern as tests/api/agents/conftest.py.
+Provides the same infrastructure as agents/conftest.py (session proxy,
+environment adapter stub, background task collector, external service mocks)
+plus an additional patch for get_fresh_db_session in a2a.py so that the
+A2A request handler uses the test DB session.
 """
 import pytest
 from unittest.mock import patch, AsyncMock
@@ -19,11 +21,21 @@ from tests.utils.db_proxy import NonClosingSessionProxy
 
 @pytest.fixture(autouse=True)
 def patch_create_session(db):
-    """All internal service session creation returns the test session."""
+    """All internal service session creation returns the test session.
+
+    Must patch at every import site because `from app.core.db import create_session`
+    binds a local reference that isn't updated by patching the source module alone.
+
+    Also patches get_fresh_db_session in a2a.py so the A2A request handler
+    uses the test session instead of creating new ones from the engine.
+    """
     factory = lambda: NonClosingSessionProxy(db)
     with (
         patch("app.core.db.create_session", factory),
+        patch("app.services.email.processing_service.create_session", factory),
+        patch("app.services.session_service.create_session", factory),
         patch("app.services.environment_service.create_session", factory),
+        patch("app.api.routes.a2a.get_fresh_db_session", factory),
     ):
         yield
 
@@ -42,8 +54,8 @@ def patch_asyncio_to_thread():
 def patch_environment_adapter(tmp_path_factory):
     """Patch lifecycle manager to use EnvironmentTestAdapter instead of Docker.
 
-    Uses a single persistent adapter instance so tests can track calls
-    (start, rebuild, set_credentials, etc.) across lifecycle operations.
+    Creates minimal template directory structure so real file I/O works
+    on temp paths without Docker.
     """
     tmp = tmp_path_factory.mktemp("env")
     templates_dir = tmp / "templates"
@@ -57,21 +69,16 @@ def patch_environment_adapter(tmp_path_factory):
     (template_dir / "docker-compose.template.yml").write_text(
         "version: '3'\nservices:\n  agent:\n    image: test\n    ports:\n      - '${AGENT_PORT}:8000'\n"
     )
-    # Create app/core directory (required by rebuild_environment validation)
-    (template_dir / "app" / "core").mkdir(parents=True)
 
     # Build lifecycle manager with tmp dirs
     lm = EnvironmentLifecycleManager()
     lm.templates_dir = templates_dir
     lm.instances_dir = instances_dir
 
-    # Use a single persistent adapter so tests can inspect call history
-    adapter = EnvironmentTestAdapter()
-
+    # Patch get_adapter to return test adapter
     def _test_get_adapter(environment):
-        return adapter
+        return EnvironmentTestAdapter()
     lm.get_adapter = _test_get_adapter
-    lm._test_adapter = adapter
 
     # Install as singleton
     EnvironmentService._lifecycle_manager = lm
@@ -81,16 +88,25 @@ def patch_environment_adapter(tmp_path_factory):
 
 @pytest.fixture(autouse=True)
 def background_tasks():
-    """Collect background tasks for deferred execution."""
+    """Collect background tasks for deferred execution.
+
+    Replaces create_task_with_error_logging at every import site so that
+    fire-and-forget coroutines are captured instead of scheduled.
+    Test utilities (e.g. drain_tasks) drain them automatically.
+    """
     collector = BackgroundTaskCollector()
     set_collector(collector)
     with (
         patch(
-            "app.services.environment_service.create_task_with_error_logging",
+            "app.services.session_service.create_task_with_error_logging",
             collector,
         ),
         patch(
             "app.services.event_service.create_task_with_error_logging",
+            collector,
+        ),
+        patch(
+            "app.services.environment_service.create_task_with_error_logging",
             collector,
         ),
     ):

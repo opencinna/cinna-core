@@ -450,6 +450,7 @@ class EventService:
         """Shutdown the event service and cleanup resources."""
         logger.info("Shutting down EventService executor...")
         self.executor.shutdown(wait=True, cancel_futures=True)
+        self._backend_handlers.clear()
         logger.info("EventService executor shut down")
 
     def get_asgi_app(self):

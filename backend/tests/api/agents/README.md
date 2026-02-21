@@ -6,7 +6,7 @@ Agent tests exercise flows that depend on Docker environments, external mail ser
 
 ### `patch_create_session`
 
-Services create their own DB sessions via `create_session()`. This fixture replaces it with a `_NonClosingSessionProxy` that returns the test `db` session, keeping all operations on the test transaction (rolled back after each test).
+Services create their own DB sessions via `create_session()`. This fixture replaces it with a `NonClosingSessionProxy` (from `tests/utils/db_proxy`) that returns the test `db` session, keeping all operations on the test transaction (rolled back after each test).
 
 **Important**: Python's `from module import name` binds a local reference. Patching the source module alone doesn't update already-imported references. Every import site must be patched individually:
 

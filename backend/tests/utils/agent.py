@@ -1,4 +1,4 @@
-"""Helper to create agents via API for tests."""
+"""Helper to create/manage agents via API for tests."""
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
@@ -18,6 +18,35 @@ def create_agent_via_api(
         json=data,
     )
     assert r.status_code == 200, f"Agent creation failed: {r.text}"
+    return r.json()
+
+
+def get_agent(
+    client: TestClient,
+    token_headers: dict[str, str],
+    agent_id: str,
+) -> dict:
+    """Get agent by ID via GET /api/v1/agents/{id}."""
+    r = client.get(
+        f"{settings.API_V1_STR}/agents/{agent_id}",
+        headers=token_headers,
+    )
+    assert r.status_code == 200, f"Get agent failed: {r.text}"
+    return r.json()
+
+
+def enable_a2a(
+    client: TestClient,
+    token_headers: dict[str, str],
+    agent_id: str,
+) -> dict:
+    """Enable A2A integration for an agent via PUT /agents/{id}."""
+    r = client.put(
+        f"{settings.API_V1_STR}/agents/{agent_id}",
+        headers=token_headers,
+        json={"a2a_config": {"enabled": True}},
+    )
+    assert r.status_code == 200, f"Enable A2A failed: {r.text}"
     return r.json()
 
 

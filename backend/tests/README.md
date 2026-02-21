@@ -101,12 +101,13 @@ tests/
     utils.py               # random_lower_string(), random_email(), get_superuser_token_headers()
     user.py                # create_random_user(), user_authentication_headers()
     item.py                # create_random_item()
-    agent.py               # create_agent_via_api(), configure/enable_email_integration()
+    agent.py               # create_agent_via_api(), get_agent(), enable_a2a(), configure/enable_email_integration()
     ai_credential.py       # create_random_ai_credential(), set/update/delete/get helpers
+    a2a.py                 # setup_a2a_agent(), send_a2a_streaming_message(), create_access_token(), etc.
     background_tasks.py    # drain_tasks() for deferred background task execution
     mail_server.py         # create_imap_server(), create_smtp_server(), process_emails_with_stub()
-    session.py             # get_agent_session()
-    message.py             # get_messages_by_role()
+    session.py             # get_agent_session(), list_sessions()
+    message.py             # get_messages_by_role(), list_messages()
 ```
 
 ## Writing New Tests
