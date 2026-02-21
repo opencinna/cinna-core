@@ -9,6 +9,7 @@ import SetPassword from "@/components/UserSettings/SetPassword"
 import { MailServerSettings } from "@/components/UserSettings/MailServerSettings"
 import { SSHKeys } from "@/components/UserSettings/SSHKeys"
 import UserInformation from "@/components/UserSettings/UserInformation"
+import { WorkspaceSettings } from "@/components/UserSettings/WorkspaceSettings"
 import { HashTabs, TabConfig } from "@/components/Common/HashTabs"
 import useAuth from "@/hooks/useAuth"
 import { usePageHeader } from "@/routes/_layout"
@@ -48,6 +49,7 @@ function UserSettings() {
     { value: "password", title: "Password", content: <ChangePassword /> },
     { value: "set-password", title: "Set Password", content: <SetPassword /> },
     { value: "oauth", title: "Connected Accounts", content: <OAuthAccounts /> },
+    { value: "interface", title: "Interface", content: <WorkspaceSettings /> },
     { value: "ai-credentials", title: "AI Credentials", content: <AICredentialsSettings /> },
     { value: "mail-servers", title: "Mail Servers", content: <MailServerSettings /> },
     { value: "keys", title: "SSH Keys", content: <SSHKeys /> },
