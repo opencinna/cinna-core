@@ -244,7 +244,7 @@ See `Makefile` for: `make prestart`, `make migrate`, `make migration`, `make dev
 
 ## Testing
 
-Tests run inside Docker. See `backend/tests/README.md` for full details (architecture, fixtures, conventions, writing new tests).
+Tests run inside Docker. **Before writing any backend tests, read `backend/tests/README.md`** for architecture, fixtures, conventions, and rules (API-only tests, no direct DB access, scenario-based structure, test utility patterns). Also check for domain-specific `README.md` files in the target test directory (e.g., `tests/api/agents/README.md`).
 
 ```bash
 # Run all backend tests

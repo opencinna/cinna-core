@@ -140,14 +140,67 @@ def get_a2a_agent_card(
     return resp.json()
 
 
+def update_access_token(
+    client: TestClient,
+    token_headers: dict[str, str],
+    agent_id: str,
+    token_id: str,
+    **fields,
+) -> dict:
+    """Update an access token via PUT /agents/{id}/access-tokens/{token_id}."""
+    r = client.put(
+        f"{settings.API_V1_STR}/agents/{agent_id}/access-tokens/{token_id}",
+        headers=token_headers,
+        json=fields,
+    )
+    assert r.status_code == 200, f"Update access token failed: {r.text}"
+    return r.json()
+
+
+def delete_access_token(
+    client: TestClient,
+    token_headers: dict[str, str],
+    agent_id: str,
+    token_id: str,
+) -> dict:
+    """Delete an access token via DELETE /agents/{id}/access-tokens/{token_id}."""
+    r = client.delete(
+        f"{settings.API_V1_STR}/agents/{agent_id}/access-tokens/{token_id}",
+        headers=token_headers,
+    )
+    assert r.status_code == 200, f"Delete access token failed: {r.text}"
+    return r.json()
+
+
+def post_a2a_raw(
+    client: TestClient,
+    agent_id: str,
+    request: dict,
+    a2a_token: str | None = None,
+):
+    """POST a JSON-RPC request to the A2A endpoint, returning the raw response.
+
+    Unlike :func:`post_a2a_jsonrpc` this does **not** assert HTTP 200, so it
+    can be used to test authentication failures and other error paths.
+    """
+    headers = _a2a_headers(a2a_token) if a2a_token else {}
+    return client.post(
+        f"{settings.API_V1_STR}/a2a/{agent_id}/",
+        headers=headers,
+        json=request,
+    )
+
+
 def setup_a2a_agent(
     client: TestClient,
     token_headers: dict[str, str],
     name: str = "A2A Agent",
-) -> tuple[dict, str]:
+) -> tuple[dict, dict]:
     """Create agent, enable A2A, create access token.
 
-    Returns ``(agent_dict, a2a_token)``.
+    Returns ``(agent_dict, token_data_dict)``.
+    ``token_data_dict`` contains ``token`` (the JWT string) and ``id``
+    (the token record UUID) among other fields.
     """
     agent = create_agent_via_api(client, token_headers, name=name)
     drain_tasks()
@@ -158,4 +211,4 @@ def setup_a2a_agent(
     enable_a2a(client, token_headers, agent["id"])
 
     token_data = create_access_token(client, token_headers, agent["id"])
-    return agent, token_data["token"]
+    return agent, token_data

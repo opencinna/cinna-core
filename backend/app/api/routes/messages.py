@@ -4,10 +4,8 @@ import logging
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
-from sqlmodel import Session as DBSession
 
 from app.api.deps import CurrentUser, SessionDep
-from app.core.db import engine
 from app.models import (
     Session,
     AgentEnvironment,
@@ -131,7 +129,6 @@ async def send_message_stream(
         content=message_in.content,
         file_ids=message_in.file_ids,
         answers_to_message_id=message_in.answers_to_message_id,
-        get_fresh_db_session=lambda: DBSession(engine)
     )
 
     # Handle error results

@@ -35,6 +35,36 @@ def get_agent(
     return r.json()
 
 
+def update_agent(
+    client: TestClient,
+    token_headers: dict[str, str],
+    agent_id: str,
+    **fields,
+) -> dict:
+    """Update agent via PUT /api/v1/agents/{id}. Pass fields as kwargs."""
+    r = client.put(
+        f"{settings.API_V1_STR}/agents/{agent_id}",
+        headers=token_headers,
+        json=fields,
+    )
+    assert r.status_code == 200, f"Update agent failed: {r.text}"
+    return r.json()
+
+
+def sync_agent_prompts(
+    client: TestClient,
+    token_headers: dict[str, str],
+    agent_id: str,
+) -> dict:
+    """Sync agent prompts to active environment via POST /api/v1/agents/{id}/sync-prompts."""
+    r = client.post(
+        f"{settings.API_V1_STR}/agents/{agent_id}/sync-prompts",
+        headers=token_headers,
+    )
+    assert r.status_code == 200, f"Sync prompts failed: {r.text}"
+    return r.json()
+
+
 def enable_a2a(
     client: TestClient,
     token_headers: dict[str, str],

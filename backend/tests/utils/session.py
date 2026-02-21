@@ -18,6 +18,22 @@ def list_sessions(
     return r.json()["data"]
 
 
+def create_session_via_api(
+    client: TestClient,
+    token_headers: dict[str, str],
+    agent_id: str,
+    mode: str = "conversation",
+) -> dict:
+    """Create session via POST /api/v1/sessions/."""
+    r = client.post(
+        f"{settings.API_V1_STR}/sessions/",
+        headers=token_headers,
+        json={"agent_id": agent_id, "mode": mode},
+    )
+    assert r.status_code == 200, f"Create session failed: {r.text}"
+    return r.json()
+
+
 def get_agent_session(
     client: TestClient,
     token_headers: dict[str, str],

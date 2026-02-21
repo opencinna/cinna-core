@@ -18,6 +18,22 @@ def list_messages(
     return r.json()["data"]
 
 
+def send_message(
+    client: TestClient,
+    token_headers: dict[str, str],
+    session_id: str,
+    content: str,
+) -> dict:
+    """Send message via POST /api/v1/sessions/{id}/messages/stream."""
+    r = client.post(
+        f"{settings.API_V1_STR}/sessions/{session_id}/messages/stream",
+        headers=token_headers,
+        json={"content": content},
+    )
+    assert r.status_code == 200, f"Send message failed: {r.text}"
+    return r.json()
+
+
 def get_messages_by_role(
     client: TestClient,
     token_headers: dict[str, str],

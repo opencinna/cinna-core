@@ -9,16 +9,29 @@ Tests the full user story:
   5. Session and context IDs in A2A match session data
   6. Agent replies and that reply is received as A2A SSE events
 
+Also tests A2A authentication enforcement:
+  - Requests without tokens are rejected
+  - Invalid tokens are rejected
+  - Revoked tokens are rejected
+  - Deleted tokens are rejected
+  - Tokens for agent A cannot access agent B
+
 Only agent-env HTTP is stubbed (via StubAgentEnvConnector).
 """
 from fastapi.testclient import TestClient
 
 from tests.utils.a2a import (
+    build_streaming_request,
+    delete_access_token,
     get_a2a_agent_card,
     post_a2a_jsonrpc,
+    post_a2a_raw,
     send_a2a_streaming_message,
     setup_a2a_agent,
+    update_access_token,
 )
+from tests.utils.agent import create_agent_via_api, enable_a2a, get_agent
+from tests.utils.background_tasks import drain_tasks
 from tests.utils.message import get_messages_by_role, list_messages
 from tests.utils.session import get_agent_session
 
@@ -41,10 +54,11 @@ def test_a2a_v1_streaming_full_flow(
     """
     # ── Phase 1: Setup ───────────────────────────────────────────────────
 
-    agent, a2a_token = setup_a2a_agent(
+    agent, token_data = setup_a2a_agent(
         client, superuser_token_headers, name="A2A Streaming Agent",
     )
     agent_id = agent["id"]
+    a2a_token = token_data["token"]
 
     # ── Phase 2: Send streaming message via A2A ──────────────────────────
 
@@ -143,10 +157,11 @@ def test_a2a_v1_streaming_continue_session(
     """
     # ── Setup ────────────────────────────────────────────────────────────
 
-    agent, a2a_token = setup_a2a_agent(
+    agent, token_data = setup_a2a_agent(
         client, superuser_token_headers, name="A2A Continue Agent",
     )
     agent_id = agent["id"]
+    a2a_token = token_data["token"]
 
     # ── First message (creates session) ──────────────────────────────────
 
@@ -194,10 +209,11 @@ def test_a2a_v1_get_task_matches_session(
     """
     # ── Setup ────────────────────────────────────────────────────────────
 
-    agent, a2a_token = setup_a2a_agent(
+    agent, token_data = setup_a2a_agent(
         client, superuser_token_headers, name="A2A GetTask Agent",
     )
     agent_id = agent["id"]
+    a2a_token = token_data["token"]
 
     # ── Stream a message ─────────────────────────────────────────────────
 
@@ -243,11 +259,11 @@ def test_a2a_v1_agent_card_with_access_token(
     Verify the extended AgentCard is returned in v1.0 format
     when using an access token.
     """
-    agent, a2a_token = setup_a2a_agent(
+    agent, token_data = setup_a2a_agent(
         client, superuser_token_headers, name="A2A Card Agent",
     )
 
-    card = get_a2a_agent_card(client, agent["id"], a2a_token)
+    card = get_a2a_agent_card(client, agent["id"], token_data["token"])
 
     # v1.0 format checks
     assert "protocolVersions" in card, "v1.0 should have protocolVersions array"
@@ -260,3 +276,156 @@ def test_a2a_v1_agent_card_with_access_token(
 
     # Agent name should be present
     assert card["name"] == "A2A Card Agent"
+
+
+# ── Auth enforcement tests ───────────────────────────────────────────────
+
+
+def test_a2a_rejects_request_without_token(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    A2A endpoint returns 401 when no Authorization header is provided.
+    """
+    agent, _ = setup_a2a_agent(
+        client, superuser_token_headers, name="A2A No-Auth Agent",
+    )
+
+    resp = post_a2a_raw(client, agent["id"], build_streaming_request("Hello"))
+    assert resp.status_code == 401
+
+
+def test_a2a_rejects_invalid_token(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    A2A endpoint returns 401 when a garbage token is provided.
+    """
+    agent, _ = setup_a2a_agent(
+        client, superuser_token_headers, name="A2A Bad-Token Agent",
+    )
+
+    resp = post_a2a_raw(
+        client, agent["id"], build_streaming_request("Hello"),
+        a2a_token="not-a-real-jwt-token",
+    )
+    assert resp.status_code == 401
+
+
+def test_a2a_revoke_and_restore_token(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    User story: token works → revoke blocks access → restore gives access back.
+      1. Create agent + token, verify A2A access works
+      2. Revoke the token → A2A request fails (401)
+      3. Restore (un-revoke) the token → A2A access works again
+    """
+    # ── Phase 1: Setup and verify access works ────────────────────────────
+
+    agent, token_data = setup_a2a_agent(
+        client, superuser_token_headers, name="A2A Revoke Agent",
+    )
+    a2a_token = token_data["token"]
+    token_id = token_data["id"]
+
+    get_a2a_agent_card(client, agent["id"], a2a_token)
+
+    # ── Phase 2: Revoke → access blocked ──────────────────────────────────
+
+    updated = update_access_token(
+        client, superuser_token_headers, agent["id"], token_id,
+        is_revoked=True,
+    )
+    assert updated["is_revoked"] is True
+
+    resp = post_a2a_raw(
+        client, agent["id"], build_streaming_request("Should be rejected"),
+        a2a_token=a2a_token,
+    )
+    assert resp.status_code == 401
+
+    # ── Phase 3: Restore → access works again ─────────────────────────────
+
+    updated = update_access_token(
+        client, superuser_token_headers, agent["id"], token_id,
+        is_revoked=False,
+    )
+    assert updated["is_revoked"] is False
+
+    get_a2a_agent_card(client, agent["id"], a2a_token)
+
+
+def test_a2a_deleted_token_blocks_access(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    User story: token works, user deletes it, subsequent A2A requests fail.
+      1. Create agent + token, verify access works
+      2. Delete the token via management API
+      3. Try the same A2A request → 401
+    """
+    # ── Phase 1: Setup and verify access works ────────────────────────────
+
+    agent, token_data = setup_a2a_agent(
+        client, superuser_token_headers, name="A2A Delete Agent",
+    )
+    a2a_token = token_data["token"]
+
+    get_a2a_agent_card(client, agent["id"], a2a_token)
+
+    # ── Phase 2: Delete the token ─────────────────────────────────────────
+
+    delete_access_token(
+        client, superuser_token_headers, agent["id"], token_data["id"],
+    )
+
+    # ── Phase 3: A2A request with deleted token → 401 ─────────────────────
+
+    resp = post_a2a_raw(
+        client, agent["id"], build_streaming_request("Should be rejected"),
+        a2a_token=a2a_token,
+    )
+    assert resp.status_code == 401
+
+
+def test_a2a_token_cannot_access_different_agent(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    A token created for agent A cannot be used to access agent B's A2A endpoint.
+
+    The A2A auth layer accepts the JWT (it's structurally valid) but the
+    handler checks agent ownership and returns a JSON-RPC permission error.
+    """
+    # ── Setup two agents, token on agent A only ───────────────────────────
+
+    agent_a, token_data = setup_a2a_agent(
+        client, superuser_token_headers, name="A2A Agent A",
+    )
+    a2a_token = token_data["token"]
+
+    agent_b = create_agent_via_api(client, superuser_token_headers, name="A2A Agent B")
+    drain_tasks()
+    agent_b = get_agent(client, superuser_token_headers, agent_b["id"])
+    enable_a2a(client, superuser_token_headers, agent_b["id"])
+
+    # ── Token for agent A works on agent A ────────────────────────────────
+
+    get_a2a_agent_card(client, agent_a["id"], a2a_token)
+
+    # ── Token for agent A rejected on agent B (JSON-RPC error) ────────────
+
+    resp = post_a2a_raw(
+        client, agent_b["id"], build_streaming_request("Cross-agent attempt"),
+        a2a_token=a2a_token,
+    )
+    # JSON-RPC returns HTTP 200 but with an error object in the body
+    body = resp.json()
+    assert "error" in body, f"Expected JSON-RPC error, got: {body}"
+    assert body["error"]["code"] == -32004  # Not enough permissions

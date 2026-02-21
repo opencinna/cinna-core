@@ -130,28 +130,62 @@ Every test function receives fixtures via pytest dependency injection. The key f
 
 Use `client` in every test. Use the auth header fixtures when the endpoint requires authentication.
 
-### Test Structure
+### Test Structure: Scenario-Based Tests
+
+Prefer **scenario-based tests** that walk through a user story end-to-end rather than writing many small atomic tests for individual operations. A single test function should set up state, perform a sequence of related actions, and verify the outcome at each step.
+
+**Why scenarios over atomic tests:**
+- They catch integration issues between steps (e.g., create → list → update → verify update appears in list)
+- They mirror real user workflows, so failures point to actual broken behavior
+- They reduce test setup duplication — each phase builds on the previous one
+- Fewer tests to maintain while covering more surface area
+
+**How to structure a scenario test:**
+- Use comment headers (`# ── Phase N: ...`) to separate logical steps
+- Assert at each phase, not just at the end — this makes failures easy to locate
+- The docstring should outline the full story as a numbered list
 
 ```python
-from fastapi.testclient import TestClient
-from app.core.config import settings
-from tests.utils.utils import random_email, random_lower_string
-
-
-def test_create_widget(
+def test_widget_full_lifecycle(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
-    data = {"name": "My Widget", "value": 42}
-    r = client.post(
-        f"{settings.API_V1_STR}/widgets/",
-        headers=superuser_token_headers,
-        json=data,
-    )
-    assert r.status_code == 200
-    created = r.json()
-    assert created["name"] == "My Widget"
-    assert "id" in created
+    """
+    Full CRUD lifecycle:
+      1. Create widget
+      2. List widgets → verify it appears
+      3. Update widget
+      4. Verify update persisted
+      5. Delete widget
+      6. Verify it's gone
+    """
+    # ── Phase 1: Create ───────────────────────────────────────────────
+    created = create_widget(client, superuser_token_headers, name="My Widget")
+    widget_id = created["id"]
+
+    # ── Phase 2: List → widget is present ─────────────────────────────
+    widgets = list_widgets(client, superuser_token_headers)
+    assert any(w["id"] == widget_id for w in widgets)
+
+    # ── Phase 3: Update ───────────────────────────────────────────────
+    updated = update_widget(client, superuser_token_headers, widget_id, name="Renamed")
+    assert updated["name"] == "Renamed"
+
+    # ── Phase 4: Verify update persisted ──────────────────────────────
+    fetched = get_widget(client, superuser_token_headers, widget_id)
+    assert fetched["name"] == "Renamed"
+
+    # ── Phase 5: Delete ───────────────────────────────────────────────
+    delete_widget(client, superuser_token_headers, widget_id)
+
+    # ── Phase 6: Verify gone ──────────────────────────────────────────
+    r = client.get(f"{settings.API_V1_STR}/widgets/{widget_id}",
+                   headers=superuser_token_headers)
+    assert r.status_code == 404
 ```
+
+**When a separate small test is appropriate:**
+- Isolated error/edge cases (404 for nonexistent resource, permission denied for wrong user)
+- Cases that can't be combined into a flow without making it confusing
 
 ### Creating Test Data
 
