@@ -3113,6 +3113,34 @@ export const Body_login_login_access_tokenSchema = {
     title: 'Body_login-login_access_token'
 } as const;
 
+export const BulkDeleteRequestSchema = {
+    properties: {
+        session_ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            title: 'Session Ids'
+        }
+    },
+    type: 'object',
+    required: ['session_ids'],
+    title: 'BulkDeleteRequest'
+} as const;
+
+export const BulkDeleteResponseSchema = {
+    properties: {
+        deleted_count: {
+            type: 'integer',
+            title: 'Deleted Count'
+        }
+    },
+    type: 'object',
+    required: ['deleted_count'],
+    title: 'BulkDeleteResponse'
+} as const;
+
 export const CheckAccessResponseSchema = {
     properties: {
         accessible: {
@@ -7499,6 +7527,28 @@ export const SessionPublicExtendedSchema = {
                 }
             ],
             title: 'Agent Ui Color Preset'
+        },
+        message_count: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Message Count'
+        },
+        last_message_content: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Message Content'
         }
     },
     type: 'object',

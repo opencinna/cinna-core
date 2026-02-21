@@ -635,6 +635,14 @@ export type Body_login_login_access_token = {
     client_secret?: (string | null);
 };
 
+export type BulkDeleteRequest = {
+    session_ids: Array<(string)>;
+};
+
+export type BulkDeleteResponse = {
+    deleted_count: number;
+};
+
 /**
  * Response for check access endpoint.
  */
@@ -1599,6 +1607,8 @@ export type SessionPublicExtended = {
     agent_id?: (string | null);
     agent_name?: (string | null);
     agent_ui_color_preset?: (string | null);
+    message_count?: (number | null);
+    last_message_content?: (string | null);
 };
 
 export type SessionsPublic = {
@@ -2906,6 +2916,7 @@ export type SessionsCreateSessionData = {
 export type SessionsCreateSessionResponse = (SessionPublic);
 
 export type SessionsListSessionsData = {
+    agentId?: (string | null);
     limit?: number;
     orderBy?: string;
     orderDesc?: boolean;
@@ -2947,6 +2958,12 @@ export type SessionsResetSdkSessionData = {
 };
 
 export type SessionsResetSdkSessionResponse = (Message);
+
+export type SessionsBulkDeleteSessionsData = {
+    requestBody: BulkDeleteRequest;
+};
+
+export type SessionsBulkDeleteSessionsResponse = (BulkDeleteResponse);
 
 export type SshKeysReadSshKeysResponse = (SSHKeysPublic);
 

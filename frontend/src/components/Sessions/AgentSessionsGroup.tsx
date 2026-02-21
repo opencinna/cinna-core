@@ -80,11 +80,11 @@ export function AgentSessionsGroup({
       {/* Show All Link */}
       {hasMore && (
         <Link
-          to="/agent/$agentId/conversations"
+          to="/sessions/agent/$agentId"
           params={{ agentId }}
           className="block text-center text-xs mt-3 pt-3 border-t text-muted-foreground hover:text-foreground hover:underline transition-colors"
         >
-          Show all conversations ({sessions.length})
+          Show all sessions ({sessions.length})
         </Link>
       )}
     </div>

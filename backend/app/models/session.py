@@ -110,6 +110,8 @@ class SessionPublicExtended(SessionPublic):
     agent_id: uuid.UUID | None = None
     agent_name: str | None = None
     agent_ui_color_preset: str | None = None
+    message_count: int | None = None
+    last_message_content: str | None = None
 
 
 class SessionsPublic(SQLModel):

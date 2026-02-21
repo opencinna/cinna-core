@@ -2,7 +2,8 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from sqlmodel import select
+from pydantic import BaseModel
+from sqlmodel import select, func
 
 from app.api.deps import CurrentUser, SessionDep
 from app.models import (
@@ -13,6 +14,7 @@ from app.models import (
     SessionPublicExtended,
     SessionsPublic,
     SessionsPublicExtended,
+    SessionMessage,
     Message,
     Agent,
     AgentEnvironment,
@@ -20,6 +22,14 @@ from app.models import (
 from app.services.session_service import SessionService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+
+class BulkDeleteRequest(BaseModel):
+    session_ids: list[uuid.UUID]
+
+
+class BulkDeleteResponse(BaseModel):
+    deleted_count: int
 
 
 @router.post("/", response_model=SessionPublic)
@@ -60,6 +70,7 @@ def list_sessions(
     order_by: str = "created_at",  # "created_at" | "updated_at" | "last_message_at"
     order_desc: bool = True,
     user_workspace_id: str | None = None,
+    agent_id: uuid.UUID | None = None,
 ) -> Any:
     """
     List user's sessions with external session metadata and agent names.
@@ -73,6 +84,7 @@ def list_sessions(
             - None (not provided): returns all sessions
             - Empty string (""): filters for default workspace (NULL)
             - UUID string: filters for that workspace
+        agent_id: Optional agent ID filter
     """
     # Parse workspace filter
     workspace_filter: uuid.UUID | None = None
@@ -94,17 +106,76 @@ def list_sessions(
             from fastapi import HTTPException
             raise HTTPException(status_code=400, detail="Invalid workspace ID format")
 
+    # Subquery for message count per session
+    msg_count_subq = (
+        select(
+            SessionMessage.session_id,
+            func.count(SessionMessage.id).label("message_count"),
+        )
+        .group_by(SessionMessage.session_id)
+        .subquery()
+    )
+
+    # Subquery for last message content per session (highest sequence_number)
+    last_msg_seq_subq = (
+        select(
+            SessionMessage.session_id,
+            func.max(SessionMessage.sequence_number).label("max_seq"),
+        )
+        .group_by(SessionMessage.session_id)
+        .subquery()
+    )
+    last_msg_subq = (
+        select(
+            SessionMessage.session_id,
+            SessionMessage.content.label("last_content"),
+        )
+        .join(
+            last_msg_seq_subq,
+            (SessionMessage.session_id == last_msg_seq_subq.c.session_id)
+            & (SessionMessage.sequence_number == last_msg_seq_subq.c.max_seq),
+        )
+        .subquery()
+    )
+
     # Join Session with AgentEnvironment and Agent to get agent name and color
     statement = (
-        select(Session, Agent.id, Agent.name, Agent.ui_color_preset)
+        select(
+            Session,
+            Agent.id,
+            Agent.name,
+            Agent.ui_color_preset,
+            msg_count_subq.c.message_count,
+            last_msg_subq.c.last_content,
+        )
         .join(AgentEnvironment, Session.environment_id == AgentEnvironment.id)
         .join(Agent, AgentEnvironment.agent_id == Agent.id)
+        .outerjoin(msg_count_subq, Session.id == msg_count_subq.c.session_id)
+        .outerjoin(last_msg_subq, Session.id == last_msg_subq.c.session_id)
         .where(Session.user_id == current_user.id)
     )
 
     # Apply workspace filter
     if apply_filter:
         statement = statement.where(Session.user_workspace_id == workspace_filter)
+
+    # Apply agent_id filter
+    if agent_id is not None:
+        statement = statement.where(Agent.id == agent_id)
+
+    # Get total count before pagination
+    count_statement = (
+        select(func.count())
+        .select_from(Session)
+        .join(AgentEnvironment, Session.environment_id == AgentEnvironment.id)
+        .join(Agent, AgentEnvironment.agent_id == Agent.id)
+        .where(Session.user_id == current_user.id)
+    )
+    if apply_filter:
+        count_statement = count_statement.where(Session.user_workspace_id == workspace_filter)
+    if agent_id is not None:
+        count_statement = count_statement.where(Agent.id == agent_id)
+    total_count = session.exec(count_statement).one()
 
     # Add ordering
     order_field = getattr(Session, order_by, Session.created_at)
@@ -123,14 +194,16 @@ def list_sessions(
             **s.model_dump(),
             external_session_id=SessionService.get_external_session_id(s),
             sdk_type=SessionService.get_sdk_type(s),
-            agent_id=agent_id,
-            agent_name=agent_name,
-            agent_ui_color_preset=agent_ui_color_preset,
+            agent_id=a_id,
+            agent_name=a_name,
+            agent_ui_color_preset=a_color,
+            message_count=msg_count or 0,
+            last_message_content=(last_content[:200] if last_content else None),
         )
-        for s, agent_id, agent_name, agent_ui_color_preset in results
+        for s, a_id, a_name, a_color, msg_count, last_content in results
     ]
 
-    return SessionsPublicExtended(data=data, count=len(results))
+    return SessionsPublicExtended(data=data, count=total_count)
 
 
 @router.get("/{id}", response_model=SessionPublicExtended)
@@ -288,3 +361,34 @@ def delete_session(
         InputTaskService.reset_task_if_no_sessions(db_session=session, task_id=source_task_id)
 
     return Message(message="Session deleted successfully")
+
+
+@router.post("/bulk-delete", response_model=BulkDeleteResponse)
+def bulk_delete_sessions(
+    session: SessionDep,
+    current_user: CurrentUser,
+    request: BulkDeleteRequest,
+) -> Any:
+    """
+    Delete multiple sessions at once.
+    """
+    deleted_count = 0
+
+    for session_id in request.session_ids:
+        chat_session = session.get(Session, session_id)
+        if not chat_session:
+            continue
+
+        # Verify ownership
+        if not current_user.is_superuser and (chat_session.user_id != current_user.id):
+            continue
+
+        source_task_id = SessionService.delete_session(db_session=session, session_id=session_id)
+
+        if source_task_id:
+            from app.services.input_task_service import InputTaskService
+            InputTaskService.reset_task_if_no_sessions(db_session=session, task_id=source_task_id)
+
+        deleted_count += 1
+
+    return BulkDeleteResponse(deleted_count=deleted_count)
