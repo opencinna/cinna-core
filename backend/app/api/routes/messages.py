@@ -135,6 +135,16 @@ async def send_message_stream(
     if result["action"] == "error":
         raise HTTPException(status_code=500, detail=result["message"])
 
+    # Handle command results (already delivered via WebSocket)
+    if result["action"] == "command_executed":
+        return {
+            "status": "ok",
+            "session_id": str(session_id),
+            "stream_room": f"session_{session_id}_stream",
+            "message": "Command executed",
+            "command_executed": True,
+        }
+
     # Build response
     response = {
         "status": "ok",

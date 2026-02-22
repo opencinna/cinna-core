@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router"
 import { toast } from "sonner"
 import type { MessagePublic } from "@/client"
 import { StreamEventRenderer } from "./StreamEventRenderer"
+import { MarkdownRenderer } from "./MarkdownRenderer"
 import { MessageActions } from "./MessageActions"
 import { AnswerQuestionsModal } from "./AnswerQuestionsModal"
 import { FileBadge } from "./FileBadge"
@@ -173,6 +174,9 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
     )
   }
 
+  // Check if this is a command response (e.g. /files) - rendered directly, not via streaming events
+  const isCommand = message.message_metadata?.command === true
+
   // Extract metadata for display
   const model = message.message_metadata?.model as string | undefined
   const totalCost = message.message_metadata?.total_cost_usd as number | undefined
@@ -260,6 +264,11 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
                   )}
                   <p className="whitespace-pre-wrap break-words">{message.content}</p>
                 </>
+              ) : isCommand ? (
+                <MarkdownRenderer
+                  content={message.content || ""}
+                  className="prose dark:prose-invert max-w-none prose-p:leading-normal prose-p:my-2 prose-ul:my-2 prose-li:my-0"
+                />
               ) : (
                 <StreamEventRenderer events={streamingEvents} conversationModeUi={conversationModeUi} />
               )}

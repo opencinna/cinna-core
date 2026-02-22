@@ -28,6 +28,7 @@ from app.services.a2a_task_store import DatabaseTaskStore
 from app.services.access_token_service import AccessTokenService
 from app.services.a2a_v1_adapter import A2AV1Adapter
 from app.core.db import engine
+from app.utils import get_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -180,11 +181,7 @@ async def get_agent_card(
     # Check if A2A is enabled for this agent
     a2a_enabled = agent.a2a_config.get("enabled", False) if agent.a2a_config else False
 
-    # Get base URL from request, respecting X-Forwarded-Proto for reverse proxy setups
-    base_url = str(request.base_url).rstrip("/")
-    forwarded_proto = request.headers.get("x-forwarded-proto")
-    if forwarded_proto == "https" and base_url.startswith("http://"):
-        base_url = "https://" + base_url[7:]
+    base_url = get_base_url(request)
 
     # Check if v1.0 format should be used
     use_v1 = A2AV1Adapter.should_use_v1(request)
@@ -292,6 +289,8 @@ async def handle_jsonrpc(
     else:
         user_id = agent.owner_id
 
+    backend_base_url = get_base_url(request)
+
     # Create request handler with A2A token context
     handler = A2ARequestHandler(
         agent=agent,
@@ -300,6 +299,7 @@ async def handle_jsonrpc(
         get_db_session=get_fresh_db_session,
         a2a_token_payload=auth.a2a_token_payload,
         access_token_id=auth.access_token_id,
+        backend_base_url=backend_base_url,
     )
 
     try:

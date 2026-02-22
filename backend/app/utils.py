@@ -152,6 +152,14 @@ def verify_password_reset_token(token: str) -> str | None:
         return None
 
 
+def get_base_url(request) -> str:
+    """Extract base URL from a request, respecting X-Forwarded-Proto for reverse proxies."""
+    url = str(request.base_url).rstrip("/")
+    if request.headers.get("x-forwarded-proto") == "https" and url.startswith("http://"):
+        url = "https://" + url[7:]
+    return url
+
+
 def detect_anthropic_credential_type(api_key: str) -> tuple[str, str]:
     """
     Detect the type of Anthropic credential based on its prefix.

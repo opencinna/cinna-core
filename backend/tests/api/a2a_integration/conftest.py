@@ -35,6 +35,8 @@ def patch_create_session(db):
         patch("app.services.email.processing_service.create_session", factory),
         patch("app.services.session_service.create_session", factory),
         patch("app.services.environment_service.create_session", factory),
+        patch("app.services.commands.files_command.create_session", factory),
+        patch("app.api.routes.shared_workspace.create_session", factory),
         patch("app.api.routes.a2a.get_fresh_db_session", factory),
     ):
         yield

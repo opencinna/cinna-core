@@ -269,8 +269,18 @@ This feature allows users to:
 
 SQLite files (`.db`, `.sqlite`, `.sqlite3`) are clickable in the environment panel and open a dedicated database viewer in a new tab.
 
+## `/files` Session Command
+
+For listing workspace files with clickable links directly from the chat, see **[agent_session_commands.md](../agent-sessions/agent_session_commands.md)**.
+
+Users can type `/files` in any agent session to get a markdown listing of all workspace files grouped by section (Files, Scripts, Logs, Docs, Uploads). Each file is a clickable link:
+- **UI users**: Links open the frontend FileViewer in a new tab (same as clicking files in the environment panel)
+- **A2A clients**: Links use short-lived tokens (1-hour JWTs) that can be opened in a browser without regular auth
+
+The command reuses the existing `adapter.get_workspace_tree()` method and requires no agent-env changes.
+
 ---
 
-**Document Version:** 2.3 (Added Remote Database Viewer reference)
-**Last Updated:** 2026-01-10
+**Document Version:** 2.4 (Added /files session command reference)
+**Last Updated:** 2026-02-22
 **Status:** Features Fully Implemented

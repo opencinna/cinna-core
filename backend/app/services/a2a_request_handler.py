@@ -55,6 +55,7 @@ class A2ARequestHandler:
         get_db_session: Callable[[], DbSession],
         a2a_token_payload: Optional[A2ATokenPayload] = None,
         access_token_id: Optional[UUID] = None,
+        backend_base_url: str = "",
     ):
         """
         Initialize the request handler.
@@ -66,6 +67,7 @@ class A2ARequestHandler:
             get_db_session: Callable that returns a fresh database session
             a2a_token_payload: Optional A2A token payload (if using access token auth)
             access_token_id: Optional access token ID (if using access token auth)
+            backend_base_url: Backend base URL for generating public links
         """
         self.agent = agent
         self.environment = environment
@@ -74,6 +76,7 @@ class A2ARequestHandler:
         self.task_store = DatabaseTaskStore(get_db_session)
         self.a2a_token_payload = a2a_token_payload
         self.access_token_id = access_token_id
+        self.backend_base_url = backend_base_url
 
     async def handle_message_send(
         self,
@@ -125,10 +128,28 @@ class A2ARequestHandler:
             get_fresh_db_session=self.get_db_session,
             agent_id=self.agent.id if session_id is None else None,
             access_token_id=self.access_token_id,
+            backend_base_url=self.backend_base_url,
         )
 
         if result.get("action") == "error":
             raise ValueError(result.get("message", "Unknown error"))
+
+        # Handle command results - return immediately with completed task
+        if result.get("action") == "command_executed":
+            cmd_session_id = result.get("session_id", session_id)
+            return Task(
+                id=str(cmd_session_id),
+                contextId=str(cmd_session_id),
+                status=TaskStatus(
+                    state=TaskState.completed,
+                    timestamp=datetime.now(UTC).isoformat() + "Z",
+                    message=Message(
+                        messageId="cmd_response",
+                        role="agent",
+                        parts=[Part(root=TextPart(text=result.get("message", "")))],
+                    ),
+                ),
+            )
 
         # Get the session_id from result (may be newly created)
         session_id = result.get("session_id", session_id)
@@ -227,10 +248,25 @@ class A2ARequestHandler:
             initiate_streaming=False,  # Don't start background streaming, we'll stream via SSE
             agent_id=self.agent.id if session_id is None else None,
             access_token_id=self.access_token_id,
+            backend_base_url=self.backend_base_url,
         )
 
         if result["action"] == "error":
             yield self._format_sse_error(request_id, -32001, result["message"])
+            return
+
+        # Handle command results - yield completed status and return
+        if result["action"] == "command_executed":
+            cmd_session_id = result.get("session_id", session_id)
+            task_id_str = str(cmd_session_id)
+            completed_event = A2AEventMapper._create_status_update(
+                task_id=task_id_str,
+                context_id=task_id_str,
+                state=TaskState.completed,
+                final=True,
+                message=result.get("message", ""),
+            )
+            yield self._format_sse_event(request_id, completed_event)
             return
 
         # Get the session_id from result (may be newly created)

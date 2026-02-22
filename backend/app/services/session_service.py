@@ -805,6 +805,7 @@ class SessionService:
         initiate_streaming: bool = True,
         agent_id: UUID | None = None,
         access_token_id: UUID | None = None,
+        backend_base_url: str | None = None,
     ) -> dict[str, Any]:
         """
         Send a message to a session and optionally initiate streaming.
@@ -898,6 +899,98 @@ class SessionService:
 
             environment_id = environment.id
             environment_status = environment.status
+            agent_id_for_command = environment.agent_id
+
+        # Phase 1.5: Check for slash commands (e.g., /files)
+        # Commands are handled locally without an LLM call.
+        from app.services.command_service import CommandService
+        # Import commands module to ensure handlers are registered
+        import app.services.commands  # noqa: F401
+
+        if CommandService.is_command(content):
+            from app.services.command_service import CommandContext
+            from app.services.message_service import MessageService
+            from app.services.event_service import event_service
+            from app.core.config import settings
+            from app.services.agent_service import AgentService
+
+            # Commands use the agent's active environment (not the session's
+            # potentially stale one) so they work even when the session was
+            # created against a previously stopped environment.
+            command_env_id = environment_id
+            with get_fresh_db_session() as db:
+                agent = AgentService.get_agent_with_environment(db, agent_id_for_command)
+                if agent and agent.active_environment_id:
+                    command_env_id = agent.active_environment_id
+
+            context = CommandContext(
+                session_id=session_id,
+                environment_id=command_env_id,
+                agent_id=agent_id_for_command,
+                user_id=user_id,
+                access_token_id=access_token_id,
+                frontend_host=settings.FRONTEND_HOST,
+                backend_base_url=backend_base_url or "",
+            )
+
+            # Create user message (marked "sent" to skip LLM streaming)
+            with get_fresh_db_session() as db:
+                user_msg = MessageService.create_message(
+                    session=db,
+                    session_id=session_id,
+                    role="user",
+                    content=content,
+                    sent_to_agent_status="sent",
+                )
+
+            # Execute command
+            result = await CommandService.execute(content, context)
+
+            # Create agent message with response
+            command_name = content.strip().split()[0]
+            with get_fresh_db_session() as db:
+                agent_msg = MessageService.create_message(
+                    session=db,
+                    session_id=session_id,
+                    role="agent",
+                    content=result.content,
+                    message_metadata={"command": True, "command_name": command_name},
+                    answers_to_message_id=user_msg.id,
+                    sent_to_agent_status="sent",
+                    status="error" if result.is_error else "",
+                )
+
+            # Emit WS events for real-time UI update
+            await event_service.emit_stream_event(session_id, "assistant", {
+                "type": "assistant",
+                "content": result.content,
+                "event_seq": 1,
+            })
+            await event_service.emit_stream_event(session_id, "stream_completed", {
+                "status": "completed",
+                "session_id": str(session_id),
+            })
+
+            # Title generation for new sessions
+            if is_new_session:
+                with get_fresh_db_session() as db:
+                    chat_session = SessionService.get_session(db, session_id)
+                    if chat_session and (not chat_session.title or chat_session.title.strip() == ""):
+                        create_task_with_error_logging(
+                            SessionService.auto_generate_session_title(
+                                session_id=session_id,
+                                first_message_content=content,
+                                get_fresh_db_session=get_fresh_db_session,
+                            ),
+                            task_name=f"auto_generate_title_session_{session_id}",
+                        )
+
+            return {
+                "action": "command_executed",
+                "message": result.content,
+                "session_id": session_id,
+                "pending_count": 0,
+            }
 
         # Phase 2: If files attached and environment not running, wait for activation
         # This must be done BEFORE file upload because upload_files_to_agent_env

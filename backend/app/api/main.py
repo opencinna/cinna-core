@@ -25,6 +25,7 @@ from app.api.routes import (
     oauth_credentials,
     private,
     sessions,
+    shared_workspace,
     ssh_keys,
     task_triggers,
     users,
@@ -65,6 +66,7 @@ api_router.include_router(task_triggers.router, prefix="/tasks", tags=["task-tri
 api_router.include_router(webhooks.router, prefix="/hooks", tags=["webhooks"])
 api_router.include_router(mail_servers.router)
 api_router.include_router(email_integration.router)
+api_router.include_router(shared_workspace.router)
 api_router.include_router(a2a.router)
 
 
