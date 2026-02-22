@@ -244,18 +244,19 @@ Enables users to view files directly in the browser by clicking on them in the e
 - **FileViewer:** `frontend/src/components/Environment/FileViewer.tsx` - Main viewer with header, filename, path, and download button
 - **CSVViewer:** `frontend/src/components/Environment/CSVViewer.tsx` - Renders CSV as table with proper parsing (handles quoted fields, escapes)
 - **MarkdownViewer:** `frontend/src/components/Environment/MarkdownViewer.tsx` - Renders Markdown with GFM support and code syntax highlighting
-- **TreeItemRenderer:** `frontend/src/components/Environment/TreeItemRenderer.tsx` - Updated to make viewable files (CSV, Markdown, JSON) clickable, opens in new tab
+- **TextViewer:** `frontend/src/components/Environment/TextViewer.tsx` - Renders plain text and log files as preformatted monospace text
+- **TreeItemRenderer:** `frontend/src/components/Environment/TreeItemRenderer.tsx` - Updated to make viewable files (CSV, Markdown, JSON, TXT, LOG) clickable, opens in new tab
 
 **File Type Renderers:**
 Different file types are handled by specific viewer components located in `frontend/src/components/Environment/`:
 - CSV files: `CSVViewer.tsx` (table rendering with headers)
 - Markdown files: `MarkdownViewer.tsx` (rendered markdown with GFM support, syntax highlighting for code blocks)
 - JSON files: `JSONViewer.tsx` (collapsible tree with type-aware color coding — green strings, orange numbers, purple booleans, red null; Expand All / Collapse All toolbar; depth 0-1 expanded by default)
-- Additional file type renderers can be added alongside existing viewers
+- Text/Log files: `TextViewer.tsx` (preformatted monospace text with word wrapping)
 
 **Integration:**
 - Environment panel file tree detects file types
-- Clickable files (CSV, Markdown, JSON) have cursor pointer on hover
+- Clickable files (CSV, Markdown, JSON, TXT, LOG) have cursor pointer on hover
 - Click handler opens new tab with file viewer route
 - Download button remains independent from view action
 
@@ -282,6 +283,6 @@ The command reuses the existing `adapter.get_workspace_tree()` method and requir
 
 ---
 
-**Document Version:** 2.5 (Added JSON file viewer)
+**Document Version:** 2.6 (Added TXT/LOG file viewer)
 **Last Updated:** 2026-02-22
 **Status:** Features Fully Implemented

@@ -5,6 +5,7 @@ import { WorkspaceService, OpenAPI } from "@/client"
 import { CSVViewer } from "./CSVViewer"
 import { MarkdownViewer } from "./MarkdownViewer"
 import { JSONViewer } from "./JSONViewer"
+import { TextViewer } from "./TextViewer"
 import { useEffect } from "react"
 import { usePageHeader } from "@/routes/_layout"
 import type { AxiosRequestConfig } from "axios"
@@ -131,6 +132,10 @@ export function FileViewer({ envId, filePath }: FileViewerProps) {
 
   if (fileExtension === "json") {
     return <JSONViewer content={fileContent} />
+  }
+
+  if (fileExtension === "txt" || fileExtension === "log") {
+    return <TextViewer content={fileContent} />
   }
 
   // Fallback for unsupported file types

@@ -86,7 +86,7 @@ export function TreeItemRenderer({
   const lastDotIndex = item.name.lastIndexOf('.')
   const baseName = lastDotIndex > 0 ? item.name.substring(0, lastDotIndex) : item.name
   const extension = lastDotIndex > 0 ? item.name.substring(lastDotIndex) : ''
-  const isViewableFile = item.fileType === "csv" || item.fileType === "md" || item.fileType === "json"
+  const isViewableFile = item.fileType === "csv" || item.fileType === "md" || item.fileType === "json" || item.fileType === "txt" || item.fileType === "log"
   const isSQLiteFile = item.fileType === "sqlite"
   const isClickable = isViewableFile // SQLite files are now expandable, not directly clickable
 
