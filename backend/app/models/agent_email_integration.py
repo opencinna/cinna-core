@@ -21,10 +21,16 @@ class AgentSessionMode(str, Enum):
     OWNER = "owner"   # Sessions created on the original agent (owner's space)
 
 
+class EmailProcessAs(str, Enum):
+    NEW_SESSION = "new_session"  # Emails processed immediately into agent sessions (default)
+    NEW_TASK = "new_task"        # Emails create tasks for review before execution
+
+
 # Shared properties (used in create/update/public)
 class AgentEmailIntegrationBase(SQLModel):
     enabled: bool = False
     access_mode: EmailAccessMode = EmailAccessMode.RESTRICTED
+    process_as: EmailProcessAs = EmailProcessAs.NEW_SESSION
     auto_approve_email_pattern: str | None = Field(default=None, max_length=1024)
     allowed_domains: str | None = Field(default=None, max_length=1024)
     max_clones: int = Field(default=50, ge=1, le=1000)
@@ -45,6 +51,7 @@ class AgentEmailIntegrationCreate(AgentEmailIntegrationBase):
 class AgentEmailIntegrationUpdate(SQLModel):
     enabled: bool | None = None
     access_mode: EmailAccessMode | None = None
+    process_as: EmailProcessAs | None = None
     auto_approve_email_pattern: str | None = Field(default=None, max_length=1024)
     allowed_domains: str | None = Field(default=None, max_length=1024)
     max_clones: int | None = Field(default=None, ge=1, le=1000)

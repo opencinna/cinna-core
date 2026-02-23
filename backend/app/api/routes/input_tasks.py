@@ -20,6 +20,8 @@ from app.models import (
     RefineTaskResponse,
     ExecuteTaskRequest,
     ExecuteTaskResponse,
+    SendAnswerRequest,
+    SendAnswerResponse,
     SessionsPublic,
     SessionPublic,
     Message,
@@ -284,6 +286,46 @@ async def execute_task(
         return ExecuteTaskResponse(
             success=True,
             session_id=new_session.id,
+        )
+    except InputTaskError as e:
+        _handle_service_error(e)
+
+
+@router.post("/{id}/send-answer", response_model=SendAnswerResponse)
+def send_task_email_answer(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+    body: SendAnswerRequest,
+) -> Any:
+    """
+    Send an email reply for an email-originated task.
+
+    Generates an AI-crafted email reply from the task's session results
+    and queues it for delivery via the original agent's SMTP configuration.
+
+    Only works for tasks with a source_email_message_id (email-originated tasks).
+    """
+    try:
+        task = InputTaskService.get_task_with_ownership_check(
+            db_session=session,
+            task_id=id,
+            user_id=current_user.id,
+        )
+
+        result = InputTaskService.send_email_answer(
+            db_session=session,
+            task=task,
+            user_id=current_user.id,
+            custom_message=body.custom_message,
+        )
+
+        return SendAnswerResponse(
+            success=result["success"],
+            queue_entry_id=result.get("queue_entry_id"),
+            generated_reply=result.get("generated_reply"),
+            error=result.get("error"),
         )
     except InputTaskError as e:
         _handle_service_error(e)

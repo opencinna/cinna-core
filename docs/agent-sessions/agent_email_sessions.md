@@ -4,6 +4,8 @@
 
 Agents can receive emails at configured IMAP mailboxes, process them as session messages, and send replies back via SMTP. The feature uses the **shared agents (clone) mechanism** for complete session and workspace isolation between different email senders. Each email sender gets their own cloned agent with independent sessions, environment, and data. An alternative **owner mode** allows sessions to run directly on the original agent for personal automation use cases.
 
+A **"Process as New Task"** mode allows incoming emails to create **InputTasks** instead of auto-responding sessions. The agent owner can review, refine, choose the right agent, and execute on their own terms. After execution, a **"Send Answer"** button generates an AI-crafted email reply from the session results and sends it back to the original sender via the existing SMTP infrastructure.
+
 ## Core Concepts
 
 ### Security Model: Clone-Based Isolation
@@ -32,36 +34,30 @@ External User -> Email -> IMAP Server -> Backend Polling (parent agent)
                                               |
                                       Sender Identification
                                               |
-                                +--------------+--------------+
-                                |   EmailRoutingService       |
-                                |                             |
-                                |  OWNER mode? ---- Yes -----|-> Route to parent agent session
-                                |       |                     |
-                                |      No (CLONE mode)        |
-                                |       |                     |
-                                |  Sender has clone? --- Yes -|-> Route to clone's session
-                                |       |                     |
-                                |      No                     |
-                                |       |                     |
-                                |  Auto-share allowed? - No --|-> Ignore/reject email
-                                |       |                     |
-                                |      Yes                    |
-                                |       |                     |
-                                |  User exists? --- No -------|-> Auto-create user
-                                |       |                     |
-                                |      Yes                    |
-                                |       |                     |
-                                |  Create share (auto-accept) |
-                                |  Create clone               |
-                                |  Queue message              |
-                                |  Process when clone ready   |
-                                +-----------------------------+
-                                              |
-                                      Message -> Target Agent's Session
-                                              |
-                                      Agent Response (in target env)
-                                              |
-                                      Email Queue -> Parent's SMTP -> External User
+                                     process_as setting?
+                                       /            \
+                                   new_task       new_session
+                                      |               |
+                                Create InputTask     EmailRoutingService
+                                for agent owner       (clone/owner mode)
+                                      |               |
+                              Owner reviews,     Route to target agent
+                              refines task            |
+                                      |          Message -> Session
+                              Execute task            |
+                                      |          Agent Response
+                              Session created         |
+                                      |          Email Queue
+                              Agent responds          |
+                                      |          SMTP send
+                                "Send Answer"         |
+                                  button         External User
+                                      |
+                              AI generates reply
+                                      |
+                                  SMTP send
+                                      |
+                                External User
 ```
 
 ### Agent Session Modes
@@ -79,6 +75,28 @@ External User -> Email -> IMAP Server -> Backend Polling (parent agent)
 - Ideal for personal automation where the agent owner wants their own agent to auto-reply
 
 Access control (open/restricted) and domain allowlists apply equally in both modes. Clone-specific settings (`max_clones`, `clone_share_mode`) are ignored in owner mode.
+
+### Email Processing Mode (`process_as`)
+
+**New Session** (`process_as = 'new_session'`, default):
+- Incoming emails are processed immediately into agent sessions (original behavior)
+- Agent auto-responds — the full routing/clone/session flow executes automatically
+- Ideal for automated workflows, customer support bots, always-on agents
+
+**New Task** (`process_as = 'new_task'`):
+- Incoming emails create **InputTasks** assigned to the agent owner
+- No automatic session or response — the owner reviews the task first
+- The task is pre-populated with the email content and the email agent is pre-selected
+- Owner can refine the task description, change the assigned agent, then execute manually
+- After execution, the **"Send Answer"** button generates an AI-crafted reply from session results
+- The reply is queued and sent via the original agent's SMTP config (preserved in `source_agent_id`)
+- Ideal for review-before-respond workflows, complex requests, or when human oversight is needed
+
+Key design decisions:
+- `source_agent_id` on `InputTask` always points to the original email agent (for SMTP config), even if the user reassigns the task to a different agent for execution
+- `source_email_message_id` being non-null identifies email-originated tasks (no separate `source` field needed)
+- Each email creates a separate task — no threading/grouping at the task level
+- `process_as` only affects future emails; already-processed emails retain their state
 
 ### Access Control Modes
 
@@ -152,9 +170,14 @@ Agent scripts running inside environments can query session metadata via HTTP:
 backend/app/
 ├── models/
 │   ├── mail_server_config.py           # IMAP/SMTP server credentials (encrypted)
-│   ├── agent_email_integration.py      # Per-agent email integration settings
-│   ├── email_message.py                # Parsed incoming emails
-│   └── outgoing_email_queue.py         # Queued agent reply emails
+│   ├── agent_email_integration.py      # Per-agent email integration settings + EmailProcessAs enum
+│   ├── email_message.py                # Parsed incoming emails (+ input_task_id)
+│   └── outgoing_email_queue.py         # Queued agent reply emails (+ input_task_id, nullable session/message)
+│
+├── agents/
+│   ├── email_reply_generator.py        # AI function: generate email reply from session results
+│   └── prompts/
+│       └── email_reply_generator_prompt.md  # Prompt template for reply generation
 │
 ├── services/email/                     # All email-related services
 │   ├── __init__.py                     # Re-exports main service classes
@@ -177,7 +200,8 @@ backend/app/
     ├── 7aeed6ea3abf_add_share_source_and_session_email_.py
     ├── 485e7e243dd5_add_email_message_table.py
     ├── 8a95916ab539_add_outgoing_email_queue_table.py
-    └── f3a1b2c4d5e6_add_agent_session_mode_and_sender_email.py
+    ├── f3a1b2c4d5e6_add_agent_session_mode_and_sender_email.py
+    └── h5c3d4e6f7g8_add_email_task_processing.py
 
 frontend/src/
 ├── components/
@@ -202,7 +226,9 @@ backend/app/
 │   ├── agent_share_service.py          # Added: create_auto_share() method
 │   ├── user_service.py                 # Added: create_email_user() method
 │   ├── session_service.py              # Added: email thread support, get_session_by_email_thread()
-│   └── message_service.py             # Added: session_context emission, STREAM_COMPLETED hook
+│   ├── message_service.py             # Added: session_context emission, STREAM_COMPLETED hook
+│   ├── input_task_service.py           # Added: send_email_answer() method
+│   └── ai_functions_service.py         # Added: generate_email_reply() wrapper
 ├── api/main.py                         # Registered mail_servers + email_integration routers
 ├── main.py                             # Registered polling/sending schedulers + event handler
 └── env-templates/python-env-advanced/app/core/server/
@@ -213,6 +239,7 @@ frontend/src/
 ├── components/
 │   ├── Agents/
 │   │   ├── AgentIntegrationsTab.tsx    # Added: EmailIntegrationCard render
+│   │   ├── EmailSessionsModal.tsx      # Added: process_as radio group (New Session / New Task)
 │   │   └── ShareManagement/
 │   │       ├── ShareList.tsx           # Added: email source badge
 │   │       └── ClonesList.tsx          # Added: email clone badge
@@ -221,6 +248,8 @@ frontend/src/
 │       └── MessageList.tsx             # Added: integrationTyp prop forwarding
 ├── routes/_layout/
 │   ├── settings.tsx                    # Added: "Mail Servers" tab
+│   ├── tasks.tsx                       # Added: "Send Answer" button for email-originated tasks
+│   ├── task/$taskId.tsx                # Added: "Send Answer" button in task detail footer
 │   └── session/$sessionId.tsx          # Added: Email/A2A badges in session header
 └── client/                             # Auto-regenerated (schemas, sdk, types)
 ```
@@ -257,6 +286,7 @@ frontend/src/
 | `max_clones` | integer, default 50, range 1-1000 | Max email-initiated clones |
 | `clone_share_mode` | enum: `user`, `builder`, default `user` | Share mode for auto-created clones |
 | `agent_session_mode` | enum: `clone`, `owner`, default `clone` | Where sessions are created |
+| `process_as` | enum: `new_session`, `new_task`, default `new_session` | How incoming emails are processed |
 | `incoming_server_id` | UUID, FK → `mail_server_config.id` SET NULL | IMAP server |
 | `incoming_mailbox` | string | Email address to monitor |
 | `outgoing_server_id` | UUID, FK → `mail_server_config.id` SET NULL | SMTP server |
@@ -271,6 +301,7 @@ frontend/src/
 | `agent_id` | UUID, FK → `agent.id` CASCADE | Parent agent |
 | `clone_agent_id` | UUID, FK → `agent.id` SET NULL | Routed target clone |
 | `session_id` | UUID, FK → `session.id` SET NULL | Created session |
+| `input_task_id` | UUID, FK → `input_task.id` SET NULL | Created task (task mode) |
 | `email_message_id` | string | Message-ID email header |
 | `sender` | string | Sender email address |
 | `subject` | string | |
@@ -291,8 +322,9 @@ frontend/src/
 | `id` | UUID, PK | |
 | `agent_id` | UUID, FK → `agent.id` CASCADE | Parent agent (owns SMTP) |
 | `clone_agent_id` | UUID, FK → `agent.id` CASCADE, nullable | Clone that generated response |
-| `session_id` | UUID, FK → `session.id` CASCADE | |
-| `message_id` | UUID, FK → `message.id` CASCADE | Agent's reply message |
+| `session_id` | UUID, FK → `session.id` CASCADE, nullable | Session (null for task-originated replies) |
+| `message_id` | UUID, FK → `message.id` CASCADE, nullable | Agent's reply message (null for task-originated replies) |
+| `input_task_id` | UUID, FK → `input_task.id` SET NULL, nullable | Source task (for task-originated replies) |
 | `recipient` | string | Recipient email address |
 | `subject` | string | |
 | `body` | text | Formatted email body |
@@ -312,6 +344,10 @@ frontend/src/
 - `email_thread_id` (string, nullable): Email Message-ID for thread matching
 - `integration_type` (string, nullable): `"email"` | `"a2a"` | null
 - `sender_email` (string, nullable): Original sender (owner mode only)
+
+**`input_task`** — Added fields (email source tracking):
+- `source_email_message_id` (UUID, FK → `email_message.id` SET NULL, nullable): Original email that created this task
+- `source_agent_id` (UUID, FK → `agent.id` SET NULL, nullable): Original email agent (preserved for SMTP config lookup even if task is reassigned to a different agent)
 
 ### Credential Storage
 
@@ -351,6 +387,16 @@ Encryption uses existing `encrypt_field()` / `decrypt_field()` from `backend/app
 | `PUT` | `/{agent_id}/email-integration/disable` | Disable integration |
 | `DELETE` | `/{agent_id}/email-integration` | Remove integration |
 | `POST` | `/{agent_id}/email-integration/process-emails` | Manual trigger: poll IMAP + process + retry pending |
+
+### Input Tasks (Email-Originated)
+
+**Router**: `backend/app/api/routes/input_tasks.py` — prefix: `/api/v1/tasks`, tags: `tasks`
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/{id}/send-answer` | Generate AI reply and queue email for an email-originated task |
+
+The endpoint validates task ownership, checks that `source_email_message_id` is set, generates an AI reply from session results via `AIFunctionsService.generate_email_reply()`, and queues it in `outgoing_email_queue` using the `source_agent_id`'s SMTP config. Accepts an optional `custom_message` to skip AI generation.
 
 ### Agent Environment (Internal)
 
@@ -400,9 +446,10 @@ services/email/
 │                            #   poll_all_enabled_agents() -> process each -> retry pending
 │
 ├── processing_service.py    # EmailProcessingService
-│                            #   Routes stored emails to target agents via EmailRoutingService
-│                            #   Finds/creates sessions using email_thread_id
-│                            #   Injects messages via SessionService.send_session_message()
+│                            #   Branches on integration.process_as:
+│                            #     new_session: Routes to target agents via EmailRoutingService,
+│                            #       finds/creates sessions, injects messages
+│                            #     new_task: Creates InputTask for agent owner to review
 │                            #   Handles pending clone creation retries
 │
 ├── sending_service.py       # EmailSendingService
@@ -428,15 +475,30 @@ services/email/
 
 **4. User Provisioning** — If sender has no account, `UserService.create_email_user()` creates one with a random password (bypasses domain whitelist).
 
-**5. Processing** — `EmailProcessingService._process_email_to_session()`:
-- Determines `thread_id` from `in_reply_to` or `email_message_id`
-- Looks up existing session by `email_thread_id` via `SessionService.get_session_by_email_thread()`
-- Creates new session if needed (with `email_thread_id`, `integration_type="email"`, optional `sender_email`)
-- Sends message via `SessionService.send_session_message()` with `initiate_streaming=True`
+**5. Processing** — `EmailProcessingService` checks `integration.process_as`:
+
+- **New Session path** (`_process_email_to_session()`):
+  - Determines `thread_id` from `in_reply_to` or `email_message_id`
+  - Looks up existing session by `email_thread_id` via `SessionService.get_session_by_email_thread()`
+  - Creates new session if needed (with `email_thread_id`, `integration_type="email"`, optional `sender_email`)
+  - Sends message via `SessionService.send_session_message()` with `initiate_streaming=True`
+
+- **New Task path** (`_process_email_to_task()`):
+  - Creates `InputTask` with email content as `original_message`/`current_description`
+  - Sets `source_email_message_id` and `source_agent_id` for email tracking
+  - Pre-selects the email agent as `selected_agent_id`
+  - Marks email as `processed=True` with `input_task_id` link
+  - No session created — owner reviews and executes manually
 
 **6. Agent Streaming** — Session and agent-env run normally. The agent-env receives `session_context.integration_type="email"` and exposes it via `GET /session/context`.
 
-**7. Sending Reply (every 2 min)** — `EmailSendingService.handle_stream_completed()` fires on `STREAM_COMPLETED` events. If `session.integration_type == "email"`, the last agent message is queued in `outgoing_email_queue`. The sending scheduler sends it via SMTP with proper `In-Reply-To`/`References` threading headers.
+**6b. Task Execution (new_task path only)** — Owner reviews the task in the Tasks UI, optionally refines the description or reassigns to a different agent, then clicks Execute. `InputTaskService.execute_task()` creates a session via `SessionService.create_session()` (with `source_task_id` link), sends the task description as the initial message via `SessionService.send_session_message()`, and the agent processes it normally. The task status transitions: `new` → `running`, and `session_id` is linked.
+
+**7. Sending Reply** — Two paths depending on how the email was processed:
+
+- **Auto-reply (new_session path, every 2 min)**: `EmailSendingService.handle_stream_completed()` fires on `STREAM_COMPLETED` events. If `session.integration_type == "email"`, the last agent message is queued in `outgoing_email_queue`. The sending scheduler sends it via SMTP with proper `In-Reply-To`/`References` threading headers.
+
+- **Manual reply (new_task path)**: Owner clicks "Send Answer" on the task after agent execution completes. `InputTaskService.send_email_answer()` retrieves the last agent message (`role == "agent"`) from the linked session (or `session.result_summary` if available), generates an AI-crafted reply via `AIFunctionsService.generate_email_reply()`, then queues it in `outgoing_email_queue` with `input_task_id` reference. The sending scheduler sends it via SMTP using the `source_agent_id`'s SMTP config. Alternatively, a `custom_message` can be provided to skip AI generation.
 
 ### Scheduler Registration
 
@@ -467,6 +529,8 @@ shutdown_email_sending_scheduler()
 | `SessionService` | `create_session()` accepts `email_thread_id`, `integration_type`, `sender_email` |
 | `SessionService` | `get_session_by_email_thread()` — finds session by thread ID for continuity |
 | `MessageService` | Emits `session_context` (including `integration_type`) to agent-env on every stream |
+| `InputTaskService` | `send_email_answer()` — generates AI reply and queues outgoing email for task-originated emails |
+| `AIFunctionsService` | `generate_email_reply()` — AI-powered email reply generation from session results |
 | Event Bus | `STREAM_COMPLETED` event triggers `EmailSendingService.handle_stream_completed()` |
 
 ## Frontend Architecture
@@ -494,9 +558,21 @@ Top-level card with:
 - Config completeness indicators (connection valid + access valid)
 - Action buttons opening three sub-modals:
   - **Access** (`EmailAccessModal.tsx`) — access mode, auto-approve patterns, domain allowlist
-  - **Sessions** (`EmailSessionsModal.tsx`) — session mode (clone/owner), max clones, share mode
+  - **Sessions** (`EmailSessionsModal.tsx`) — session mode (clone/owner), max clones, share mode, email processing mode (new session/new task)
   - **Connection** (`EmailConnectionModal.tsx`) — IMAP/SMTP server selection, mailbox/from addresses
 - Manual "Process Emails" button (triggers immediate poll + process)
+
+### Tasks: Email-Originated Task Actions
+
+**Tasks List** (`frontend/src/routes/_layout/tasks.tsx`):
+- Email-originated tasks (with `source_email_message_id`) show a **"Send Answer"** button with Mail icon
+- Button visible when task status is `completed` or `error` (has session results)
+- Shows loading state during AI reply generation
+- Toast notification on success/error
+
+**Task Detail** (`frontend/src/routes/_layout/task/$taskId.tsx`):
+- **"Send Answer"** button in the footer action buttons area, same visibility/enable logic as tasks list
+- Positioned next to the Execute button for easy access
 
 ### Share Management: Email Badges
 
@@ -551,7 +627,8 @@ Top-level card with:
 
 **Models**:
 - `backend/app/models/mail_server_config.py` — `MailServerConfig`, `MailServerConfigPublic`, `MailServerConfigCreate`, `MailServerConfigUpdate`
-- `backend/app/models/agent_email_integration.py` — `AgentEmailIntegration`, `AgentEmailIntegrationPublic`, `EmailAccessMode`, `AgentSessionMode`, `ProcessEmailsResult`
+- `backend/app/models/agent_email_integration.py` — `AgentEmailIntegration`, `AgentEmailIntegrationPublic`, `EmailAccessMode`, `AgentSessionMode`, `EmailProcessAs`, `ProcessEmailsResult`
+- `backend/app/models/input_task.py` — `InputTask` (added `source_email_message_id`, `source_agent_id`), `SendAnswerRequest`, `SendAnswerResponse`
 - `backend/app/models/email_message.py` — `EmailMessage`, `EmailMessagePublic`
 - `backend/app/models/outgoing_email_queue.py` — `OutgoingEmailQueue`, `OutgoingEmailQueuePublic`, `OutgoingEmailStatus`
 
@@ -565,11 +642,17 @@ Top-level card with:
 - `backend/app/services/email/polling_scheduler.py` — APScheduler (5 min interval)
 - `backend/app/services/email/sending_scheduler.py` — APScheduler (2 min interval)
 
+**AI Functions**:
+- `backend/app/agents/email_reply_generator.py` — `generate_email_reply()` AI function
+- `backend/app/agents/prompts/email_reply_generator_prompt.md` — Prompt template for email reply generation
+- `backend/app/services/ai_functions_service.py` — `generate_email_reply()` wrapper
+
 **Updated Services**:
 - `backend/app/services/agent_share_service.py` — `create_auto_share()` method
 - `backend/app/services/user_service.py` — `create_email_user()` method
 - `backend/app/services/session_service.py` — `get_session_by_email_thread()`, email params on `create_session()`
 - `backend/app/services/message_service.py` — `session_context` emission to agent-env
+- `backend/app/services/input_task_service.py` — `send_email_answer()` method for email-originated task replies
 
 **API Routes**:
 - `backend/app/api/routes/mail_servers.py` — Mail server CRUD + test
@@ -584,9 +667,11 @@ Top-level card with:
 - `frontend/src/components/Agents/EmailIntegrationCard.tsx` — Main integration card
 - `frontend/src/components/Agents/EmailAccessModal.tsx` — Access control modal
 - `frontend/src/components/Agents/EmailConnectionModal.tsx` — Server assignment modal
-- `frontend/src/components/Agents/EmailSessionsModal.tsx` — Session mode modal
+- `frontend/src/components/Agents/EmailSessionsModal.tsx` — Session mode + email processing mode modal
 - `frontend/src/components/Agents/ShareManagement/ShareList.tsx` — Email share badges
 - `frontend/src/components/Agents/ShareManagement/ClonesList.tsx` — Email clone badges
+- `frontend/src/routes/_layout/tasks.tsx` — "Send Answer" button for email-originated tasks
+- `frontend/src/routes/_layout/task/$taskId.tsx` — "Send Answer" button in task detail
 - `frontend/src/routes/_layout/session/$sessionId.tsx` — Integration type badges
 
 **Migrations**:
@@ -596,6 +681,7 @@ Top-level card with:
 - `485e7e243dd5` — `email_message` table
 - `8a95916ab539` — `outgoing_email_queue` table
 - `f3a1b2c4d5e6` — `agent_email_integration.agent_session_mode` + `session.sender_email`
+- `h5c3d4e6f7g8` — `agent_email_integration.process_as` + `input_task` email source fields + `email_message.input_task_id` + `outgoing_email_queue.input_task_id` + nullable session_id/message_id
 
 ## Benefits
 
@@ -610,3 +696,4 @@ Top-level card with:
 9. **Full UI Visibility**: Email-originated shares, clones, and sessions are clearly badged across the interface
 10. **Manual Override**: "Process Emails" button allows immediate poll + process without waiting for scheduler
 11. **Standard Protocol Support**: Works with any IMAP/SMTP server, supports SSL/TLS/STARTTLS encryption
+12. **Review-Before-Respond**: "New Task" processing mode gives human oversight over email requests before auto-responding — review, refine, choose the right agent, then send an AI-crafted reply

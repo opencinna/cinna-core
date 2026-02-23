@@ -33,8 +33,9 @@ class OutgoingEmailQueue(OutgoingEmailQueueBase, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     agent_id: uuid.UUID = Field(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
     clone_agent_id: uuid.UUID | None = Field(default=None, foreign_key="agent.id", ondelete="CASCADE")
-    session_id: uuid.UUID = Field(foreign_key="session.id", nullable=False, ondelete="CASCADE")
-    message_id: uuid.UUID = Field(foreign_key="message.id", nullable=False, ondelete="CASCADE")
+    session_id: uuid.UUID | None = Field(default=None, foreign_key="session.id", ondelete="CASCADE")
+    message_id: uuid.UUID | None = Field(default=None, foreign_key="message.id", ondelete="CASCADE")
+    input_task_id: uuid.UUID | None = Field(default=None, foreign_key="input_task.id", ondelete="SET NULL")
 
     status: str = Field(default=OutgoingEmailStatus.PENDING)
     retry_count: int = Field(default=0)
@@ -50,8 +51,9 @@ class OutgoingEmailQueuePublic(OutgoingEmailQueueBase):
     id: uuid.UUID
     agent_id: uuid.UUID
     clone_agent_id: uuid.UUID | None = None
-    session_id: uuid.UUID
-    message_id: uuid.UUID
+    session_id: uuid.UUID | None = None
+    message_id: uuid.UUID | None = None
+    input_task_id: uuid.UUID | None = None
     status: str
     retry_count: int
     last_error: str | None = None

@@ -34,6 +34,9 @@ class EmailMessage(EmailMessageBase, table=True):
     session_id: uuid.UUID | None = Field(
         default=None, foreign_key="session.id", ondelete="SET NULL"
     )
+    input_task_id: uuid.UUID | None = Field(
+        default=None, foreign_key="input_task.id", ondelete="SET NULL"
+    )
 
     # Processing state
     processed: bool = Field(default=False)

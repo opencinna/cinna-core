@@ -64,6 +64,13 @@ class InputTask(InputTaskBase, table=True):
     source_session_id: uuid.UUID | None = Field(
         default=None, foreign_key="session.id", ondelete="SET NULL"
     )
+    # Email source tracking (for email-originated tasks)
+    source_email_message_id: uuid.UUID | None = Field(
+        default=None, foreign_key="email_message.id", ondelete="SET NULL"
+    )
+    source_agent_id: uuid.UUID | None = Field(
+        default=None, foreign_key="agent.id", ondelete="SET NULL"
+    )
     # Auto-feedback: whether to auto-trigger source agent on session state change
     auto_feedback: bool = Field(default=True)
     feedback_delivered: bool = Field(default=False)
@@ -112,6 +119,9 @@ class InputTaskPublic(SQLModel):
     agent_initiated: bool
     auto_execute: bool
     source_session_id: uuid.UUID | None
+    # Email source tracking
+    source_email_message_id: uuid.UUID | None = None
+    source_agent_id: uuid.UUID | None = None
     auto_feedback: bool
     error_message: str | None
     created_at: datetime
@@ -170,3 +180,16 @@ class ExecuteTaskResponse(SQLModel):
     session_id: uuid.UUID | None = None
     error: str | None = None
     file_ids: list[str] | None = None
+
+
+class SendAnswerRequest(SQLModel):
+    """Request to send an email reply for an email-originated task"""
+    custom_message: str | None = Field(default=None, max_length=10000)
+
+
+class SendAnswerResponse(SQLModel):
+    """Response from sending an email reply"""
+    success: bool
+    queue_entry_id: uuid.UUID | None = None
+    generated_reply: str | None = None
+    error: str | None = None

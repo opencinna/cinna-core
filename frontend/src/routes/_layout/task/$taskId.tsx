@@ -18,6 +18,7 @@ import {
   ExternalLink,
   Plus,
   Zap,
+  Mail,
 } from "lucide-react"
 
 import { TasksService, AgentsService, FilesService } from "@/client"
@@ -207,6 +208,24 @@ function TaskDetail() {
     },
     onError: (error) => {
       showErrorToast((error as Error).message || "Failed to auto-refine task")
+    },
+  })
+
+  const sendAnswerMutation = useMutation({
+    mutationFn: () =>
+      TasksService.sendTaskEmailAnswer({
+        id: taskId,
+        requestBody: {},
+      }),
+    onSuccess: (data) => {
+      if (data.success) {
+        showSuccessToast("Email reply queued for delivery")
+      } else {
+        showErrorToast(data.error || "Failed to send email reply")
+      }
+    },
+    onError: (error) => {
+      showErrorToast((error as Error).message || "Failed to send email reply")
     },
   })
 
@@ -743,6 +762,25 @@ function TaskDetail() {
               >
                 <Layers className="h-5 w-5" />
                 <span className="text-xs">{sessions.length} sessions</span>
+              </Button>
+            )}
+
+            {/* Send Answer button - for email-originated tasks */}
+            {task.source_email_message_id && ["completed", "error"].includes(task.status) && (
+              <Button
+                variant="outline"
+                onClick={() => sendAnswerMutation.mutate()}
+                disabled={sendAnswerMutation.isPending}
+                className="h-full w-[80px] flex-col gap-1"
+              >
+                {sendAnswerMutation.isPending ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <>
+                    <Mail className="h-5 w-5" />
+                    <span className="text-xs">Send Answer</span>
+                  </>
+                )}
               </Button>
             )}
 

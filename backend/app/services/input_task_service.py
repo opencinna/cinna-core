@@ -19,7 +19,7 @@ from app.models import (
     SessionMessage,
     SessionCreate,
 )
-from app.core.db import engine
+from app.core.db import engine, create_session
 from app.services.session_service import SessionService
 
 logger = logging.getLogger(__name__)
@@ -536,7 +536,7 @@ class InputTaskService:
             content=content,
             file_ids=file_ids,
             answers_to_message_id=None,
-            get_fresh_db_session=lambda: DBSession(engine)
+            get_fresh_db_session=create_session,
         )
 
         if result["action"] == "error":
@@ -1381,6 +1381,140 @@ class InputTaskService:
             f"for task {task.id} (state={state})"
         )
         return True
+
+    # ==================== Email Answer Methods ====================
+
+    @staticmethod
+    def send_email_answer(
+        db_session: DBSession,
+        task: InputTask,
+        user_id: UUID,
+        custom_message: str | None = None,
+    ) -> dict:
+        """
+        Generate and queue an email reply for an email-originated task.
+
+        1. Validate task has source_email_message_id
+        2. Load original EmailMessage
+        3. Get session results (last agent message)
+        4. Generate AI reply (or use custom_message)
+        5. Look up SMTP config via source_agent_id
+        6. Create OutgoingEmailQueue entry
+
+        Args:
+            db_session: Database session
+            task: The email-originated task
+            user_id: User ID performing the action
+            custom_message: Optional custom reply text (skips AI generation)
+
+        Returns:
+            dict with success, queue_entry_id, generated_reply, or error
+        """
+        from app.models.email_message import EmailMessage
+        from app.models.outgoing_email_queue import OutgoingEmailQueue, OutgoingEmailStatus
+        from app.models.agent_email_integration import AgentEmailIntegration
+        from app.services.ai_functions_service import AIFunctionsService
+
+        # Validate task is email-originated
+        if not task.source_email_message_id:
+            return {
+                "success": False,
+                "error": "Task is not email-originated (no source_email_message_id)",
+            }
+
+        # Load original email
+        email_msg = db_session.get(EmailMessage, task.source_email_message_id)
+        if not email_msg:
+            return {
+                "success": False,
+                "error": "Original email message not found",
+            }
+
+        # Get session results
+        session_result = None
+        if task.session_id:
+            session = db_session.get(Session, task.session_id)
+            if session and session.result_summary:
+                session_result = session.result_summary
+            else:
+                # Try to get the last agent message from the session
+                last_msg = db_session.exec(
+                    select(SessionMessage)
+                    .where(SessionMessage.session_id == task.session_id)
+                    .where(SessionMessage.role == "agent")
+                    .order_by(SessionMessage.timestamp.desc())
+                ).first()
+                if last_msg:
+                    session_result = last_msg.content
+
+        if not session_result and not custom_message:
+            return {
+                "success": False,
+                "error": "No session results and no custom message provided",
+            }
+
+        # Generate reply
+        reply_body = custom_message
+        reply_subject = f"Re: {email_msg.subject}" if email_msg.subject else "Re: your email"
+
+        if not custom_message:
+            # Use AI to generate reply
+            ai_result = AIFunctionsService.generate_email_reply(
+                original_subject=email_msg.subject or "",
+                original_body=email_msg.body or "",
+                original_sender=email_msg.sender,
+                session_result=session_result or "",
+                task_description=task.current_description,
+            )
+
+            if not ai_result.get("success"):
+                return {
+                    "success": False,
+                    "error": ai_result.get("error", "Failed to generate email reply"),
+                }
+
+            reply_body = ai_result["reply_body"]
+            reply_subject = ai_result.get("reply_subject", reply_subject)
+
+        # Look up SMTP config via source_agent_id
+        source_agent_id = task.source_agent_id or email_msg.agent_id
+        integration = db_session.exec(
+            select(AgentEmailIntegration)
+            .where(AgentEmailIntegration.agent_id == source_agent_id)
+        ).first()
+
+        if not integration or not integration.outgoing_server_id:
+            return {
+                "success": False,
+                "error": "No outgoing email server configured for this agent",
+            }
+
+        # Create outgoing email queue entry
+        queue_entry = OutgoingEmailQueue(
+            agent_id=source_agent_id,
+            input_task_id=task.id,
+            session_id=task.session_id,
+            recipient=email_msg.sender,
+            subject=reply_subject,
+            body=reply_body,
+            in_reply_to=email_msg.email_message_id,
+            references=email_msg.email_message_id,
+            status=OutgoingEmailStatus.PENDING,
+        )
+        db_session.add(queue_entry)
+        db_session.commit()
+        db_session.refresh(queue_entry)
+
+        logger.info(
+            f"Task {task.id}: queued email reply {queue_entry.id} "
+            f"to {email_msg.sender} via agent {source_agent_id}"
+        )
+
+        return {
+            "success": True,
+            "queue_entry_id": queue_entry.id,
+            "generated_reply": reply_body,
+        }
 
     # ==================== File Attachment Methods ====================
 

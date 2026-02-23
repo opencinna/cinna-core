@@ -180,6 +180,7 @@ export type AgentCredentialLinkRequest = {
 export type AgentEmailIntegrationCreate = {
     enabled?: boolean;
     access_mode?: EmailAccessMode;
+    process_as?: EmailProcessAs;
     auto_approve_email_pattern?: (string | null);
     allowed_domains?: (string | null);
     max_clones?: number;
@@ -194,6 +195,7 @@ export type AgentEmailIntegrationCreate = {
 export type AgentEmailIntegrationPublic = {
     enabled?: boolean;
     access_mode?: EmailAccessMode;
+    process_as?: EmailProcessAs;
     auto_approve_email_pattern?: (string | null);
     allowed_domains?: (string | null);
     max_clones?: number;
@@ -837,6 +839,8 @@ export type EmailAccessMode = 'open' | 'restricted';
 
 export type EmailCloneShareMode = 'user' | 'builder';
 
+export type EmailProcessAs = 'new_session' | 'new_task';
+
 export type EncryptionType = 'ssl' | 'tls' | 'starttls' | 'none';
 
 /**
@@ -1030,6 +1034,8 @@ export type InputTaskPublic = {
     agent_initiated: boolean;
     auto_execute: boolean;
     source_session_id: (string | null);
+    source_email_message_id?: (string | null);
+    source_agent_id?: (string | null);
     auto_feedback: boolean;
     error_message: (string | null);
     created_at: string;
@@ -1054,6 +1060,8 @@ export type InputTaskPublicExtended = {
     agent_initiated: boolean;
     auto_execute: boolean;
     source_session_id: (string | null);
+    source_email_message_id?: (string | null);
+    source_agent_id?: (string | null);
     auto_feedback: boolean;
     error_message: (string | null);
     created_at: string;
@@ -1544,6 +1552,23 @@ export type ScheduleResponse = {
     description?: (string | null);
     cron_string?: (string | null);
     next_execution?: (string | null);
+    error?: (string | null);
+};
+
+/**
+ * Request to send an email reply for an email-originated task
+ */
+export type SendAnswerRequest = {
+    custom_message?: (string | null);
+};
+
+/**
+ * Response from sending an email reply
+ */
+export type SendAnswerResponse = {
+    success: boolean;
+    queue_entry_id?: (string | null);
+    generated_reply?: (string | null);
     error?: (string | null);
 };
 
@@ -2971,6 +2996,17 @@ export type SessionsBulkDeleteSessionsData = {
 
 export type SessionsBulkDeleteSessionsResponse = (BulkDeleteResponse);
 
+export type SharedWorkspaceViewSharedWorkspaceFileData = {
+    envId: string;
+    path: string;
+    /**
+     * Workspace view token
+     */
+    token: string;
+};
+
+export type SharedWorkspaceViewSharedWorkspaceFileResponse = (unknown);
+
 export type SshKeysReadSshKeysResponse = (SSHKeysPublic);
 
 export type SshKeysImportSshKeyData = {
@@ -3057,6 +3093,13 @@ export type TasksExecuteTaskData = {
 };
 
 export type TasksExecuteTaskResponse = (ExecuteTaskResponse);
+
+export type TasksSendTaskEmailAnswerData = {
+    id: string;
+    requestBody: SendAnswerRequest;
+};
+
+export type TasksSendTaskEmailAnswerResponse = (SendAnswerResponse);
 
 export type TasksArchiveTaskData = {
     id: string;

@@ -16,7 +16,10 @@ from sqlmodel import Session as DBSession, select
 from app.core.db import create_session
 from app.models.email_message import EmailMessage
 from app.models.session import Session, SessionCreate
+from app.models.input_task import InputTask, InputTaskStatus
+from app.models.agent_email_integration import EmailProcessAs
 from app.services.email.routing_service import EmailRoutingService, EmailAccessDenied
+from app.services.email.integration_service import EmailIntegrationService
 from app.services.session_service import SessionService
 
 logger = logging.getLogger(__name__)
@@ -49,7 +52,24 @@ class EmailProcessingService:
             return True
 
         try:
-            # Route email to target agent (clone or owner agent depending on session mode)
+            # Check if integration is configured for task mode
+            integration = EmailIntegrationService.get_email_integration(
+                db_session, email_msg.agent_id
+            )
+            process_as = (
+                integration.process_as
+                if integration and hasattr(integration, 'process_as')
+                else EmailProcessAs.NEW_SESSION
+            )
+
+            # Task mode: create InputTask instead of session
+            if process_as == EmailProcessAs.NEW_TASK:
+                await EmailProcessingService._process_email_to_task(
+                    db_session, email_msg
+                )
+                return True
+
+            # Session mode: route email to target agent
             target_agent_id, is_ready, session_mode = await EmailRoutingService.route_email(
                 session=db_session,
                 agent_id=email_msg.agent_id,
@@ -119,6 +139,23 @@ class EmailProcessingService:
 
         for email_msg in pending_emails:
             try:
+                # Check if integration switched to task mode
+                integration = EmailIntegrationService.get_email_integration(
+                    db_session, email_msg.agent_id
+                )
+                process_as = (
+                    integration.process_as
+                    if integration and hasattr(integration, 'process_as')
+                    else EmailProcessAs.NEW_SESSION
+                )
+
+                if process_as == EmailProcessAs.NEW_TASK:
+                    await EmailProcessingService._process_email_to_task(
+                        db_session, email_msg
+                    )
+                    processed_count += 1
+                    continue
+
                 if not email_msg.clone_agent_id:
                     # Re-route if target agent wasn't set
                     target_agent_id, is_ready, session_mode = await EmailRoutingService.route_email(
@@ -133,10 +170,6 @@ class EmailProcessingService:
                     target_agent_id = email_msg.clone_agent_id
                     # Determine session_mode from integration config
                     from app.models.agent_email_integration import AgentSessionMode
-                    from app.services.email.integration_service import EmailIntegrationService
-                    integration = EmailIntegrationService.get_email_integration(
-                        db_session, email_msg.agent_id
-                    )
                     session_mode = (
                         integration.agent_session_mode
                         if integration
@@ -283,6 +316,57 @@ class EmailProcessingService:
         logger.info(
             f"Email {email_msg.id}: processed -> session {session_id} "
             f"on agent {target_agent_id} (mode={session_mode})"
+        )
+
+    @staticmethod
+    async def _process_email_to_task(
+        db_session: DBSession,
+        email_msg: EmailMessage,
+    ) -> None:
+        """
+        Create an InputTask from an incoming email instead of a session.
+
+        Used when integration.process_as == "new_task". The task is created
+        for the agent owner to review, refine, and execute manually.
+
+        The task retains source_agent_id for SMTP config lookup when sending replies.
+        """
+        from app.models.agent import Agent
+
+        # Get the parent agent and its owner
+        agent = db_session.get(Agent, email_msg.agent_id)
+        if not agent:
+            raise ValueError(f"Agent {email_msg.agent_id} not found")
+
+        # Build task content from email
+        content = EmailProcessingService._format_email_as_message(email_msg)
+
+        # Create InputTask
+        task = InputTask(
+            owner_id=agent.owner_id,
+            original_message=content,
+            current_description=content,
+            selected_agent_id=email_msg.agent_id,  # Pre-select the email agent
+            source_email_message_id=email_msg.id,
+            source_agent_id=email_msg.agent_id,  # Preserved for SMTP lookup
+            status=InputTaskStatus.NEW,
+            refinement_history=[],
+        )
+        db_session.add(task)
+        db_session.commit()
+        db_session.refresh(task)
+
+        # Mark email as processed and link to task
+        email_msg.processed = True
+        email_msg.pending_clone_creation = False
+        email_msg.input_task_id = task.id
+        email_msg.updated_at = datetime.now(UTC)
+        db_session.add(email_msg)
+        db_session.commit()
+
+        logger.info(
+            f"Email {email_msg.id}: created task {task.id} for agent {email_msg.agent_id} "
+            f"owner {agent.owner_id} (process_as=new_task)"
         )
 
     @staticmethod

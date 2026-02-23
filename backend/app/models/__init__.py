@@ -242,6 +242,8 @@ from .input_task import (
     RefineTaskResponse,
     ExecuteTaskRequest,
     ExecuteTaskResponse,
+    SendAnswerRequest,
+    SendAnswerResponse,
 )
 from .task_trigger import (
     TaskTrigger,
@@ -261,6 +263,7 @@ from .agent_email_integration import (
     AgentEmailIntegrationPublic,
     EmailAccessMode,
     EmailCloneShareMode,
+    EmailProcessAs,
     ProcessEmailsResult,
 )
 from .mail_server_config import (
@@ -510,6 +513,8 @@ __all__ = [
     "RefineTaskResponse",
     "ExecuteTaskRequest",
     "ExecuteTaskResponse",
+    "SendAnswerRequest",
+    "SendAnswerResponse",
     # Task Triggers
     "TaskTrigger",
     "TriggerType",
@@ -527,6 +532,7 @@ __all__ = [
     "AgentEmailIntegrationPublic",
     "EmailAccessMode",
     "EmailCloneShareMode",
+    "EmailProcessAs",
     "ProcessEmailsResult",
     # Mail Server Config
     "MailServerConfig",

@@ -7,6 +7,7 @@ import {
   type AgentEmailIntegrationPublic,
   type AgentSessionMode,
   type EmailCloneShareMode,
+  type EmailProcessAs,
 } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -48,12 +49,14 @@ export function EmailSessionsModal({
   const [sessionMode, setSessionMode] = useState<AgentSessionMode>("clone")
   const [maxClones, setMaxClones] = useState(50)
   const [cloneShareMode, setCloneShareMode] = useState<EmailCloneShareMode>("user")
+  const [processAs, setProcessAs] = useState<EmailProcessAs>("new_session")
 
   useEffect(() => {
     if (open && integration) {
       setSessionMode(integration.agent_session_mode || "clone")
       setMaxClones(integration.max_clones ?? 50)
       setCloneShareMode(integration.clone_share_mode || "user")
+      setProcessAs(integration.process_as || "new_session")
     }
   }, [open, integration])
 
@@ -82,6 +85,7 @@ export function EmailSessionsModal({
       max_clones: maxClones,
       clone_share_mode: cloneShareMode,
       agent_session_mode: sessionMode,
+      process_as: processAs,
       incoming_server_id: integration?.incoming_server_id || null,
       incoming_mailbox: integration?.incoming_mailbox || null,
       outgoing_server_id: integration?.outgoing_server_id || null,
@@ -134,8 +138,42 @@ export function EmailSessionsModal({
             </p>
           </div>
 
+          {/* Process As */}
+          <div className="space-y-3">
+            <Label className="text-sm font-medium">Email Processing</Label>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="modal_process_as"
+                  value="new_session"
+                  checked={processAs === "new_session"}
+                  onChange={() => setProcessAs("new_session")}
+                  className="accent-primary"
+                />
+                <span className="text-sm">New Session</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="modal_process_as"
+                  value="new_task"
+                  checked={processAs === "new_task"}
+                  onChange={() => setProcessAs("new_task")}
+                  className="accent-primary"
+                />
+                <span className="text-sm">New Task</span>
+              </label>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {processAs === "new_task"
+                ? "Emails create tasks for you to review, refine, and execute manually. Use 'Send Answer' to reply after execution."
+                : "Emails are processed immediately into agent sessions with automatic responses."}
+            </p>
+          </div>
+
           {/* Max clones & clone share mode (clone mode only) */}
-          {sessionMode === "clone" && (
+          {sessionMode === "clone" && processAs === "new_session" && (
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="modal_max_clones">Max Clones</Label>
@@ -167,7 +205,7 @@ export function EmailSessionsModal({
           )}
 
           {/* Clone count display */}
-          {integration && sessionMode === "clone" && (
+          {integration && sessionMode === "clone" && processAs === "new_session" && (
             <p className="text-sm text-muted-foreground">
               Currently {integration.email_clone_count}/{integration.max_clones ?? 50} email clones active
             </p>

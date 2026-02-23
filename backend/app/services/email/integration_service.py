@@ -335,6 +335,7 @@ class EmailIntegrationService:
             agent_id=integration.agent_id,
             enabled=integration.enabled,
             access_mode=integration.access_mode,
+            process_as=integration.process_as,
             auto_approve_email_pattern=integration.auto_approve_email_pattern,
             allowed_domains=integration.allowed_domains,
             max_clones=integration.max_clones,

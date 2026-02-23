@@ -1535,6 +1535,10 @@ export const AgentEmailIntegrationCreateSchema = {
             '$ref': '#/components/schemas/EmailAccessMode',
             default: 'restricted'
         },
+        process_as: {
+            '$ref': '#/components/schemas/EmailProcessAs',
+            default: 'new_session'
+        },
         auto_approve_email_pattern: {
             anyOf: [
                 {
@@ -1637,6 +1641,10 @@ export const AgentEmailIntegrationPublicSchema = {
         access_mode: {
             '$ref': '#/components/schemas/EmailAccessMode',
             default: 'restricted'
+        },
+        process_as: {
+            '$ref': '#/components/schemas/EmailProcessAs',
+            default: 'new_session'
         },
         auto_approve_email_pattern: {
             anyOf: [
@@ -3947,6 +3955,12 @@ export const EmailCloneShareModeSchema = {
     title: 'EmailCloneShareMode'
 } as const;
 
+export const EmailProcessAsSchema = {
+    type: 'string',
+    enum: ['new_session', 'new_task'],
+    title: 'EmailProcessAs'
+} as const;
+
 export const EncryptionTypeSchema = {
     type: 'string',
     enum: ['ssl', 'tls', 'starttls', 'none'],
@@ -4660,6 +4674,30 @@ export const InputTaskPublicSchema = {
             ],
             title: 'Source Session Id'
         },
+        source_email_message_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Email Message Id'
+        },
+        source_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Agent Id'
+        },
         auto_feedback: {
             type: 'boolean',
             title: 'Auto Feedback'
@@ -4806,6 +4844,30 @@ export const InputTaskPublicExtendedSchema = {
                 }
             ],
             title: 'Source Session Id'
+        },
+        source_email_message_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Email Message Id'
+        },
+        source_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Agent Id'
         },
         auto_feedback: {
             type: 'boolean',
@@ -7073,6 +7135,73 @@ export const ScheduleResponseSchema = {
     required: ['success'],
     title: 'ScheduleResponse',
     description: 'Response from AI schedule generation.'
+} as const;
+
+export const SendAnswerRequestSchema = {
+    properties: {
+        custom_message: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 10000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Custom Message'
+        }
+    },
+    type: 'object',
+    title: 'SendAnswerRequest',
+    description: 'Request to send an email reply for an email-originated task'
+} as const;
+
+export const SendAnswerResponseSchema = {
+    properties: {
+        success: {
+            type: 'boolean',
+            title: 'Success'
+        },
+        queue_entry_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Queue Entry Id'
+        },
+        generated_reply: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Generated Reply'
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        }
+    },
+    type: 'object',
+    required: ['success'],
+    title: 'SendAnswerResponse',
+    description: 'Response from sending an email reply'
 } as const;
 
 export const SessionCreateSchema = {

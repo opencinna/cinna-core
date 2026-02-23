@@ -1,9 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useEffect, useState, useCallback } from "react"
-import { Plus, MessageSquare, Play, Sparkles, Circle, CheckCircle2, List, Archive, Loader2, MoreVertical, Trash2, Layers, FileText } from "lucide-react"
+import { Plus, MessageSquare, Play, Sparkles, Circle, CheckCircle2, List, Archive, Loader2, MoreVertical, Trash2, Layers, FileText, Mail } from "lucide-react"
 
 import { TasksService, AgentsService } from "@/client"
+import useCustomToast from "@/hooks/useCustomToast"
 import type { InputTaskPublicExtended } from "@/client"
 import { usePageHeader } from "@/routes/_layout"
 import { TaskStatusBadge } from "@/components/Tasks/TaskStatusBadge"
@@ -35,6 +36,7 @@ function TasksList() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { activeWorkspaceId } = useWorkspace()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active")
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [sessionsModalTaskId, setSessionsModalTaskId] = useState<string | null>(null)
@@ -103,6 +105,29 @@ function TasksList() {
       queryClient.invalidateQueries({ queryKey: ["tasks"] })
     },
   })
+
+  const sendAnswerMutation = useMutation({
+    mutationFn: (taskId: string) =>
+      TasksService.sendTaskEmailAnswer({
+        id: taskId,
+        requestBody: {},
+      }),
+    onSuccess: (data) => {
+      if (data.success) {
+        showSuccessToast("Email reply queued for delivery")
+      } else {
+        showErrorToast(data.error || "Failed to send email reply")
+      }
+    },
+    onError: (error: any) => {
+      showErrorToast(error?.body?.detail || "Failed to send email reply")
+    },
+  })
+
+  const handleSendAnswer = (e: React.MouseEvent, taskId: string) => {
+    e.stopPropagation()
+    sendAnswerMutation.mutate(taskId)
+  }
 
   const handleArchive = (e: React.MouseEvent, taskId: string) => {
     e.stopPropagation()
@@ -433,6 +458,22 @@ function TasksList() {
                                 Open Task
                               </Button>
                             ) : null}
+                            {task.source_email_message_id && ["completed", "error"].includes(task.status) && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={(e) => handleSendAnswer(e, task.id)}
+                                disabled={sendAnswerMutation.isPending}
+                                title="Send email reply"
+                              >
+                                {sendAnswerMutation.isPending ? (
+                                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                                ) : (
+                                  <Mail className="h-4 w-4 mr-1" />
+                                )}
+                                Send Answer
+                              </Button>
+                            )}
                             <Button
                               size="sm"
                               onClick={(e) => handleExecute(e, task.id)}
