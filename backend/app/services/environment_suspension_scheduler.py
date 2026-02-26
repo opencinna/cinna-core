@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlmodel import Session, select
 
@@ -49,7 +49,7 @@ async def _check_and_suspend_environments():
 
         logger.info(f"Checking {len(running_envs)} running environments for suspension")
 
-        threshold_time = datetime.now(UTC) - timedelta(minutes=INACTIVITY_THRESHOLD_MINUTES)
+        threshold_time = datetime.utcnow() - timedelta(minutes=INACTIVITY_THRESHOLD_MINUTES)
         lifecycle_manager = EnvironmentLifecycleManager()
 
         suspended_count = 0
