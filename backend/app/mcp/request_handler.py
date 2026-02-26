@@ -8,6 +8,7 @@ All data access is done through the service layer (SessionService, MessageServic
 rather than direct database queries (following the same pattern as A2ARequestHandler).
 """
 import asyncio
+import json
 import logging
 from typing import Callable
 from uuid import UUID
@@ -68,6 +69,7 @@ class MCPRequestHandler:
         self,
         message: str,
         mcp_session_id: str | None = None,
+        context_id: str | None = None,
     ) -> str:
         """
         Handle send_message tool call.
@@ -77,14 +79,15 @@ class MCPRequestHandler:
         2. Create user message
         3. Ensure environment is ready for streaming
         4. Stream response from agent environment
-        5. Return response text
+        5. Return JSON with response text and context_id
 
         Args:
             message: User message content
             mcp_session_id: Optional MCP transport session ID (from client header)
+            context_id: Optional context_id for per-chat session isolation
 
         Returns:
-            Agent response text or error string
+            JSON string with "response" and "context_id" fields
         """
         # Phase 1: Get/create session and create user message
         with self.get_db_session() as db:
@@ -93,17 +96,15 @@ class MCPRequestHandler:
                     db_session=db,
                     connector=self.connector,
                     mcp_session_id=mcp_session_id,
+                    context_id=context_id,
                 )
             except ValueError as e:
-                return f"Error: {e}"
+                return json.dumps({"error": str(e), "context_id": ""})
 
             session_id = platform_session.id
+            result_context_id = str(session_id)
             external_session_id = (platform_session.session_metadata or {}).get(
                 "external_session_id"
-            )
-            logger.info(
-                "[MCP] Using platform_session=%s | is_new=%s | external_session_id=%s",
-                session_id, is_new_session, external_session_id or "(none)",
             )
 
             # Create user message (same as email/A2A pipeline)
@@ -134,14 +135,14 @@ class MCPRequestHandler:
                 timeout_seconds=120,
             )
         except (ValueError, RuntimeError) as e:
-            logger.error(f"[MCP] Environment not ready for streaming: {e}")
-            return f"Error: Environment not ready: {str(e)}"
+            logger.error("[MCP] Environment not ready for streaming: %s", e)
+            return json.dumps({"error": f"Environment not ready: {e}", "context_id": result_context_id})
 
         # Phase 3: Stream response with per-session locking
         session_id_str = str(session_id)
         lock = _get_session_lock(session_id_str)
         if lock.locked():
-            return "Error: Another message is being processed. Please wait."
+            return json.dumps({"error": "Another message is being processed. Please wait.", "context_id": result_context_id})
 
         response_parts: list[str] = []
         async with lock:
@@ -164,15 +165,18 @@ class MCPRequestHandler:
                     elif event_type == "error":
                         error_content = event.get("content", "Unknown error")
                         logger.error("[MCP] Error event from agent: %s", error_content)
-                        return f"Error from agent: {error_content}"
+                        return json.dumps({"error": f"Error from agent: {error_content}", "context_id": result_context_id})
 
             except Exception as e:
-                logger.error(f"[MCP] Error streaming from agent environment: {e}")
-                return f"Error: Failed to communicate with agent environment: {str(e)}"
+                logger.error("[MCP] Error streaming from agent environment: %s", e)
+                return json.dumps({"error": f"Failed to communicate with agent environment: {e}", "context_id": result_context_id})
 
         full_response = "\n\n".join(response_parts)
         logger.info(
             "[MCP] Response complete | session=%s | response_parts=%d | length=%d",
             session_id, len(response_parts), len(full_response),
         )
-        return full_response if full_response else "No response from agent"
+        return json.dumps({
+            "response": full_response if full_response else "No response from agent",
+            "context_id": result_context_id,
+        })

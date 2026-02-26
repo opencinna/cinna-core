@@ -106,8 +106,9 @@ This is more secure than URL-as-security-boundary because URLs can leak inadvert
 
 | MCP Primitive | Platform Mapping |
 |---------------|-----------------|
-| **Tool** (`send_message`) | Send a message to the agent, receive a response |
-| **MCP Session** | Platform Session (one MCP session = one chat session) |
+| **Tool** (`send_message`) | Send a message to the agent, receive a JSON response with `response` and `context_id` |
+| **`context_id`** | Platform Session UUID — echoed by LLM to maintain per-chat continuity |
+| **MCP Session** | Transport-level session (shared across chats); stored as metadata, not used for routing |
 | **Resource** (future) | Agent workspace files |
 | **Prompt** (future) | Agent prompt templates |
 
@@ -115,9 +116,14 @@ This is more secure than URL-as-security-boundary because URLs can leak inadvert
 
 The agent exposes a single primary tool:
 
-**`send_message`** — Send a message to the agent and receive a response. The agent processes the request using its configured capabilities, tools, and knowledge.
+**`send_message(message, context_id)`** — Send a message to the agent and receive a response. Returns a JSON object with `response` and `context_id` fields.
 
-Session continuity is automatic — all `send_message` calls within the same MCP session go to the same platform chat session. New MCP session = new conversation.
+**Per-chat session isolation via `context_id`:**
+- On the first call in a new chat, `context_id` is empty → a new platform session is created → the response includes the session's `context_id` (its UUID)
+- On subsequent calls, the LLM passes back the `context_id` from the previous response → the same session is reused
+- A new chat = fresh LLM context = no `context_id` = new session
+
+This solves a fundamental problem: Claude Desktop (and similar MCP clients) reuse a single MCP transport session (`mcp-session-id`) across all chats. Without `context_id`, all chats would land in the same platform session. The `context_id` parameter lets us distinguish chats even when the transport session is shared.
 
 ### Service Layer Architecture
 
@@ -127,11 +133,12 @@ The tool handler follows the same isolation pattern as `A2ARequestHandler`:
 tools.py (thin MCP entry point)
     ├─ Extract MCP context vars (connector_id, mcp_session_id)
     ├─ MCPConnectorService.resolve_connector_context() → (connector, agent, environment)
-    └─ MCPRequestHandler.handle_send_message()
-            ├─ SessionService.get_or_create_mcp_session()
+    └─ MCPRequestHandler.handle_send_message(message, mcp_session_id, context_id)
+            ├─ SessionService.get_or_create_mcp_session(context_id=...)
             ├─ MessageService.create_message()
             ├─ SessionService.ensure_environment_ready_for_streaming()
-            └─ MessageService.stream_message_with_events()
+            ├─ MessageService.stream_message_with_events()
+            └─ Return JSON: {"response": "...", "context_id": "<session_uuid>"}
 ```
 
 **Key principle:** No direct database queries in `MCPRequestHandler` — all data access goes through `SessionService` and `MessageService`, matching the A2A handler pattern.
@@ -232,29 +239,36 @@ When the OAuth `/authorize` endpoint is hit:
 ```
 MCP Client connects (initialize → Mcp-Session-Id assigned by SDK)
     │
-    ├─ tools/list → Returns [send_message]
+    ├─ tools/list → Returns [send_message(message, context_id)]
     │
-    ├─ tools/call "send_message" {message: "..."}       ← first call
+    ├─ Chat 1: tools/call "send_message" {message: "...", context_id: ""}    ← first call
     │   │
-    │   ├─ tools.py: extract context vars, resolve entities via MCPConnectorService
-    │   ├─ MCPRequestHandler.handle_send_message():
-    │   │   ├─ SessionService.get_or_create_mcp_session() → not found → create
+    │   ├─ tools.py: extract context vars, resolve entities
+    │   ├─ MCPRequestHandler.handle_send_message(context_id=""):
+    │   │   ├─ SessionService.get_or_create_mcp_session(context_id=None) → create new
     │   │   ├─ MessageService.create_message() (user message)
-    │   │   ├─ SessionService.ensure_environment_ready_for_streaming()
-    │   │   ├─ MessageService.stream_message_with_events() → stream from agent env
-    │   │   └─ Return agent response text
-    │   └─ Return to MCP client
+    │   │   ├─ Stream response from agent environment
+    │   │   └─ Return JSON: {"response": "...", "context_id": "<session-uuid-A>"}
+    │   └─ LLM receives context_id, stores in its context window
     │
-    ├─ tools/call "send_message" {message: "..."}       ← subsequent call
-    │   │
-    │   ├─ MCPRequestHandler: look up session by mcp_session_id → found
-    │   └─ Same flow, reusing existing session
+    ├─ Chat 1: tools/call "send_message" {message: "...", context_id: "<session-uuid-A>"}
+    │   │                                                                ← LLM echoes it back
+    │   ├─ MCPRequestHandler: look up session by context_id → found → reuse
+    │   └─ Same session, conversation continues
     │
-    └─ [New MCP connection] → new platform session (no cross-session visibility)
+    ├─ Chat 2: tools/call "send_message" {message: "...", context_id: ""}
+    │   │                                     ← new chat = fresh LLM context = no context_id
+    │   ├─ MCPRequestHandler: no context_id → create new session
+    │   └─ Return JSON: {"response": "...", "context_id": "<session-uuid-B>"}
+    │
+    └─ Chat 1 and Chat 2 are fully isolated despite sharing the same MCP transport session
 ```
 
 **Key behaviors:**
-- Each MCP transport session maps to one platform session (via `mcp_session_id`)
+- Session lookup is driven exclusively by `context_id` (the platform session UUID)
+- `mcp_session_id` (MCP transport session) is stored as metadata but NOT used for session routing — Claude Desktop reuses the same transport session across all chats, so it cannot distinguish them
+- `context_id` is cross-connector verified: a context_id from connector A is rejected on connector B
+- Invalid/garbage `context_id` values gracefully create a new session
 - Session belongs to the connector owner (like guest sessions)
 - Agent environment auto-starts if suspended/stopped (via `ensure_environment_ready_for_streaming`)
 - Sequential message processing with per-session locking (concurrent calls rejected)
@@ -360,8 +374,10 @@ All three share the same underlying services: SessionService, MessageService, ag
 
 ### Session Isolation
 
-- Each MCP connection creates its own platform session
-- No cross-session visibility between connections
+- Session routing is driven by `context_id`, not by `mcp_session_id` (transport session)
+- `context_id` is cross-connector verified: session must belong to the requesting connector
+- Each new chat (empty `context_id`) creates a new platform session
+- No cross-session visibility between chats
 - Mode enforcement: connector mode determines session mode
 
 ---
@@ -370,7 +386,7 @@ All three share the same underlying services: SessionService, MessageService, ag
 
 1. **Fixed tool set** — `send_message` rather than auto-generating tools from agent config. Keeps the MCP surface predictable. The agent decides which capabilities to invoke based on the message.
 
-2. **MCP session = platform session** — No `session_id` parameter on tools. Each MCP connection is one conversation. New connection = new session.
+2. **`context_id` for per-chat isolation** — Claude Desktop (and similar clients) reuse a single MCP transport session across all chats, so `mcp_session_id` cannot distinguish conversations. Instead, `send_message` returns a `context_id` (the platform session UUID) that the LLM echoes back on subsequent calls. New chat = fresh LLM context = empty `context_id` = new session. The `mcp_session_id` is stored as metadata but never used for session lookup.
 
 3. **Opaque tokens, not JWTs** — Database lookup on each request enables immediate revocation. We already hit the DB for connector validation, so token lookup adds minimal overhead.
 
@@ -425,6 +441,6 @@ All three share the same underlying services: SessionService, MessageService, ag
 
 ---
 
-**Document Version:** 1.1
+**Document Version:** 1.2
 **Last Updated:** 2026-02-26
-**Status:** Implemented (Phase 1 MVP, tool handler refactored for service isolation)
+**Status:** Implemented (Phase 1 MVP, per-chat session isolation via context_id)

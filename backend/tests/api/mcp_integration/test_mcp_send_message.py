@@ -9,6 +9,7 @@ Verifies that the MCP tool handler correctly:
   - Preserves external session IDs for multi-turn continuity
   - Reuses existing sessions for subsequent messages
   - Handles MCP session ID changes (client reconnection)
+  - Uses context_id for per-chat session isolation
 
 These tests call handle_send_message() directly (not through MCP protocol)
 with the agent environment stubbed to return predefined responses.
@@ -19,6 +20,7 @@ Uses the same service pipeline as email and A2A integrations:
   - create_session() (patchable) for all DB access
 """
 import asyncio
+import json
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -67,7 +69,8 @@ def _run_send_message(
     message: str,
     agent_env_stub: StubAgentEnvConnector,
     mcp_session_id: str | None = None,
-) -> str:
+    context_id: str = "",
+) -> dict:
     """Call handle_send_message with the standard service pipeline.
 
     Patches agent_env_connector at the MessageService level (same as A2A tests)
@@ -80,6 +83,10 @@ def _run_send_message(
         agent_env_stub: Stub for the agent environment
         mcp_session_id: Optional MCP transport session ID (simulates the
             mcp-session-id header that Claude Desktop sends)
+        context_id: Optional context_id for per-chat session isolation
+
+    Returns:
+        Parsed JSON dict with "response" and "context_id" (or "error" and "context_id")
     """
     from app.mcp.tools import handle_send_message
     from app.mcp.server import mcp_connector_id_var, mcp_session_id_var
@@ -88,7 +95,7 @@ def _run_send_message(
         token_conn = mcp_connector_id_var.set(connector_id)
         token_sess = mcp_session_id_var.set(mcp_session_id)
         try:
-            return await handle_send_message(message)
+            return await handle_send_message(message, context_id=context_id)
         finally:
             mcp_connector_id_var.reset(token_conn)
             mcp_session_id_var.reset(token_sess)
@@ -96,7 +103,12 @@ def _run_send_message(
     with patch("app.services.message_service.agent_env_connector", agent_env_stub):
         result = asyncio.run(_run())
     drain_tasks()
-    return result
+
+    # Parse JSON response; fall back to raw string wrapped in error dict
+    try:
+        return json.loads(result)
+    except (json.JSONDecodeError, TypeError):
+        return {"response": result, "context_id": ""}
 
 
 # ── Tests ────────────────────────────────────────────────────────────────────
@@ -130,7 +142,8 @@ def test_send_message_creates_session_with_correct_fields(
     )
 
     # ── Verify tool returned the agent response ──────────────────────────
-    assert "Hello from the agent!" in result
+    assert "Hello from the agent!" in result["response"]
+    assert result["context_id"], "context_id should be non-empty"
 
     # ── Verify session created via API ───────────────────────────────────
     mcp_sessions = _find_mcp_sessions(client, superuser_token_headers, connector_id)
@@ -170,7 +183,7 @@ def test_send_message_stores_user_and_agent_messages(
 
     stub = StubAgentEnvConnector(response_text="I can help with that!")
     result = _run_send_message(connector_id, "Please help me", stub)
-    assert "I can help with that!" in result
+    assert "I can help with that!" in result["response"]
 
     # ── Find the session ─────────────────────────────────────────────────
     mcp_sessions = _find_mcp_sessions(client, superuser_token_headers, connector_id)
@@ -198,26 +211,26 @@ def test_send_message_reuses_existing_session(
     db,
 ) -> None:
     """
-    Subsequent send_message calls reuse the existing session:
-      1. Call send_message twice on the same connector with the same MCP session ID
-      2. Verify only one session exists
-      3. Verify both message exchanges are in the same session
-      4. Verify mcp_session_id is preserved
+    Subsequent send_message calls reuse the existing session via context_id:
+      1. Call send_message → get context_id in response
+      2. Call send_message again with that context_id
+      3. Verify only one session exists with both message exchanges
     """
     agent, connector = _setup_agent_with_connector(
         client, superuser_token_headers,
         agent_name="Session Reuse Agent",
     )
     connector_id = connector["id"]
-    mcp_sid = "reuse-test-mcp-session-id"
 
-    # First message
+    # First message — no context_id
     stub1 = StubAgentEnvConnector(response_text="First response")
-    _run_send_message(connector_id, "First message", stub1, mcp_session_id=mcp_sid)
+    result1 = _run_send_message(connector_id, "First message", stub1)
+    ctx_id = result1["context_id"]
 
-    # Second message (same MCP session)
+    # Second message — pass back context_id
     stub2 = StubAgentEnvConnector(response_text="Second response")
-    _run_send_message(connector_id, "Second message", stub2, mcp_session_id=mcp_sid)
+    result2 = _run_send_message(connector_id, "Second message", stub2, context_id=ctx_id)
+    assert result2["context_id"] == ctx_id
 
     # ── Verify single session ────────────────────────────────────────────
     mcp_sessions = _find_mcp_sessions(client, superuser_token_headers, connector_id)
@@ -225,13 +238,10 @@ def test_send_message_reuses_existing_session(
         f"Expected 1 session (reused), got {len(mcp_sessions)}"
     )
 
-    session = mcp_sessions[0]
-    session_id = session["id"]
-    assert session["mcp_session_id"] == mcp_sid
+    session_id = mcp_sessions[0]["id"]
 
     # ── Verify all messages in same session ──────────────────────────────
     messages = list_messages(client, superuser_token_headers, session_id)
-    # Should have messages from both exchanges
     user_msgs = [m for m in messages if m["role"] == "user"]
     agent_msgs = [m for m in messages if m["role"] == "agent"]
     assert len(user_msgs) >= 2, f"Expected 2 user messages, got {len(user_msgs)}"
@@ -254,7 +264,7 @@ def test_send_message_reuses_session_after_stream_completed(
          (this is what the event handler does for non-integration sessions)
       3. Call handle_stream_completed with integration_type check
       4. Verify MCP session stays "active"
-      5. Send second message → should reuse the same session
+      5. Send second message with context_id → should reuse the same session
     """
     from uuid import UUID
     from app.models import Session
@@ -264,11 +274,11 @@ def test_send_message_reuses_session_after_stream_completed(
         agent_name="Stream Completed Agent",
     )
     connector_id = connector["id"]
-    mcp_sid = "stream-completed-test"
 
     # ── Phase 1: First message ───────────────────────────────────────────
     stub1 = StubAgentEnvConnector(response_text="First response")
-    _run_send_message(connector_id, "Hello", stub1, mcp_session_id=mcp_sid)
+    result1 = _run_send_message(connector_id, "Hello", stub1)
+    ctx_id = result1["context_id"]
 
     mcp_sessions = _find_mcp_sessions(client, superuser_token_headers, connector_id)
     assert len(mcp_sessions) == 1
@@ -300,9 +310,10 @@ def test_send_message_reuses_session_after_stream_completed(
         f"got '{mcp_sessions[0]['status']}'"
     )
 
-    # ── Phase 4: Second message should reuse the same session ────────────
+    # ── Phase 4: Second message with context_id should reuse session ─────
     stub2 = StubAgentEnvConnector(response_text="Second response")
-    _run_send_message(connector_id, "Still here", stub2, mcp_session_id=mcp_sid)
+    result2 = _run_send_message(connector_id, "Still here", stub2, context_id=ctx_id)
+    assert result2["context_id"] == ctx_id
 
     mcp_sessions = _find_mcp_sessions(client, superuser_token_headers, connector_id)
     assert len(mcp_sessions) == 1, (
@@ -313,44 +324,57 @@ def test_send_message_reuses_session_after_stream_completed(
     assert len(user_msgs) >= 2, f"Expected 2 user messages in same session, got {len(user_msgs)}"
 
 
-def test_send_message_session_reuse_after_mcp_session_change(
+def test_send_message_same_mcp_session_id_does_not_reuse(
     client: TestClient,
     superuser_token_headers: dict[str, str],
     db,
 ) -> None:
     """
-    When the MCP transport session ID changes (client reconnected), a new
-    platform session is created — there is no connector-based fallback.
-      1. Send first message with mcp_session_id "session-A"
-      2. Send second message with mcp_session_id "session-B" (client reconnected)
-      3. Verify 2 separate platform sessions exist
+    mcp_session_id alone does NOT cause session reuse.
+
+    Claude Desktop reuses the same mcp_session_id across all chats, so if
+    mcp_session_id drove session lookup, all chats would land in the same
+    platform session. Only context_id should drive reuse.
+
+      1. Send first message with mcp_session_id "shared-transport"
+      2. Send second message with the SAME mcp_session_id but NO context_id
+      3. Verify 2 separate platform sessions exist (no reuse)
+      4. Verify mcp_session_id is still stored as metadata on both
     """
     agent, connector = _setup_agent_with_connector(
         client, superuser_token_headers,
-        agent_name="Reconnect Agent",
+        agent_name="No MCP Reuse Agent",
     )
     connector_id = connector["id"]
+    shared_mcp_sid = "shared-transport-session"
 
-    # First message with session-A
+    # First message (chat 1)
     stub1 = StubAgentEnvConnector(response_text="First response")
-    _run_send_message(connector_id, "Hello", stub1, mcp_session_id="session-A")
+    result1 = _run_send_message(
+        connector_id, "Hello from chat 1", stub1,
+        mcp_session_id=shared_mcp_sid, context_id="",
+    )
 
-    mcp_sessions = _find_mcp_sessions(client, superuser_token_headers, connector_id)
-    assert len(mcp_sessions) == 1
-    assert mcp_sessions[0]["mcp_session_id"] == "session-A"
-
-    # Second message with session-B (simulates Claude Desktop reconnecting)
+    # Second message (chat 2) — same mcp_session_id, no context_id
     stub2 = StubAgentEnvConnector(response_text="Second response")
-    _run_send_message(connector_id, "Still here", stub2, mcp_session_id="session-B")
+    result2 = _run_send_message(
+        connector_id, "Hello from chat 2", stub2,
+        mcp_session_id=shared_mcp_sid, context_id="",
+    )
 
-    # ── Different mcp_session_id → different platform session ────────────
+    # ── Must be 2 separate sessions (no reuse via mcp_session_id) ────────
+    assert result1["context_id"] != result2["context_id"], (
+        "Same mcp_session_id without context_id should create separate sessions"
+    )
+
     mcp_sessions = _find_mcp_sessions(client, superuser_token_headers, connector_id)
     assert len(mcp_sessions) == 2, (
-        f"Expected 2 sessions after reconnect with new mcp_session_id, got {len(mcp_sessions)}"
+        f"Expected 2 sessions (mcp_session_id must NOT drive reuse), got {len(mcp_sessions)}"
     )
-    session_ids_by_mcp = {s["mcp_session_id"]: s["id"] for s in mcp_sessions}
-    assert "session-A" in session_ids_by_mcp
-    assert "session-B" in session_ids_by_mcp
+
+    # mcp_session_id should still be stored as metadata on both
+    for s in mcp_sessions:
+        assert s["mcp_session_id"] == shared_mcp_sid
 
 
 def test_send_message_without_mcp_session_id(
@@ -438,8 +462,9 @@ def test_send_message_inactive_connector_rejected(
     stub = StubAgentEnvConnector(response_text="Should not reach")
     result = _run_send_message(connector_id, "Hello", stub)
 
-    assert "error" in result.lower()
-    assert "inactive" in result.lower() or "not found" in result.lower()
+    # Result may be a JSON error or a raw error string
+    raw = result.get("error", result.get("response", ""))
+    assert "error" in raw.lower() or "inactive" in raw.lower() or "not found" in raw.lower()
 
     # No session should have been created
     mcp_sessions = _find_mcp_sessions(client, superuser_token_headers, connector_id)
@@ -485,3 +510,173 @@ def test_send_message_agent_response_metadata(
     assert meta.get("streaming_in_progress") is False, (
         "streaming_in_progress should be False after stream completes"
     )
+
+
+# ── context_id tests ─────────────────────────────────────────────────────────
+
+
+def test_send_message_context_id_new_chat(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db,
+) -> None:
+    """
+    Empty context_id creates a new session; response contains the session's
+    context_id (which is the platform session UUID).
+    """
+    agent, connector = _setup_agent_with_connector(
+        client, superuser_token_headers,
+        agent_name="Context ID New Chat Agent",
+    )
+    connector_id = connector["id"]
+
+    stub = StubAgentEnvConnector(response_text="Welcome!")
+    result = _run_send_message(connector_id, "Hello", stub, context_id="")
+
+    assert "Welcome!" in result["response"]
+    assert result["context_id"], "context_id should be non-empty for new session"
+
+    # context_id should match the session's UUID
+    mcp_sessions = _find_mcp_sessions(client, superuser_token_headers, connector_id)
+    assert len(mcp_sessions) == 1
+    assert result["context_id"] == mcp_sessions[0]["id"]
+
+
+def test_send_message_context_id_reuse(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db,
+) -> None:
+    """
+    Passing back context_id from the first response reuses the same session.
+    """
+    agent, connector = _setup_agent_with_connector(
+        client, superuser_token_headers,
+        agent_name="Context ID Reuse Agent",
+    )
+    connector_id = connector["id"]
+
+    # First message — no context_id
+    stub1 = StubAgentEnvConnector(response_text="First reply")
+    result1 = _run_send_message(connector_id, "Hello", stub1, context_id="")
+    ctx_id = result1["context_id"]
+    assert ctx_id, "First response should include context_id"
+
+    # Second message — pass back context_id
+    stub2 = StubAgentEnvConnector(response_text="Second reply")
+    result2 = _run_send_message(connector_id, "Follow up", stub2, context_id=ctx_id)
+    assert result2["context_id"] == ctx_id, "context_id should stay the same"
+
+    # Only one session should exist
+    mcp_sessions = _find_mcp_sessions(client, superuser_token_headers, connector_id)
+    assert len(mcp_sessions) == 1, (
+        f"Expected 1 session (reused via context_id), got {len(mcp_sessions)}"
+    )
+
+    # Verify both messages are in the same session
+    messages = list_messages(client, superuser_token_headers, mcp_sessions[0]["id"])
+    user_msgs = [m for m in messages if m["role"] == "user"]
+    assert len(user_msgs) >= 2, f"Expected 2 user messages, got {len(user_msgs)}"
+
+
+def test_send_message_context_id_different_chats(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db,
+) -> None:
+    """
+    Two calls with empty context_id create two separate sessions
+    (simulates two different Claude Desktop chats).
+    """
+    agent, connector = _setup_agent_with_connector(
+        client, superuser_token_headers,
+        agent_name="Context ID Diff Chats Agent",
+    )
+    connector_id = connector["id"]
+
+    # Chat 1 — new session
+    stub1 = StubAgentEnvConnector(response_text="Chat 1 reply")
+    result1 = _run_send_message(connector_id, "Hello from chat 1", stub1, context_id="")
+
+    # Chat 2 — another new session (empty context_id = new chat)
+    stub2 = StubAgentEnvConnector(response_text="Chat 2 reply")
+    result2 = _run_send_message(connector_id, "Hello from chat 2", stub2, context_id="")
+
+    assert result1["context_id"] != result2["context_id"], (
+        "Different chats should get different context_ids"
+    )
+
+    mcp_sessions = _find_mcp_sessions(client, superuser_token_headers, connector_id)
+    assert len(mcp_sessions) == 2, (
+        f"Expected 2 sessions for 2 different chats, got {len(mcp_sessions)}"
+    )
+
+
+def test_send_message_context_id_cross_connector_rejected(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db,
+) -> None:
+    """
+    context_id from connector A is rejected when used with connector B.
+    A new session is created instead.
+    """
+    agent, connector_a = _setup_agent_with_connector(
+        client, superuser_token_headers,
+        agent_name="Cross Connector Agent",
+        connector_name="Connector A",
+    )
+    # Create a second connector on the same agent
+    connector_b = create_mcp_connector(
+        client, superuser_token_headers, agent["id"],
+        name="Connector B", mode="conversation",
+    )
+
+    # Get context_id from connector A
+    stub1 = StubAgentEnvConnector(response_text="Reply from A")
+    result_a = _run_send_message(connector_a["id"], "Hello A", stub1, context_id="")
+    ctx_id_a = result_a["context_id"]
+
+    # Try to use connector A's context_id with connector B
+    stub2 = StubAgentEnvConnector(response_text="Reply from B")
+    result_b = _run_send_message(connector_b["id"], "Hello B", stub2, context_id=ctx_id_a)
+
+    # Should get a different context_id (new session created)
+    assert result_b["context_id"] != ctx_id_a, (
+        "context_id from connector A should not work on connector B"
+    )
+
+    # Connector A should have 1 session, connector B should have 1 session
+    sessions_a = _find_mcp_sessions(client, superuser_token_headers, connector_a["id"])
+    sessions_b = _find_mcp_sessions(client, superuser_token_headers, connector_b["id"])
+    assert len(sessions_a) == 1
+    assert len(sessions_b) == 1
+    assert sessions_a[0]["id"] != sessions_b[0]["id"]
+
+
+def test_send_message_invalid_context_id_creates_new_session(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db,
+) -> None:
+    """
+    Garbage/invalid context_id gracefully creates a new session instead
+    of returning an error.
+    """
+    agent, connector = _setup_agent_with_connector(
+        client, superuser_token_headers,
+        agent_name="Invalid Context Agent",
+    )
+    connector_id = connector["id"]
+
+    stub = StubAgentEnvConnector(response_text="Hello!")
+    result = _run_send_message(
+        connector_id, "Hello", stub,
+        context_id="not-a-valid-uuid-garbage",
+    )
+
+    assert "Hello!" in result["response"]
+    assert result["context_id"], "Should get a valid context_id for the new session"
+
+    mcp_sessions = _find_mcp_sessions(client, superuser_token_headers, connector_id)
+    assert len(mcp_sessions) == 1

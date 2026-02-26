@@ -13,15 +13,17 @@ as A2ARequestHandler.
 import uuid
 import logging
 
+from app.core.config import settings
 from app.core.db import create_session
 from app.services.mcp_connector_service import MCPConnectorService
 from app.mcp.request_handler import MCPRequestHandler
+from app.mcp.upload_token import create_file_upload_token
 from app.mcp.server import mcp_connector_id_var, mcp_session_id_var
 
 logger = logging.getLogger(__name__)
 
 
-async def handle_send_message(message: str, ctx=None) -> str:
+async def handle_send_message(message: str, context_id: str = "", ctx=None) -> str:
     """
     MCP tool handler: send a message to the agent and return the response.
 
@@ -31,13 +33,13 @@ async def handle_send_message(message: str, ctx=None) -> str:
     subsequent requests to return 400. Always return an error string instead.
     """
     try:
-        return await _handle_send_message_inner(message, ctx)
+        return await _handle_send_message_inner(message, context_id, ctx)
     except Exception as e:
-        logger.exception(f"Unhandled error in MCP send_message tool: {e}")
+        logger.exception("Unhandled error in MCP send_message tool: %s", e)
         return f"Error: {str(e)}"
 
 
-async def _handle_send_message_inner(message: str, ctx=None) -> str:
+async def _handle_send_message_inner(message: str, context_id: str = "", ctx=None) -> str:
     """
     MCP-specific entry point: extract MCP context, resolve entities, delegate.
 
@@ -62,21 +64,10 @@ async def _handle_send_message_inner(message: str, ctx=None) -> str:
                 if starlette_request is not None:
                     ctx_session_id = starlette_request.headers.get("mcp-session-id")
         except Exception as e:
-            logger.debug(f"[MCP] Could not extract session ID from ctx: {e}")
+            logger.debug("[MCP] Could not extract session ID from ctx: %s", e)
 
     # Use whichever source has the session ID
     effective_mcp_session_id = mcp_transport_session_id or ctx_session_id
-
-    logger.info(
-        "[MCP] send_message called | connector=%s | mcp_session_id(contextvar)=%s | "
-        "mcp_session_id(ctx)=%s | effective=%s | ctx_type=%s | message_preview=%.80s",
-        connector_id_str,
-        mcp_transport_session_id or "(none)",
-        ctx_session_id or "(none)",
-        effective_mcp_session_id or "(none)",
-        type(ctx).__name__ if ctx else "None",
-        message,
-    )
 
     connector_id = uuid.UUID(connector_id_str)
 
@@ -97,7 +88,58 @@ async def _handle_send_message_inner(message: str, ctx=None) -> str:
         connector=connector,
         get_db_session=create_session,
     )
-    return await handler.handle_send_message(message, effective_mcp_session_id)
+    return await handler.handle_send_message(
+        message,
+        effective_mcp_session_id,
+        context_id=context_id or None,
+    )
+
+
+async def handle_get_file_upload_url(filename: str, workspace_path: str = "uploads") -> str:
+    """
+    MCP tool handler: generate a temporary upload URL + CURL command.
+
+    IMPORTANT: Any unhandled exception here kills the MCP session, causing all
+    subsequent requests to return 400. Always return an error string instead.
+    """
+    try:
+        return _handle_get_file_upload_url_inner(filename, workspace_path)
+    except Exception as e:
+        logger.exception(f"Unhandled error in MCP get_file_upload_url tool: {e}")
+        return f"Error: {str(e)}"
+
+
+def _handle_get_file_upload_url_inner(filename: str, workspace_path: str = "uploads") -> str:
+    """Generate a CURL command with a temporary JWT for file upload."""
+    connector_id_str = mcp_connector_id_var.get(None)
+    if not connector_id_str:
+        return "Error: No connector context available"
+
+    # Validate connector exists and is active
+    connector_id = uuid.UUID(connector_id_str)
+    with create_session() as db:
+        try:
+            MCPConnectorService.resolve_connector_context(db, connector_id)
+        except ValueError as e:
+            return f"Error: {e}"
+
+    # Build upload URL
+    base_url = settings.MCP_SERVER_BASE_URL
+    if not base_url:
+        return "Error: MCP_SERVER_BASE_URL is not configured"
+    base_url = base_url.rstrip("/")
+    upload_url = f"{base_url}/{connector_id_str}/upload"
+
+    # Generate temporary JWT
+    token = create_file_upload_token(connector_id_str)
+
+    return (
+        f"Upload your file using this command (token valid for 15 minutes):\n\n"
+        f'curl -X POST "{upload_url}" \\\n'
+        f'  -H "Authorization: Bearer {token}" \\\n'
+        f'  -F "file=@{filename}" \\\n'
+        f'  -F "workspace_path={workspace_path}"'
+    )
 
 
 def register_mcp_tools(server) -> None:
@@ -106,7 +148,21 @@ def register_mcp_tools(server) -> None:
 
     @server.tool(
         name="send_message",
-        description="Send a message to the AI agent and receive a response. The agent can use tools, write code, and perform tasks based on your message.",
+        description=(
+            "Send a message to the AI agent and receive a response. "
+            "The agent can use tools, write code, and perform tasks based on your message.\n\n"
+            "Returns a JSON object with 'response' and 'context_id' fields. "
+            "IMPORTANT: Always pass back the 'context_id' from the previous response "
+            "to maintain conversation continuity. On the first message in a new conversation, "
+            "pass an empty string for context_id."
+        ),
     )
-    async def send_message(message: str, ctx: Context = None) -> str:
-        return await handle_send_message(message, ctx)
+    async def send_message(message: str, context_id: str = "", ctx: Context = None) -> str:
+        return await handle_send_message(message, context_id, ctx)
+
+    @server.tool(
+        name="get_file_upload_url",
+        description="Get a temporary upload URL and CURL command to upload a file to the agent's workspace. The returned CURL command includes a short-lived authentication token (valid for 15 minutes). Execute the CURL command to upload the file.",
+    )
+    async def get_file_upload_url(filename: str, workspace_path: str = "uploads") -> str:
+        return await handle_get_file_upload_url(filename, workspace_path)

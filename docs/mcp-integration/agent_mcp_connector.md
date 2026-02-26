@@ -12,7 +12,8 @@ Enable agent owners to expose their agents as MCP (Model Context Protocol) serve
 - Dynamic Client Registration (RFC 7591) allows MCP clients to register automatically
 - OAuth 2.1 authorization flow with PKCE and frontend consent page
 - Authenticated MCP clients call `send_message` tool to interact with the agent
-- Per-connector session mapping maintains conversation continuity
+- Per-chat session isolation via `context_id` parameter (LLM echoes it back for continuity)
+- `send_message` returns JSON with `response` and `context_id` fields
 - Sequential message processing with per-session locking
 
 ## Architecture
@@ -178,7 +179,7 @@ MCP Client (Claude Desktop / Cursor)
 
 Two new nullable fields added to the `session` table:
 - `mcp_connector_id` (UUID, FK → mcp_connector.id, SET NULL on delete)
-- `mcp_session_id` (VARCHAR, unique, nullable)
+- `mcp_session_id` (VARCHAR, unique, nullable) — MCP transport session ID, stored as metadata only (NOT used for session lookup; `context_id` drives session routing instead)
 
 ## Backend Implementation
 
@@ -359,25 +360,29 @@ Starlette routing precedence ensures `/mcp/oauth/...` routes match before the `/
 
 **File:** `backend/app/mcp/tools.py` (MCP-specific entry point)
 
-`handle_send_message(message, ctx)` logic:
+`handle_send_message(message, context_id, ctx)` logic:
 1. Extract `connector_id` from `mcp_connector_id_var` contextvar
 2. Extract MCP transport session ID from contextvar and/or tool context
 3. Resolve connector, agent, environment via `MCPConnectorService.resolve_connector_context()`
 4. Create `MCPRequestHandler` with resolved entities
-5. Delegate to `handler.handle_send_message()`
+5. Delegate to `handler.handle_send_message(message, mcp_session_id, context_id)`
 
 **File:** `backend/app/mcp/request_handler.py` (business logic handler)
 
 **Class:** `MCPRequestHandler`
 
-`handle_send_message(message, mcp_session_id)` logic:
-1. Get or create platform session via `SessionService.get_or_create_mcp_session()`
+`handle_send_message(message, mcp_session_id, context_id)` logic:
+1. Get or create platform session via `SessionService.get_or_create_mcp_session(context_id=...)`
+   - If `context_id` provided → look up session by UUID, verify it belongs to this connector
+   - If not provided or invalid → create new session
+   - `mcp_session_id` is stored as metadata on new sessions but NOT used for session lookup
 2. Create user message via `MessageService.create_message()`
 3. Trigger title generation for new sessions via `SessionService.auto_generate_session_title()`
 4. Ensure environment is ready via `SessionService.ensure_environment_ready_for_streaming()`
 5. Acquire per-session `asyncio.Lock` for sequential processing
 6. Stream response via `MessageService.stream_message_with_events()` (resolves environment URL/auth internally from `environment_id`)
-7. Collect response parts and return full response or error
+7. Collect response parts and return JSON: `{"response": "...", "context_id": "<session_uuid>"}`
+   - Error responses also JSON: `{"error": "...", "context_id": "..."}`
 
 **Service Layer:** `backend/app/services/mcp_connector_service.py`
 - `MCPConnectorService.resolve_connector_context()` — Loads and validates connector, agent, environment for tool requests
@@ -386,7 +391,7 @@ Starlette routing precedence ensures `/mcp/oauth/...` routes match before the `/
 - Per-session locks via `_session_locks` dict in request handler
 - Returns error if lock is already held (another message in progress)
 
-**`register_mcp_tools(server)`:** Registers `send_message` on the FastMCP instance via `@server.tool()`.
+**`register_mcp_tools(server)`:** Registers `send_message(message, context_id)` on the FastMCP instance via `@server.tool()`. The tool description instructs the LLM to always pass back the `context_id` from the previous response to maintain conversation continuity.
 
 ### Configuration
 
@@ -463,6 +468,9 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 - DCR: `max_clients` limit per connector (429 if exceeded)
 
 **Session Isolation:**
+- Session routing is driven by `context_id` (platform session UUID), not by `mcp_session_id`
+- `context_id` is cross-connector verified: a session from connector A is rejected when used with connector B
+- Invalid/garbage `context_id` values gracefully create a new session
 - Each connector gets its own platform sessions
 - Deactivated connector returns 404 on MCP requests
 - Connector deletion cascades to OAuth clients, auth codes, tokens
@@ -488,12 +496,18 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 ### Scenario 2: Multi-Turn Conversation via MCP
 
 ```
-1. First send_message call → creates new platform session
-2. Session linked to connector via mcp_connector_id
-3. External session ID stored in session_metadata
-4. Subsequent send_message calls → reuse same platform session
-5. Agent maintains conversation context across turns
+1. Chat 1 — first send_message(message, context_id="")
+   → Creates new platform session
+   → Returns {"response": "...", "context_id": "<session-uuid>"}
+2. Chat 1 — LLM echoes back: send_message(message, context_id="<session-uuid>")
+   → Looks up session by context_id → found → reuses it
+   → Agent maintains conversation context across turns
+3. Chat 2 — new chat: send_message(message, context_id="")
+   → No context_id → creates a new session
+   → Fully isolated from Chat 1, even though same MCP transport session
 ```
+
+**Why `context_id` instead of `mcp_session_id`:** Claude Desktop reuses a single MCP transport session (`mcp-session-id` header) across all chats. The `context_id` parameter — echoed by the LLM from the tool response — is the only way to distinguish which chat a tool call originated from.
 
 ### Scenario 3: Connector Deactivation
 
@@ -581,6 +595,6 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 
 ---
 
-**Document Version:** 1.1
+**Document Version:** 1.2
 **Last Updated:** 2026-02-26
-**Status:** Implemented (Phase 1-7 complete, Phase 8 in progress, tool handler refactored for service isolation)
+**Status:** Implemented (Phase 1-7 complete, Phase 8 in progress, per-chat session isolation via context_id)

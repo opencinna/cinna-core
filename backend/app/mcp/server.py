@@ -301,7 +301,7 @@ class MCPServerRegistry:
                 break
 
         method = scope.get("method", "?")
-        logger.info(
+        logger.debug(
             "[MCP] %s %s | connector=%s | mcp_session_id=%s",
             method, path, connector_id_str, mcp_session_id_from_header or "(none)",
         )
@@ -312,10 +312,6 @@ class MCPServerRegistry:
         if mcp_instance and mcp_session_id_from_header:
             known_sessions = getattr(
                 mcp_instance.session_manager, "_server_instances", {}
-            )
-            logger.debug(
-                "[MCP] Stale check: session=%s | known_sessions=%s",
-                mcp_session_id_from_header, list(known_sessions.keys()),
             )
             if mcp_session_id_from_header not in known_sessions:
                 logger.warning(

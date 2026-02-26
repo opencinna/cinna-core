@@ -84,38 +84,77 @@ class SessionService:
         return None
 
     @staticmethod
+    def get_session_by_context_id(
+        db_session: DBSession,
+        context_id: str,
+        connector_id: UUID,
+    ) -> Session | None:
+        """
+        Look up a platform session by context_id (which is the session's UUID).
+
+        Verifies that the session belongs to the given connector to enforce
+        cross-connector isolation.
+
+        Returns:
+            Session if found and belongs to connector, else None
+        """
+        try:
+            session_uuid = UUID(context_id)
+        except (ValueError, AttributeError):
+            logger.debug("[MCP] Invalid context_id (not a UUID): %s", context_id)
+            return None
+
+        session = db_session.get(Session, session_uuid)
+        if not session:
+            logger.debug("[MCP] No session found for context_id=%s", context_id)
+            return None
+
+        if session.mcp_connector_id != connector_id:
+            logger.warning(
+                "[MCP] context_id=%s belongs to connector %s, not %s — rejected",
+                context_id, session.mcp_connector_id, connector_id,
+            )
+            return None
+
+        return session
+
+    @staticmethod
     def get_or_create_mcp_session(
         db_session: DBSession,
         connector: MCPConnector,
         mcp_session_id: str | None = None,
+        context_id: str | None = None,
     ) -> tuple[Session, bool]:
         """
         Find or create a platform session for an MCP connector.
 
         Lookup strategy:
-        1. By mcp_session_id (exact match) — no status filter
-        2. If not found: create a new session
+        1. By context_id (session UUID) — cross-connector verified
+        2. If not found or not provided: create a new session
+
+        mcp_session_id is NOT used for session lookup — it is only stored as
+        metadata on newly created sessions. Claude Desktop reuses the same
+        mcp_session_id across all chats, so using it for lookup would defeat
+        per-chat isolation via context_id.
 
         Returns:
             (session, is_new) tuple
         """
         connector_id = connector.id
 
-        # Lookup by exact mcp_session_id
-        if mcp_session_id:
-            session = db_session.exec(
-                select(Session).where(
-                    Session.mcp_session_id == mcp_session_id,
-                )
-            ).first()
+        # Lookup by context_id (per-chat isolation)
+        if context_id:
+            session = SessionService.get_session_by_context_id(
+                db_session, context_id, connector_id,
+            )
             if session:
-                logger.info(
-                    "[MCP] Found session by mcp_session_id=%s -> session=%s (status=%s)",
-                    mcp_session_id, session.id, session.status,
+                logger.debug(
+                    "[MCP] Reusing session by context_id=%s -> session=%s",
+                    context_id, session.id,
                 )
                 return session, False
 
-        # 3. Create new session
+        # Create new session
         session_data = SessionCreate(
             agent_id=connector.agent_id,
             mode=connector.mode,
@@ -137,8 +176,8 @@ class SessionService:
         db_session.refresh(session)
 
         logger.info(
-            "[MCP] Created new session=%s | mcp_session_id=%s | connector=%s",
-            session.id, mcp_session_id or "(none)", connector_id,
+            "[MCP] Created new session=%s | connector=%s",
+            session.id, connector_id,
         )
         return session, True
 

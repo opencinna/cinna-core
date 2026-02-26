@@ -7,6 +7,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from app.api.main import api_router
 from app.mcp.oauth_routes import router as mcp_oauth_router, wellknown_router as mcp_wellknown_router
+from app.mcp.upload_routes import router as mcp_upload_router
 from app.mcp.server import mcp_registry
 from app.core.config import settings
 
@@ -216,6 +217,9 @@ app.include_router(mcp_wellknown_router)
 
 # MCP OAuth routes (must be before any /mcp mount)
 app.include_router(mcp_oauth_router, prefix="/mcp/oauth")
+
+# MCP file upload route (must be before /mcp ASGI mount — FastAPI routes match first)
+app.include_router(mcp_upload_router)
 
 # Per-connector MCP server mount (must be after /mcp/oauth routes)
 app.mount("/mcp", mcp_registry)

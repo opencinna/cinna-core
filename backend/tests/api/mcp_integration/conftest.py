@@ -38,6 +38,7 @@ def patch_create_session(db):
     with patched_create_sessions(db, CREATE_SESSION_TARGETS_AGENT + [
         "app.mcp.oauth_routes.create_session",
         "app.mcp.tools.create_session",
+        "app.mcp.upload_routes.create_session",
     ]):
         yield
 
