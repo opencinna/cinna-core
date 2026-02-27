@@ -107,6 +107,18 @@ async def upload_file_to_mcp(
         connector_id, filename, len(content), result.get("path", "unknown"),
     )
 
+    # Notify connected MCP clients that workspace resources changed
+    try:
+        from app.mcp.notifications import broadcast_resource_list_changed
+        await broadcast_resource_list_changed(connector_id)
+    except Exception:
+        logger.debug(
+            "[MCP Upload] Failed to broadcast resource list changed notification "
+            "for connector %s (non-fatal)",
+            connector_id,
+            exc_info=True,
+        )
+
     return {
         "status": "uploaded",
         "workspace_path": result.get("path", f"./uploads/{filename}"),

@@ -407,24 +407,7 @@ export function McpConnectorsCard({ agentId }: McpConnectorsCardProps) {
                   )}
                 </div>
                 {/* Right: action buttons */}
-                <div className="flex items-center gap-0.5 ml-1 border-l pl-2 shrink-0">
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6"
-                          onClick={() => handleEditOpen(connector)}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Edit connector
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
+                <div className="flex items-center gap-0.5 ml-1 shrink-0">
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -449,6 +432,24 @@ export function McpConnectorsCard({ agentId }: McpConnectorsCardProps) {
                         {getMcpServerUrl(connector.id)
                           ? "Copy MCP server URL"
                           : "MCP_SERVER_BASE_URL not configured"}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                  <div className="h-4 w-px bg-border mx-1" />
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6"
+                          onClick={() => handleEditOpen(connector)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="text-xs">
+                        Edit connector
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>

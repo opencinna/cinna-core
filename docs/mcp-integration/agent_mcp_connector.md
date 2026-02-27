@@ -393,7 +393,7 @@ Starlette routing precedence ensures `/mcp/oauth/...` routes match before the `/
 - Per-session locks via `_session_locks` dict in request handler
 - Returns error if lock is already held (another message in progress)
 
-**`register_mcp_tools(server)`:** Registers `send_message(message, context_id)` and `get_file_upload_url(filename, workspace_path)` on the FastMCP instance via `@server.tool()`. The tool description instructs the LLM to always pass back the `context_id` from the previous response to maintain conversation continuity.
+**`register_mcp_tools(server)`:** Registers `send_message(message, context_id)` and `get_file_upload_url(filename, workspace_path)` on the FastMCP instance via `@server.tool()`. The tool description instructs the LLM to always pass back the `context_id` from the previous response to maintain conversation continuity. After `send_message` completes, the wrapper sends a `notifications/resources/list_changed` notification to the client (the agent may have created or modified workspace files) and registers the session in the registry for broadcast reuse by the upload route. Notification failures are non-fatal.
 
 ### Workspace Resources
 
@@ -445,6 +445,31 @@ Exposes agent-defined example prompts as MCP prompts so clients can discover the
 **Dynamic resolution:** Prompts are fetched from the DB on every call (same pattern as `resources.py`), so updates take effect immediately without server restart.
 
 **Frontend editing:** "Example Prompts" button in the agent Config tab → `EditExamplePromptsModal` → textarea (one prompt per line) → saves as `example_prompts: [...]` via `AgentsService.updateAgent()`.
+
+### Resource Change Notifications
+
+**File:** `backend/app/mcp/notifications.py`
+
+The MCP server sends `notifications/resources/list_changed` to connected clients after agent work or file uploads so they re-fetch workspace resources.
+
+**Capability declaration:** `create_mcp_server_for_connector()` patches `_mcp_server.create_initialization_options` to include `NotificationOptions(resources_changed=True)`, causing the server to advertise `"resources": {"listChanged": true}` during the MCP initialize handshake.
+
+**Session tracking:** `MCPServerRegistry` maintains `_active_sessions: dict[str, dict[str, ServerSession]]` mapping `connector_id -> {mcp_session_id -> ServerSession}`. Methods:
+- `register_session(connector_id, mcp_session_id, session)` — called by the `send_message` tool wrapper after each call
+- `get_sessions_for_connector(connector_id)` — used by `broadcast_resource_list_changed()`
+- Cleaned up by `remove()` and `clear()`
+
+**Notification helpers:**
+- `notify_resource_list_changed(session)` — send via a specific session (used by tool handlers)
+- `broadcast_resource_list_changed(connector_id)` — send to ALL sessions of a connector (used by upload route); catches exceptions per session
+
+**Notification triggers:**
+| Trigger | Method | Location |
+|---------|--------|----------|
+| After `send_message` completes | `ctx.session.send_resource_list_changed()` | `tools.py` (send_message wrapper) |
+| After file upload succeeds | `broadcast_resource_list_changed(connector_id)` | `upload_routes.py` |
+
+All notification failures are non-fatal — they are caught and logged at debug level to avoid affecting tool responses or upload results.
 
 ### Configuration
 
@@ -615,6 +640,7 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 - `backend/app/mcp/resources.py` — Workspace resources, WorkspaceResourceManager, register_mcp_resources()
 - `backend/app/mcp/prompts.py` — Agent example prompts, register_mcp_prompts()
 - `backend/app/mcp/request_handler.py` — MCPRequestHandler (business logic, service layer delegation)
+- `backend/app/mcp/notifications.py` — Resource change notification helpers (notify + broadcast)
 - `backend/app/mcp/upload_routes.py` — File upload endpoint for MCP clients
 - `backend/app/mcp/upload_token.py` — Temporary JWT creation/verification for file uploads
 - `backend/app/mcp/oauth_routes.py` — Shared OAuth Authorization Server
@@ -646,6 +672,7 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 - `backend/tests/api/mcp_integration/test_mcp_file_upload.py` — File upload tool and endpoint tests
 - `backend/tests/api/mcp_integration/test_mcp_resources.py` — Workspace resource tests (URI parsing, tree filtering, file reading, WorkspaceResourceManager, registration)
 - `backend/tests/api/mcp_integration/test_mcp_prompts.py` — Agent example prompts tests (parsing, DB fetch, handler registration, list/get/not-found/empty)
+- `backend/tests/api/mcp_integration/test_mcp_notifications.py` — Resource change notification tests (capability, send_message notification, broadcast, session tracking)
 - `backend/tests/utils/mcp.py` — Test utilities
 
 ## Related Documentation
@@ -655,6 +682,6 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 
 ---
 
-**Document Version:** 1.4
+**Document Version:** 1.5
 **Last Updated:** 2026-02-27
-**Status:** Implemented (Phase 1-7 complete + workspace resources, per-chat session isolation via context_id, example prompts)
+**Status:** Implemented (Phase 1-7 complete + workspace resources, per-chat session isolation via context_id, example prompts, resource change notifications)

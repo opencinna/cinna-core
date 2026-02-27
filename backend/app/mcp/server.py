@@ -11,6 +11,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.auth.settings import AuthSettings
+from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.transport_security import TransportSecuritySettings
 
 from sqlmodel import Session as DBSession
@@ -87,6 +88,17 @@ def create_mcp_server_for_connector(connector_id: str) -> FastMCP:
     from app.mcp.prompts import register_mcp_prompts
     register_mcp_prompts(server)
 
+    # Enable resources.listChanged capability so the server advertises it
+    # during the MCP initialize handshake and clients know to expect
+    # notifications/resources/list_changed messages.
+    original_create_init = server._mcp_server.create_initialization_options
+    def _patched_create_init(notification_options=None, experimental_capabilities=None):
+        return original_create_init(
+            notification_options=NotificationOptions(resources_changed=True),
+            experimental_capabilities=experimental_capabilities,
+        )
+    server._mcp_server.create_initialization_options = _patched_create_init
+
     return server
 
 
@@ -108,6 +120,9 @@ class MCPServerRegistry:
         self._mcp_instances: dict[str, FastMCP] = {}
         self._task_group: anyio.abc.TaskGroup | None = None
         self._base_url_validated: bool = False
+        # Track active MCP ServerSessions for sending notifications
+        # Maps connector_id -> {mcp_session_id -> ServerSession}
+        self._active_sessions: dict[str, dict[str, object]] = {}
 
     @asynccontextmanager
     async def run(self):
@@ -258,6 +273,7 @@ class MCPServerRegistry:
         if connector_id in self._mcp_instances:
             del self._mcp_instances[connector_id]
             removed = True
+        self._active_sessions.pop(connector_id, None)
         if removed:
             logger.info(f"Removed MCP server for connector {connector_id}")
 
@@ -265,7 +281,18 @@ class MCPServerRegistry:
         """Clear all servers (for shutdown). Called by the run() context on exit."""
         self._servers.clear()
         self._mcp_instances.clear()
+        self._active_sessions.clear()
         logger.info("Cleared all MCP servers")
+
+    def register_session(self, connector_id: str, mcp_session_id: str, session: object) -> None:
+        """Store a reference to an active MCP ServerSession for later notifications."""
+        if connector_id not in self._active_sessions:
+            self._active_sessions[connector_id] = {}
+        self._active_sessions[connector_id][mcp_session_id] = session
+
+    def get_sessions_for_connector(self, connector_id: str) -> list:
+        """Return all active ServerSession objects for a connector."""
+        return list(self._active_sessions.get(connector_id, {}).values())
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """ASGI dispatcher — extract connector_id from path, delegate to per-connector app."""

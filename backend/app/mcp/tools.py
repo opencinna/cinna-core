@@ -158,7 +158,29 @@ def register_mcp_tools(server) -> None:
         ),
     )
     async def send_message(message: str, context_id: str = "", ctx: Context = None) -> str:
-        return await handle_send_message(message, context_id, ctx)
+        result = await handle_send_message(message, context_id, ctx)
+
+        # Notify MCP client that workspace resources may have changed
+        # (the agent may have created/modified files during processing)
+        if ctx is not None:
+            try:
+                from app.mcp.server import mcp_registry
+                connector_id = mcp_connector_id_var.get(None)
+                mcp_sid = mcp_session_id_var.get(None)
+                session = ctx.session
+                # Register session for broadcast reuse (e.g. upload route)
+                if connector_id and session and mcp_sid:
+                    mcp_registry.register_session(connector_id, mcp_sid, session)
+                if session:
+                    await session.send_resource_list_changed()
+            except Exception:
+                logger.debug(
+                    "[MCP] Failed to send resource list changed notification "
+                    "after send_message (non-fatal)",
+                    exc_info=True,
+                )
+
+        return result
 
     @server.tool(
         name="get_file_upload_url",

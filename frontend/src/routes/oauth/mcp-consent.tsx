@@ -102,7 +102,7 @@ function McpConsentPage() {
     if (!authorized && !denied) return
     const timer = setTimeout(() => {
       window.close()
-    }, 2000)
+    }, 10000)
     return () => clearTimeout(timer)
   }, [authorized, denied])
 

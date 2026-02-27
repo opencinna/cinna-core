@@ -241,7 +241,50 @@ If the tunnel drops or you restart it (free tier), the URL changes. To recover:
 | Consent API (`/api/v1/mcp/consent/{nonce}/approve`) | Frontend JS to localhost:8000 | No |
 | App UI / Connector management | Browser (localhost:5173) | No |
 
-No CORS configuration changes are needed — MCP protocol calls are server-to-server (no browser origin), and OAuth redirects are browser navigations (not XHR).
+Native MCP clients (Claude Desktop, Cursor) make server-to-server calls — no browser origin involved. Browser-based clients (MCP Inspector) send an `Origin` header; the backend allows any `localhost` origin automatically in local development (`ENVIRONMENT=local`).
+
+---
+
+## Local Testing with MCP Inspector
+
+The [MCP Inspector](https://github.com/modelcontextprotocol/inspector) is a browser-based debugging tool that lets you test the full MCP chain — OAuth, tool calls, resources, prompts — without needing Claude Desktop or Cursor.
+
+### Starting the Inspector
+
+```bash
+make mcp-inspector
+```
+
+This launches the inspector UI (typically at `http://localhost:6274`).
+
+### Connecting to a Connector
+
+1. In the inspector's **left-hand sidebar**, set the transport type to **Streamable HTTP**
+2. Paste the **MCP Server URL** copied from the connector in the app UI (e.g. `https://your-tunnel.a.free.pinggy.link/mcp/{connector-uuid}/mcp`)
+3. Click **Connect**
+4. The inspector opens a browser tab for OAuth consent — log in and approve
+5. Once connected, use the inspector tabs to call tools, list resources, and test prompts
+
+### Domain Must Match `MCP_SERVER_BASE_URL`
+
+The MCP Server URL you paste into the inspector **must use the same domain** as the `MCP_SERVER_BASE_URL` configured in `.env`. During OAuth, the `resource` parameter (derived from the connector URL) is verified against registered tokens — if the domains don't match, token exchange will fail with a resource mismatch error.
+
+For example, if your `.env` has:
+```
+MCP_SERVER_BASE_URL=https://abc123.a.free.pinggy.link/mcp
+```
+
+Then the connector URL in the inspector must also use `https://abc123.a.free.pinggy.link/mcp/...` — not `http://localhost:8000/mcp/...`.
+
+### Testing Directly Against localhost (No Tunnel)
+
+If you don't need a tunnel (e.g. testing tools/resources without external OAuth clients), you can point the inspector at `localhost` directly:
+
+1. Set `MCP_SERVER_BASE_URL=http://localhost:8000/mcp` in `.env` and recreate the backend (`docker compose up -d backend`)
+2. In the inspector, paste `http://localhost:8000/mcp/{connector-uuid}/mcp`
+3. Connect and complete OAuth as usual (consent page at `localhost:5173`)
+
+This avoids tunnel setup entirely, but note that native MCP clients (Claude Desktop, Cursor) won't be able to connect since they need a public URL.
 
 ---
 
@@ -285,6 +328,7 @@ MCP_SERVER_BASE_URL=https://{tunnel-or-production-host}/mcp
 |---------|-------------|
 | `make mcp-tunnel` | Start pinggy tunnel for MCP testing (keep terminal open) |
 | `make mcp-set-url URL=https://xxx.pinggy.link` | Update `.env`, recreate backend, verify endpoint |
+| `make mcp-inspector` | Launch MCP Inspector for local debugging and testing |
 | `make dev-tunnel` | Generic tunnel (same SSH command, no MCP instructions) |
 
 ## Quick Reference

@@ -111,6 +111,7 @@ This is more secure than URL-as-security-boundary because URLs can leak inadvert
 | **`context_id`** | Platform Session UUID — echoed by LLM to maintain per-chat continuity |
 | **MCP Session** | Transport-level session (shared across chats); stored as metadata, not used for routing |
 | **Resource** (`workspace://{folder}/{path}`) | Individual workspace files from `files/`, `uploads/`, `scripts/` — dynamically listed |
+| **Notification** (`resources/list_changed`) | Sent after `send_message` completes and after file uploads to trigger client resource re-fetch |
 | **Prompt** (`prompts/list`, `prompts/get`) | Agent example prompts — defined as `slug: text` lines on the agent model, exposed as MCP slash commands |
 
 ### Resource Design
@@ -150,6 +151,35 @@ check_email: Check my email for urgent items
 
 **Configuration:** Agent owners edit example prompts via the "Example Prompts" button in the agent's Config tab (Information card). The frontend sends the list as `example_prompts: [...]` via the standard agent update endpoint.
 
+### Resource Change Notifications
+
+The MCP server sends `notifications/resources/list_changed` after agent work and file uploads so clients automatically re-fetch the workspace resource list.
+
+**Capability:** The server advertises `"resources": {"listChanged": true}` during the MCP initialize handshake via patched `create_initialization_options()`.
+
+**Notification flow:**
+```
+send_message tool call:
+  Client -> Server: tools/call "send_message"
+    -> request handler streams response from agent
+  Server -> Client: tool result (response JSON)
+  Server -> Client: notifications/resources/list_changed  ← new
+  Client -> Server: resources/list (re-fetch)
+
+File upload:
+  Client uploads via POST /mcp/{connector_id}/upload
+    -> upload_routes proxies to agent-env
+  Server -> ALL Client(s): notifications/resources/list_changed  ← new
+  Client(s) -> Server: resources/list (re-fetch)
+```
+
+**Session tracking:** The registry tracks active `ServerSession` objects per connector (`register_session`/`get_sessions_for_connector`). The `send_message` tool wrapper registers `ctx.session` after each call, enabling the upload route (which lacks direct MCP session access) to broadcast to all connected clients via `broadcast_resource_list_changed()`.
+
+**Design decisions:**
+- **Always notify** rather than comparing workspace trees before/after — false positives are harmless, false negatives mean stale views
+- **Non-fatal** — all notification errors are caught and logged at debug level; they never affect tool responses or upload results
+- **Per-session exception isolation** — `broadcast_resource_list_changed` catches exceptions per session so one disconnected client doesn't block others
+
 ### Tool Design
 
 The agent exposes two tools:
@@ -179,6 +209,10 @@ tools.py (thin MCP entry point — tool handlers)
             ├─ SessionService.ensure_environment_ready_for_streaming()
             ├─ MessageService.stream_message_with_events()
             └─ Return JSON: {"response": "...", "context_id": "<session_uuid>"}
+
+notifications.py (resource change notifications)
+    ├─ notify_resource_list_changed(session) → session.send_resource_list_changed()
+    └─ broadcast_resource_list_changed(connector_id) → notify all sessions via registry
 
 resources.py (MCP resource handlers)
     ├─ WorkspaceResourceManager (custom ResourceManager subclass)
@@ -496,6 +530,6 @@ All three share the same underlying services: SessionService, MessageService, ag
 
 ---
 
-**Document Version:** 1.4
+**Document Version:** 1.5
 **Last Updated:** 2026-02-27
-**Status:** Implemented (Phase 1 MVP + workspace resources, per-chat session isolation via context_id, example prompts)
+**Status:** Implemented (Phase 1 MVP + workspace resources, per-chat session isolation via context_id, example prompts, resource change notifications)

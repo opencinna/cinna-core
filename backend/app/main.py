@@ -202,13 +202,21 @@ app = FastAPI(
 
 # Set all CORS enabled origins
 if settings.all_cors_origins:
-    app.add_middleware(
-        CORSMiddleware,
+    # In local development, allow any localhost origin (any port) so that
+    # MCP clients (e.g. Claude Desktop at http://localhost:6274) can make
+    # cross-origin requests to the backend without adding each port to .env.
+    cors_kwargs: dict = dict(
         allow_origins=settings.all_cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Expose MCP protocol headers so browser-based MCP clients can read
+        # the session ID from responses and echo it back on subsequent requests.
+        expose_headers=["mcp-session-id", "mcp-protocol-version"],
     )
+    if settings.ENVIRONMENT == "local":
+        cors_kwargs["allow_origin_regex"] = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
+    app.add_middleware(CORSMiddleware, **cors_kwargs)
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
