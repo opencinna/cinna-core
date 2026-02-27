@@ -37,6 +37,29 @@ Frontend (consent page)
 
 Settings → MCP → Add Server → paste the MCP Server URL.
 
+### Google Antigravity
+
+1. Open the **Editor** in Google Antigravity
+2. In the **top-right corner**, click the **`...`** (three-dot menu) button
+3. From the dropdown, select **MCP Servers**
+4. In the **Manage MCPs** window that opens, click **View raw config**
+5. Paste the following JSON (replace the `serverUrl` with your MCP Server URL):
+
+```json
+{
+  "mcpServers": {
+    "your-agent-name": {
+      "serverUrl": "https://your-tunnel.a.pinggy.link/mcp/{connector-uuid}/mcp"
+    }
+  }
+}
+```
+
+6. **Save** the config
+7. Back in the **Manage MCPs** window, click the **Refresh** button
+8. This triggers the **OAuth authorization flow** for the connector — complete the consent process in the browser
+9. Once complete, the connector appears as **enabled** in the Manage MCPs window, with its available tools listed
+
 ### Connection Flow
 
 When the MCP client connects, it will automatically:
