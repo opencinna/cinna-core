@@ -101,6 +101,7 @@ def _agent_to_public_with_clone_info(session, agent: Agent) -> AgentPublic:
         agent_sdk_config=agent.agent_sdk_config,
         a2a_config=agent.a2a_config,
         example_prompts=agent.example_prompts,
+        inactivity_period_limit=agent.inactivity_period_limit,
         created_at=agent.created_at,
         updated_at=agent.updated_at,
         owner_id=agent.owner_id,

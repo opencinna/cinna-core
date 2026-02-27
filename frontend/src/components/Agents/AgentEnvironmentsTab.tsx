@@ -3,6 +3,21 @@ import { AgentsService } from "@/client"
 import { EnvironmentCard } from "@/components/Environments/EnvironmentCard"
 import { AddEnvironment } from "@/components/Environments/AddEnvironment"
 import useCustomToast from "@/hooks/useCustomToast"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+
+const INACTIVITY_OPTIONS = [
+  { value: "default", label: "10 minutes (default)" },
+  { value: "2_days", label: "2 days" },
+  { value: "1_week", label: "1 week" },
+  { value: "1_month", label: "1 month" },
+  { value: "always_on", label: "Always On" },
+] as const
 
 interface AgentEnvironmentsTabProps {
   agentId: string
@@ -11,6 +26,29 @@ interface AgentEnvironmentsTabProps {
 export function AgentEnvironmentsTab({ agentId }: AgentEnvironmentsTabProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
+
+  const { data: agentData } = useQuery({
+    queryKey: ["agent", agentId],
+    queryFn: () => AgentsService.readAgent({ id: agentId }),
+    enabled: !!agentId,
+  })
+
+  const updateInactivityMutation = useMutation({
+    mutationFn: (value: string) =>
+      AgentsService.updateAgent({
+        id: agentId,
+        requestBody: {
+          inactivity_period_limit: value === "default" ? null : value,
+        },
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agent", agentId] })
+      showSuccessToast("Inactivity period updated.")
+    },
+    onError: () => {
+      showErrorToast("Failed to update inactivity period")
+    },
+  })
 
   const { data: environmentsData, isLoading } = useQuery({
     queryKey: ["environments", agentId],
@@ -86,6 +124,31 @@ export function AgentEnvironmentsTab({ agentId }: AgentEnvironmentsTabProps) {
           </p>
         </div>
         <AddEnvironment agentId={agentId} />
+      </div>
+
+      <div className="flex items-center gap-3">
+        <label
+          htmlFor="inactivity-period"
+          className="text-sm font-medium text-muted-foreground whitespace-nowrap"
+        >
+          Auto-suspend after inactivity
+        </label>
+        <Select
+          value={agentData?.inactivity_period_limit ?? "default"}
+          onValueChange={(value) => updateInactivityMutation.mutate(value)}
+          disabled={updateInactivityMutation.isPending}
+        >
+          <SelectTrigger id="inactivity-period" className="w-[200px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {INACTIVITY_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {environments.length === 0 ? (

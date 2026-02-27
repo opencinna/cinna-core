@@ -395,6 +395,7 @@ export type AgentPublic = {
     [key: string]: unknown;
 } | null);
     example_prompts?: Array<(string)>;
+    inactivity_period_limit?: (string | null);
     created_at: string;
     updated_at: string;
     owner_id: string;
@@ -490,6 +491,7 @@ export type AgentUpdate = {
     [key: string]: unknown;
 } | null);
     example_prompts?: (Array<(string)> | null);
+    inactivity_period_limit?: (string | null);
     update_mode?: (string | null);
 };
 

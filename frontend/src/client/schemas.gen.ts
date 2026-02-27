@@ -2714,6 +2714,17 @@ export const AgentPublicSchema = {
             title: 'Example Prompts',
             default: []
         },
+        inactivity_period_limit: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Inactivity Period Limit'
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -3177,6 +3188,17 @@ export const AgentUpdateSchema = {
                 }
             ],
             title: 'Example Prompts'
+        },
+        inactivity_period_limit: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Inactivity Period Limit'
         },
         update_mode: {
             anyOf: [

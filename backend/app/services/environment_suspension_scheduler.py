@@ -16,8 +16,17 @@ logger = logging.getLogger(__name__)
 
 scheduler = BackgroundScheduler()
 
-# Inactivity threshold: 10 minutes
+# Inactivity threshold: 10 minutes (default)
 INACTIVITY_THRESHOLD_MINUTES = 10
+
+# Per-agent inactivity limits (agent.inactivity_period_limit -> timedelta)
+INACTIVITY_LIMITS = {
+    None: timedelta(minutes=10),
+    "2_days": timedelta(days=2),
+    "1_week": timedelta(weeks=1),
+    "1_month": timedelta(days=30),
+    "always_on": None,  # Never suspend
+}
 
 
 def run_suspension_check():
@@ -49,7 +58,6 @@ async def _check_and_suspend_environments():
 
         logger.info(f"Checking {len(running_envs)} running environments for suspension")
 
-        threshold_time = datetime.utcnow() - timedelta(minutes=INACTIVITY_THRESHOLD_MINUTES)
         lifecycle_manager = EnvironmentLifecycleManager()
 
         suspended_count = 0
@@ -61,13 +69,25 @@ async def _check_and_suspend_environments():
                     logger.warning(f"Agent {env.agent_id} not found for environment {env.id}")
                     continue
 
+                # Resolve per-agent inactivity limit
+                inactivity_limit = INACTIVITY_LIMITS.get(
+                    agent.inactivity_period_limit, timedelta(minutes=INACTIVITY_THRESHOLD_MINUTES)
+                )
+
+                # "always_on" → never auto-suspend
+                if inactivity_limit is None:
+                    logger.debug(f"Skipping environment {env.id}: agent {agent.id} is always_on")
+                    continue
+
+                threshold_time = datetime.utcnow() - inactivity_limit
+
                 # Check if user is online
                 user_online = event_service.is_user_online(agent.owner_id)
 
                 # Determine if environment should be suspended
                 should_suspend = False
 
-                # Case 1: No activity recorded yet and environment was created more than 10 minutes ago
+                # Case 1: No activity recorded yet and environment was created before threshold
                 if env.last_activity_at is None:
                     if env.created_at < threshold_time:
                         logger.debug(

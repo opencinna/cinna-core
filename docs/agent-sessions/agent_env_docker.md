@@ -401,10 +401,27 @@ Both variables are defined in the generated `.env` file, but only one is set bas
 - Runs every 10 minutes (background APScheduler job)
 - Checks all `running` environments for inactivity
 
+**Configurable Inactivity Period** (`Agent.inactivity_period_limit`):
+
+Each agent has a configurable inactivity threshold that controls when its active environment is auto-suspended. This is an agent-level setting (not per-environment) because the suspension policy reflects the agent's operational requirements.
+
+| Value | UI Label | Behavior |
+|-------|----------|----------|
+| `None` (default) | "10 minutes (default)" | Suspend after 10 min of inactivity |
+| `"2_days"` | "2 days" | Suspend after 2 days |
+| `"1_week"` | "1 week" | Suspend after 1 week |
+| `"1_month"` | "1 month" | Suspend after 30 days |
+| `"always_on"` | "Always On" | Never auto-suspend |
+
+**UI Location**: Select dropdown in **Agent Config → Environments tab**, above the environment cards. Updated via `PUT /api/v1/agents/{id}` (`inactivity_period_limit` field on `AgentUpdate`).
+
+**Implementation**: The scheduler resolves each agent's limit from the `INACTIVITY_LIMITS` mapping dict. Agents with `"always_on"` are skipped entirely. Unknown values fall back to the 10-minute default.
+
 **Suspension Criteria** (ALL must be true):
 1. Environment status is `running`
-2. Last activity > 10 minutes ago (tracked via `last_activity_at`)
-3. EITHER:
+2. Agent's `inactivity_period_limit` is not `"always_on"`
+3. Last activity exceeds the agent's configured threshold (tracked via `last_activity_at`)
+4. EITHER:
    - User is offline (no active WebSocket connection), OR
    - Environment is not the active one for its agent
 
@@ -606,8 +623,11 @@ The environment will automatically reactivate when you send a message or open a 
 
 **Model**: `backend/app/models/environment.py::AgentEnvironment`
 
-**Additional Fields**:
+**Additional Fields** (on `AgentEnvironment`):
 - `last_activity_at` (datetime, nullable) - Timestamp of last activity (message sent, session opened, usage intent)
+
+**Related Agent Field** (on `Agent` model, `backend/app/models/agent.py`):
+- `inactivity_period_limit` (string, nullable) - Controls auto-suspension threshold. Values: `None` (10 min default), `"2_days"`, `"1_week"`, `"1_month"`, `"always_on"`
 
 **Rebuild Status Flow**:
 1. `running` or `stopped` → trigger rebuild
@@ -615,7 +635,7 @@ The environment will automatically reactivate when you send a message or open a 
 3. `running` (if was running) or `stopped` (if was stopped) → after rebuild
 
 **Suspension Status Flow**:
-1. `running` → idle for 10+ minutes (or manual suspension)
+1. `running` → idle beyond agent's configured inactivity period (default: 10 min) or manual suspension
 2. `suspended` → environment suspended
 3. User opens session or sends message
 4. `activating` → activation in progress
@@ -663,6 +683,8 @@ The environment will automatically reactivate when you send a message or open a 
 - Methods: `is_user_online()`, `agent_usage_intent` event handler, `_activate_environment_sync()`
 
 **Frontend Components**:
+- Environments Tab: `frontend/src/components/Agents/AgentEnvironmentsTab.tsx`
+  - Features: Inactivity period selector (Select dropdown), environment list
 - Environment Card: `frontend/src/components/Environments/EnvironmentCard.tsx`
   - Actions: Rebuild button, Suspend button (for active environments)
 - Session UI: `frontend/src/routes/_layout/session/$sessionId.tsx`
