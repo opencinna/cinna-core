@@ -26,6 +26,8 @@ class GeminiProvider(BaseAIProvider):
 
     PROVIDER_NAME = "gemini"
     DEFAULT_MODEL = "gemini-2.5-flash-lite"
+    # Timeout in ms for the SDK's internal retry loop (prevents long hangs on 429s)
+    REQUEST_TIMEOUT_MS = 10000
 
     def __init__(self, api_key: Optional[str] = None):
         """
@@ -52,7 +54,10 @@ class GeminiProvider(BaseAIProvider):
                 )
             try:
                 from google.genai import Client
-                self._client = Client(api_key=self._api_key)
+                self._client = Client(
+                    api_key=self._api_key,
+                    http_options={"timeout": self.REQUEST_TIMEOUT_MS},
+                )
             except ImportError as e:
                 raise ProviderError(
                     f"google-genai package not installed: {e}",
@@ -97,9 +102,16 @@ class GeminiProvider(BaseAIProvider):
         except ProviderError:
             raise
         except Exception as e:
-            logger.error(f"Gemini generation failed: {e}", exc_info=True)
+            error_str = str(e)
+            is_rate_limit = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+            if is_rate_limit:
+                logger.warning(
+                    f"Gemini rate limit hit for {model_name}: {error_str}"
+                )
+            else:
+                logger.error(f"Gemini generation failed: {e}", exc_info=True)
             raise ProviderError(
-                f"Failed to generate content: {str(e)}",
+                f"Failed to generate content: {error_str}",
                 self.PROVIDER_NAME,
                 recoverable=True,
             )

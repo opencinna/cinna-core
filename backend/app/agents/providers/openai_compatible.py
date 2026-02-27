@@ -129,7 +129,7 @@ class OpenAICompatibleProvider(BaseAIProvider):
                 recoverable=False,
             )
         except Exception as e:
-            logger.error(f"OpenAI-compatible generation failed: {e}", exc_info=True)
+            logger.error(f"OpenAI-compatible generation failed: {e}")
             raise ProviderError(
                 f"Failed to generate content: {str(e)}",
                 self.PROVIDER_NAME,
