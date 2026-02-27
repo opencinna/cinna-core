@@ -2,6 +2,11 @@ services:
 
   backend:
     image: '${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}'
+    # TEMPORARY FIX
+    # Single worker required: MCP sessions are in-memory per-worker.
+    # Multiple workers cause "Session not found" because initialize and
+    # subsequent requests may hit different workers.
+    command: ["fastapi", "run", "--workers", "1", "app/main.py"]
     restart: always
     extra_hosts:
       - "host.docker.internal:host-gateway"
