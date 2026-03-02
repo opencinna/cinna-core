@@ -11,6 +11,7 @@ from app.models import SessionMessage, Session as ChatSession, AgentEnvironment,
 from app.services.active_streaming_manager import active_streaming_manager
 from app.services.agent_env_connector import agent_env_connector
 from app.services.agent_service import AgentService
+from app.models.mcp_session_meta import MCPSessionMeta
 from app.services.session_context_signer import sign_session_context
 
 logger = logging.getLogger(__name__)
@@ -765,6 +766,16 @@ class MessageService:
                         ).first()
                         if initiating_email:
                             session_context["email_subject"] = initiating_email.subject
+
+                    # Fetch authenticated MCP user email (may differ from session owner)
+                    if session_db.integration_type == "mcp":
+                        mcp_meta = db.exec(
+                            select(MCPSessionMeta).where(
+                                MCPSessionMeta.session_id == session_db.id
+                            )
+                        ).first()
+                        if mcp_meta:
+                            session_context["mcp_user_email"] = mcp_meta.authenticated_user_email
 
                     # Reset result_state when user sends a new message
                     if session_db.result_state is not None:

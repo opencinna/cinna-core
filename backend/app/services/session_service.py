@@ -4,9 +4,12 @@ import logging
 import asyncio
 from typing import Any
 from sqlmodel import Session as DBSession, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.attributes import flag_modified
 from app.models import Session, SessionCreate, SessionUpdate, Agent, AgentEnvironment
 from app.models.mcp_connector import MCPConnector
+from app.models.mcp_session_meta import MCPSessionMeta
+from app.models.user import User
 from app.core.db import create_session
 from app.utils import create_task_with_error_logging
 
@@ -124,6 +127,7 @@ class SessionService:
         connector: MCPConnector,
         mcp_session_id: str | None = None,
         context_id: str | None = None,
+        authenticated_user_id: UUID | None = None,
     ) -> tuple[Session, bool]:
         """
         Find or create a platform session for an MCP connector.
@@ -136,6 +140,10 @@ class SessionService:
         metadata on newly created sessions. Claude Desktop reuses the same
         mcp_session_id across all chats, so using it for lookup would defeat
         per-chat isolation via context_id.
+
+        Args:
+            authenticated_user_id: OAuth-authenticated user ID. May differ from
+                connector.owner_id when the owner grants access via allowed_emails.
 
         Returns:
             (session, is_new) tuple
@@ -172,8 +180,37 @@ class SessionService:
         if mcp_session_id:
             session.mcp_session_id = mcp_session_id
         db_session.add(session)
-        db_session.commit()
+        db_session.flush()
         db_session.refresh(session)
+
+        # Create MCPSessionMeta to track the authenticated user identity
+        if authenticated_user_id:
+            try:
+                auth_user = db_session.get(User, authenticated_user_id)
+                if auth_user:
+                    meta = MCPSessionMeta(
+                        session_id=session.id,
+                        authenticated_user_id=authenticated_user_id,
+                        authenticated_user_email=auth_user.email,
+                        connector_id=connector_id,
+                    )
+                    db_session.add(meta)
+                    logger.info(
+                        "[MCP] Created MCPSessionMeta for session=%s | user=%s",
+                        session.id, auth_user.email,
+                    )
+            except IntegrityError:
+                db_session.rollback()
+                logger.warning(
+                    "[MCP] MCPSessionMeta already exists for session=%s", session.id,
+                )
+            except Exception:
+                db_session.rollback()
+                logger.exception(
+                    "[MCP] Failed to create MCPSessionMeta for session=%s", session.id,
+                )
+
+        db_session.commit()
 
         logger.info(
             "[MCP] Created new session=%s | connector=%s",

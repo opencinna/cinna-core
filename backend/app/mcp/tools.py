@@ -19,7 +19,7 @@ from app.services.mcp_connector_service import MCPConnectorService
 from app.services.mcp_errors import MCPError
 from app.mcp.request_handler import MCPRequestHandler
 from app.mcp.upload_token import create_file_upload_token
-from app.mcp.server import mcp_connector_id_var, mcp_session_id_var
+from app.mcp.context_vars import mcp_connector_id_var, mcp_session_id_var, mcp_authenticated_user_id_var
 
 logger = logging.getLogger(__name__)
 
@@ -82,12 +82,17 @@ async def _handle_send_message_inner(message: str, context_id: str = "", ctx=Non
             logger.warning("[MCP] Context resolution failed for connector %s: %s", connector_id_str, e)
             return f"Error: {e}"
 
+    # Read authenticated user identity (set by MCPTokenVerifier)
+    auth_user_id_str = mcp_authenticated_user_id_var.get(None)
+    authenticated_user_id = uuid.UUID(auth_user_id_str) if auth_user_id_str else None
+
     # Create handler and delegate (same pattern as A2ARequestHandler)
     handler = MCPRequestHandler(
         agent=agent,
         environment=environment,
         connector=connector,
         get_db_session=create_session,
+        authenticated_user_id=authenticated_user_id,
     )
     return await handler.handle_send_message(
         message,

@@ -62,6 +62,7 @@ class MCPRequestHandler:
         environment: AgentEnvironment,
         connector: MCPConnector,
         get_db_session: Callable[[], DbSession],
+        authenticated_user_id: UUID | None = None,
     ):
         """
         Initialize the request handler.
@@ -71,11 +72,13 @@ class MCPRequestHandler:
             environment: The agent's active environment
             connector: The MCP connector instance
             get_db_session: Callable that returns a fresh database session
+            authenticated_user_id: OAuth-authenticated user ID (may differ from connector owner)
         """
         self.agent = agent
         self.environment = environment
         self.connector = connector
         self.get_db_session = get_db_session
+        self.authenticated_user_id = authenticated_user_id
 
     @staticmethod
     async def _send_mcp_progress(mcp_ctx, event: dict, progress: int, last_info_time: float) -> tuple[int, float]:
@@ -151,6 +154,7 @@ class MCPRequestHandler:
                     connector=self.connector,
                     mcp_session_id=mcp_session_id,
                     context_id=context_id,
+                    authenticated_user_id=self.authenticated_user_id,
                 )
             except ValueError as e:
                 return json.dumps({"error": str(e), "context_id": ""})

@@ -173,6 +173,26 @@ MCP Client (Claude Desktop / Cursor)
 **Models:** `backend/app/models/mcp_token.py`
 - `MCPToken` (table model)
 
+### Table: `mcp_session_meta`
+
+Tracks the OAuth-authenticated user's identity for MCP sessions. When an MCP connector has `allowed_emails`, the session's `user_id` is the connector **owner**, but the person actually communicating may be a different user who authenticated via OAuth. This table records that identity so it can be surfaced in the agent's session context.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID, PK | Internal ID |
+| `session_id` | UUID, FK → session.id (CASCADE), unique, indexed | One meta per session |
+| `authenticated_user_id` | UUID, FK → user.id (CASCADE) | OAuth-authenticated user |
+| `authenticated_user_email` | VARCHAR | Denormalized email for fast lookup |
+| `connector_id` | UUID, FK → mcp_connector.id (CASCADE) | Which connector |
+| `oauth_client_id` | VARCHAR, nullable | Audit trail |
+| `created_at` | DATETIME | Timestamp |
+
+**Models:** `backend/app/models/mcp_session_meta.py`
+- `MCPSessionMeta` (table model)
+- `MCPSessionMetaPublic` (response schema)
+
+**Migration:** `backend/app/alembic/versions/1cfe565b5e39_add_mcp_session_meta_table.py`
+
 ### Session Table Updates
 
 **File:** `backend/app/models/session.py:46-50`
@@ -313,7 +333,8 @@ Mounted at `/mcp/oauth` in `backend/app/main.py`. Route handlers are thin wrappe
 3. Check revocation
 4. Verify `connector_id` matches this verifier's connector
 5. Verify connector is still active
-6. Return SDK `AccessToken` or `None`
+6. Set `mcp_authenticated_user_id_var` ContextVar with `token_record.user_id` (propagates OAuth-authenticated user identity to tool handlers)
+7. Return SDK `AccessToken` or `None`
 
 #### Server Factory
 
@@ -338,9 +359,12 @@ Mounted at `/mcp/oauth` in `backend/app/main.py`. Route handlers are thin wrappe
 - `get_or_create(connector_id)` — Lazy-creates per-connector FastMCP ASGI apps; validates connector exists and is active
 - `remove(connector_id)` — Evicts cached server (called on deactivation/deletion)
 - `clear()` — Clears all servers (called on app shutdown)
-- `__call__(scope, receive, send)` — ASGI dispatcher: extracts `connector_id` from path, sets `mcp_connector_id_var` contextvar, delegates to per-connector app
+- `__call__(scope, receive, send)` — ASGI dispatcher: extracts `connector_id` from path, sets context vars, delegates to per-connector app; resets all context vars (including `mcp_authenticated_user_id_var`) in `finally` block
 
-**Context Variable:** `mcp_connector_id_var: ContextVar[str]` — set by registry, read by tool handlers
+**Context Variables** (defined in `backend/app/mcp/context_vars.py`):
+- `mcp_connector_id_var: ContextVar[str]` — set by registry, read by tool handlers
+- `mcp_session_id_var: ContextVar[str | None]` — MCP transport session ID from client header
+- `mcp_authenticated_user_id_var: ContextVar[str | None]` — set by `MCPTokenVerifier.verify_token()`, read by tool handlers to propagate OAuth-authenticated user identity
 
 #### Mounting in FastAPI
 
@@ -370,9 +394,10 @@ Starlette routing precedence ensures `/mcp/oauth/...` routes match before the `/
 `handle_send_message(message, context_id, ctx)` logic:
 1. Extract `connector_id` from `mcp_connector_id_var` contextvar
 2. Extract MCP transport session ID from contextvar and/or tool context
-3. Resolve connector, agent, environment via `MCPConnectorService.resolve_connector_context()`
-4. Create `MCPRequestHandler` with resolved entities
-5. Delegate to `handler.handle_send_message(message, mcp_session_id, context_id, mcp_ctx=ctx)`
+3. Read `mcp_authenticated_user_id_var` to get the OAuth-authenticated user's UUID
+4. Resolve connector, agent, environment via `MCPConnectorService.resolve_connector_context()`
+5. Create `MCPRequestHandler` with resolved entities and `authenticated_user_id`
+6. Delegate to `handler.handle_send_message(message, mcp_session_id, context_id, mcp_ctx=ctx)`
    - `ctx` (MCP `Context` object) is passed through as `mcp_ctx` to enable progress/log notifications during streaming
 
 **File:** `backend/app/mcp/request_handler.py` (business logic handler)
@@ -380,10 +405,11 @@ Starlette routing precedence ensures `/mcp/oauth/...` routes match before the `/
 **Class:** `MCPRequestHandler`
 
 `handle_send_message(message, mcp_session_id, context_id, mcp_ctx)` logic:
-1. Get or create platform session via `SessionService.get_or_create_mcp_session(context_id=...)`
+1. Get or create platform session via `SessionService.get_or_create_mcp_session(context_id=..., authenticated_user_id=...)`
    - If `context_id` provided → look up session by UUID, verify it belongs to this connector
    - If not provided or invalid → create new session
    - `mcp_session_id` is stored as metadata on new sessions but NOT used for session lookup
+   - When creating a new session: creates `MCPSessionMeta` record linking the session to the OAuth-authenticated user (email, user_id, connector_id)
 2. Create user message via `MessageService.create_message()`
 3. Trigger title generation for new sessions via `SessionService.auto_generate_session_title()`
 4. Send initial progress notification: `mcp_ctx.report_progress(0, 100, "Preparing agent environment...")`
@@ -416,6 +442,14 @@ During the streaming loop, the handler sends MCP notifications to keep the clien
 - `backend/app/services/mcp_connector_service.py` — `MCPConnectorService.resolve_connector_context()` loads and validates connector, agent, environment for tool requests
 - `backend/app/services/mcp_consent_service.py` — `MCPConsentService` handles OAuth consent flow (get_consent_details, approve_consent)
 - `backend/app/services/mcp_oauth_service.py` — `MCPOAuthService` handles OAuth 2.1 logic (register_client, create_authorization, exchange_authorization_code, refresh_access_token, revoke_token)
+
+**Authenticated User Tracking (MCPSessionMeta):**
+- When `authenticated_user_id` is provided, `SessionService.get_or_create_mcp_session()` creates an `MCPSessionMeta` record after creating the session
+- The meta stores `authenticated_user_id`, `authenticated_user_email` (denormalized from User), and `connector_id`
+- `MessageService._get_session_context_and_reset_state()` enriches `session_context` with `mcp_user_email` from the meta record for MCP sessions
+- The `mcp_user_email` field is HMAC-signed along with the rest of the session context (existing signing mechanism)
+- The agent environment's `prompt_generator.py` renders it as "**MCP User Email**: user@example.com" in the system prompt's Session Context section
+- Pre-existing sessions without meta gracefully skip enrichment (no error)
 
 **Message Queuing:**
 - Per-session locks via `_session_locks` dict in request handler (bounded: evicts idle entries when exceeding 1000 to prevent unbounded memory growth)
@@ -626,7 +660,22 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 4. MCP clients receive errors, must wait for reactivation
 ```
 
-### Scenario 4: Token Refresh Flow
+### Scenario 4: Shared Connector with Authenticated User Tracking
+
+```
+1. Agent owner creates MCP connector with allowed_emails=["alice@example.com"]
+2. Alice connects via Claude Desktop with her own OAuth credentials
+3. MCPTokenVerifier.verify_token() sets mcp_authenticated_user_id_var = Alice's user_id
+4. Tool handler reads the ContextVar, passes authenticated_user_id to MCPRequestHandler
+5. SessionService.get_or_create_mcp_session() creates:
+   - Session with user_id = owner_id (connector owner)
+   - MCPSessionMeta with authenticated_user_id = Alice's user_id, email = alice@example.com
+6. MessageService enriches session_context with mcp_user_email = "alice@example.com"
+7. Agent's system prompt includes "MCP User Email: alice@example.com"
+8. Agent knows WHO is communicating, even though session belongs to the owner
+```
+
+### Scenario 5: Token Refresh Flow
 
 ```
 1. Access token expires after 1 hour
@@ -644,6 +693,7 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 - `backend/app/models/mcp_oauth_client.py` — MCPOAuthClient model
 - `backend/app/models/mcp_auth_code.py` — MCPAuthCode + MCPAuthRequest models
 - `backend/app/models/mcp_token.py` — MCPToken model
+- `backend/app/models/mcp_session_meta.py` — MCPSessionMeta model (authenticated user tracking)
 - `backend/app/models/session.py:46-50` — MCP fields on session table
 - `backend/app/models/__init__.py` — Exports added
 
@@ -665,7 +715,8 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 ### Backend — MCP Infrastructure
 
 - `backend/app/mcp/__init__.py` — Package init
-- `backend/app/mcp/server.py` — FastMCP factory, MCPServerRegistry, mcp_connector_id_var
+- `backend/app/mcp/context_vars.py` — Shared ContextVar definitions (connector_id, session_id, authenticated_user_id)
+- `backend/app/mcp/server.py` — FastMCP factory, MCPServerRegistry
 - `backend/app/mcp/token_verifier.py` — MCPTokenVerifier
 - `backend/app/mcp/tools.py` — MCP-specific entry point, register_mcp_tools()
 - `backend/app/mcp/resources.py` — Workspace resources, WorkspaceResourceManager, register_mcp_resources()
@@ -683,6 +734,7 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 ### Backend — Migration
 
 - `backend/app/alembic/versions/dc259404533e_add_mcp_integration_tables.py`
+- `backend/app/alembic/versions/1cfe565b5e39_add_mcp_session_meta_table.py`
 
 ### Backend — Dependencies
 
@@ -705,6 +757,7 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 - `backend/tests/api/mcp_integration/test_mcp_prompts.py` — Agent example prompts tests (parsing, DB fetch, handler registration, list/get/not-found/empty)
 - `backend/tests/api/mcp_integration/test_mcp_notifications.py` — Resource change notification tests (capability, send_message notification, broadcast, session tracking)
 - `backend/tests/api/mcp_integration/test_mcp_progress_notifications.py` — Progress and content streaming notification tests (multi-step progress, capping, throttling, failure resilience)
+- `backend/tests/api/mcp_integration/test_mcp_session_meta.py` — MCPSessionMeta tests (creation, reuse, session context enrichment, owner vs authenticated user, error resilience)
 - `backend/tests/utils/mcp.py` — Test utilities
 
 ## Related Documentation
@@ -714,6 +767,6 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 
 ---
 
-**Document Version:** 1.7
-**Last Updated:** 2026-02-28
-**Status:** Implemented (Phase 1-7 complete + workspace resources, per-chat session isolation via context_id, example prompts, resource change notifications, progress & content streaming notifications, service layer refactoring)
+**Document Version:** 1.8
+**Last Updated:** 2026-03-02
+**Status:** Implemented (Phase 1-7 complete + workspace resources, per-chat session isolation via context_id, example prompts, resource change notifications, progress & content streaming notifications, service layer refactoring, authenticated MCP user tracking via MCPSessionMeta)

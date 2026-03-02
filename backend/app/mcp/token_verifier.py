@@ -8,6 +8,7 @@ from app.core.db import engine
 from app.models.mcp_connector import MCPConnector
 from app.models.mcp_token import MCPToken
 from app.core.config import settings
+from app.mcp.context_vars import mcp_authenticated_user_id_var
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,11 @@ class MCPTokenVerifier(TokenVerifier):
 
             scopes = [s for s in token_record.scope.split(" ") if s] if token_record.scope else []
             expires_at_ts = int(token_record.expires_at.timestamp()) if token_record.expires_at else None
+
+            # Propagate authenticated user identity to tool handlers via ContextVar.
+            # Token not captured — cleanup is handled by MCPServerRegistry.__call__()
+            # which resets mcp_authenticated_user_id_var in its finally block.
+            mcp_authenticated_user_id_var.set(str(token_record.user_id))
 
             return AccessToken(
                 token=token,

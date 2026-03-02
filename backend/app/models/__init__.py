@@ -315,6 +315,10 @@ from .mcp_auth_code import (
 from .mcp_token import (
     MCPToken,
 )
+from .mcp_session_meta import (
+    MCPSessionMeta,
+    MCPSessionMetaPublic,
+)
 
 __all__ = [
     # Core
@@ -604,4 +608,7 @@ __all__ = [
     "MCPAuthCode",
     "MCPAuthRequest",
     "MCPToken",
+    # MCP Session Meta
+    "MCPSessionMeta",
+    "MCPSessionMetaPublic",
 ]

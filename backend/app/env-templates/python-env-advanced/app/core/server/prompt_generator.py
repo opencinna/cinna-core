@@ -307,6 +307,10 @@ class PromptGenerator:
         if sender_email:
             lines.append(f"- **Sender Email**: {sender_email}")
 
+        mcp_user_email = session_context.get("mcp_user_email")
+        if mcp_user_email:
+            lines.append(f"- **MCP User Email**: {mcp_user_email}")
+
         email_subject = session_context.get("email_subject")
         if email_subject:
             lines.append(f"- **Subject**: {email_subject}")

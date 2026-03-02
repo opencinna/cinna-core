@@ -1,7 +1,6 @@
 import uuid
 import logging
 from contextlib import asynccontextmanager
-from contextvars import ContextVar
 from urllib.parse import urlparse
 
 import anyio
@@ -20,12 +19,13 @@ from app.core.config import settings
 from app.core.db import engine
 from app.models.mcp_connector import MCPConnector
 from app.mcp.token_verifier import MCPTokenVerifier
+from app.mcp.context_vars import (
+    mcp_connector_id_var,
+    mcp_session_id_var,
+    mcp_authenticated_user_id_var,
+)
 
 logger = logging.getLogger(__name__)
-
-# Context vars to pass connector_id and MCP session_id to tool handlers
-mcp_connector_id_var: ContextVar[str] = ContextVar("mcp_connector_id")
-mcp_session_id_var: ContextVar[str | None] = ContextVar("mcp_session_id", default=None)
 
 
 def _build_transport_security() -> TransportSecuritySettings:
@@ -365,6 +365,7 @@ class MCPServerRegistry:
         # Set context vars for tool handlers
         token_conn = mcp_connector_id_var.set(connector_id_str)
         token_sess = mcp_session_id_var.set(mcp_session_id_from_header)
+        token_auth_user = mcp_authenticated_user_id_var.set(None)
         try:
             # Rewrite path to strip the connector_id prefix
             remaining_path = f"/{parts[1]}" if len(parts) > 1 else "/"
@@ -386,6 +387,7 @@ class MCPServerRegistry:
         finally:
             mcp_connector_id_var.reset(token_conn)
             mcp_session_id_var.reset(token_sess)
+            mcp_authenticated_user_id_var.reset(token_auth_user)
 
 
 # Singleton registry instance
