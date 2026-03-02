@@ -570,7 +570,9 @@ class GoogleADKAdapter(BaseSDKAdapter):
                 logger.info("Using explicit system_prompt override")
             else:
                 try:
-                    generated_prompt = self.prompt_generator.generate_prompt(mode)
+                    generated_prompt = self.prompt_generator.generate_prompt(
+                        mode, session_state=session_state
+                    )
                     # For conversation mode, generate_prompt returns a string
                     # For building mode, it returns a dict with preset info
                     if isinstance(generated_prompt, dict):

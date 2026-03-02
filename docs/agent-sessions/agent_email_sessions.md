@@ -150,17 +150,35 @@ Email conversations map to agent sessions via email headers:
 
 ### Session Context for Agent Scripts
 
-Agent scripts running inside environments can query session metadata via HTTP:
-- `GET /session/context` endpoint (localhost-only, no auth) returns:
+Agent scripts running inside environments can query HMAC-verified session metadata via HTTP:
+- `GET /session/context?session_id=<backend_session_id>` endpoint (localhost-only, no auth) returns:
   - `integration_type` (e.g., "email")
+  - `sender_email` — original sender (from `session.sender_email`)
+  - `email_subject` — subject of the initiating email (fetched from linked `EmailMessage`)
+  - `email_thread_id` — email Message-ID for threading
   - `agent_id`, `is_clone`, `parent_agent_id`
-  - `session_id`, `backend_session_id`, `mode`
+  - `backend_session_id`
 - Enables conditional logic in agent scripts (e.g., format responses differently for email)
+- The `session_id` parameter routes to the correct session's context (supports parallel sessions)
+
+**Three-Layer Security**:
+
+1. **System Prompt Injection** — Server-verified metadata (sender, subject, session_id) injected into the LLM's system prompt under a "Session Context (Server-Verified, Read-Only)" section. The LLM is instructed to trust these values over message content (mitigates prompt injection where a malicious email body claims a different sender).
+
+2. **HMAC-Verified Per-Session Context Store** — Backend HMAC-signs `session_context` with `AGENT_AUTH_TOKEN` using HMAC-SHA256. Agent-env verifies the signature before storing. Context is stored in a dict keyed by `backend_session_id`, supporting parallel sessions without cross-session leakage. Context is explicitly cleaned up when each stream ends, with TTL-based cleanup (24h) as a fallback safety net.
+
+3. **Helper Script** — `/app/core/scripts/get_session_context.py` provides stdlib-only CLI/import access for agent scripts. The LLM passes the `backend_session_id` (from its system prompt) to scripts as a CLI argument. Scripts query the core server directly, bypassing the LLM entirely for authoritative context.
 
 **Implementation**:
-- `ActiveSessionManager.set_current_context()` stores context when a stream starts
-- `routes.py::get_session_context()` exposes it via HTTP
-- Context is cleared automatically when the stream ends
+- `routes.py::_store_session_context()` — helper that stores context via both legacy and per-session APIs (deduplicates chat/chat_stream)
+- `ActiveSessionManager.set_session_context()` stores HMAC-verified context per `backend_session_id`
+- `ActiveSessionManager.get_session_context()` retrieves context for a specific session
+- `ActiveSessionManager.cleanup_session_context()` explicitly removes context when stream ends
+- `routes.py::get_session_context()` exposes it via HTTP with `?session_id=` parameter
+- `PromptGenerator.build_session_context_section()` generates the system prompt section
+- `session_context_signer.py` (backend) handles HMAC signing
+- Explicit cleanup on stream end + TTL-based cleanup (24h) as fallback safety net
+- Legacy single-context API (`set_current_context`/`get_current_context`/`clear_context`) retained for backward compatibility
 
 ## File Structure
 
@@ -231,9 +249,14 @@ backend/app/
 │   └── ai_functions_service.py         # Added: generate_email_reply() wrapper
 ├── api/main.py                         # Registered mail_servers + email_integration routers
 ├── main.py                             # Registered polling/sending schedulers + event handler
-└── env-templates/python-env-advanced/app/core/server/
-    ├── active_session_manager.py       # Added: set/get/clear_current_context()
-    └── routes.py                       # Added: GET /session/context endpoint + context storage
+└── env-templates/python-env-advanced/app/core/
+    ├── server/
+    │   ├── active_session_manager.py   # Per-session context store (HMAC-verified), TTL cleanup
+    │   ├── routes.py                   # GET /session/context with ?session_id= param, HMAC-verified context storage
+    │   ├── prompt_generator.py         # Session context injection into system prompts
+    │   └── adapters/claude_code.py     # Passes session_state to prompt generation
+    └── scripts/
+        └── get_session_context.py      # Stdlib-only helper for agent scripts to query session context
 
 frontend/src/
 ├── components/
@@ -404,7 +427,7 @@ The endpoint validates task ownership, checks that `source_email_message_id` is 
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/session/context` | Current session metadata (localhost-only, no auth) |
+| `GET` | `/session/context?session_id=X` | HMAC-verified session metadata (localhost-only, no auth). With `session_id`: per-session lookup (404 if not found). Without: legacy fallback. |
 
 ## Service Architecture
 
@@ -490,7 +513,7 @@ services/email/
   - Marks email as `processed=True` with `input_task_id` link
   - No session created — owner reviews and executes manually
 
-**6. Agent Streaming** — Session and agent-env run normally. The agent-env receives `session_context.integration_type="email"` and exposes it via `GET /session/context`.
+**6. Agent Streaming** — Session and agent-env run normally. The backend sends HMAC-signed `session_context` (including `integration_type`, `sender_email`, `email_subject` fetched from the linked `EmailMessage`, `email_thread_id`, `backend_session_id`) to agent-env. The context is verified, stored per-session, injected into the system prompt, and exposed to scripts via `GET /session/context?session_id=X`.
 
 **6b. Task Execution (new_task path only)** — Owner reviews the task in the Tasks UI, optionally refines the description or reassigns to a different agent, then clicks Execute. `InputTaskService.execute_task()` creates a session via `SessionService.create_session()` (with `source_task_id` link), sends the task description as the initial message via `SessionService.send_session_message()`, and the agent processes it normally. The task status transitions: `new` → `running`, and `session_id` is linked.
 
@@ -528,7 +551,7 @@ shutdown_email_sending_scheduler()
 | `UserService` | `create_email_user()` — creates user from email, bypasses domain whitelist |
 | `SessionService` | `create_session()` accepts `email_thread_id`, `integration_type`, `sender_email` |
 | `SessionService` | `get_session_by_email_thread()` — finds session by thread ID for continuity |
-| `MessageService` | Emits `session_context` (including `integration_type`) to agent-env on every stream |
+| `MessageService` | Emits HMAC-signed `session_context` (including `integration_type`, `sender_email`, `email_subject` from linked `EmailMessage`, `email_thread_id`, `backend_session_id`) to agent-env on every stream |
 | `InputTaskService` | `send_email_answer()` — generates AI reply and queues outgoing email for task-originated emails |
 | `AIFunctionsService` | `generate_email_reply()` — AI-powered email reply generation from session results |
 | Event Bus | `STREAM_COMPLETED` event triggers `EmailSendingService.handle_stream_completed()` |
@@ -651,7 +674,8 @@ Top-level card with:
 - `backend/app/services/agent_share_service.py` — `create_auto_share()` method
 - `backend/app/services/user_service.py` — `create_email_user()` method
 - `backend/app/services/session_service.py` — `get_session_by_email_thread()`, email params on `create_session()`
-- `backend/app/services/message_service.py` — `session_context` emission to agent-env
+- `backend/app/services/message_service.py` — HMAC-signed `session_context` emission to agent-env (fetches `email_subject` from linked `EmailMessage`)
+- `backend/app/services/session_context_signer.py` — HMAC-SHA256 signing/verification for session context
 - `backend/app/services/input_task_service.py` — `send_email_answer()` method for email-originated task replies
 
 **API Routes**:
@@ -659,8 +683,10 @@ Top-level card with:
 - `backend/app/api/routes/email_integration.py` — Agent email integration config
 
 **Agent-Env**:
-- `backend/app/env-templates/python-env-advanced/app/core/server/active_session_manager.py` — Context storage
-- `backend/app/env-templates/python-env-advanced/app/core/server/routes.py` — `GET /session/context`
+- `backend/app/env-templates/python-env-advanced/app/core/server/active_session_manager.py` — Per-session HMAC-verified context store
+- `backend/app/env-templates/python-env-advanced/app/core/server/routes.py` — `GET /session/context?session_id=X`, `_store_session_context()` helper, explicit cleanup on stream end
+- `backend/app/env-templates/python-env-advanced/app/core/server/prompt_generator.py` — Session context injection into system prompts
+- `backend/app/env-templates/python-env-advanced/app/core/scripts/get_session_context.py` — Stdlib-only helper for agent scripts
 
 **Frontend**:
 - `frontend/src/components/UserSettings/MailServerSettings.tsx` — Settings panel

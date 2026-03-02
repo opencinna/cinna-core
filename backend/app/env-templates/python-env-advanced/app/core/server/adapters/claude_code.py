@@ -285,7 +285,9 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                     logger.info("Using explicit system_prompt override")
                 else:
                     try:
-                        options.system_prompt = self.prompt_generator.generate_prompt(mode)
+                        options.system_prompt = self.prompt_generator.generate_prompt(
+                            mode, session_state=session_state
+                        )
                         logger.info(f"Generated system prompt for mode: {mode}")
                     except ValueError as e:
                         yield SDKEvent(

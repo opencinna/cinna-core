@@ -1,7 +1,7 @@
 import os
 import logging
 import json
-from fastapi import APIRouter, Depends, Header, HTTPException, status, File, UploadFile, Form
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status, File, UploadFile, Form
 from fastapi.responses import StreamingResponse
 from datetime import datetime
 from typing import Annotated
@@ -41,6 +41,32 @@ WORKSPACE_DIR = os.getenv("CLAUDE_CODE_WORKSPACE", "/app/workspace")
 
 # Initialize agent environment service
 agent_env_service = AgentEnvService(WORKSPACE_DIR)
+
+
+async def _store_session_context(request: ChatRequest) -> None:
+    """Store session context from the request into the active session manager.
+
+    Handles both the legacy single-context API and the new per-session
+    HMAC-verified context storage.
+    """
+    if not (request.session_state and "session_context" in request.session_state):
+        return
+
+    context_data = {
+        **request.session_state["session_context"],
+        "session_id": request.session_id,
+        "backend_session_id": request.backend_session_id,
+        "mode": request.mode,
+    }
+    # Legacy single-context (backward compat)
+    await active_session_manager.set_current_context(context_data)
+    # Per-session context with HMAC verification
+    if request.backend_session_id:
+        await active_session_manager.set_session_context(
+            backend_session_id=request.backend_session_id,
+            context=request.session_state["session_context"],
+            signature=request.session_state.get("session_context_signature"),
+        )
 
 
 async def verify_auth_token(authorization: Annotated[str | None, Header()] = None) -> None:
@@ -117,14 +143,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     Uses Claude SDK for both building and conversation modes.
     SDK configuration (Anthropic vs MiniMax) is determined by settings files in the environment.
     """
-    # Store session context if provided
-    if request.session_state and "session_context" in request.session_state:
-        await active_session_manager.set_current_context({
-            **request.session_state["session_context"],
-            "session_id": request.session_id,
-            "backend_session_id": request.backend_session_id,
-            "mode": request.mode,
-        })
+    await _store_session_context(request)
 
     response_content = []
     new_session_id = request.session_id
@@ -147,6 +166,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
                 response_content.append(chunk["content"])
     finally:
         await active_session_manager.clear_context()
+        if request.backend_session_id:
+            await active_session_manager.cleanup_session_context(request.backend_session_id)
 
     return ChatResponse(
         response="\n".join(response_content),
@@ -172,14 +193,7 @@ async def chat_stream(request: ChatRequest):
     """
     logger.info(f"Starting stream for mode={request.mode}, sdk_session_id={request.session_id}, backend_session_id={request.backend_session_id}, message={request.message[:50]}...")
 
-    # Store session context if provided
-    if request.session_state and "session_context" in request.session_state:
-        await active_session_manager.set_current_context({
-            **request.session_state["session_context"],
-            "session_id": request.session_id,
-            "backend_session_id": request.backend_session_id,
-            "mode": request.mode,
-        })
+    await _store_session_context(request)
 
     async def event_stream():
         """Generate SSE events from SDK stream"""
@@ -234,6 +248,8 @@ async def chat_stream(request: ChatRequest):
                 logger.warning("Client disconnected before error event could be sent")
         finally:
             await active_session_manager.clear_context()
+            if request.backend_session_id:
+                await active_session_manager.cleanup_session_context(request.backend_session_id)
 
     return StreamingResponse(
         event_stream(),
@@ -303,18 +319,32 @@ async def close_sdk_session(session_id: str):
 
 
 @router.get("/session/context")
-async def get_session_context():
+async def get_session_context(session_id: str | None = Query(default=None)):
     """
-    Get current session context metadata.
+    Get session context metadata.
 
     This endpoint is available without authentication (localhost-only, internal to container).
     Agent scripts can call this to determine if the current session is email-initiated,
     whether they're running as a clone, and what the parent agent is.
 
+    Args:
+        session_id: Backend session ID to look up specific session context.
+                    If provided, returns HMAC-verified per-session context.
+                    If omitted, falls back to legacy current-session context.
+
     Returns:
-        Session context dict with integration_type, agent_id, is_clone, parent_agent_id, mode.
-        Returns empty context if no session is currently active.
+        Session context dict with integration_type, agent_id, is_clone, parent_agent_id, etc.
+        Returns 404 if session_id is provided but not found.
+        Returns empty context if no session is currently active (legacy mode).
     """
+    # Per-session lookup (preferred path)
+    if session_id:
+        context = await active_session_manager.get_session_context(session_id)
+        if context:
+            return context
+        raise HTTPException(status_code=404, detail=f"No context found for session_id={session_id}")
+
+    # Legacy fallback: return single current context
     context = await active_session_manager.get_current_context()
     if context:
         return context

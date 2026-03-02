@@ -11,6 +11,7 @@ from app.models import SessionMessage, Session as ChatSession, AgentEnvironment,
 from app.services.active_streaming_manager import active_streaming_manager
 from app.services.agent_env_connector import agent_env_connector
 from app.services.agent_service import AgentService
+from app.services.session_context_signer import sign_session_context
 
 logger = logging.getLogger(__name__)
 
@@ -726,6 +727,7 @@ class MessageService:
                 session_context = None
                 env_base_url = ""
                 env_auth_headers = {}
+                env_auth_token = None
 
                 if session_db:
                     env = db.get(AgentEnvironment, environment_id)
@@ -734,6 +736,7 @@ class MessageService:
                         # Resolve environment URL and auth headers
                         env_base_url = MessageService.get_environment_url(env)
                         env_auth_headers = MessageService.get_auth_headers(env)
+                        env_auth_token = env.config.get("auth_token") if env.config else None
 
                         if env.agent_id:
                             agent = db.get(Agent, env.agent_id)
@@ -746,7 +749,22 @@ class MessageService:
                         "agent_id": str(env.agent_id) if env and env.agent_id else None,
                         "is_clone": agent.is_clone if agent else False,
                         "parent_agent_id": str(agent.parent_agent_id) if agent and agent.parent_agent_id else None,
+                        "sender_email": session_db.sender_email,
+                        "email_thread_id": session_db.email_thread_id,
+                        "backend_session_id": str(session_db.id),
                     }
+
+                    # Fetch email subject from the initiating EmailMessage (avoid data duplication)
+                    if session_db.integration_type == "email":
+                        from app.models.email_message import EmailMessage
+                        initiating_email = db.exec(
+                            select(EmailMessage)
+                            .where(EmailMessage.session_id == session_db.id)
+                            .order_by(EmailMessage.received_at.asc())
+                            .limit(1)
+                        ).first()
+                        if initiating_email:
+                            session_context["email_subject"] = initiating_email.subject
 
                     # Reset result_state when user sends a new message
                     if session_db.result_state is not None:
@@ -766,8 +784,8 @@ class MessageService:
                                 db_session=db, task_id=session_db.source_task_id
                             )
 
-                return user_id, allowed_tools, previous_result_state, session_context, env_base_url, env_auth_headers
-        user_id, agent_allowed_tools, previous_result_state, session_context, base_url, auth_headers = await asyncio.to_thread(
+                return user_id, allowed_tools, previous_result_state, session_context, env_base_url, env_auth_headers, env_auth_token
+        user_id, agent_allowed_tools, previous_result_state, session_context, base_url, auth_headers, env_auth_token = await asyncio.to_thread(
             _get_session_context_and_reset_state
         )
 
@@ -812,6 +830,11 @@ class MessageService:
                 session_state["previous_result_state"] = previous_result_state
             if session_context:
                 session_state["session_context"] = session_context
+                # HMAC-sign context so agent-env can verify authenticity
+                if env_auth_token:
+                    session_state["session_context_signature"] = sign_session_context(
+                        session_context, env_auth_token
+                    )
 
         try:
             # Stream from environment

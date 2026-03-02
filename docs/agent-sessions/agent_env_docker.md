@@ -41,13 +41,20 @@ backend/app/env-templates/python-env-advanced/
 │   ├── core/                          # System code (baked into image)
 │   │   ├── __init__.py
 │   │   ├── main.py                    # FastAPI entry point
-│   │   └── server/                    # API server code (modular architecture)
-│   │       ├── routes.py              # HTTP endpoints
-│   │       ├── models.py              # Pydantic request/response models
-│   │       ├── sdk_manager.py         # SDK session orchestration
-│   │       ├── prompt_generator.py    # System prompt generation
-│   │       ├── agent_env_service.py   # Business logic (file operations)
-│   │       └── sdk_utils.py           # Logging, debugging, formatting
+│   │   ├── server/                    # API server code (modular architecture)
+│   │   │   ├── routes.py              # HTTP endpoints + _store_session_context() helper
+│   │   │   ├── models.py              # Pydantic request/response models
+│   │   │   ├── sdk_manager.py         # SDK session orchestration
+│   │   │   ├── prompt_generator.py    # System prompt generation
+│   │   │   ├── agent_env_service.py   # Business logic (file operations)
+│   │   │   ├── sdk_utils.py           # Logging, debugging, formatting
+│   │   │   ├── active_session_manager.py  # Session tracking, per-session context (HMAC-verified)
+│   │   │   └── adapters/              # SDK adapter implementations
+│   │   │       ├── base.py            # SDKEvent, SDKConfig, BaseSDKAdapter
+│   │   │       ├── claude_code.py     # ClaudeCodeAdapter
+│   │   │       └── google_adk.py      # GoogleADKAdapter
+│   │   └── scripts/                   # Helper scripts for agent use
+│   │       └── get_session_context.py # Query HMAC-verified session context
 │   │
 │   ├── workspace/                     # User data (volume mounted)
 │   │   ├── scripts/                   # Agent-created Python scripts
@@ -93,12 +100,14 @@ backend/data/environments/{env_id}/
 The core server follows a **modular architecture** with clear separation of concerns:
 
 **modules**:
-- **routes.py**: HTTP API endpoints, request validation, response formatting
+- **routes.py**: HTTP API endpoints, request validation, response formatting, `_store_session_context()` helper
 - **sdk_manager.py**: SDK session orchestration, streaming coordination (~ 220 lines, down from 600)
 - **prompt_generator.py**: System prompt generation for building/conversation modes
 - **agent_env_service.py**: Business logic for workspace file operations
 - **sdk_utils.py**: Logging, debugging, message formatting utilities
 - **models.py**: Pydantic request/response models
+- **active_session_manager.py**: Session tracking, interrupt support, HMAC-verified per-session context store
+- **adapters/**: SDK adapter implementations (ClaudeCodeAdapter, GoogleADKAdapter)
 
 **Benefits**:
 - **Testability**: Each module can be tested independently
@@ -290,7 +299,7 @@ The environment lifecycle uses standard Docker operations:
    - If container doesn't exist: creates new container from image
    - If container exists but stopped: starts existing container
 4. Mount volumes:
-   - `{instance_dir}/app/core:/app/core` (read-only in practice)
+   - `{instance_dir}/app/core:/app/core:ro` (read-only mount — LLM cannot modify server code)
    - `{instance_dir}/app/workspace:/app/workspace` (read-write)
 5. Wait for health check at `/health` endpoint
 6. **If container is NEW** (didn't exist before):
@@ -325,7 +334,7 @@ Both variables are defined in the generated `.env` file, but only one is set bas
 
 **Optimization**: Restarting an existing stopped container skips package installation (step 6), making restarts much faster.
 
-**Note**: Core files are both baked into image AND volume-mounted for easier development. Production could use image-only.
+**Note**: Core files are both baked into image AND volume-mounted (read-only) for easier development. The `:ro` mount ensures the LLM cannot modify server code or HMAC verification logic at runtime.
 
 ### Environment Rebuild
 
@@ -593,7 +602,7 @@ The environment will automatically reactivate when you send a message or open a 
 **Location**: `backend/app/env-templates/python-env-advanced/docker-compose.template.yml`
 
 **Volume Mounts**:
-- `${HOST_INSTANCE_DIR}/app/core:/app/core` - Core files (system code)
+- `${HOST_INSTANCE_DIR}/app/core:/app/core:ro` - Core files (system code, read-only)
 - `${HOST_INSTANCE_DIR}/app/workspace:/app/workspace` - Workspace files (user data)
 
 **Networks**:

@@ -33,7 +33,7 @@ services:
     # Core: system files (server, API) - baked into image, can be updated on rebuild
     # Workspace: user files (scripts, docs, credentials) - persisted across rebuilds
     volumes:
-      - ${HOST_INSTANCE_DIR}/app/core:/app/core
+      - ${HOST_INSTANCE_DIR}/app/core:/app/core:ro
       - ${HOST_INSTANCE_DIR}/app/workspace:/app/workspace
 
     # Networks: agent-bridge (shared with backend and other agents)

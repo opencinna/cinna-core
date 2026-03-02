@@ -389,15 +389,19 @@ class EmailProcessingService:
 
     @staticmethod
     def _format_email_as_message(email_msg: EmailMessage) -> str:
-        """Format an email into a message string for the agent."""
-        parts = []
+        """Format an email into a message string for the agent.
+
+        Note: The authoritative sender/subject metadata is in the session context
+        (system prompt and GET /session/context endpoint), not in this message text.
+        This formatting is for readability only.
+        """
+        parts = ["--- Forwarded email content ---"]
 
         if email_msg.subject:
             parts.append(f"Subject: {email_msg.subject}")
         parts.append(f"From: {email_msg.sender}")
 
-        if parts:
-            parts.append("")  # blank line separator
+        parts.append("")  # blank line separator
 
         parts.append(email_msg.body or "")
 
@@ -409,6 +413,8 @@ class EmailProcessingService:
                 name = att.get("filename", "unknown")
                 size = att.get("size", 0)
                 parts.append(f"  - {name} ({size} bytes)")
+
+        parts.append("--- End of forwarded email content ---")
 
         return "\n".join(parts)
 

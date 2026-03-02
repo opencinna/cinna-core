@@ -20,20 +20,24 @@ The **Agent Environment Core** is the server-side component that runs inside eac
 The core is organized into focused modules with clear separation of concerns:
 
 ```
-app/core/server/
-├── main.py                 # FastAPI entry point
-├── routes.py               # HTTP API endpoints
-├── models.py               # Pydantic request/response models
-├── sdk_manager.py          # Multi-adapter SDK manager
-├── prompt_generator.py     # System prompt generation
-├── agent_env_service.py    # Business logic for workspace operations
-├── sdk_utils.py            # Logging, debugging utilities
-├── active_session_manager.py  # Session interrupt tracking
-└── adapters/               # SDK adapter implementations
-    ├── __init__.py         # Package exports
-    ├── base.py             # SDKEvent, SDKConfig, BaseSDKAdapter, AdapterRegistry
-    ├── claude_code.py      # ClaudeCodeAdapter for claude-code/* variants
-    └── google_adk.py       # GoogleADKAdapter placeholder for google-adk-wr/*
+app/core/
+├── server/
+│   ├── main.py                 # FastAPI entry point
+│   ├── routes.py               # HTTP API endpoints + _store_session_context() helper
+│   ├── models.py               # Pydantic request/response models
+│   ├── sdk_manager.py          # Multi-adapter SDK manager
+│   ├── prompt_generator.py     # System prompt generation
+│   ├── agent_env_service.py    # Business logic for workspace operations
+│   ├── sdk_utils.py            # Logging, debugging utilities
+│   ├── active_session_manager.py  # Session tracking, per-session context store (HMAC-verified)
+│   └── adapters/               # SDK adapter implementations
+│       ├── __init__.py         # Package exports
+│       ├── base.py             # SDKEvent, SDKConfig, BaseSDKAdapter, AdapterRegistry
+│       ├── claude_code.py      # ClaudeCodeAdapter for claude-code/* variants
+│       └── google_adk.py       # GoogleADKAdapter placeholder for google-adk-wr/*
+└── scripts/
+    ├── __init__.py
+    └── get_session_context.py  # Stdlib-only helper for scripts to query session context
 ```
 
 ### Design Principles
@@ -127,11 +131,15 @@ class SDKEvent:
 - Cache static prompts for performance
 
 **Key Methods**:
-- `generate_building_mode_prompt()`: Returns SystemPromptPreset dict
-  - Claude Code preset + BUILDING_AGENT.md + scripts README + workflow docs
-- `generate_conversation_mode_prompt()`: Returns plain string
-  - WORKFLOW_PROMPT.md + scripts README only
-- `generate_prompt(mode)`: Factory method routing to mode-specific generators
+- `generate_building_mode_prompt(session_context)`: Returns SystemPromptPreset dict
+  - Claude Code preset + BUILDING_AGENT.md + scripts README + workflow docs + session context
+- `generate_conversation_mode_prompt(session_context)`: Returns plain string
+  - WORKFLOW_PROMPT.md + scripts README + session context section
+- `generate_prompt(mode, session_state)`: Factory method routing to mode-specific generators
+  - Extracts `session_context` from `session_state` and passes to mode-specific generators
+- `build_session_context_section(session_context)`: Static method, builds a "Session Context (Server-Verified, Read-Only)" markdown section
+  - Includes session_id, integration type, sender email, subject, agent_id, clone info
+  - Instructs LLM to pass session_id to scripts and to trust system prompt values over message content
 
 **Loaded Files**:
 - `/app/BUILDING_AGENT.md` - Static template for building mode
@@ -224,6 +232,8 @@ docs/ENTRYPOINT_PROMPT.md (trigger message examples)
 docs/WORKFLOW_PROMPT.md (main system prompt)
 +
 scripts/README.md (available scripts)
++
+Session Context section (if integration-specific metadata is available)
 ```
 
 **Model**: Haiku - faster and more cost-effective
@@ -282,19 +292,26 @@ Payload: {
   "message": "user message",
   "mode": "conversation",
   "agent_sdk": "claude",
-  "session_id": "existing_session_id" or null
+  "session_id": "existing_session_id" or null,
+  "backend_session_id": "backend-uuid",
+  "session_state": {
+    "session_context": { integration_type, agent_id, sender_email, ... },
+    "session_context_signature": "hmac-sha256-hex"
+  }
 }
 ```
 
 **2. Route Handler** (`routes.py::chat_stream()`)
 - Validates `agent_sdk` parameter
+- Stores per-session context (HMAC-verified) via `_store_session_context()` helper
 - Logs request details
 - Routes to SDK manager
+- Cleans up per-session context in `finally` block when stream ends
 
 **3. SDK Manager** (`sdk_manager.py::send_message_stream()`)
 - Validates SDK support
 - Sets model based on mode (Haiku or Sonnet)
-- Generates system prompt via PromptGenerator
+- Generates system prompt via PromptGenerator (passes `session_state` for context injection)
 - Creates SDK client with options
 - Sends message and streams responses
 
@@ -359,6 +376,13 @@ Events: {
 **GET /health** - Health check
 - Returns: Status, timestamp, uptime, message
 - Use case: Docker health checks, monitoring
+
+**GET /session/context** - Get session context metadata (no auth, localhost-only)
+- Query parameter: `?session_id=<backend_session_id>` (optional)
+- With `session_id`: Returns HMAC-verified per-session context (404 if not found)
+- Without `session_id`: Falls back to legacy single-session context
+- Returns: `integration_type`, `agent_id`, `is_clone`, `sender_email`, `email_subject`, etc.
+- Use case: Agent scripts querying session metadata for conditional behavior
 
 **GET /sdk/sessions** - List SDK sessions (debugging)
 - Returns: Message indicating sessions are per-request
@@ -628,11 +652,27 @@ The system auto-detects credential type by prefix and sets the appropriate varia
 **Bypassed When**:
 - `AGENT_AUTH_TOKEN` not configured (development/backward compatibility only)
 
+### Session Context Integrity
+
+**HMAC-Signed Context**:
+- Backend signs `session_context` with `AGENT_AUTH_TOKEN` using HMAC-SHA256 before sending to agent-env
+- Agent-env verifies the signature before storing context — forged context is rejected
+- Canonical JSON (`sort_keys=True, separators=(',',':')`) ensures deterministic signing
+- Per-session context store keyed by `backend_session_id` supports parallel sessions
+- Explicit cleanup on stream end via `cleanup_session_context()` + TTL-based cleanup (24h) as fallback
+- Signing module: `backend/app/services/session_context_signer.py`
+
+**System Prompt Injection**:
+- Server-verified session metadata (sender, subject, integration type) injected into system prompt
+- Positioned as a trusted "Session Context (Server-Verified, Read-Only)" section
+- LLM instructed to trust these values over message content (prompt injection resistance)
+- Scripts bypass LLM entirely via `GET /session/context?session_id=X` for authoritative data
+
 ### File Access
 
 **Workspace Isolation**:
 - Agent operates in `/app/workspace` only
-- Cannot access `/app/core` (system files)
+- `/app/core` mounted read-only (`:ro`) — LLM cannot modify server code or verification logic
 - Tools restricted to workspace directory
 
 **Credential Security**:
@@ -735,10 +775,12 @@ The system auto-detects credential type by prefix and sets the appropriate varia
   - `base.py` - SDKEvent, SDKEventType, SDKConfig, BaseSDKAdapter, AdapterRegistry
   - `claude_code.py` - ClaudeCodeAdapter for claude-code/* variants
   - `google_adk.py` - GoogleADKAdapter placeholder for google-adk-wr/*
+- `backend/app/env-templates/python-env-advanced/app/core/scripts/get_session_context.py` - Helper for agent scripts
 
 ### Backend Integration
 
 - `backend/app/services/message_service.py`
+- `backend/app/services/session_context_signer.py` - HMAC signing/verification for session context
 - `backend/app/services/session_service.py`
 - `backend/app/services/environment_lifecycle.py`
 - `backend/app/api/routes/messages.py`
