@@ -92,6 +92,8 @@ tests/
       conftest.py          # Environment stubs for credential propagation tests
       test_ai_credentials.py
       test_ai_credentials_propagation.py
+    knowledge_sources/
+      test_knowledge_sources.py  # Source lifecycle, check-access/refresh, discoverable flow
   stubs/                   # Test doubles for external services
     environment_adapter_stub.py
     email_stubs.py
@@ -108,6 +110,7 @@ tests/
     mail_server.py         # create_imap_server(), create_smtp_server(), process_emails_with_stub()
     session.py             # get_agent_session(), list_sessions()
     message.py             # get_messages_by_role(), list_messages()
+    knowledge_source.py    # create/get/list/update/delete/enable/disable_knowledge_source()
 ```
 
 ## Writing New Tests
@@ -183,9 +186,34 @@ def test_widget_full_lifecycle(
     assert r.status_code == 404
 ```
 
-**When a separate small test is appropriate:**
-- Isolated error/edge cases (404 for nonexistent resource, permission denied for wrong user)
-- Cases that can't be combined into a flow without making it confusing
+**Fold error and auth checks into the scenario as phases, not separate tests.**
+
+404 (not-found), ownership guards, and auth rejections are not standalone stories — they are
+observable properties of the resource you just created. Test them inline, right after the
+resource exists, so no extra setup is needed:
+
+```python
+    # ── Phase N: Auth and ownership guards ────────────────────────────
+    # Unauthenticated request is rejected
+    assert client.get(f"{_BASE}/").status_code in (401, 403)
+
+    # Other user cannot read or mutate the resource
+    other = create_random_user(client)
+    other_h = user_authentication_headers(client=client, email=other["email"], password=other["_password"])
+    assert client.get(f"{_BASE}/{resource_id}", headers=other_h).status_code == 404
+    assert client.put(f"{_BASE}/{resource_id}", headers=other_h, json={}).status_code == 404
+    assert client.delete(f"{_BASE}/{resource_id}", headers=other_h).status_code == 404
+
+    # Non-existent ID returns 404
+    ghost = str(uuid.uuid4())
+    assert client.get(f"{_BASE}/{ghost}", headers=headers).status_code == 404
+```
+
+**A standalone test is only justified when:**
+- The error case requires completely different setup (e.g., a separate user role or a
+  precondition that cannot exist in the main flow)
+- Testing a validation rule that fires before any resource is created (e.g., a missing
+  required field on POST)
 
 ### Creating Test Data
 
