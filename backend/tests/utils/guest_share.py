@@ -17,6 +17,7 @@ def create_guest_share(
     agent_id: str,
     label: str | None = None,
     expires_in_hours: int = 24,
+    allow_env_panel: bool | None = None,
 ) -> dict:
     """Create a guest share via POST /agents/{id}/guest-shares/.
 
@@ -25,6 +26,8 @@ def create_guest_share(
     payload: dict = {"expires_in_hours": expires_in_hours}
     if label is not None:
         payload["label"] = label
+    if allow_env_panel is not None:
+        payload["allow_env_panel"] = allow_env_panel
     r = client.post(
         f"{API}/agents/{agent_id}/guest-shares/",
         headers=token_headers,
@@ -89,6 +92,7 @@ def update_guest_share(
     share_id: str,
     label: str | None = None,
     security_code: str | None = None,
+    allow_env_panel: bool | None = None,
 ) -> dict:
     """Update a guest share via PUT /agents/{id}/guest-shares/{share_id}."""
     payload: dict = {}
@@ -96,6 +100,8 @@ def update_guest_share(
         payload["label"] = label
     if security_code is not None:
         payload["security_code"] = security_code
+    if allow_env_panel is not None:
+        payload["allow_env_panel"] = allow_env_panel
     r = client.put(
         f"{API}/agents/{agent_id}/guest-shares/{share_id}",
         headers=token_headers,

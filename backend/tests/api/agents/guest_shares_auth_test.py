@@ -11,6 +11,8 @@ Only environment adapter is stubbed (via conftest autouse fixtures).
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
+from tests.utils.agent import create_agent_via_api
+from tests.utils.background_tasks import drain_tasks
 from tests.utils.guest_share import (
     activate_guest_grant,
     create_guest_share,
@@ -272,3 +274,43 @@ def test_guest_share_info_expired_token(
 
     assert body["is_valid"] is False
     assert body["guest_share_id"] == share["id"]
+
+
+def test_guest_share_info_returns_allow_env_panel(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    Public info endpoint returns allow_env_panel reflecting the share configuration:
+      1. Create share with allow_env_panel=True → info returns allow_env_panel=True
+      2. Create share without allow_env_panel → info returns allow_env_panel=False
+    """
+    agent = create_agent_via_api(client, superuser_token_headers, name="Env Panel Info Agent")
+    drain_tasks()
+    agent_id = agent["id"]
+
+    # ── Phase 1: allow_env_panel=True → info returns True ─────────────────
+
+    share_on = create_guest_share(
+        client, superuser_token_headers, agent_id,
+        label="env-panel-on-info",
+        allow_env_panel=True,
+    )
+    body = guest_share_info(client, share_on["token"])
+
+    assert body["is_valid"] is True
+    assert body["allow_env_panel"] is True, "Info endpoint must return allow_env_panel=True"
+    assert body["guest_share_id"] == share_on["id"]
+    assert body["agent_name"] == "Env Panel Info Agent"
+
+    # ── Phase 2: allow_env_panel omitted (defaults False) → info returns False
+
+    share_off = create_guest_share(
+        client, superuser_token_headers, agent_id,
+        label="env-panel-off-info",
+    )
+    body_off = guest_share_info(client, share_off["token"])
+
+    assert body_off["is_valid"] is True
+    assert body_off["allow_env_panel"] is False, "Info endpoint must return allow_env_panel=False by default"
+    assert body_off["guest_share_id"] == share_off["id"]

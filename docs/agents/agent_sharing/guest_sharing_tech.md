@@ -40,6 +40,7 @@
 
 - `backend/app/alembic/versions/f53ac2dee553_add_agent_guest_share_tables.py` - Creates `agent_guest_share` and `guest_share_grant` tables, adds `session.guest_share_id`
 - `backend/app/alembic/versions/w3r4s5t6u7v8_add_security_code_to_guest_shares.py` - Adds `security_code_encrypted`, `failed_code_attempts`, `is_code_blocked` to `agent_guest_share`
+- `backend/app/alembic/versions/x4s5t6u7v8w9_add_allow_env_panel_to_guest_shares.py` - Adds `allow_env_panel` to `agent_guest_share`
 
 ### Tests
 
@@ -68,6 +69,7 @@
 | `security_code_encrypted` | string, nullable | Fernet-encrypted 4-digit code |
 | `failed_code_attempts` | integer, default 0 | Failed code entry attempts |
 | `is_code_blocked` | boolean, default False | True after 3 failed attempts |
+| `allow_env_panel` | boolean, default False | Whether guests can access the environment panel |
 
 **Indexes:** `agent_id`, `owner_id`, `token_hash`
 
@@ -97,7 +99,7 @@ Prefix: `/api/v1/agents/{agent_id}/guest-shares`, tags: `guest-shares`
 | `POST` | `/` | Create guest share link (returns token, share_url, security_code) | CurrentUser (owner) |
 | `GET` | `/` | List guest share links (with session counts, decrypted security codes) | CurrentUser (owner) |
 | `GET` | `/{guest_share_id}` | Get single guest share (with decrypted security code) | CurrentUser (owner) |
-| `PUT` | `/{guest_share_id}` | Update label and/or security code (resets block state) | CurrentUser (owner) |
+| `PUT` | `/{guest_share_id}` | Update label, security code, and/or allow_env_panel | CurrentUser (owner) |
 | `DELETE` | `/{guest_share_id}` | Delete guest share link | CurrentUser (owner) |
 
 ### Guest Auth Router
@@ -108,7 +110,7 @@ Prefix: `/api/v1/guest-share`, tags: `guest-share`
 |--------|------|-------------|------|
 | `POST` | `/{token}/auth` | Authenticate anonymous → guest JWT (accepts `security_code`) | None |
 | `POST` | `/{token}/activate` | Activate grant for logged-in user (accepts `security_code`) | CurrentUser |
-| `GET` | `/{token}/info` | Public info (agent name, validity, `requires_code`, `is_code_blocked`) | None |
+| `GET` | `/{token}/info` | Public info (agent name, validity, `requires_code`, `is_code_blocked`, `allow_env_panel`) | None |
 
 ### Modified Endpoints
 
@@ -132,12 +134,12 @@ All methods are `@staticmethod`:
 - `create_guest_share()` - Generate token via `secrets.token_urlsafe(32)`, hash with SHA256, generate 4-digit security code, encrypt with Fernet, create DB record
 - `list_guest_shares()` - Query by `agent_id` with session_count subquery, ordered by `created_at` DESC; includes share_url and decrypted security_code
 - `get_guest_share()` - Single share with session count, share_url, decrypted security_code
-- `update_guest_share()` - Update label/security code; new code resets `failed_code_attempts` and `is_code_blocked`
+- `update_guest_share()` - Update label, security code, and/or `allow_env_panel`; new code resets `failed_code_attempts` and `is_code_blocked`
 - `delete_guest_share()` - Ownership check, delete record (CASCADE removes grants, SET NULL on sessions)
 - `validate_token()` - Hash lookup, check not revoked, check not expired
 - `authenticate_anonymous()` - Validate token → verify security code → issue guest JWT (capped at 24h)
 - `activate_for_user()` - Validate token → verify security code → UPSERT grant via `INSERT ... ON CONFLICT DO NOTHING`
-- `get_guest_share_info()` - Public info: agent name, description (first 200 chars), validity, requires_code, is_code_blocked
+- `get_guest_share_info()` - Public info: agent name, description (first 200 chars), validity, requires_code, is_code_blocked, allow_env_panel
 - `check_grant()` - Query grant for (user_id, guest_share_id), verify parent share still valid
 - `_hash_token()` - SHA256 helper
 - `_verify_security_code()` - Decrypt stored code, compare, track failed attempts, block after 3 failures
@@ -166,15 +168,19 @@ Located in Agent Integrations tab. Features:
 - Create dialog with label input + expiration selector (1h, 24h, 7d, 30d)
 - Token display dialog on creation with copy button
 - Copy share link button on each active share (owner can re-copy at any time)
+- Edit dialog with label, security code, and "Show App panel" toggle (`allow_env_panel`)
 - Delete button with AlertDialog confirmation
-- React Query: query key `["guest-shares", agentId]`, mutations for create/delete
+- React Query: query key `["guest-shares", agentId]`, mutations for create/delete/update
 
 ### Guest Chat Page (`frontend/src/routes/guest/$guestShareToken.tsx`)
 
 Public route (not under `_layout/`). Component hierarchy:
-- `GuestChatPage` → `GuestChatHeader`, `GuestSessionSidebar`, `GuestEmptyState`, `GuestChatArea`
-- Reuses `MessageList`, `MessageInput`, `EnvironmentPanel`, `useSessionStreaming` from existing chat UI
+- `GuestChatPage` → `GuestChatHeader`, `GuestSessionSidebar`, `GuestNewChatState`, `GuestChatArea`
+- Reuses `MessageList` (compact mode), `MessageInput`, `EnvironmentPanel` (conditional), `useSessionStreaming` from existing chat UI
 - Session list polls every 10s, filtered by `guest_share_id`
+- **Deferred session creation**: No session is created until the guest sends their first message. `GuestNewChatState` shows a text input; on send, creates session + sends message + navigates to session URL
+- **Compact mode**: All guest chat uses `conversationModeUi="compact"` — tool calls shown in simplified view, thinking blocks hidden
+- **Environment panel**: "App" button and `EnvironmentPanel` only rendered when `allow_env_panel` is true on the share link
 
 ### Guest Share Context (`frontend/src/hooks/useGuestShare.tsx`)
 
@@ -194,6 +200,8 @@ Used by child components to detect guest context and hide restricted UI elements
 - Guest JWT lifetime: min(24 hours, share expiry)
 - Max failed code attempts: 3 (then blocked)
 - Expiration options: 1h, 24h, 7d, 30d
+- `allow_env_panel`: boolean, default `false` — controls whether the "App" button and environment panel are visible to guests
+- Conversation mode UI: always `compact` for guest sessions (simplified tool display)
 
 ## Security
 

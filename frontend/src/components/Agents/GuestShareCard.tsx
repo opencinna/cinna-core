@@ -48,6 +48,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
+import { Switch } from "@/components/ui/switch"
 import {
   Tooltip,
   TooltipContent,
@@ -104,6 +105,7 @@ export function GuestShareCard({ agentId }: GuestShareCardProps) {
   const [editingShare, setEditingShare] = useState<AgentGuestSharePublic | null>(null)
   const [editLabel, setEditLabel] = useState("")
   const [editSecurityCode, setEditSecurityCode] = useState("")
+  const [editAllowEnvPanel, setEditAllowEnvPanel] = useState(false)
 
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -218,6 +220,7 @@ export function GuestShareCard({ agentId }: GuestShareCardProps) {
     setEditingShare(share)
     setEditLabel(share.label || "")
     setEditSecurityCode("")
+    setEditAllowEnvPanel(share.allow_env_panel ?? false)
     setEditDialogOpen(true)
   }
 
@@ -229,6 +232,9 @@ export function GuestShareCard({ agentId }: GuestShareCardProps) {
     }
     if (editSecurityCode.length === 4) {
       data.security_code = editSecurityCode
+    }
+    if (editAllowEnvPanel !== (editingShare.allow_env_panel ?? false)) {
+      data.allow_env_panel = editAllowEnvPanel
     }
     updateShareMutation.mutate({ guestShareId: editingShare.id, data })
   }
@@ -586,6 +592,20 @@ export function GuestShareCard({ agentId }: GuestShareCardProps) {
               <p className="text-xs text-muted-foreground">
                 Enter a new 4-digit code to replace the current one. This will also reset the attempt counter.
               </p>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="edit-env-panel">Show App panel</Label>
+                <p className="text-xs text-muted-foreground">
+                  Allow guests to access the agent's environment panel
+                </p>
+              </div>
+              <Switch
+                id="edit-env-panel"
+                checked={editAllowEnvPanel}
+                onCheckedChange={setEditAllowEnvPanel}
+              />
             </div>
           </div>
 

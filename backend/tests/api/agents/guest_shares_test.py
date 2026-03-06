@@ -25,6 +25,7 @@ from tests.utils.guest_share import (
     get_guest_share,
     list_guest_shares,
     setup_guest_share_agent,
+    update_guest_share,
 )
 from tests.utils.user import create_random_user_with_headers
 
@@ -284,3 +285,109 @@ def test_guest_share_without_label(
     # Verify via GET
     fetched = get_guest_share(client, superuser_token_headers, agent["id"], created["id"])
     assert fetched["label"] is None
+
+
+def test_allow_env_panel_create_and_read(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    allow_env_panel field is persisted on creation and readable via GET and list:
+      1. Create share with allow_env_panel=True → verify field in creation response
+      2. Get single share → verify allow_env_panel=True
+      3. List shares → verify allow_env_panel=True
+      4. Create second share with allow_env_panel omitted → verify defaults to False
+      5. Get second share → verify allow_env_panel=False
+      6. List → both shares present with correct values
+    """
+    agent = create_agent_via_api(client, superuser_token_headers, name="Env Panel Field Agent")
+    drain_tasks()
+    agent_id = agent["id"]
+
+    # ── Phase 1: Create with allow_env_panel=True ─────────────────────────
+
+    share_on = create_guest_share(
+        client, superuser_token_headers, agent_id,
+        label="env-panel-on",
+        allow_env_panel=True,
+    )
+    assert share_on["allow_env_panel"] is True, "allow_env_panel should be True in creation response"
+
+    # ── Phase 2: GET single → allow_env_panel=True ────────────────────────
+
+    fetched_on = get_guest_share(client, superuser_token_headers, agent_id, share_on["id"])
+    assert fetched_on["allow_env_panel"] is True, "GET should return allow_env_panel=True"
+
+    # ── Phase 3: Create without allow_env_panel → defaults to False ───────
+
+    share_off = create_guest_share(
+        client, superuser_token_headers, agent_id,
+        label="env-panel-default",
+    )
+    assert share_off["allow_env_panel"] is False, "allow_env_panel should default to False"
+
+    # ── Phase 4: GET single → allow_env_panel=False ───────────────────────
+
+    fetched_off = get_guest_share(client, superuser_token_headers, agent_id, share_off["id"])
+    assert fetched_off["allow_env_panel"] is False, "GET should return allow_env_panel=False"
+
+    # ── Phase 5: List → both shares have correct allow_env_panel values ───
+
+    shares = list_guest_shares(client, superuser_token_headers, agent_id)
+    assert len(shares) == 2
+    by_id = {s["id"]: s for s in shares}
+    assert by_id[share_on["id"]]["allow_env_panel"] is True
+    assert by_id[share_off["id"]]["allow_env_panel"] is False
+
+
+def test_allow_env_panel_update(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    allow_env_panel can be toggled via the update endpoint:
+      1. Create share with allow_env_panel=False (default)
+      2. Update allow_env_panel to True → verify response and GET
+      3. Update allow_env_panel back to False → verify response and GET
+      4. Update with allow_env_panel omitted → field remains unchanged
+    """
+    agent, share = setup_guest_share_agent(
+        client, superuser_token_headers,
+        name="Env Panel Update Agent",
+        share_label="toggle-env-panel",
+    )
+    agent_id = agent["id"]
+    share_id = share["id"]
+
+    assert share["allow_env_panel"] is False, "Newly created share should have allow_env_panel=False"
+
+    # ── Phase 1: Update allow_env_panel False → True ──────────────────────
+
+    updated = update_guest_share(
+        client, superuser_token_headers, agent_id, share_id,
+        allow_env_panel=True,
+    )
+    assert updated["allow_env_panel"] is True, "Update response should reflect allow_env_panel=True"
+
+    fetched = get_guest_share(client, superuser_token_headers, agent_id, share_id)
+    assert fetched["allow_env_panel"] is True, "GET after update should return allow_env_panel=True"
+
+    # ── Phase 2: Update allow_env_panel True → False ──────────────────────
+
+    updated = update_guest_share(
+        client, superuser_token_headers, agent_id, share_id,
+        allow_env_panel=False,
+    )
+    assert updated["allow_env_panel"] is False, "Update response should reflect allow_env_panel=False"
+
+    fetched = get_guest_share(client, superuser_token_headers, agent_id, share_id)
+    assert fetched["allow_env_panel"] is False, "GET after update should return allow_env_panel=False"
+
+    # ── Phase 3: Update with allow_env_panel omitted → field unchanged ────
+
+    updated = update_guest_share(
+        client, superuser_token_headers, agent_id, share_id,
+        label="new-label",
+    )
+    assert updated["allow_env_panel"] is False, "Omitting allow_env_panel in update should leave it unchanged"
+    assert updated["label"] == "new-label"

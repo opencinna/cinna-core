@@ -42,7 +42,10 @@ Allow agents to be shared with unauthenticated (or authenticated) users via time
    - After failed attempt, auto-submit disabled; must press Enter or click Continue
 4. Frontend calls auth endpoint → receives guest JWT
 5. Guest JWT stored in localStorage, used for all API calls
-6. Guest can create sessions, send messages, view workspace files — all in conversation mode only
+6. Guest sees an empty chat page with a text input — ready to type immediately
+7. On first message send: session is created on the backend, message is sent, URL updates with session ID
+8. All guest chat uses compact conversation mode (simplified tool display, hidden thinking blocks)
+9. Guest can view workspace files if the owner enabled `allow_env_panel` on the share link
 
 ### Authenticated User Accessing a Guest Share Link
 
@@ -57,8 +60,15 @@ Allow agents to be shared with unauthenticated (or authenticated) users via time
 
 1. Owner views list of active guest share links with session counts
 2. Can copy share link at any time (token is stored for re-access)
-3. Can update label or set a new security code (resets block state)
+3. Can update label, set a new security code (resets block state), or toggle the "Show App panel" setting
 4. Can delete a link — immediately invalidates all associated access
+
+### Environment Panel Access
+
+- By default, the "App" button (environment panel) is **hidden** for guest users
+- Owner can enable it per share link via the "Show App panel" toggle in the edit dialog
+- When enabled, guests can browse the agent's workspace files, scripts, logs, and docs (read-only)
+- Credentials tab is always hidden for guests regardless of this setting
 
 ## Business Rules
 
@@ -111,6 +121,8 @@ Allow agents to be shared with unauthenticated (or authenticated) users via time
 - Owner sees all sessions (including guest sessions) in their normal session list
 - Guests see only sessions matching their `guest_share_id`
 - Conversation mode is enforced for all guest share sessions
+- Sessions are created lazily — only when the guest sends their first message (not on page load)
+- Compact conversation mode UI is always used (simplified tool display)
 
 ## Architecture Overview
 
@@ -139,17 +151,25 @@ Has existing JWT (logged in)?
   └───────────────────────────────┘
         │
         ▼
-  Guest chats in conversation mode
+  Guest sees empty chat with text input
+        │
+  Guest sends first message
+        │
+  Session created + message sent
+        │
+  URL updates with session ID
+        │
+  Guest chats in compact conversation mode
 ```
 
 ### Guest Chat UI Structure
 
 ```
 GuestChatPage
-├── GuestChatHeader (agent name, icon, description)
-├── GuestSessionSidebar (session list filtered by guest_share_id)
-├── GuestEmptyState (when no session selected)
-└── GuestChatArea (reuses MessageList, MessageInput, EnvironmentPanel)
+├── GuestChatHeader (agent name, icon, description, optional App button)
+├── GuestSessionSidebar (session list filtered by guest_share_id, New Chat button)
+├── GuestNewChatState (when no session selected — text input, deferred session creation)
+└── GuestChatArea (reuses MessageList in compact mode, MessageInput, optional EnvironmentPanel)
 ```
 
 ## Integration Points

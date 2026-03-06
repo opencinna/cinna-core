@@ -266,6 +266,7 @@ export type AgentEnvironmentUpdate = {
 export type AgentGuestShareCreate = {
     label?: (string | null);
     expires_in_hours?: number;
+    allow_env_panel?: boolean;
 };
 
 /**
@@ -283,6 +284,7 @@ export type AgentGuestShareCreated = {
     share_url: string;
     security_code: string;
     is_code_blocked?: boolean;
+    allow_env_panel?: boolean;
     token: string;
 };
 
@@ -298,6 +300,7 @@ export type AgentGuestSharePublic = {
     share_url?: (string | null);
     security_code?: (string | null);
     is_code_blocked?: boolean;
+    allow_env_panel?: boolean;
 };
 
 export type AgentGuestSharesPublic = {
@@ -308,6 +311,7 @@ export type AgentGuestSharesPublic = {
 export type AgentGuestShareUpdate = {
     label?: (string | null);
     security_code?: (string | null);
+    allow_env_panel?: (boolean | null);
 };
 
 /**

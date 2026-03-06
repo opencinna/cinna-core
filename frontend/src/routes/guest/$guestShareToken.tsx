@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useState, useEffect, useRef, useCallback } from "react"
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   GuestShareService,
   SessionsService,
@@ -46,6 +46,7 @@ interface GuestShareInfoResponse {
   guest_share_id: string | null
   requires_code: boolean
   is_code_blocked: boolean
+  allow_env_panel: boolean
 }
 
 interface GuestShareAuthResponse {
@@ -97,6 +98,7 @@ function GuestChatPage() {
   const [agentId, setAgentId] = useState<string | null>(null)
   const [agentName, setAgentName] = useState<string>("")
   const [agentDescription, setAgentDescription] = useState<string | null>(null)
+  const [allowEnvPanel, setAllowEnvPanel] = useState(false)
 
   // Session state
   const [envPanelOpen, setEnvPanelOpen] = useState(false)
@@ -262,6 +264,13 @@ function GuestChatPage() {
     setAuthState("ready")
   }
 
+  // Keep allowEnvPanel in sync with share info (survives cache updates)
+  useEffect(() => {
+    if (shareInfo?.is_valid) {
+      setAllowEnvPanel(shareInfo.allow_env_panel || false)
+    }
+  }, [shareInfo?.allow_env_panel, shareInfo?.is_valid])
+
   // Handle info loading error
   useEffect(() => {
     if (infoError) {
@@ -314,6 +323,7 @@ function GuestChatPage() {
           envPanelOpen={envPanelOpen}
           onToggleEnvPanel={() => setEnvPanelOpen(!envPanelOpen)}
           hasSession={selectedSessionId !== undefined}
+          allowEnvPanel={allowEnvPanel}
         />
 
         {/* Content area */}
@@ -321,9 +331,16 @@ function GuestChatPage() {
           {/* Sidebar */}
           <GuestSessionSidebar
             guestShareId={guestShareId!}
-            agentId={agentId!}
             selectedSessionId={selectedSessionId ?? null}
             onSelectSession={selectSession}
+            onNewChat={() => {
+              navigate({
+                to: "/guest/$guestShareToken",
+                params: { guestShareToken },
+                search: { sessionId: undefined },
+                replace: true,
+              })
+            }}
           />
 
           {/* Main chat area */}
@@ -334,13 +351,15 @@ function GuestChatPage() {
                 agentId={agentId}
                 messageInputRef={messageInputRef}
                 envPanelOpen={envPanelOpen}
+                allowEnvPanel={allowEnvPanel}
               />
             ) : (
-              <GuestEmptyState
+              <GuestNewChatState
                 agentName={agentName}
                 agentId={agentId!}
                 guestShareId={guestShareId!}
                 onSessionCreated={selectSession}
+                messageInputRef={messageInputRef}
               />
             )}
           </div>
@@ -533,12 +552,14 @@ function GuestChatHeader({
   envPanelOpen,
   onToggleEnvPanel,
   hasSession,
+  allowEnvPanel,
 }: {
   agentName: string
   agentDescription: string | null
   envPanelOpen: boolean
   onToggleEnvPanel: () => void
   hasSession: boolean
+  allowEnvPanel: boolean
 }) {
   return (
     <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-4 border-b px-4 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -553,7 +574,7 @@ function GuestChatHeader({
           </p>
         </div>
       </div>
-      {hasSession && (
+      {hasSession && allowEnvPanel && (
         <Button
           variant={envPanelOpen ? "secondary" : "ghost"}
           size="sm"
@@ -572,17 +593,15 @@ function GuestChatHeader({
 
 function GuestSessionSidebar({
   guestShareId,
-  agentId,
   selectedSessionId,
   onSelectSession,
+  onNewChat,
 }: {
   guestShareId: string
-  agentId: string
   selectedSessionId: string | null
   onSelectSession: (id: string) => void
+  onNewChat: () => void
 }) {
-  const queryClient = useQueryClient()
-
   const {
     data: sessionsData,
     isLoading: sessionsLoading,
@@ -598,40 +617,20 @@ function GuestSessionSidebar({
     refetchInterval: 10000,
   })
 
-  const createMutation = useMutation({
-    mutationFn: () =>
-      SessionsService.createSession({
-        requestBody: {
-          agent_id: agentId,
-          mode: "conversation",
-          guest_share_id: guestShareId,
-        },
-      }),
-    onSuccess: (session) => {
-      onSelectSession(session.id)
-      queryClient.invalidateQueries({ queryKey: ["guestSessions", guestShareId] })
-    },
-  })
-
   const sessions = sessionsData?.data || []
 
   return (
     <div className="w-64 border-r bg-muted/30 flex flex-col shrink-0 hidden md:flex">
-      {/* New Session button */}
+      {/* New Chat button */}
       <div className="p-3 border-b">
         <Button
-          onClick={() => createMutation.mutate()}
-          disabled={createMutation.isPending}
+          onClick={onNewChat}
           variant="outline"
           size="sm"
           className="w-full gap-2"
         >
-          {createMutation.isPending ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <MessageSquarePlus className="h-4 w-4" />
-          )}
-          New Session
+          <MessageSquarePlus className="h-4 w-4" />
+          New Chat
         </Button>
       </div>
 
@@ -682,62 +681,71 @@ function GuestSessionSidebar({
   )
 }
 
-// ── Empty State ─────────────────────────────────────────────────────────
+// ── New Chat State (deferred session creation) ──────────────────────────
 
-function GuestEmptyState({
+function GuestNewChatState({
   agentName,
   agentId,
   guestShareId,
   onSessionCreated,
+  messageInputRef,
 }: {
   agentName: string
   agentId: string
   guestShareId: string
   onSessionCreated: (id: string) => void
+  messageInputRef: React.RefObject<HTMLTextAreaElement | null>
 }) {
   const queryClient = useQueryClient()
+  const [isSending, setIsSending] = useState(false)
 
-  const createMutation = useMutation({
-    mutationFn: () =>
-      SessionsService.createSession({
-        requestBody: {
-          agent_id: agentId,
-          mode: "conversation",
-          guest_share_id: guestShareId,
-        },
-      }),
-    onSuccess: (session) => {
-      onSessionCreated(session.id)
-      queryClient.invalidateQueries({ queryKey: ["guestSessions", guestShareId] })
+  const handleSendFirstMessage = useCallback(
+    async (content: string) => {
+      if (!content.trim() || isSending) return
+      setIsSending(true)
+      try {
+        const session = await SessionsService.createSession({
+          requestBody: {
+            agent_id: agentId,
+            mode: "conversation",
+            guest_share_id: guestShareId,
+          },
+        })
+        await MessagesService.sendMessageStream({
+          sessionId: session.id,
+          requestBody: { content: content.trim() },
+        })
+        queryClient.invalidateQueries({ queryKey: ["guestSessions", guestShareId] })
+        onSessionCreated(session.id)
+      } catch (error) {
+        console.error("Failed to create session:", error)
+        setIsSending(false)
+      }
     },
-  })
+    [agentId, guestShareId, onSessionCreated, queryClient, isSending]
+  )
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center gap-6 px-4">
-      <div className="flex flex-col items-center gap-3 text-center">
-        <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center">
-          <Bot className="h-8 w-8 text-primary" />
+    <>
+      <div className="flex-1 flex flex-col items-center justify-center gap-3 px-4">
+        <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
+          <Bot className="h-6 w-6 text-primary" />
         </div>
-        <h2 className="text-lg font-semibold">Start a conversation</h2>
-        <p className="text-muted-foreground text-sm max-w-sm">
-          Begin chatting with {agentName}. Your conversations will be saved and you
-          can continue them later.
+        <p className="text-muted-foreground text-sm">
+          Start chatting with {agentName}
         </p>
       </div>
-      <Button
-        onClick={() => createMutation.mutate()}
-        disabled={createMutation.isPending}
-        size="lg"
-        className="gap-2"
-      >
-        {createMutation.isPending ? (
-          <Loader2 className="h-5 w-5 animate-spin" />
-        ) : (
-          <MessageSquarePlus className="h-5 w-5" />
-        )}
-        New Session
-      </Button>
-    </div>
+      <MessageInput
+        ref={messageInputRef}
+        onSend={async (content) => { await handleSendFirstMessage(content) }}
+        onStop={() => {}}
+        sendDisabled={isSending}
+        isInterruptPending={false}
+        placeholder={isSending ? "Starting session..." : "Type your message..."}
+        agentId={agentId}
+        mode="conversation"
+      />
+    </>
   )
 }
 
@@ -748,11 +756,13 @@ function GuestChatArea({
   agentId,
   messageInputRef,
   envPanelOpen,
+  allowEnvPanel,
 }: {
   sessionId: string
   agentId: string | null
   messageInputRef: React.RefObject<HTMLTextAreaElement | null>
   envPanelOpen: boolean
+  allowEnvPanel: boolean
 }) {
   const [isSessionStreaming, setIsSessionStreaming] = useState(false)
 
@@ -860,15 +870,17 @@ function GuestChatArea({
           isStreaming={isStreaming}
           onSendAnswer={handleSendAnswer}
           onSendMessage={handleSendSimpleMessage}
-          conversationModeUi="detailed"
+          conversationModeUi="compact"
           agentId={agentId ?? undefined}
           sessionId={sessionId}
         />
-        <EnvironmentPanel
-          isOpen={envPanelOpen}
-          environmentId={session.environment_id}
-          agentId={agentId ?? undefined}
-        />
+        {allowEnvPanel && (
+          <EnvironmentPanel
+            isOpen={envPanelOpen}
+            environmentId={session.environment_id}
+            agentId={agentId ?? undefined}
+          />
+        )}
       </div>
       <MessageInput
         ref={messageInputRef}

@@ -21,6 +21,7 @@ class AgentGuestShareBase(SQLModel):
 # Properties to receive on guest share creation
 class AgentGuestShareCreate(AgentGuestShareBase):
     expires_in_hours: int = Field(default=24, ge=1, le=720)
+    allow_env_panel: bool = False
 
 
 # Database model
@@ -39,6 +40,7 @@ class AgentGuestShare(AgentGuestShareBase, table=True):
     security_code_encrypted: str | None = Field(default=None)
     failed_code_attempts: int = Field(default=0)
     is_code_blocked: bool = Field(default=False)
+    allow_env_panel: bool = Field(default=False)
 
 
 # Properties to return via API (without sensitive data)
@@ -54,6 +56,7 @@ class AgentGuestSharePublic(SQLModel):
     share_url: str | None = None  # Computed from stored token, for owner to copy link
     security_code: str | None = None  # Decrypted by service for owner
     is_code_blocked: bool = False
+    allow_env_panel: bool = False
 
 
 # Properties to return when creating a guest share (includes the actual token once)
@@ -68,6 +71,7 @@ class AgentGuestShareCreated(AgentGuestSharePublic):
 class AgentGuestShareUpdate(SQLModel):
     label: str | None = None
     security_code: str | None = Field(default=None, min_length=4, max_length=4)
+    allow_env_panel: bool | None = None
 
     @field_validator("security_code")
     @classmethod

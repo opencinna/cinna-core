@@ -2090,6 +2090,11 @@ export const AgentGuestShareCreateSchema = {
             minimum: 1,
             title: 'Expires In Hours',
             default: 24
+        },
+        allow_env_panel: {
+            type: 'boolean',
+            title: 'Allow Env Panel',
+            default: false
         }
     },
     type: 'object',
@@ -2153,6 +2158,11 @@ export const AgentGuestShareCreatedSchema = {
         is_code_blocked: {
             type: 'boolean',
             title: 'Is Code Blocked',
+            default: false
+        },
+        allow_env_panel: {
+            type: 'boolean',
+            title: 'Allow Env Panel',
             default: false
         },
         token: {
@@ -2238,6 +2248,11 @@ export const AgentGuestSharePublicSchema = {
             type: 'boolean',
             title: 'Is Code Blocked',
             default: false
+        },
+        allow_env_panel: {
+            type: 'boolean',
+            title: 'Allow Env Panel',
+            default: false
         }
     },
     type: 'object',
@@ -2270,6 +2285,17 @@ export const AgentGuestShareUpdateSchema = {
                 }
             ],
             title: 'Security Code'
+        },
+        allow_env_panel: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Allow Env Panel'
         }
     },
     type: 'object',

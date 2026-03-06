@@ -149,6 +149,7 @@ class AgentGuestShareService:
             expires_at=expires_at,
             created_at=datetime.now(UTC),
             security_code_encrypted=security_code_encrypted,
+            allow_env_panel=data.allow_env_panel,
         )
         session.add(guest_share)
         session.commit()
@@ -173,6 +174,7 @@ class AgentGuestShareService:
             token=token,
             share_url=share_url,
             security_code=security_code,
+            allow_env_panel=guest_share.allow_env_panel,
         )
 
     @staticmethod
@@ -232,6 +234,7 @@ class AgentGuestShareService:
                     share_url=share_url,
                     security_code=security_code,
                     is_code_blocked=share.is_code_blocked,
+                    allow_env_panel=share.allow_env_panel,
                 )
             )
 
@@ -297,6 +300,7 @@ class AgentGuestShareService:
             share_url=share_url,
             security_code=security_code,
             is_code_blocked=share.is_code_blocked,
+            allow_env_panel=share.allow_env_panel,
         )
 
     @staticmethod
@@ -396,6 +400,9 @@ class AgentGuestShareService:
             share.failed_code_attempts = 0
             share.is_code_blocked = False
 
+        if data.allow_env_panel is not None:
+            share.allow_env_panel = data.allow_env_panel
+
         session.add(share)
         session.commit()
         session.refresh(share)
@@ -424,6 +431,7 @@ class AgentGuestShareService:
             share_url=share_url,
             security_code=security_code,
             is_code_blocked=share.is_code_blocked,
+            allow_env_panel=share.allow_env_panel,
         )
 
     @staticmethod
@@ -657,6 +665,7 @@ class AgentGuestShareService:
                     "guest_share_id": str(existing.id),
                     "requires_code": False,
                     "is_code_blocked": False,
+                    "allow_env_panel": False,
                 }
             return {
                 "agent_name": None,
@@ -665,6 +674,7 @@ class AgentGuestShareService:
                 "guest_share_id": None,
                 "requires_code": False,
                 "is_code_blocked": False,
+                "allow_env_panel": False,
             }
 
         # Fetch agent info
@@ -681,6 +691,7 @@ class AgentGuestShareService:
             "guest_share_id": str(guest_share.id),
             "requires_code": guest_share.security_code_encrypted is not None,
             "is_code_blocked": guest_share.is_code_blocked,
+            "allow_env_panel": guest_share.allow_env_panel,
         }
 
     @staticmethod
