@@ -364,7 +364,8 @@ class EnvironmentLifecycleManager:
         Setup operations for NEW container only.
 
         CONTAINER SETUP (only when container is newly created):
-        - Installing custom dependencies from workspace_requirements.txt
+        - Installing custom Python dependencies from workspace_requirements.txt
+        - Installing system packages from workspace_system_packages.txt
         - Any other one-time setup for new containers
 
         This should NOT be called when:
@@ -384,6 +385,13 @@ class EnvironmentLifecycleManager:
         db_session.commit()
 
         await adapter.install_custom_packages()
+
+        # Install system packages (only needed for new containers)
+        environment.status_message = "Installing system packages..."
+        db_session.add(environment)
+        db_session.commit()
+
+        await adapter.install_system_packages()
         logger.debug(f"New container setup completed for environment {environment.id}")
 
     async def start_environment(
@@ -1559,6 +1567,7 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
         - app/workspace/credentials/ (integration credentials)
         - app/workspace/plugins/ (LLM plugins)
         - app/workspace/workspace_requirements.txt (Python packages)
+        - app/workspace/workspace_system_packages.txt (OS packages)
 
         Does NOT copy (Environment Runtime - environment-specific):
         - app/workspace/logs/ (session logs)
@@ -1596,6 +1605,7 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
         # Single files to copy
         files_to_copy = [
             "app/workspace/workspace_requirements.txt",
+            "app/workspace/workspace_system_packages.txt",
         ]
 
         def _copy_sync():

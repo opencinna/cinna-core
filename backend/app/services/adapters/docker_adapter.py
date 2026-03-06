@@ -766,6 +766,53 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
             logger.error(f"Error installing custom packages in {self.container_name}: {e}")
             raise
 
+    async def install_system_packages(self) -> bool:
+        """
+        Install system packages from workspace/workspace_system_packages.txt.
+
+        This allows agents to install OS-level tools (ffmpeg, imagemagick, etc.)
+        that persist across environment rebuilds.
+
+        Returns:
+            True if successful or no packages to install, raises exception on failure
+        """
+        system_packages_path = "/app/workspace/workspace_system_packages.txt"
+
+        try:
+            check_result = await self.execute_command(
+                f"test -f {system_packages_path} && echo 'exists' || echo 'missing'"
+            )
+
+            if "missing" in check_result.stdout:
+                logger.debug(f"No system packages file found in {self.container_name}")
+                return True
+
+            # Read non-empty, non-comment lines as package names
+            read_result = await self.execute_command(
+                f"grep -v '^#' {system_packages_path} | grep -v '^[[:space:]]*$' | tr '\\n' ' '"
+            )
+
+            packages = read_result.stdout.strip()
+            if not packages:
+                logger.debug(f"No system packages to install in {self.container_name}")
+                return True
+
+            logger.info(f"Installing system packages in {self.container_name}: {packages}")
+            install_result = await self.execute_command(
+                f"apt-get update && apt-get install -y {packages} && rm -rf /var/lib/apt/lists/*"
+            )
+
+            if install_result.exit_code != 0:
+                logger.error(f"Failed to install system packages: {install_result.stdout}")
+                raise Exception(f"Failed to install system packages: {install_result.stdout}")
+
+            logger.info(f"System packages installed successfully in {self.container_name}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error installing system packages in {self.container_name}: {e}")
+            raise
+
     async def get_logs(self, lines: int = 100, follow: bool = False) -> list[str] | AsyncIterator[str]:
         """Get container logs."""
         try:

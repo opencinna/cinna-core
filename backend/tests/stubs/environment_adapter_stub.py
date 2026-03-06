@@ -200,3 +200,6 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
 
     async def install_custom_packages(self) -> bool:
         return True
+
+    async def install_system_packages(self) -> bool:
+        return True

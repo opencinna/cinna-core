@@ -281,6 +281,7 @@ class AgentCloneService:
         # Single files to copy
         files_to_copy = [
             ("app/workspace/workspace_requirements.txt", "app/workspace/workspace_requirements.txt"),
+            ("app/workspace/workspace_system_packages.txt", "app/workspace/workspace_system_packages.txt"),
         ]
 
         for src_rel, dst_rel in dirs_to_copy:

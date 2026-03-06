@@ -70,7 +70,7 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 
 | Feature | Description | Docs |
 |---------|-------------|------|
-| agent_environments | Docker container architecture, build layers, workspace isolation | [business logic](agents/agent_environments/agent_environments.md) \| [tech](agents/agent_environments/agent_environments_tech.md) \| [credential rebuild](agents/agent_environments/affected_environments_rebuild.md) |
+| agent_environments | Docker container architecture, build layers, workspace isolation, multi-image templates | [business logic](agents/agent_environments/agent_environments.md) \| [tech](agents/agent_environments/agent_environments_tech.md) \| [multi-image](agents/agent_environments/agent_multi_image_environments.md) \| [credential rebuild](agents/agent_environments/affected_environments_rebuild.md) |
 | agent_prompts | System prompt construction for building and conversation modes | [business logic](agents/agent_prompts/agent_prompts.md) \| [tech](agents/agent_prompts/agent_prompts_tech.md) |
 | agent_commands | Slash commands in agent sessions — `/files`, `/session-recover`, `/session-reset` | [business logic](agents/agent_commands/agent_commands.md) \| [tech](agents/agent_commands/agent_commands_tech.md) \| [files](agents/agent_commands/files_command.md) \| [recovery](agents/agent_commands/session_recovery_command.md) \| [reset](agents/agent_commands/session_reset_command.md) |
 | agent_plugins | Plugin marketplace integration, capability loading | [business logic](agents/agent_plugins/agent_plugins.md) \| [tech](agents/agent_plugins/agent_plugins_tech.md) |

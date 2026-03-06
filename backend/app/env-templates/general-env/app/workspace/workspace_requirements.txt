@@ -1,0 +1,32 @@
+# Workspace Python Packages
+#
+# This file contains Python packages installed by the agent for specific integrations
+# or workflows. These packages are automatically installed on container startup and
+# persist across environment rebuilds.
+#
+# Base template dependencies (fastapi, httpx, requests, etc.) are managed in the
+# template's pyproject.toml and are baked into the Docker image.
+#
+# Usage:
+# ------
+# Add packages one per line. You can specify versions:
+#   package-name          # Latest version
+#   package-name==1.2.3   # Specific version
+#   package-name>=1.2.0   # Minimum version
+#
+# Example:
+#   odoo-rpc-client>=0.8.0
+#   salesforce-api==2.1.0
+#   stripe
+#
+# The agent can add packages programmatically with:
+#   import subprocess
+#   subprocess.run(["uv", "pip", "install", "package-name"], check=True)
+#   with open("/app/workspace/workspace_requirements.txt", "a") as f:
+#       f.write("package-name\n")
+#
+# Or manually edit this file and restart the environment.
+#
+# -------------------------------------------------------------------------------
+# Add your workspace packages below this line:
+

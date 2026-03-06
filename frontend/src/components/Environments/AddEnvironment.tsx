@@ -24,6 +24,12 @@ import type { AgentEnvironmentCreate } from "@/client"
 import useCustomToast from "@/hooks/useCustomToast"
 import { Plus, AlertCircle, Key } from "lucide-react"
 
+// Environment template options
+const ENV_TEMPLATE_OPTIONS = [
+  { value: "python-env-advanced", label: "Python", description: "Lightweight Python environment based on slim image" },
+  { value: "general-env", label: "General Purpose", description: "Full Debian environment, supports installing system packages (ffmpeg, etc.)" },
+]
+
 // SDK options
 const SDK_OPTIONS = [
   { value: "claude-code/anthropic", label: "Anthropic Claude", requiredKey: "anthropic", credType: "anthropic" },
@@ -43,7 +49,7 @@ interface AddEnvironmentProps {
 
 export function AddEnvironment({ agentId }: AddEnvironmentProps) {
   const [open, setOpen] = useState(false)
-  const [envName] = useState("python-env-advanced")
+  const [envName, setEnvName] = useState("python-env-advanced")
   const [sdkConversation, setSdkConversation] = useState("claude-code/anthropic")
   const [sdkBuilding, setSdkBuilding] = useState("claude-code/anthropic")
   const [useDefaultCredentials, setUseDefaultCredentials] = useState(true)
@@ -158,20 +164,26 @@ export function AddEnvironment({ agentId }: AddEnvironmentProps) {
           <DialogHeader>
             <DialogTitle>Create New Environment</DialogTitle>
             <DialogDescription>
-              Create a new Python Advanced environment for your agent. This will be a Docker
-              container with advanced Python capabilities.
+              Create a new Docker container environment for your agent.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
-            <div className="text-sm text-muted-foreground">
-              <p>
-                <span className="font-medium">Template:</span> Python Advanced
-              </p>
-              <p>
-                <span className="font-medium">Version:</span> 1.0.0
-              </p>
-              <p>
-                <span className="font-medium">Type:</span> Docker Container
+            <div className="space-y-2">
+              <Label htmlFor="env-template">Environment Template</Label>
+              <Select value={envName} onValueChange={setEnvName}>
+                <SelectTrigger id="env-template">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ENV_TEMPLATE_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {ENV_TEMPLATE_OPTIONS.find(o => o.value === envName)?.description}
               </p>
             </div>
 

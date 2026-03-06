@@ -5,8 +5,15 @@ import { Badge } from "@/components/ui/badge"
 import { EnvironmentsService } from "@/client"
 import type { AgentEnvironmentPublic } from "@/client"
 import { EnvironmentStatusBadge } from "./EnvironmentStatusBadge"
-import { Play, Trash2, RefreshCw, Pause, Loader2, Wrench, MessageCircle } from "lucide-react"
+import { Play, Trash2, RefreshCw, Pause, Loader2, Wrench, MessageCircle, Box } from "lucide-react"
 import useCustomToast from "@/hooks/useCustomToast"
+
+// Helper to get template display name
+const getTemplateDisplayName = (envName: string): string => {
+  if (envName === "python-env-advanced") return "Python"
+  if (envName === "general-env") return "General Purpose"
+  return envName
+}
 
 // Helper to get SDK display name
 const getSDKDisplayName = (sdk: string | null | undefined): string => {
@@ -126,7 +133,10 @@ export function EnvironmentCard({ environment, agentId, onActivate }: Environmen
               <EnvironmentStatusBadge status={environment.status} />
             </p>
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-medium">SDK:</span>
+              <Badge variant="secondary" className="text-xs gap-1">
+                <Box className="h-3 w-3" />
+                {getTemplateDisplayName(environment.env_name)}
+              </Badge>
               <Badge variant="outline" className="text-xs gap-1">
                 <MessageCircle className="h-3 w-3" />
                 {getSDKDisplayName(environment.agent_sdk_conversation)}

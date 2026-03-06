@@ -25,10 +25,15 @@ Each agent environment is a Docker container with two distinct layers:
 - **Building Mode** - Agent uses Claude Sonnet for development tasks: creating scripts, configuring integrations, updating documentation
 - **Conversation Mode** - Agent uses Claude Haiku for executing pre-built workflows: processing tasks, generating reports, interacting with APIs
 
-### Two-Layer Dependencies
+### Multi-Image Templates
 
-- **Template dependencies** (`pyproject.toml`) - System-level packages baked into the Docker image. Updated via rebuild
-- **Workspace dependencies** (`workspace_requirements.txt`) - Integration-specific packages installed by the agent. Persist across rebuilds and auto-install on container startup
+The platform supports multiple Docker base images for different agent use cases. The template is selected when creating an environment and determines the base OS, pre-installed tooling, and image size. See [Multi-Image Environments](./agent_multi_image_environments.md) for details on available templates and selection guidance.
+
+### Three-Layer Dependencies
+
+- **Template dependencies** (`pyproject.toml`) - System-level Python packages baked into the Docker image. Updated via rebuild
+- **Workspace Python dependencies** (`workspace_requirements.txt`) - Integration-specific Python packages installed by the agent. Persist across rebuilds and auto-install on new container startup
+- **Workspace system packages** (`workspace_system_packages.txt`) - OS-level packages (e.g., ffmpeg, imagemagick) installed via `apt-get`. Persist across rebuilds and auto-install on new container startup. Available in both templates but most useful with the `general-env` template which has the full Debian package ecosystem
 
 ## User Stories / Flows
 
@@ -46,7 +51,7 @@ Each agent environment is a Docker container with two distinct layers:
 2. System checks if a Docker container already exists
 3. Configuration files regenerated (fresh auth token, AI credentials resolved)
 4. Docker container started (`docker-compose up`)
-5. If **new container**: Install workspace dependencies from `workspace_requirements.txt`
+5. If **new container**: Install workspace dependencies from `workspace_requirements.txt` and system packages from `workspace_system_packages.txt`
 6. **Always**: Sync dynamic data (agent prompts to `workspace/docs/`, credentials)
 7. Environment status set to `running`
 8. `ENVIRONMENT_ACTIVATED` event emitted to process any pending sessions
@@ -142,6 +147,7 @@ Each agent has a configurable inactivity threshold (agent-level setting, not per
 - All workspace data (scripts, files, docs, credentials, databases, logs)
 - User-created knowledge files (not in template)
 - Workspace dependencies (`workspace_requirements.txt`)
+- System packages (`workspace_system_packages.txt`)
 - Docker volumes
 - Environment configuration and agent prompts
 
@@ -162,7 +168,7 @@ Each agent has a configurable inactivity threshold (agent-level setting, not per
 
 ### Container Setup Logic
 
-- **New container** (first start or after rebuild): Install workspace packages + sync dynamic data
+- **New container** (first start or after rebuild): Install workspace Python packages + system packages + sync dynamic data
 - **Existing container** (restart or activation from suspended): Only sync dynamic data (prompts, credentials)
 - This optimization makes restarts and activations significantly faster
 
@@ -195,4 +201,5 @@ User → Frontend → Backend API → Environment Lifecycle Manager → Docker A
 - **[File Upload](../agent_file_management/agent_file_management.md)** - Files uploaded to backend transferred into workspace via Docker adapter
 - **[Event Bus](../../application/realtime_events/event_bus_system.md)** - WebSocket events for environment status changes (activating, activated, suspended, error)
 - **[Knowledge Management](../../application/knowledge_sources/knowledge_sources.md)** - Knowledge base files in `workspace/knowledge/` synced from template during rebuild
+- **[Multi-Image Environments](./agent_multi_image_environments.md)** - Template selection guidance: `python-env-advanced` (lightweight) vs `general-env` (full Debian with system package support)
 

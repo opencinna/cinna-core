@@ -2,9 +2,13 @@
 
 ## File Locations
 
-### Environment Template (source of truth)
+### Environment Templates (source of truth)
 
-- `backend/app/env-templates/python-env-advanced/` - Template root
+- `backend/app/env-templates/python-env-advanced/` - Python template (lightweight, `python:3.11-slim`)
+- `backend/app/env-templates/general-env/` - General purpose template (full Debian, `python:3.11-bookworm`)
+
+Both templates share identical structure:
+- `backend/app/env-templates/<template-name>/` - Template root
   - `app/core/` - System code baked into Docker image
     - `server/main.py` - FastAPI entry point
     - `server/routes.py` - HTTP endpoints, `_store_session_context()` helper
@@ -124,7 +128,7 @@ Relevant field:
 - `delete_environment_instance()` - DOWN operation with volume cleanup
 - `_container_exists()` - Check if Docker container exists (stopped or running)
 - `_sync_dynamic_data()` - Sync prompts and credentials to running environment
-- `_setup_new_container()` - Install workspace packages (only for new containers)
+- `_setup_new_container()` - Install workspace Python packages and system packages (only for new containers)
 - `_update_environment_config()` - Regenerate auth token, docker-compose.yml, .env
 - `_generate_auth_token()` - Create 10-year JWT with user ID as subject
 - `_generate_env_file()` - Generate .env with AI credential auto-detection by prefix
@@ -136,7 +140,8 @@ Relevant field:
 - `stop()` - STOP operation (`docker-compose stop`)
 - `rebuild()` - DOWN + build + optional UP
 - `delete()` - DOWN with volumes (`docker-compose down -v --remove-orphans`)
-- `install_custom_packages()` - Install workspace dependencies from `workspace_requirements.txt`
+- `install_custom_packages()` - Install workspace Python dependencies from `workspace_requirements.txt`
+- `install_system_packages()` - Install OS-level packages from `workspace_system_packages.txt` via `apt-get`
 - `set_agent_prompts()` - Sync prompts via HTTP API to agent-env
 - `set_credentials()` - Sync credentials via HTTP API to agent-env
 - `get_container()` - Get Docker container object for existence check
@@ -174,8 +179,15 @@ Relevant field:
 - Inactivity period selector (Select dropdown)
 - Environment list with cards
 
+### AddEnvironment (`frontend/src/components/Environments/AddEnvironment.tsx`)
+
+- Environment template selector (Python / General Purpose)
+- SDK selectors for conversation and building modes
+- AI credential configuration (default or custom)
+
 ### EnvironmentCard (`frontend/src/components/Environments/EnvironmentCard.tsx`)
 
+- Template badge (Python / General Purpose) alongside SDK badges
 - Active + Running → "Suspend" button (Pause icon)
 - Inactive → "Delete" button
 - Rebuild button for all environments
@@ -220,14 +232,17 @@ Relevant field:
 
 ### Docker Configuration
 
-**Dockerfile** (`backend/app/env-templates/python-env-advanced/Dockerfile`):
+Each template has its own Dockerfile and docker-compose template. Both share the same build structure:
+
+**Dockerfile** (`backend/app/env-templates/<template>/Dockerfile`):
+- Base image: `python:3.11-slim` (python-env-advanced) or `python:3.11-bookworm` (general-env)
 - Installs system deps (curl, git, Node.js for Claude Code)
 - Installs uv package manager and Claude Code CLI globally
 - Copies `pyproject.toml`, installs template dependencies
 - Copies `app/core` into image
 - CMD: `fastapi run core/main.py`
 
-**docker-compose.template.yml** (`backend/app/env-templates/python-env-advanced/docker-compose.template.yml`):
+**docker-compose.template.yml** (`backend/app/env-templates/<template>/docker-compose.template.yml`):
 - Volume mounts: `core:/app/core:ro` (read-only), `workspace:/app/workspace` (read-write)
 - Networks: `agent-bridge` (shared with backend), `agent-env-${ENV_ID}` (isolated)
 - Variables substituted: `${ENV_ID}`, `${AGENT_ID}`, `${ENV_VERSION}`, `${AGENT_PORT}`, `${AGENT_AUTH_TOKEN}`
