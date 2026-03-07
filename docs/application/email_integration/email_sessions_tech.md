@@ -32,11 +32,11 @@
 - `backend/app/models/input_task.py` — Added: `source_email_message_id`, `source_agent_id`, `SendAnswerRequest`, `SendAnswerResponse`
 
 ### Backend — Agent Environment (Session Context)
-- `backend/app/env-templates/python-env-advanced/app/core/server/active_session_manager.py` — Per-session HMAC-verified context store with TTL cleanup
-- `backend/app/env-templates/python-env-advanced/app/core/server/routes.py` — `GET /session/context?session_id=X`, `_store_session_context()` helper
-- `backend/app/env-templates/python-env-advanced/app/core/server/prompt_generator.py` — `build_session_context_section()`
-- `backend/app/env-templates/python-env-advanced/app/core/server/adapters/claude_code.py` — Passes `session_state` to prompt generation
-- `backend/app/env-templates/python-env-advanced/app/core/scripts/get_session_context.py` — Stdlib-only CLI/import helper
+- `backend/app/env-templates/app_core_base/core/server/active_session_manager.py` — Per-session HMAC-verified context store with TTL cleanup
+- `backend/app/env-templates/app_core_base/core/server/routes.py` — `GET /session/context?session_id=X`, `_store_session_context()` helper
+- `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` — `build_session_context_section()`
+- `backend/app/env-templates/app_core_base/core/server/adapters/claude_code.py` — Passes `session_state` to prompt generation
+- `backend/app/env-templates/app_core_base/core/scripts/get_session_context.py` — Stdlib-only CLI/import helper
 
 ### Frontend — Task Actions
 - `frontend/src/routes/_layout/tasks.tsx` — "Send Answer" button for email-originated tasks

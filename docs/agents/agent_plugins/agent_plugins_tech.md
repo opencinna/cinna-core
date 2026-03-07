@@ -11,9 +11,9 @@
 - `backend/app/services/adapters/docker_adapter.py` — `set_plugins()` method
 
 **Agent-Env (inside Docker container)**
-- `backend/app/env-templates/python-env-advanced/app/core/server/routes.py` — `/config/plugins` endpoints
-- `backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py` — Plugin file management
-- `backend/app/env-templates/python-env-advanced/app/core/server/sdk_manager.py` — Plugin loading into SDK at session start
+- `backend/app/env-templates/app_core_base/core/server/routes.py` — `/config/plugins` endpoints
+- `backend/app/env-templates/app_core_base/core/server/agent_env_service.py` — Plugin file management
+- `backend/app/env-templates/app_core_base/core/server/sdk_manager.py` — Plugin loading into SDK at session start
 
 **Frontend**
 - `frontend/src/routes/_layout/admin/marketplaces.tsx` — Marketplace list page (admin)

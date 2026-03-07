@@ -4,14 +4,14 @@
 
 ### Backend - Agent Environment Core (runs inside Docker)
 
-- `backend/app/env-templates/python-env-advanced/app/core/server/prompt_generator.py` - PromptGenerator class: loads prompt files, assembles mode-specific system prompts
-- `backend/app/env-templates/python-env-advanced/app/core/server/sdk_manager.py` - SDKManager class: coordinates adapter selection, delegates prompt generation to PromptGenerator
-- `backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py` - AgentEnvService class: reads/writes prompt files in workspace (WORKFLOW_PROMPT.md, ENTRYPOINT_PROMPT.md, REFINER_PROMPT.md)
-- `backend/app/env-templates/python-env-advanced/app/core/server/routes.py` - HTTP endpoints `/chat`, `/chat/stream`, `/config/agent-prompts` (GET/POST)
+- `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` - PromptGenerator class: loads prompt files, assembles mode-specific system prompts
+- `backend/app/env-templates/app_core_base/core/server/sdk_manager.py` - SDKManager class: coordinates adapter selection, delegates prompt generation to PromptGenerator
+- `backend/app/env-templates/app_core_base/core/server/agent_env_service.py` - AgentEnvService class: reads/writes prompt files in workspace (WORKFLOW_PROMPT.md, ENTRYPOINT_PROMPT.md, REFINER_PROMPT.md)
+- `backend/app/env-templates/app_core_base/core/server/routes.py` - HTTP endpoints `/chat`, `/chat/stream`, `/config/agent-prompts` (GET/POST)
 
 ### Backend - Prompt Templates (version-controlled)
 
-- `backend/app/env-templates/python-env-advanced/app/core/prompts/BUILDING_AGENT.md` - Building agent instructions template
+- `backend/app/env-templates/app_core_base/core/prompts/BUILDING_AGENT.md` - Building agent instructions template
 - `backend/app/env-templates/python-env-advanced/app/workspace/docs/WORKFLOW_PROMPT.md` - Workflow prompt template
 - `backend/app/env-templates/python-env-advanced/app/workspace/docs/ENTRYPOINT_PROMPT.md` - Entrypoint prompt template
 - `backend/app/env-templates/python-env-advanced/app/workspace/docs/REFINER_PROMPT.md` - Refiner prompt template
@@ -69,7 +69,7 @@
 
 ### Agent Environment API (inside Docker)
 
-- `backend/app/env-templates/python-env-advanced/app/core/server/routes.py`
+- `backend/app/env-templates/app_core_base/core/server/routes.py`
   - `GET /config/agent-prompts` - Read WORKFLOW_PROMPT.md, ENTRYPOINT_PROMPT.md, REFINER_PROMPT.md from workspace
   - `POST /config/agent-prompts` - Write prompt files to workspace docs directory
   - `POST /chat/stream` - Main chat endpoint. Accepts `mode` and `agent_sdk` parameters; SDK Manager delegates prompt assembly to PromptGenerator based on mode

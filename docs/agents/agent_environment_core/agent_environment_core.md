@@ -152,6 +152,7 @@ Backend ──HTTP POST──→ Environment Container (FastAPI)
 - **Agent Handover** - Create/respond task tools enable agent-to-agent delegation. See [Agent Handover](../agent_handover/agent_handover.md) and [Create Agent Task Tool](create_agent_task_tool.md)
 - **Input Tasks** - Session state tools let agents report task outcomes and exchange clarifications. See [Session State Tools](session_state_tools.md) and [Input Tasks](../../application/input_tasks/input_tasks.md)
 - **Tools Approval** - Plugin-provided tools require explicit user approval before autonomous use; approval state synced to environments. See [Tools Approval Management](tools_approval_management.md)
+- **Agent Webapp** - Three dedicated endpoints serve static files, execute Python data scripts, and report webapp metadata from `/app/workspace/webapp/`. See [Agent Webapp](../agent_webapp/agent_webapp.md)
 
 ## API Endpoints
 
@@ -164,6 +165,12 @@ Backend ──HTTP POST──→ Environment Container (FastAPI)
 
 - `GET /config/agent-prompts` - Get current prompts (workflow_prompt, entrypoint_prompt) from workspace docs
 - `POST /config/agent-prompts` - Update prompts in workspace docs directory
+
+### Webapp
+
+- `GET /webapp/status` - Webapp metadata: exists, total_size_bytes, file_count, has_index, api_endpoints
+- `GET /webapp/{path:path}` - Serve static file from `webapp/` with ETag/Last-Modified/304 caching headers
+- `POST /webapp/api/{endpoint}` - Execute Python data script (`webapp/api/{endpoint}.py`) via stdin/stdout, timeout up to 300s
 
 ### Utility
 
@@ -198,9 +205,12 @@ Backend ──HTTP POST──→ Environment Container (FastAPI)
 ```
 /app/
 ├── BUILDING_AGENT.md              # Instance-specific building prompt (copied from template on init)
-├── core/                          # System code (read-only mount, baked into Docker image)
+├── core/                          # System code (from shared app_core_base, read-only mount, baked into Docker image)
+│   ├── prompts/
+│   │   ├── BUILDING_AGENT.md      # Building mode system prompt
+│   │   └── WEBAPP_BUILDING.md     # Webapp building instructions (read by agent on demand)
 │   ├── server/                    # FastAPI server application
-│   │   ├── routes.py              # HTTP endpoints + session context helper
+│   │   ├── routes.py              # HTTP endpoints + session context helper + webapp endpoints
 │   │   ├── sdk_manager.py         # Multi-adapter SDK orchestrator
 │   │   ├── prompt_generator.py    # System prompt construction
 │   │   ├── agent_env_service.py   # Workspace file operations
@@ -226,6 +236,12 @@ Backend ──HTTP POST──→ Environment Container (FastAPI)
     │   ├── WORKFLOW_PROMPT.md      # Workflow system prompt
     │   └── ENTRYPOINT_PROMPT.md   # Trigger message definition
     ├── credentials/               # API keys and service accounts
-    └── logs/                      # Session logs (when enabled)
+    ├── logs/                      # Session logs (when enabled)
+    └── webapp/                    # Web app files (HTML/CSS/JS + Python data scripts)
+        ├── index.html             # Entry point
+        ├── assets/                # CSS, JS, images
+        └── api/                   # Python data endpoint scripts
 ```
+
+**Source of truth**: All `app/core/` files live in `backend/app/env-templates/app_core_base/core/` and are shared across all environment templates. Individual templates (`general-env`, `python-env-advanced`) only contain template-specific files (Dockerfile, docker-compose template, workspace structure).
 

@@ -134,7 +134,7 @@ await adapter.set_repositories(repositories_data)
 
 ### 5.3 New Endpoint in Agent-Env Core
 
-**Modify**: `backend/app/env-templates/python-env-advanced/app/core/server/routes.py`
+**Modify**: `backend/app/env-templates/app_core_base/core/server/routes.py`
 
 Add `POST /config/repositories`:
 1. Write `repos_config.json` to `/app/workspace/repositories/`
@@ -143,20 +143,20 @@ Add `POST /config/repositories`:
 4. Create empty folder per repository (if not already existing - don't delete existing cloned repos)
 5. Remove SSH keys that are no longer referenced
 
-**Modify**: `backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py`
+**Modify**: `backend/app/env-templates/app_core_base/core/server/agent_env_service.py`
 
 Add methods:
 - `set_repositories(repos_config, ssh_keys, repos_readme)` - business logic for writing config/keys
 - `_write_ssh_keys(ssh_keys_dir, ssh_keys_dict)` - write keys with proper permissions
 - `_create_repo_directories(repos_dir, repositories)` - create blank folders
 
-**Modify**: `backend/app/env-templates/python-env-advanced/app/core/server/models.py`
+**Modify**: `backend/app/env-templates/app_core_base/core/server/models.py`
 
 Add `RepositoriesConfigRequest` Pydantic model.
 
 ### 5.4 Prompt Integration
 
-**Modify**: `backend/app/env-templates/python-env-advanced/app/core/server/prompt_generator.py`
+**Modify**: `backend/app/env-templates/app_core_base/core/server/prompt_generator.py`
 
 Add `_get_repositories_context()` method:
 - Read `repositories/repos_config.json`
@@ -257,8 +257,8 @@ source backend/.venv/bin/activate && make gen-client
 - `backend/app/services/adapters/base.py` - add set_repositories abstract method
 - `backend/app/services/adapters/docker_adapter.py` - implement set_repositories
 - `backend/app/services/environment_lifecycle.py` - sync in _sync_dynamic_data + copy in workspace copy
-- `backend/app/env-templates/python-env-advanced/app/core/server/routes.py` - POST /config/repositories
-- `backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py` - repository file ops
-- `backend/app/env-templates/python-env-advanced/app/core/server/models.py` - request model
-- `backend/app/env-templates/python-env-advanced/app/core/server/prompt_generator.py` - repos context
+- `backend/app/env-templates/app_core_base/core/server/routes.py` - POST /config/repositories
+- `backend/app/env-templates/app_core_base/core/server/agent_env_service.py` - repository file ops
+- `backend/app/env-templates/app_core_base/core/server/models.py` - request model
+- `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` - repos context
 - `frontend/src/components/Environment/EnvironmentPanel.tsx` - add tab + queries

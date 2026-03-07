@@ -10,7 +10,7 @@ Provide isolated Docker container runtimes where AI agents execute tasks, with a
 
 Each agent environment is a Docker container with two distinct layers:
 
-- **Core Layer** (`/app/core/`) - System code (FastAPI server, SDK adapters, API routes). Baked into the Docker image during build. Immutable at runtime. Updated only via rebuild
+- **Core Layer** (`/app/core/`) - System code (FastAPI server, SDK adapters, API routes). Shared across all environment templates via `app_core_base`. Baked into the Docker image during build. Immutable at runtime. Updated only via rebuild
 - **Workspace Layer** (`/app/workspace/`) - User-generated content (scripts, files, credentials, databases, logs, knowledge base). Mounted as a Docker volume. Persists across all lifecycle operations (restarts, rebuilds, suspensions)
 - **Template Files** (`/app/`) - Static configuration files copied during initialization (e.g., `BUILDING_AGENT.md`). Not updated during rebuilds
 
@@ -62,7 +62,7 @@ The platform supports multiple Docker base images for different agent use cases.
 2. If running, container stopped first
 3. Old container removed completely (`docker-compose down`)
 4. Infrastructure files overwritten from template (Dockerfile, pyproject.toml, etc.)
-5. Old core directory deleted, fresh core copied from template
+5. Old core directory deleted, fresh core copied from shared `app_core_base` (single source of truth for all templates)
 6. Knowledge base files synced from template (add/update only, no deletions)
 7. Docker image rebuilt (uses cache for speed)
 8. If was running: new container started with full setup (packages + dynamic data)

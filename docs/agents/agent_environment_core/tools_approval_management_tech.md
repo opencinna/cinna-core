@@ -16,7 +16,7 @@
 
 ### Agent-Env (inside Docker container)
 
-**Base path**: `backend/app/env-templates/python-env-advanced/app/core/server/`
+**Base path**: `backend/app/env-templates/app_core_base/core/server/`
 
 | File | Purpose |
 |------|---------|
@@ -67,11 +67,11 @@
 **Environment Lifecycle**: `backend/app/services/environment_lifecycle.py`
 - `_sync_plugins_to_environment(agent)` — Reads `agent.agent_sdk_config.allowed_tools`; passes to `prepare_plugins_for_environment()`
 
-**Agent Env Service** (container): `backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py`
+**Agent Env Service** (container): `backend/app/env-templates/app_core_base/core/server/agent_env_service.py`
 - `get_plugins_settings()` — Reads `/app/workspace/plugins/settings.json` and returns full content
 - `get_allowed_tools()` — Returns `settings["allowed_tools"]` list
 
-**SDK Manager** (container): `backend/app/env-templates/python-env-advanced/app/core/server/sdk_manager.py`
+**SDK Manager** (container): `backend/app/env-templates/app_core_base/core/server/sdk_manager.py`
 - `send_message_stream()` — Defines hardcoded pre-allowed list; calls `get_allowed_tools()`; merges both into `ClaudeAgentOptions(allowed_tools=...)`
 
 ## Workspace Structure

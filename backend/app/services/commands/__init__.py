@@ -8,9 +8,11 @@ from app.services.command_service import CommandService
 from app.services.commands.files_command import FilesCommandHandler, FilesAllCommandHandler
 from app.services.commands.session_recover_command import SessionRecoverCommandHandler
 from app.services.commands.session_reset_command import SessionResetCommandHandler
+from app.services.commands.webapp_command import WebappCommandHandler
 
 # Register all command handlers
 CommandService.register(FilesCommandHandler())
 CommandService.register(FilesAllCommandHandler())
 CommandService.register(SessionRecoverCommandHandler())
 CommandService.register(SessionResetCommandHandler())
+CommandService.register(WebappCommandHandler())

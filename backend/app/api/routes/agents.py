@@ -24,8 +24,6 @@ from app.models import (
     AllowedToolsUpdate,
     PendingToolsResponse,
     Message,
-    Credential,
-    CredentialPublic,
     CredentialsPublic,
     AgentEnvironment,
     AgentEnvironmentCreate,
@@ -37,7 +35,6 @@ from app.models import (
     UpdateScheduleRequest,
     AgentSchedulePublic,
     AgentSchedulesPublic,
-    AgentHandoverConfig,
     HandoverConfigCreate,
     HandoverConfigUpdate,
     HandoverConfigPublic,
@@ -59,9 +56,8 @@ from app.models import (
 from app.services.environment_service import EnvironmentService
 from app.services.agent_service import AgentService
 from app.services.credentials_service import CredentialsService
-from app.services.message_service import MessageService
-from app.services.ai_functions_service import AIFunctionsService
 from app.services.agent_scheduler_service import AgentSchedulerService, ScheduleError
+from app.services.agent_handover_service import AgentHandoverService, HandoverError
 from app.services.session_service import SessionService
 from app.models.session import SessionCreate
 
@@ -104,6 +100,7 @@ def _agent_to_public_with_clone_info(session, agent: Agent) -> AgentPublic:
         a2a_config=agent.a2a_config,
         example_prompts=agent.example_prompts,
         inactivity_period_limit=agent.inactivity_period_limit,
+        webapp_enabled=agent.webapp_enabled,
         created_at=agent.created_at,
         updated_at=agent.updated_at,
         owner_id=agent.owner_id,
@@ -350,33 +347,6 @@ async def delete_agent(
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_superuser and (agent.owner_id != current_user.id):
         raise HTTPException(status_code=400, detail="Not enough permissions")
-
-    # If this agent is a clone, update the share record status to 'deleted'
-    if agent.is_clone:
-        stmt = select(AgentShare).where(AgentShare.cloned_agent_id == id)
-        share = session.exec(stmt).first()
-        if share:
-            share.status = "deleted"
-            share.cloned_agent_id = None  # Clear the reference since clone is being deleted
-            session.add(share)
-            logger.info(f"Updated share {share.id} status to 'deleted' for deleted clone {id}")
-            session.commit()
-
-    # If this agent has clones (is a parent), detach them first
-    if not agent.is_clone:
-        stmt = select(Agent).where(Agent.parent_agent_id == id)
-        clones = session.exec(stmt).all()
-        for clone in clones:
-            clone.is_clone = False
-            clone.parent_agent_id = None
-            clone.clone_mode = None
-            clone.pending_update = False
-            clone.pending_update_at = None
-            session.add(clone)
-            logger.info(f"Detached clone {clone.id} from deleted parent {id}")
-
-        if clones:
-            session.commit()
 
     success = await AgentService.delete_agent(session=session, agent_id=id)
     if not success:
@@ -654,6 +624,11 @@ def delete_schedule(
     return Message(message="Schedule deleted successfully")
 
 
+def _handle_handover_error(e: HandoverError) -> None:
+    """Convert handover service exceptions to HTTP exceptions."""
+    raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
 # Handover configuration routes
 @router.get("/{id}/handovers", response_model=HandoverConfigsPublic)
 def list_handover_configs(
@@ -663,37 +638,12 @@ def list_handover_configs(
     id: uuid.UUID,
 ) -> Any:
     """Get all handover configurations for an agent."""
-    agent = session.get(Agent, id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if not current_user.is_superuser and (agent.owner_id != current_user.id):
-        raise HTTPException(status_code=400, detail="Not enough permissions")
-
-    # Query handover configs where this agent is the source
-    statement = select(AgentHandoverConfig).where(
-        AgentHandoverConfig.source_agent_id == id
-    )
-    configs = session.exec(statement).all()
-
-    # Build public response with target agent names
-    public_configs = []
-    for config in configs:
-        target_agent = session.get(Agent, config.target_agent_id)
-        public_configs.append(
-            HandoverConfigPublic(
-                id=config.id,
-                source_agent_id=config.source_agent_id,
-                target_agent_id=config.target_agent_id,
-                target_agent_name=target_agent.name if target_agent else "Unknown",
-                handover_prompt=config.handover_prompt,
-                enabled=config.enabled,
-                auto_feedback=config.auto_feedback,
-                created_at=config.created_at,
-                updated_at=config.updated_at,
-            )
+    try:
+        return AgentHandoverService.list_configs(
+            session, id, current_user.id, is_superuser=current_user.is_superuser
         )
-
-    return HandoverConfigsPublic(data=public_configs, count=len(public_configs))
+    except HandoverError as e:
+        _handle_handover_error(e)
 
 
 @router.post("/{id}/handovers", response_model=HandoverConfigPublic)
@@ -705,48 +655,12 @@ async def create_handover_config(
     data: HandoverConfigCreate,
 ) -> Any:
     """Create a new handover configuration."""
-    agent = session.get(Agent, id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if not current_user.is_superuser and (agent.owner_id != current_user.id):
-        raise HTTPException(status_code=400, detail="Not enough permissions")
-
-    # Verify target agent exists and user has access
-    target_agent = session.get(Agent, data.target_agent_id)
-    if not target_agent:
-        raise HTTPException(status_code=404, detail="Target agent not found")
-    if not current_user.is_superuser and (target_agent.owner_id != current_user.id):
-        raise HTTPException(status_code=400, detail="Not enough permissions to access target agent")
-
-    # Prevent self-handover
-    if id == data.target_agent_id:
-        raise HTTPException(status_code=400, detail="Cannot create handover to the same agent")
-
-    # Create handover config
-    config = AgentHandoverConfig(
-        source_agent_id=id,
-        target_agent_id=data.target_agent_id,
-        handover_prompt=data.handover_prompt,
-        enabled=True,
-    )
-    session.add(config)
-    session.commit()
-    session.refresh(config)
-
-    # Sync handover config to agent-env
-    await AgentService.sync_agent_handover_config(session, id)
-
-    return HandoverConfigPublic(
-        id=config.id,
-        source_agent_id=config.source_agent_id,
-        target_agent_id=config.target_agent_id,
-        target_agent_name=target_agent.name,
-        handover_prompt=config.handover_prompt,
-        enabled=config.enabled,
-        auto_feedback=config.auto_feedback,
-        created_at=config.created_at,
-        updated_at=config.updated_at,
-    )
+    try:
+        return await AgentHandoverService.create_config(
+            session, id, current_user.id, data, is_superuser=current_user.is_superuser
+        )
+    except HandoverError as e:
+        _handle_handover_error(e)
 
 
 @router.put("/{id}/handovers/{handover_id}", response_model=HandoverConfigPublic)
@@ -759,44 +673,13 @@ async def update_handover_config(
     data: HandoverConfigUpdate,
 ) -> Any:
     """Update a handover configuration."""
-    agent = session.get(Agent, id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if not current_user.is_superuser and (agent.owner_id != current_user.id):
-        raise HTTPException(status_code=400, detail="Not enough permissions")
-
-    config = session.get(AgentHandoverConfig, handover_id)
-    if not config or config.source_agent_id != id:
-        raise HTTPException(status_code=404, detail="Handover configuration not found")
-
-    # Update fields
-    if data.handover_prompt is not None:
-        config.handover_prompt = data.handover_prompt
-    if data.enabled is not None:
-        config.enabled = data.enabled
-    if data.auto_feedback is not None:
-        config.auto_feedback = data.auto_feedback
-
-    config.updated_at = datetime.now(UTC)
-    session.add(config)
-    session.commit()
-    session.refresh(config)
-
-    # Sync handover config to agent-env
-    await AgentService.sync_agent_handover_config(session, id)
-
-    target_agent = session.get(Agent, config.target_agent_id)
-    return HandoverConfigPublic(
-        id=config.id,
-        source_agent_id=config.source_agent_id,
-        target_agent_id=config.target_agent_id,
-        target_agent_name=target_agent.name if target_agent else "Unknown",
-        handover_prompt=config.handover_prompt,
-        enabled=config.enabled,
-        auto_feedback=config.auto_feedback,
-        created_at=config.created_at,
-        updated_at=config.updated_at,
-    )
+    try:
+        return await AgentHandoverService.update_config(
+            session, id, handover_id, current_user.id, data,
+            is_superuser=current_user.is_superuser,
+        )
+    except HandoverError as e:
+        _handle_handover_error(e)
 
 
 @router.delete("/{id}/handovers/{handover_id}")
@@ -808,22 +691,13 @@ async def delete_handover_config(
     handover_id: uuid.UUID,
 ) -> Message:
     """Delete a handover configuration."""
-    agent = session.get(Agent, id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if not current_user.is_superuser and (agent.owner_id != current_user.id):
-        raise HTTPException(status_code=400, detail="Not enough permissions")
-
-    config = session.get(AgentHandoverConfig, handover_id)
-    if not config or config.source_agent_id != id:
-        raise HTTPException(status_code=404, detail="Handover configuration not found")
-
-    session.delete(config)
-    session.commit()
-
-    # Sync handover config to agent-env
-    await AgentService.sync_agent_handover_config(session, id)
-
+    try:
+        await AgentHandoverService.delete_config(
+            session, id, handover_id, current_user.id,
+            is_superuser=current_user.is_superuser,
+        )
+    except HandoverError as e:
+        _handle_handover_error(e)
     return Message(message="Handover configuration deleted successfully")
 
 
@@ -836,34 +710,13 @@ def generate_handover_prompt_endpoint(
     data: GenerateHandoverPromptRequest,
 ) -> Any:
     """Generate handover prompt using AI."""
-    # Verify source agent
-    source_agent = session.get(Agent, id)
-    if not source_agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if not current_user.is_superuser and (source_agent.owner_id != current_user.id):
-        raise HTTPException(status_code=400, detail="Not enough permissions")
-
-    # Verify target agent
-    target_agent = session.get(Agent, data.target_agent_id)
-    if not target_agent:
-        raise HTTPException(status_code=404, detail="Target agent not found")
-    if not current_user.is_superuser and (target_agent.owner_id != current_user.id):
-        raise HTTPException(status_code=400, detail="Not enough permissions to access target agent")
-
-    # Prevent self-handover
-    if id == data.target_agent_id:
-        raise HTTPException(status_code=400, detail="Cannot create handover to the same agent")
-
-    # Generate handover prompt
-    result = AIFunctionsService.generate_handover_prompt(
-        source_agent_name=source_agent.name,
-        source_entrypoint=source_agent.entrypoint_prompt,
-        source_workflow=source_agent.workflow_prompt,
-        target_agent_name=target_agent.name,
-        target_entrypoint=target_agent.entrypoint_prompt,
-        target_workflow=target_agent.workflow_prompt,
-    )
-
+    try:
+        result = AgentHandoverService.generate_handover_prompt(
+            session, id, data.target_agent_id, current_user.id,
+            is_superuser=current_user.is_superuser,
+        )
+    except HandoverError as e:
+        _handle_handover_error(e)
     return GenerateHandoverPromptResponse(**result)
 
 

@@ -21,9 +21,9 @@
 
 ### Agent Environment (Docker Container)
 
-- **Knowledge query tool**: `backend/app/env-templates/python-env-advanced/app/core/server/tools/knowledge_query.py` - MCP tool `query_integration_knowledge`, two-step discovery/retrieval, reads `BACKEND_URL`/`AGENT_AUTH_TOKEN`/`ENV_ID` env vars, UUID validation, error handling
-- **Claude Code adapter**: `backend/app/env-templates/python-env-advanced/app/core/server/adapters/claude_code.py` - Registers knowledge MCP server in building mode only (~lines 344-360): `create_sdk_mcp_server(name="knowledge", tools=[query_integration_knowledge])` → tool name `mcp__knowledge__query_integration_knowledge`
-- **Tools package**: `backend/app/env-templates/python-env-advanced/app/core/server/tools/__init__.py`
+- **Knowledge query tool**: `backend/app/env-templates/app_core_base/core/server/tools/knowledge_query.py` - MCP tool `query_integration_knowledge`, two-step discovery/retrieval, reads `BACKEND_URL`/`AGENT_AUTH_TOKEN`/`ENV_ID` env vars, UUID validation, error handling
+- **Claude Code adapter**: `backend/app/env-templates/app_core_base/core/server/adapters/claude_code.py` - Registers knowledge MCP server in building mode only (~lines 344-360): `create_sdk_mcp_server(name="knowledge", tools=[query_integration_knowledge])` → tool name `mcp__knowledge__query_integration_knowledge`
+- **Tools package**: `backend/app/env-templates/app_core_base/core/server/tools/__init__.py`
 
 ### Frontend
 

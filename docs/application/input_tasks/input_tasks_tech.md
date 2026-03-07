@@ -27,10 +27,10 @@
 - `backend/app/agents/__init__.py` — exports refine_task
 
 **Agent-Env Tools:**
-- `backend/app/env-templates/python-env-advanced/app/core/server/tools/update_session_state.py`
-- `backend/app/env-templates/python-env-advanced/app/core/server/tools/respond_to_task.py`
-- `backend/app/env-templates/python-env-advanced/app/core/server/adapters/claude_code.py` — tool registration
-- `backend/app/env-templates/python-env-advanced/app/core/server/prompt_generator.py` — session state prompt injection
+- `backend/app/env-templates/app_core_base/core/server/tools/update_session_state.py`
+- `backend/app/env-templates/app_core_base/core/server/tools/respond_to_task.py`
+- `backend/app/env-templates/app_core_base/core/server/adapters/claude_code.py` — tool registration
+- `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` — session state prompt injection
 
 **Migrations:**
 - `backend/app/alembic/versions/l2g3h4i5j6k7_add_input_task_table.py` — creates input_task table, adds source_task_id to session

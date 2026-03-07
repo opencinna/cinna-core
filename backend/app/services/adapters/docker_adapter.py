@@ -233,7 +233,7 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
         logger.info(f"Core files updated from template")
 
         # Update knowledge files from template (add/update only, don't delete)
-        template_knowledge_dir = template_core_dir.parent / "workspace" / "knowledge"
+        template_knowledge_dir = template_dir / "app" / "workspace" / "knowledge"
         instance_knowledge_dir = self.env_dir / "app" / "workspace" / "knowledge"
 
         if template_knowledge_dir.exists():
@@ -908,6 +908,84 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
         """
         tasks = [self.upload_file_to_agent_env(filename, content) for filename, content in files]
         return await asyncio.gather(*tasks)
+
+    # === Webapp Methods ===
+
+    async def get_webapp_status(self) -> dict:
+        """Get webapp metadata from agent-env."""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/webapp/status",
+                    headers=self._get_headers(),
+                    timeout=10.0
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to get webapp status: {e}")
+            raise Exception(f"Failed to get webapp status: {e}")
+
+    async def get_webapp_file(
+        self,
+        path: str,
+        request_headers: dict | None = None,
+    ) -> tuple[int, dict, bytes]:
+        """
+        Proxy a webapp static file request to agent-env.
+
+        Returns (status_code, response_headers, body).
+        Passes through caching headers (If-Modified-Since, If-None-Match, ETag, Last-Modified).
+        """
+        import urllib.parse
+        encoded_path = urllib.parse.quote(path, safe='/')
+
+        headers = self._get_headers()
+        if request_headers:
+            for h in ("if-modified-since", "if-none-match"):
+                if h in request_headers:
+                    headers[h] = request_headers[h]
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/webapp/{encoded_path}",
+                    headers=headers,
+                    timeout=30.0
+                )
+                resp_headers = {}
+                for h in ("content-type", "etag", "last-modified", "cache-control", "content-length"):
+                    if h in response.headers:
+                        resp_headers[h] = response.headers[h]
+
+                return response.status_code, resp_headers, response.content
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to get webapp file {path}: {e}")
+            raise Exception(f"Failed to get webapp file: {e}")
+
+    async def call_webapp_api(
+        self,
+        endpoint: str,
+        params: dict | None = None,
+        timeout: int = 60,
+    ) -> tuple[int, bytes]:
+        """
+        Proxy a webapp data API call to agent-env.
+
+        Returns (status_code, response_body).
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.base_url}/webapp/api/{endpoint}",
+                    json={"params": params or {}, "timeout": timeout},
+                    headers=self._get_headers(),
+                    timeout=float(timeout) + 10.0,
+                )
+                return response.status_code, response.content
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to call webapp API {endpoint}: {e}")
+            raise Exception(f"Failed to call webapp API: {e}")
 
     # === SQLite Database Methods ===
 

@@ -4,7 +4,7 @@
 
 ### Core Server (inside Docker container)
 
-**Base path**: `backend/app/env-templates/python-env-advanced/app/core/server/`
+**Base path**: `backend/app/env-templates/app_core_base/core/server/`
 
 | File | Purpose |
 |------|---------|
@@ -18,7 +18,7 @@
 
 ### SDK Adapters
 
-**Base path**: `backend/app/env-templates/python-env-advanced/app/core/server/adapters/`
+**Base path**: `backend/app/env-templates/app_core_base/core/server/adapters/`
 
 | File | Purpose |
 |------|---------|
@@ -30,7 +30,7 @@
 
 ### Custom Tools
 
-**Base path**: `backend/app/env-templates/python-env-advanced/app/core/server/tools/`
+**Base path**: `backend/app/env-templates/app_core_base/core/server/tools/`
 
 | File | Purpose |
 |------|---------|
@@ -43,7 +43,7 @@
 
 | File | Purpose |
 |------|---------|
-| `backend/app/env-templates/python-env-advanced/app/core/scripts/get_session_context.py` | Stdlib-only helper for agent scripts to query session context via HTTP |
+| `backend/app/env-templates/app_core_base/core/scripts/get_session_context.py` | Stdlib-only helper for agent scripts to query session context via HTTP |
 
 ### Backend Integration (main backend)
 
@@ -68,7 +68,7 @@ No dedicated database tables - the environment core runs inside Docker container
 
 ### Environment-side (inside container)
 
-**Routes file**: `backend/app/env-templates/python-env-advanced/app/core/server/routes.py`
+**Routes file**: `backend/app/env-templates/app_core_base/core/server/routes.py`
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
@@ -92,14 +92,14 @@ No dedicated database tables - the environment core runs inside Docker container
 
 ### SDK Manager
 
-**File**: `backend/app/env-templates/python-env-advanced/app/core/server/sdk_manager.py`
+**File**: `backend/app/env-templates/app_core_base/core/server/sdk_manager.py`
 
 - `SDKManager.send_message_stream()` - Main entry point. Selects adapter, generates prompt, streams SDKEvents as dicts
 - `SDKManager._get_adapter(mode)` - Reads `SDK_ADAPTER_{MODE}` env var, creates/caches adapter via AdapterRegistry
 
 ### Prompt Generator
 
-**File**: `backend/app/env-templates/python-env-advanced/app/core/server/prompt_generator.py`
+**File**: `backend/app/env-templates/app_core_base/core/server/prompt_generator.py`
 
 - `PromptGenerator.generate_prompt(mode, session_state)` - Factory method routing to mode-specific generators
 - `PromptGenerator.generate_building_mode_prompt(session_context)` - Returns `SystemPromptPreset` dict (Claude Code preset + all docs)
@@ -108,7 +108,7 @@ No dedicated database tables - the environment core runs inside Docker container
 
 ### Agent Env Service
 
-**File**: `backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py`
+**File**: `backend/app/env-templates/app_core_base/core/server/agent_env_service.py`
 
 - `AgentEnvService.get_agent_prompts()` - Returns tuple of (workflow_prompt, entrypoint_prompt)
 - `AgentEnvService.update_agent_prompts()` - Write prompts to docs directory, returns list of updated filenames
@@ -117,7 +117,7 @@ No dedicated database tables - the environment core runs inside Docker container
 
 ### Active Session Manager
 
-**File**: `backend/app/env-templates/python-env-advanced/app/core/server/active_session_manager.py`
+**File**: `backend/app/env-templates/app_core_base/core/server/active_session_manager.py`
 
 - `ActiveSessionManager.store_session_context()` - HMAC-verify and store per-session context
 - `ActiveSessionManager.get_session_context()` - Retrieve context by backend_session_id
@@ -125,7 +125,7 @@ No dedicated database tables - the environment core runs inside Docker container
 
 ### SDK Adapters
 
-**Base**: `backend/app/env-templates/python-env-advanced/app/core/server/adapters/base.py`
+**Base**: `backend/app/env-templates/app_core_base/core/server/adapters/base.py`
 
 - `BaseSDKAdapter.send_message_stream()` - Abstract method, streams `SDKEvent` objects
 - `BaseSDKAdapter.interrupt_session()` - Abstract method, interrupts running session
@@ -133,7 +133,7 @@ No dedicated database tables - the environment core runs inside Docker container
 - `AdapterRegistry.create_adapter(config)` - Instantiate adapter from `SDKConfig`
 - `SDKConfig.from_env(mode)` - Parse adapter ID from environment variables
 
-**Claude Code**: `backend/app/env-templates/python-env-advanced/app/core/server/adapters/claude_code.py`
+**Claude Code**: `backend/app/env-templates/app_core_base/core/server/adapters/claude_code.py`
 
 - `ClaudeCodeAdapter.send_message_stream()` - Configures Claude SDK, converts messages to SDKEvent format
 - `ClaudeCodeAdapter.interrupt_session()` - Interrupts running Claude session

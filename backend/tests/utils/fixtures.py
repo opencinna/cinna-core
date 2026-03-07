@@ -20,7 +20,7 @@ from unittest.mock import patch, AsyncMock
 
 from app.core.config import settings
 from app.services.environment_service import EnvironmentService
-from app.services.environment_lifecycle import EnvironmentLifecycleManager
+from app.services.environment_lifecycle import EnvironmentLifecycleManager, APP_CORE_BASE_DIR_NAME
 from tests.stubs.environment_adapter_stub import EnvironmentTestAdapter
 from tests.stubs.socketio_stub import StubSocketIOConnector
 from tests.utils.ai_credential import create_random_ai_credential
@@ -175,6 +175,10 @@ def setup_environment_adapter(tmp_path_factory, *, persistent_adapter=False, ext
     (template_dir / "docker-compose.template.yml").write_text(
         "version: '3'\nservices:\n  agent:\n    image: test\n    ports:\n      - '${AGENT_PORT}:8000'\n"
     )
+
+    # Create shared app_core_base/core directory (used during rebuild)
+    app_core_base_dir = templates_dir / APP_CORE_BASE_DIR_NAME / "core"
+    app_core_base_dir.mkdir(parents=True)
 
     if extra_template_dirs:
         for d in extra_template_dirs:

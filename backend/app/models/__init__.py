@@ -319,6 +319,16 @@ from .mcp_session_meta import (
     MCPSessionMeta,
     MCPSessionMetaPublic,
 )
+from .agent_webapp_share import (
+    AgentWebappShare,
+    AgentWebappShareBase,
+    AgentWebappShareCreate,
+    AgentWebappShareUpdate,
+    AgentWebappSharePublic,
+    AgentWebappShareCreated,
+    AgentWebappSharesPublic,
+    WebappShareTokenPayload,
+)
 
 __all__ = [
     # Core
@@ -611,4 +621,13 @@ __all__ = [
     # MCP Session Meta
     "MCPSessionMeta",
     "MCPSessionMetaPublic",
+    # Agent Webapp Shares
+    "AgentWebappShare",
+    "AgentWebappShareBase",
+    "AgentWebappShareCreate",
+    "AgentWebappShareUpdate",
+    "AgentWebappSharePublic",
+    "AgentWebappShareCreated",
+    "AgentWebappSharesPublic",
+    "WebappShareTokenPayload",
 ]

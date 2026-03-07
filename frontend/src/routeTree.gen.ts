@@ -15,6 +15,7 @@ import { Route as RecoverPasswordRouteImport } from './routes/recover-password'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as LayoutRouteImport } from './routes/_layout'
 import { Route as LayoutIndexRouteImport } from './routes/_layout/index'
+import { Route as WebappWebappTokenRouteImport } from './routes/webapp/$webappToken'
 import { Route as OauthMcpConsentRouteImport } from './routes/oauth/mcp-consent'
 import { Route as GuestFileViewerRouteImport } from './routes/guest/file-viewer'
 import { Route as GuestGuestShareTokenRouteImport } from './routes/guest/$guestShareToken'
@@ -71,6 +72,11 @@ const LayoutIndexRoute = LayoutIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => LayoutRoute,
+} as any)
+const WebappWebappTokenRoute = WebappWebappTokenRouteImport.update({
+  id: '/webapp/$webappToken',
+  path: '/webapp/$webappToken',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const OauthMcpConsentRoute = OauthMcpConsentRouteImport.update({
   id: '/oauth/mcp-consent',
@@ -233,6 +239,7 @@ export interface FileRoutesByFullPath {
   '/guest/$guestShareToken': typeof GuestGuestShareTokenRoute
   '/guest/file-viewer': typeof GuestFileViewerRoute
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
+  '/webapp/$webappToken': typeof WebappWebappTokenRoute
   '/': typeof LayoutIndexRoute
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/admin/users': typeof LayoutAdminUsersRoute
@@ -266,6 +273,7 @@ export interface FileRoutesByTo {
   '/guest/$guestShareToken': typeof GuestGuestShareTokenRoute
   '/guest/file-viewer': typeof GuestFileViewerRoute
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
+  '/webapp/$webappToken': typeof WebappWebappTokenRoute
   '/': typeof LayoutIndexRoute
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/admin/users': typeof LayoutAdminUsersRoute
@@ -302,6 +310,7 @@ export interface FileRoutesById {
   '/guest/$guestShareToken': typeof GuestGuestShareTokenRoute
   '/guest/file-viewer': typeof GuestFileViewerRoute
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
+  '/webapp/$webappToken': typeof WebappWebappTokenRoute
   '/_layout/': typeof LayoutIndexRoute
   '/_layout/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/_layout/admin/users': typeof LayoutAdminUsersRoute
@@ -338,6 +347,7 @@ export interface FileRouteTypes {
     | '/guest/$guestShareToken'
     | '/guest/file-viewer'
     | '/oauth/mcp-consent'
+    | '/webapp/$webappToken'
     | '/'
     | '/admin/marketplaces'
     | '/admin/users'
@@ -371,6 +381,7 @@ export interface FileRouteTypes {
     | '/guest/$guestShareToken'
     | '/guest/file-viewer'
     | '/oauth/mcp-consent'
+    | '/webapp/$webappToken'
     | '/'
     | '/admin/marketplaces'
     | '/admin/users'
@@ -406,6 +417,7 @@ export interface FileRouteTypes {
     | '/guest/$guestShareToken'
     | '/guest/file-viewer'
     | '/oauth/mcp-consent'
+    | '/webapp/$webappToken'
     | '/_layout/'
     | '/_layout/admin/marketplaces'
     | '/_layout/admin/users'
@@ -434,6 +446,7 @@ export interface RootRouteChildren {
   GuestGuestShareTokenRoute: typeof GuestGuestShareTokenRoute
   GuestFileViewerRoute: typeof GuestFileViewerRoute
   OauthMcpConsentRoute: typeof OauthMcpConsentRoute
+  WebappWebappTokenRoute: typeof WebappWebappTokenRoute
   CredentialsOauthCallbackRoute: typeof CredentialsOauthCallbackRoute
 }
 
@@ -480,6 +493,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof LayoutIndexRouteImport
       parentRoute: typeof LayoutRoute
+    }
+    '/webapp/$webappToken': {
+      id: '/webapp/$webappToken'
+      path: '/webapp/$webappToken'
+      fullPath: '/webapp/$webappToken'
+      preLoaderRoute: typeof WebappWebappTokenRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/oauth/mcp-consent': {
       id: '/oauth/mcp-consent'
@@ -760,6 +780,7 @@ const rootRouteChildren: RootRouteChildren = {
   GuestGuestShareTokenRoute: GuestGuestShareTokenRoute,
   GuestFileViewerRoute: GuestFileViewerRoute,
   OauthMcpConsentRoute: OauthMcpConsentRoute,
+  WebappWebappTokenRoute: WebappWebappTokenRoute,
   CredentialsOauthCallbackRoute: CredentialsOauthCallbackRoute,
 }
 export const routeTree = rootRouteImport

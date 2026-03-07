@@ -16,9 +16,9 @@
 - `backend/app/api/routes/credentials.py` - Server-side SA JSON validation on `POST /credentials/` and `PUT /credentials/{id}`
 
 ### Agent Environment (Inside Container)
-- `backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py` - Writes standalone SA JSON files, handles orphan cleanup
-- `backend/app/env-templates/python-env-advanced/app/core/server/models.py` - `CredentialsUpdate.service_account_files: list[dict] | None`
-- `backend/app/env-templates/python-env-advanced/app/core/server/routes.py` - `POST /config/credentials` passes `service_account_files` to service
+- `backend/app/env-templates/app_core_base/core/server/agent_env_service.py` - Writes standalone SA JSON files, handles orphan cleanup
+- `backend/app/env-templates/app_core_base/core/server/models.py` - `CredentialsUpdate.service_account_files: list[dict] | None`
+- `backend/app/env-templates/app_core_base/core/server/routes.py` - `POST /config/credentials` passes `service_account_files` to service
 
 ### Frontend
 - `frontend/src/components/Credentials/CredentialFields/ServiceAccountFields.tsx` - SA JSON textarea + file upload + validation UI
@@ -41,7 +41,7 @@
 - `prepare_credentials_for_environment()` - Collects SA files into `service_account_files` list, replaces `credential_data` with processed file-path reference before field filtering
 - `generate_credentials_readme()` - Includes SA usage example with `from_service_account_file()` pattern
 
-### AgentEnvService (`backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py`)
+### AgentEnvService (`backend/app/env-templates/app_core_base/core/server/agent_env_service.py`)
 
 - `update_credentials()` - Accepts optional `service_account_files: list[dict]` parameter; writes each SA file as `credentials/{credential_id}.json`; reconciles orphaned `.json` files by comparing against current SA list
 
@@ -53,7 +53,7 @@
   - `PUT /api/v1/credentials/{id}` - Validates SA JSON via `validate_service_account_json()` before update; returns 422 on invalid
 
 ### Agent Environment Internal API
-- `backend/app/env-templates/python-env-advanced/app/core/server/routes.py`
+- `backend/app/env-templates/app_core_base/core/server/routes.py`
   - `POST /config/credentials` - Passes `service_account_files` through to `AgentEnvService.update_credentials()`
 
 ## Data Structures

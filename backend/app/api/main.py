@@ -35,9 +35,13 @@ from app.api.routes import (
     user_workspaces,
     utils,
     webhooks,
+    webapp,
+    webapp_public,
+    webapp_share,
     workspace,
 )
 from app.api.routes.guest_shares import guest_router as guest_share_auth_router
+from app.api.routes.webapp_share import public_router as webapp_share_public_router
 from app.core.config import settings
 
 api_router = APIRouter()
@@ -72,6 +76,10 @@ api_router.include_router(task_triggers.router, prefix="/tasks", tags=["task-tri
 api_router.include_router(webhooks.router, prefix="/hooks", tags=["webhooks"])
 api_router.include_router(mail_servers.router)
 api_router.include_router(email_integration.router)
+api_router.include_router(webapp.router)
+api_router.include_router(webapp_share.router)
+api_router.include_router(webapp_share_public_router)
+api_router.include_router(webapp_public.router)
 api_router.include_router(shared_workspace.router)
 api_router.include_router(a2a.router)
 api_router.include_router(mcp_connectors.router)

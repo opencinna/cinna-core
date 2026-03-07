@@ -58,11 +58,11 @@ The tool uses the same bearer token as other agent-env → backend calls:
 
 ## File References
 
-- **Tool implementation**: `backend/app/env-templates/python-env-advanced/app/core/server/tools/create_agent_task.py`
-- **Adapter registration**: `backend/app/env-templates/python-env-advanced/app/core/server/adapters/claude_code.py`
-- **Global session state + helpers**: `backend/app/env-templates/python-env-advanced/app/core/server/adapters/claude_code.py` (`get_current_sdk_session_id()`, `get_backend_session_id()`, `_sdk_session_lock`)
-- **Prompt injection**: `backend/app/env-templates/python-env-advanced/app/core/server/prompt_generator.py` — `_load_task_creation_prompt()`
-- **Config storage**: `backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py` — `get_agent_handover_config()`
+- **Tool implementation**: `backend/app/env-templates/app_core_base/core/server/tools/create_agent_task.py`
+- **Adapter registration**: `backend/app/env-templates/app_core_base/core/server/adapters/claude_code.py`
+- **Global session state + helpers**: `backend/app/env-templates/app_core_base/core/server/adapters/claude_code.py` (`get_current_sdk_session_id()`, `get_backend_session_id()`, `_sdk_session_lock`)
+- **Prompt injection**: `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` — `_load_task_creation_prompt()`
+- **Config storage**: `backend/app/env-templates/app_core_base/core/server/agent_env_service.py` — `get_agent_handover_config()`
 - **Runtime config file**: `{workspace}/docs/agent_handover_config.json`
 - **Backend endpoint**: `backend/app/api/routes/agents.py` — `POST /api/v1/agents/tasks/create`
 - **Pre-allowed list**: `backend/app/services/message_service.py`

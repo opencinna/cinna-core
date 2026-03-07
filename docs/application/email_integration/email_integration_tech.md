@@ -44,10 +44,10 @@
 - `backend/app/api/routes/input_tasks.py` — `POST /{id}/send-answer` endpoint
 
 ### Backend — Agent Environment
-- `backend/app/env-templates/python-env-advanced/app/core/server/active_session_manager.py` — Per-session HMAC-verified context store
-- `backend/app/env-templates/python-env-advanced/app/core/server/routes.py` — `GET /session/context?session_id=X`, `_store_session_context()` helper
-- `backend/app/env-templates/python-env-advanced/app/core/server/prompt_generator.py` — `build_session_context_section()` for system prompt injection
-- `backend/app/env-templates/python-env-advanced/app/core/scripts/get_session_context.py` — Stdlib-only CLI/import helper for agent scripts
+- `backend/app/env-templates/app_core_base/core/server/active_session_manager.py` — Per-session HMAC-verified context store
+- `backend/app/env-templates/app_core_base/core/server/routes.py` — `GET /session/context?session_id=X`, `_store_session_context()` helper
+- `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` — `build_session_context_section()` for system prompt injection
+- `backend/app/env-templates/app_core_base/core/scripts/get_session_context.py` — Stdlib-only CLI/import helper for agent scripts
 
 ### Frontend — Components
 - `frontend/src/components/UserSettings/MailServerSettings.tsx` — Mail server CRUD settings panel

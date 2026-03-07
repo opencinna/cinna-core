@@ -17,9 +17,9 @@
 - `backend/app/api/routes/agents.py` - Agent credential link/unlink with auto-sync
 
 ### Agent Environment (Inside Container)
-- `backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py` - Writes credential files to workspace
-- `backend/app/env-templates/python-env-advanced/app/core/server/routes.py` - POST /config/credentials endpoint
-- `backend/app/env-templates/python-env-advanced/app/core/server/prompt_generator.py` - Loads credentials README for prompt
+- `backend/app/env-templates/app_core_base/core/server/agent_env_service.py` - Writes credential files to workspace
+- `backend/app/env-templates/app_core_base/core/server/routes.py` - POST /config/credentials endpoint
+- `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` - Loads credentials README for prompt
 
 ### Frontend
 - `frontend/src/components/Agents/AgentCredentialsTab.tsx` - Link/unlink credentials to agents
@@ -77,7 +77,7 @@
   - `POST /api/v1/credentials/{credential_id}/oauth/refresh` - Manually trigger token refresh
 
 ### Agent Environment Internal API
-- `backend/app/env-templates/python-env-advanced/app/core/server/routes.py`
+- `backend/app/env-templates/app_core_base/core/server/routes.py`
   - `POST /config/credentials` - Receives credential data from backend, writes to workspace
 
 ## Services & Key Methods
@@ -104,11 +104,11 @@
 ### EnvironmentLifecycleManager (`backend/app/services/environment_lifecycle.py`)
 - `_sync_agent_data()` - Called after start/restart/rebuild, syncs prompts and credentials to container
 
-### AgentEnvService (`backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py`)
+### AgentEnvService (`backend/app/env-templates/app_core_base/core/server/agent_env_service.py`)
 - `update_credentials()` - Writes `credentials.json` and `README.md` to workspace/credentials/
 - `get_credentials_readme()` - Loads README content for inclusion in agent prompt
 
-### PromptGenerator (`backend/app/env-templates/python-env-advanced/app/core/server/prompt_generator.py`)
+### PromptGenerator (`backend/app/env-templates/app_core_base/core/server/prompt_generator.py`)
 - `_load_credentials_readme()` - Reads credentials README from workspace
 - `generate_building_mode_prompt()` - Includes credentials documentation in system prompt with security warnings
 

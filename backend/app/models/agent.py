@@ -52,6 +52,7 @@ class AgentUpdate(SQLModel):
     a2a_config: dict | None = None
     example_prompts: list[str] | None = None
     inactivity_period_limit: str | None = None
+    webapp_enabled: bool | None = None
     # Clone owners can update these
     update_mode: str | None = None  # "automatic" | "manual"
 
@@ -102,6 +103,7 @@ class Agent(AgentBase, table=True):
     a2a_config: dict = Field(default_factory=dict, sa_column=Column(JSON))  # A2A config: skills, version, generated_at
     example_prompts: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     inactivity_period_limit: str | None = Field(default=None)  # None="10min" | "2_days" | "1_week" | "1_month" | "always_on"
+    webapp_enabled: bool = Field(default=False)  # Whether webapp feature is active
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -158,6 +160,7 @@ class AgentPublic(SQLModel):
     a2a_config: dict | None = None
     example_prompts: list[str] = []
     inactivity_period_limit: str | None = None
+    webapp_enabled: bool = False
     created_at: datetime
     updated_at: datetime
     owner_id: uuid.UUID

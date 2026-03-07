@@ -15,7 +15,7 @@
 - `backend/app/services/credentials_service.py` - `sync_credentials_to_agent_environments()` - Sends filtered credentials to running containers
 
 ### Agent Environment (Inside Container)
-- `backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py` - `update_credentials()` writes filtered `credentials.json` and redacted `README.md` to workspace
+- `backend/app/env-templates/app_core_base/core/server/agent_env_service.py` - `update_credentials()` writes filtered `credentials.json` and redacted `README.md` to workspace
 
 ## Key Methods
 

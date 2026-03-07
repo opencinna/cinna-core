@@ -126,29 +126,31 @@ export function AgentEnvironmentsTab({ agentId }: AgentEnvironmentsTabProps) {
         <AddEnvironment agentId={agentId} />
       </div>
 
-      <div className="flex items-center gap-3">
-        <label
-          htmlFor="inactivity-period"
-          className="text-sm font-medium text-muted-foreground whitespace-nowrap"
-        >
-          Auto-suspend after inactivity
-        </label>
-        <Select
-          value={agentData?.inactivity_period_limit ?? "default"}
-          onValueChange={(value) => updateInactivityMutation.mutate(value)}
-          disabled={updateInactivityMutation.isPending}
-        >
-          <SelectTrigger id="inactivity-period" className="w-[200px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {INACTIVITY_OPTIONS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div className="flex items-center gap-6 flex-wrap">
+        <div className="flex items-center gap-3">
+          <label
+            htmlFor="inactivity-period"
+            className="text-sm font-medium text-muted-foreground whitespace-nowrap"
+          >
+            Auto-suspend after inactivity
+          </label>
+          <Select
+            value={agentData?.inactivity_period_limit ?? "default"}
+            onValueChange={(value) => updateInactivityMutation.mutate(value)}
+            disabled={updateInactivityMutation.isPending}
+          >
+            <SelectTrigger id="inactivity-period" className="w-[200px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {INACTIVITY_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {environments.length === 0 ? (

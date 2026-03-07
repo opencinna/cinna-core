@@ -20,10 +20,10 @@
 
 ### Agent-Env (inside Docker container)
 
-- **Routes:** `backend/app/env-templates/python-env-advanced/app/core/server/routes.py` - `/files/upload` endpoint
-- **Service:** `backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py` - `sanitize_filename()`, `resolve_filename_conflict()`, `get_workspace_tree()`
-- **Models:** `backend/app/env-templates/python-env-advanced/app/core/server/models.py` - FileUploadResponse, WorkspaceTreeResponse
-- **Prompts:** `backend/app/env-templates/python-env-advanced/app/core/server/prompt_generator.py` - `_get_environment_context()` adds upload path info to prompts
+- **Routes:** `backend/app/env-templates/app_core_base/core/server/routes.py` - `/files/upload` endpoint
+- **Service:** `backend/app/env-templates/app_core_base/core/server/agent_env_service.py` - `sanitize_filename()`, `resolve_filename_conflict()`, `get_workspace_tree()`
+- **Models:** `backend/app/env-templates/app_core_base/core/server/models.py` - FileUploadResponse, WorkspaceTreeResponse
+- **Prompts:** `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` - `_get_environment_context()` adds upload path info to prompts
 
 ### Frontend
 
@@ -112,7 +112,7 @@
 
 - `upload_file_to_agent_env()` - Async HTTP POST with file content to agent-env `/files/upload`
 
-### Agent-Env Service - `backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py`
+### Agent-Env Service - `backend/app/env-templates/app_core_base/core/server/agent_env_service.py`
 
 - `sanitize_filename()` - Strip dangerous characters, normalize unicode
 - `resolve_filename_conflict()` - Append `_1`, `_2` if file exists

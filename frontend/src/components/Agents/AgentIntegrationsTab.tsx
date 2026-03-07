@@ -18,6 +18,7 @@ import { AccessTokensCard } from "./AccessTokensCard"
 import { EmailIntegrationCard } from "./EmailIntegrationCard"
 import { GuestShareCard } from "./GuestShareCard"
 import { McpConnectorsCard } from "./McpConnectorsCard"
+import { WebappShareCard } from "./WebappShareCard"
 
 interface AgentIntegrationsTabProps {
   agent: AgentPublic
@@ -144,6 +145,9 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
 
         {/* MCP Connectors Card */}
         <McpConnectorsCard agentId={agent.id} />
+
+        {/* Webapp Share Links Card */}
+        <WebappShareCard agentId={agent.id} webappEnabled={agent.webapp_enabled ?? false} />
 
         {/* Email Integration Card - Half width, only for non-clone agents */}
         {!agent.is_clone && (

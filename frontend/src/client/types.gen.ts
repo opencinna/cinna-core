@@ -400,6 +400,7 @@ export type AgentPublic = {
 } | null);
     example_prompts?: Array<(string)>;
     inactivity_period_limit?: (string | null);
+    webapp_enabled?: boolean;
     created_at: string;
     updated_at: string;
     owner_id: string;
@@ -505,7 +506,60 @@ export type AgentUpdate = {
 } | null);
     example_prompts?: (Array<(string)> | null);
     inactivity_period_limit?: (string | null);
+    webapp_enabled?: (boolean | null);
     update_mode?: (string | null);
+};
+
+export type AgentWebappShareCreate = {
+    label?: (string | null);
+    expires_in_hours?: (number | null);
+    allow_data_api?: boolean;
+    require_security_code?: boolean;
+};
+
+/**
+ * Returned only on creation - includes the actual token and share URL.
+ */
+export type AgentWebappShareCreated = {
+    id: string;
+    agent_id: string;
+    label: (string | null);
+    token_prefix: string;
+    is_active: boolean;
+    allow_data_api: boolean;
+    expires_at: (string | null);
+    created_at: string;
+    share_url: string;
+    security_code?: (string | null);
+    is_code_blocked?: boolean;
+    token: string;
+};
+
+export type AgentWebappSharePublic = {
+    id: string;
+    agent_id: string;
+    label: (string | null);
+    token_prefix: string;
+    is_active: boolean;
+    allow_data_api: boolean;
+    expires_at: (string | null);
+    created_at: string;
+    share_url?: (string | null);
+    security_code?: (string | null);
+    is_code_blocked?: boolean;
+};
+
+export type AgentWebappSharesPublic = {
+    data: Array<AgentWebappSharePublic>;
+    count: number;
+};
+
+export type AgentWebappShareUpdate = {
+    label?: (string | null);
+    is_active?: (boolean | null);
+    allow_data_api?: (boolean | null);
+    security_code?: (string | null);
+    remove_security_code?: (boolean | null);
 };
 
 /**
@@ -2128,6 +2182,17 @@ export type ValidationError = {
     type: string;
 };
 
+export type WebappDataApiRequest = {
+    params?: {
+        [key: string]: unknown;
+    };
+    timeout?: number;
+};
+
+export type WebappShareAuthRequest = {
+    security_code?: (string | null);
+};
+
 /**
  * Type of workspace access for a knowledge source.
  */
@@ -3647,6 +3712,95 @@ export type UtilsRefinePromptData = {
 };
 
 export type UtilsRefinePromptResponse = (RefinePromptResponse);
+
+export type WebappGetWebappStatusData = {
+    agentId: string;
+};
+
+export type WebappGetWebappStatusResponse = (unknown);
+
+export type WebappWebappDataApiData = {
+    agentId: string;
+    endpoint: string;
+    requestBody?: (WebappDataApiRequest | null);
+};
+
+export type WebappWebappDataApiResponse = (unknown);
+
+export type WebappServeWebappFileData = {
+    agentId: string;
+    path: string;
+};
+
+export type WebappServeWebappFileResponse = (unknown);
+
+export type WebappPublicWebappStatusData = {
+    token: string;
+};
+
+export type WebappPublicWebappStatusResponse = (unknown);
+
+export type WebappPublicWebappPublicDataApiGetData = {
+    endpoint: string;
+    token: string;
+};
+
+export type WebappPublicWebappPublicDataApiGetResponse = (unknown);
+
+export type WebappPublicWebappPublicDataApiData = {
+    endpoint: string;
+    token: string;
+};
+
+export type WebappPublicWebappPublicDataApiResponse = (unknown);
+
+export type WebappPublicServeWebappPublicData = {
+    path: string;
+    token: string;
+};
+
+export type WebappPublicServeWebappPublicResponse = (unknown);
+
+export type WebappShareWebappShareInfoData = {
+    token: string;
+};
+
+export type WebappShareWebappShareInfoResponse = (unknown);
+
+export type WebappShareWebappShareAuthenticateData = {
+    requestBody?: (WebappShareAuthRequest | null);
+    token: string;
+};
+
+export type WebappShareWebappShareAuthenticateResponse = (unknown);
+
+export type WebappSharesCreateWebappShareData = {
+    agentId: string;
+    requestBody: AgentWebappShareCreate;
+};
+
+export type WebappSharesCreateWebappShareResponse = (AgentWebappShareCreated);
+
+export type WebappSharesListWebappSharesData = {
+    agentId: string;
+};
+
+export type WebappSharesListWebappSharesResponse = (AgentWebappSharesPublic);
+
+export type WebappSharesUpdateWebappShareData = {
+    agentId: string;
+    requestBody: AgentWebappShareUpdate;
+    shareId: string;
+};
+
+export type WebappSharesUpdateWebappShareResponse = (AgentWebappSharePublic);
+
+export type WebappSharesDeleteWebappShareData = {
+    agentId: string;
+    shareId: string;
+};
+
+export type WebappSharesDeleteWebappShareResponse = (Message);
 
 export type WebhooksExecuteWebhookData = {
     authorization?: (string | null);

@@ -61,34 +61,38 @@ This mirrors the existing `workspace_requirements.txt` pattern for Python packag
 
 ## Template Architecture
 
-Both templates share identical structure:
+Core server code is maintained in a single shared location and overlaid onto each template during environment creation and rebuild:
 
 ```
-backend/app/env-templates/<template-name>/
-├── Dockerfile                    # Only difference: FROM image
-├── docker-compose.template.yml   # Only difference: image name
-├── pyproject.toml                # Same Python dependencies
-├── uv.lock                       # Same lock file
-└── app/
-    ├── core/                     # Same server code
-    │   ├── server/               # FastAPI server, SDK adapters
-    │   └── scripts/              # Helper scripts
-    └── workspace/                # Same workspace template
-        ├── scripts/
-        ├── files/
-        ├── docs/
-        ├── credentials/
-        ├── databases/
-        ├── knowledge/
-        ├── logs/
-        └── workspace_requirements.txt
+backend/app/env-templates/
+├── app_core_base/                # Shared across ALL templates
+│   └── core/                     # FastAPI server, SDK adapters, prompts, tools
+│       ├── server/               # HTTP API, SDK manager, adapters
+│       ├── prompts/              # BUILDING_AGENT.md, WEBAPP_BUILDING.md
+│       └── scripts/              # Helper scripts
+│
+├── python-env-advanced/          # Template-specific files only
+│   ├── Dockerfile                # FROM python:3.11-slim
+│   ├── docker-compose.template.yml
+│   ├── pyproject.toml
+│   ├── uv.lock
+│   └── app/
+│       └── workspace/            # Workspace template
+│
+└── general-env/                  # Template-specific files only
+    ├── Dockerfile                # FROM python:3.11-bookworm
+    ├── docker-compose.template.yml
+    ├── pyproject.toml
+    ├── uv.lock
+    └── app/
+        └── workspace/            # Workspace template
 ```
 
 The only differences between templates are:
 1. **Dockerfile `FROM` line**: `python:3.11-slim` vs `python:3.11-bookworm`
 2. **Docker image name**: `agent-python-env-advanced` vs `agent-general-env`
 
-All core server code (`app/core/`), Python dependencies, workspace structure, and docker-compose configuration are identical.
+All core server code (`app/core/`) is shared via `app_core_base` — changes to routes, models, adapters, or prompts apply to all templates automatically.
 
 ## Template Selection
 

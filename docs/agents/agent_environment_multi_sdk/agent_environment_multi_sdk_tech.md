@@ -27,10 +27,10 @@
 - `frontend/src/client/` (auto-generated OpenAPI types and service classes)
 
 **Agent Environment (inside container):**
-- `backend/app/env-templates/python-env-advanced/app/core/server/sdk_manager.py`
-- `backend/app/env-templates/python-env-advanced/app/core/server/adapters/base.py`
-- `backend/app/env-templates/python-env-advanced/app/core/server/adapters/claude_code.py`
-- `backend/app/env-templates/python-env-advanced/app/core/server/adapters/google_adk.py`
+- `backend/app/env-templates/app_core_base/core/server/sdk_manager.py`
+- `backend/app/env-templates/app_core_base/core/server/adapters/base.py`
+- `backend/app/env-templates/app_core_base/core/server/adapters/claude_code.py`
+- `backend/app/env-templates/app_core_base/core/server/adapters/google_adk.py`
 
 ## Database Schema
 

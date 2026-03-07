@@ -29,6 +29,9 @@ REBUILD_OVERWRITE_FILES = [
     "docker-compose.template.yml",
 ]
 
+# Shared app/core directory used by all environment templates
+APP_CORE_BASE_DIR_NAME = "app_core_base"
+
 
 class EnvironmentLifecycleManager:
     """
@@ -784,12 +787,12 @@ class EnvironmentLifecycleManager:
             # Get adapter
             adapter = self.get_adapter(environment)
 
-            # Get template core directory
+            # Get template directory and shared core directory
             template_dir = self.templates_dir / environment.env_name
-            template_core_dir = template_dir / "app" / "core"
+            template_core_dir = self.templates_dir / APP_CORE_BASE_DIR_NAME / "core"
 
             if not template_core_dir.exists():
-                raise FileNotFoundError(f"Template core directory not found: {template_core_dir}")
+                raise FileNotFoundError(f"Shared app_core_base directory not found: {template_core_dir}")
 
             # Get instance directory
             instance_dir = self.instances_dir / str(environment.id)
@@ -1052,11 +1055,14 @@ class EnvironmentLifecycleManager:
     # === Helper Methods ===
 
     async def _copy_template(self, template_dir: Path, instance_dir: Path):
-        """Copy template files to instance directory."""
+        """Copy template files to instance directory, then overlay shared app/core."""
         logger.debug(f"Copying template from {template_dir} to {instance_dir}")
+
+        app_core_base_dir = self.templates_dir / APP_CORE_BASE_DIR_NAME
 
         def _copy_sync():
             """Synchronous copy operation to run in thread pool."""
+            # 1. Copy template-specific files
             for item in template_dir.iterdir():
                 if item.name.startswith('.'):
                     logger.debug(f"Skipping hidden file: {item.name}")
@@ -1068,6 +1074,18 @@ class EnvironmentLifecycleManager:
                     shutil.copytree(item, dest, dirs_exist_ok=True)
                 else:
                     shutil.copy2(item, dest)
+
+            # 2. Overlay shared app/core from app_core_base
+            if app_core_base_dir.exists():
+                instance_app_core = instance_dir / "app" / "core"
+                shutil.copytree(
+                    app_core_base_dir / "core",
+                    instance_app_core,
+                    dirs_exist_ok=True,
+                )
+                logger.debug(f"Overlaid shared app/core from {app_core_base_dir}")
+            else:
+                logger.warning(f"Shared app_core_base not found at {app_core_base_dir}")
 
         # Run blocking I/O operation in thread pool executor
         await asyncio.to_thread(_copy_sync)
@@ -1600,6 +1618,7 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
             "app/workspace/uploads",
             "app/workspace/credentials",
             "app/workspace/plugins",
+            "app/workspace/webapp",
         ]
 
         # Single files to copy

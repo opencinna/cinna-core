@@ -8,6 +8,7 @@
 - `backend/app/services/commands/files_command.py` — `/files` and `/files-all` handlers
 - `backend/app/services/commands/session_recover_command.py` — `/session-recover` handler
 - `backend/app/services/commands/session_reset_command.py` — `/session-reset` handler
+- `backend/app/services/commands/webapp_command.py` — `/webapp` handler
 
 ### Backend — Integration Points
 - `backend/app/services/session_service.py` — `send_session_message()` — command detection at Phase 1.5, between session validation and file handling; takes optional `backend_base_url` param for A2A callers

@@ -2751,6 +2751,11 @@ export const AgentPublicSchema = {
             ],
             title: 'Inactivity Period Limit'
         },
+        webapp_enabled: {
+            type: 'boolean',
+            title: 'Webapp Enabled',
+            default: false
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -3257,6 +3262,17 @@ export const AgentUpdateSchema = {
             ],
             title: 'Inactivity Period Limit'
         },
+        webapp_enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Webapp Enabled'
+        },
         update_mode: {
             anyOf: [
                 {
@@ -3271,6 +3287,299 @@ export const AgentUpdateSchema = {
     },
     type: 'object',
     title: 'AgentUpdate'
+} as const;
+
+export const AgentWebappShareCreateSchema = {
+    properties: {
+        label: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        expires_in_hours: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    maximum: 8760,
+                    minimum: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires In Hours'
+        },
+        allow_data_api: {
+            type: 'boolean',
+            title: 'Allow Data Api',
+            default: true
+        },
+        require_security_code: {
+            type: 'boolean',
+            title: 'Require Security Code',
+            default: false
+        }
+    },
+    type: 'object',
+    title: 'AgentWebappShareCreate'
+} as const;
+
+export const AgentWebappShareCreatedSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        token_prefix: {
+            type: 'string',
+            title: 'Token Prefix'
+        },
+        is_active: {
+            type: 'boolean',
+            title: 'Is Active'
+        },
+        allow_data_api: {
+            type: 'boolean',
+            title: 'Allow Data Api'
+        },
+        expires_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires At'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        share_url: {
+            type: 'string',
+            title: 'Share Url'
+        },
+        security_code: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Security Code'
+        },
+        is_code_blocked: {
+            type: 'boolean',
+            title: 'Is Code Blocked',
+            default: false
+        },
+        token: {
+            type: 'string',
+            title: 'Token'
+        }
+    },
+    type: 'object',
+    required: ['id', 'agent_id', 'label', 'token_prefix', 'is_active', 'allow_data_api', 'expires_at', 'created_at', 'share_url', 'token'],
+    title: 'AgentWebappShareCreated',
+    description: 'Returned only on creation - includes the actual token and share URL.'
+} as const;
+
+export const AgentWebappSharePublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        token_prefix: {
+            type: 'string',
+            title: 'Token Prefix'
+        },
+        is_active: {
+            type: 'boolean',
+            title: 'Is Active'
+        },
+        allow_data_api: {
+            type: 'boolean',
+            title: 'Allow Data Api'
+        },
+        expires_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires At'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        share_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Share Url'
+        },
+        security_code: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Security Code'
+        },
+        is_code_blocked: {
+            type: 'boolean',
+            title: 'Is Code Blocked',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['id', 'agent_id', 'label', 'token_prefix', 'is_active', 'allow_data_api', 'expires_at', 'created_at'],
+    title: 'AgentWebappSharePublic'
+} as const;
+
+export const AgentWebappShareUpdateSchema = {
+    properties: {
+        label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        is_active: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Is Active'
+        },
+        allow_data_api: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Allow Data Api'
+        },
+        security_code: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 4,
+                    minLength: 4
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Security Code'
+        },
+        remove_security_code: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Remove Security Code'
+        }
+    },
+    type: 'object',
+    title: 'AgentWebappShareUpdate'
+} as const;
+
+export const AgentWebappSharesPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentWebappSharePublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AgentWebappSharesPublic'
 } as const;
 
 export const AgentsPublicSchema = {
@@ -10122,6 +10431,42 @@ export const ValidationErrorSchema = {
     type: 'object',
     required: ['loc', 'msg', 'type'],
     title: 'ValidationError'
+} as const;
+
+export const WebappDataApiRequestSchema = {
+    properties: {
+        params: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Params',
+            default: {}
+        },
+        timeout: {
+            type: 'integer',
+            title: 'Timeout',
+            default: 60
+        }
+    },
+    type: 'object',
+    title: 'WebappDataApiRequest'
+} as const;
+
+export const WebappShareAuthRequestSchema = {
+    properties: {
+        security_code: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Security Code'
+        }
+    },
+    type: 'object',
+    title: 'WebappShareAuthRequest'
 } as const;
 
 export const WorkspaceAccessTypeSchema = {

@@ -4,27 +4,31 @@
 
 ### Environment Templates (source of truth)
 
+- `backend/app/env-templates/app_core_base/` - **Shared core** — single source of truth for `app/core/` across all templates
 - `backend/app/env-templates/python-env-advanced/` - Python template (lightweight, `python:3.11-slim`)
 - `backend/app/env-templates/general-env/` - General purpose template (full Debian, `python:3.11-bookworm`)
 
-Both templates share identical structure:
+**Shared core** (`backend/app/env-templates/app_core_base/core/`):
+- `server/routes.py` - HTTP endpoints, `_store_session_context()` helper, webapp endpoints
+- `server/models.py` - Pydantic request/response models
+- `server/sdk_manager.py` - Multi-adapter SDK orchestration
+- `server/prompt_generator.py` - System prompt generation for building/conversation modes
+- `server/agent_env_service.py` - Business logic for workspace file operations
+- `server/sdk_utils.py` - Logging, debugging, message formatting
+- `server/active_session_manager.py` - Session tracking, HMAC-verified per-session context store
+- `server/adapters/base.py` - `SDKEvent`, `SDKConfig`, `BaseSDKAdapter`, `AdapterRegistry`
+- `server/adapters/claude_code.py` - `ClaudeCodeAdapter` for `claude-code/*` variants
+- `server/adapters/google_adk.py` - `GoogleADKAdapter` placeholder for `google-adk-wr/*`
+- `scripts/get_session_context.py` - Stdlib-only helper for agent scripts to query session context
+- `prompts/BUILDING_AGENT.md` - Building mode system prompt
+- `prompts/WEBAPP_BUILDING.md` - Webapp building instructions (read by agent on demand)
+- `main.py` - FastAPI entry point
+
+**Per-template files** (template-specific, NOT shared):
 - `backend/app/env-templates/<template-name>/` - Template root <!-- nocheck -->
-  - `app/core/` - System code baked into Docker image
-    - `server/main.py` - FastAPI entry point
-    - `server/routes.py` - HTTP endpoints, `_store_session_context()` helper
-    - `server/models.py` - Pydantic request/response models
-    - `server/sdk_manager.py` - Multi-adapter SDK orchestration
-    - `server/prompt_generator.py` - System prompt generation for building/conversation modes
-    - `server/agent_env_service.py` - Business logic for workspace file operations
-    - `server/sdk_utils.py` - Logging, debugging, message formatting
-    - `server/active_session_manager.py` - Session tracking, HMAC-verified per-session context store
-    - `server/adapters/base.py` - `SDKEvent`, `SDKConfig`, `BaseSDKAdapter`, `AdapterRegistry`
-    - `server/adapters/claude_code.py` - `ClaudeCodeAdapter` for `claude-code/*` variants
-    - `server/adapters/google_adk.py` - `GoogleADKAdapter` placeholder for `google-adk-wr/*`
-  - `app/core/scripts/get_session_context.py` - Stdlib-only helper for agent scripts to query session context
   - `app/workspace/` - Workspace template (scripts/, files/, docs/, credentials/, databases/, knowledge/, logs/)
   - `app/BUILDING_AGENT_EXAMPLE.md` - Template for building mode prompt
-  - `Dockerfile` - Image definition
+  - `Dockerfile` - Image definition (different base image per template)
   - `docker-compose.template.yml` - Container configuration template
   - `pyproject.toml` - Python dependencies (system-level)
 
@@ -120,12 +124,12 @@ Relevant field:
 
 ### EnvironmentLifecycleManager (`backend/app/services/environment_lifecycle.py`)
 
-- `create_environment_instance()` - Copy template, generate configs, build Docker image
+- `create_environment_instance()` - Copy template + shared core, generate configs, build Docker image
 - `start_environment()` - UP operation with smart container detection (new vs existing)
 - `stop_environment()` - STOP operation, keep container
 - `suspend_environment()` - STOP operation with `suspended` status
 - `activate_suspended_environment()` - UP operation optimized for existing containers
-- `rebuild_environment()` - DOWN → build → UP with full setup
+- `rebuild_environment()` - DOWN → build → UP with full setup; core replaced from shared `app_core_base`
 - `delete_environment_instance()` - DOWN operation with volume cleanup
 - `_container_exists()` - Check if Docker container exists (stopped or running)
 - `_sync_dynamic_data()` - Sync prompts and credentials to running environment
@@ -247,7 +251,7 @@ Each template has its own Dockerfile and docker-compose template. Both share the
 - Installs system deps (curl, git, Node.js for Claude Code)
 - Installs uv package manager and Claude Code CLI globally
 - Copies `pyproject.toml`, installs template dependencies
-- Copies `app/core` into image
+- Copies `app/core` into image (sourced from shared `app_core_base` at instance creation)
 - CMD: `fastapi run core/main.py`
 
 **docker-compose.template.yml** (`backend/app/env-templates/<template>/docker-compose.template.yml`): <!-- nocheck -->
@@ -259,6 +263,13 @@ Each template has its own Dockerfile and docker-compose template. Both share the
 
 Infrastructure files overwritten from template during rebuild (defined in `REBUILD_OVERWRITE_FILES`):
 - `uv.lock`, `pyproject.toml`, `Dockerfile`, `docker-compose.template.yml`
+
+### Shared Core Directory
+
+The `app/core/` directory is maintained in a single shared location (`backend/app/env-templates/app_core_base/core/`) and is:
+- Copied into environment instances during creation (overlaid after template-specific files)
+- Used as the source during rebuild (replaces the instance's `app/core/` entirely)
+- Defined by `APP_CORE_BASE_DIR_NAME` constant in `backend/app/services/environment_lifecycle.py`
 
 ### Agent-Level Settings
 

@@ -21,8 +21,8 @@
 
 ### Agent-Env Internal (inside Docker container)
 
-- `backend/app/env-templates/python-env-advanced/app/core/server/routes.py` - Config HTTP endpoints
-- `backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py` - Workspace file operations
+- `backend/app/env-templates/app_core_base/core/server/routes.py` - Config HTTP endpoints
+- `backend/app/env-templates/app_core_base/core/server/agent_env_service.py` - Workspace file operations
 
 ### Configuration
 

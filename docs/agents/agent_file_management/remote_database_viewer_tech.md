@@ -4,9 +4,9 @@
 
 ### Agent-Env (inside Docker container)
 
-- **Routes:** `backend/app/env-templates/python-env-advanced/app/core/server/routes.py` - `/database/tables/{path}`, `/database/schema/{path}`, `/database/query`
-- **Service:** `backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py` - SQLite query execution, schema introspection
-- **Models:** `backend/app/env-templates/python-env-advanced/app/core/server/models.py` - SQLite data models
+- **Routes:** `backend/app/env-templates/app_core_base/core/server/routes.py` - `/database/tables/{path}`, `/database/schema/{path}`, `/database/query`
+- **Service:** `backend/app/env-templates/app_core_base/core/server/agent_env_service.py` - SQLite query execution, schema introspection
+- **Models:** `backend/app/env-templates/app_core_base/core/server/models.py` - SQLite data models
 
 ### Backend
 
@@ -25,7 +25,7 @@
 
 ## API Endpoints
 
-### Agent-Env Endpoints - `backend/app/env-templates/python-env-advanced/app/core/server/routes.py`
+### Agent-Env Endpoints - `backend/app/env-templates/app_core_base/core/server/routes.py`
 
 - `GET /database/tables/{path}` - List table/view names (lightweight)
 - `GET /database/schema/{path}` - Full schema with columns and types
@@ -39,7 +39,7 @@
 
 ## Services & Key Methods
 
-### Agent-Env Service - `backend/app/env-templates/python-env-advanced/app/core/server/agent_env_service.py`
+### Agent-Env Service - `backend/app/env-templates/app_core_base/core/server/agent_env_service.py`
 
 - `is_sqlite_file(filename)` - Check if file has SQLite extension
 - `get_database_tables(path)` - Return list of table/view names
@@ -68,7 +68,7 @@
 
 ## Data Models
 
-### Agent-Env Models - `backend/app/env-templates/python-env-advanced/app/core/server/models.py`
+### Agent-Env Models - `backend/app/env-templates/app_core_base/core/server/models.py`
 
 - `SQLiteColumnInfo` - Column metadata: name, type, nullable, primary_key
 - `SQLiteTableInfo` - Table/view with columns list

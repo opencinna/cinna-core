@@ -24,6 +24,7 @@ def patch_create_session(db):
     with patched_create_sessions(db, CREATE_SESSION_TARGETS_AGENT + [
         "app.services.commands.session_recover_command.create_db_session",
         "app.services.commands.session_reset_command.create_db_session",
+        "app.services.commands.webapp_command.create_session",
     ]):
         yield
 

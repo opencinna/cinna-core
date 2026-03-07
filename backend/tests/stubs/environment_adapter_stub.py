@@ -203,3 +203,36 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
 
     async def install_system_packages(self) -> bool:
         return True
+
+    # --- Webapp ---
+
+    webapp_has_index: bool = True
+
+    async def get_webapp_status(self) -> dict:
+        return {
+            "exists": self.webapp_has_index,
+            "total_size_bytes": 1024 if self.webapp_has_index else 0,
+            "file_count": 3 if self.webapp_has_index else 0,
+            "has_index": self.webapp_has_index,
+            "api_endpoints": ["get_data"] if self.webapp_has_index else [],
+        }
+
+    async def get_webapp_file(
+        self,
+        path: str,
+        request_headers: dict | None = None,
+    ) -> tuple[int, dict, bytes]:
+        if not self.webapp_has_index and path == "index.html":
+            return 404, {"content-type": "application/json"}, b'{"detail":"File not found: index.html"}'
+        if path == "index.html":
+            return 200, {"content-type": "text/html", "cache-control": "no-cache"}, b"<html>Hello</html>"
+        return 200, {"content-type": "application/octet-stream", "cache-control": "no-cache"}, b"file content"
+
+    async def call_webapp_api(
+        self,
+        endpoint: str,
+        params: dict | None = None,
+        timeout: int = 60,
+    ) -> tuple[int, bytes]:
+        import json
+        return 200, json.dumps({"result": "ok", "endpoint": endpoint}).encode()

@@ -47,6 +47,8 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | **A2A** | Agent-to-Agent protocol for cross-platform agent communication |
 | **MCP** | Model Context Protocol - exposes agents as tool servers to external LLM clients |
 | **MCP Connector** | Configuration that connects an agent environment to an external MCP server |
+| **Agent Webapp** | Lightweight data dashboard (HTML/CSS/JS) served from an agent's workspace via shareable URLs |
+| **Webapp Share** | Token-based public access to an agent's webapp for unauthenticated viewers |
 
 ---
 
@@ -54,7 +56,7 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 
 | Domain | Description | Features |
 |--------|-------------|----------|
-| [agents](#agents) | Core agent lifecycle - creation, configuration, environments, sessions, chat, file management | 10 features |
+| [agents](#agents) | Core agent lifecycle - creation, configuration, environments, sessions, chat, file management | 11 features |
 | [tasks](#tasks) | Task submission, refinement, triggers, and scheduling | 3 features |
 | [credentials](#credentials) | Credential management, encryption, AI provider keys | 1 feature |
 | [application](#application) | User-facing platform features - authentication, integrations, real-time events, workspaces | 15 features |
@@ -80,6 +82,7 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | agent_environment_data_management | Environment data flow, cloning, syncing operations | [business logic](agents/agent_environment_data_management/agent_environment_data_management.md) \| [tech](agents/agent_environment_data_management/agent_environment_data_management_tech.md) |
 | agent_credentials | Credential syncing to agent environments, whitelisting, redaction, OAuth refresh | [business logic](agents/agent_credentials/agent_credentials.md) \| [tech](agents/agent_credentials/agent_credentials_tech.md) \| [oauth](agents/agent_credentials/oauth_credentials.md) \| [whitelist](agents/agent_credentials/credentials_whitelist.md) \| [google SA](agents/agent_credentials/google_service_account.md) \| [sharing](agents/agent_credentials/credential_sharing.md) |
 | agent_file_management | File upload/download, workspace file viewing, storage quota, garbage collection | [business logic](agents/agent_file_management/agent_file_management.md) \| [tech](agents/agent_file_management/agent_file_management_tech.md) \| [remote db viewer](agents/agent_file_management/remote_database_viewer.md) |
+| agent_webapp | Lightweight data dashboards served from agent workspace via shareable URLs, with dynamic Python data endpoints | [business logic](agents/agent_webapp/agent_webapp.md) \| [tech](agents/agent_webapp/agent_webapp_tech.md) |
 
 ### tasks
 

@@ -1,4 +1,4 @@
-import { FileText, FileCode, ScrollText, BookOpen, Upload, ChevronDown, Maximize2, Minimize2, KeyRound } from "lucide-react"
+import { FileText, FileCode, ScrollText, BookOpen, Upload, ChevronDown, Maximize2, Minimize2, KeyRound, Globe, ExternalLink } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -14,6 +14,8 @@ interface TabHeaderProps {
   isWidePanelMode: boolean
   onToggleWidePanel: () => void
   hideCredentials?: boolean
+  webappUrl?: string | null
+  hasWebapp?: boolean
 }
 
 const TAB_LABELS: Record<string, string> = {
@@ -22,10 +24,11 @@ const TAB_LABELS: Record<string, string> = {
   logs: "Logs",
   docs: "Docs",
   uploads: "Uploads",
-  credentials: "Credentials"
+  credentials: "Credentials",
+  webapp: "Web App",
 }
 
-export function TabHeader({ activeTab, onTabChange, isWidePanelMode, onToggleWidePanel, hideCredentials }: TabHeaderProps) {
+export function TabHeader({ activeTab, onTabChange, isWidePanelMode, onToggleWidePanel, hideCredentials, webappUrl, hasWebapp }: TabHeaderProps) {
   const menuLabel = TAB_LABELS[activeTab] || "Files"
 
   return (
@@ -69,6 +72,22 @@ export function TabHeader({ activeTab, onTabChange, isWidePanelMode, onToggleWid
                 <DropdownMenuItem onClick={() => onTabChange("credentials")}>
                   <KeyRound className="h-4 w-4 mr-2" />
                   Credentials
+                </DropdownMenuItem>
+              </>
+            )}
+            {hasWebapp && (
+              <DropdownMenuItem onClick={() => onTabChange("webapp")}>
+                <Globe className="h-4 w-4 mr-2" />
+                Web App Files
+              </DropdownMenuItem>
+            )}
+            {webappUrl && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => window.open(webappUrl, "_blank")}>
+                  <Globe className="h-4 w-4 mr-2" />
+                  Open Web App
+                  <ExternalLink className="h-3 w-3 ml-auto opacity-50" />
                 </DropdownMenuItem>
               </>
             )}

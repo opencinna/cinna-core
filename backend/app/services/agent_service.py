@@ -248,14 +248,43 @@ class AgentService:
         Delete agent and cleanup all associated resources.
 
         Steps:
-        1. Get all environments for the agent
-        2. Delete each environment (stops containers, cleans up Docker resources)
+        1. Handle clone relationships (detach clones or update share records)
+        2. Get all environments for the agent
+        3. Delete each environment (stops containers, cleans up Docker resources)
            - EnvironmentService.delete_environment handles clearing active_environment_id
-        3. Delete agent (DB cascades will handle sessions/messages)
+        4. Delete agent (DB cascades will handle sessions/messages)
         """
+        from app.models import AgentShare
+
         agent = session.get(Agent, agent_id)
         if not agent:
             return False
+
+        # If this agent is a clone, update the share record status to 'deleted'
+        if agent.is_clone:
+            stmt = select(AgentShare).where(AgentShare.cloned_agent_id == agent_id)
+            share = session.exec(stmt).first()
+            if share:
+                share.status = "deleted"
+                share.cloned_agent_id = None
+                session.add(share)
+                logger.info(f"Updated share {share.id} status to 'deleted' for deleted clone {agent_id}")
+                session.commit()
+
+        # If this agent has clones (is a parent), detach them first
+        if not agent.is_clone:
+            stmt = select(Agent).where(Agent.parent_agent_id == agent_id)
+            clones = session.exec(stmt).all()
+            for clone in clones:
+                clone.is_clone = False
+                clone.parent_agent_id = None
+                clone.clone_mode = None
+                clone.pending_update = False
+                clone.pending_update_at = None
+                session.add(clone)
+                logger.info(f"Detached clone {clone.id} from deleted parent {agent_id}")
+            if clones:
+                session.commit()
 
         # Get all environments for this agent
         environments = EnvironmentService.list_agent_environments(session, agent_id)
@@ -266,8 +295,7 @@ class AgentService:
             try:
                 await EnvironmentService.delete_environment(session, env.id)
             except Exception as e:
-                # Log error but continue with other environments
-                print(f"Warning: Failed to delete environment {env.id}: {e}")
+                logger.warning(f"Failed to delete environment {env.id}: {e}")
 
         # Delete agent (DB cascades will handle any remaining records)
         session.delete(agent)
