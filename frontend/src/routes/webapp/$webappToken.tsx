@@ -5,6 +5,7 @@ import { WebappShareService } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Loader2, AlertCircle, Globe } from "lucide-react"
 import { WebappChatWidget } from "@/components/Webapp/WebappChatWidget"
+import { eventService } from "@/services/eventService"
 
 export const Route = createFileRoute("/webapp/$webappToken")({
   component: WebappPage,
@@ -189,6 +190,23 @@ function WebappPage() {
       setErrorMessage("Something went wrong. Please try again.")
     }
   }, [infoError])
+
+  // Connect to Socket.IO for real-time events when chat is enabled
+  useEffect(() => {
+    if (authState !== "ready" || !chatMode) return
+
+    const jwt = localStorage.getItem(WEBAPP_TOKEN_KEY)
+    if (!jwt) return
+    const claims = parseWebappJwt(jwt)
+    if (!claims) return
+
+    // Connect using webapp_share_id (from JWT sub) as user identifier
+    eventService.connect(claims.sub)
+
+    return () => {
+      eventService.disconnect()
+    }
+  }, [authState, chatMode])
 
   // ── Render states ────────────────────────────────────────────────────
 

@@ -668,15 +668,23 @@ class SessionService:
             # Emit session_interaction_status_changed WS event to user room
             try:
                 from app.services.event_service import event_service
+                status_meta = {
+                    "session_id": session_id,
+                    "interaction_status": "running",
+                    "streaming_started_at": now.isoformat(),
+                }
                 await event_service.emit_event(
                     event_type="session_interaction_status_changed",
                     model_id=UUID(session_id),
-                    meta={
-                        "session_id": session_id,
-                        "interaction_status": "running",
-                        "streaming_started_at": now.isoformat(),
-                    },
+                    meta=status_meta,
                     user_id=user_id,
+                )
+                # Also emit to session stream room so webapp viewers receive it
+                await event_service.emit_event(
+                    event_type="session_interaction_status_changed",
+                    model_id=UUID(session_id),
+                    meta=status_meta,
+                    room=f"session_{session_id}_stream",
                 )
             except Exception as ws_err:
                 logger.error(f"Failed to emit session_interaction_status_changed: {ws_err}", exc_info=True)
@@ -743,14 +751,22 @@ class SessionService:
             # Emit session_interaction_status_changed WS event to user room
             try:
                 from app.services.event_service import event_service
+                status_meta = {
+                    "session_id": session_id,
+                    "interaction_status": "",
+                }
                 await event_service.emit_event(
                     event_type="session_interaction_status_changed",
                     model_id=UUID(session_id),
-                    meta={
-                        "session_id": session_id,
-                        "interaction_status": "",
-                    },
+                    meta=status_meta,
                     user_id=user_id,
+                )
+                # Also emit to session stream room so webapp viewers receive it
+                await event_service.emit_event(
+                    event_type="session_interaction_status_changed",
+                    model_id=UUID(session_id),
+                    meta=status_meta,
+                    room=f"session_{session_id}_stream",
                 )
             except Exception as ws_err:
                 logger.error(f"Failed to emit session_interaction_status_changed: {ws_err}", exc_info=True)
@@ -802,14 +818,22 @@ class SessionService:
             # Emit session_interaction_status_changed WS event to user room
             try:
                 from app.services.event_service import event_service
+                status_meta = {
+                    "session_id": session_id,
+                    "interaction_status": "",
+                }
                 await event_service.emit_event(
                     event_type="session_interaction_status_changed",
                     model_id=UUID(session_id),
-                    meta={
-                        "session_id": session_id,
-                        "interaction_status": "",
-                    },
+                    meta=status_meta,
                     user_id=user_id,
+                )
+                # Also emit to session stream room so webapp viewers receive it
+                await event_service.emit_event(
+                    event_type="session_interaction_status_changed",
+                    model_id=UUID(session_id),
+                    meta=status_meta,
+                    room=f"session_{session_id}_stream",
                 )
             except Exception as ws_err:
                 logger.error(f"Failed to emit session_interaction_status_changed: {ws_err}", exc_info=True)
@@ -860,14 +884,22 @@ class SessionService:
             # Emit session_interaction_status_changed WS event to user room
             try:
                 from app.services.event_service import event_service
+                status_meta = {
+                    "session_id": session_id,
+                    "interaction_status": "",
+                }
                 await event_service.emit_event(
                     event_type="session_interaction_status_changed",
                     model_id=UUID(session_id),
-                    meta={
-                        "session_id": session_id,
-                        "interaction_status": "",
-                    },
+                    meta=status_meta,
                     user_id=user_id,
+                )
+                # Also emit to session stream room so webapp viewers receive it
+                await event_service.emit_event(
+                    event_type="session_interaction_status_changed",
+                    model_id=UUID(session_id),
+                    meta=status_meta,
+                    room=f"session_{session_id}_stream",
                 )
             except Exception as ws_err:
                 logger.error(f"Failed to emit session_interaction_status_changed: {ws_err}", exc_info=True)

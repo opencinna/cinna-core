@@ -106,7 +106,7 @@ Per-agent configuration that controls how the webapp is displayed to viewers acr
 Available options:
 
 - **Show Header** (default: on) — shows or hides the header bar at the top of the shared webapp page. The header displays the agent name and provides visual framing for the webapp. When hidden, the webapp renders full-screen without any chrome.
-- **Chat Mode** (default: disabled) — controls whether webapp viewers can chat with the agent via an embedded chat widget. Three options: Disabled (no chat), Conversation (compact mode for interacting with existing UI), Building (full mode for creating/modifying widgets). See [Webapp Chat Widget](webapp_chat_widget_implementation.md) for details.
+- **Chat Mode** (default: disabled) — controls whether webapp viewers can chat with the agent via an embedded chat widget. Three options: Disabled (no chat), Conversation (compact mode for interacting with existing UI), Building (full mode for creating/modifying widgets). See [Webapp Chat Widget](webapp_chat.md) for details.
 
 These settings apply globally to all share links for the agent — there is no per-share override. The configuration is created with default values on first access (no manual setup required).
 

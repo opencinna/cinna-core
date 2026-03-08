@@ -111,6 +111,56 @@ These methods are shared between webapp chat routes and regular session routes (
 - `WebappInterfaceModal.tsx` — Radio group for chat mode (Disabled / Conversation / Building), replaces former show_chat toggle
 - `$webappToken.tsx` — Conditionally renders `WebappChatWidget` when `interface_config.chat_mode` is set; passes token, mode, agent name
 
+## Socket.IO Connection for Webapp Viewers
+
+Webapp viewers connect to Socket.IO independently from authenticated users. The connection is established in `$webappToken.tsx` via a `useEffect` that fires once `authState === "ready"` and `chatMode` is non-null:
+
+```typescript
+// Connect using webapp_share_id (from JWT sub) as user identifier
+eventService.connect(claims.sub)
+```
+
+**Important**: The `sub` claim in the webapp-viewer JWT holds the `webapp_share_id` UUID (not the owner's user_id). This means:
+- The viewer joins Socket.IO room `user_{webapp_share_id}` — not the owner's user room
+- The viewer subscribes to `session_{session_id}_stream` room when a chat session starts to receive streaming events
+- `session_interaction_status_changed` events for the viewer must be broadcast to the session stream room, not the owner's user room
+
+The connection is torn down (`eventService.disconnect()`) when the page component unmounts.
+
+## Session Stream Room Event Routing
+
+All four `SessionService` stream event handlers emit `session_interaction_status_changed` to **two** destinations:
+
+1. `user_{owner_id}` room — for authenticated owner sessions viewing in the regular app
+2. `session_{session_id}_stream` room — for webapp viewers subscribed to this room
+
+```python
+# Both rooms receive the same payload
+await event_service.emit_event(
+    event_type="session_interaction_status_changed",
+    model_id=UUID(session_id),
+    meta=status_meta,
+    user_id=user_id,          # → user_{owner_id} room
+)
+await event_service.emit_event(
+    event_type="session_interaction_status_changed",
+    model_id=UUID(session_id),
+    meta=status_meta,
+    room=f"session_{session_id}_stream",  # → webapp viewer room
+)
+```
+
+This dual emission applies to all handlers: `handle_stream_started`, `handle_stream_completed`, `handle_stream_error`, and `handle_stream_interrupted`.
+
+## Stream Completed Fallback in WebappChatWidget
+
+`WebappChatWidget.tsx` subscribes to both `session_interaction_status_changed` (via `eventService.subscribe`) and raw `stream_event` messages from the session stream room. When a `stream_event` arrives with `event_type === "stream_completed"`, the widget also clears its streaming state. This acts as a fallback in case the `session_interaction_status_changed` event is delayed or missed, providing more resilient UX.
+
+## Widget Dimensions
+
+- Width: `w-[460px]` (460px, capped at `calc(100vw - 2rem)` on small screens)
+- Height: `min(600px, calc(100vh - 6rem))`
+
 ## Security
 
 - Chat reuses webapp share JWT (`role: "webapp-viewer"`, `token_type: "webapp_share"`)
@@ -118,6 +168,7 @@ These methods are shared between webapp chat routes and regular session routes (
 - Session access enforced via `webapp_share_id` match — viewers can only access sessions created from their share token
 - Chat endpoints validate `chat_mode != null` on every request (not just session creation)
 - Sessions run as `user_id = owner_id` — same security model as guest shares
+- The session stream room (`session_{id}_stream`) is joinable by anyone with a valid Socket.IO connection who knows the session ID. This is acceptable because: (a) session IDs are UUIDs with 122 bits of entropy, (b) the room only carries streaming content events and status changes, not sensitive session data, and (c) the webapp viewer already has access to session content via the chat API endpoints.
 
 ---
 

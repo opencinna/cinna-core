@@ -134,13 +134,24 @@ export function WebappChatWidget({
       const { session_id, data } = event
       if (session_id !== sessionId) return
 
+      // Handle stream_completed event as fallback for status change
+      const eventType = data?.type || event.event_type
+      if (eventType === "stream_completed") {
+        setIsStreaming(false)
+        setStreamingEvents([])
+        lastKnownSeqRef.current = 0
+        refreshMessages()
+        if (!isOpen) setHasUnread(true)
+        return
+      }
+
       const seq = data?.event_seq ?? event.event_seq
       if (!seq) return
       if (seq <= lastKnownSeqRef.current) return
 
       lastKnownSeqRef.current = seq
       const streamEvent: StreamEvent = {
-        type: data?.type || event.event_type,
+        type: eventType,
         content: data?.content || "",
         event_seq: seq,
         tool_name: data?.tool_name,
@@ -323,8 +334,8 @@ export function WebappChatWidget({
 
       {/* Chat Panel */}
       {isOpen && (
-        <div className="fixed bottom-4 right-4 z-50 w-96 max-w-[calc(100vw-2rem)] flex flex-col bg-background border rounded-xl shadow-xl overflow-hidden"
-          style={{ height: "min(500px, calc(100vh - 6rem))" }}
+        <div className="fixed bottom-4 right-4 z-50 w-[460px] max-w-[calc(100vw-2rem)] flex flex-col bg-background border rounded-xl shadow-xl overflow-hidden"
+          style={{ height: "min(600px, calc(100vh - 6rem))" }}
         >
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-2.5 border-b bg-muted/30 shrink-0">

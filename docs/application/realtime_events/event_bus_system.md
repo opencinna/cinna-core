@@ -73,7 +73,13 @@ Frontend Components                    Backend Services
 }
 ```
 
-**Frontend usage**: The session page subscribes to this event to immediately invalidate the session query, providing near-instant detection of streaming state changes without waiting for the next poll interval. This enables derived streaming state (`isStreaming = session.interaction_status === "running"`) to update reactively.
+**Dual room emission**: Each handler emits this event to two destinations:
+1. `user_{owner_id}` room — for authenticated owner sessions in the regular app UI
+2. `session_{session_id}_stream` room — for webapp chat viewers who connect using their `webapp_share_id` as their Socket.IO user identifier and are therefore never in the owner's user room
+
+This dual emission is required because webapp viewers cannot receive events from the owner's user room. The session stream room is the only shared channel between the owner's streaming pipeline and the webapp viewer's Socket.IO connection.
+
+**Frontend usage**: The session page subscribes to this event to immediately invalidate the session query, providing near-instant detection of streaming state changes without waiting for the next poll interval. This enables derived streaming state (`isStreaming = session.interaction_status === "running"`) to update reactively. The webapp chat widget also subscribes, using the event to show/hide the streaming indicator.
 
 ### Environment Activation Events
 

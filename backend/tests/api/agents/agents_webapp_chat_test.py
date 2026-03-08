@@ -8,6 +8,9 @@ Covers the webapp chat endpoints under /api/v1/webapp/{token}/chat/...:
   D. Message list for a chat session
   E. Unauthenticated and wrong-token-type access → 401/403
   F. chat_mode "conversation" and "building" produce correctly-typed sessions
+  G. Non-existent session returns 404
+  H. Stream event handlers emit session_interaction_status_changed to the session
+     stream room so webapp viewers (who are not in the owner's user room) receive it
 
 Business rules tested:
   1. POST /sessions returns 403 when chat_mode is None
@@ -21,12 +24,20 @@ Business rules tested:
   9. All endpoints return 403 with a regular user JWT (wrong token type)
   10. chat_mode="conversation" → session.mode == "conversation"
   11. chat_mode="building" → session.mode == "building"
+  12. handle_stream_started emits session_interaction_status_changed to both the
+      owner user room and the session stream room
+  13. handle_stream_completed emits session_interaction_status_changed to both rooms
+  14. handle_stream_error emits session_interaction_status_changed to both rooms
+  15. handle_stream_interrupted emits session_interaction_status_changed to both rooms
 """
+import asyncio
 import uuid
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
+from tests.stubs.socketio_stub import StubSocketIOConnector
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.user import create_random_user_with_headers
 from tests.utils.webapp_interface_config import update_webapp_interface_config
@@ -486,4 +497,183 @@ def test_webapp_chat_nonexistent_session_returns_error(
     )
     assert r.status_code in (403, 404), (
         f"Expected 403 or 404 for ghost session messages, got {r.status_code}: {r.text}"
+    )
+
+
+# ── H. Session stream room emission for webapp viewers ────────────────────
+
+
+def test_stream_handlers_emit_to_session_stream_room(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    All four stream event handlers emit session_interaction_status_changed to
+    the session stream room (session_{id}_stream), not just the owner's user room.
+
+    Webapp viewers connect to Socket.IO using their webapp_share_id as user_id
+    (not the actual owner's user_id), so they are never in the user_{owner_id}
+    room. The session stream room is the only channel they can receive
+    session_interaction_status_changed events through.
+
+    This test covers the bug fix: before the fix, handle_stream_error and
+    handle_stream_interrupted only emitted to the user room, leaving webapp
+    viewers stuck in "thinking" state.
+
+    Scenario:
+      1. Create agent + webapp share, enable chat
+      2. Create a webapp chat session
+      3. Call each handler with a fresh StubSocketIOConnector
+      4. Verify each handler emits session_interaction_status_changed to
+         both the user room AND the session stream room
+    """
+    from app.services.session_service import SessionService
+
+    # ── Phase 1: Create agent + webapp share, enable chat ─────────────────
+    agent, share = setup_webapp_agent(
+        client, superuser_token_headers,
+        name="Stream Room Emission Agent",
+        share_label="Room Emission Share",
+    )
+    agent_id = agent["id"]
+    share_token = share["token"]
+    update_webapp_interface_config(
+        client, superuser_token_headers, agent_id, chat_mode="conversation"
+    )
+
+    # ── Phase 2: Create a webapp chat session ─────────────────────────────
+    webapp_auth = authenticate_webapp_share(client, share_token)
+    webapp_hdrs = {"Authorization": f"Bearer {webapp_auth['access_token']}"}
+
+    r = client.post(
+        f"{_chat_base(share_token)}/sessions",
+        headers=webapp_hdrs,
+    )
+    assert r.status_code == 200, f"Create chat session failed: {r.text}"
+    session = r.json()
+    session_id = session["id"]
+
+    # user_id for webapp sessions is the agent owner's user_id
+    # We just need to know the session room name
+    expected_stream_room = f"session_{session_id}_stream"
+
+    # Helper: run a handler with a fresh stub and return the emitted events
+    def _run_handler_and_collect(handler_coro):
+        """Runs an async handler using its own StubSocketIOConnector."""
+        stub = StubSocketIOConnector()
+        with patch("app.services.event_service.socketio_connector", stub):
+            asyncio.run(handler_coro)
+        return stub.emitted_events
+
+    # ── Phase 3: handle_stream_started ────────────────────────────────────
+    started_events = _run_handler_and_collect(
+        SessionService.handle_stream_started({
+            "meta": {
+                "session_id": session_id,
+            }
+        })
+    )
+
+    # Should have at least two session_interaction_status_changed emissions
+    status_events = [
+        e for e in started_events
+        if e.get("data", {}).get("type") == "session_interaction_status_changed"
+    ]
+    rooms_emitted_to = [e.get("room") for e in status_events]
+    assert expected_stream_room in rooms_emitted_to, (
+        f"handle_stream_started did not emit to {expected_stream_room}. "
+        f"Rooms seen: {rooms_emitted_to}"
+    )
+    # Also emits to the user room — event_service routes user_id-targeted
+    # emissions to room user_{user_id}, captured as a non-stream-room entry
+    has_user_room_emission = any(
+        r is not None and r.startswith("user_") for r in rooms_emitted_to
+    )
+    assert has_user_room_emission, (
+        f"handle_stream_started did not emit to any user_* room. "
+        f"Rooms seen: {rooms_emitted_to}"
+    )
+
+    # Interaction status should be "running" for STREAM_STARTED
+    stream_room_event = next(
+        e for e in status_events if e.get("room") == expected_stream_room
+    )
+    assert stream_room_event["data"]["meta"]["interaction_status"] == "running", (
+        f"Expected interaction_status='running' in stream room event, "
+        f"got: {stream_room_event['data']['meta']}"
+    )
+
+    # ── Phase 4: handle_stream_completed ──────────────────────────────────
+    completed_events = _run_handler_and_collect(
+        SessionService.handle_stream_completed({
+            "meta": {
+                "session_id": session_id,
+                "was_interrupted": False,
+            }
+        })
+    )
+
+    status_events = [
+        e for e in completed_events
+        if e.get("data", {}).get("type") == "session_interaction_status_changed"
+    ]
+    rooms_emitted_to = [e.get("room") for e in status_events]
+    assert expected_stream_room in rooms_emitted_to, (
+        f"handle_stream_completed did not emit to {expected_stream_room}. "
+        f"Rooms seen: {rooms_emitted_to}"
+    )
+    stream_room_event = next(
+        e for e in status_events if e.get("room") == expected_stream_room
+    )
+    assert stream_room_event["data"]["meta"]["interaction_status"] == "", (
+        f"Expected interaction_status='' in stream room event after completion, "
+        f"got: {stream_room_event['data']['meta']}"
+    )
+
+    # ── Phase 5: handle_stream_error ──────────────────────────────────────
+    error_events = _run_handler_and_collect(
+        SessionService.handle_stream_error({
+            "meta": {
+                "session_id": session_id,
+                "error_type": "TestError",
+            }
+        })
+    )
+
+    status_events = [
+        e for e in error_events
+        if e.get("data", {}).get("type") == "session_interaction_status_changed"
+    ]
+    stream_rooms = [e.get("room") for e in status_events]
+    assert expected_stream_room in stream_rooms, (
+        f"handle_stream_error did not emit to {expected_stream_room}. "
+        f"Rooms seen: {stream_rooms}. "
+        "This was the bug: error handler was missing the session stream room emission."
+    )
+
+    # ── Phase 6: handle_stream_interrupted ────────────────────────────────
+    # First reset session back to active/running state via completed handler
+    _run_handler_and_collect(
+        SessionService.handle_stream_started({
+            "meta": {"session_id": session_id}
+        })
+    )
+
+    interrupted_events = _run_handler_and_collect(
+        SessionService.handle_stream_interrupted({
+            "meta": {
+                "session_id": session_id,
+            }
+        })
+    )
+
+    status_events = [
+        e for e in interrupted_events
+        if e.get("data", {}).get("type") == "session_interaction_status_changed"
+    ]
+    stream_rooms = [e.get("room") for e in status_events]
+    assert expected_stream_room in stream_rooms, (
+        f"handle_stream_interrupted did not emit to {expected_stream_room}. "
+        f"Rooms seen: {stream_rooms}. "
+        "This was the bug: interrupted handler was missing the session stream room emission."
     )
