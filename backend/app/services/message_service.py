@@ -34,6 +34,54 @@ _FORWARDED_METADATA_KEYS = {"model", "total_cost_usd", "claude_code_version", "d
 _STORED_EVENT_METADATA_KEYS = {"tool_id", "tool_input", "model", "needs_approval", "tool_name"}
 
 
+def _compute_context_diff(old_context_str: str, new_context_str: str) -> dict | None:
+    """
+    Compute a semantic diff between two page_context JSON strings.
+
+    Both arguments must be valid JSON strings. The context payload has the
+    structure: {"selected_text": str, "page": {...}, "microdata": [...]}
+
+    Returns:
+        None      — if the contexts are semantically identical (no change)
+        dict      — with keys "changed", "added", "removed" describing only what
+                    differs. Each key is omitted if it has no entries, so the
+                    returned dict is always non-empty when not None.
+
+    Raises nothing — callers should handle any exception and fall back to full
+    context injection.
+    """
+    old_data = json.loads(old_context_str)
+    new_data = json.loads(new_context_str)
+
+    # Fast path: identical after round-trip through json.loads (normalises key order)
+    if old_data == new_data:
+        return None
+
+    changed: dict = {}
+    added: dict = {}
+    removed: list = []
+
+    all_keys = set(old_data.keys()) | set(new_data.keys())
+    for key in all_keys:
+        if key not in old_data:
+            added[key] = new_data[key]
+        elif key not in new_data:
+            removed.append(key)
+        elif old_data[key] != new_data[key]:
+            changed[key] = {"from": old_data[key], "to": new_data[key]}
+
+    diff: dict = {}
+    if changed:
+        diff["changed"] = changed
+    if added:
+        diff["added"] = added
+    if removed:
+        diff["removed"] = removed
+
+    # Diff should always be non-empty here because old_data != new_data
+    return diff if diff else None
+
+
 class MessageServiceError(Exception):
     """Domain exception for message service operations."""
     def __init__(self, message: str, status_code: int = 400):
@@ -202,7 +250,8 @@ class MessageService:
         file_ids: list[UUID],
         environment_id: UUID,
         user_id: UUID,
-        answers_to_message_id: UUID | None = None
+        answers_to_message_id: UUID | None = None,
+        message_metadata: dict | None = None,
     ) -> tuple[SessionMessage, str]:
         """
         Prepare user message with file attachments.
@@ -266,6 +315,7 @@ class MessageService:
             content=message_content,  # Store original content without file paths
             answers_to_message_id=answers_to_message_id,
             file_ids=file_ids,
+            message_metadata=message_metadata,
         )
 
         # Update message_files with agent_env_paths
@@ -395,6 +445,13 @@ class MessageService:
 
         If messages have attached files, reconstructs the content with file paths prepended.
 
+        Page context diff optimisation: instead of injecting the full page_context
+        on every message, only the diff relative to the previously-sent context is
+        sent.  If the context is unchanged from the last sent message the block is
+        omitted entirely; if it changed a compact <context_update> block is used.
+        The first message (or any message where diffing fails due to malformed JSON)
+        always gets the full <page_context> block.
+
         Returns:
             tuple: (concatenated_content, list of pending_messages)
                 - concatenated_content: All pending messages concatenated with formatting, or None if no pending messages
@@ -417,6 +474,35 @@ class MessageService:
         if not pending_messages:
             return None, []
 
+        # ── Context diff optimisation setup ───────────────────────────────────
+        # Find the most recent already-sent user message that carried a page_context
+        # so we can diff the current context against it rather than sending the full
+        # payload every time.
+        first_pending_seq = pending_messages[0].sequence_number
+        prev_context_stmt = (
+            select(SessionMessage)
+            .where(
+                SessionMessage.session_id == session_id,
+                SessionMessage.role == "user",
+                SessionMessage.sent_to_agent_status == "sent",
+                SessionMessage.sequence_number < first_pending_seq,
+            )
+            .order_by(SessionMessage.sequence_number.desc())
+            .limit(20)  # scan up to 20 sent messages to find one with page_context
+        )
+        sent_messages_recent = list(session.exec(prev_context_stmt).all())
+        last_sent_context: str | None = None
+        for sent_msg in sent_messages_recent:
+            ctx = (sent_msg.message_metadata or {}).get("page_context")
+            if ctx:
+                last_sent_context = ctx
+                break
+
+        # Mutable closure variable: tracks the "previous context" as we process
+        # multiple pending messages in sequence.  Wrapped in a list so the inner
+        # function can update it without a nonlocal declaration.
+        prev_context_ref: list[str | None] = [last_sent_context]
+
         # Helper function to reconstruct message content with files
         def get_message_content_with_files(message: SessionMessage) -> str:
             # Check if message has attached files
@@ -424,18 +510,54 @@ class MessageService:
             message_files = list(session.exec(file_statement).all())
 
             if not message_files:
-                # No files, return original content
-                return message.content
+                # No files — start with original content only
+                agent_content = message.content
+            else:
+                # Reconstruct content with file paths (same format as prepare_user_message_with_files)
+                file_paths = [mf.agent_env_path for mf in message_files if mf.agent_env_path]
 
-            # Reconstruct content with file paths (same format as prepare_user_message_with_files)
-            file_paths = [mf.agent_env_path for mf in message_files if mf.agent_env_path]
+                if not file_paths:
+                    # Files exist but no agent_env_path, return original content
+                    agent_content = message.content
+                else:
+                    file_list = "\n".join(f"- {path}" for path in file_paths)
+                    agent_content = f"Uploaded files:\n{file_list}\n---\n\n{message.content}"
 
-            if not file_paths:
-                # Files exist but no agent_env_path, return original content
-                return message.content
+            # ── Page context diff injection ────────────────────────────────────
+            # The page_context is stored in message_metadata (not in message.content)
+            # so the chat UI never renders it — only the agent-env sees the XML block.
+            stored_page_context = (message.message_metadata or {}).get("page_context")
+            if stored_page_context:
+                previous = prev_context_ref[0]
+                context_block: str | None = None
 
-            file_list = "\n".join(f"- {path}" for path in file_paths)
-            return f"Uploaded files:\n{file_list}\n---\n\n{message.content}"
+                if previous is None:
+                    # First message in this session that carries context — send full block.
+                    context_block = f"<page_context>\n{stored_page_context}\n</page_context>"
+                else:
+                    # Attempt to diff; fall back to full block on any error.
+                    try:
+                        diff = _compute_context_diff(previous, stored_page_context)
+                        if diff is None:
+                            # Context is identical — omit the block entirely.
+                            context_block = None
+                        else:
+                            diff_json = json.dumps(diff, ensure_ascii=False)
+                            context_block = f"<context_update>\n{diff_json}\n</context_update>"
+                    except Exception:
+                        logger.debug(
+                            "page_context diff failed for message %s; falling back to full block",
+                            message.id,
+                        )
+                        context_block = f"<page_context>\n{stored_page_context}\n</page_context>"
+
+                if context_block:
+                    agent_content = f"{agent_content}\n\n{context_block}"
+
+                # Advance the closure so the next pending message diffs against this one.
+                prev_context_ref[0] = stored_page_context
+
+            return agent_content
 
         # Concatenate messages with formatting
         if len(pending_messages) == 1:

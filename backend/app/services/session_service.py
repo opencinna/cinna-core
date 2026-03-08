@@ -996,6 +996,7 @@ class SessionService:
         agent_id: UUID | None = None,
         access_token_id: UUID | None = None,
         backend_base_url: str | None = None,
+        page_context: str | None = None,
     ) -> dict[str, Any]:
         """
         Send a message to a session and optionally initiate streaming.
@@ -1025,6 +1026,10 @@ class SessionService:
                                (used by A2A handler for SSE streaming).
             agent_id: Optional agent ID for creating a new session (required if session_id is None)
             access_token_id: Optional access token ID (for A2A token-created sessions)
+            page_context: Optional JSON string with schema.org microdata and selected text from the
+                          webapp iframe. Stored in message_metadata so it is available when building
+                          the agent prompt (via collect_pending_messages) without being rendered in
+                          the chat UI as part of message content.
 
         Returns:
             dict with status information:
@@ -1210,6 +1215,14 @@ class SessionService:
             if not chat_session:
                 return {"action": "error", "message": "Session not found"}
 
+            # Build message_metadata: include page_context if provided so that
+            # collect_pending_messages can inject it as an XML block into the
+            # agent-bound content without it being stored in message.content
+            # (and therefore never rendered in the chat UI).
+            base_message_metadata: dict = {}
+            if page_context:
+                base_message_metadata["page_context"] = page_context
+
             if has_files:
                 try:
                     # Prepare user message with files (uploads to agent-env)
@@ -1220,7 +1233,8 @@ class SessionService:
                         file_ids=file_ids,
                         environment_id=chat_session.environment_id,
                         user_id=user_id,
-                        answers_to_message_id=answers_to_message_id
+                        answers_to_message_id=answers_to_message_id,
+                        message_metadata=base_message_metadata,
                     )
                     logger.info(f"Prepared message with {len(file_ids)} files for session {session_id}")
                 except Exception as e:
@@ -1233,7 +1247,8 @@ class SessionService:
                     session_id=session_id,
                     role="user",
                     content=content,
-                    answers_to_message_id=answers_to_message_id
+                    answers_to_message_id=answers_to_message_id,
+                    message_metadata=base_message_metadata if base_message_metadata else None,
                 )
                 logger.info(f"Created user message for session {session_id}")
 

@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/webapp/{token}/chat", tags=["webapp-chat"])
 
+# Maximum characters allowed in the page_context field before truncation.
+# Prevents excessively large context payloads from bloating stored metadata.
+_PAGE_CONTEXT_MAX_CHARS = 10_000
+
 
 def _handle_chat_error(e: WebappChatError) -> None:
     """Convert service exceptions to HTTP exceptions."""
@@ -164,6 +168,14 @@ async def send_chat_message_stream(
 
     _update_env_activity(session, chat_session)
 
+    # Truncate page_context to the allowed limit before passing it along.
+    # The context is stored in message_metadata (not in message content) so it
+    # remains invisible in the chat UI but is still available when building the
+    # agent prompt in collect_pending_messages.
+    safe_page_context: str | None = None
+    if message_in.page_context:
+        safe_page_context = message_in.page_context[:_PAGE_CONTEXT_MAX_CHARS]
+
     # Send message using centralized service (user_id = owner_id)
     result = await SessionService.send_session_message(
         session_id=session_id,
@@ -171,6 +183,7 @@ async def send_chat_message_stream(
         content=message_in.content,
         file_ids=message_in.file_ids,
         answers_to_message_id=message_in.answers_to_message_id,
+        page_context=safe_page_context,
     )
 
     if result["action"] == "error":

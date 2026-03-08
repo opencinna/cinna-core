@@ -147,6 +147,7 @@ class MessageCreate(SQLModel):
     content: str
     answers_to_message_id: uuid.UUID | None = None
     file_ids: list[uuid.UUID] = Field(default_factory=list)
+    page_context: str | None = None
 
 
 class MessagePublic(SQLModel):

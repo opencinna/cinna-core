@@ -5,7 +5,7 @@
 ### Backend - Models
 
 - `backend/app/models/agent_webapp_interface_config.py` — `chat_mode` field on `AgentWebappInterfaceConfig` (table), `AgentWebappInterfaceConfigBase`, `AgentWebappInterfaceConfigUpdate`, `AgentWebappInterfaceConfigPublic`
-- `backend/app/models/session.py` — `webapp_share_id` nullable FK on `Session` table; also on `SessionCreate`, `SessionPublic`, `SessionPublicExtended`
+- `backend/app/models/session.py` — `webapp_share_id` nullable FK on `Session` table; also on `SessionCreate`, `SessionPublic`, `SessionPublicExtended`; `page_context` optional field on `MessageCreate`
 
 ### Backend - Routes
 
@@ -16,7 +16,8 @@
 ### Backend - Services
 
 - `backend/app/services/webapp_chat_service.py` — `WebappChatService` with chat validation, session management, and access verification. Exception hierarchy: `WebappChatError` (base), `WebappChatDisabledError`, `WebappChatSessionNotFoundError`, `WebappChatAccessDeniedError`.
-- `backend/app/services/message_service.py` — `MessageService` provides shared streaming enrichment (`enrich_messages_with_streaming()`), interrupt orchestration (`interrupt_stream()`), and response building (`build_stream_response()`). These methods are reused by both webapp chat and regular session routes.
+- `backend/app/services/message_service.py` — `MessageService` provides shared streaming enrichment (`enrich_messages_with_streaming()`), interrupt orchestration (`interrupt_stream()`), response building (`build_stream_response()`), and context-aware message dispatch (`collect_pending_messages` with diff logic). These methods are reused by both webapp chat and regular session routes.
+- `backend/app/services/session_service.py` — `send_session_message` accepts `page_context: str | None` and stores it in `message_metadata` when creating the user `SessionMessage`.
 - `backend/app/services/agent_webapp_interface_config_service.py` — `AgentWebappInterfaceConfigService` with get-or-create, partial update, public read. Exception hierarchy: `InterfaceConfigError` (base), `AgentNotFoundError`, `AgentPermissionError`.
 
 ### Backend - Dependencies
@@ -25,9 +26,9 @@
 
 ### Frontend
 
-- `frontend/src/components/Webapp/WebappChatWidget.tsx` — Main chat widget: FAB icon, overlay panel, message list, input, streaming
+- `frontend/src/components/Webapp/WebappChatWidget.tsx` — Main chat widget: FAB icon, overlay panel, message list, input, streaming, context collection
 - `frontend/src/components/Agents/WebappInterfaceModal.tsx` — Interface config modal with Chat Mode radio group (Disabled / Conversation / Building)
-- `frontend/src/routes/webapp/$webappToken.tsx` — Renders `WebappChatWidget` when `chat_mode` is set
+- `frontend/src/routes/webapp/$webappToken.tsx` — Renders `WebappChatWidget` when `chat_mode` is set; declares `iframeRef` for context bridge
 
 ### Migrations
 
@@ -36,7 +37,7 @@
 
 ### Tests
 
-- `backend/tests/api/agents/agents_webapp_chat_test.py` — Chat session lifecycle, mode enforcement, access control tests
+- `backend/tests/api/agents/agents_webapp_chat_test.py` — Chat session lifecycle, mode enforcement, access control, context storage, and context diff tests
 - `backend/tests/api/agents/agents_webapp_interface_config_test.py` — Interface config lifecycle including `chat_mode` updates
 - `backend/tests/utils/webapp_interface_config.py` — Test utility helpers for interface config
 
@@ -54,6 +55,10 @@
 |---|---|---|
 | `webapp_share_id` | UUID, nullable, FK -> `agent_webapp_share` SET NULL | Tracks which webapp share created this session. SET NULL on delete to preserve sessions. Mirrors `guest_share_id` pattern. |
 
+### `session_message` table — no migration required
+
+`page_context` is stored inside the existing `message_metadata` JSON column, which already exists on `SessionMessage`. No schema change was needed.
+
 ## API Endpoints
 
 ### Webapp Chat Routes (`backend/app/api/routes/webapp_chat.py`)
@@ -66,7 +71,7 @@ Prefix: `/api/v1/webapp/{token}/chat`
 | GET | `/sessions` | Get active chat session for this share. Returns null if none exists. |
 | GET | `/sessions/{session_id}` | Get session details. Verifies `webapp_share_id` match. |
 | GET | `/sessions/{session_id}/messages` | Get message history. Merges in-memory streaming events with persisted messages. |
-| POST | `/sessions/{session_id}/messages/stream` | Send message and stream response via WebSocket. |
+| POST | `/sessions/{session_id}/messages/stream` | Send message and stream response via WebSocket. Accepts optional `page_context` field. |
 | POST | `/sessions/{session_id}/messages/interrupt` | Interrupt active streaming message. |
 
 All endpoints require webapp-viewer JWT auth and validate that chat is enabled.
@@ -91,11 +96,12 @@ Prefix: `/api/v1/agents/{agent_id}/webapp-interface-config`
 
 ### `MessageService` (`backend/app/services/message_service.py`) — shared methods
 
-These methods are shared between webapp chat routes and regular session routes (messages.py), eliminating duplication of streaming enrichment, interrupt orchestration, and response building logic.
+These methods are shared between webapp chat routes and regular session routes (`messages.py`), eliminating duplication of streaming enrichment, interrupt orchestration, and response building logic.
 
 - `enrich_messages_with_streaming()` — Merges in-memory streaming events from `active_streaming_manager` into message list; deduplicates by `event_seq`; patches accumulated content onto in-progress messages
 - `interrupt_stream()` — Full interrupt orchestration: requests interrupt via `active_streaming_manager`, checks pending state, resolves environment, forwards interrupt to agent-env; raises `ValueError` if no active stream
 - `build_stream_response()` — Builds standardized response dict from `SessionService.send_session_message()` result; handles `command_executed`, `streaming`, `pending`, and default actions
+- `collect_pending_messages()` — Builds agent-bound message content; contains context diff logic (see Context Management section)
 
 ### `AgentWebappInterfaceConfigService` (`backend/app/services/agent_webapp_interface_config_service.py`)
 
@@ -107,9 +113,15 @@ These methods are shared between webapp chat routes and regular session routes (
 
 ## Frontend Components
 
-- `WebappChatWidget.tsx` — Main widget: manages open/closed state, session lifecycle, message polling, streaming via WebSocket, interrupt, and localStorage persistence. Key internal functions: `loadExistingSession(isBackgroundVerify)` — fetches or verifies the active session; when `isBackgroundVerify=true`, skips the loading spinner and does not clear the cache on no-session. `loadMessages(sid, silent)` — fetches message history; when `silent=true`, skips the `isLoadingMessages` spinner (used during background verify). `refreshMessages()` — convenience wrapper calling `loadMessages` without silent flag (used after stream completes). Sub-components: ChatFAB (floating button with unread badge), ChatOverlayPanel (slide-in panel with header, message list, input)
+- `WebappChatWidget.tsx` — Main widget: manages open/closed state, session lifecycle, message polling, streaming via WebSocket, interrupt, localStorage persistence, and context collection. Key internal functions:
+  - `loadExistingSession(isBackgroundVerify)` — fetches or verifies the active session; when `isBackgroundVerify=true`, skips the loading spinner and does not clear the cache on no-session
+  - `loadMessages(sid, silent)` — fetches message history; when `silent=true`, skips the `isLoadingMessages` spinner (used during background verify)
+  - `refreshMessages()` — convenience wrapper calling `loadMessages` without silent flag (used after stream completes)
+  - `collectIframeContext(iframeRef)` — sends a `postMessage` to the webapp iframe and awaits a `page_context_response` (500ms timeout, returns null on timeout)
+  - `buildPageContext(iframeRef)` — orchestrates context collection: captures `window.getSelection()` (selected text, truncated at 2,000 chars) and calls `collectIframeContext`; returns a serialized JSON string or `undefined` if no context available
+  - Sub-components: ChatFAB (floating button with unread badge), ChatOverlayPanel (slide-in panel with header, message list, input)
 - `WebappInterfaceModal.tsx` — Radio group for chat mode (Disabled / Conversation / Building), replaces former show_chat toggle
-- `$webappToken.tsx` — Conditionally renders `WebappChatWidget` when `interface_config.chat_mode` is set; passes token, mode, agent name
+- `$webappToken.tsx` — Conditionally renders `WebappChatWidget` when `interface_config.chat_mode` is set; passes token, mode, agent name, and `iframeRef`. The `iframeRef` (`useRef<HTMLIFrameElement>(null)`, declared before any conditional returns to satisfy Rules of Hooks) is attached to the webapp `<iframe>` element and passed to the chat widget so it can collect schema.org context via postMessage.
 
 ## localStorage Cache
 
@@ -138,6 +150,12 @@ interface WebappChatCache {
 3. If background verify finds no active session: cached state is preserved (no `clearCache()`, no state reset). Only an explicit (non-background) `loadExistingSession(false)` call will clear the cache and reset state when no session exists
 4. Cache write: `useEffect` on `[sessionId, messages, webappToken]` calls `writeCache()` on every state change
 5. Incognito / new window: isolated localStorage gives a fresh session automatically
+
+## Context Management
+
+Context management covers the full lifecycle of page context data: collection on the frontend, transmission in the message payload, storage in the backend, injection into agent-bound content, and the diff optimization that minimizes context overhead across turns.
+
+For full technical details, see the dedicated aspect document: **[Context Management Tech](webapp_chat_context_tech.md)**. For business logic and user flows, see **[Context Management](webapp_chat_context.md)**.
 
 ## Socket.IO Connection for Webapp Viewers
 
@@ -200,4 +218,4 @@ This dual emission applies to all handlers: `handle_stream_started`, `handle_str
 
 ---
 
-*Last updated: 2026-03-08 — background verify preserves cache on failure; loadMessages silent parameter; cacheRestoredRef guard*
+*Last updated: 2026-03-08 — context management extracted to standalone aspect docs (webapp_chat_context.md, webapp_chat_context_tech.md)*

@@ -73,6 +73,10 @@ function WebappPage() {
   const [chatMode, setChatMode] = useState<"conversation" | "building" | null>(null)
 
   const authAttempted = useRef(false)
+  // iframeRef is passed to the chat widget so it can collect schema.org microdata
+  // from the webapp page via postMessage (context aggregation feature).
+  // Must be declared here (before any conditional returns) to satisfy Rules of Hooks.
+  const iframeRef = useRef<HTMLIFrameElement>(null)
 
   // Step 1: Fetch share info
   const {
@@ -268,6 +272,7 @@ function WebappPage() {
       webappToken={webappToken}
       chatMode={chatMode}
       agentName={agentName || "Agent"}
+      iframeRef={iframeRef}
     />
   ) : null
 
@@ -275,6 +280,7 @@ function WebappPage() {
     return (
       <>
         <iframe
+          ref={iframeRef}
           src={iframeSrc}
           className="w-full h-screen border-0"
           title="Agent Web App"
@@ -288,6 +294,7 @@ function WebappPage() {
     return (
       <>
         <iframe
+          ref={iframeRef}
           src={iframeSrc}
           className="w-full h-screen border-0"
           title="Agent Web App"
@@ -307,6 +314,7 @@ function WebappPage() {
         <h1 className="text-sm font-semibold truncate">{agentName}</h1>
       </header>
       <iframe
+        ref={iframeRef}
         src={iframeSrc}
         className="flex-1 w-full border-0"
         title="Agent Web App"

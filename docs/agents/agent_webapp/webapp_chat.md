@@ -113,6 +113,12 @@ Chat endpoints reuse the existing webapp share JWT (`role: "webapp-viewer"`). Th
 - Streaming event deduplication uses `event_seq` to avoid gaps or duplicates
 - Streaming enrichment, interrupt orchestration, and response building are shared with regular session routes via `MessageService` — no chat-specific duplication of these flows
 
+## Context Management
+
+The chat widget silently collects contextual information about what the viewer is currently looking at (schema.org microdata, selected text) and bundles it with each message. This allows the agent to give context-aware responses without the viewer describing the dashboard state. A diff optimization ensures that only changed context is sent on subsequent messages, keeping the agent's conversation window lean.
+
+For full details on context collection, storage, injection, and diff optimization, see the dedicated aspect document: **[Context Management](webapp_chat_context.md)** | **[Context Tech](webapp_chat_context_tech.md)**
+
 ## Architecture Overview
 
 ```
@@ -149,8 +155,8 @@ On page reload: GET /webapp/{token}/chat/sessions
 - **[Agent Sessions](../../application/agent_sessions/agent_sessions.md)** — chat sessions reuse the full session infrastructure with `webapp_share_id` scoping
 - **[Guest Sharing](../agent_sharing/guest_sharing.md)** — parallel pattern for `webapp_share_id` on sessions (mirrors `guest_share_id`)
 - **[Streaming Architecture](../../application/realtime_events/frontend_backend_agentenv_streaming.md)** — WebSocket streaming for real-time chat responses
-- **[Agent Prompts](../agent_prompts/agent_prompts.md)** — building mode chat uses the building prompt; conversation mode uses conversation prompt
+- **[Agent Prompts](../agent_prompts/agent_prompts.md)** — building mode chat uses the building prompt; conversation mode uses conversation prompt; `WEBAPP_BUILDING.md` contains schema.org markup and context bridge script instructions for the building agent
 
 ---
 
-*Last updated: 2026-03-08 — background verify preserves cache on failure; explicit load clears on no-session*
+*Last updated: 2026-03-08 — context management extracted to standalone aspect docs (webapp_chat_context.md, webapp_chat_context_tech.md)*
