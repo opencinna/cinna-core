@@ -21,7 +21,13 @@ Chat mode is per-agent, not per-share — all share links for the same agent use
 Chat sessions are scoped by `webapp_share_id` — one active session per share token. This means:
 - Multiple viewers on the same share URL share the same session
 - Different share links for the same agent have separate sessions
-- Sessions persist across page reloads (retrieved on mount)
+- Sessions persist across page reloads — session ID and messages are cached in localStorage under `webapp_chat_{webappToken}` and restored instantly on mount, with a background API verify to detect stale sessions
+
+### Session Persistence
+
+The chat widget caches the active session ID and message history in localStorage (key: `webapp_chat_{webappToken}`) so that page refreshes are seamless. On mount, cached data is restored immediately before any API call, giving instant message display. A background verify confirms the session is still active on the server and refreshes the message list silently (no loading spinner). If the background verify fails or finds no active session, the cached state is intentionally preserved — the viewer retains their message history across page refreshes even when the verify cannot confirm the session. The cache is only cleared when the widget performs an explicit (foreground) session load and finds no active session. Opening an incognito window starts a fresh session naturally since incognito localStorage is isolated.
+
+The intended workflow is: user chats → agent makes changes → user refreshes page to see changes → continues chatting in the same session without losing context.
 
 Sessions use `user_id = agent.owner_id` (runs in the owner's environment), matching the guest share pattern.
 
@@ -45,10 +51,12 @@ Chat endpoints reuse the existing webapp share JWT (`role: "webapp-viewer"`). Th
 
 1. Viewer reloads the webapp page
 2. After auth (JWT from localStorage), webapp page renders
-3. Chat widget mounts and fetches active session for this share
-4. If active session exists, loads it with message history
-5. Chat FAB shows with badge if there are unread agent messages
-6. Viewer clicks FAB and sees their previous conversation
+3. Chat widget mounts and immediately restores session ID and messages from localStorage (instant, no spinner)
+4. FAB badge appears signaling that a prior conversation exists
+5. In the background, the widget verifies the cached session is still active on the server and refreshes messages; the loading spinner is suppressed so cached messages remain visible
+6. If the background verify cannot reach the server or the session is not found, the cached state is preserved so the viewer can keep reading their history — the cache is only cleared on an explicit (non-background) session load
+7. Only when the viewer explicitly opens the chat without a cached session (e.g., first open after incognito or after a manual cache clear) will the widget query the server and reset if no session exists
+8. Viewer clicks FAB and sees their previous conversation
 
 ### Owner Configures Chat Mode
 
@@ -145,4 +153,4 @@ On page reload: GET /webapp/{token}/chat/sessions
 
 ---
 
-*Last updated: 2026-03-08*
+*Last updated: 2026-03-08 — background verify preserves cache on failure; explicit load clears on no-session*

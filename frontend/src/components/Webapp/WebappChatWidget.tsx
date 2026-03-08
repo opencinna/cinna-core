@@ -9,12 +9,71 @@ import type { MessagePublic } from "@/client"
 
 const API_URL = import.meta.env.VITE_API_URL
 const WEBAPP_TOKEN_KEY = "webapp_access_token"
+const WEBAPP_CHAT_CACHE_PREFIX = "webapp_chat_"
+
+// ── Types ─────────────────────────────────────────────────────────────────
 
 interface WebappChatWidgetProps {
   webappToken: string
   chatMode: "conversation" | "building"
   agentName: string
 }
+
+interface WebappChatCache {
+  sessionId: string
+  messages: MessagePublic[]
+  cachedAt: number
+}
+
+// ── Cache helpers ─────────────────────────────────────────────────────────
+
+function getCacheKey(webappToken: string): string {
+  return `${WEBAPP_CHAT_CACHE_PREFIX}${webappToken}`
+}
+
+function readCache(webappToken: string): WebappChatCache | null {
+  try {
+    const raw = localStorage.getItem(getCacheKey(webappToken))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as unknown
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      "sessionId" in parsed &&
+      "messages" in parsed &&
+      typeof (parsed as WebappChatCache).sessionId === "string" &&
+      Array.isArray((parsed as WebappChatCache).messages)
+    ) {
+      return parsed as WebappChatCache
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+function writeCache(
+  webappToken: string,
+  sessionId: string,
+  messages: MessagePublic[]
+): void {
+  try {
+    const entry: WebappChatCache = { sessionId, messages, cachedAt: Date.now() }
+    localStorage.setItem(getCacheKey(webappToken), JSON.stringify(entry))
+  } catch {
+    // Quota exceeded or storage unavailable — degrade gracefully
+  }
+}
+
+function clearCache(webappToken: string): void {
+  try {
+    localStorage.removeItem(getCacheKey(webappToken))
+  } catch {
+    // Storage unavailable — ignore
+  }
+}
+
+// ── Auth helper ───────────────────────────────────────────────────────────
 
 function getWebappJwt(): string | null {
   return localStorage.getItem(WEBAPP_TOKEN_KEY)
@@ -37,6 +96,8 @@ async function chatFetch(path: string, options: RequestInit = {}) {
   }
   return res.json()
 }
+
+// ── Component ─────────────────────────────────────────────────────────────
 
 export function WebappChatWidget({
   webappToken,
@@ -61,6 +122,11 @@ export function WebappChatWidget({
   const streamRoomRef = useRef<string | null>(null)
   const sessionStatusSubRef = useRef<string | null>(null)
 
+  // True when sessionId was restored from localStorage (needs background verify)
+  const needsBackgroundVerifyRef = useRef(false)
+  // Guards background verify so it only fires once per mount
+  const backgroundVerifyDoneRef = useRef(false)
+
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -75,13 +141,54 @@ export function WebappChatWidget({
     scrollToBottom()
   }, [messages, streamingEvents, scrollToBottom])
 
-  // Fetch existing session on first open
+  // ── Cache restore on mount ──────────────────────────────────────────────
+
+  const cacheRestoredRef = useRef(false)
+
+  useEffect(() => {
+    if (cacheRestoredRef.current) return
+    const cached = readCache(webappToken)
+    if (!cached) return
+
+    cacheRestoredRef.current = true
+    setSessionId(cached.sessionId)
+    setMessages(cached.messages)
+    needsBackgroundVerifyRef.current = true
+
+    // Signal that a prior session exists — show badge on FAB
+    if (cached.messages.length > 0) {
+      setHasUnread(true)
+    }
+  }, [webappToken])
+
+  // ── Background verify after cache restore ───────────────────────────────
+  // Runs once when sessionId was restored from cache (needsBackgroundVerifyRef).
+  // Does NOT run when sessionId is set via ensureSession() during a send.
+
+  useEffect(() => {
+    if (!sessionId || !needsBackgroundVerifyRef.current || backgroundVerifyDoneRef.current) return
+    backgroundVerifyDoneRef.current = true
+    needsBackgroundVerifyRef.current = false
+    loadExistingSession(true)
+  }, [sessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Persist cache on state change ───────────────────────────────────────
+
+  useEffect(() => {
+    if (sessionId) {
+      writeCache(webappToken, sessionId, messages)
+    }
+  }, [sessionId, messages, webappToken])
+
+  // ── Fetch existing session on first open (no cache) ─────────────────────
+
   useEffect(() => {
     if (!isOpen || sessionId || isLoadingSession) return
-    loadExistingSession()
-  }, [isOpen])
+    loadExistingSession(false)
+  }, [isOpen]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Subscribe to session interaction_status changes to track streaming
+  // ── Session interaction status subscription ─────────────────────────────
+
   useEffect(() => {
     if (!sessionId) return
 
@@ -110,10 +217,10 @@ export function WebappChatWidget({
     }
   }, [sessionId, isOpen])
 
-  // Subscribe to stream events when streaming starts
+  // ── Stream event subscription ───────────────────────────────────────────
+
   useEffect(() => {
     if (!sessionId || !isStreaming) {
-      // Cleanup stream subscriptions when not streaming
       if (streamSubscriptionRef.current) {
         eventService.unsubscribe(streamSubscriptionRef.current)
         streamSubscriptionRef.current = null
@@ -125,7 +232,6 @@ export function WebappChatWidget({
       return
     }
 
-    // Subscribe to streaming room
     const streamRoom = `session_${sessionId}_stream`
     streamRoomRef.current = streamRoom
     eventService.subscribeToRoom(streamRoom)
@@ -134,7 +240,6 @@ export function WebappChatWidget({
       const { session_id, data } = event
       if (session_id !== sessionId) return
 
-      // Handle stream_completed event as fallback for status change
       const eventType = data?.type || event.event_type
       if (eventType === "stream_completed") {
         setIsStreaming(false)
@@ -169,7 +274,8 @@ export function WebappChatWidget({
     }
   }, [sessionId, isStreaming])
 
-  // Cleanup on unmount
+  // ── Cleanup on unmount ──────────────────────────────────────────────────
+
   useEffect(() => {
     return () => {
       if (streamSubscriptionRef.current) {
@@ -184,8 +290,20 @@ export function WebappChatWidget({
     }
   }, [])
 
-  async function loadExistingSession() {
-    setIsLoadingSession(true)
+  // ── API functions ───────────────────────────────────────────────────────
+
+  /**
+   * Fetch or verify the active chat session.
+   *
+   * When called as a background verify (isBackgroundVerify=true), skips the
+   * loading spinner so cached messages remain visible without flickering. If
+   * the backend reports no active session, the local cache is cleared and state
+   * is reset so the widget starts fresh.
+   */
+  async function loadExistingSession(isBackgroundVerify = false) {
+    if (!isBackgroundVerify) {
+      setIsLoadingSession(true)
+    }
     setError(null)
     try {
       const session = await chatFetch(`${basePath}/sessions`)
@@ -195,24 +313,42 @@ export function WebappChatWidget({
           session.interaction_status === "running" ||
             session.interaction_status === "pending_stream"
         )
-        await loadMessages(session.id)
+        await loadMessages(session.id, isBackgroundVerify)
+      } else if (!isBackgroundVerify) {
+        // Only clear cache on explicit load, not background verify.
+        // Background verify failures should preserve cached state so the
+        // user can keep chatting after a page refresh.
+        clearCache(webappToken)
+        setSessionId(null)
+        setMessages([])
       }
     } catch (e: any) {
-      console.error("Failed to load chat session:", e)
+      if (isBackgroundVerify) {
+        // Silent failure — keep cached state, user can still interact
+        console.error("Background session verify failed:", e)
+      } else {
+        console.error("Failed to load chat session:", e)
+      }
     } finally {
-      setIsLoadingSession(false)
+      if (!isBackgroundVerify) {
+        setIsLoadingSession(false)
+      }
     }
   }
 
-  async function loadMessages(sid: string) {
-    setIsLoadingMessages(true)
+  async function loadMessages(sid: string, silent = false) {
+    if (!silent) {
+      setIsLoadingMessages(true)
+    }
     try {
       const data = await chatFetch(`${basePath}/sessions/${sid}/messages`)
       setMessages(data.data || [])
     } catch (e: any) {
       console.error("Failed to load messages:", e)
     } finally {
-      setIsLoadingMessages(false)
+      if (!silent) {
+        setIsLoadingMessages(false)
+      }
     }
   }
 

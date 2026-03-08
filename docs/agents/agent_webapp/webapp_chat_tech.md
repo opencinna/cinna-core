@@ -107,9 +107,37 @@ These methods are shared between webapp chat routes and regular session routes (
 
 ## Frontend Components
 
-- `WebappChatWidget.tsx` — Main widget: manages open/closed state, session lifecycle, message polling, streaming via WebSocket, interrupt. Sub-components: ChatFAB (floating button with unread badge), ChatOverlayPanel (slide-in panel with header, message list, input)
+- `WebappChatWidget.tsx` — Main widget: manages open/closed state, session lifecycle, message polling, streaming via WebSocket, interrupt, and localStorage persistence. Key internal functions: `loadExistingSession(isBackgroundVerify)` — fetches or verifies the active session; when `isBackgroundVerify=true`, skips the loading spinner and does not clear the cache on no-session. `loadMessages(sid, silent)` — fetches message history; when `silent=true`, skips the `isLoadingMessages` spinner (used during background verify). `refreshMessages()` — convenience wrapper calling `loadMessages` without silent flag (used after stream completes). Sub-components: ChatFAB (floating button with unread badge), ChatOverlayPanel (slide-in panel with header, message list, input)
 - `WebappInterfaceModal.tsx` — Radio group for chat mode (Disabled / Conversation / Building), replaces former show_chat toggle
 - `$webappToken.tsx` — Conditionally renders `WebappChatWidget` when `interface_config.chat_mode` is set; passes token, mode, agent name
+
+## localStorage Cache
+
+`WebappChatWidget.tsx` caches the chat session in localStorage for seamless page-refresh persistence.
+
+**Key**: `webapp_chat_{webappToken}` (e.g., `webapp_chat_abc123`)
+
+**Value schema**:
+```typescript
+interface WebappChatCache {
+  sessionId: string       // UUID of the active session
+  messages: MessagePublic[] // Persisted messages (not streaming events)
+  cachedAt: number        // Unix ms timestamp (for future TTL use)
+}
+```
+
+**Cache helpers** (module-level pure functions):
+- `getCacheKey(webappToken)` — returns the localStorage key
+- `readCache(webappToken)` — reads and validates shape; returns `null` on any error
+- `writeCache(webappToken, sessionId, messages)` — serializes and stores; silent on quota errors
+- `clearCache(webappToken)` — removes the entry; silent on storage errors
+
+**Lifecycle**:
+1. On mount: `readCache()` called; if hit, sets `sessionId` + `messages` in state immediately, marks `needsBackgroundVerifyRef = true`, and sets `cacheRestoredRef = true` to prevent the effect from running a second time if `webappToken` ever changes identity
+2. Background verify: fires once when `sessionId` becomes non-null from cache (guarded by `needsBackgroundVerifyRef` and `backgroundVerifyDoneRef`); calls `loadExistingSession(true)` which passes `isBackgroundVerify=true`, suppressing the loading spinner via `loadMessages(sid, silent=true)` and preserving cached state if the session is not found or the request fails
+3. If background verify finds no active session: cached state is preserved (no `clearCache()`, no state reset). Only an explicit (non-background) `loadExistingSession(false)` call will clear the cache and reset state when no session exists
+4. Cache write: `useEffect` on `[sessionId, messages, webappToken]` calls `writeCache()` on every state change
+5. Incognito / new window: isolated localStorage gives a fresh session automatically
 
 ## Socket.IO Connection for Webapp Viewers
 
@@ -172,4 +200,4 @@ This dual emission applies to all handlers: `handle_stream_started`, `handle_str
 
 ---
 
-*Last updated: 2026-03-08*
+*Last updated: 2026-03-08 — background verify preserves cache on failure; loadMessages silent parameter; cacheRestoredRef guard*
