@@ -1,6 +1,6 @@
 from uuid import UUID
 from datetime import datetime, UTC
-from typing import AsyncIterator
+from typing import AsyncIterator, NamedTuple
 import json
 import time
 import httpx
@@ -26,6 +26,100 @@ PRE_ALLOWED_TOOLS = frozenset([
     "mcp__knowledge__query_integration_knowledge", "mcp__task__create_agent_task",
     "mcp__task__update_session_state", "mcp__task__respond_to_task"
 ])
+
+# Metadata keys to forward from streaming events to response_metadata
+_FORWARDED_METADATA_KEYS = {"model", "total_cost_usd", "claude_code_version", "duration_ms", "num_turns"}
+
+# Keys to keep when copying event metadata for storage
+_STORED_EVENT_METADATA_KEYS = {"tool_id", "tool_input", "model", "needs_approval", "tool_name"}
+
+
+class MessageServiceError(Exception):
+    """Domain exception for message service operations."""
+    def __init__(self, message: str, status_code: int = 400):
+        self.message = message
+        self.status_code = status_code
+        super().__init__(message)
+
+
+class StreamContext(NamedTuple):
+    """Pre-resolved context for streaming a message to agent environment."""
+    user_id: UUID | None
+    allowed_tools: set
+    previous_result_state: str | None
+    session_context: dict | None
+    base_url: str
+    auth_headers: dict
+    env_auth_token: str | None
+
+
+async def _emit_activity_event(
+    event_type,
+    session_id: UUID,
+    environment_id: UUID,
+    session_mode: str,
+    user_id: UUID | None,
+    **extra_meta,
+) -> None:
+    """Fire-and-forget activity event with standard error handling."""
+    try:
+        from app.services.event_service import event_service
+        await event_service.emit_event(
+            event_type=event_type,
+            model_id=session_id,
+            meta={
+                "session_id": str(session_id),
+                "environment_id": str(environment_id),
+                "session_mode": session_mode,
+                **extra_meta,
+            },
+            user_id=user_id,
+        )
+        logger.info(f"Emitted {event_type.value if hasattr(event_type, 'value') else event_type} event for session {session_id}")
+    except Exception as e:
+        logger.error(f"Failed to emit {event_type} event: {e}", exc_info=True)
+
+
+def _build_session_context(
+    db: Session,
+    session_db: ChatSession,
+    env: AgentEnvironment | None,
+    agent: Agent | None,
+) -> dict:
+    """Build session_context dict for agent-env, including email/MCP enrichment."""
+    context = {
+        "integration_type": session_db.integration_type,
+        "agent_id": str(env.agent_id) if env and env.agent_id else None,
+        "is_clone": agent.is_clone if agent else False,
+        "parent_agent_id": str(agent.parent_agent_id) if agent and agent.parent_agent_id else None,
+        "sender_email": session_db.sender_email,
+        "email_thread_id": session_db.email_thread_id,
+        "backend_session_id": str(session_db.id),
+    }
+
+    # Fetch email subject from the initiating EmailMessage (avoid data duplication)
+    if session_db.integration_type == "email":
+        from app.models.email_message import EmailMessage
+        initiating_email = db.exec(
+            select(EmailMessage)
+            .where(EmailMessage.session_id == session_db.id)
+            .order_by(EmailMessage.received_at.asc())
+            .limit(1)
+        ).first()
+        if initiating_email:
+            context["email_subject"] = initiating_email.subject
+
+    # Fetch authenticated MCP user email (may differ from session owner)
+    if session_db.integration_type == "mcp":
+        mcp_meta = db.exec(
+            select(MCPSessionMeta).where(
+                MCPSessionMeta.session_id == session_db.id
+            )
+        ).first()
+        if mcp_meta:
+            context["mcp_user_email"] = mcp_meta.authenticated_user_email
+
+    return context
 
 
 class MessageService:
@@ -120,46 +214,31 @@ class MessageService:
         4. Updates message_files with agent_env_paths
         5. Marks files as attached
 
-        Args:
-            session: Database session
-            session_id: Session UUID
-            message_content: Original user message content (without file paths)
-            file_ids: List of file IDs to attach
-            environment_id: Environment UUID for file upload
-            user_id: User UUID for ownership validation
-            answers_to_message_id: Optional message ID being answered
-
-        Returns:
-            tuple: (user_message, message_content_for_agent)
-                - user_message: Created SessionMessage with files
-                - message_content_for_agent: Message content with file paths prepended
-
         Raises:
-            HTTPException: If validation fails or upload errors
+            MessageServiceError: If validation fails or upload errors
         """
         from app.models.file_upload import FileUpload, MessageFile
         from app.services.file_service import FileService
         from sqlmodel import select
-        from fastapi import HTTPException
 
         # Validate files exist
         statement = select(FileUpload).where(FileUpload.id.in_(file_ids))
         files = session.exec(statement).all()
 
         if len(files) != len(file_ids):
-            raise HTTPException(status_code=400, detail="Some files not found")
+            raise MessageServiceError("Some files not found", status_code=400)
 
         # Check ownership and status
         for file in files:
             if file.user_id != user_id:
-                raise HTTPException(
+                raise MessageServiceError(
+                    f"Not authorized for file: {file.filename}",
                     status_code=403,
-                    detail=f"Not authorized for file: {file.filename}"
                 )
             if file.status != "temporary":
-                raise HTTPException(
+                raise MessageServiceError(
+                    f"File already attached: {file.filename}",
                     status_code=400,
-                    detail=f"File already attached: {file.filename}"
                 )
 
         # Upload files to agent-env
@@ -169,13 +248,11 @@ class MessageService:
                 file_ids=file_ids,
                 environment_id=environment_id,
             )
-        except HTTPException:
-            raise  # Re-raise HTTP exceptions as-is
         except Exception as e:
-            raise HTTPException(
+            raise MessageServiceError(
+                f"Failed to upload files to agent environment: {str(e)}",
                 status_code=500,
-                detail=f"Failed to upload files to agent environment: {str(e)}"
-            )
+            ) from e
 
         # Compose message content with file paths for agent
         file_list = "\n".join(f"- {path}" for path in agent_file_paths.values())
@@ -547,30 +624,14 @@ class MessageService:
 
     @staticmethod
     def get_environment_url(environment: AgentEnvironment) -> str:
-        """
-        Get environment base URL from config.
-
-        Args:
-            environment: AgentEnvironment instance
-
-        Returns:
-            Base URL for the environment (e.g., "http://agent-{env_id}:8000")
-        """
+        """Get environment base URL from config."""
         container_name = environment.config.get("container_name", f"agent-{environment.id}")
         port = environment.config.get("port", 8000)
         return f"http://{container_name}:{port}"
 
     @staticmethod
     def get_auth_headers(environment: AgentEnvironment) -> dict:
-        """
-        Get authentication headers for environment API calls.
-
-        Args:
-            environment: AgentEnvironment instance
-
-        Returns:
-            Headers dict with Authorization bearer token
-        """
+        """Get authentication headers for environment API calls."""
         auth_token = environment.config.get("auth_token")
         if auth_token:
             return {"Authorization": f"Bearer {auth_token}"}
@@ -585,18 +646,8 @@ class MessageService:
         """
         Forward interrupt request to the agent environment.
 
-        Args:
-            base_url: Environment base URL
-            auth_headers: Authentication headers
-            external_session_id: External SDK session ID
-
         Returns:
-            dict with status information:
-            {
-                "status": "ok" | "warning" | "error",
-                "message": str,
-                "external_session_id": str
-            }
+            dict with status information
 
         Raises:
             Exception: If communication with environment fails
@@ -642,24 +693,6 @@ class MessageService:
         Send message to environment and stream response.
 
         Delegates HTTP/SSE logic to agent_env_connector (injectable for testing).
-
-        Yields SSE events from the environment server in the format:
-        {
-            "type": "session_created" | "assistant" | "tool" | "result" | "error" | "done",
-            "content": str,
-            "session_id": str (external SDK session ID),
-            "metadata": dict
-        }
-
-        Args:
-            base_url: Environment base URL
-            auth_headers: Authentication headers
-            user_message: User's message content
-            mode: Session mode ("building" or "conversation")
-            external_session_id: Optional external SDK session ID for resumption
-
-        Yields:
-            dict: SSE event chunks from environment
         """
         payload = {
             "message": user_message,
@@ -800,6 +833,282 @@ class MessageService:
         return response
 
     @staticmethod
+    def _resolve_stream_context(
+        db: Session,
+        session_id: UUID,
+        environment_id: UUID,
+    ) -> StreamContext:
+        """
+        Resolve all context needed before starting a stream.
+
+        Loads session, environment, agent; builds session_context;
+        resets result_state if needed. Returns a StreamContext NamedTuple.
+        """
+        session_db = db.get(ChatSession, session_id)
+        user_id = session_db.user_id if session_db else None
+        allowed_tools = set()
+        previous_result_state = None
+        session_context = None
+        env_base_url = ""
+        env_auth_headers = {}
+        env_auth_token = None
+
+        if session_db:
+            env = db.get(AgentEnvironment, environment_id)
+            agent = None
+            if env:
+                env_base_url = MessageService.get_environment_url(env)
+                env_auth_headers = MessageService.get_auth_headers(env)
+                env_auth_token = env.config.get("auth_token") if env.config else None
+
+                if env.agent_id:
+                    agent = db.get(Agent, env.agent_id)
+                    if agent and agent.agent_sdk_config:
+                        allowed_tools = set(agent.agent_sdk_config.get("allowed_tools", []))
+
+            session_context = _build_session_context(db, session_db, env, agent)
+
+            # Reset result_state when user sends a new message
+            if session_db.result_state is not None:
+                previous_result_state = session_db.result_state
+                session_db.result_state = None
+                session_db.result_summary = None
+                db.add(session_db)
+                db.commit()
+                logger.info(
+                    f"Reset result_state '{previous_result_state}' for session {session_id}"
+                )
+
+                # Sync task status if session is linked to a task
+                if session_db.source_task_id:
+                    from app.services.input_task_service import InputTaskService
+                    InputTaskService.sync_task_status_from_sessions(
+                        db_session=db, task_id=session_db.source_task_id
+                    )
+
+        return StreamContext(
+            user_id=user_id,
+            allowed_tools=allowed_tools,
+            previous_result_state=previous_result_state,
+            session_context=session_context,
+            base_url=env_base_url,
+            auth_headers=env_auth_headers,
+            env_auth_token=env_auth_token,
+        )
+
+    @staticmethod
+    async def _handle_session_id_capture(
+        session_id: UUID,
+        new_external_session_id: str,
+        base_url: str,
+        auth_headers: dict,
+        get_fresh_db_session: callable,
+    ) -> None:
+        """
+        Handle first capture of external_session_id during streaming.
+
+        Updates ActiveStreamingManager, forwards any pending interrupt,
+        and persists the ID to the database.
+        """
+        # Update active streaming manager — returns True if there's a pending interrupt
+        interrupt_pending = await active_streaming_manager.update_external_session_id(
+            session_id=session_id,
+            external_session_id=new_external_session_id,
+        )
+
+        # If interrupt was requested before external_session_id was available, forward it now
+        if interrupt_pending:
+            logger.info(f"Forwarding pending interrupt to agent env for session {session_id}")
+            try:
+                await MessageService.forward_interrupt_to_environment(
+                    base_url=base_url,
+                    auth_headers=auth_headers,
+                    external_session_id=new_external_session_id,
+                )
+            except Exception as e:
+                logger.error(f"Error forwarding pending interrupt: {e}")
+
+        # Store external session ID in DB
+        def _store_session_id():
+            with get_fresh_db_session() as db:
+                from app.services.session_service import SessionService
+                chat_session_db = db.get(ChatSession, session_id)
+                if chat_session_db:
+                    SessionService.set_external_session_id(
+                        db=db,
+                        session=chat_session_db,
+                        external_session_id=new_external_session_id,
+                    )
+        await asyncio.to_thread(_store_session_id)
+
+    @staticmethod
+    async def _handle_tools_init_event(
+        event: dict,
+        environment_id: UUID,
+        get_fresh_db_session: callable,
+    ) -> None:
+        """Update agent's sdk_tools from a tools_init system event."""
+        tools_list = event.get("data", {}).get("tools", [])
+        if not tools_list:
+            return
+
+        def _update_sdk_tools():
+            with get_fresh_db_session() as db:
+                env = db.get(AgentEnvironment, environment_id)
+                if env and env.agent_id:
+                    try:
+                        AgentService.update_sdk_tools(
+                            session=db,
+                            agent_id=env.agent_id,
+                            tools=tools_list,
+                        )
+                        logger.info(f"Updated sdk_tools for agent {env.agent_id} with {len(tools_list)} tools")
+                    except Exception as e:
+                        logger.error(f"Failed to update sdk_tools: {e}")
+        await asyncio.to_thread(_update_sdk_tools)
+
+    @staticmethod
+    async def _handle_tool_event(
+        event: dict,
+        agent_allowed_tools: set,
+        tools_needing_approval: set,
+        session_id: UUID,
+        user_id: UUID | None,
+        get_fresh_db_session: callable,
+    ) -> None:
+        """
+        Process tool events: approval flagging, TodoWrite progress tracking.
+
+        Mutates event dict (adds metadata flags) and tools_needing_approval set.
+        """
+        from app.models.event import EventType
+
+        tool_name = event["tool_name"]
+
+        # Check if tool needs approval (not in pre-allowed or agent's allowed_tools)
+        needs_approval = (
+            tool_name not in PRE_ALLOWED_TOOLS and
+            tool_name not in agent_allowed_tools
+        )
+        if needs_approval:
+            if "metadata" not in event:
+                event["metadata"] = {}
+            event["metadata"]["needs_approval"] = True
+            event["metadata"]["tool_name"] = tool_name
+            tools_needing_approval.add(tool_name)
+            logger.info(f"Tool '{tool_name}' flagged as needing approval")
+
+        # Detect TodoWrite tool calls for progress tracking
+        if tool_name.lower() == "todowrite":
+            tool_input = event.get("metadata", {}).get("tool_input", {})
+            todos = tool_input.get("todos", [])
+            if todos:
+                def _update_todo_progress():
+                    with get_fresh_db_session() as db:
+                        session_db = db.get(ChatSession, session_id)
+                        if session_db:
+                            session_db.todo_progress = todos
+                            db.add(session_db)
+                            db.commit()
+                            logger.info(f"Updated todo_progress for session {session_id} with {len(todos)} items")
+                await asyncio.to_thread(_update_todo_progress)
+
+                await _emit_activity_event(
+                    event_type=EventType.TODO_LIST_UPDATED,
+                    session_id=session_id,
+                    environment_id=UUID(int=0),  # not relevant for this event
+                    session_mode="",
+                    user_id=user_id,
+                    todos=todos,
+                )
+
+    @staticmethod
+    async def _flush_streaming_to_db(
+        agent_message_id: UUID,
+        streaming_events: list[dict],
+        response_metadata: dict,
+        get_fresh_db_session: callable,
+        session_id: UUID,
+    ) -> None:
+        """Periodic flush of streaming content to DB for crash recovery."""
+        flush_events = list(streaming_events)
+        flush_content = "\n\n".join(
+            e["content"] for e in flush_events
+            if e["type"] == "assistant" and e.get("content")
+        ) or "Agent is responding..."
+
+        flush_metadata = dict(response_metadata)
+
+        def _flush(
+            msg_id=agent_message_id,
+            content=flush_content,
+            events=flush_events,
+            metadata=flush_metadata,
+        ):
+            from sqlalchemy.orm.attributes import flag_modified
+            with get_fresh_db_session() as db:
+                agent_msg = db.get(SessionMessage, msg_id)
+                if agent_msg:
+                    agent_msg.content = content
+                    metadata["streaming_in_progress"] = True
+                    metadata["streaming_events"] = events
+                    agent_msg.message_metadata = metadata
+                    flag_modified(agent_msg, "message_metadata")
+                    db.add(agent_msg)
+                    db.commit()
+
+        await asyncio.to_thread(_flush)
+        flush_seq = streaming_events[-1].get("event_seq", 0) if streaming_events else 0
+        await active_streaming_manager.update_last_flushed_seq(session_id, flush_seq)
+        logger.debug(f"Flushed streaming content to DB (seq={flush_seq}) for session {session_id}")
+
+    @staticmethod
+    async def _finalize_agent_message(
+        agent_message_id: UUID | None,
+        session_id: UUID,
+        agent_content: str,
+        response_metadata: dict,
+        tool_questions_status: str | None,
+        was_interrupted: bool,
+        get_fresh_db_session: callable,
+    ) -> None:
+        """Save or update the final agent message after stream completes."""
+        def _save_or_update():
+            from sqlalchemy.orm.attributes import flag_modified
+            response_metadata["streaming_in_progress"] = False
+            status = "user_interrupted" if was_interrupted else ""
+            status_msg = "Interrupted by user" if was_interrupted else None
+            with get_fresh_db_session() as db:
+                if agent_message_id:
+                    agent_message = db.get(SessionMessage, agent_message_id)
+                    if agent_message:
+                        agent_message.content = agent_content
+                        agent_message.message_metadata = response_metadata
+                        flag_modified(agent_message, "message_metadata")
+                        agent_message.tool_questions_status = tool_questions_status
+                        agent_message.status = status
+                        agent_message.status_message = status_msg
+                        db.add(agent_message)
+                        db.commit()
+                        logger.info(f"Updated agent message {agent_message_id} with final content")
+                        return
+                    else:
+                        logger.error(f"Agent message {agent_message_id} not found for update, creating new one")
+
+                # Fallback: create new message
+                MessageService.create_message(
+                    session=db,
+                    session_id=session_id,
+                    role="agent",
+                    content=agent_content,
+                    message_metadata=response_metadata,
+                    tool_questions_status=tool_questions_status,
+                    status=status,
+                    status_message=status_msg,
+                )
+        await asyncio.to_thread(_save_or_update)
+
+    @staticmethod
     async def stream_message_with_events(
         session_id: UUID,
         environment_id: UUID,
@@ -819,137 +1128,36 @@ class MessageService:
         - Updates session status
         - Syncs agent prompts (for building mode)
         - Yields SSE events for frontend
-
-        Args:
-            session_id: Session UUID
-            environment_id: Environment UUID (used to resolve base_url and auth)
-            user_message_content: User's message
-            session_mode: "building" or "conversation"
-            external_session_id: External SDK session ID (None for new)
-            get_fresh_db_session: Callable that returns a fresh DB session (context manager)
-
-        Yields:
-            dict: SSE event dictionaries
         """
+        from app.models.event import EventType
 
         # Register this as an active stream BEFORE starting
-        # This allows frontend to reconnect if it disconnects during streaming
         await active_streaming_manager.register_stream(
             session_id=session_id,
             external_session_id=external_session_id
         )
 
-        # Get user_id, agent's allowed_tools, reset result_state, session context,
-        # and resolve environment base_url + auth_headers
-        def _get_session_context_and_reset_state():
+        # Resolve all context needed for streaming
+        def _resolve_context():
             with get_fresh_db_session() as db:
-                session_db = db.get(ChatSession, session_id)
-                user_id = session_db.user_id if session_db else None
-                allowed_tools = set()
-                previous_result_state = None
-                session_context = None
-                env_base_url = ""
-                env_auth_headers = {}
-                env_auth_token = None
+                return MessageService._resolve_stream_context(db, session_id, environment_id)
 
-                if session_db:
-                    env = db.get(AgentEnvironment, environment_id)
-                    agent = None
-                    if env:
-                        # Resolve environment URL and auth headers
-                        env_base_url = MessageService.get_environment_url(env)
-                        env_auth_headers = MessageService.get_auth_headers(env)
-                        env_auth_token = env.config.get("auth_token") if env.config else None
-
-                        if env.agent_id:
-                            agent = db.get(Agent, env.agent_id)
-                            if agent and agent.agent_sdk_config:
-                                allowed_tools = set(agent.agent_sdk_config.get("allowed_tools", []))
-
-                    # Build session context for agent-env
-                    session_context = {
-                        "integration_type": session_db.integration_type,
-                        "agent_id": str(env.agent_id) if env and env.agent_id else None,
-                        "is_clone": agent.is_clone if agent else False,
-                        "parent_agent_id": str(agent.parent_agent_id) if agent and agent.parent_agent_id else None,
-                        "sender_email": session_db.sender_email,
-                        "email_thread_id": session_db.email_thread_id,
-                        "backend_session_id": str(session_db.id),
-                    }
-
-                    # Fetch email subject from the initiating EmailMessage (avoid data duplication)
-                    if session_db.integration_type == "email":
-                        from app.models.email_message import EmailMessage
-                        initiating_email = db.exec(
-                            select(EmailMessage)
-                            .where(EmailMessage.session_id == session_db.id)
-                            .order_by(EmailMessage.received_at.asc())
-                            .limit(1)
-                        ).first()
-                        if initiating_email:
-                            session_context["email_subject"] = initiating_email.subject
-
-                    # Fetch authenticated MCP user email (may differ from session owner)
-                    if session_db.integration_type == "mcp":
-                        mcp_meta = db.exec(
-                            select(MCPSessionMeta).where(
-                                MCPSessionMeta.session_id == session_db.id
-                            )
-                        ).first()
-                        if mcp_meta:
-                            session_context["mcp_user_email"] = mcp_meta.authenticated_user_email
-
-                    # Reset result_state when user sends a new message
-                    if session_db.result_state is not None:
-                        previous_result_state = session_db.result_state
-                        session_db.result_state = None
-                        session_db.result_summary = None
-                        db.add(session_db)
-                        db.commit()
-                        logger.info(
-                            f"Reset result_state '{previous_result_state}' for session {session_id}"
-                        )
-
-                        # Sync task status if session is linked to a task
-                        if session_db.source_task_id:
-                            from app.services.input_task_service import InputTaskService
-                            InputTaskService.sync_task_status_from_sessions(
-                                db_session=db, task_id=session_db.source_task_id
-                            )
-
-                return user_id, allowed_tools, previous_result_state, session_context, env_base_url, env_auth_headers, env_auth_token
-        user_id, agent_allowed_tools, previous_result_state, session_context, base_url, auth_headers, env_auth_token = await asyncio.to_thread(
-            _get_session_context_and_reset_state
-        )
+        ctx = await asyncio.to_thread(_resolve_context)
 
         # Emit STREAM_STARTED event for activity tracking
-        try:
-            from app.services.event_service import event_service
-            from app.models.event import EventType
-            await event_service.emit_event(
-                event_type=EventType.STREAM_STARTED,
-                model_id=session_id,
-                meta={
-                    "session_id": str(session_id),
-                    "environment_id": str(environment_id),
-                    "session_mode": session_mode,
-                },
-                user_id=user_id
-            )
-            logger.info(f"Emitted STREAM_STARTED event for session {session_id}")
-        except Exception as e:
-            logger.error(f"Failed to emit STREAM_STARTED event: {e}", exc_info=True)
+        await _emit_activity_event(
+            EventType.STREAM_STARTED, session_id, environment_id, session_mode, ctx.user_id
+        )
 
         # Variables to collect agent response
-        agent_response_parts = []
-        streaming_events = []  # Store raw streaming events for visualization
+        streaming_events = []
         new_external_session_id = external_session_id
-        was_interrupted = False  # Track if message was interrupted
-        agent_message_id = None  # Track agent message ID for early creation
-        tools_needing_approval = set()  # Track all tools that need approval in this message
-        event_seq_counter = 0  # Monotonically incrementing event sequence
-        last_flush_time = time.time()  # Track last DB flush for incremental persistence
-        FLUSH_INTERVAL = 2.0  # Flush to DB every 2 seconds
+        was_interrupted = False
+        agent_message_id = None
+        tools_needing_approval = set()
+        event_seq_counter = 0
+        last_flush_time = time.time()
+        FLUSH_INTERVAL = 2.0
         response_metadata = {
             "external_session_id": external_session_id,
             "mode": session_mode,
@@ -957,23 +1165,23 @@ class MessageService:
 
         # Build session_state for agent-env
         session_state = None
-        if previous_result_state or session_context:
+        if ctx.previous_result_state or ctx.session_context:
             session_state = {}
-            if previous_result_state:
-                session_state["previous_result_state"] = previous_result_state
-            if session_context:
-                session_state["session_context"] = session_context
+            if ctx.previous_result_state:
+                session_state["previous_result_state"] = ctx.previous_result_state
+            if ctx.session_context:
+                session_state["session_context"] = ctx.session_context
                 # HMAC-sign context so agent-env can verify authenticity
-                if env_auth_token:
+                if ctx.env_auth_token:
                     session_state["session_context_signature"] = sign_session_context(
-                        session_context, env_auth_token
+                        ctx.session_context, ctx.env_auth_token
                     )
 
         try:
             # Stream from environment
             async for event in MessageService.send_message_to_environment_stream(
-                base_url=base_url,
-                auth_headers=auth_headers,
+                base_url=ctx.base_url,
+                auth_headers=ctx.auth_headers,
                 user_message=user_message_content,
                 mode=session_mode,
                 external_session_id=external_session_id,
@@ -984,28 +1192,11 @@ class MessageService:
                 if event.get("type") == "interrupted":
                     was_interrupted = True
                     logger.info("Message was interrupted by user")
-
-                    # Emit STREAM_INTERRUPTED event for activity tracking
-                    try:
-                        from app.services.event_service import event_service as evt_service
-                        from app.models.event import EventType
-                        await evt_service.emit_event(
-                            event_type=EventType.STREAM_INTERRUPTED,
-                            model_id=session_id,
-                            meta={
-                                "session_id": str(session_id),
-                                "environment_id": str(environment_id),
-                                "session_mode": session_mode
-                            },
-                            user_id=user_id
-                        )
-                        logger.info(f"Emitted STREAM_INTERRUPTED event for session {session_id}")
-                    except Exception as e:
-                        logger.error(f"Failed to emit STREAM_INTERRUPTED event: {e}", exc_info=True)
-
-                    # Forward event to frontend
+                    await _emit_activity_event(
+                        EventType.STREAM_INTERRUPTED, session_id, environment_id,
+                        session_mode, ctx.user_id,
+                    )
                     yield event
-                    # Don't return - let cleanup happen below
                     break
 
                 # Handle error events from message service
@@ -1016,7 +1207,6 @@ class MessageService:
                     # Check if this is a corrupted session error
                     if event.get("session_corrupted"):
                         logger.warning(f"Session {session_id} has corrupted external_session_id, clearing it")
-                        # Clear the corrupted external_session_id so next message starts fresh
                         def _clear_corrupted_session():
                             with get_fresh_db_session() as db:
                                 from app.services.session_service import SessionService
@@ -1042,147 +1232,49 @@ class MessageService:
                             )
                     await asyncio.to_thread(_save_error_message)
 
-                    # Emit STREAM_ERROR event for activity tracking
-                    try:
-                        from app.services.event_service import event_service as evt_service
-                        from app.models.event import EventType
-                        await evt_service.emit_event(
-                            event_type=EventType.STREAM_ERROR,
-                            model_id=session_id,
-                            meta={
-                                "session_id": str(session_id),
-                                "environment_id": str(environment_id),
-                                "error_type": error_type,
-                                "error_message": error_content,
-                                "session_mode": session_mode
-                            },
-                            user_id=user_id
-                        )
-                        logger.info(f"Emitted STREAM_ERROR event for session {session_id}")
-                    except Exception as e:
-                        logger.error(f"Failed to emit STREAM_ERROR event: {e}", exc_info=True)
+                    await _emit_activity_event(
+                        EventType.STREAM_ERROR, session_id, environment_id,
+                        session_mode, ctx.user_id,
+                        error_type=error_type, error_message=error_content,
+                    )
 
-                    # Forward error event and exit
                     yield event
                     return
 
-                # Capture external session ID from first event that has it (not just "done")
-                # This allows us to forward pending interrupts early in the stream
+                # Capture external session ID from first event that has it
                 if not new_external_session_id:
                     event_session_id = event.get("session_id") or event.get("metadata", {}).get("session_id")
-                    logger.debug(f"🔍 Event type={event.get('type')}, session_id={event.get('session_id')}, metadata.session_id={event.get('metadata', {}).get('session_id')}")
+                    logger.debug(f"Event type={event.get('type')}, session_id={event.get('session_id')}, metadata.session_id={event.get('metadata', {}).get('session_id')}")
                     if event_session_id:
                         new_external_session_id = event_session_id
-                        logger.info(f"✅ External session ID captured early from event type={event.get('type')}: {new_external_session_id}")
+                        logger.info(f"External session ID captured early from event type={event.get('type')}: {new_external_session_id}")
 
-                        # Update active streaming manager with external session ID
-                        # This returns True if there's a pending interrupt
-                        interrupt_pending = await active_streaming_manager.update_external_session_id(
+                        await MessageService._handle_session_id_capture(
                             session_id=session_id,
-                            external_session_id=new_external_session_id
+                            new_external_session_id=new_external_session_id,
+                            base_url=ctx.base_url,
+                            auth_headers=ctx.auth_headers,
+                            get_fresh_db_session=get_fresh_db_session,
                         )
-
-                        # If interrupt was requested before external_session_id was available, forward it now
-                        if interrupt_pending:
-                            logger.info(f"Forwarding pending interrupt to agent env for session {session_id}")
-                            try:
-                                import httpx
-                                async with httpx.AsyncClient(timeout=5.0) as client:
-                                    response = await client.post(
-                                        f"{base_url}/chat/interrupt/{new_external_session_id}",
-                                        headers=auth_headers
-                                    )
-                                    if response.status_code == 200:
-                                        logger.info(f"Pending interrupt forwarded successfully")
-                                    else:
-                                        logger.warning(f"Failed to forward pending interrupt: {response.status_code}")
-                            except Exception as e:
-                                logger.error(f"Error forwarding pending interrupt: {e}")
-
-                        # Store external session ID (non-blocking)
-                        def _store_session_id():
-                            with get_fresh_db_session() as db:
-                                from app.services.session_service import SessionService
-                                chat_session_db = db.get(ChatSession, session_id)
-                                if chat_session_db:
-                                    SessionService.set_external_session_id(
-                                        db=db,
-                                        session=chat_session_db,
-                                        external_session_id=new_external_session_id
-                                        # sdk_type is optional
-                                    )
-                        await asyncio.to_thread(_store_session_id)
 
                 # Handle tools_init event - update agent's sdk_tools
                 if event.get("type") == "system" and event.get("subtype") == "tools_init":
-                    tools_list = event.get("data", {}).get("tools", [])
-                    if tools_list:
-                        def _update_sdk_tools():
-                            with get_fresh_db_session() as db:
-                                # Get agent_id from environment
-                                env = db.get(AgentEnvironment, environment_id)
-                                if env and env.agent_id:
-                                    try:
-                                        AgentService.update_sdk_tools(
-                                            session=db,
-                                            agent_id=env.agent_id,
-                                            tools=tools_list
-                                        )
-                                        logger.info(f"Updated sdk_tools for agent {env.agent_id} with {len(tools_list)} tools")
-                                    except Exception as e:
-                                        logger.error(f"Failed to update sdk_tools: {e}")
-                        await asyncio.to_thread(_update_sdk_tools)
+                    await MessageService._handle_tools_init_event(
+                        event, environment_id, get_fresh_db_session,
+                    )
                     # Don't forward this event to frontend - it's internal
                     continue
 
-                # Check tool events for approval status
+                # Check tool events for approval status and TodoWrite progress
                 if event.get("type") == "tool" and event.get("tool_name"):
-                    tool_name = event["tool_name"]
-                    # Check if tool needs approval (not in pre-allowed or agent's allowed_tools)
-                    needs_approval = (
-                        tool_name not in PRE_ALLOWED_TOOLS and
-                        tool_name not in agent_allowed_tools
+                    await MessageService._handle_tool_event(
+                        event=event,
+                        agent_allowed_tools=ctx.allowed_tools,
+                        tools_needing_approval=tools_needing_approval,
+                        session_id=session_id,
+                        user_id=ctx.user_id,
+                        get_fresh_db_session=get_fresh_db_session,
                     )
-                    if needs_approval:
-                        # Add metadata to flag this tool needs approval
-                        if "metadata" not in event:
-                            event["metadata"] = {}
-                        event["metadata"]["needs_approval"] = True
-                        event["metadata"]["tool_name"] = tool_name
-                        # Track for summary in final message metadata
-                        tools_needing_approval.add(tool_name)
-                        logger.info(f"Tool '{tool_name}' flagged as needing approval")
-
-                    # Detect TodoWrite tool calls for progress tracking
-                    if tool_name.lower() == "todowrite":
-                        tool_input = event.get("metadata", {}).get("tool_input", {})
-                        todos = tool_input.get("todos", [])
-                        if todos:
-                            # Update session's todo_progress and emit event
-                            def _update_todo_progress():
-                                with get_fresh_db_session() as db:
-                                    session_db = db.get(ChatSession, session_id)
-                                    if session_db:
-                                        session_db.todo_progress = todos
-                                        db.add(session_db)
-                                        db.commit()
-                                        logger.info(f"Updated todo_progress for session {session_id} with {len(todos)} items")
-                            await asyncio.to_thread(_update_todo_progress)
-
-                            # Emit TODO_LIST_UPDATED event
-                            try:
-                                await event_service.emit_event(
-                                    event_type=EventType.TODO_LIST_UPDATED,
-                                    model_id=session_id,
-                                    user_id=user_id,
-                                    meta={
-                                        "session_id": str(session_id),
-                                        "todos": todos
-                                    }
-                                )
-                                logger.info(f"Emitted TODO_LIST_UPDATED event for session {session_id}")
-                            except Exception as e:
-                                logger.error(f"Failed to emit TODO_LIST_UPDATED event: {e}", exc_info=True)
 
                 # Store raw event for visualization (exclude done/error events from storage)
                 if event.get("type") not in ["done", "error", "session_created"]:
@@ -1197,7 +1289,7 @@ class MessageService:
                     if event.get("metadata"):
                         event_copy["metadata"] = {
                             k: v for k, v in event["metadata"].items()
-                            if k in ["tool_id", "tool_input", "model", "needs_approval", "tool_name"]
+                            if k in _STORED_EVENT_METADATA_KEYS
                         }
                     streaming_events.append(event_copy)
 
@@ -1209,49 +1301,22 @@ class MessageService:
 
                     # Periodic flush to DB (non-blocking)
                     if agent_message_id and (time.time() - last_flush_time >= FLUSH_INTERVAL):
-                        flush_seq = event_seq_counter
-                        flush_events = list(streaming_events)
-                        flush_content = "\n\n".join(
-                            e["content"] for e in flush_events
-                            if e["type"] == "assistant" and e.get("content")
-                        ) or "Agent is responding..."
-
-                        def _flush_streaming_content(
-                            msg_id=agent_message_id,
-                            content=flush_content,
-                            events=flush_events,
-                            seq=flush_seq,
-                            metadata=dict(response_metadata),
-                        ):
-                            from sqlalchemy.orm.attributes import flag_modified
-                            with get_fresh_db_session() as db:
-                                agent_msg = db.get(SessionMessage, msg_id)
-                                if agent_msg:
-                                    agent_msg.content = content
-                                    metadata["streaming_in_progress"] = True
-                                    metadata["streaming_events"] = events
-                                    agent_msg.message_metadata = metadata
-                                    flag_modified(agent_msg, "message_metadata")
-                                    db.add(agent_msg)
-                                    db.commit()
-
-                        await asyncio.to_thread(_flush_streaming_content)
-                        await active_streaming_manager.update_last_flushed_seq(session_id, flush_seq)
+                        await MessageService._flush_streaming_to_db(
+                            agent_message_id, streaming_events, response_metadata,
+                            get_fresh_db_session, session_id,
+                        )
                         last_flush_time = time.time()
-                        logger.debug(f"Flushed streaming content to DB (seq={flush_seq}) for session {session_id}")
 
                 # Create agent message in DB as soon as we receive the first "assistant" event
                 # This ensures the message exists BEFORE any tool calls execute (like handover)
-                # so the sequence number is correctly calculated
                 if event.get("type") == "assistant" and agent_message_id is None:
                     def _create_initial_agent_message():
                         with get_fresh_db_session() as db:
-                            # Create placeholder message with initial content
                             initial_content = event.get("content", "Agent is responding...")
                             initial_metadata = {
                                 "external_session_id": new_external_session_id,
                                 "mode": session_mode,
-                                "streaming_in_progress": True  # Mark as incomplete
+                                "streaming_in_progress": True
                             }
                             message = MessageService.create_message(
                                 session=db,
@@ -1262,109 +1327,49 @@ class MessageService:
                             )
                             return message.id
 
-                    # Create message in background thread and capture ID
                     agent_message_id = await asyncio.to_thread(_create_initial_agent_message)
                     logger.info(f"Created initial agent message {agent_message_id} on first assistant event")
-
-                # Collect agent response content
-                if event.get("content"):
-                    agent_response_parts.append(event["content"])
 
                 # Collect metadata from events
                 event_metadata = event.get("metadata", {})
                 if event_metadata:
-                    if "model" in event_metadata:
-                        response_metadata["model"] = event_metadata["model"]
-                    if "total_cost_usd" in event_metadata:
-                        response_metadata["total_cost_usd"] = event_metadata["total_cost_usd"]
-                    if "claude_code_version" in event_metadata:
-                        response_metadata["claude_code_version"] = event_metadata["claude_code_version"]
-                    if "duration_ms" in event_metadata:
-                        response_metadata["duration_ms"] = event_metadata["duration_ms"]
-                    if "num_turns" in event_metadata:
-                        response_metadata["num_turns"] = event_metadata["num_turns"]
+                    response_metadata.update({
+                        k: v for k, v in event_metadata.items()
+                        if k in _FORWARDED_METADATA_KEYS
+                    })
 
                 # Forward event to frontend (except 'done' - we'll send our own after saving message)
-                # The agent environment sends 'done' when streaming completes, but we need to wait
-                # until the message is saved with streaming_in_progress=False before telling frontend
                 if event.get("type") != "done":
                     yield event
 
-            # After stream completes, save agent response to database (non-blocking)
+            # After stream completes, save agent response to database
             if streaming_events:
-                # Create summary content from text events only
                 text_parts = [e["content"] for e in streaming_events if e["type"] == "assistant" and e.get("content")]
                 agent_content = "\n\n".join(text_parts) if text_parts else "Agent response"
 
-                # Store structured events in metadata
                 response_metadata["external_session_id"] = new_external_session_id
-
-                # Add tools needing approval summary if any
                 if tools_needing_approval:
                     response_metadata["tools_needing_approval"] = list(tools_needing_approval)
                     logger.info(f"Message has {len(tools_needing_approval)} tools needing approval: {tools_needing_approval}")
                 response_metadata["streaming_events"] = streaming_events
 
-                # Detect if AskUserQuestion tool was used
                 has_questions = MessageService.detect_ask_user_question_tool(streaming_events)
                 tool_questions_status = "unanswered" if has_questions else None
 
-                def _save_or_update_agent_message():
-                    from sqlalchemy.orm.attributes import flag_modified
-                    # Clear streaming_in_progress flag to indicate message is complete
-                    # Frontend uses this to show/hide the streaming indicator on the message bubble
-                    response_metadata["streaming_in_progress"] = False
-                    with get_fresh_db_session() as db:
-                        if agent_message_id:
-                            # Update existing message that was created on first assistant event
-                            agent_message = db.get(SessionMessage, agent_message_id)
-                            if agent_message:
-                                agent_message.content = agent_content
-                                agent_message.message_metadata = response_metadata
-                                # Force SQLAlchemy to detect JSON column change
-                                flag_modified(agent_message, "message_metadata")
-                                agent_message.tool_questions_status = tool_questions_status
-                                agent_message.status = "user_interrupted" if was_interrupted else ""
-                                agent_message.status_message = "Interrupted by user" if was_interrupted else None
-                                db.add(agent_message)
-                                db.commit()
-                                logger.info(f"Updated agent message {agent_message_id} with final content")
-                            else:
-                                logger.error(f"Agent message {agent_message_id} not found for update, creating new one")
-                                # Fallback: create new message if the initial one was lost
-                                MessageService.create_message(
-                                    session=db,
-                                    session_id=session_id,
-                                    role="agent",
-                                    content=agent_content,
-                                    message_metadata=response_metadata,
-                                    tool_questions_status=tool_questions_status,
-                                    status="user_interrupted" if was_interrupted else "",
-                                    status_message="Interrupted by user" if was_interrupted else None
-                                )
-                        else:
-                            # No assistant events received (edge case), create message normally
-                            MessageService.create_message(
-                                session=db,
-                                session_id=session_id,
-                                role="agent",
-                                content=agent_content,
-                                message_metadata=response_metadata,
-                                tool_questions_status=tool_questions_status,
-                                status="user_interrupted" if was_interrupted else "",
-                                status_message="Interrupted by user" if was_interrupted else None
-                            )
-                await asyncio.to_thread(_save_or_update_agent_message)
+                await MessageService._finalize_agent_message(
+                    agent_message_id=agent_message_id,
+                    session_id=session_id,
+                    agent_content=agent_content,
+                    response_metadata=response_metadata,
+                    tool_questions_status=tool_questions_status,
+                    was_interrupted=was_interrupted,
+                    get_fresh_db_session=get_fresh_db_session,
+                )
                 logger.info(f"Agent response finalized ({len(streaming_events)} events, model={response_metadata.get('model')}, has_questions={has_questions}, interrupted={was_interrupted})")
 
             # Emit stream_completed event for event-driven post-processing
-            # This allows services (like EnvironmentService and SessionService) to react to stream completion
-            # SessionService will update session status based on was_interrupted flag
             if not was_interrupted:
                 try:
-                    from app.models.event import EventType
-
-                    # Get user_id and agent_id for event targeting
                     def _get_session_info():
                         with get_fresh_db_session() as db:
                             session_db = db.get(ChatSession, session_id)
@@ -1375,22 +1380,14 @@ class MessageService:
 
                     user_id, agent_id = await asyncio.to_thread(_get_session_info)
 
-                    await event_service.emit_event(
-                        event_type=EventType.STREAM_COMPLETED,
-                        model_id=session_id,
-                        meta={
-                            "session_id": str(session_id),
-                            "environment_id": str(environment_id),
-                            "agent_id": str(agent_id) if agent_id else None,
-                            "session_mode": session_mode,
-                            "was_interrupted": was_interrupted
-                        },
-                        user_id=user_id
+                    await _emit_activity_event(
+                        EventType.STREAM_COMPLETED, session_id, environment_id,
+                        session_mode, user_id,
+                        agent_id=str(agent_id) if agent_id else None,
+                        was_interrupted=was_interrupted,
                     )
-                    logger.info(f"Emitted stream_completed event for session {session_id} (mode: {session_mode})")
                 except Exception as event_error:
                     logger.error(f"Failed to emit stream_completed event: {event_error}", exc_info=True)
-                    # Don't fail the request, just log the error
 
             # Send final done event to frontend
             yield {
@@ -1405,26 +1402,11 @@ class MessageService:
         except Exception as e:
             logger.error(f"Error in message stream: {e}", exc_info=True)
 
-            # Emit STREAM_ERROR event for activity tracking
-            # SessionService will update session status to "error" via event handler
-            try:
-                from app.services.event_service import event_service as evt_service
-                from app.models.event import EventType
-                await evt_service.emit_event(
-                    event_type=EventType.STREAM_ERROR,
-                    model_id=session_id,
-                    meta={
-                        "session_id": str(session_id),
-                        "environment_id": str(environment_id),
-                        "error_type": type(e).__name__,
-                        "error_message": str(e),
-                        "session_mode": session_mode
-                    },
-                    user_id=user_id
-                )
-                logger.info(f"Emitted STREAM_ERROR event for session {session_id}")
-            except Exception as evt_error:
-                logger.error(f"Failed to emit STREAM_ERROR event: {evt_error}", exc_info=True)
+            await _emit_activity_event(
+                EventType.STREAM_ERROR, session_id, environment_id,
+                session_mode, ctx.user_id,
+                error_type=type(e).__name__, error_message=str(e),
+            )
 
             yield {
                 "type": "error",
@@ -1433,7 +1415,6 @@ class MessageService:
             }
         finally:
             # Always unregister stream when done (success, error, or interruption)
-            # Note: SessionService handles interaction_status updates via event handlers
             await active_streaming_manager.unregister_stream(session_id)
             logger.info(f"Stream unregistered for session {session_id}")
 
@@ -1448,15 +1429,6 @@ class MessageService:
         Create user message and emit event to frontend.
 
         This is a helper method to avoid code duplication.
-
-        Args:
-            db_session: Database session
-            session_id: Session UUID
-            message_content: User message content
-            answers_to_message_id: Optional message ID being answered
-
-        Returns:
-            Created SessionMessage
         """
         from app.services.event_service import event_service
 
