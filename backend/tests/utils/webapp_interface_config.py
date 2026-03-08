@@ -32,7 +32,7 @@ def update_webapp_interface_config(
 ) -> dict:
     """Update webapp interface config via PUT /agents/{id}/webapp-interface-config/.
 
-    Pass ``show_header`` and/or ``show_chat`` as keyword arguments.
+    Pass ``show_header`` and/or ``chat_mode`` as keyword arguments.
     Returns the updated config dict.
     """
     r = client.put(

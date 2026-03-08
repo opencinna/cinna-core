@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query"
 import { WebappShareService } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Loader2, AlertCircle, Globe } from "lucide-react"
+import { WebappChatWidget } from "@/components/Webapp/WebappChatWidget"
 
 export const Route = createFileRoute("/webapp/$webappToken")({
   component: WebappPage,
@@ -19,7 +20,7 @@ export const Route = createFileRoute("/webapp/$webappToken")({
 
 interface WebappInterfaceConfig {
   show_header: boolean
-  show_chat: boolean
+  chat_mode: string | null  // "conversation" | "building" | null
 }
 
 interface WebappShareInfoResponse {
@@ -68,6 +69,7 @@ function WebappPage() {
   const [errorMessage, setErrorMessage] = useState("")
   const [agentName, setAgentName] = useState("")
   const [showHeader, setShowHeader] = useState(true)
+  const [chatMode, setChatMode] = useState<"conversation" | "building" | null>(null)
 
   const authAttempted = useRef(false)
 
@@ -106,6 +108,9 @@ function WebappPage() {
     setAgentName(shareInfo.agent_name || "Agent")
     if (shareInfo.interface_config) {
       setShowHeader(shareInfo.interface_config.show_header)
+      setChatMode(
+        shareInfo.interface_config.chat_mode as "conversation" | "building" | null
+      )
     }
 
     if (shareInfo.is_code_blocked) {
@@ -240,23 +245,37 @@ function WebappPage() {
   // Ready — render full-page iframe
   const iframeSrc = `${import.meta.env.VITE_API_URL}/api/v1/webapp/${webappToken}/`
 
+  const chatWidget = chatMode ? (
+    <WebappChatWidget
+      webappToken={webappToken}
+      chatMode={chatMode}
+      agentName={agentName || "Agent"}
+    />
+  ) : null
+
   if (embed) {
     return (
-      <iframe
-        src={iframeSrc}
-        className="w-full h-screen border-0"
-        title="Agent Web App"
-      />
+      <>
+        <iframe
+          src={iframeSrc}
+          className="w-full h-screen border-0"
+          title="Agent Web App"
+        />
+        {chatWidget}
+      </>
     )
   }
 
   if (!showHeader) {
     return (
-      <iframe
-        src={iframeSrc}
-        className="w-full h-screen border-0"
-        title="Agent Web App"
-      />
+      <>
+        <iframe
+          src={iframeSrc}
+          className="w-full h-screen border-0"
+          title="Agent Web App"
+        />
+        {chatWidget}
+      </>
     )
   }
 
@@ -274,6 +293,7 @@ function WebappPage() {
         className="flex-1 w-full border-0"
         title="Agent Web App"
       />
+      {chatWidget}
     </div>
   )
 }

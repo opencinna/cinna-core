@@ -144,3 +144,66 @@ def get_current_user_or_guest(
 CurrentUserOrGuest = Annotated[
     User | GuestShareContext, Depends(get_current_user_or_guest)
 ]
+
+
+# ── Webapp chat context ────────────────────────────────────────────────
+
+
+class WebappChatContext(SQLModel):
+    """
+    Context object for webapp chat access.
+
+    Returned by ``get_webapp_chat_user`` when the JWT token
+    has ``role == "webapp-viewer"`` (webapp share access).
+    """
+    webapp_share_id: uuid.UUID
+    agent_id: uuid.UUID
+    owner_id: uuid.UUID
+
+
+def get_webapp_chat_user(
+    session: SessionDep, token: str = Depends(OAuth2PasswordBearer(tokenUrl="token", auto_error=False)),
+) -> WebappChatContext:
+    """
+    Resolve the current caller as a WebappChatContext from a webapp-viewer JWT.
+    """
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+
+    try:
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
+        )
+    except InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Could not validate credentials",
+        )
+
+    role = payload.get("role")
+    token_type = payload.get("token_type")
+
+    if role != "webapp-viewer" or token_type != "webapp_share":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid token type for webapp chat",
+        )
+
+    try:
+        return WebappChatContext(
+            webapp_share_id=uuid.UUID(payload["sub"]),
+            agent_id=uuid.UUID(payload["agent_id"]),
+            owner_id=uuid.UUID(payload["owner_id"]),
+        )
+    except (KeyError, ValueError) as e:
+        logger.error(f"Invalid webapp chat JWT claims: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Could not validate credentials",
+        )
+
+
+CurrentWebappChatUser = Annotated[WebappChatContext, Depends(get_webapp_chat_user)]

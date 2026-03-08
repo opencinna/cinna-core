@@ -28,6 +28,7 @@ class SessionService:
         integration_type: str | None = None,
         sender_email: str | None = None,
         guest_share_id: UUID | None = None,
+        webapp_share_id: UUID | None = None,
     ) -> Session | None:
         """
         Create session using agent's active environment.
@@ -42,6 +43,7 @@ class SessionService:
             integration_type: Optional integration source ("email", "a2a", etc.)
             sender_email: Optional sender email address (owner mode: track original sender)
             guest_share_id: Optional guest share ID (for guest share sessions)
+            webapp_share_id: Optional webapp share ID (for webapp chat sessions)
         """
         # Get agent to find active environment
         agent = db_session.get(Agent, data.agent_id)
@@ -50,6 +52,7 @@ class SessionService:
 
         # Use guest_share_id from parameter or from data
         effective_guest_share_id = guest_share_id or data.guest_share_id
+        effective_webapp_share_id = webapp_share_id or data.webapp_share_id
 
         session = Session(
             environment_id=agent.active_environment_id,
@@ -58,6 +61,7 @@ class SessionService:
             access_token_id=access_token_id,
             source_task_id=source_task_id,
             guest_share_id=effective_guest_share_id,
+            webapp_share_id=effective_webapp_share_id,
             title=data.title,
             mode=data.mode,
             email_thread_id=email_thread_id,

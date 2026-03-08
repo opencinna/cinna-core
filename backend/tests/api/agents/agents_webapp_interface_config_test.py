@@ -6,7 +6,7 @@ Covers two route groups:
   B. Interface config in share info  (GET /webapp-share/{token}/info)
 
 Business rules tested:
-  1. GET auto-creates a default record (show_header=True, show_chat=False) on first call
+  1. GET auto-creates a default record (show_header=True, chat_mode=None) on first call
   2. PUT updates only the fields provided; omitted fields are unchanged (including empty body)
   3. PUT advances updated_at on the config record
   4. Both GET and PUT require authentication (401/403 when unauthenticated)
@@ -14,6 +14,7 @@ Business rules tested:
   6. Non-existent agent returns 404 from both GET and PUT
   7. The share info endpoint embeds interface_config reflecting the current state
   8. Changes to the config are immediately visible in the share info response
+  9. chat_mode accepts "conversation", "building", or null (disabled)
 """
 import uuid
 
@@ -42,11 +43,11 @@ def test_webapp_interface_config_full_lifecycle(
     """
     Full lifecycle for webapp interface config:
       1. Create agent
-      2. GET config → returns defaults (show_header=True, show_chat=False), auto-creates record
+      2. GET config → returns defaults (show_header=True, chat_mode=None), auto-creates record
       3. Verify response shape (id, agent_id, created_at, updated_at present)
       4. PUT show_header=False → verify response reflects change; updated_at advances
       5. GET → verify show_header=False persisted
-      6. PUT show_chat=True → verify show_chat=True, show_header still False
+      6. PUT chat_mode="conversation" → verify chat_mode set, show_header still False
       7. PUT both fields at once → verify both updated
       8. PUT with empty body → both fields unchanged (no-op partial update)
       9. Auth guard: unauthenticated GET → 401/403
@@ -63,7 +64,7 @@ def test_webapp_interface_config_full_lifecycle(
     # ── Phase 2: GET config → defaults, record auto-created ───────────────
     config = get_webapp_interface_config(client, superuser_token_headers, agent_id)
     assert config["show_header"] is True
-    assert config["show_chat"] is False
+    assert config["chat_mode"] is None
 
     # ── Phase 3: Verify response shape ────────────────────────────────────
     assert "id" in config
@@ -78,32 +79,32 @@ def test_webapp_interface_config_full_lifecycle(
         client, superuser_token_headers, agent_id, show_header=False
     )
     assert updated["show_header"] is False
-    assert updated["show_chat"] is False  # unchanged
+    assert updated["chat_mode"] is None  # unchanged
     assert updated["agent_id"] == agent_id
     assert updated["updated_at"] >= updated_at_before  # timestamp advanced or equal
 
     # ── Phase 5: GET → show_header=False persisted ────────────────────────
     fetched = get_webapp_interface_config(client, superuser_token_headers, agent_id)
     assert fetched["show_header"] is False
-    assert fetched["show_chat"] is False
+    assert fetched["chat_mode"] is None
 
-    # ── Phase 6: PUT show_chat=True → show_header still False ─────────────
+    # ── Phase 6: PUT chat_mode="conversation" → show_header still False ──
     updated = update_webapp_interface_config(
-        client, superuser_token_headers, agent_id, show_chat=True
+        client, superuser_token_headers, agent_id, chat_mode="conversation"
     )
-    assert updated["show_chat"] is True
+    assert updated["chat_mode"] == "conversation"
     assert updated["show_header"] is False  # unchanged from phase 4
 
     # ── Phase 7: PUT both fields at once ──────────────────────────────────
     updated = update_webapp_interface_config(
-        client, superuser_token_headers, agent_id, show_header=True, show_chat=False
+        client, superuser_token_headers, agent_id, show_header=True, chat_mode=None
     )
     assert updated["show_header"] is True
-    assert updated["show_chat"] is False
+    assert updated["chat_mode"] is None
 
     fetched = get_webapp_interface_config(client, superuser_token_headers, agent_id)
     assert fetched["show_header"] is True
-    assert fetched["show_chat"] is False
+    assert fetched["chat_mode"] is None
 
     # ── Phase 8: PUT with empty body → no-op, both fields unchanged ───────
     r = client.put(
@@ -114,7 +115,7 @@ def test_webapp_interface_config_full_lifecycle(
     assert r.status_code == 200
     noop = r.json()
     assert noop["show_header"] is True   # still True from phase 7
-    assert noop["show_chat"] is False    # still False from phase 7
+    assert noop["chat_mode"] is None     # still None from phase 7
 
     # ── Phase 9 & 10: Auth guard — unauthenticated requests rejected ──────
     assert client.get(
@@ -156,6 +157,44 @@ def test_webapp_interface_config_full_lifecycle(
     assert r.status_code == 404
 
 
+def test_webapp_interface_config_chat_mode_values(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    Verify chat_mode accepts valid values and transitions:
+      1. Default is None (disabled)
+      2. Set to "conversation" → persists
+      3. Set to "building" → persists
+      4. Set back to None → disables chat
+    """
+    agent = create_agent_via_api(client, superuser_token_headers, name="Chat Mode Agent")
+    drain_tasks()
+    agent_id = agent["id"]
+
+    # Default
+    config = get_webapp_interface_config(client, superuser_token_headers, agent_id)
+    assert config["chat_mode"] is None
+
+    # Set conversation
+    updated = update_webapp_interface_config(
+        client, superuser_token_headers, agent_id, chat_mode="conversation"
+    )
+    assert updated["chat_mode"] == "conversation"
+
+    # Set building
+    updated = update_webapp_interface_config(
+        client, superuser_token_headers, agent_id, chat_mode="building"
+    )
+    assert updated["chat_mode"] == "building"
+
+    # Disable
+    updated = update_webapp_interface_config(
+        client, superuser_token_headers, agent_id, chat_mode=None
+    )
+    assert updated["chat_mode"] is None
+
+
 # ── B. Interface config in share info ─────────────────────────────────────
 
 
@@ -167,7 +206,7 @@ def test_webapp_interface_config_in_share_info(
     Interface config is embedded in the webapp share info endpoint:
       1. Create agent with webapp_enabled, create a webapp share
       2. GET /webapp-share/{token}/info → has interface_config with defaults
-      3. PUT config to change show_header=False, show_chat=True
+      3. PUT config to change show_header=False, chat_mode="conversation"
       4. GET /webapp-share/{token}/info → interface_config reflects the change
       5. Inactive/invalid share info does not include interface_config
     """
@@ -186,13 +225,13 @@ def test_webapp_interface_config_in_share_info(
     assert "interface_config" in info
     interface_config = info["interface_config"]
     assert interface_config["show_header"] is True
-    assert interface_config["show_chat"] is False
+    assert interface_config["chat_mode"] is None
 
     # ── Phase 3: Update interface config ──────────────────────────────────
     update_webapp_interface_config(
         client, superuser_token_headers, agent_id,
         show_header=False,
-        show_chat=True,
+        chat_mode="conversation",
     )
 
     # ── Phase 4: Share info → interface_config reflects change ────────────
@@ -200,7 +239,7 @@ def test_webapp_interface_config_in_share_info(
     assert info["is_valid"] is True
     interface_config = info["interface_config"]
     assert interface_config["show_header"] is False
-    assert interface_config["show_chat"] is True
+    assert interface_config["chat_mode"] == "conversation"
 
     # ── Phase 5: Inactive share → no interface_config in response ─────────
     r = client.patch(

@@ -36,6 +36,7 @@ from app.api.routes import (
     utils,
     webhooks,
     webapp,
+    webapp_chat,
     webapp_interface_config,
     webapp_public,
     webapp_share,
@@ -81,6 +82,7 @@ api_router.include_router(webapp.router)
 api_router.include_router(webapp_interface_config.router)
 api_router.include_router(webapp_share.router)
 api_router.include_router(webapp_share_public_router)
+api_router.include_router(webapp_chat.router)
 api_router.include_router(webapp_public.router)
 api_router.include_router(shared_workspace.router)
 api_router.include_router(a2a.router)

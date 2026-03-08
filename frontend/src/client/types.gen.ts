@@ -512,7 +512,7 @@ export type AgentUpdate = {
 
 export type AgentWebappInterfaceConfigPublic = {
     show_header?: boolean;
-    show_chat?: boolean;
+    chat_mode?: (string | null);
     id: string;
     agent_id: string;
     created_at: string;
@@ -521,7 +521,7 @@ export type AgentWebappInterfaceConfigPublic = {
 
 export type AgentWebappInterfaceConfigUpdate = {
     show_header?: (boolean | null);
-    show_chat?: (boolean | null);
+    chat_mode?: (string | null);
 };
 
 export type AgentWebappShareCreate = {
@@ -1802,6 +1802,7 @@ export type SessionCreate = {
     title?: (string | null);
     mode?: string;
     guest_share_id?: (string | null);
+    webapp_share_id?: (string | null);
 };
 
 export type SessionPublic = {
@@ -1812,6 +1813,7 @@ export type SessionPublic = {
     access_token_id: (string | null);
     source_task_id: (string | null);
     guest_share_id?: (string | null);
+    webapp_share_id?: (string | null);
     title: (string | null);
     mode: string;
     status: string;
@@ -1842,6 +1844,7 @@ export type SessionPublicExtended = {
     access_token_id: (string | null);
     source_task_id: (string | null);
     guest_share_id?: (string | null);
+    webapp_share_id?: (string | null);
     title: (string | null);
     mode: string;
     status: string;
@@ -3747,6 +3750,49 @@ export type WebappServeWebappFileData = {
 };
 
 export type WebappServeWebappFileResponse = (unknown);
+
+export type WebappChatCreateOrGetChatSessionData = {
+    token: string;
+};
+
+export type WebappChatCreateOrGetChatSessionResponse = (SessionPublic);
+
+export type WebappChatGetActiveChatSessionData = {
+    token: string;
+};
+
+export type WebappChatGetActiveChatSessionResponse = ((SessionPublic | null));
+
+export type WebappChatGetChatSessionData = {
+    sessionId: string;
+    token: string;
+};
+
+export type WebappChatGetChatSessionResponse = (SessionPublic);
+
+export type WebappChatGetChatMessagesData = {
+    limit?: number;
+    offset?: number;
+    sessionId: string;
+    token: string;
+};
+
+export type WebappChatGetChatMessagesResponse = (MessagesPublic);
+
+export type WebappChatSendChatMessageStreamData = {
+    requestBody: MessageCreate;
+    sessionId: string;
+    token: string;
+};
+
+export type WebappChatSendChatMessageStreamResponse = (unknown);
+
+export type WebappChatInterruptChatMessageData = {
+    sessionId: string;
+    token: string;
+};
+
+export type WebappChatInterruptChatMessageResponse = (unknown);
 
 export type WebappInterfaceConfigGetWebappInterfaceConfigData = {
     agentId: string;

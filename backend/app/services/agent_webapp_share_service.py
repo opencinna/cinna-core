@@ -22,8 +22,49 @@ from app.models import (
 )
 from app.core.config import settings
 from app.core.security import ALGORITHM, encrypt_field, decrypt_field
+from app.services.agent_webapp_interface_config_service import AgentWebappInterfaceConfigService
 
 logger = logging.getLogger(__name__)
+
+
+class WebappShareError(Exception):
+    """Base exception for webapp share service errors."""
+
+    def __init__(self, message: str, status_code: int = 400):
+        self.message = message
+        self.status_code = status_code
+        super().__init__(message)
+
+
+class ShareAgentNotFoundError(WebappShareError):
+    def __init__(self):
+        super().__init__("Agent not found", status_code=404)
+
+
+class ShareAgentNotOwnedError(WebappShareError):
+    # Returns 404 to avoid leaking agent existence info
+    def __init__(self):
+        super().__init__("Agent not found", status_code=404)
+
+
+class ShareWebappDisabledError(WebappShareError):
+    def __init__(self):
+        super().__init__("Webapp feature is disabled for this agent", status_code=400)
+
+
+class ShareNotFoundError(WebappShareError):
+    def __init__(self):
+        super().__init__("Webapp share not found", status_code=404)
+
+
+class ShareExpiredError(WebappShareError):
+    def __init__(self):
+        super().__init__("Webapp share link has expired or been deactivated", status_code=410)
+
+
+class SecurityCodeError(WebappShareError):
+    def __init__(self, message: str):
+        super().__init__(message, status_code=403)
 
 
 class AgentWebappShareService:
@@ -34,6 +75,18 @@ class AgentWebappShareService:
         return hashlib.sha256(raw_token.encode()).hexdigest()
 
     @staticmethod
+    def _verify_agent_ownership(
+        session: Session, user_id: uuid.UUID, agent_id: uuid.UUID
+    ) -> Agent:
+        """Verify agent exists and is owned by user. Returns the agent."""
+        agent = session.get(Agent, agent_id)
+        if not agent:
+            raise ShareAgentNotFoundError()
+        if agent.owner_id != user_id:
+            raise ShareAgentNotOwnedError()
+        return agent
+
+    @staticmethod
     def _verify_security_code(
         session: Session,
         share: AgentWebappShare,
@@ -42,9 +95,9 @@ class AgentWebappShareService:
         if share.security_code_encrypted is None:
             return
         if share.is_code_blocked:
-            raise ValueError("This share link has been blocked due to too many failed attempts.")
+            raise SecurityCodeError("This share link has been blocked due to too many failed attempts.")
         if not provided_code:
-            raise ValueError("Security code is required")
+            raise SecurityCodeError("Security code is required")
 
         stored_code = decrypt_field(share.security_code_encrypted)
         if provided_code != stored_code:
@@ -53,11 +106,11 @@ class AgentWebappShareService:
                 share.is_code_blocked = True
                 session.add(share)
                 session.commit()
-                raise ValueError("This share link has been blocked due to too many failed attempts.")
+                raise SecurityCodeError("This share link has been blocked due to too many failed attempts.")
             remaining = 3 - share.failed_code_attempts
             session.add(share)
             session.commit()
-            raise ValueError(f"Incorrect security code. {remaining} attempt(s) remaining.")
+            raise SecurityCodeError(f"Incorrect security code. {remaining} attempt(s) remaining.")
 
     @staticmethod
     def create_webapp_share(
@@ -66,13 +119,11 @@ class AgentWebappShareService:
         agent_id: uuid.UUID,
         data: AgentWebappShareCreate,
     ) -> AgentWebappShareCreated:
-        agent = session.get(Agent, agent_id)
-        if not agent:
-            raise ValueError("Agent not found")
-        if agent.owner_id != user_id:
-            raise ValueError("Agent not owned by user")
+        agent = AgentWebappShareService._verify_agent_ownership(
+            session, user_id, agent_id
+        )
         if not agent.webapp_enabled:
-            raise ValueError("Webapp feature is disabled for this agent")
+            raise ShareWebappDisabledError()
 
         token = secrets.token_urlsafe(32)
         token_hash = AgentWebappShareService._hash_token(token)
@@ -127,11 +178,9 @@ class AgentWebappShareService:
         user_id: uuid.UUID,
         agent_id: uuid.UUID,
     ) -> AgentWebappSharesPublic:
-        agent = session.get(Agent, agent_id)
-        if not agent:
-            raise ValueError("Agent not found")
-        if agent.owner_id != user_id:
-            raise ValueError("Agent not owned by user")
+        AgentWebappShareService._verify_agent_ownership(
+            session, user_id, agent_id
+        )
 
         shares = session.exec(
             select(AgentWebappShare)
@@ -169,11 +218,9 @@ class AgentWebappShareService:
         share_id: uuid.UUID,
         data: AgentWebappShareUpdate,
     ) -> AgentWebappSharePublic | None:
-        agent = session.get(Agent, agent_id)
-        if not agent:
-            raise ValueError("Agent not found")
-        if agent.owner_id != user_id:
-            raise ValueError("Agent not owned by user")
+        AgentWebappShareService._verify_agent_ownership(
+            session, user_id, agent_id
+        )
 
         share = session.exec(
             select(AgentWebappShare).where(
@@ -229,11 +276,9 @@ class AgentWebappShareService:
         agent_id: uuid.UUID,
         share_id: uuid.UUID,
     ) -> bool:
-        agent = session.get(Agent, agent_id)
-        if not agent:
-            raise ValueError("Agent not found")
-        if agent.owner_id != user_id:
-            raise ValueError("Agent not owned by user")
+        AgentWebappShareService._verify_agent_ownership(
+            session, user_id, agent_id
+        )
 
         share = session.exec(
             select(AgentWebappShare).where(
@@ -344,8 +389,8 @@ class AgentWebappShareService:
         if not share:
             existing = AgentWebappShareService._find_share_by_token(session, raw_token)
             if existing:
-                raise ValueError("Webapp share link has expired or been deactivated")
-            return None
+                raise ShareExpiredError()
+            raise ShareNotFoundError()
 
         AgentWebappShareService._verify_security_code(session, share, security_code)
 
@@ -362,6 +407,7 @@ class AgentWebappShareService:
 
     @staticmethod
     def get_share_info(session: Session, raw_token: str) -> dict:
+        """Get public information about a share. Does not raise — returns is_valid=False for invalid tokens."""
         share = AgentWebappShareService.validate_token(session, raw_token)
 
         if not share:
@@ -385,7 +431,6 @@ class AgentWebappShareService:
         agent = session.get(Agent, share.agent_id)
         agent_name = agent.name if agent else "Unknown Agent"
 
-        from app.services.agent_webapp_interface_config_service import AgentWebappInterfaceConfigService
         interface_config = AgentWebappInterfaceConfigService.get_by_agent_id(session, share.agent_id)
 
         return {

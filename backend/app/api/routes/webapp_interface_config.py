@@ -1,7 +1,7 @@
 """
 Webapp Interface Config API Routes.
 
-GET/PUT for per-agent webapp interface configuration (show_header, show_chat).
+GET/PUT for per-agent webapp interface configuration (show_header, chat_mode).
 """
 import uuid
 from typing import Any

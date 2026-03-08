@@ -12,15 +12,15 @@
 ### Backend - Routes
 
 - `backend/app/api/routes/webapp.py` - Owner preview routes (auth required), thin controller delegating to `WebappService`
-- `backend/app/api/routes/webapp_share.py` - Share CRUD (`router`) + public auth flow (`public_router`)
+- `backend/app/api/routes/webapp_share.py` - Share CRUD (`router`) + public auth flow (`public_router`). Uses `_handle_service_error()` pattern with `WebappShareError` hierarchy.
 - `backend/app/api/routes/webapp_public.py` - Token-authenticated content serving (public), uses `WebappService` for status polling and activity tracking
 - `backend/app/api/routes/webapp_templates.py` - HTML templates for public error pages and loading screens (extracted from route files)
-- `backend/app/api/main.py` - All three routers registered
+- `backend/app/api/main.py` - All routers registered
 
 ### Backend - Services
 
 - `backend/app/services/webapp_service.py` - `WebappService` with agent+environment resolution, activity tracking, public status polling logic; exception hierarchy (`WebappError`, `WebappNotFoundError`, `WebappPermissionError`, `WebappNotAvailableError`)
-- `backend/app/services/agent_webapp_share_service.py` - `AgentWebappShareService` with CRUD, token validation, security code verification, JWT issuance
+- `backend/app/services/agent_webapp_share_service.py` - `AgentWebappShareService` with CRUD, token validation, security code verification, JWT issuance. Exception hierarchy: `WebappShareError` (base), `ShareAgentNotFoundError`, `ShareAgentNotOwnedError`, `ShareWebappDisabledError`, `ShareNotFoundError`, `ShareExpiredError`, `SecurityCodeError`.
 - `backend/app/services/agent_webapp_interface_config_service.py` - `AgentWebappInterfaceConfigService` with get-or-create and partial update
 - `backend/app/services/adapters/docker_adapter.py` - `get_webapp_status()`, `get_webapp_file()`, `call_webapp_api()` methods
 - `backend/app/services/environment_lifecycle.py` - `webapp` added to `dirs_to_copy` in `copy_workspace_between_environments()`
@@ -49,6 +49,7 @@
 
 - `backend/tests/api/agents/agents_webapp_test.py` - 19 scenario-based tests covering CRUD, auth, owner preview, public serving
 - `backend/tests/api/agents/agents_webapp_interface_config_test.py` - Interface config lifecycle and share info integration tests
+- `backend/tests/api/agents/agents_webapp_chat_test.py` - Chat session lifecycle, mode enforcement, access control
 - `backend/tests/api/agents/agents_webapp_command_test.py` - `/webapp` command integration test
 - `backend/tests/utils/webapp_share.py` - Test utility helpers
 - `backend/tests/utils/webapp_interface_config.py` - Interface config test utility helpers
@@ -87,7 +88,7 @@
 | `id` | UUID PK | Config ID |
 | `agent_id` | UUID FK -> agent (unique) | CASCADE delete; unique constraint enforces one-to-one |
 | `show_header` | BOOL (default true) | Whether the header bar with agent name is shown on shared webapp |
-| `show_chat` | BOOL (default false) | Placeholder for future chat widget (not yet functional) |
+| `chat_mode` | VARCHAR(20) (nullable, default NULL) | Chat mode: `"conversation"`, `"building"`, or NULL (disabled) |
 
 ## API Endpoints
 
@@ -120,7 +121,7 @@ Prefix: `/api/v1/agents/{agent_id}/webapp-interface-config`
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/` | Get interface config for agent. Returns existing config or creates one with default values (show_header=true, show_chat=false). |
+| GET | `/` | Get interface config for agent. Returns existing config or creates one with default values (show_header=true, chat_mode=null). |
 | PUT | `/` | Update interface config. Partial update — only specified fields are changed. |
 
 Requires owner auth.
@@ -131,7 +132,7 @@ Prefix: `/api/v1/webapp-share`
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/{token}/info` | Check validity, agent name, code requirement, blocked status. Also returns `interface_config` object with `show_header` and `show_chat` values. |
+| GET | `/{token}/info` | Check validity, agent name, code requirement, blocked status. Also returns `interface_config` object with `show_header` and `chat_mode` values. |
 | POST | `/{token}/auth` | Authenticate with optional security code. Returns JWT. |
 
 ### Public Serving (`backend/app/api/routes/webapp_public.py`)
@@ -144,6 +145,21 @@ Prefix: `/api/v1/webapp`
 | GET | `/{token}/{path:path}` | Serve static file. Returns loading page if env not running, styled error HTML if webapp missing/oversized. |
 | POST | `/{token}/api/{endpoint}` | Execute data script. Checks `allow_data_api`. |
 | GET | `/{token}/api/{endpoint}` | Returns 405 (POST only). |
+
+### Webapp Chat (`backend/app/api/routes/webapp_chat.py`)
+
+Prefix: `/api/v1/webapp/{token}/chat`
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/sessions` | Create or get active chat session (idempotent). |
+| GET | `/sessions` | Get active chat session for this share. |
+| GET | `/sessions/{session_id}` | Get session details (verifies `webapp_share_id`). |
+| GET | `/sessions/{session_id}/messages` | Get messages with streaming event enrichment. |
+| POST | `/sessions/{session_id}/messages/stream` | Send message, stream via WebSocket. |
+| POST | `/sessions/{session_id}/messages/interrupt` | Interrupt active streaming. |
+
+All require webapp-viewer JWT. See [Webapp Chat Tech](webapp_chat_tech.md) for details.
 
 ### Agent-Env Endpoints (inside container)
 
@@ -163,23 +179,26 @@ Prefix: `/api/v1/webapp`
 
 ### `AgentWebappShareService` (`backend/app/services/agent_webapp_share_service.py`)
 
-- `create_webapp_share()` - Generates token (secrets.token_urlsafe), hashes it (SHA256), optionally generates and encrypts security code (Fernet) if `require_security_code=True`, creates DB record
+- `_verify_agent_ownership()` - Reusable agent lookup + ownership check helper; raises `ShareAgentNotFoundError` or `ShareAgentNotOwnedError` (404 to avoid leaking existence)
+- `create_webapp_share()` - Verifies ownership + webapp enabled, generates token (secrets.token_urlsafe), hashes it (SHA256), optionally generates and encrypts security code (Fernet), creates DB record
 - `list_webapp_shares()` - Lists shares for agent, decrypts security codes for owner view
 - `update_webapp_share()` - Updates fields; setting new security_code resets failed_code_attempts and is_code_blocked; `remove_security_code` clears the code requirement entirely
 - `delete_webapp_share()` - Permanent deletion
 - `validate_token()` - Finds share by token hash, checks is_active and expiration
-- `authenticate()` - Validates token, verifies security code, issues JWT
-- `get_share_info()` - Returns public info (validity, agent name, code requirement)
-- `_verify_security_code()` - Decrypts stored code, compares, increments failures, blocks after 3
+- `authenticate()` - Validates token, verifies security code, issues JWT; raises `ShareExpiredError` or `ShareNotFoundError` instead of returning None
+- `get_share_info()` - Returns public info (validity, agent name, code requirement); does not raise — returns `is_valid=false` for invalid tokens
+- `_verify_security_code()` - Decrypts stored code, compares, increments failures, blocks after 3; raises `SecurityCodeError`
 - `_create_webapp_jwt()` - Creates JWT with role "webapp-viewer", 24h max lifetime
+- Exception hierarchy: `WebappShareError` (base with `message` + `status_code`), `ShareAgentNotFoundError` (404), `ShareAgentNotOwnedError` (404), `ShareWebappDisabledError` (400), `ShareNotFoundError` (404), `ShareExpiredError` (410), `SecurityCodeError` (403)
 
 ### `AgentWebappInterfaceConfigService` (`backend/app/services/agent_webapp_interface_config_service.py`)
 
-- `get_or_create()` - Returns existing config for the agent, or creates one with default values (show_header=true, show_chat=false) if none exists
-- `update()` - Partial update of config fields; only fields provided in the request body are modified
-- `get_by_agent_id()` - Returns config dict for public endpoints (no auth check); returns defaults if no record exists
-- `_verify_agent_ownership()` - Reusable agent lookup + ownership check helper
+- `get_or_create()` - Returns existing config for the agent, or creates one with default values (show_header=true, chat_mode=null) if none exists
+- `update()` - Partial update of config fields; only fields provided in the request body are modified (uses `model_dump(exclude_unset=True)`)
+- `get_by_agent_id()` - Returns `AgentWebappInterfaceConfigBase` for public endpoints (no auth check); returns default instance if no record exists
+- `_verify_agent_ownership()` - Reusable agent lookup + ownership check helper; `AgentPermissionError` returns 404 (not 403) to avoid leaking agent existence
 - `_get_config_by_agent()` - Reusable config query helper
+- `_get_or_create_config()` - Internal helper that gets or creates config record (used by both `get_or_create` and `update`)
 - Exception hierarchy: `InterfaceConfigError` (base), `AgentNotFoundError`, `AgentPermissionError`
 
 ### Docker Adapter (`backend/app/services/adapters/docker_adapter.py`)
@@ -191,7 +210,7 @@ Prefix: `/api/v1/webapp`
 ## Frontend Components
 
 - `WebappShareCard.tsx` - Full share management UI: create dialog (label, expiration, allow_data_api, require_security_code), post-create view (copy URL, security code, embed snippet), share list with status badges, edit dialog (label, allow_data_api, require_security_code toggle with optional code input), delete per share; includes "Interface" button that opens the interface config modal
-- `WebappInterfaceModal.tsx` - Modal dialog for editing interface configuration (Show Header, Show Chat toggles)
+- `WebappInterfaceModal.tsx` - Modal dialog for editing interface configuration (Show Header toggle, Chat Mode radio selection)
 - `$webappToken.tsx` - Public page with auth state machine (loading -> code_entry -> authenticating -> ready/error), security code input, full-page iframe, `?embed=1` for chromeless mode
 - `AgentEnvironmentsTab.tsx` - `webapp_enabled` switch next to inactivity period selector
 - `EnvironmentPanel.tsx` - "Web App" tab for webapp files in workspace tree

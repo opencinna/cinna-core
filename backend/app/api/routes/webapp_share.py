@@ -20,7 +20,11 @@ from app.models import (
     AgentWebappSharesPublic,
     Message,
 )
-from app.services.agent_webapp_share_service import AgentWebappShareService
+from app.services.agent_webapp_share_service import (
+    AgentWebappShareService,
+    WebappShareError,
+    ShareNotFoundError,
+)
 
 
 class WebappShareAuthRequest(BaseModel):
@@ -28,6 +32,11 @@ class WebappShareAuthRequest(BaseModel):
 
 
 router = APIRouter(prefix="/agents/{agent_id}/webapp-shares", tags=["webapp-shares"])
+
+
+def _handle_service_error(e: WebappShareError) -> None:
+    """Convert service exceptions to HTTP exceptions."""
+    raise HTTPException(status_code=e.status_code, detail=e.message)
 
 
 @router.post("/", response_model=AgentWebappShareCreated)
@@ -42,8 +51,8 @@ def create_webapp_share(
         return AgentWebappShareService.create_webapp_share(
             session, current_user.id, agent_id, share_in
         )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except WebappShareError as e:
+        _handle_service_error(e)
 
 
 @router.get("/", response_model=AgentWebappSharesPublic)
@@ -57,8 +66,8 @@ def list_webapp_shares(
         return AgentWebappShareService.list_webapp_shares(
             session, current_user.id, agent_id
         )
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except WebappShareError as e:
+        _handle_service_error(e)
 
 
 @router.patch("/{share_id}", response_model=AgentWebappSharePublic)
@@ -74,8 +83,8 @@ def update_webapp_share(
         share = AgentWebappShareService.update_webapp_share(
             session, current_user.id, agent_id, share_id, share_in
         )
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except WebappShareError as e:
+        _handle_service_error(e)
 
     if not share:
         raise HTTPException(status_code=404, detail="Webapp share not found")
@@ -94,8 +103,8 @@ def delete_webapp_share(
         success = AgentWebappShareService.delete_webapp_share(
             session, current_user.id, agent_id, share_id
         )
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except WebappShareError as e:
+        _handle_service_error(e)
 
     if not success:
         raise HTTPException(status_code=404, detail="Webapp share not found")
@@ -125,15 +134,8 @@ def webapp_share_authenticate(
     """Authenticate via a webapp share token. Returns a short-lived JWT."""
     security_code = body.security_code if body else None
     try:
-        result = AgentWebappShareService.authenticate(
+        return AgentWebappShareService.authenticate(
             session, token, security_code=security_code
         )
-    except ValueError as e:
-        detail = str(e)
-        if "security code" in detail.lower() or "blocked" in detail.lower():
-            raise HTTPException(status_code=403, detail=detail)
-        raise HTTPException(status_code=410, detail=detail)
-
-    if result is None:
-        raise HTTPException(status_code=404, detail="Webapp share not found")
-    return result
+    except WebappShareError as e:
+        _handle_service_error(e)

@@ -331,6 +331,7 @@ from .agent_webapp_share import (
 )
 from .agent_webapp_interface_config import (
     AgentWebappInterfaceConfig,
+    AgentWebappInterfaceConfigBase,
     AgentWebappInterfaceConfigCreate,
     AgentWebappInterfaceConfigUpdate,
     AgentWebappInterfaceConfigPublic,
@@ -638,6 +639,7 @@ __all__ = [
     "WebappShareTokenPayload",
     # Agent Webapp Interface Config
     "AgentWebappInterfaceConfig",
+    "AgentWebappInterfaceConfigBase",
     "AgentWebappInterfaceConfigCreate",
     "AgentWebappInterfaceConfigUpdate",
     "AgentWebappInterfaceConfigPublic",

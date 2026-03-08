@@ -103,10 +103,10 @@ Data scripts:
 
 Per-agent configuration that controls how the webapp is displayed to viewers across all share links. Accessible via the "Interface" button on the Web App integration card in the Integrations tab.
 
-Two options are available:
+Available options:
 
 - **Show Header** (default: on) — shows or hides the header bar at the top of the shared webapp page. The header displays the agent name and provides visual framing for the webapp. When hidden, the webapp renders full-screen without any chrome.
-- **Show Chat** (default: off) — placeholder for a future chat widget that will allow webapp viewers to interact with the agent. Currently non-functional; the toggle is visible but reserved for future use.
+- **Chat Mode** (default: disabled) — controls whether webapp viewers can chat with the agent via an embedded chat widget. Three options: Disabled (no chat), Conversation (compact mode for interacting with existing UI), Building (full mode for creating/modifying widgets). See [Webapp Chat Widget](webapp_chat_widget_implementation.md) for details.
 
 These settings apply globally to all share links for the agent — there is no per-share override. The configuration is created with default values on first access (no manual setup required).
 

@@ -7,7 +7,7 @@ import httpx
 import logging
 import asyncio
 from sqlmodel import Session, select, func
-from app.models import SessionMessage, Session as ChatSession, AgentEnvironment, Agent, SessionUpdate
+from app.models import SessionMessage, Session as ChatSession, AgentEnvironment, Agent, SessionUpdate, MessagePublic
 from app.services.active_streaming_manager import active_streaming_manager
 from app.services.agent_env_connector import agent_env_connector
 from app.services.agent_service import AgentService
@@ -676,6 +676,128 @@ class MessageService:
             payload=payload,
         ):
             yield event
+
+    @staticmethod
+    async def enrich_messages_with_streaming(
+        messages: list[MessagePublic],
+        session_id: UUID,
+    ) -> list[MessagePublic]:
+        """
+        Merge in-memory streaming events into message list.
+
+        If the session has an active stream, patches the in-progress message
+        with new streaming events and accumulated content from the stream manager.
+        """
+        if not await active_streaming_manager.is_streaming(session_id):
+            return messages
+
+        stream_data = await active_streaming_manager.get_stream_events(session_id)
+        if not stream_data or not stream_data["streaming_events"]:
+            return messages
+
+        # Find the in-progress message
+        in_progress_msg = None
+        for msg in messages:
+            if msg.message_metadata and msg.message_metadata.get("streaming_in_progress"):
+                in_progress_msg = msg
+                break
+
+        if in_progress_msg:
+            db_events = in_progress_msg.message_metadata.get("streaming_events", [])
+            db_max_seq = max((e.get("event_seq", 0) for e in db_events), default=0)
+            new_events = [
+                e for e in stream_data["streaming_events"]
+                if e.get("event_seq", 0) > db_max_seq
+            ]
+            if new_events:
+                in_progress_msg.message_metadata["streaming_events"] = db_events + new_events
+            if stream_data["accumulated_content"]:
+                in_progress_msg.content = stream_data["accumulated_content"]
+
+        return messages
+
+    @staticmethod
+    async def interrupt_stream(
+        db_session: Session,
+        session_id: UUID,
+        environment_id: UUID,
+    ) -> dict:
+        """
+        Interrupt an active streaming message.
+
+        Handles the full flow: request interrupt via active_streaming_manager,
+        check for pending state, and forward to agent environment if needed.
+
+        Returns:
+            dict with status, message, session_id, and queued flag.
+
+        Raises:
+            ValueError: If no active stream to interrupt.
+            Exception: If environment not found or communication fails.
+        """
+        interrupt_info = await active_streaming_manager.request_interrupt(session_id)
+
+        if not interrupt_info["found"]:
+            raise ValueError("No active stream to interrupt")
+
+        if interrupt_info["pending"]:
+            return {
+                "status": "ok",
+                "message": "Interrupt queued",
+                "session_id": str(session_id),
+                "queued": True,
+            }
+
+        external_session_id = interrupt_info["external_session_id"]
+        environment = db_session.get(AgentEnvironment, environment_id)
+        if not environment:
+            raise ValueError("Environment not found")
+
+        base_url = MessageService.get_environment_url(environment)
+        auth_headers = MessageService.get_auth_headers(environment)
+
+        result = await MessageService.forward_interrupt_to_environment(
+            base_url=base_url,
+            auth_headers=auth_headers,
+            external_session_id=external_session_id,
+        )
+        return {**result, "session_id": str(session_id), "queued": False}
+
+    @staticmethod
+    def build_stream_response(session_id: UUID, result: dict) -> dict:
+        """
+        Build a standardized response dict from SessionService.send_session_message() result.
+
+        Used by both regular message and webapp chat routes.
+        """
+        if result["action"] == "command_executed":
+            return {
+                "status": "ok",
+                "session_id": str(session_id),
+                "stream_room": f"session_{session_id}_stream",
+                "message": "Command executed",
+                "command_executed": True,
+            }
+
+        response = {
+            "status": "ok",
+            "session_id": str(session_id),
+            "stream_room": f"session_{session_id}_stream",
+        }
+
+        if result["action"] == "streaming":
+            response["message"] = result["message"]
+            response["streaming"] = True
+        elif result["action"] == "pending":
+            response["message"] = result["message"]
+            response["pending"] = True
+        else:
+            response["message"] = result.get("message", "Message received")
+
+        if result.get("files_attached"):
+            response["files_attached"] = result["files_attached"]
+
+        return response
 
     @staticmethod
     async def stream_message_with_events(

@@ -27,6 +27,10 @@ class Session(SQLModel, table=True):
     guest_share_id: uuid.UUID | None = Field(
         default=None, foreign_key="agent_guest_share.id", ondelete="SET NULL"
     )
+    # Track which webapp share created this session (for webapp chat)
+    webapp_share_id: uuid.UUID | None = Field(
+        default=None, foreign_key="agent_webapp_share.id", ondelete="SET NULL"
+    )
     title: str | None = None
     mode: str = "conversation"  # "building" | "conversation"
     status: str = "active"  # "active" | "paused" | "completed" | "error"
@@ -80,6 +84,7 @@ class SessionCreate(SQLModel):
     title: str | None = None
     mode: str = "conversation"  # "building" | "conversation"
     guest_share_id: uuid.UUID | None = None  # Optional guest share link
+    webapp_share_id: uuid.UUID | None = None  # Optional webapp share link
 
 
 class SessionUpdate(SQLModel):
@@ -97,6 +102,7 @@ class SessionPublic(SQLModel):
     access_token_id: uuid.UUID | None
     source_task_id: uuid.UUID | None
     guest_share_id: uuid.UUID | None = None
+    webapp_share_id: uuid.UUID | None = None
     title: str | None
     mode: str
     status: str

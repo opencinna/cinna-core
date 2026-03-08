@@ -3296,10 +3296,16 @@ export const AgentWebappInterfaceConfigPublicSchema = {
             title: 'Show Header',
             default: true
         },
-        show_chat: {
-            type: 'boolean',
-            title: 'Show Chat',
-            default: false
+        chat_mode: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Chat Mode'
         },
         id: {
             type: 'string',
@@ -3340,16 +3346,16 @@ export const AgentWebappInterfaceConfigUpdateSchema = {
             ],
             title: 'Show Header'
         },
-        show_chat: {
+        chat_mode: {
             anyOf: [
                 {
-                    type: 'boolean'
+                    type: 'string'
                 },
                 {
                     type: 'null'
                 }
             ],
-            title: 'Show Chat'
+            title: 'Chat Mode'
         }
     },
     type: 'object',
@@ -8383,6 +8389,18 @@ export const SessionCreateSchema = {
                 }
             ],
             title: 'Guest Share Id'
+        },
+        webapp_share_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Webapp Share Id'
         }
     },
     type: 'object',
@@ -8454,6 +8472,18 @@ export const SessionPublicSchema = {
                 }
             ],
             title: 'Guest Share Id'
+        },
+        webapp_share_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Webapp Share Id'
         },
         title: {
             anyOf: [
@@ -8676,6 +8706,18 @@ export const SessionPublicExtendedSchema = {
                 }
             ],
             title: 'Guest Share Id'
+        },
+        webapp_share_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Webapp Share Id'
         },
         title: {
             anyOf: [

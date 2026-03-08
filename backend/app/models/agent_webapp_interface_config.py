@@ -14,7 +14,7 @@ from sqlmodel import Field, SQLModel
 
 class AgentWebappInterfaceConfigBase(SQLModel):
     show_header: bool = True
-    show_chat: bool = False
+    chat_mode: str | None = None  # "conversation" | "building" | None (disabled)
 
 
 class AgentWebappInterfaceConfigCreate(AgentWebappInterfaceConfigBase):
@@ -23,7 +23,7 @@ class AgentWebappInterfaceConfigCreate(AgentWebappInterfaceConfigBase):
 
 class AgentWebappInterfaceConfigUpdate(SQLModel):
     show_header: bool | None = None
-    show_chat: bool | None = None
+    chat_mode: str | None = None  # "conversation" | "building" | None (disabled)
 
 
 class AgentWebappInterfaceConfig(AgentWebappInterfaceConfigBase, table=True):
@@ -36,6 +36,7 @@ class AgentWebappInterfaceConfig(AgentWebappInterfaceConfigBase, table=True):
     agent_id: uuid.UUID = Field(
         foreign_key="agent.id", nullable=False, ondelete="CASCADE"
     )
+    chat_mode: str | None = Field(default=None, max_length=20)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

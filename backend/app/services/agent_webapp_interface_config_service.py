@@ -10,6 +10,7 @@ from sqlmodel import Session, select
 from app.models import (
     Agent,
     AgentWebappInterfaceConfig,
+    AgentWebappInterfaceConfigBase,
     AgentWebappInterfaceConfigUpdate,
     AgentWebappInterfaceConfigPublic,
 )
@@ -32,6 +33,7 @@ class AgentNotFoundError(InterfaceConfigError):
 
 
 class AgentPermissionError(InterfaceConfigError):
+    # Returns 404 with "Agent not found" to avoid leaking agent existence info
     def __init__(self, message: str = "Agent not found"):
         super().__init__(message, status_code=404)
 
@@ -62,6 +64,21 @@ class AgentWebappInterfaceConfigService:
         ).first()
 
     @staticmethod
+    def _get_or_create_config(
+        session: Session, agent_id: uuid.UUID
+    ) -> AgentWebappInterfaceConfig:
+        """Get existing config or create a default one for the agent."""
+        config = AgentWebappInterfaceConfigService._get_config_by_agent(
+            session, agent_id
+        )
+        if not config:
+            config = AgentWebappInterfaceConfig(agent_id=agent_id)
+            session.add(config)
+            session.commit()
+            session.refresh(config)
+        return config
+
+    @staticmethod
     def get_or_create(
         session: Session,
         user_id: uuid.UUID,
@@ -70,17 +87,9 @@ class AgentWebappInterfaceConfigService:
         AgentWebappInterfaceConfigService._verify_agent_ownership(
             session, user_id, agent_id
         )
-
-        config = AgentWebappInterfaceConfigService._get_config_by_agent(
+        config = AgentWebappInterfaceConfigService._get_or_create_config(
             session, agent_id
         )
-
-        if not config:
-            config = AgentWebappInterfaceConfig(agent_id=agent_id)
-            session.add(config)
-            session.commit()
-            session.refresh(config)
-
         return AgentWebappInterfaceConfigPublic.model_validate(config)
 
     @staticmethod
@@ -93,19 +102,12 @@ class AgentWebappInterfaceConfigService:
         AgentWebappInterfaceConfigService._verify_agent_ownership(
             session, user_id, agent_id
         )
-
-        config = AgentWebappInterfaceConfigService._get_config_by_agent(
+        config = AgentWebappInterfaceConfigService._get_or_create_config(
             session, agent_id
         )
 
-        if not config:
-            config = AgentWebappInterfaceConfig(agent_id=agent_id)
-            session.add(config)
-
-        if data.show_header is not None:
-            config.show_header = data.show_header
-        if data.show_chat is not None:
-            config.show_chat = data.show_chat
+        for field, value in data.model_dump(exclude_unset=True).items():
+            setattr(config, field, value)
 
         config.updated_at = datetime.now(UTC)
         session.add(config)
@@ -118,16 +120,11 @@ class AgentWebappInterfaceConfigService:
     def get_by_agent_id(
         session: Session,
         agent_id: uuid.UUID,
-    ) -> dict:
+    ) -> AgentWebappInterfaceConfigBase:
         """Get interface config for a given agent (no auth check, used by public endpoints)."""
         config = AgentWebappInterfaceConfigService._get_config_by_agent(
             session, agent_id
         )
-
         if not config:
-            return {"show_header": True, "show_chat": False}
-
-        return {
-            "show_header": config.show_header,
-            "show_chat": config.show_chat,
-        }
+            return AgentWebappInterfaceConfigBase()
+        return AgentWebappInterfaceConfigBase.model_validate(config)
