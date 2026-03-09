@@ -70,6 +70,9 @@ async def webapp_public_data_api(
     request: Request,
 ):
     """Execute a data script endpoint via share token."""
+    # Strip .py extension if caller included it in the URL
+    if endpoint.endswith(".py"):
+        endpoint = endpoint[:-3]
     share, agent, environment = _resolve_share_and_env(session, token)
 
     if not share.allow_data_api:

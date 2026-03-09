@@ -71,6 +71,9 @@ async def webapp_data_api(
     body: WebappDataApiRequest | None = None,
 ):
     """Execute a data script endpoint in the webapp."""
+    # Strip .py extension if caller included it in the URL
+    if endpoint.endswith(".py"):
+        endpoint = endpoint[:-3]
     try:
         agent, environment = WebappService.resolve_agent_environment(
             session, agent_id, current_user.id,

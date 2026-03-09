@@ -24,6 +24,7 @@ Place all webapp files in `/app/workspace/webapp/`:
 For dashboards that need live data from databases or APIs:
 
 1. Create Python scripts in `webapp/api/` (e.g., `webapp/api/get_sales.py`)
+   - **Files MUST have the `.py` extension** (e.g., `get_sales.py`, not `get_sales`). The platform resolves endpoints by looking for `{endpoint_name}.py` — files without the extension will not be found.
 2. Each script:
    - Reads JSON params from stdin: `params = json.loads(sys.stdin.read() or '{}')`
    - Prints JSON result to stdout: `print(json.dumps(result))`
@@ -69,9 +70,21 @@ if __name__ == '__main__':
     main()
 ```
 
-## Schema.org Microdata Markup (REQUIRED)
+## Chat Integration Checklist
 
-**You MUST add schema.org microdata attributes to all significant data elements** in every HTML page you build. This enables the platform's chat assistant to understand what the user is currently viewing and provide smarter, context-aware responses.
+Before finalizing the webapp, evaluate these two questions:
+
+### 1. Does the webapp display dynamic data (charts, tables, metrics, lists)?
+If yes — **ask the user** whether they want the chat assistant to be aware of what the user is currently viewing on the page. If they confirm, you MUST add schema.org microdata markup to all data elements (see Schema.org section below) and include the context-bridge.js script in every page (see Context Bridge section below). Read `/app/core/webapp-framework/SCHEMA_EXAMPLES.md` for markup examples before writing the HTML.
+
+### 2. Does the webapp have forms, filters, inputs, or other interactive elements?
+If yes, **and the user has indicated that chat communication will be available for this app** — you MUST integrate Agent-to-Webapp Actions (see Actions section below). This allows the agent to update filters, fill forms, navigate pages, and reload data in response to chat messages. Without this integration, the agent cannot interact with the webapp UI. Read `/app/core/webapp-framework/ACTIONS_REFERENCE.md` before writing the HTML.
+
+---
+
+## Schema.org Microdata Markup
+
+**Add schema.org microdata attributes to all significant data elements** in every HTML page. This enables the platform's chat assistant to understand what the user is currently viewing and provide smarter, context-aware responses.
 
 Three HTML attributes work together:
 - `itemscope` — marks an element as containing structured data
@@ -82,7 +95,7 @@ Add them to all significant data elements: tables, metric cards, filter forms, l
 
 For full HTML examples for each element type, read `/app/core/webapp-framework/SCHEMA_EXAMPLES.md`.
 
-## Context Bridge Script (REQUIRED)
+## Context Bridge Script
 
 The script `./assets/context-bridge.js` is **auto-available** in every webapp — you do not need to create it. Just include it as the last `<script>` tag before `</body>` in every HTML page:
 

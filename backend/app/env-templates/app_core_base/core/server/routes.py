@@ -1078,6 +1078,9 @@ async def get_webapp_status():
 @router.post("/webapp/api/{endpoint}", dependencies=[Depends(verify_auth_token)])
 async def webapp_data_api(endpoint: str, request: Request):
     """Execute a Python data script in webapp/api/{endpoint}.py and return JSON."""
+    # Strip .py extension if caller included it in the URL
+    if endpoint.endswith(".py"):
+        endpoint = endpoint[:-3]
     # Validate endpoint name: alphanumeric + underscores only
     if not re.match(r"^[a-zA-Z0-9_]+$", endpoint):
         raise HTTPException(status_code=400, detail="Invalid endpoint name")
