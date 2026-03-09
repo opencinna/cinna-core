@@ -266,6 +266,13 @@ class AgentEnvService:
                     existing_file.unlink()
                     logger.info(f"Removed orphaned SA file: {existing_file.name}")
 
+            # Update CredentialGuard with new values for output redaction (Phase 2)
+            try:
+                from security.credential_guard import credential_guard
+                credential_guard.update_values(credentials_json)
+            except Exception as guard_err:
+                logger.warning(f"Failed to update CredentialGuard (output redaction disabled): {guard_err}")
+
             return updated_files
 
         except Exception as e:

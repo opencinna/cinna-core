@@ -339,6 +339,16 @@ from .agent_webapp_interface_config import (
     AgentWebappInterfaceConfigUpdate,
     AgentWebappInterfaceConfigPublic,
 )
+from .security_event import (
+    SecurityEvent,
+    SecurityEventCreate,
+    SecurityEventPublic,
+    SecurityEventsPublic,
+    CREDENTIAL_READ_ATTEMPT,
+    CREDENTIAL_BASH_ACCESS,
+    OUTPUT_REDACTED,
+    CREDENTIAL_WRITE_ATTEMPT,
+)
 
 __all__ = [
     # Core
@@ -648,4 +658,13 @@ __all__ = [
     "AgentWebappInterfaceConfigCreate",
     "AgentWebappInterfaceConfigUpdate",
     "AgentWebappInterfaceConfigPublic",
+    # Security Events
+    "SecurityEvent",
+    "SecurityEventCreate",
+    "SecurityEventPublic",
+    "SecurityEventsPublic",
+    "CREDENTIAL_READ_ATTEMPT",
+    "CREDENTIAL_BASH_ACCESS",
+    "OUTPUT_REDACTED",
+    "CREDENTIAL_WRITE_ATTEMPT",
 ]

@@ -9,8 +9,16 @@ from email.utils import formatdate
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status, File, UploadFile, Form
 from fastapi.responses import StreamingResponse, Response, FileResponse
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 from pathlib import Path
+
+try:
+    import httpx as _httpx  # available in env container
+    _HTTPX_AVAILABLE = True
+except ImportError:
+    _HTTPX_AVAILABLE = False
+
+from pydantic import BaseModel as _BaseModel
 
 from .models import (
     HealthCheckResponse,
@@ -36,6 +44,97 @@ from .active_session_manager import active_session_manager
 
 router = APIRouter(tags=["agent"])
 logger = logging.getLogger(__name__)
+
+# Import CredentialGuard singleton (Phase 2 — output redaction)
+try:
+    from .security.credential_guard import credential_guard as _credential_guard
+    _CREDENTIAL_GUARD_AVAILABLE = True
+except ImportError:
+    _credential_guard = None  # type: ignore[assignment]
+    _CREDENTIAL_GUARD_AVAILABLE = False
+
+
+# ── Security proxy models ─────────────────────────────────────────────────────
+
+class _SecurityEventReport(_BaseModel):
+    """Payload for the security event proxy endpoint."""
+    event_type: str
+    tool_name: str | None = None
+    tool_input: str | None = None
+    session_id: str | None = None
+    environment_id: str | None = None
+    agent_id: str | None = None
+    severity: str = "high"
+    details: dict = {}
+
+
+class _SecurityEventResponse(_BaseModel):
+    """Response returned to the SDK hook."""
+    action: str = "allow"
+    reason: str | None = None
+
+
+# ── Output redaction helper ───────────────────────────────────────────────────
+
+async def _redacted_event_stream(source_generator, session_id: str | None = None):
+    """
+    Wrap an SSE event generator and redact known credential values from agent output.
+
+    Scans SSE events of type "assistant" and "tool" for sensitive values tracked
+    by the CredentialGuard singleton. Matching values are replaced with
+    ***REDACTED*** before the event reaches the client.
+
+    When a redaction occurs, an async fire-and-forget security event is reported
+    to the backend via the /security/report proxy.
+
+    Args:
+        source_generator: Async generator yielding raw SSE strings ("data: {...}\n\n")
+        session_id: Backend session ID for security event attribution (optional)
+    """
+    # Types of SSE events whose content should be scanned
+    REDACT_EVENT_TYPES = {"assistant", "tool"}
+
+    async for sse_line in source_generator:
+        if not _CREDENTIAL_GUARD_AVAILABLE or _credential_guard is None:
+            yield sse_line
+            continue
+
+        # SSE format: "data: <json>\n\n" — extract the JSON payload
+        if not sse_line.startswith("data: "):
+            yield sse_line
+            continue
+
+        try:
+            payload_str = sse_line[len("data: "):].rstrip()
+            chunk = json.loads(payload_str)
+        except (json.JSONDecodeError, ValueError):
+            yield sse_line
+            continue
+
+        event_type = chunk.get("type", "")
+        content = chunk.get("content", "")
+
+        if event_type in REDACT_EVENT_TYPES and content:
+            redacted_content, was_redacted = _credential_guard.redact(content)
+            if was_redacted:
+                chunk["content"] = redacted_content
+                sse_line = f"data: {json.dumps(chunk)}\n\n"
+                # Fire-and-forget report — does not block the stream
+                try:
+                    from .security.event_reporter import SecurityEventReporter
+                    _reporter = SecurityEventReporter()
+                    asyncio.create_task(
+                        _reporter.report_async(
+                            event_type="OUTPUT_REDACTED",
+                            session_id=session_id,
+                            severity="medium",
+                            details={"event_subtype": event_type},
+                        )
+                    )
+                except Exception:
+                    pass  # Non-critical — redaction still happened
+
+        yield sse_line
 
 # Environment variables (set from .env file via docker-compose)
 ENV_ID = os.getenv("ENV_ID", "unknown")
@@ -131,6 +230,51 @@ async def health_check() -> HealthCheckResponse:
         uptime=0,  # TODO: Calculate actual uptime
         message=f"Agent server running (env={ENV_NAME}, env_id={ENV_ID})"
     )
+
+
+@router.post("/security/report")
+async def proxy_security_event(event: _SecurityEventReport) -> _SecurityEventResponse:
+    """
+    Proxy a security event from an SDK hook to the backend blockable endpoint.
+
+    Called by credential_guard_hook.py (Claude Code hook) and ADK inline
+    interceptors. Does NOT require the AGENT_AUTH_TOKEN header — this endpoint
+    is on localhost and only accessible inside the container.
+
+    Forwards to backend POST /api/v1/security-events/report with the
+    AGENT_AUTH_TOKEN attached. Returns the action decision to the caller.
+
+    Fail-open: if the backend is unreachable or times out, returns action="allow".
+    """
+    if not _HTTPX_AVAILABLE:
+        logger.warning("httpx not available — security event proxy returning allow")
+        return _SecurityEventResponse(action="allow")
+
+    backend_url = os.getenv("BACKEND_URL", "http://host.docker.internal:8000")
+    auth_token = AGENT_AUTH_TOKEN
+
+    if not auth_token:
+        logger.warning("AGENT_AUTH_TOKEN not set — security event proxy returning allow")
+        return _SecurityEventResponse(action="allow")
+
+    try:
+        async with _httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.post(
+                f"{backend_url}/api/v1/security-events/report",
+                json=event.model_dump(),
+                headers={"Authorization": f"Bearer {auth_token}"},
+            )
+            response.raise_for_status()
+            data = response.json()
+            return _SecurityEventResponse(
+                action=data.get("action", "allow"),
+                reason=data.get("reason"),
+            )
+    except Exception as exc:
+        logger.warning(
+            "Backend unreachable for security event proxy (fail-open): %s", exc
+        )
+        return _SecurityEventResponse(action="allow")
 
 
 @router.post("/config/settings", dependencies=[Depends(verify_auth_token)])
@@ -257,7 +401,7 @@ async def chat_stream(request: ChatRequest):
                 await active_session_manager.cleanup_session_context(request.backend_session_id)
 
     return StreamingResponse(
-        event_stream(),
+        _redacted_event_stream(event_stream(), session_id=request.backend_session_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

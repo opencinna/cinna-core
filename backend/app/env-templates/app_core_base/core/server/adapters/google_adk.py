@@ -184,6 +184,41 @@ def _get_workspace_dir(fallback_dir: str) -> str:
     return os.environ.get("CLAUDE_CODE_WORKSPACE", fallback_dir)
 
 
+def _check_credential_access(input_value: str, tool_type: str) -> str:
+    """
+    Check if a tool call targets credential files and report to backend if so.
+
+    Used as an inline interceptor in the ADK Bash() and Read() tool functions.
+    Returns "allow" or "block" (fail-open on any error).
+
+    Args:
+        input_value: File path (read/write) or command string (bash)
+        tool_type: "read", "bash", etc.
+
+    Returns:
+        "allow" or "block"
+    """
+    try:
+        from security.credential_access_detector import is_credential_access, get_event_type
+        from security.event_reporter import SecurityEventReporter
+
+        if not is_credential_access(input_value, tool_type):
+            return "allow"
+
+        event_type = get_event_type(tool_type)
+        reporter = SecurityEventReporter()
+        return reporter.report(
+            event_type=event_type,
+            tool_name="Bash" if tool_type == "bash" else "Read",
+            tool_input=input_value,
+            session_id=None,
+            severity="high",
+        )
+    except Exception:
+        # Fail-open: any error in the security check allows the tool call
+        return "allow"
+
+
 class AgentFactory:
     """
     Factory for creating Google ADK agents based on provider type.
@@ -238,6 +273,17 @@ class AgentFactory:
             Returns:
                 dict: Contains return_code, stdout, and stderr from command execution.
             """
+            # Credential access interception (Phase 1)
+            _action = _check_credential_access(command, "bash")
+            if _action == "block":
+                return {
+                    "status": "blocked",
+                    "command": command,
+                    "return_code": 1,
+                    "stdout": "",
+                    "stderr": "Credential file access denied by security policy.",
+                }
+
             # Use CLAUDE_CODE_WORKSPACE env var if set, otherwise fallback to working_dir
             effective_working_dir = _get_workspace_dir(working_dir)
 
@@ -278,6 +324,14 @@ class AgentFactory:
             Returns:
                 dict: Contains status ('success' or 'error') and file content or error message.
             """
+            # Credential access interception (Phase 1)
+            _action = _check_credential_access(file_path, "read")
+            if _action == "block":
+                return {
+                    "status": "blocked",
+                    "error": "Credential file access denied by security policy.",
+                }
+
             import os as _os
             full_path = file_path
             # If path is relative, make it relative to workspace

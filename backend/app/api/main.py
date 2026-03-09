@@ -27,6 +27,7 @@ from app.api.routes import (
     oauth,
     oauth_credentials,
     private,
+    security_events,
     sessions,
     shared_workspace,
     ssh_keys,
@@ -68,6 +69,7 @@ api_router.include_router(messages.router)
 api_router.include_router(workspace.router)
 api_router.include_router(user_workspaces.router)
 api_router.include_router(activities.router)
+api_router.include_router(security_events.router)
 api_router.include_router(events.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(knowledge_sources.router)

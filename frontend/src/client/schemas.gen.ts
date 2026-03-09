@@ -7250,6 +7250,17 @@ export const MessageCreateSchema = {
             },
             type: 'array',
             title: 'File Ids'
+        },
+        page_context: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Page Context'
         }
     },
     type: 'object',
@@ -8286,6 +8297,296 @@ export const ScheduleResponseSchema = {
     required: ['success'],
     title: 'ScheduleResponse',
     description: 'Response from AI schedule generation.'
+} as const;
+
+export const SecurityEventCreateSchema = {
+    properties: {
+        agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Id'
+        },
+        environment_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Environment Id'
+        },
+        session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Id'
+        },
+        guest_share_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Guest Share Id'
+        },
+        event_type: {
+            type: 'string',
+            title: 'Event Type'
+        },
+        severity: {
+            type: 'string',
+            title: 'Severity',
+            default: 'medium'
+        },
+        details: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Details',
+            default: {}
+        }
+    },
+    type: 'object',
+    required: ['event_type'],
+    title: 'SecurityEventCreate'
+} as const;
+
+export const SecurityEventPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Id'
+        },
+        environment_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Environment Id'
+        },
+        session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Id'
+        },
+        guest_share_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Guest Share Id'
+        },
+        event_type: {
+            type: 'string',
+            title: 'Event Type'
+        },
+        severity: {
+            type: 'string',
+            title: 'Severity'
+        },
+        details: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Details'
+        },
+        risk_score: {
+            anyOf: [
+                {
+                    type: 'number'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Risk Score'
+        }
+    },
+    type: 'object',
+    required: ['id', 'created_at', 'user_id', 'agent_id', 'environment_id', 'session_id', 'guest_share_id', 'event_type', 'severity', 'details', 'risk_score'],
+    title: 'SecurityEventPublic'
+} as const;
+
+export const SecurityEventReportSchema = {
+    properties: {
+        event_type: {
+            type: 'string',
+            title: 'Event Type'
+        },
+        tool_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Tool Name'
+        },
+        tool_input: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Tool Input'
+        },
+        session_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Id'
+        },
+        environment_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Environment Id'
+        },
+        agent_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Id'
+        },
+        severity: {
+            type: 'string',
+            title: 'Severity',
+            default: 'high'
+        },
+        details: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Details',
+            default: {}
+        }
+    },
+    type: 'object',
+    required: ['event_type'],
+    title: 'SecurityEventReport',
+    description: `Event payload sent by SDK interceptors for blockable event reporting.
+The environment server proxies this from the hook script to the backend.`
+} as const;
+
+export const SecurityEventReportResponseSchema = {
+    properties: {
+        action: {
+            type: 'string',
+            title: 'Action',
+            default: 'allow'
+        },
+        reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Reason'
+        }
+    },
+    type: 'object',
+    title: 'SecurityEventReportResponse',
+    description: `Response returned to the SDK interceptor. The \`action\` field determines
+whether the tool call should proceed or be blocked.`
+} as const;
+
+export const SecurityEventsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/SecurityEventPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'SecurityEventsPublic'
 } as const;
 
 export const SendAnswerRequestSchema = {

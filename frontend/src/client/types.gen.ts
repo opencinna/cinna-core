@@ -1537,6 +1537,7 @@ export type MessageCreate = {
     content: string;
     answers_to_message_id?: (string | null);
     file_ids?: Array<(string)>;
+    page_context?: (string | null);
 };
 
 export type MessagePublic = {
@@ -1778,6 +1779,65 @@ export type ScheduleResponse = {
     cron_string?: (string | null);
     next_execution?: (string | null);
     error?: (string | null);
+};
+
+export type SecurityEventCreate = {
+    agent_id?: (string | null);
+    environment_id?: (string | null);
+    session_id?: (string | null);
+    guest_share_id?: (string | null);
+    event_type: string;
+    severity?: string;
+    details?: {
+        [key: string]: unknown;
+    };
+};
+
+export type SecurityEventPublic = {
+    id: string;
+    created_at: string;
+    user_id: string;
+    agent_id: (string | null);
+    environment_id: (string | null);
+    session_id: (string | null);
+    guest_share_id: (string | null);
+    event_type: string;
+    severity: string;
+    details: {
+        [key: string]: unknown;
+    };
+    risk_score: (number | null);
+};
+
+/**
+ * Event payload sent by SDK interceptors for blockable event reporting.
+ * The environment server proxies this from the hook script to the backend.
+ */
+export type SecurityEventReport = {
+    event_type: string;
+    tool_name?: (string | null);
+    tool_input?: (string | null);
+    session_id?: (string | null);
+    environment_id?: (string | null);
+    agent_id?: (string | null);
+    severity?: string;
+    details?: {
+        [key: string]: unknown;
+    };
+};
+
+/**
+ * Response returned to the SDK interceptor. The `action` field determines
+ * whether the tool call should proceed or be blocked.
+ */
+export type SecurityEventReportResponse = {
+    action?: string;
+    reason?: (string | null);
+};
+
+export type SecurityEventsPublic = {
+    data: Array<SecurityEventPublic>;
+    count: number;
 };
 
 /**
@@ -3357,6 +3417,29 @@ export type PrivateCreateUserData = {
 };
 
 export type PrivateCreateUserResponse = (UserPublic);
+
+export type SecurityEventsReportSecurityEventData = {
+    requestBody: SecurityEventReport;
+};
+
+export type SecurityEventsReportSecurityEventResponse = (SecurityEventReportResponse);
+
+export type SecurityEventsIngestSecurityEventData = {
+    requestBody: SecurityEventCreate;
+};
+
+export type SecurityEventsIngestSecurityEventResponse = (SecurityEventPublic);
+
+export type SecurityEventsListSecurityEventsData = {
+    agentId?: (string | null);
+    environmentId?: (string | null);
+    eventType?: (string | null);
+    limit?: number;
+    sessionId?: (string | null);
+    skip?: number;
+};
+
+export type SecurityEventsListSecurityEventsResponse = (SecurityEventsPublic);
 
 export type SessionsCreateSessionData = {
     requestBody: SessionCreate;

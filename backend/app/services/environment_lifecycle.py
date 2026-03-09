@@ -1241,6 +1241,9 @@ class EnvironmentLifecycleManager:
             openai_compatible_api_key, openai_compatible_base_url, openai_compatible_model
         )
 
+        # 6. Write Claude Code PreToolUse hook settings for credential access detection
+        self._write_claude_code_hook_settings(instance_dir, environment)
+
         logger.info(f"Updated configuration files for environment {environment.id}")
 
     def _generate_compose_file(
@@ -1534,6 +1537,77 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
             with open(conversation_settings_path, 'w') as f:
                 json.dump(minimax_settings, f, indent=2)
             logger.info(f"Generated MiniMax conversation settings for environment {environment.id}")
+
+    def _write_claude_code_hook_settings(self, instance_dir: Path, environment: AgentEnvironment):
+        """
+        Write the Claude Code PreToolUse hook configuration for credential access detection.
+
+        Creates or updates /app/core/.claude/settings.json inside the container
+        (host path: instance_dir/app/core/.claude/settings.json) to include the
+        credential_guard_hook.py PreToolUse hook.
+
+        The hook script is already present in the core directory (copied from
+        app_core_base/core/hooks/credential_guard_hook.py). This method only
+        writes the settings.json that activates it.
+
+        If settings.json already exists (e.g., from MiniMax configuration), the
+        hooks section is merged in without overwriting existing settings.
+
+        Note: Claude Code hooks run on `Bash|Read|Write|Edit` tool calls. The hook
+        script exits code 0 (allow) or 2 (block) based on the backend response.
+
+        Args:
+            instance_dir: Environment instance directory
+            environment: Environment model
+        """
+        import json
+
+        claude_settings_dir = instance_dir / "app" / "core" / ".claude"
+        claude_settings_dir.mkdir(parents=True, exist_ok=True)
+        settings_path = claude_settings_dir / "settings.json"
+
+        # Load existing settings if present (e.g., MiniMax env config)
+        existing_settings: dict = {}
+        if settings_path.exists():
+            try:
+                with open(settings_path, 'r') as f:
+                    existing_settings = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                existing_settings = {}
+
+        # Build hook entry
+        credential_hook_entry = {
+            "matcher": "Bash|Read|Write|Edit",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": "python3 /app/core/hooks/credential_guard_hook.py"
+                }
+            ]
+        }
+
+        # Deep merge: preserve existing hooks, append credential guard if not present
+        existing_hooks = existing_settings.setdefault("hooks", {})
+        existing_pre_tool = existing_hooks.setdefault("PreToolUse", [])
+
+        # Avoid duplicating the hook if it's already registered
+        already_registered = any(
+            entry.get("matcher") == credential_hook_entry["matcher"]
+            and any(
+                h.get("command", "").endswith("credential_guard_hook.py")
+                for h in entry.get("hooks", [])
+            )
+            for entry in existing_pre_tool
+        )
+        if not already_registered:
+            existing_pre_tool.append(credential_hook_entry)
+
+        merged = existing_settings
+
+        with open(settings_path, 'w') as f:
+            json.dump(merged, f, indent=2)
+
+        logger.info(f"Wrote Claude Code hook settings for environment {environment.id}")
 
     def _allocate_port(self) -> int:
         """Allocate available port."""
