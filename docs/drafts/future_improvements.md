@@ -84,26 +84,13 @@ Required features:
 - connection of knowledge database that is providing details from external sources (Confluence ROVO API?)
 
 
-### Multi-Worker MCP Session Support
+### Multi-Worker MCP Session Support — IMPLEMENTED
 
-Currently MCP sessions (`StreamableHTTPSessionManager._server_instances`) are held **in-memory per-worker process**. When the backend runs with multiple uvicorn workers (`--workers N`), the `initialize` request may hit worker A while subsequent requests (`notifications/initialized`, `tools/call`, etc.) hit worker B, which doesn't have the session — causing `"Session not found"` errors.
+**Status:** Implemented via `SharedSessionManager` (DB-backed session registry).
 
-**Current workaround:** `docker-compose.yml` overrides CMD to `--workers 1`.
+**Solution:** `app/mcp/shared_session_manager.py` subclasses the SDK's `StreamableHTTPSessionManager` with a PostgreSQL-backed `mcp_transport_session` table. When a request arrives at a worker that doesn't have the session locally, it checks the DB and "warms" the session by creating a new local transport with `stateless=True` (bypasses re-initialization). The stale-session check in `MCPServerRegistry.__call__` was removed in favor of the session manager's DB fallback.
 
-**Future fix — shared MCP session store:**
-
-1. **Custom `EventStore` / session registry backed by Redis** — The MCP Python SDK's `StreamableHTTPSessionManager` accepts an optional `event_store: EventStore` parameter for resumability. Implement a Redis-backed `EventStore` so all workers share session state and can resume any session regardless of which worker created it.
-
-2. **Alternative: sticky sessions at the load balancer** — Run N separate uvicorn processes on different ports (instead of `--workers N` on one port) and use nginx `hash $http_mcp_session_id consistent;` upstream routing. Requires changing the Dockerfile entrypoint to a process supervisor (e.g. supervisord) that starts multiple uvicorn instances.
-
-3. **Scope of changes:**
-   - `MCPServerRegistry` stale-session check (`server.py:346-363`) would need to query the shared store instead of the local `_server_instances` dict
-   - `MCPServerRegistry._active_sessions` (used for resource change notification broadcasts) would also need to be shared or replaced with a pub/sub mechanism (Redis Pub/Sub)
-   - Session manager lifecycle (`get_or_create` / `remove`) needs distributed locking
-
-4. **Reference implementation:** https://github.com/bh-rat/mcp-db — investigate as a potential solution or starting point for DB/Redis-backed MCP session persistence.
-
-**Priority:** Medium — only affects deployments with multiple workers. Single-worker deployments (current demo/prod) are unaffected.
+**Remaining limitation:** `MCPServerRegistry._active_sessions` (used for resource change notification broadcasts) is still per-worker. Notifications sent via `broadcast_resource_list_changed()` only reach sessions on the current worker. For cross-worker notifications, a pub/sub mechanism (e.g. Redis Pub/Sub) would be needed. This is acceptable because notifications are best-effort and the primary use case (notify after `send_message`) happens on the same worker that handled the request.
 
 ## RANDOM UNSTRUCTURED NOTES
 

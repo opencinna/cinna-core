@@ -319,6 +319,9 @@ from .mcp_session_meta import (
     MCPSessionMeta,
     MCPSessionMetaPublic,
 )
+from .mcp_transport_session import (
+    MCPTransportSession,
+)
 from .agent_webapp_share import (
     AgentWebappShare,
     AgentWebappShareBase,
@@ -628,6 +631,8 @@ __all__ = [
     # MCP Session Meta
     "MCPSessionMeta",
     "MCPSessionMetaPublic",
+    # MCP Transport Sessions
+    "MCPTransportSession",
     # Agent Webapp Shares
     "AgentWebappShare",
     "AgentWebappShareBase",

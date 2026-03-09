@@ -24,6 +24,7 @@ from app.mcp.context_vars import (
     mcp_session_id_var,
     mcp_authenticated_user_id_var,
 )
+from app.mcp.shared_session_manager import SharedSessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,18 @@ def create_mcp_server_for_connector(connector_id: str) -> FastMCP:
             experimental_capabilities=experimental_capabilities,
         )
     server._mcp_server.create_initialization_options = _patched_create_init
+
+    # Inject DB-backed session manager BEFORE streamable_http_app() is called.
+    # FastMCP.streamable_http_app() skips creating a new manager if
+    # _session_manager is already set (see FastMCP line 955).
+    server._session_manager = SharedSessionManager(
+        connector_id=connector_id,
+        app=server._mcp_server,
+        event_store=server._event_store,
+        json_response=server.settings.json_response,
+        stateless=server.settings.stateless_http,
+        security_settings=server.settings.transport_security,
+    )
 
     return server
 
@@ -341,26 +354,10 @@ class MCPServerRegistry:
             method, path, connector_id_str, mcp_session_id_from_header or "(none)",
         )
 
-        # Per MCP spec §Session Management: return 404 for stale session IDs
-        # so the client re-initializes with a fresh InitializeRequest.
-        mcp_instance = self._mcp_instances.get(connector_id_str)
-        if mcp_instance and mcp_session_id_from_header:
-            known_sessions = getattr(
-                mcp_instance.session_manager, "_server_instances", {}
-            )
-            if mcp_session_id_from_header not in known_sessions:
-                logger.warning(
-                    "[MCP] Stale MCP session %s for connector %s — returning 404 "
-                    "(known: %s)",
-                    mcp_session_id_from_header,
-                    connector_id_str,
-                    list(known_sessions.keys()),
-                )
-                response = JSONResponse(
-                    {"detail": "Session not found"}, status_code=404
-                )
-                await response(scope, receive, send)
-                return
+        # NOTE: Stale-session detection is handled by SharedSessionManager.
+        # It checks both the local _server_instances dict AND the shared
+        # mcp_transport_session DB table before returning 404, enabling
+        # cross-worker session warm-up in multi-worker deployments.
 
         # Set context vars for tool handlers
         token_conn = mcp_connector_id_var.set(connector_id_str)
