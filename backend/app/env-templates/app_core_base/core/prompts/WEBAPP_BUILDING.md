@@ -73,142 +73,45 @@ if __name__ == '__main__':
 
 **You MUST add schema.org microdata attributes to all significant data elements** in every HTML page you build. This enables the platform's chat assistant to understand what the user is currently viewing and provide smarter, context-aware responses.
 
-### What are schema.org markers?
-
 Three HTML attributes work together:
 - `itemscope` — marks an element as containing structured data
 - `itemtype="https://schema.org/TypeName"` — specifies the type of data
 - `itemprop="propertyName"` — marks a specific property value within the item
 
-### Where to add markers
+Add them to all significant data elements: tables, metric cards, filter forms, list items, navigation sections, and status badges. Every meaningful data display MUST have schema.org attributes — the chat assistant's context-awareness depends on it.
 
-**Data tables** — wrap `<table>` with `itemscope itemtype="https://schema.org/Dataset"`, mark each column header with `itemprop="name"`, and each data cell with `itemprop="value"`:
-```html
-<table itemscope itemtype="https://schema.org/Dataset">
-  <caption itemprop="name">Monthly Sales</caption>
-  <thead><tr><th itemprop="description">Month</th><th itemprop="description">Revenue</th></tr></thead>
-  <tbody>
-    <tr itemscope itemtype="https://schema.org/DataFeedItem">
-      <td itemprop="name">January</td>
-      <td itemprop="value">$12,400</td>
-    </tr>
-  </tbody>
-</table>
-```
-
-**Metric cards / KPI tiles** — use `QuantitativeValue` for numbers with units:
-```html
-<div itemscope itemtype="https://schema.org/QuantitativeValue">
-  <span class="label" itemprop="name">Total Revenue</span>
-  <span class="value" itemprop="value">$2.4M</span>
-  <span class="unit" itemprop="unitText">USD</span>
-</div>
-```
-
-**Filter / search forms** — wrap form with `itemscope itemtype="https://schema.org/SearchAction"`, mark inputs with `itemprop`:
-```html
-<form itemscope itemtype="https://schema.org/SearchAction">
-  <label itemprop="name">Date Range</label>
-  <input itemprop="query-input" name="date_from" value="2026-01-01" />
-  <select itemprop="query-input" name="region"><option value="north">North</option></select>
-</form>
-```
-
-**List items / entity cards** — use `Thing` or a more specific type:
-```html
-<div itemscope itemtype="https://schema.org/Thing">
-  <h3 itemprop="name">Invoice #INV-2026-001</h3>
-  <p itemprop="description">ACME Corp — $1,500</p>
-  <span itemprop="identifier">INV-2026-001</span>
-</div>
-```
-
-**Navigation / section headers** — mark page sections with `WebPageElement`:
-```html
-<section itemscope itemtype="https://schema.org/WebPageElement">
-  <h2 itemprop="name">Q1 Performance</h2>
-</section>
-```
-
-**Status badges / labels** — mark status text with `itemprop="actionStatus"` or `itemprop="value"`:
-```html
-<span itemscope itemtype="https://schema.org/Thing" itemprop="actionStatus">Active</span>
-```
-
-### Rule: Mark every meaningful data display
-
-Every table, card, metric, filter, and key content section MUST have appropriate schema.org attributes. Do not leave data displays without markers — the assistant's ability to help the user depends on it.
-
----
+For full HTML examples for each element type, read `/app/core/webapp-framework/SCHEMA_EXAMPLES.md`.
 
 ## Context Bridge Script (REQUIRED)
 
-**You MUST include the context bridge script in every HTML page.** This script enables the platform's chat widget to collect the schema.org data from your page and send it to the assistant.
+The script `./assets/context-bridge.js` is **auto-available** in every webapp — you do not need to create it. Just include it as the last `<script>` tag before `</body>` in every HTML page:
 
-### Setup (do this for every HTML page)
-
-1. Create `webapp/assets/context-bridge.js` with the following content — **copy it exactly, do not modify**:
-
-```javascript
-// Webapp Context Bridge — do not remove or modify
-// Enables the platform chat assistant to read page context.
-(function () {
-  function collectMicrodata() {
-    var items = [];
-    document.querySelectorAll('[itemscope]').forEach(function (el) {
-      var item = {
-        type: el.getAttribute('itemtype') || '',
-        properties: {}
-      };
-      el.querySelectorAll('[itemprop]').forEach(function (prop) {
-        var name = prop.getAttribute('itemprop');
-        var value = (prop.tagName === 'INPUT' || prop.tagName === 'SELECT' || prop.tagName === 'TEXTAREA')
-          ? prop.value
-          : prop.textContent.trim();
-        if (name && value !== '') {
-          if (Object.prototype.hasOwnProperty.call(item.properties, name)) {
-            if (!Array.isArray(item.properties[name])) {
-              item.properties[name] = [item.properties[name]];
-            }
-            item.properties[name].push(value);
-          } else {
-            item.properties[name] = value;
-          }
-        }
-      });
-      if (Object.keys(item.properties).length > 0) {
-        items.push(item);
-      }
-    });
-    return items;
-  }
-
-  window.addEventListener('message', function (event) {
-    if (!event.data || event.data.type !== 'request_page_context') return;
-    var context = {
-      url: window.location.href,
-      title: document.title,
-      microdata: collectMicrodata()
-    };
-    event.source.postMessage({ type: 'page_context_response', context: context }, event.origin || '*');
-  });
-})();
-```
-
-2. Include it as the **last `<script>` tag** before `</body>` in every HTML page:
 ```html
   <script src="./assets/context-bridge.js"></script>
 </body>
-</html>
 ```
 
-For pages in subdirectories (e.g., `pages/detail.html`), adjust the path: `../assets/context-bridge.js`.
+For pages in subdirectories (e.g., `pages/detail.html`), adjust the path: `../assets/context-bridge.js`. Do not skip it on any page — the chat assistant cannot provide context-aware help without it, and agent action commands will not work.
 
-### This is mandatory
+## Agent-to-Webapp Actions
 
-Do not skip this script on any page. It is lightweight (< 1KB) and has no performance impact. The chat assistant cannot provide context-aware help without it.
+You can trigger UI changes in the webapp from your responses by embedding action tags:
 
----
+```
+<webapp_action>{"action": "action_type", "data": { ... }}</webapp_action>
+```
+
+Tags are automatically stripped from the visible chat message — the user only sees your regular text. Actions execute silently in the webapp.
+
+| Action | When to use |
+|---|---|
+| `refresh_page` | After code changes in building mode |
+| `reload_data` | After updating backend data in conversation mode |
+| `update_form` | To apply filter changes the user asked for in natural language |
+| `show_notification` | To confirm completed actions or report errors |
+| `navigate` | To take the user to a relevant section in an SPA |
+
+For full documentation — data field specs, custom event listeners, and examples — read `/app/core/webapp-framework/ACTIONS_REFERENCE.md`.
 
 ## Best Practices
 - Start with a single `index.html` for simple dashboards
@@ -218,7 +121,6 @@ Do not skip this script on any page. It is lightweight (< 1KB) and has no perfor
 - Handle API errors gracefully in the UI (show user-friendly messages)
 - For multi-page apps, use client-side routing or simple `<a>` links between HTML files
 - Document your data endpoints in `webapp/api/README.md`
-- Use meaningful loading states: show skeleton screens or progress indicators while data loads
 - **Add schema.org microdata to all data elements** (see Schema.org section above)
 - **Include context-bridge.js in every HTML page** (see Context Bridge Script section above)
 

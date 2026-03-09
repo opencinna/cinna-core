@@ -119,6 +119,12 @@ The chat widget silently collects contextual information about what the viewer i
 
 For full details on context collection, storage, injection, and diff optimization, see the dedicated aspect document: **[Context Management](webapp_chat_context.md)** | **[Context Tech](webapp_chat_context_tech.md)**
 
+## Agent-to-Webapp Actions
+
+The chat framework supports **bi-directional** communication. In addition to context flowing from webapp to agent (via schema.org microdata), agents can send action commands back to the webapp frontend. Actions are embedded as `<webapp_action>` XML tags in agent responses, detected mid-stream, emitted as WebSocket events, and forwarded to the iframe — entirely invisible to the viewer.
+
+For full details on the action framework, available actions, and processing pipeline, see the dedicated aspect document: **[Agent-to-Webapp Actions](webapp_chat_actions.md)** | **[Actions Tech](webapp_chat_actions_tech.md)**
+
 ## Architecture Overview
 
 ```
@@ -140,7 +146,7 @@ POST /webapp/{token}/chat/sessions/{id}/messages/stream
         |
         v
 WebSocket stream -> chat panel renders messages in real time
-        |
+        |           (also receives webapp_action events — see Actions aspect)
         v
 Subsequent messages use same session
         |
@@ -159,4 +165,4 @@ On page reload: GET /webapp/{token}/chat/sessions
 
 ---
 
-*Last updated: 2026-03-08 — context management extracted to standalone aspect docs (webapp_chat_context.md, webapp_chat_context_tech.md)*
+*Last updated: 2026-03-08 — extracted Agent-to-Webapp Actions to separate aspect docs*

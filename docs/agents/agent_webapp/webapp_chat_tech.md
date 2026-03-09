@@ -157,6 +157,12 @@ Context management covers the full lifecycle of page context data: collection on
 
 For full technical details, see the dedicated aspect document: **[Context Management Tech](webapp_chat_context_tech.md)**. For business logic and user flows, see **[Context Management](webapp_chat_context.md)**.
 
+## Agent-to-Webapp Action Framework
+
+The action framework enables agents to trigger webapp UI actions by embedding `<webapp_action>` XML tags in their responses. Tags are parsed mid-stream, emitted as WebSocket events, and stripped from the persisted message.
+
+For full technical details (tag parsing, mid-stream scanning, WebSocket event structure, frontend handling, context-bridge.js dispatcher), see the dedicated aspect document: **[Actions Tech](webapp_chat_actions_tech.md)**. For business logic and user flows, see **[Actions](webapp_chat_actions.md)**.
+
 ## Socket.IO Connection for Webapp Viewers
 
 Webapp viewers connect to Socket.IO independently from authenticated users. The connection is established in `$webappToken.tsx` via a `useEffect` that fires once `authState === "ready"` and `chatMode` is non-null:
@@ -218,4 +224,4 @@ This dual emission applies to all handlers: `handle_stream_started`, `handle_str
 
 ---
 
-*Last updated: 2026-03-08 — context management extracted to standalone aspect docs (webapp_chat_context.md, webapp_chat_context_tech.md)*
+*Last updated: 2026-03-08 — extracted Agent-to-Webapp Action Framework to separate aspect docs*

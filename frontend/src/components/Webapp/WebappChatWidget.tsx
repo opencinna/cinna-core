@@ -333,6 +333,21 @@ export function WebappChatWidget({
         return
       }
 
+      // Forward webapp_action events to the iframe via postMessage.
+      // These events are emitted by the agent when it wants to trigger a UI
+      // action (e.g. refresh_page, update_form, show_notification).
+      if (eventType === "webapp_action") {
+        const action = data?.action ?? event.action
+        const actionData = data?.data ?? event.data ?? {}
+        if (action && iframeRef?.current?.contentWindow) {
+          iframeRef.current.contentWindow.postMessage(
+            { type: "webapp_action", action, data: actionData },
+            "*"
+          )
+        }
+        return
+      }
+
       const seq = data?.event_seq ?? event.event_seq
       if (!seq) return
       if (seq <= lastKnownSeqRef.current) return

@@ -879,6 +879,7 @@ async def execute_database_query(request: SQLiteQueryRequest) -> SQLiteQueryResu
 
 WEBAPP_DIR = Path(WORKSPACE_DIR) / "webapp"
 WEBAPP_SIZE_LIMIT_BYTES = 100 * 1024 * 1024  # 100MB
+WEBAPP_FRAMEWORK_DIR = Path("/app/core/webapp-framework")
 
 
 def _validate_webapp_path(path: str) -> Path:
@@ -1001,7 +1002,14 @@ async def serve_webapp_file(path: str, request: Request):
     file_path = _validate_webapp_path(path)
 
     if not file_path.is_file():
-        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+        # Fallback: serve context-bridge.js from the framework directory if not in webapp
+        if path == "assets/context-bridge.js":
+            framework_file = WEBAPP_FRAMEWORK_DIR / "context-bridge.js"
+            if framework_file.is_file():
+                file_path = framework_file
+
+        if not file_path.is_file():
+            raise HTTPException(status_code=404, detail=f"File not found: {path}")
 
     stat = file_path.stat()
     mtime = stat.st_mtime

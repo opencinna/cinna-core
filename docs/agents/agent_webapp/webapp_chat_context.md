@@ -75,8 +75,8 @@ An optimization that avoids sending the full context payload on every message. I
 ### Schema.org Microdata Requirements
 
 - The building agent must annotate all significant elements (tables, cards, metrics, filters, form inputs) with schema.org microdata attributes (`itemscope`, `itemtype`, `itemprop`)
-- Every webapp HTML page must include the context bridge script (`webapp/assets/context-bridge.js`)
-- Instructions for the building agent are defined in `WEBAPP_BUILDING.md`
+- Every webapp HTML page must include the context bridge script (`<script src="./assets/context-bridge.js"></script>`) — the script is auto-available and does not need to be created by the agent
+- Instructions for the building agent are defined in `WEBAPP_BUILDING.md`; full HTML markup examples are available at `/app/core/webapp-framework/SCHEMA_EXAMPLES.md`
 
 ## Architecture Overview
 

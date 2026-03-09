@@ -2,6 +2,7 @@ from uuid import UUID
 from datetime import datetime, UTC
 from typing import AsyncIterator, NamedTuple
 import json
+import re
 import time
 import httpx
 import logging
@@ -15,6 +16,13 @@ from app.models.mcp_session_meta import MCPSessionMeta
 from app.services.session_context_signer import sign_session_context
 
 logger = logging.getLogger(__name__)
+
+# Regex for matching complete <webapp_action>...</webapp_action> tags.
+# Uses non-greedy matching to handle multiple tags in one response.
+_WEBAPP_ACTION_TAG_RE = re.compile(
+    r"<webapp_action>(.*?)</webapp_action>",
+    re.DOTALL,
+)
 
 # Pre-allowed tools that never require user approval
 # These match the default tools in agent-env's sdk_manager.py
@@ -32,6 +40,89 @@ _FORWARDED_METADATA_KEYS = {"model", "total_cost_usd", "claude_code_version", "d
 
 # Keys to keep when copying event metadata for storage
 _STORED_EVENT_METADATA_KEYS = {"tool_id", "tool_input", "model", "needs_approval", "tool_name"}
+
+
+def _extract_webapp_actions(content: str) -> tuple[list[dict], str]:
+    """
+    Extract all complete <webapp_action>...</webapp_action> tags from content.
+
+    Parses the JSON payload inside each tag. Tags with malformed JSON are
+    logged as warnings and skipped (not emitted). All complete tags —
+    whether their JSON parsed or not — are stripped from the returned
+    cleaned content so they never appear in the chat UI.
+
+    Args:
+        content: Raw text that may contain webapp_action tags.
+
+    Returns:
+        A tuple of (actions, cleaned_content) where:
+        - actions: list of dicts with keys "action" (str) and "data" (dict, may be empty)
+        - cleaned_content: the original text with all complete tags removed
+    """
+    actions: list[dict] = []
+    matches = list(_WEBAPP_ACTION_TAG_RE.finditer(content))
+
+    for match in matches:
+        raw_json = match.group(1).strip()
+        try:
+            payload = json.loads(raw_json)
+        except json.JSONDecodeError:
+            logger.warning(
+                "webapp_action tag contained invalid JSON — skipping emission: %r", raw_json[:200]
+            )
+            continue
+
+        action_name = payload.get("action")
+        if not action_name or not isinstance(action_name, str):
+            logger.warning(
+                "webapp_action payload missing 'action' field — skipping: %r", payload
+            )
+            continue
+
+        actions.append({
+            "action": action_name,
+            "data": payload.get("data", {}),
+        })
+
+    # Strip ALL complete tags from the content regardless of JSON validity
+    cleaned_content = _WEBAPP_ACTION_TAG_RE.sub("", content)
+    return actions, cleaned_content
+
+
+async def _emit_webapp_action_events(
+    session_id: UUID,
+    actions: list[dict],
+) -> None:
+    """
+    Emit webapp_action WebSocket events for a list of parsed action payloads.
+
+    Each action is emitted as a separate stream event to the session stream
+    room so the webapp frontend (WebappChatWidget) can forward it to the
+    iframe via postMessage.
+
+    Errors are caught and logged — a failed emission must never crash the stream.
+    """
+    try:
+        from app.services.event_service import event_service
+        for action in actions:
+            await event_service.emit_stream_event(
+                session_id=session_id,
+                event_type="webapp_action",
+                event_data={
+                    "action": action["action"],
+                    "data": action["data"],
+                    "session_id": str(session_id),
+                },
+            )
+            logger.info(
+                "Emitted webapp_action event: action=%r session=%s", action["action"], session_id
+            )
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        raise
+    except Exception as e:
+        logger.error(
+            "Failed to emit webapp_action events for session %s: %s", session_id, e, exc_info=True
+        )
 
 
 def _compute_context_diff(old_context_str: str, new_context_str: str) -> dict | None:
@@ -1285,6 +1376,12 @@ class MessageService:
             "mode": session_mode,
         }
 
+        # Webapp action tracking: accumulate assistant text to scan for action tags mid-stream.
+        # We track how many characters of the buffer have already been scanned so we only
+        # scan the newly arrived suffix (avoiding O(n²) rescanning on long responses).
+        accumulated_assistant_content: str = ""
+        webapp_action_scan_offset: int = 0
+
         # Build session_state for agent-env
         session_state = None
         if ctx.previous_result_state or ctx.session_context:
@@ -1398,6 +1495,22 @@ class MessageService:
                         get_fresh_db_session=get_fresh_db_session,
                     )
 
+                # Detect webapp_action tags mid-stream from assistant content.
+                # Accumulate text and scan only the newly arrived suffix for complete tags.
+                if event.get("type") == "assistant" and event.get("content"):
+                    accumulated_assistant_content += event["content"]
+                    # Only scan the region that contains newly arrived content.
+                    # We look back _WEBAPP_ACTION_TAG_RE's max tag length to catch tags
+                    # that straddle the previous scan boundary.  Using a generous 2 KB
+                    # lookback is safe and avoids missed tags at chunk boundaries.
+                    scan_start = max(0, webapp_action_scan_offset - 2048)
+                    new_suffix = accumulated_assistant_content[scan_start:]
+                    new_actions, _ = _extract_webapp_actions(new_suffix)
+                    if new_actions:
+                        await _emit_webapp_action_events(session_id, new_actions)
+                    # Advance the scan offset so the next chunk only rescans the lookback window
+                    webapp_action_scan_offset = len(accumulated_assistant_content)
+
                 # Store raw event for visualization (exclude done/error events from storage)
                 if event.get("type") not in ["done", "error", "session_created"]:
                     event_seq_counter += 1
@@ -1468,6 +1581,27 @@ class MessageService:
             if streaming_events:
                 text_parts = [e["content"] for e in streaming_events if e["type"] == "assistant" and e.get("content")]
                 agent_content = "\n\n".join(text_parts) if text_parts else "Agent response"
+
+                # Emit any webapp_action tags that appear in the final assembled content
+                # but were not caught mid-stream (e.g. they spanned two chunk boundaries
+                # in a way that the lookback window missed them, or the stream ended before
+                # the next scan).  We do a fresh extract on the full assembled content and
+                # only emit actions whose tags still exist (i.e. weren't already emitted).
+                # To avoid double-emitting we compare against what was already scanned:
+                # any tag that was in accumulated_assistant_content AND had full content
+                # would already have been emitted.  The safest guard is to emit from the
+                # portion of agent_content beyond the last scan offset.
+                remaining_content = agent_content[webapp_action_scan_offset:]
+                if remaining_content and _WEBAPP_ACTION_TAG_RE.search(remaining_content):
+                    final_actions, _ = _extract_webapp_actions(remaining_content)
+                    if final_actions:
+                        await _emit_webapp_action_events(session_id, final_actions)
+
+                # Strip webapp_action tags from the content saved to DB so they are
+                # never rendered in the chat UI.  The agent's visible reply is the text
+                # around the tags; the tags themselves are purely a signalling mechanism.
+                _, agent_content = _extract_webapp_actions(agent_content)
+                agent_content = agent_content.strip() or "Agent response"
 
                 response_metadata["external_session_id"] = new_external_session_id
                 if tools_needing_approval:

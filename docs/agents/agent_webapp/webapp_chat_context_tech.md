@@ -16,7 +16,9 @@
 
 ### Agent Prompts
 
-- `backend/app/env-templates/app_core_base/core/prompts/WEBAPP_BUILDING.md` — schema.org markup instructions and context bridge script specification for the building agent
+- `backend/app/env-templates/app_core_base/core/prompts/WEBAPP_BUILDING.md` — schema.org markup instructions and context bridge script inclusion instructions for the building agent
+- `backend/app/env-templates/app_core_base/core/webapp-framework/SCHEMA_EXAMPLES.md` — full schema.org HTML markup examples for the building agent to reference on demand
+- `backend/app/env-templates/app_core_base/core/webapp-framework/context-bridge.js` — framework-provided context bridge script, auto-served as fallback
 
 ### Tests
 
@@ -119,9 +121,11 @@ The `page_context` string sent from the frontend:
 
 ## Context Bridge Script
 
-File: `backend/app/env-templates/app_core_base/core/prompts/WEBAPP_BUILDING.md`
+File: `backend/app/env-templates/app_core_base/core/webapp-framework/context-bridge.js`
 
-The building agent creates `webapp/assets/context-bridge.js` and includes it in every HTML page. The script:
+The script is **auto-served** at `./assets/context-bridge.js` by the environment server from the framework directory. When the agent places a custom version at `webapp/assets/context-bridge.js`, that version is served instead; otherwise the framework version is used as a fallback. The building agent no longer needs to manually create this file — it just needs to include the `<script>` tag in every HTML page.
+
+The script:
 1. Registers a `message` event listener on `window`
 2. On receiving `{ type: "request_page_context" }`, collects all `[itemscope]` elements and their `[itemprop]` child values into a structured array
 3. Responds with `{ type: "page_context_response", context: { url, title, microdata } }` back to the requesting window
