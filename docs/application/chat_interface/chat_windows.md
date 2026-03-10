@@ -118,6 +118,10 @@ Key behaviors:
 - Floating scroll-down button when user scrolls away from bottom
 - During streaming, messages split into before/during/after zones to prevent ordering artifacts
 - Webapp widget uses simpler always-scroll behavior
+- When a chat widget opens with existing message history (e.g. restored from cache), it must scroll to bottom immediately — same stick-to-bottom behavior as the session page
+- Message list must remain visible during background refreshes (e.g. after send or stream completion) — never replace with a loading spinner mid-conversation
+- Message input must receive focus when the chat widget opens
+- Message input must retain focus across send and streaming lifecycle — re-focus after textarea is re-enabled post-send, and after streaming ends (iframe webapp actions can steal focus during streaming)
 
 ## Business Rules
 

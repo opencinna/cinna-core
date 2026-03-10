@@ -224,6 +224,32 @@ export function WebappChatWidget({
     scrollToBottom()
   }, [messages, streamingEvents, scrollToBottom])
 
+  // Scroll to bottom and focus input when widget opens
+  useEffect(() => {
+    if (isOpen) {
+      if (messages.length > 0) scrollToBottom()
+      setTimeout(() => textareaRef.current?.focus(), 0)
+    }
+  }, [isOpen]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Restore focus to textarea after it gets re-enabled (disabled during send)
+  // or after streaming ends (iframe webapp actions can steal focus)
+  const wasSendingRef = useRef(false)
+  const wasStreamingRef = useRef(false)
+  useEffect(() => {
+    if (wasSendingRef.current && !isSending) {
+      textareaRef.current?.focus()
+    }
+    wasSendingRef.current = isSending
+  }, [isSending])
+
+  useEffect(() => {
+    if (wasStreamingRef.current && !isStreaming && isOpen) {
+      textareaRef.current?.focus()
+    }
+    wasStreamingRef.current = isStreaming
+  }, [isStreaming, isOpen])
+
   // ── Cache restore on mount ──────────────────────────────────────────────
 
   const cacheRestoredRef = useRef(false)
@@ -452,7 +478,7 @@ export function WebappChatWidget({
 
   async function refreshMessages() {
     if (!sessionId) return
-    await loadMessages(sessionId)
+    await loadMessages(sessionId, true)
   }
 
   async function ensureSession(): Promise<string> {
@@ -524,8 +550,8 @@ export function WebappChatWidget({
         setIsStreaming(true)
       }
 
-      // Refresh to get real message
-      setTimeout(() => loadMessages(sid), 300)
+      // Refresh to get real message (silent to avoid spinner flash)
+      setTimeout(() => loadMessages(sid, true), 300)
     } catch (e: any) {
       console.error("Failed to send message:", e)
       setError("Failed to send message. Please try again.")
@@ -662,7 +688,7 @@ export function WebappChatWidget({
                 placeholder="Type a message..."
                 rows={1}
                 disabled={isSending}
-                className="flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary min-h-[36px] max-h-[100px]"
+                className="flex-1 resize-none rounded-lg border bg-background px-3 py-1.5 text-sm leading-snug focus:outline-none focus:ring-1 focus:ring-primary min-h-[36px] max-h-[100px]"
                 style={{ height: "36px" }}
                 onInput={(e) => {
                   const target = e.target as HTMLTextAreaElement
