@@ -1,21 +1,8 @@
 import { Lightbulb } from "lucide-react"
 import { ToolCallBlock } from "./ToolCallBlock"
 import { MarkdownRenderer } from "./MarkdownRenderer"
-
-interface StreamEvent {
-  type: "assistant" | "tool" | "thinking" | "system"
-  content: string
-  event_seq?: number
-  tool_name?: string
-  metadata?: {
-    tool_id?: string
-    tool_input?: Record<string, any>
-    model?: string
-    interrupt_notification?: boolean
-    needs_approval?: boolean
-    tool_name?: string
-  }
-}
+import { WebappActionBlock } from "./WebappActionBlock"
+import type { StreamEvent } from "@/hooks/useSessionStreaming"
 
 interface StreamEventRendererProps {
   events: StreamEvent[]
@@ -61,6 +48,15 @@ export function StreamEventRenderer({ events, conversationModeUi = "detailed" }:
                 className="prose dark:prose-invert max-w-none text-xs prose-p:text-xs prose-p:leading-tight prose-p:my-0.5 prose-ul:my-0.5 prose-ul:text-xs prose-li:my-0 prose-li:leading-tight prose-headings:text-xs prose-headings:my-1 prose-code:text-xs"
               />
             </div>
+          )
+        } else if (event.type === "webapp_action") {
+          return (
+            <WebappActionBlock
+              key={key}
+              action={event.content}
+              data={event.metadata?.data}
+              isCompact={conversationModeUi === "compact"}
+            />
           )
         } else if (event.type === "system" && event.content.trim()) {
           // Render system notification (e.g., interrupt notifications)

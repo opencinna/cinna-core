@@ -1659,6 +1659,65 @@ class MessageService:
                 _, agent_content = _extract_webapp_actions(agent_content)
                 agent_content = agent_content.strip() or "Agent response"
 
+                # Post-process streaming_events: split assistant events that contain
+                # <webapp_action> tags into interleaved text + action chunks so the
+                # frontend renders them in the correct position within the conversation.
+                if any(
+                    e.get("type") == "assistant"
+                    and e.get("content")
+                    and _WEBAPP_ACTION_TAG_RE.search(e["content"])
+                    for e in streaming_events
+                ):
+                    processed_events: list[dict] = []
+                    for evt in streaming_events:
+                        if (
+                            evt.get("type") == "assistant"
+                            and evt.get("content")
+                            and _WEBAPP_ACTION_TAG_RE.search(evt["content"])
+                        ):
+                            # Split content around each <webapp_action> tag, producing
+                            # interleaved text chunks and action events in order.
+                            content = evt["content"]
+                            last_end = 0
+                            for match in _WEBAPP_ACTION_TAG_RE.finditer(content):
+                                # Text chunk before this tag
+                                text_before = content[last_end:match.start()].strip()
+                                if text_before:
+                                    processed_events.append({
+                                        **{k: v for k, v in evt.items() if k not in ("content", "event_seq")},
+                                        "content": text_before,
+                                    })
+                                # The webapp_action event itself
+                                raw_json = match.group(1).strip()
+                                try:
+                                    payload = json.loads(raw_json)
+                                    action_name = payload.get("action", "")
+                                    if action_name:
+                                        processed_events.append({
+                                            "type": "webapp_action",
+                                            "content": action_name,
+                                            "metadata": {
+                                                "action": action_name,
+                                                "data": payload.get("data", {}),
+                                            },
+                                        })
+                                except (json.JSONDecodeError, AttributeError):
+                                    logger.debug("Malformed webapp_action tag during post-processing: %r", raw_json[:200])
+                                last_end = match.end()
+                            # Remaining text after the last tag
+                            text_after = content[last_end:].strip()
+                            if text_after:
+                                processed_events.append({
+                                    **{k: v for k, v in evt.items() if k not in ("content", "event_seq")},
+                                    "content": text_after,
+                                })
+                        else:
+                            processed_events.append(evt)
+                    # Re-number all events sequentially to preserve correct display order
+                    for i, evt in enumerate(processed_events, start=1):
+                        evt["event_seq"] = i
+                    streaming_events = processed_events
+
                 response_metadata["external_session_id"] = new_external_session_id
                 if tools_needing_approval:
                     response_metadata["tools_needing_approval"] = list(tools_needing_approval)

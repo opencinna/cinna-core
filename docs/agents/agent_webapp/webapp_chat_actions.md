@@ -8,17 +8,18 @@ Enable bi-directional communication between the agent and the webapp frontend. W
 
 ### Webapp Action
 
-A JSON command embedded in the agent's text response using `<webapp_action>` XML tags. Each action has an `action` type and optional `data` payload. The tags are invisible to the viewer — they are stripped from the stored message and never displayed in the chat UI.
+A JSON command embedded in the agent's text response using `<webapp_action>` XML tags. Each action has an `action` type and optional `data` payload. The raw XML tags are stripped from the persisted message content and the final text bubble. However, actions are rendered as visual blocks in the chat UI (alongside the surrounding text) so the viewer can see which actions the agent issued during the conversation.
 
 ### Action Pipeline
 
 1. Agent includes `<webapp_action>` tags in its streaming response
 2. Backend detects tags mid-stream and at stream completion
-3. Backend emits a `webapp_action` WebSocket event to the session stream room
-4. Backend strips the tags from the persisted message content
-5. Frontend chat widget receives the WebSocket event
-6. Widget forwards the action to the webapp iframe via `postMessage`
-7. The `context-bridge.js` script inside the iframe dispatches the action to the appropriate handler
+3. Backend emits a `webapp_action` WebSocket event to the session stream room (for real-time delivery to the iframe)
+4. After streaming completes, the backend post-processes the saved `streaming_events`: assistant events that contain `<webapp_action>` tags are split into interleaved text chunks and `webapp_action` events, preserving the order in which they appeared. All events are re-numbered sequentially.
+5. Backend strips the tags from the persisted message text (`message.content`)
+6. Frontend chat renders the `webapp_action` events as `WebappActionBlock` components — full block with icon and data fields in detailed mode, inline one-liner in compact mode
+7. Frontend chat widget (in webapp sessions) also forwards the action to the webapp iframe via `postMessage`
+8. The `context-bridge.js` script inside the iframe dispatches the action to the appropriate handler
 
 ### Action Types
 
@@ -39,7 +40,7 @@ Unknown action types are dispatched as custom events (`webapp_action_{action}`) 
 1. Viewer asks the agent to update the dashboard layout
 2. Agent writes new code to the workspace files
 3. Agent includes `<webapp_action>{"action": "refresh_page"}</webapp_action>` in its response
-4. Viewer sees the agent's reply ("I've updated the layout") — the action tag is invisible
+4. Viewer sees the agent's reply ("I've updated the layout") with a `refresh_page` action block rendered inline — the raw XML tag is never shown as text
 5. The webapp iframe reloads automatically, showing the new layout
 
 ### Agent Updates Form Filters (Conversation Mode)
@@ -59,10 +60,12 @@ Unknown action types are dispatched as custom events (`webapp_action_{action}`) 
 
 ### Tag Processing
 
-- Tags are detected both mid-stream (for real-time action delivery) and at stream completion (for any remaining tags)
-- Malformed JSON inside tags is silently skipped (logged as warning) — the tag is still stripped from the message
+- Tags are detected both mid-stream (for real-time action delivery to the iframe) and at stream completion (for any remaining tags)
+- After streaming completes, `streaming_events` are post-processed: any assistant event whose content contains one or more `<webapp_action>` tags is split into interleaved text and `webapp_action` events. The split preserves relative order — text before a tag, the action event, then text after. All resulting events are re-numbered sequentially.
+- Malformed JSON inside tags is silently skipped during both mid-stream emission and post-processing (logged as warning at DEBUG level) — the tag is still stripped from the message
 - Tags missing the `"action"` field are skipped — the tag is still stripped
-- All `<webapp_action>` tags are always removed from the stored message, regardless of JSON validity
+- All `<webapp_action>` tags are always removed from the stored `message.content`, regardless of JSON validity
+- Valid actions with a parseable `action` field produce a `webapp_action` event in `streaming_events` with `content = action_name` and `metadata = {action, data}`
 
 ### Mode Applicability
 
@@ -82,23 +85,32 @@ Unknown action types are dispatched as custom events (`webapp_action_{action}`) 
 Agent response with <webapp_action> tags
         |
         v
-Backend: _extract_webapp_actions() parses tags from content
+Backend: mid-stream scan via _extract_webapp_actions()
         |
         ├──> Actions emitted as WebSocket events (session stream room)
+        |     |
+        |     v
+        |   Frontend: WebappChatWidget (webapp sessions) receives webapp_action event
+        |     |
+        |     v
+        |   postMessage to webapp iframe
+        |     |
+        |     v
+        |   context-bridge.js handleWebappAction()
+        |     |
+        |     v
+        |   Action dispatched: reload, form update, navigate, notification, etc.
         |
-        └──> Tags stripped from stored message content
-                |
-                v
-Frontend: WebappChatWidget receives webapp_action event
-        |
-        v
-postMessage to webapp iframe
-        |
-        v
-context-bridge.js handleWebappAction()
-        |
-        v
-Action dispatched: reload, form update, navigate, notification, etc.
+        └──> Stream completion: post-process streaming_events
+              |
+              ├── Split assistant events containing tags into interleaved
+              |   text chunks + webapp_action events (preserves position)
+              ├── Re-number all events sequentially
+              └── Strip tags from message.content before DB save
+                        |
+                        v
+              Frontend: StreamEventRenderer renders webapp_action events
+              via WebappActionBlock (full block or compact inline)
 ```
 
 ## Integration Points
@@ -107,7 +119,8 @@ Action dispatched: reload, form update, navigate, notification, etc.
 - **[Webapp Chat Context](webapp_chat_context.md)** — complementary direction: context flows webapp→agent, actions flow agent→webapp
 - **[Streaming Architecture](../../application/realtime_events/frontend_backend_agentenv_streaming.md)** — action events use the same WebSocket event bus and session stream room
 - **[Agent Prompts](../agent_prompts/agent_prompts.md)** — `WEBAPP_BUILDING.md` instructs the building agent on available actions and the context-bridge.js script
+- **[Agent Sessions](../../application/agent_sessions/agent_sessions.md)** — `streaming_events` in `message_metadata` is where post-processed events (including `webapp_action` type) are persisted and later replayed on page load
 
 ---
 
-*Last updated: 2026-03-08*
+*Last updated: 2026-03-10*

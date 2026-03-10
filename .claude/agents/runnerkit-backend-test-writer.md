@@ -67,34 +67,34 @@ Before finalizing any test file, verify:
 - [ ] Code style matches existing tests in the project
 - [ ] No hardcoded secrets or sensitive data
 
-## Running Tests
+## Running Tests — Delegate to `runnerkit-test-runner`
 
-Tests run inside Docker. Prerequisites: Docker services must be running (`make up` or `docker compose up -d`).
+**Do NOT run tests yourself.** After writing tests, delegate ALL test execution to the `runnerkit-test-runner` agent using the Agent tool. This keeps your context slim and focused on writing code.
 
-**After writing tests, you MUST run them in the following order to verify correctness and ensure no regressions:**
+**After writing tests, you MUST spawn the `runnerkit-test-runner` agent to execute the following chain:**
 
-### Step 1: Run the exact tests you wrote
-Run only the specific test file(s) you created or modified to verify they pass in isolation.
-```bash
-docker compose exec backend python -m pytest tests/api/entity_name/your_new_test_file.py -v
+1. **Run the exact test file(s) you wrote** — if green, continue
+2. **Run the entire business domain test directory** (e.g., `tests/api/agents/`) — if green, continue
+3. **Run the full backend test suite** (`make test-backend`)
+
+Provide the test-runner agent with:
+- The exact test file path(s) you created or modified
+- The domain test directory path
+- Instruction to run the chain: exact file → domain directory → full suite, stopping on first failure
+
+**Example Agent call:**
 ```
-If any tests fail, fix them before proceeding to the next step.
-
-### Step 2: Run tests within the same business domain
-Run the entire test directory for the business domain (e.g., agents, mcp_integration, items) to verify your new tests don't conflict with existing tests in the same domain.
-```bash
-docker compose exec backend python -m pytest tests/api/entity_name/ -v
+Use the Agent tool with subagent_type="runnerkit-test-runner" and prompt:
+"Run the following test chain, stopping at the first failure:
+1. Run exact test: tests/api/agents/agents_new_feature_test.py
+2. If green, run domain tests: tests/api/agents/
+3. If green, run full suite: make test-backend
+Report a concise summary of each step."
 ```
-If any existing tests break, investigate and fix the issue before proceeding.
 
-### Step 3: Run the full test suite
-Run all backend tests to ensure nothing is broken across the entire project.
-```bash
-make test-backend
-```
-If any tests fail in other domains, investigate whether your changes caused the regression and fix accordingly.
+**On failure:** Read the test-runner's summary, fix the failing tests in your context, then spawn the test-runner agent again to re-run the chain from the beginning.
 
-**Important:** Do NOT skip any of these steps. Each level catches different types of issues — isolation bugs, domain-level conflicts, and cross-domain regressions. Report the results of each step to the user.
+**Important:** Do NOT run `docker compose exec`, `pytest`, or `make test-backend` commands yourself. Always delegate to the test-runner agent. This separation keeps your context focused on test writing and code fixes while the test-runner handles execution and reporting.
 
 ## Update Your Agent Memory
 

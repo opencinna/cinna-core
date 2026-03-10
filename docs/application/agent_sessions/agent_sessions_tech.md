@@ -44,7 +44,8 @@
 - `frontend/src/components/Chat/MessageBubble.tsx` — Individual message; shows streaming indicator when `streaming_in_progress=true`
 - `frontend/src/components/Chat/MessageInput.tsx` — Text input with send/stop controls, file upload
 - `frontend/src/components/Chat/StreamingMessage.tsx` — Real-time streaming event display
-- `frontend/src/components/Chat/StreamEventRenderer.tsx` — Renders events by type using `event_seq` as React key
+- `frontend/src/components/Chat/StreamEventRenderer.tsx` — Renders events by type using `event_seq` as React key; handles `assistant`, `tool`, `thinking`, `system`, and `webapp_action` event types
+- `frontend/src/components/Chat/WebappActionBlock.tsx` — Visual block for `webapp_action` events; supports normal (full block with icon + data fields) and compact (inline one-liner) modes
 - `frontend/src/components/Chat/ModeSwitchToggle.tsx` — Toggle building/conversation mode
 - `frontend/src/components/Chat/SubTasksPanel.tsx` — Side panel showing sub-tasks spawned by agent
 - `frontend/src/components/Chat/RecoverSessionModal.tsx` — Session recovery dialog
@@ -129,9 +130,21 @@
 
 **Key `message_metadata` fields:**
 - `streaming_in_progress: bool` — True while generating; cleared on completion
-- `streaming_events: list[{event_seq, type, content, metadata}]` — All events flushed to DB
+- `streaming_events: list[{event_seq, type, content, metadata}]` — All events flushed to DB; post-processed after stream completion (see below)
 - `tools_needing_approval: list[{tool_name, tool_use_id, input}]` — Pending approvals (pre-approved tools filtered out)
 - `model: str` — LLM model used for this message
+
+**`streaming_events` event types:**
+
+| `type` | `content` | `metadata` fields | Description |
+|--------|-----------|-------------------|-------------|
+| `assistant` | Text chunk | `model?` | Agent text output |
+| `tool` | Tool label | `tool_id`, `tool_input`, `tool_name`, `needs_approval?` | Tool call |
+| `thinking` | Thinking text | — | Extended thinking block |
+| `system` | Notification text | `interrupt_notification?` | System message (e.g., interrupt notice) |
+| `webapp_action` | Action name | `action`, `data` | Webapp UI command extracted from agent response; produced by post-processing of assistant events containing `<webapp_action>` tags |
+
+After streaming completes, assistant events containing `<webapp_action>` tags are split into interleaved text and `webapp_action` events, and all events are re-numbered sequentially. See [webapp chat actions tech](../../agents/agent_webapp/webapp_chat_actions_tech.md) for the full post-processing algorithm.
 
 ---
 
