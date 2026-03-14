@@ -46,6 +46,10 @@ Read/write chat access for unauthenticated users via share token.
 
 Collapsible floating chat widget embedded alongside agent webapp dashboards. Has unique behaviors including localStorage caching, page context collection, webapp action forwarding, and self-contained streaming. See **[Webapp Chat Widget](webapp_chat_widget.md)** for the full aspect documentation.
 
+### 4. Dashboard Prompt Actions (In-Place)
+
+One-click chat shortcuts embedded inside dashboard blocks. Clicking a prompt action button sends a pre-configured message and shows the streaming response in a compact overlay at the bottom of the block — no navigation to the session page. Uses the same streaming infrastructure as the session page and the same page context + webapp action patterns as the webapp chat widget. See **[Dashboard Prompt Actions](dashboard_prompt_actions.md)** for the full aspect documentation.
+
 ## Message Types & Rendering
 
 ### User Messages
@@ -144,3 +148,4 @@ Key behaviors:
 - **[Tools Approval](../../agents/agent_environment_core/tools_approval_management.md)** — Tool approval flow triggered from chat message actions
 - **[Ask User Question Widget](tool_answer_questions_widget.md)** — Detailed question answering flow documentation
 - **[Tool Approval Widget](tool_approval_widget.md)** — Tool approval flow from chat messages
+- **[Dashboard Prompt Actions](dashboard_prompt_actions.md)** — In-place chat shortcuts on dashboard blocks, streaming overlay, session reuse

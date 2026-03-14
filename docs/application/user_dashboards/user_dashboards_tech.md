@@ -113,6 +113,9 @@ UserDashboardBlockPromptActionPublic — id, block_id, prompt_text, label, sort_
 | POST | `/{dashboard_id}/blocks/{block_id}/prompt-actions` | Create prompt action | `UserDashboardBlockPromptActionPublic` |
 | PUT | `/{dashboard_id}/blocks/{block_id}/prompt-actions/{action_id}` | Update prompt action | `UserDashboardBlockPromptActionPublic` |
 | DELETE | `/{dashboard_id}/blocks/{block_id}/prompt-actions/{action_id}` | Delete prompt action | `Message` |
+| GET | `/{dashboard_id}/blocks/{block_id}/latest-session` | Get most recent session for block (within 12 h) | `SessionPublic` |
+
+The `/latest-session` route path uses the literal segment `/latest-session` to avoid conflicting with the `/{action_id}` prompt-action routes. It verifies dashboard ownership, then calls `SessionService.get_recent_block_session()` which queries sessions by `dashboard_block_id`, `user_id`, and `last_message_at >= now - 12h`. Returns 404 if no qualifying session is found.
 
 The `/blocks/layout` route is registered **before** `/{block_id}` to avoid FastAPI path conflict. Prompt action routes are nested under `/{block_id}/prompt-actions` — the literal path segment prevents any conflict.
 
@@ -251,17 +254,35 @@ src/components/Dashboard/UserDashboards/
         — Inline delete confirmation replaces block content
         — onError toast handler on delete mutation
         — isHovered state tracks hover; renders PromptActionsOverlay in view mode when block has prompt_actions
+        — webappIframeRef: useRef<HTMLIFrameElement | null> — created unconditionally; passed to WebAppView for attachment and to PromptActionsOverlay for context collection
+        — Passes isWebApp={block.view_type === "webapp"} and iframeRef={webappIframeRef} (only when webapp) to PromptActionsOverlay
     AddBlockDialog.tsx
         — Agent picker (all owned agents); view type radio group
     EditBlockDialog.tsx
         — Edit view_type, custom title, show_border toggle, show_header toggle
         — "Prompt Actions" section: displays saved actions (delete per-item); "+ Add" form for new actions (save/discard per-item); immediate mutations (no batch save)
     PromptActionsOverlay.tsx
-        — Renders at bottom of block content area as absolute overlay on hover (view mode only)
+        — Renders at bottom of block content area as absolute overlay; visible on hover OR while streaming
         — Shows one pill button per action (label or truncated prompt_text, max 28 chars)
-        — On button click: calls SessionsService.createSession + MessagesService.sendMessageStream
-        — Post-click: button becomes Loader2 spinner; spinner click navigates to /session/{id}
-        — activeSessions map: Record<actionId, sessionId>; resets on page reload
+        — Props: actions, agentId, blockId, dashboardId, isVisible, isWebApp, iframeRef (optional)
+        — On mount: calls DashboardsService.getBlockLatestSession() to restore session indicator
+        — Left-side session indicator:
+            webapp blocks  → MessageCircle icon (muted=no session, primary=active session, clickable to navigate)
+            non-webapp     → ExternalLink icon when session exists (clickable to navigate)
+        — On button click:
+            1. resolveSession() — tries getBlockLatestSession; on 404 creates new session via SessionsService.createSession with dashboard_block_id
+            2. For webapp blocks: concurrently calls buildPageContext(iframeRef)
+            3. Subscribes to WebSocket stream room before sending: eventService.subscribeToRoom(`session_{id}_stream`)
+            4. Sends message via MessagesService.sendMessageStream with optional page_context
+        — Streaming state: isStreaming flag; streamingEvents: StreamEvent[]
+            — While streaming: shows StreamingMessage (conversationModeUi="compact") above action bar
+            — If no events yet: shows Loader2 + "Processing..." text
+            — All action buttons disabled while streaming
+        — Three useEffect subscriptions (each self-cleaning):
+            1. session_interaction_status_changed → sets/clears isStreaming based on newStatus
+            2. stream_event → accumulates StreamEvent[] by event_seq (deduped); forwards webapp_action events to iframe via postMessage; stream_completed clears state
+            3. Unmount cleanup → unsubscribes all event listeners and stream rooms
+        — resolveSession() (module-level helper): tries GET latest-session; creates new on 404
     views/
         WebAppView.tsx         — <iframe> embedding /api/v1/agents/{id}/webapp/?token={jwt}
         LatestSessionView.tsx  — Fetches latest 10 sessions; scrollable list with mode icon, title, timestamp per row (matches sessions index page style)
@@ -341,6 +362,8 @@ Creates `user_dashboard` and `user_dashboard_block` tables with all columns, for
 
 **`361c33705d15`**: Creates `user_dashboard_block_prompt_action` table with `id`, `block_id` (FK CASCADE), `prompt_text`, `label`, `sort_order`, `created_at`, `updated_at`. Creates index on `block_id`.
 
+**`b3029a8e84ac`**: Adds `dashboard_block_id` (UUID, nullable) to the `session` table with FK → `user_dashboard_block.id` (`ondelete="SET NULL"`) and index `ix_session_dashboard_block_id`. This column tags sessions created from prompt actions so the latest-session endpoint can retrieve them efficiently.
+
 ---
 
 ## Tests
@@ -360,5 +383,6 @@ Creates `user_dashboard` and `user_dashboard_block` tables with all columns, for
   - Prompt action full CRUD lifecycle (create, list, update, delete, cascade with block delete)
   - Prompt action ownership guards (cross-user access, unauthenticated, ghost IDs)
   - Prompt action input validation (empty text, oversized text/label → 422)
+  - Block latest-session endpoint: no session → 404, session with no messages → 404 (last_message_at NULL), session with message → 200 with correct session, ownership guard, ghost dashboard_id → 404
 
-Helper utilities: `backend/tests/utils/dashboard.py` — includes `create_prompt_action`, `list_prompt_actions`, `update_prompt_action`, `delete_prompt_action` helpers.
+Helper utilities: `backend/tests/utils/dashboard.py` — includes `create_prompt_action`, `list_prompt_actions`, `update_prompt_action`, `delete_prompt_action` helpers. `backend/tests/utils/session.py` — `create_dashboard_block_session()` creates a session tagged with `dashboard_block_id`.

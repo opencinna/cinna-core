@@ -120,7 +120,7 @@ Block content auto-refreshes every 30 seconds.
 
 ## Prompt Actions
 
-Dashboard blocks can have **prompt actions** — one-click buttons that appear when hovering over a block in view mode. Clicking a button creates a new agent session and sends the configured prompt text as the first user message.
+Dashboard blocks can have **prompt actions** — one-click buttons that appear when hovering over a block in view mode. Clicking a button sends the configured prompt text to the agent and shows the streaming response directly inside the block overlay, without navigating away from the dashboard.
 
 ### Configuration
 
@@ -134,20 +134,42 @@ Dashboard blocks can have **prompt actions** — one-click buttons that appear w
 ### UX Flow (view mode)
 
 1. User hovers over a block that has prompt actions configured.
-2. Small pill buttons appear at the bottom of the block (semi-transparent overlay).
-3. User clicks a button → a new session is created for that block's agent (conversation mode) and the prompt text is sent as the first message.
-4. The button becomes a spinning icon to indicate the session is in progress.
-5. Clicking the spinner opens the session chat page (`/session/{id}`).
-6. The block auto-refreshes every 30 seconds, so the new session will appear in the Latest Session view shortly.
+2. Small pill buttons appear at the bottom of the block in a semi-transparent overlay bar.
+3. A `MessageCircle` icon appears on the left side of the action bar (webapp blocks only):
+   - **Muted/grey**: no active session yet for this block.
+   - **Primary color**: an active session exists (persists across page refreshes).
+   - **Clickable**: navigates to the full session chat page (`/session/{id}`).
+4. For non-webapp blocks, once a session exists an `ExternalLink` icon appears in place of the `MessageCircle`, which also navigates to the session page.
+5. User clicks a prompt action button:
+   - The overlay resolves (or creates) a session for the block, then sends the prompt text immediately via `MessagesService.sendMessageStream()`.
+   - For webapp blocks, page context (schema.org microdata + selected text from the iframe) is collected and attached to the message as `page_context`.
+   - The button shows a `Loader2` spinner while the request is in flight.
+6. While the agent is streaming a response, a compact `StreamingMessage` appears inside the overlay above the action buttons. If no streaming events have arrived yet, a "Processing..." indicator with a spinner is shown.
+7. When the stream completes, the streaming display clears and the action buttons return to their normal state. The session indicator stays active (primary color).
+8. The block auto-refreshes every 30 seconds, so completed sessions will appear in the Latest Session view.
+
+### Session Persistence and Reuse
+
+Each block reuses its most recent session rather than creating a new one every time:
+
+- On **mount**, `PromptActionsOverlay` calls `GET /api/v1/dashboards/{id}/blocks/{block_id}/latest-session` to load any session active in the last 12 hours. If found, the session indicator turns active immediately (persists across page refreshes).
+- On **action click**, the overlay calls the same endpoint first. If a recent session exists it is reused; if not, a new `conversation`-mode session is created tagged with `dashboard_block_id`.
+- This means repeated prompt actions accumulate in a single ongoing conversation rather than spawning one session per click.
+
+### Webapp Action Forwarding
+
+For blocks with `view_type = "webapp"`, the overlay also listens for `webapp_action` events received on the WebSocket stream. These events are forwarded to the embedded iframe via `postMessage`, using the same pattern as the `WebappChatWidget`. This allows agent responses to trigger UI state changes in the webapp (e.g., highlighting a row, switching a view).
 
 ### Business Rules
 
 - A block can have any number of prompt actions (no enforced cap beyond practical UI constraints).
 - Prompt actions are only visible in view mode (never in edit mode).
 - Each action stores: `prompt_text` (1–2000 characters), optional `label` (max 100 characters), and `sort_order`.
-- The in-progress (spinner) state is tracked per browser session only — it resets on page reload.
+- While a prompt action response is streaming, all action buttons are disabled (no concurrent streams per block).
+- Session state (active session ID + streaming status) is tracked in component memory; it persists across hover events but resets on full page reload. The session indicator is restored on mount via the latest-session API call.
 - Prompt actions are cascade-deleted when their parent block is deleted.
-- The new session is always created in `conversation` mode.
+- New sessions are always created in `conversation` mode, tagged with `dashboard_block_id`.
+- The `dashboard_block_id` FK on `session` uses `ondelete="SET NULL"` — deleting the block sets the column to NULL rather than deleting the session.
 
 ---
 
@@ -206,6 +228,7 @@ The active dashboard is highlighted with an accent background and check icon in 
 | Max dashboards reached | "New Dashboard" button disabled with tooltip |
 | Max blocks reached | "Add Block" button disabled with tooltip |
 | Delete block fails | Toast error: "Failed to remove block. Please try again." |
+| Prompt action send fails | Toast error: "Failed to send prompt action. Please try again." |
 
 ---
 
@@ -217,3 +240,9 @@ The active dashboard is highlighted with an accent background and check icon in 
 - **Agent list**: "Add Block" dialog calls `/api/v1/agents/?limit=200` (no workspace filter) to populate the agent picker
 - **Sidebar**: `SidebarDashboardSwitcher` queries `["userDashboards"]` for the dropdown list
 - **Page header**: Dashboard view page uses `usePageHeader` hook to inject the dashboard name, action buttons, and dropdown menu into the shared layout header (same pattern as the session page)
+- **Prompt actions — session reuse**: `GET /api/v1/dashboards/{id}/blocks/{block_id}/latest-session` returns the most recent session tagged to a block (within 12 hours), used on mount and before each action send
+- **Prompt actions — message sending**: `MessagesService.sendMessageStream()` sends the prompt text to the resolved session; the WebSocket stream room `session_{id}_stream` is subscribed before the message is sent
+- **Prompt actions — streaming**: `PromptActionsOverlay` subscribes to `stream_event` and `session_interaction_status_changed` via `eventService`; streaming display uses the shared `StreamingMessage` component in `compact` conversation mode
+- **Webapp context**: `buildPageContext()` from `src/utils/webappContext.ts` collects page context from the webapp iframe via `postMessage`; same utility used by `WebappChatWidget`
+- **Webapp action forwarding**: `webapp_action` stream events are forwarded to the embedded iframe via `postMessage` (same pattern as `WebappChatWidget`)
+- **Chat interface aspect docs**: Full prompt actions behavior documented in **[Dashboard Prompt Actions](../chat_interface/dashboard_prompt_actions.md)** (business logic) and **[tech](../chat_interface/dashboard_prompt_actions_tech.md)**

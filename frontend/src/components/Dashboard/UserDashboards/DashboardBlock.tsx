@@ -172,6 +172,7 @@ export function DashboardBlock({ block, agent, dashboardId, isEditMode }: Dashbo
               blockId={block.id}
               dashboardId={dashboardId}
               isVisible={isHovered}
+              isWebApp={block.view_type === "webapp"}
               iframeRef={block.view_type === "webapp" ? webappIframeRef : undefined}
             />
           )}
