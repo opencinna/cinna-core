@@ -7,6 +7,10 @@ This document provides context and instructions for LLM assistants working on th
 - Detailed backend patterns: `docs/development/backend/backend_development_llm.md`
 - Common operations: See `Makefile` in project root
 
+## User Shortcuts
+
+- **"read core ..."** — When the user says "read core" (optionally followed by a topic), read `docs/README.md` first. This is the base for documentation discovery; use it to find the relevant feature docs for the topic mentioned.
+
 ## Documentation Strategy
 
 `docs/README.md` is the entrypoint to all feature documentation. When planning a task or exploring unfamiliar territory, start there to identify which features are involved and how they relate.

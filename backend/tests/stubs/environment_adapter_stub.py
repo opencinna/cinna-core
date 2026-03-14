@@ -153,9 +153,7 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
         return {}
 
     async def download_workspace_item(self, path: str) -> AsyncIterator[bytes]:
-        async def _empty():
-            yield b""
-        return _empty()
+        yield b""
 
     # --- Messages ---
 

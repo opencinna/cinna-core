@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, type RefObject } from "react"
 import { useNavigate } from "@tanstack/react-router"
-import { Loader2, MessageCircle, ExternalLink } from "lucide-react"
+import { Loader2, MessageCircle } from "lucide-react"
 
 import type { UserDashboardBlockPromptActionPublic } from "@/client"
 import { DashboardsService, SessionsService, MessagesService } from "@/client"
@@ -280,15 +280,11 @@ export function PromptActionsOverlay({
             title="Open session"
             onClick={handleOpenSession}
           >
-            {isWebApp ? (
-              <MessageCircle className="h-4 w-4 text-primary" />
-            ) : (
-              <ExternalLink className="h-3.5 w-3.5" />
-            )}
+            <MessageCircle className="h-4 w-4 text-primary" />
           </Button>
-        ) : isWebApp ? (
+        ) : (
           <MessageCircle className="h-4 w-4 shrink-0 text-muted-foreground" />
-        ) : null}
+        )}
 
         {/* Prompt action buttons */}
         {actions.map((action) => {

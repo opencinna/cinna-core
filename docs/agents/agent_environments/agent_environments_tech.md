@@ -58,8 +58,8 @@
 - `backend/app/services/environment_service.py` - `EnvironmentService` - route-level orchestration
 - `backend/app/services/environment_suspension_scheduler.py` - APScheduler background job (inactivity suspension)
 - `backend/app/services/environment_status_scheduler.py` - APScheduler background job (health monitoring)
-- `backend/app/services/adapters/base.py` - `EnvironmentAdapter` abstract interface
-- `backend/app/services/adapters/docker_adapter.py` - `DockerEnvironmentAdapter` - Docker-specific implementation
+- `backend/app/services/adapters/base.py` - `EnvironmentAdapter` abstract interface, `LocalFilesAccessInterface` optional mixin
+- `backend/app/services/adapters/docker_adapter.py` - `DockerEnvironmentAdapter` - Docker-specific implementation (implements `LocalFilesAccessInterface`)
 - `backend/app/services/session_context_signer.py` - HMAC signing/verification for session context
 
 ### Frontend - Components
@@ -122,6 +122,19 @@ Relevant field:
 
 ## Services & Key Methods
 
+### LocalFilesAccessInterface (`backend/app/services/adapters/base.py`)
+
+An optional mixin interface for adapters that can provide direct local filesystem access to workspace files without requiring the container to be running.
+
+- `get_local_workspace_file_path(relative_path: str) -> Path | None` — returns absolute path to a workspace file, or None if not found or unsafe
+- `list_local_workspace_files(subfolder: str = "files") -> list[str]` — lists files in a workspace subfolder, returns sorted relative paths
+- Callers check `isinstance(adapter, LocalFilesAccessInterface)` to detect support — no configuration needed
+- `DockerEnvironmentAdapter` implements this interface — workspace files are stored at `{env_dir}/app/workspace/` which is a Docker volume accessible directly on the host filesystem
+- Adapters that do NOT implement it fall back to `download_workspace_item()`, which requires the container to be running
+- Cloud/distributed adapters may implement this interface if they auto-sync workspace files to a local cache directory
+- Used by `UserDashboardService` env-file methods: `list_env_files()` calls `list_local_workspace_files()`, `get_env_file_local_path()` calls `get_local_workspace_file_path()`
+- Dashboard endpoints: `GET /api/v1/dashboards/{id}/blocks/{block_id}/env-files` (list) and `GET .../env-file` (stream)
+
 ### EnvironmentLifecycleManager (`backend/app/services/environment_lifecycle.py`)
 
 - `create_environment_instance()` - Copy template + shared core, generate configs, build Docker image
@@ -152,6 +165,8 @@ Relevant field:
 - `get_container()` - Get Docker container object for existence check
 - `get_workspace_tree()` - HTTP proxy to agent-env `/workspace/tree`
 - `download_workspace_item()` - HTTP streaming proxy to agent-env `/workspace/download/{path}`
+- `get_local_workspace_file_path(relative_path)` - Returns the absolute local filesystem path for a workspace file, or None if not found or unsafe. Rejects `..` and absolute paths. Resolves symlinks and validates the result stays within `{env_dir}/app/workspace/`. (`LocalFilesAccessInterface` implementation)
+- `list_local_workspace_files(subfolder)` - Lists files under `{env_dir}/app/workspace/{subfolder}/` recursively. Returns sorted relative paths from the subfolder root. (`LocalFilesAccessInterface` implementation)
 
 ### EnvironmentSuspensionScheduler (`backend/app/services/environment_suspension_scheduler.py`)
 

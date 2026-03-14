@@ -1,7 +1,8 @@
+import { useState } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import type { UserDashboardBlockPublic } from "@/client"
 import { DashboardsService } from "@/client"
@@ -29,9 +30,9 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Button } from "@/components/ui/button"
+import { Label } from "@/components/ui/label"
 
 const editBlockSchema = z.object({
-  view_type: z.enum(["webapp", "latest_session", "latest_tasks"]),
   title: z.string().max(255).optional().or(z.literal("")),
   show_border: z.boolean(),
   show_header: z.boolean(),
@@ -49,10 +50,12 @@ interface EditBlockDialogProps {
 export function EditBlockDialog({ block, dashboardId, open, onOpenChange }: EditBlockDialogProps) {
   const queryClient = useQueryClient()
 
+  const blockConfig = block.config as Record<string, string> | null
+  const [filePath, setFilePath] = useState<string>(blockConfig?.file_path ?? "")
+
   const form = useForm<EditBlockFormData>({
     resolver: zodResolver(editBlockSchema),
     defaultValues: {
-      view_type: (block.view_type as "webapp" | "latest_session" | "latest_tasks") || "latest_session",
       title: block.title ?? "",
       show_border: block.show_border,
       show_header: block.show_header,
@@ -61,18 +64,38 @@ export function EditBlockDialog({ block, dashboardId, open, onOpenChange }: Edit
 
   const showHeader = form.watch("show_header")
 
+  // Fetch available files from the agent's default environment (files/ subfolder)
+  const { data: availableFiles, isLoading: filesLoading } = useQuery({
+    queryKey: ["blockEnvFiles", dashboardId, block.id],
+    queryFn: () => DashboardsService.listBlockEnvFiles({
+      dashboardId,
+      blockId: block.id,
+      subfolder: "files",
+    }),
+    enabled: block.view_type === "agent_env_file" && open,
+  })
+
+  // Prefix with 'files/' for full workspace-relative paths
+  const files = (availableFiles ?? []).map((f) => `files/${f}`)
+
   const updateBlockMutation = useMutation({
-    mutationFn: (data: EditBlockFormData) =>
-      DashboardsService.updateBlock({
+    mutationFn: (data: EditBlockFormData) => {
+      const config =
+        block.view_type === "agent_env_file"
+          ? { file_path: filePath }
+          : block.config
+
+      return DashboardsService.updateBlock({
         dashboardId,
         blockId: block.id,
         requestBody: {
-          view_type: data.view_type,
           title: data.title || null,
           show_border: data.show_border,
           show_header: data.show_header,
+          config,
         },
-      }),
+      })
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["userDashboard", dashboardId] })
       onOpenChange(false)
@@ -92,28 +115,6 @@ export function EditBlockDialog({ block, dashboardId, open, onOpenChange }: Edit
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-            <FormField
-              control={form.control}
-              name="view_type"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>View Type</FormLabel>
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select view type" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="latest_session">Latest Session</SelectItem>
-                      <SelectItem value="latest_tasks">Latest Tasks</SelectItem>
-                      <SelectItem value="webapp">Web App</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </FormItem>
-              )}
-            />
-
             <FormField
               control={form.control}
               name="show_header"
@@ -163,6 +164,37 @@ export function EditBlockDialog({ block, dashboardId, open, onOpenChange }: Edit
                 </FormItem>
               )}
             />
+
+            {/* Agent Env File: file selector */}
+            {block.view_type === "agent_env_file" && (
+              <div className="flex items-center gap-4 pt-1">
+                <Label className="w-24 shrink-0 text-right text-sm">File</Label>
+                <Select
+                  value={filePath}
+                  onValueChange={setFilePath}
+                  disabled={filesLoading}
+                >
+                  <SelectTrigger className="ml-auto w-56">
+                    <SelectValue
+                      placeholder={
+                        filesLoading
+                          ? "Loading files..."
+                          : files.length === 0
+                          ? "No files found"
+                          : "Select a file"
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {files.map((file) => (
+                      <SelectItem key={file} value={file}>
+                        {file}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

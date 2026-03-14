@@ -11,6 +11,7 @@ from docker.models.containers import Container
 
 from .base import (
     EnvironmentAdapter,
+    LocalFilesAccessInterface,
     EnvInitConfig,
     File,
     MessageRequest,
@@ -22,7 +23,7 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 
-class DockerEnvironmentAdapter(EnvironmentAdapter):
+class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
     """
     Docker environment adapter using docker-compose.
 
@@ -544,6 +545,60 @@ class DockerEnvironmentAdapter(EnvironmentAdapter):
         except httpx.HTTPError as e:
             logger.error(f"Failed to get plugins settings: {e}")
             raise Exception(f"Failed to get plugins settings: {e}")
+
+    def get_local_workspace_file_path(self, relative_path: str) -> Path | None:
+        """
+        Return the absolute path to a workspace file on the local host filesystem.
+
+        DockerEnvironmentAdapter mounts the workspace directory at
+        ``{env_dir}/app/workspace/`` on the host, so files are directly accessible
+        without starting the container.
+
+        Args:
+            relative_path: Relative path from workspace root (e.g., "files/data.csv").
+
+        Returns:
+            Absolute Path if the file exists within the workspace boundary, else None.
+        """
+        workspace_dir = self.env_dir / "app" / "workspace"
+        # Reject obvious traversal sequences early
+        if ".." in relative_path or relative_path.startswith("/"):
+            logger.warning(f"Rejected path traversal attempt: {relative_path!r}")
+            return None
+        try:
+            candidate = (workspace_dir / relative_path).resolve()
+            workspace_resolved = workspace_dir.resolve()
+            # Ensure resolved path is strictly inside workspace_dir
+            if not str(candidate).startswith(str(workspace_resolved) + "/") and candidate != workspace_resolved:
+                logger.warning(
+                    f"Path {relative_path!r} resolved outside workspace: {candidate}"
+                )
+                return None
+            if not candidate.exists() or not candidate.is_file():
+                return None
+            return candidate
+        except Exception as e:
+            logger.warning(f"Error resolving workspace path {relative_path!r}: {e}")
+            return None
+
+    def list_local_workspace_files(self, subfolder: str = "files") -> list[str]:
+        """
+        List files in a workspace subfolder on the local host filesystem.
+
+        Args:
+            subfolder: Subfolder within workspace (default: "files").
+
+        Returns:
+            Sorted list of relative paths from the subfolder root.
+        """
+        target_dir = self.env_dir / "app" / "workspace" / subfolder
+        if not target_dir.exists() or not target_dir.is_dir():
+            return []
+        files = []
+        for item in target_dir.rglob("*"):
+            if item.is_file():
+                files.append(str(item.relative_to(target_dir)))
+        return sorted(files)
 
     async def upload_file(self, file: File) -> bool:
         """Upload file to container workspace via volume."""

@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Globe, MessageSquare, ClipboardList } from "lucide-react"
+import { Globe, MessageSquare, ClipboardList, FileText } from "lucide-react"
 
 import { AgentsService, DashboardsService } from "@/client"
 import {
@@ -19,12 +19,6 @@ import {
 } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
 import { getColorPreset } from "@/utils/colorPresets"
 import useCustomToast from "@/hooks/useCustomToast"
 
@@ -34,12 +28,13 @@ interface AddBlockDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
-type ViewType = "latest_session" | "latest_tasks" | "webapp"
+type ViewType = "latest_session" | "latest_tasks" | "webapp" | "agent_env_file"
 
-const VIEW_TYPES: { value: ViewType; label: string; icon: React.ElementType; description: string }[] = [
-  { value: "latest_session", label: "Latest Session", icon: MessageSquare, description: "Shows the most recent session for this agent" },
-  { value: "latest_tasks", label: "Latest Tasks", icon: ClipboardList, description: "Shows recent tasks" },
-  { value: "webapp", label: "Web App", icon: Globe, description: "Embeds the agent's web app" },
+const VIEW_TYPES: { value: ViewType; label: string; icon: React.ElementType }[] = [
+  { value: "latest_session", label: "Latest Session", icon: MessageSquare },
+  { value: "latest_tasks", label: "Latest Tasks", icon: ClipboardList },
+  { value: "webapp", label: "Web App", icon: Globe },
+  { value: "agent_env_file", label: "Agent Env File", icon: FileText },
 ]
 
 export function AddBlockDialog({ dashboardId, open, onOpenChange }: AddBlockDialogProps) {
@@ -47,6 +42,7 @@ export function AddBlockDialog({ dashboardId, open, onOpenChange }: AddBlockDial
   const { showErrorToast } = useCustomToast()
   const [selectedAgentId, setSelectedAgentId] = useState<string>("")
   const [viewType, setViewType] = useState<ViewType>("latest_session")
+  const [filePath, setFilePath] = useState<string>("")
 
   // Fetch all agents without workspace filter
   const { data: agentsData, isLoading: agentsLoading } = useQuery({
@@ -55,13 +51,29 @@ export function AddBlockDialog({ dashboardId, open, onOpenChange }: AddBlockDial
     enabled: open,
   })
 
+  // Fetch available files for agent_env_file view type
+  const { data: availableFiles, isLoading: filesLoading } = useQuery({
+    queryKey: ["agentEnvFiles", selectedAgentId],
+    queryFn: () => DashboardsService.listAgentEnvFiles({
+      agentId: selectedAgentId,
+      subfolder: "files",
+    }),
+    enabled: viewType === "agent_env_file" && !!selectedAgentId && open,
+  })
+
+  const files = (availableFiles ?? []).map((f) => `files/${f}`)
+
   const agents = agentsData?.data ?? []
   const selectedAgent = agents.find((a) => a.id === selectedAgentId)
   const webappNotEnabled = viewType === "webapp" && selectedAgent && !selectedAgent.webapp_enabled
 
   const addBlockMutation = useMutation({
-    mutationFn: () =>
-      DashboardsService.addBlock({
+    mutationFn: () => {
+      const config = viewType === "agent_env_file" && filePath
+        ? { file_path: filePath }
+        : null
+
+      return DashboardsService.addBlock({
         dashboardId,
         requestBody: {
           agent_id: selectedAgentId,
@@ -72,13 +84,16 @@ export function AddBlockDialog({ dashboardId, open, onOpenChange }: AddBlockDial
           grid_y: 0,
           grid_w: 2,
           grid_h: 2,
+          config,
         },
-      }),
+      })
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["userDashboard", dashboardId] })
       onOpenChange(false)
       setSelectedAgentId("")
       setViewType("latest_session")
+      setFilePath("")
     },
     onError: (error: { body?: { detail?: string } }) => {
       showErrorToast(error.body?.detail || "Failed to add block")
@@ -90,6 +105,16 @@ export function AddBlockDialog({ dashboardId, open, onOpenChange }: AddBlockDial
     addBlockMutation.mutate()
   }
 
+  const handleAgentChange = (agentId: string) => {
+    setSelectedAgentId(agentId)
+    setFilePath("")
+  }
+
+  const handleViewTypeChange = (vt: string) => {
+    setViewType(vt as ViewType)
+    setFilePath("")
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -97,12 +122,12 @@ export function AddBlockDialog({ dashboardId, open, onOpenChange }: AddBlockDial
           <DialogTitle>Add Block</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-5">
+        <div className="space-y-4">
           {/* Agent picker */}
-          <div className="space-y-2">
-            <Label>Agent</Label>
-            <Select value={selectedAgentId} onValueChange={setSelectedAgentId} disabled={agentsLoading}>
-              <SelectTrigger>
+          <div className="flex items-center gap-4">
+            <Label className="w-24 shrink-0 text-right text-sm">Agent</Label>
+            <Select value={selectedAgentId} onValueChange={handleAgentChange} disabled={agentsLoading}>
+              <SelectTrigger className="ml-auto w-56">
                 <SelectValue placeholder={agentsLoading ? "Loading agents..." : "Select an agent"} />
               </SelectTrigger>
               <SelectContent>
@@ -121,51 +146,64 @@ export function AddBlockDialog({ dashboardId, open, onOpenChange }: AddBlockDial
             </Select>
           </div>
 
-          {/* View type selection */}
-          <div className="space-y-2">
-            <Label>View Type</Label>
-            <RadioGroup
-              value={viewType}
-              onValueChange={(v) => setViewType(v as ViewType)}
-              className="space-y-2"
-            >
-              {VIEW_TYPES.map(({ value, label, icon: Icon, description }) => {
-                const isDisabled = value === "webapp" && selectedAgent && !selectedAgent.webapp_enabled
-
-                return (
-                  <Tooltip key={value} delayDuration={0}>
-                    <TooltipTrigger asChild>
-                      <div
-                        className={`flex items-center gap-3 rounded-lg border p-3 transition-colors cursor-pointer ${
-                          viewType === value ? "border-primary bg-accent" : "hover:bg-muted/50"
-                        } ${isDisabled ? "opacity-50 cursor-not-allowed" : ""}`}
-                        onClick={() => !isDisabled && setViewType(value)}
-                      >
-                        <RadioGroupItem value={value} id={value} disabled={!!isDisabled} />
-                        <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <Label htmlFor={value} className="text-sm font-medium cursor-pointer">
-                            {label}
-                          </Label>
-                          <p className="text-xs text-muted-foreground">{description}</p>
-                        </div>
+          {/* View type */}
+          <div className="flex items-center gap-4">
+            <Label className="w-24 shrink-0 text-right text-sm">View Type</Label>
+            <Select value={viewType} onValueChange={handleViewTypeChange}>
+              <SelectTrigger className="ml-auto w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {VIEW_TYPES.map(({ value, label, icon: Icon }) => {
+                  const isDisabled = value === "webapp" && selectedAgent && !selectedAgent.webapp_enabled
+                  return (
+                    <SelectItem key={value} value={value} disabled={!!isDisabled}>
+                      <div className="flex items-center gap-2">
+                        <Icon className="h-4 w-4 text-muted-foreground" />
+                        {label}
                       </div>
-                    </TooltipTrigger>
-                    {isDisabled && (
-                      <TooltipContent>
-                        Web App is not enabled for this agent. Enable it in agent settings first.
-                      </TooltipContent>
-                    )}
-                  </Tooltip>
-                )
-              })}
-            </RadioGroup>
+                    </SelectItem>
+                  )
+                })}
+              </SelectContent>
+            </Select>
           </div>
 
           {webappNotEnabled && (
-            <p className="text-xs text-destructive">
+            <p className="text-xs text-destructive text-right">
               Web App is not enabled for this agent.
             </p>
+          )}
+
+          {/* Agent Env File: file selector */}
+          {viewType === "agent_env_file" && selectedAgentId && (
+            <div className="flex items-center gap-4">
+              <Label className="w-24 shrink-0 text-right text-sm">File</Label>
+              <Select
+                value={filePath}
+                onValueChange={setFilePath}
+                disabled={filesLoading}
+              >
+                <SelectTrigger className="ml-auto w-56">
+                  <SelectValue
+                    placeholder={
+                      filesLoading
+                        ? "Loading files..."
+                        : files.length === 0
+                        ? "No files found"
+                        : "Select a file"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {files.map((file) => (
+                    <SelectItem key={file} value={file}>
+                      {file}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           )}
         </div>
 
@@ -175,7 +213,11 @@ export function AddBlockDialog({ dashboardId, open, onOpenChange }: AddBlockDial
           </Button>
           <Button
             onClick={handleAdd}
-            disabled={!selectedAgentId || !!webappNotEnabled || addBlockMutation.isPending}
+            disabled={
+              !selectedAgentId ||
+              !!webappNotEnabled ||
+              addBlockMutation.isPending
+            }
           >
             Add Block
           </Button>

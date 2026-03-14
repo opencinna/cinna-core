@@ -2180,7 +2180,7 @@ export type UserCreate = {
 
 export type UserDashboardBlockCreate = {
     agent_id: string;
-    view_type?: 'webapp' | 'latest_session' | 'latest_tasks';
+    view_type?: 'webapp' | 'latest_session' | 'latest_tasks' | 'agent_env_file';
     title?: (string | null);
     show_border?: boolean;
     show_header?: boolean;
@@ -2188,9 +2188,12 @@ export type UserDashboardBlockCreate = {
     grid_y?: number;
     grid_w?: number;
     grid_h?: number;
+    config?: ({
+    [key: string]: unknown;
+} | null);
 };
 
-export type view_type = 'webapp' | 'latest_session' | 'latest_tasks';
+export type view_type = 'webapp' | 'latest_session' | 'latest_tasks' | 'agent_env_file';
 
 export type UserDashboardBlockPromptActionCreate = {
     prompt_text: string;
@@ -2234,7 +2237,7 @@ export type UserDashboardBlockPublic = {
 };
 
 export type UserDashboardBlockUpdate = {
-    view_type?: ('webapp' | 'latest_session' | 'latest_tasks' | null);
+    view_type?: ('webapp' | 'latest_session' | 'latest_tasks' | 'agent_env_file' | null);
     title?: (string | null);
     show_border?: (boolean | null);
     show_header?: (boolean | null);
@@ -2894,6 +2897,19 @@ export type CredentialsRefreshOauthTokenData = {
 
 export type CredentialsRefreshOauthTokenResponse = (OAuthRefreshResponse);
 
+export type DashboardsListAgentEnvFilesData = {
+    /**
+     * Agent ID to list files for
+     */
+    agentId: string;
+    /**
+     * Workspace subfolder to list (default: 'files')
+     */
+    subfolder?: string;
+};
+
+export type DashboardsListAgentEnvFilesResponse = (Array<(string)>);
+
 export type DashboardsListDashboardsResponse = (Array<UserDashboardPublic>);
 
 export type DashboardsCreateDashboardData = {
@@ -2988,6 +3004,28 @@ export type DashboardsGetBlockLatestSessionData = {
 };
 
 export type DashboardsGetBlockLatestSessionResponse = (SessionPublic);
+
+export type DashboardsListBlockEnvFilesData = {
+    blockId: string;
+    dashboardId: string;
+    /**
+     * Workspace subfolder to list (default: 'files')
+     */
+    subfolder?: string;
+};
+
+export type DashboardsListBlockEnvFilesResponse = (Array<(string)>);
+
+export type DashboardsGetBlockEnvFileData = {
+    blockId: string;
+    dashboardId: string;
+    /**
+     * Workspace-relative path (e.g. 'files/report.csv')
+     */
+    path: string;
+};
+
+export type DashboardsGetBlockEnvFileResponse = (unknown);
 
 export type EmailIntegrationGetEmailIntegrationData = {
     agentId: string;

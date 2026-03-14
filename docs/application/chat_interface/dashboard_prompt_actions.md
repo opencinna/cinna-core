@@ -58,10 +58,10 @@ Once a session exists for a block, the session indicator becomes a clickable lin
 
 The left-side icon in the action bar communicates session state:
 
-| Block Type | No Session | Session Exists |
-|------------|------------|----------------|
-| Webapp | `MessageCircle` icon (muted/grey, not clickable) | `MessageCircle` icon (primary color, clickable) |
-| Non-webapp | No icon | `ExternalLink` icon (default color, clickable) |
+| State | Display |
+|-------|---------|
+| No session | `MessageCircle` icon (muted/grey, not clickable) |
+| Session exists | `MessageCircle` icon (primary color, clickable) |
 
 Clicking the active session icon navigates to the full session page (`/session/{sessionId}`).
 

@@ -1,6 +1,6 @@
 import { useState, useRef } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Globe, MessageSquare, ClipboardList, MoreVertical, Pencil, Trash2, Zap } from "lucide-react"
+import { Globe, MessageSquare, ClipboardList, FileText, MoreVertical, Pencil, Trash2, Zap } from "lucide-react"
 
 import type { UserDashboardBlockPublic, AgentPublic } from "@/client"
 import { DashboardsService } from "@/client"
@@ -19,6 +19,7 @@ import useCustomToast from "@/hooks/useCustomToast"
 import { WebAppView } from "./views/WebAppView"
 import { LatestSessionView } from "./views/LatestSessionView"
 import { LatestTasksView } from "./views/LatestTasksView"
+import { AgentEnvFileView } from "./views/AgentEnvFileView"
 import { EditBlockDialog } from "./EditBlockDialog"
 import { EditPromptActionsDialog } from "./EditPromptActionsDialog"
 import { PromptActionsOverlay } from "./PromptActionsOverlay"
@@ -34,6 +35,7 @@ const VIEW_TYPE_ICONS: Record<string, React.ElementType> = {
   webapp: Globe,
   latest_session: MessageSquare,
   latest_tasks: ClipboardList,
+  agent_env_file: FileText,
 }
 
 export function DashboardBlock({ block, agent, dashboardId, isEditMode }: DashboardBlockProps) {
@@ -87,6 +89,14 @@ export function DashboardBlock({ block, agent, dashboardId, isEditMode }: Dashbo
         )
       case "latest_tasks":
         return <LatestTasksView agentId={agent.id} />
+      case "agent_env_file":
+        return (
+          <AgentEnvFileView
+            dashboardId={dashboardId}
+            blockId={block.id}
+            filePath={(block.config as Record<string, string> | null)?.file_path ?? ""}
+          />
+        )
       case "latest_session":
       default:
         return <LatestSessionView agentId={agent.id} />

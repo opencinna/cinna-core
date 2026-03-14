@@ -237,7 +237,7 @@ async def serve_webapp_file(
 
     # Set a cookie so sub-resource requests (JS, CSS, images) from the iframe
     # are authenticated without needing the ?token= query param on every URL.
-    set_cookie = token and not request.cookies.get("webapp_owner_token")
+    set_cookie = token and request.cookies.get("webapp_owner_token") != raw_token
 
     try:
         status_code, resp_headers, body = await adapter.get_webapp_file(path, req_headers)

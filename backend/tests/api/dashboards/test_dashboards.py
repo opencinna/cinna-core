@@ -14,6 +14,8 @@ Test scenarios:
   10. Prompt actions returned in block/dashboard responses
   11. Prompt action ownership guards — other user cannot manage actions
   12. Prompt action validation — empty prompt_text rejected
+  13. Agent env file block creation and config validation
+  14. Agent env file endpoint security and path validation
 """
 import uuid
 
@@ -24,11 +26,13 @@ from tests.utils.agent import create_agent_via_api, update_agent
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.dashboard import (
     add_block,
+    create_agent_env_file_block,
     create_dashboard,
     create_prompt_action,
     delete_block,
     delete_dashboard,
     delete_prompt_action,
+    get_block_env_file,
     get_block_latest_session,
     get_dashboard,
     list_dashboards,
@@ -39,6 +43,7 @@ from tests.utils.dashboard import (
     update_prompt_action,
 )
 from tests.utils.background_tasks import drain_tasks
+from tests.utils.environment import list_environments
 from tests.utils.message import send_message
 from tests.utils.session import create_session_with_block
 from tests.utils.user import create_random_user, user_authentication_headers
@@ -807,4 +812,156 @@ def test_block_latest_session(
     # ── Phase 6: Ghost dashboard_id → 404 ────────────────────────────────────
     ghost_dashboard = str(uuid.uuid4())
     status, _ = get_block_latest_session(client, superuser_token_headers, ghost_dashboard, block_id)
+    assert status == 404
+
+
+# ── Scenario 13: Agent env file block creation and config validation ──────────
+
+def test_agent_env_file_block_creation(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    agent_env_file block creation and validation:
+      1. Create dashboard and agent; drain background tasks so the default environment is created
+      2. Create agent_env_file block with file_path config → 200
+      3. Create agent_env_file block without config (no file selected yet) → 200
+      4. Fetch dashboard → blocks appear with correct config
+      5. List env files endpoint → returns list (empty from test adapter)
+    """
+    # ── Phase 1: Setup dashboard + agent ─────────────────────────────────────
+    dashboard = create_dashboard(client, superuser_token_headers, name="Env File Block Test")
+    dashboard_id = dashboard["id"]
+
+    agent = create_agent_via_api(client, superuser_token_headers)
+    agent_id = agent["id"]
+
+    # Drain background tasks so the agent's default environment is created
+    drain_tasks()
+
+    envs = list_environments(client, superuser_token_headers, agent_id)
+    assert envs["count"] >= 1, "Agent must have at least one environment after drain_tasks()"
+
+    # ── Phase 2: Create agent_env_file block with file_path ──────────────────
+    block = create_agent_env_file_block(
+        client, superuser_token_headers, dashboard_id, agent_id,
+        file_path="files/report.csv",
+    )
+    block_id = block["id"]
+    assert block["view_type"] == "agent_env_file"
+    assert block["config"] is not None
+    assert block["config"]["file_path"] == "files/report.csv"
+
+    # ── Phase 3: Create block without config (file not selected yet) ─────────
+    block_no_file = create_agent_env_file_block(
+        client, superuser_token_headers, dashboard_id, agent_id,
+    )
+    assert block_no_file["view_type"] == "agent_env_file"
+
+    # ── Phase 4: Verify blocks appear in dashboard GET ────────────────────────
+    fetched = get_dashboard(client, superuser_token_headers, dashboard_id)
+    blocks_by_id = {b["id"]: b for b in fetched["blocks"]}
+    assert block_id in blocks_by_id
+    saved = blocks_by_id[block_id]
+    assert saved["view_type"] == "agent_env_file"
+    assert saved["config"]["file_path"] == "files/report.csv"
+
+    # ── Phase 5: List env files → returns list (empty from test adapter) ──────
+    r = client.get(
+        f"{_BASE}/{dashboard_id}/blocks/{block_id}/env-files",
+        headers=superuser_token_headers,
+    )
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+# ── Scenario 14: Agent env file endpoint security and path validation ─────────
+
+def test_agent_env_file_endpoint(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    Agent env file endpoint security and path validation:
+      1. Setup: dashboard + agent + drain tasks
+      2. Create agent_env_file block
+      3. Call env-file endpoint — EnvironmentTestAdapter does NOT implement
+         LocalFilesAccessInterface, so the fallback path is used. After
+         drain_tasks() the env is "running", stub yields b"", so 200 is returned.
+         Path is now relative to files/ folder (endpoint prefixes files/).
+      4. Path traversal attempt → 400
+      5. Absolute path attempt → 400
+      6. Wrong block type (latest_session block) → 400
+      7. Cross-user request → 403/404
+      8. Ghost block_id → 404
+    """
+    # ── Phase 1: Setup dashboard + agent ─────────────────────────────────────
+    dashboard = create_dashboard(client, superuser_token_headers, name="Env File Endpoint Test")
+    dashboard_id = dashboard["id"]
+
+    agent = create_agent_via_api(client, superuser_token_headers)
+    agent_id = agent["id"]
+
+    drain_tasks()
+
+    envs = list_environments(client, superuser_token_headers, agent_id)
+    assert envs["count"] >= 1
+
+    # ── Phase 2: Create agent_env_file block ──────────────────────────────────
+    block = create_agent_env_file_block(
+        client, superuser_token_headers, dashboard_id, agent_id,
+        file_path="files/data.txt",
+    )
+    block_id = block["id"]
+
+    # ── Phase 3: Fallback path — env is running → 200 (empty body from stub) ──
+    # Path is workspace-relative (e.g. files/data.txt)
+    status, _ = get_block_env_file(
+        client, superuser_token_headers, dashboard_id, block_id, path="files/data.txt"
+    )
+    assert status == 200
+
+    # ── Phase 4: Path traversal → 400 ─────────────────────────────────────────
+    status, _ = get_block_env_file(
+        client, superuser_token_headers, dashboard_id, block_id, path="../secret"
+    )
+    assert status == 400
+
+    # ── Phase 5: Absolute path → 400 ──────────────────────────────────────────
+    status, _ = get_block_env_file(
+        client, superuser_token_headers, dashboard_id, block_id, path="/etc/passwd"
+    )
+    assert status == 400
+
+    # ── Phase 6: Wrong block type → 400 ──────────────────────────────────────
+    wrong_block = add_block(
+        client, superuser_token_headers, dashboard_id, agent_id,
+        view_type="latest_session",
+    )
+    wrong_block_id = wrong_block["id"]
+    status, _ = get_block_env_file(
+        client, superuser_token_headers, dashboard_id, wrong_block_id, path="files/data.txt"
+    )
+    assert status == 400
+
+    # ── Phase 7: Cross-user request → 403/404 ────────────────────────────────
+    other_user = create_random_user(client)
+    other_headers = user_authentication_headers(
+        client=client, email=other_user["email"], password=other_user["_password"]
+    )
+    status, _ = get_block_env_file(
+        client, other_headers, dashboard_id, block_id, path="files/data.txt"
+    )
+    assert status in (403, 404)
+
+    # Unauthenticated → 401/403
+    r = client.get(
+        f"{_BASE}/{dashboard_id}/blocks/{block_id}/env-file",
+        params={"path": "files/data.txt"},
+    )
+    assert r.status_code in (401, 403)
+
+    # ── Phase 8: Ghost block_id → 404 ────────────────────────────────────────
+    ghost_block_id = str(uuid.uuid4())
+    status, _ = get_block_env_file(
+        client, superuser_token_headers, dashboard_id, ghost_block_id, path="files/data.txt"
+    )
     assert status == 404

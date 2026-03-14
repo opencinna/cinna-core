@@ -21,7 +21,8 @@ Dashboards are intentionally **workspace-independent** — any agent a user owns
 1. From the dashboard grid view, click "Edit Layout" in the page header to enter edit mode.
 2. Click "+ Add Block" (appears in the header only while in edit mode).
 3. Select an agent from the dropdown (all owned agents, no workspace filter).
-4. Choose a view type: Latest Session, Latest Tasks, or Web App.
+4. Choose a view type from the dropdown: Latest Session, Latest Tasks, Web App, or Agent Env File.
+   - 4a. (Agent Env File only) A file picker dropdown appears below, listing files from the agent's active environment workspace. Select the file to display.
 5. Click "Add". The block appears at the next available grid position.
 
 ### Rearranging Blocks
@@ -34,10 +35,12 @@ Dashboards are intentionally **workspace-independent** — any agent a user owns
 ### Editing a Block
 
 1. Enter edit mode ("Edit Layout"). Block headers with the kebab (⋮) menu are only visible in edit mode.
-2. Click the kebab menu on a block header → "Edit".
-3. Modify the view type, custom title, show/hide border, or show/hide header.
-4. Optionally add, edit, or remove prompt actions in the "Prompt Actions" section of the dialog.
-5. Click "Save Changes" to save the block settings. Prompt actions are saved immediately per-item (not on "Save Changes").
+2. Click the kebab menu on a block header → "Edit Block".
+3. Modify custom title, show/hide border, or show/hide header. The agent and view type are fixed after creation.
+4. For `agent_env_file` blocks, a file picker dropdown is shown to change the displayed file.
+5. Click "Save Changes".
+
+Prompt actions are managed separately via the kebab menu → "Edit Prompt Actions" (see below).
 
 ### Deleting a Block
 
@@ -113,6 +116,7 @@ Blocks have two visual modes:
 | `latest_session` | Shows the most recent sessions for the agent in a scrollable list matching the sessions index page style: mode icon (wrench/message), title, and relative timestamp per row. Clicking a row navigates to that session. |
 | `latest_tasks` | Shows the 5 most recent tasks with status color coding: violet=new, blue=running, amber=pending, red=error, green=completed. |
 | `webapp` | Embeds the agent's web application in an iframe using the authenticated owner preview route. Only available when the agent has `webapp_enabled = true`. |
+| `agent_env_file` | Displays the content of a workspace file from the agent's active environment (resolved automatically from `active_environment_id`). The user selects a file path from the file picker; no environment selector is needed. Supports CSV, Markdown, JSON, TXT, and LOG files with syntax-appropriate viewers; other file types render as plain text. File content is read directly from the local filesystem (no running container required for DockerEnvironmentAdapter). |
 
 Block content auto-refreshes every 30 seconds.
 
@@ -135,11 +139,10 @@ Dashboard blocks can have **prompt actions** — one-click buttons that appear w
 
 1. User hovers over a block that has prompt actions configured.
 2. Small pill buttons appear at the bottom of the block in a semi-transparent overlay bar.
-3. A `MessageCircle` icon appears on the left side of the action bar (webapp blocks only):
+3. A `MessageCircle` icon appears on the left side of the action bar:
    - **Muted/grey**: no active session yet for this block.
    - **Primary color**: an active session exists (persists across page refreshes).
    - **Clickable**: navigates to the full session chat page (`/session/{id}`).
-4. For non-webapp blocks, once a session exists an `ExternalLink` icon appears in place of the `MessageCircle`, which also navigates to the session page.
 5. User clicks a prompt action button:
    - The overlay resolves (or creates) a session for the block, then sends the prompt text immediately via `MessagesService.sendMessageStream()`.
    - For webapp blocks, page context (schema.org microdata + selected text from the iframe) is collected and attached to the message as `page_context`.
@@ -213,6 +216,7 @@ The active dashboard is highlighted with an accent background and check icon in 
 - **Ownership-based access**: Users can only read/write their own dashboards and blocks.
 - **Agent access**: When adding a block, the agent must be owned by the current user. Shared agents are not currently eligible.
 - **Webapp validation**: Blocks with `view_type = "webapp"` require the agent to have `webapp_enabled = true`. The backend validates this on block creation; if the agent disables webapp later, the block shows a placeholder.
+- **Agent Env File config**: Blocks with `view_type = "agent_env_file"` store `config` with `file_path` (non-empty, no path traversal). The environment is resolved automatically from the agent's `active_environment_id` — no `env_id` is stored in the block config. Backend validates the agent has an active environment on creation.
 - **CASCADE deletes**: Deleting an agent removes all blocks referencing it across all dashboards. Deleting a dashboard removes all its blocks.
 - **No workspace scoping**: The `user_dashboard` table has no `user_workspace_id` column. Dashboards span all workspaces.
 
@@ -229,6 +233,9 @@ The active dashboard is highlighted with an accent background and check icon in 
 | Max blocks reached | "Add Block" button disabled with tooltip |
 | Delete block fails | Toast error: "Failed to remove block. Please try again." |
 | Prompt action send fails | Toast error: "Failed to send prompt action. Please try again." |
+| File not found in workspace | Block shows "Failed to load file" with alert icon |
+| Environment not running (agent_env_file fallback path) | Block shows "Failed to load file" (only when adapter does not support local file access and environment is stopped) |
+| `file_path` missing from agent_env_file block config | Block shows "No file configured" placeholder |
 
 ---
 
@@ -246,3 +253,6 @@ The active dashboard is highlighted with an accent background and check icon in 
 - **Webapp context**: `buildPageContext()` from `src/utils/webappContext.ts` collects page context from the webapp iframe via `postMessage`; same utility used by `WebappChatWidget`
 - **Webapp action forwarding**: `webapp_action` stream events are forwarded to the embedded iframe via `postMessage` (same pattern as `WebappChatWidget`)
 - **Chat interface aspect docs**: Full prompt actions behavior documented in **[Dashboard Prompt Actions](../chat_interface/dashboard_prompt_actions.md)** (business logic) and **[tech](../chat_interface/dashboard_prompt_actions_tech.md)**
+- **Agent Env File — file listing**: `AddBlockDialog` and `EditBlockDialog` call `GET /api/v1/dashboards/{id}/blocks/{block_id}/env-files?subfolder=files` to list available workspace files for the file picker
+- **Agent Env File — file streaming**: `AgentEnvFileView` calls `GET /api/v1/dashboards/{id}/blocks/{block_id}/env-file?path={filePath}` to stream workspace file content. Uses `refetchInterval: 30000` (React Query key: `["dashboardBlockEnvFile", dashboardId, blockId, filePath]`)
+- **Agent Env File — environment resolution**: The backend resolves the agent's active environment automatically via `agent.active_environment_id` — no environment selector is needed in the frontend dialogs

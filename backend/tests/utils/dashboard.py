@@ -216,6 +216,58 @@ def delete_prompt_action(
     assert r.status_code == 200, f"Delete prompt action failed: {r.text}"
 
 
+# ── Agent env file block helper ──────────────────────────────────────────────
+
+def create_agent_env_file_block(
+    client: TestClient,
+    token_headers: dict[str, str],
+    dashboard_id: str,
+    agent_id: str,
+    file_path: str | None = None,
+    grid_x: int = 0,
+    grid_y: int = 0,
+    grid_w: int = 2,
+    grid_h: int = 2,
+) -> dict:
+    """Add an agent_env_file block to a dashboard via POST /dashboards/{id}/blocks."""
+    config = {"file_path": file_path} if file_path else None
+    payload = {
+        "agent_id": agent_id,
+        "view_type": "agent_env_file",
+        "config": config,
+        "show_border": True,
+        "grid_x": grid_x,
+        "grid_y": grid_y,
+        "grid_w": grid_w,
+        "grid_h": grid_h,
+    }
+    r = client.post(
+        f"{_BASE}/{dashboard_id}/blocks", headers=token_headers, json=payload
+    )
+    assert r.status_code == 200, f"Create agent_env_file block failed: {r.text}"
+    return r.json()
+
+
+def get_block_env_file(
+    client: TestClient,
+    token_headers: dict[str, str],
+    dashboard_id: str,
+    block_id: str,
+    path: str,
+) -> tuple[int, str | None]:
+    """
+    Call GET /dashboards/{id}/blocks/{block_id}/env-file?path=...
+    Returns (status_code, response_text) — does NOT assert status code.
+    """
+    r = client.get(
+        f"{_BASE}/{dashboard_id}/blocks/{block_id}/env-file",
+        headers=token_headers,
+        params={"path": path},
+    )
+    body = r.text if r.status_code == 200 else None
+    return r.status_code, body
+
+
 # ── Block latest-session helper ───────────────────────────────────────────────
 
 def get_block_latest_session(

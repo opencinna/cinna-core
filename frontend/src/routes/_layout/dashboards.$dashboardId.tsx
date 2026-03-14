@@ -138,7 +138,16 @@ function DashboardViewPage() {
 
   const handleOpenFullscreen = () => {
     setMenuOpen(false)
-    window.open(`/dashboard-fullscreen/${dashboardId}`, "_blank")
+    const width = window.screen.availWidth
+    const height = window.screen.availHeight
+    const screen = window.screen as Screen & { availLeft?: number; availTop?: number }
+    const left = screen.availLeft ?? 0
+    const top = screen.availTop ?? 0
+    window.open(
+      `/dashboard-fullscreen/${dashboardId}`,
+      "_blank",
+      `popup,width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no`,
+    )
   }
 
   useEffect(() => {

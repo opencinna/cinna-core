@@ -63,7 +63,7 @@ class UserDashboardBlockPromptActionPublic(SQLModel):
 
 class UserDashboardBlockBase(SQLModel):
     agent_id: uuid.UUID
-    view_type: Literal["webapp", "latest_session", "latest_tasks"] = Field(default="latest_session")
+    view_type: Literal["webapp", "latest_session", "latest_tasks", "agent_env_file"] = Field(default="latest_session")
     title: str | None = Field(default=None, max_length=255)
     show_border: bool = Field(default=True)
     show_header: bool = Field(default=False)
@@ -71,6 +71,7 @@ class UserDashboardBlockBase(SQLModel):
     grid_y: int = Field(default=0, ge=0)
     grid_w: int = Field(default=2, ge=1)
     grid_h: int = Field(default=2, ge=1)
+    config: dict | None = None
 
 
 class UserDashboardBlock(UserDashboardBlockBase, table=True):
@@ -105,7 +106,7 @@ class UserDashboardBlockCreate(UserDashboardBlockBase):
 
 
 class UserDashboardBlockUpdate(SQLModel):
-    view_type: Literal["webapp", "latest_session", "latest_tasks"] | None = None
+    view_type: Literal["webapp", "latest_session", "latest_tasks", "agent_env_file"] | None = None
     title: str | None = None
     show_border: bool | None = None
     show_header: bool | None = None

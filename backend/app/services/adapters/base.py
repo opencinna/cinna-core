@@ -6,6 +6,61 @@ from pydantic import BaseModel
 from datetime import datetime
 
 
+class LocalFilesAccessInterface(ABC):
+    """
+    Optional mixin for adapters that can provide direct local filesystem access
+    to workspace files without requiring the container to be running.
+
+    This is a capability interface — it is NOT required by EnvironmentAdapter.
+    Adapters that implement this interface allow features like dashboard blocks
+    to read files directly from disk, bypassing container communication entirely.
+
+    The design is intentionally encapsulated within the adapter layer:
+    - Callers check ``isinstance(adapter, LocalFilesAccessInterface)`` to detect support
+    - Adapters that do NOT implement this interface fall back to the standard
+      ``download_workspace_item()`` path, which requires the container to be running
+
+    In distributed or cloud environments, adapters may still implement this interface
+    if they auto-sync workspace files to a local cache directory, making the interface
+    valid even in multi-server setups.
+    """
+
+    @abstractmethod
+    def get_local_workspace_file_path(self, relative_path: str) -> Path | None:
+        """
+        Return the absolute local filesystem path for a workspace file,
+        or None if the file is not accessible locally.
+
+        Args:
+            relative_path: Path relative to the workspace root (e.g., "files/data.csv").
+                           Must not contain absolute paths or directory traversal sequences.
+
+        Returns:
+            Absolute Path object if the file exists and is safely within the workspace.
+            None if the file does not exist, is outside the workspace boundary,
+            or if the relative_path contains traversal sequences (``..``, absolute paths).
+
+        Security:
+            Implementations MUST resolve the path and verify the result stays within
+            the workspace directory to prevent directory traversal attacks.
+        """
+        pass
+
+    @abstractmethod
+    def list_local_workspace_files(self, subfolder: str = "files") -> list[str]:
+        """
+        List files available locally under a workspace subfolder.
+
+        Args:
+            subfolder: Subfolder within workspace to list (default: "files").
+
+        Returns:
+            List of relative paths from the subfolder root (e.g., ["report.csv", "data/output.json"]).
+            Empty list if the subfolder does not exist or is not accessible.
+        """
+        pass
+
+
 class File(BaseModel):
     """Transport-agnostic file abstraction"""
     model_config = {"arbitrary_types_allowed": True}

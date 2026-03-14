@@ -55,7 +55,7 @@ Indexes: `ix_user_dashboard_owner_id` (owner_id), `ix_user_dashboard_owner_sort`
 
 Indexes: `ix_user_dashboard_block_dashboard_id` (dashboard_id), `ix_user_dashboard_block_agent_id` (agent_id)
 
-Note: `config` is reserved for future per-view-type settings (e.g., refresh interval). Not used in current implementation.
+Note: `config` stores view-type-specific settings. For `agent_env_file` blocks: `{"file_path": "<relative-path>"}` — the environment is resolved automatically from the agent's `active_environment_id` (no `env_id` stored in config). For other view types, `config` is currently unused.
 
 Note: The `agent_id` foreign key (`foreign_key="agent.id"` with `ondelete="CASCADE"`) was added via a separate migration after initial table creation.
 
@@ -65,7 +65,7 @@ Note: The `agent_id` foreign key (`foreign_key="agent.id"` with `ondelete="CASCA
 
 The `view_type` field differs between the DB model and the Pydantic schemas:
 - **DB model** (`UserDashboardBlock`): plain `str` field with `max_length=50`
-- **Pydantic schemas** (`UserDashboardBlockBase`, `UserDashboardBlockUpdate`): `Literal["webapp", "latest_session", "latest_tasks"]` for validation
+- **Pydantic schemas** (`UserDashboardBlockBase`, `UserDashboardBlockUpdate`): `Literal["webapp", "latest_session", "latest_tasks", "agent_env_file"]` for validation
 
 ```
 UserDashboardBase           — name, description
@@ -114,8 +114,17 @@ UserDashboardBlockPromptActionPublic — id, block_id, prompt_text, label, sort_
 | PUT | `/{dashboard_id}/blocks/{block_id}/prompt-actions/{action_id}` | Update prompt action | `UserDashboardBlockPromptActionPublic` |
 | DELETE | `/{dashboard_id}/blocks/{block_id}/prompt-actions/{action_id}` | Delete prompt action | `Message` |
 | GET | `/{dashboard_id}/blocks/{block_id}/latest-session` | Get most recent session for block (within 12 h) | `SessionPublic` |
+| GET | `/agent-env-files` | List workspace files by agent_id (query: `agent_id`, `subfolder`) — no block required | `list[str]` |
+| GET | `/{dashboard_id}/blocks/{block_id}/env-files` | List workspace files in a subfolder (query: `subfolder`, default `files`) | `list[str]` |
+| GET | `/{dashboard_id}/blocks/{block_id}/env-file` | Stream workspace file content for an agent_env_file block | `StreamingResponse` (text/plain) |
 
 The `/latest-session` route path uses the literal segment `/latest-session` to avoid conflicting with the `/{action_id}` prompt-action routes. It verifies dashboard ownership, then calls `SessionService.get_recent_block_session()` which queries sessions by `dashboard_block_id`, `user_id`, and `last_message_at >= now - 12h`. Returns 404 if no qualifying session is found.
+
+The `/agent-env-files` route lists workspace files by agent_id without requiring a block. Query params: `agent_id` (required), `subfolder` (default `files`). Used by the Add Block form to let users pick a file before the block is created. Calls `UserDashboardService.list_agent_env_files()`. Registered before `/{dashboard_id}` to avoid path conflict.
+
+The `/{dashboard_id}/blocks/{block_id}/env-files` route lists files in a workspace subfolder for existing `agent_env_file` blocks. Query param: `subfolder` (default `files`). Verifies the full ownership chain via `UserDashboardService.list_env_files()`. Uses `LocalFilesAccessInterface` on the adapter when available; returns empty list for adapters without local file access.
+
+The `/env-file` route streams workspace file content for `agent_env_file` blocks. Query param: `path` (relative file path, e.g. `files/report.csv`). Verifies the full ownership chain via `UserDashboardService.get_env_file_local_path()`. Path traversal attempts (containing `..` or starting with `/`) return 400. Uses `LocalFilesAccessInterface` on the adapter when available (no running container needed); falls back to `download_workspace_item()` when the adapter does not implement it (requires environment to be running). Returns 404 if the file is not found.
 
 The `/blocks/layout` route is registered **before** `/{block_id}` to avoid FastAPI path conflict. Prompt action routes are nested under `/{block_id}/prompt-actions` — the literal path segment prevents any conflict.
 
@@ -142,6 +151,10 @@ Cookie is set via `Response.set_cookie()` with `httponly=True`, `samesite="stric
 | 403 | Dashboard not owned by current user |
 | 400 | Agent not found or not accessible by user |
 | 400 | `view_type = "webapp"` but agent has `webapp_enabled = False` |
+| 400 | `view_type = "agent_env_file"` but agent has no active environment |
+| 400 | Path traversal attempt (`..` or absolute path) in env-file request |
+| 400 | Fallback path: environment not running when adapter lacks local file access |
+| 404 | File not found on local filesystem (env-file endpoint) |
 | 409 | Max dashboards (10) or max blocks (20) limit reached |
 | 422 | Validation error: invalid view_type, negative grid values, name too long |
 
@@ -151,8 +164,38 @@ Cookie is set via `Response.set_cookie()` with `httponly=True`, `samesite="stric
 
 **File:** `backend/app/services/user_dashboard_service.py`
 
+### Exception Hierarchy
+
+The service uses domain-specific exceptions (base class `UserDashboardError`) instead of raising `HTTPException` directly. Each exception carries a `status_code` and `message`. The route layer converts these via `_handle_service_error()`.
+
+```
+UserDashboardError (base, 400)
+├── DashboardNotFoundError (404)
+├── DashboardPermissionError (403)
+├── BlockNotFoundError (404)
+├── PromptActionNotFoundError (404)
+├── DashboardLimitExceededError (409)
+├── BlockLimitExceededError (409)
+├── InvalidViewTypeError (422)
+├── AgentAccessError (400)
+├── EnvironmentNotFoundError (404)
+├── EnvironmentNotReadyError (400)
+├── InvalidPathError (400)
+└── FileNotFoundError_ (404)
+```
+
+### Methods
+
 ```python
 class UserDashboardService:
+    # -- Private helpers --
+    _get_block(session, dashboard_id, block_id) -> UserDashboardBlock
+        # Fetches block ensuring it belongs to dashboard; raises BlockNotFoundError
+
+    _get_prompt_action(session, block_id, action_id) -> UserDashboardBlockPromptAction
+        # Fetches action ensuring it belongs to block; raises PromptActionNotFoundError
+
+    # -- Dashboard CRUD --
     list_dashboards(session, owner_id) -> list[UserDashboard]
         # Ordered by sort_order; eager loads blocks + prompt_actions via chained selectinload
 
@@ -161,21 +204,20 @@ class UserDashboardService:
         # sort_order = max existing + 1
 
     get_dashboard(session, dashboard_id, owner_id) -> UserDashboard
-        # Raises 404 if not found; 403 if owner mismatch
+        # Raises DashboardNotFoundError / DashboardPermissionError
         # Eager loads blocks + prompt_actions (chained selectinload)
-
-    _get_block(session, dashboard_id, block_id) -> UserDashboardBlock
-        # Fetches block ensuring it belongs to dashboard; raises 404 if not found
 
     update_dashboard(session, dashboard_id, owner_id, data) -> UserDashboard
 
     delete_dashboard(session, dashboard_id, owner_id) -> bool
 
+    # -- Block CRUD --
     add_block(session, dashboard_id, owner_id, data) -> UserDashboardBlock
         # Enforces MAX_BLOCKS_PER_DASHBOARD = 20
-        # Validates view_type in {"webapp", "latest_session", "latest_tasks"}
+        # Validates view_type in {"webapp", "latest_session", "latest_tasks", "agent_env_file"}
         # Validates agent.owner_id == owner_id (no workspace filter)
         # If view_type == "webapp": validates agent.webapp_enabled == True
+        # If view_type == "agent_env_file": validates agent has active environment
 
     update_block(session, dashboard_id, block_id, owner_id, data) -> UserDashboardBlock
 
@@ -184,6 +226,7 @@ class UserDashboardService:
     update_block_layout(session, dashboard_id, owner_id, layouts) -> list[UserDashboardBlock]
         # Single transaction for all grid position updates
 
+    # -- Prompt Action CRUD --
     list_prompt_actions(session, dashboard_id, block_id, owner_id) -> list[UserDashboardBlockPromptAction]
         # Ownership via get_dashboard(); block verified via _get_block()
         # Returns ordered by sort_order
@@ -191,9 +234,26 @@ class UserDashboardService:
     create_prompt_action(session, dashboard_id, block_id, owner_id, data) -> UserDashboardBlockPromptAction
 
     update_prompt_action(session, dashboard_id, block_id, action_id, owner_id, data) -> UserDashboardBlockPromptAction
-        # Raises 404 if action not found under this block
 
     delete_prompt_action(session, dashboard_id, block_id, action_id, owner_id) -> bool
+
+    # -- Agent Env File --
+    list_agent_env_files(session, agent_id, owner_id, subfolder) -> list[str]
+        # Lists files by agent_id (no block required); used by Add Block form
+        # Validates agent ownership + active environment; returns [] for non-local adapters
+
+    resolve_block_agent_env(session, dashboard_id, block_id, owner_id) -> tuple[Block, Agent, Environment]
+        # Verifies ownership chain: dashboard → block (must be agent_env_file type) → agent → active environment
+
+    list_env_files(session, dashboard_id, block_id, owner_id, subfolder) -> list[str]
+        # Lists files in workspace subfolder via LocalFilesAccessInterface; returns [] for non-local adapters
+
+    get_env_file_local_path(session, dashboard_id, block_id, owner_id, path) -> Path | None
+        # Returns local Path if adapter supports it; None signals caller to use remote streaming
+        # Raises EnvironmentNotReadyError if non-local adapter and environment not running
+
+    get_env_file_adapter(session, dashboard_id, block_id, owner_id, path) -> EnvironmentAdapter
+        # Returns the adapter for remote file streaming (used when get_env_file_local_path returns None)
 ```
 
 ---
@@ -256,11 +316,15 @@ src/components/Dashboard/UserDashboards/
         — isHovered state tracks hover; renders PromptActionsOverlay in view mode when block has prompt_actions
         — webappIframeRef: useRef<HTMLIFrameElement | null> — created unconditionally; passed to WebAppView for attachment and to PromptActionsOverlay for context collection
         — Passes isWebApp={block.view_type === "webapp"} and iframeRef={webappIframeRef} (only when webapp) to PromptActionsOverlay
+        — renderView() includes case for "agent_env_file": renders AgentEnvFileView
     AddBlockDialog.tsx
-        — Agent picker (all owned agents); view type radio group
+        — Label-left / selector-right layout: Agent dropdown, View Type dropdown (right-aligned, fixed w-56)
+        — When agent_env_file selected: file picker dropdown appears (fetches from GET /agent-env-files?agent_id=)
+        — Includes config: {file_path} in block create payload for agent_env_file blocks
     EditBlockDialog.tsx
-        — Edit view_type, custom title, show_border toggle, show_header toggle
-        — "Prompt Actions" section: displays saved actions (delete per-item); "+ Add" form for new actions (save/discard per-item); immediate mutations (no batch save)
+        — Agent and view_type are fixed (not editable after creation)
+        — Editable: show_header toggle, custom title (when header shown), show_border toggle
+        — When agent_env_file: file picker dropdown (fetches from GET .../env-files); pre-populated from block.config
     PromptActionsOverlay.tsx
         — Renders at bottom of block content area as absolute overlay; visible on hover OR while streaming
         — Shows one pill button per action (label or truncated prompt_text, max 28 chars)
@@ -287,6 +351,7 @@ src/components/Dashboard/UserDashboards/
         WebAppView.tsx         — <iframe> embedding /api/v1/agents/{id}/webapp/?token={jwt}
         LatestSessionView.tsx  — Fetches latest 10 sessions; scrollable list with mode icon, title, timestamp per row (matches sessions index page style)
         LatestTasksView.tsx    — Fetches recent tasks; status dot color coding
+        AgentEnvFileView.tsx   — Fetches workspace file via GET .../env-file?path=; renders with CSVViewer/MarkdownViewer/JSONViewer/TextViewer based on file extension; loading/error/empty states; refetchInterval=30000
 ```
 
 ---
@@ -300,6 +365,9 @@ src/components/Dashboard/UserDashboards/
 | `["dashboardBlockSessions", agentId]` | Latest session for block; refetchInterval=30000 |
 | `["dashboardBlockTasks", agentId]` | Latest tasks for block; refetchInterval=30000 |
 | `["allAgents"]` | All owned agents without workspace filter (AddBlockDialog + DashboardViewPage) |
+| `["agentEnvFiles", agentId]` | Available workspace files by agent (AddBlockDialog file picker) |
+| `["blockEnvFiles", dashboardId, blockId]` | Available workspace files for existing block (EditBlockDialog file picker) |
+| `["dashboardBlockEnvFile", dashboardId, blockId, filePath]` | Workspace file content for agent_env_file block; refetchInterval=30000 |
 
 ---
 
@@ -371,7 +439,7 @@ Creates `user_dashboard` and `user_dashboard_block` tables with all columns, for
 **Location:** `backend/tests/api/dashboards/`
 
 - `conftest.py` — imports environment adapter stubs and AI credential fixtures from shared `tests/utils/fixtures.py`
-- `test_dashboards.py` — 11 scenario-based tests covering:
+- `test_dashboards.py` — 14 scenario-based tests covering:
   - Dashboard CRUD lifecycle + ownership guards + 404 for ghost IDs
   - Block CRUD lifecycle + block-level ownership guards
   - Bulk layout update + unknown block_id → 404
@@ -384,5 +452,7 @@ Creates `user_dashboard` and `user_dashboard_block` tables with all columns, for
   - Prompt action ownership guards (cross-user access, unauthenticated, ghost IDs)
   - Prompt action input validation (empty text, oversized text/label → 422)
   - Block latest-session endpoint: no session → 404, session with no messages → 404 (last_message_at NULL), session with message → 200 with correct session, ownership guard, ghost dashboard_id → 404
+  - agent_env_file block creation and config validation (valid config → 200, no active env → 400)
+  - agent_env_file endpoint security (wrong block type → 400, path traversal → 400, cross-user → 403/404, ghost block_id → 404)
 
-Helper utilities: `backend/tests/utils/dashboard.py` — includes `create_prompt_action`, `list_prompt_actions`, `update_prompt_action`, `delete_prompt_action` helpers. `backend/tests/utils/session.py` — `create_dashboard_block_session()` creates a session tagged with `dashboard_block_id`.
+Helper utilities: `backend/tests/utils/dashboard.py` — includes `create_agent_env_file_block`, `get_block_env_file`, `create_prompt_action`, `list_prompt_actions`, `update_prompt_action`, `delete_prompt_action` helpers. `backend/tests/utils/session.py` — `create_dashboard_block_session()` creates a session tagged with `dashboard_block_id`.

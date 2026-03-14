@@ -10381,7 +10381,7 @@ export const UserDashboardBlockCreateSchema = {
         },
         view_type: {
             type: 'string',
-            enum: ['webapp', 'latest_session', 'latest_tasks'],
+            enum: ['webapp', 'latest_session', 'latest_tasks', 'agent_env_file'],
             title: 'View Type',
             default: 'latest_session'
         },
@@ -10430,6 +10430,18 @@ export const UserDashboardBlockCreateSchema = {
             minimum: 1,
             title: 'Grid H',
             default: 2
+        },
+        config: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Config'
         }
     },
     type: 'object',
@@ -10651,7 +10663,7 @@ export const UserDashboardBlockUpdateSchema = {
             anyOf: [
                 {
                     type: 'string',
-                    enum: ['webapp', 'latest_session', 'latest_tasks']
+                    enum: ['webapp', 'latest_session', 'latest_tasks', 'agent_env_file']
                 },
                 {
                     type: 'null'
