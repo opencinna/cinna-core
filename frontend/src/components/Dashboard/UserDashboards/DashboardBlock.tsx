@@ -1,4 +1,4 @@
-import { useState, useRef } from "react"
+import { useState, useRef, useCallback } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Globe, MessageSquare, ClipboardList, FileText, MoreVertical, Pencil, Trash2, Zap } from "lucide-react"
 
@@ -54,6 +54,21 @@ export function DashboardBlock({ block, agent, dashboardId, isEditMode }: Dashbo
   const colorPreset = getColorPreset(agent?.ui_color_preset)
   const ViewIcon = VIEW_TYPE_ICONS[block.view_type] ?? MessageSquare
   const title = block.title || agent?.name || "Unknown Agent"
+
+  const handleStreamComplete = useCallback(() => {
+    if (!agent) return
+    switch (block.view_type) {
+      case "latest_session":
+        queryClient.invalidateQueries({ queryKey: ["dashboardBlockSessions", agent.id] })
+        break
+      case "latest_tasks":
+        queryClient.invalidateQueries({ queryKey: ["dashboardBlockTasks", agent.id] })
+        break
+      case "agent_env_file":
+        queryClient.invalidateQueries({ queryKey: ["dashboardBlockEnvFile", dashboardId, block.id, (block.config as Record<string, string> | null)?.file_path ?? ""] })
+        break
+    }
+  }, [agent, block.view_type, block.id, block.config, dashboardId, queryClient])
 
   const deleteBlockMutation = useMutation({
     mutationFn: () =>
@@ -192,6 +207,7 @@ export function DashboardBlock({ block, agent, dashboardId, isEditMode }: Dashbo
               isVisible={isHovered}
               isWebApp={block.view_type === "webapp"}
               iframeRef={block.view_type === "webapp" ? webappIframeRef : undefined}
+              onStreamComplete={handleStreamComplete}
             />
           )}
         </div>

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 
 import { AgentsService, DashboardsService } from "@/client"
 import { isLoggedIn } from "@/hooks/useAuth"
+import { useEventBusConnection } from "@/hooks/useEventBus"
 import PendingItems from "@/components/Pending/PendingItems"
 import { DashboardGrid } from "@/components/Dashboard/UserDashboards/DashboardGrid"
 
@@ -20,6 +21,7 @@ export const Route = createFileRoute("/dashboard-fullscreen/$dashboardId")({
 
 function FullscreenDashboardPage() {
   const { dashboardId } = Route.useParams()
+  useEventBusConnection()
 
   const { data: dashboard, isLoading: dashboardLoading } = useQuery({
     queryKey: ["userDashboard", dashboardId],

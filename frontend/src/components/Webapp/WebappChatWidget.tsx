@@ -225,7 +225,7 @@ export function WebappChatWidget({
       "session_interaction_status_changed",
       (event: any) => {
         if (event.model_id !== sessionId && event.meta?.session_id !== sessionId) return
-        const newStatus = event.meta?.interaction_status || event.text_content
+        const newStatus = event.meta?.interaction_status ?? event.text_content ?? ""
         if (newStatus === "running" || newStatus === "pending_stream") {
           setIsStreaming(true)
         } else if (newStatus === "" || newStatus === undefined) {

@@ -20,6 +20,7 @@ interface PromptActionsOverlayProps {
   isVisible: boolean
   isWebApp: boolean
   iframeRef?: RefObject<HTMLIFrameElement | null>
+  onStreamComplete?: () => void
 }
 
 export function PromptActionsOverlay({
@@ -30,6 +31,7 @@ export function PromptActionsOverlay({
   isVisible,
   isWebApp,
   iframeRef,
+  onStreamComplete,
 }: PromptActionsOverlayProps) {
   const navigate = useNavigate()
   const { showErrorToast } = useCustomToast()
@@ -69,13 +71,14 @@ export function PromptActionsOverlay({
       "session_interaction_status_changed",
       (event: any) => {
         if (event.model_id !== sessionId && event.meta?.session_id !== sessionId) return
-        const newStatus = event.meta?.interaction_status || event.text_content
+        const newStatus = event.meta?.interaction_status ?? event.text_content ?? ""
         if (newStatus === "running" || newStatus === "pending_stream") {
           setIsStreaming(true)
         } else if (newStatus === "" || newStatus === undefined) {
           setIsStreaming(false)
           setStreamingEvents([])
           lastKnownSeqRef.current = 0
+          onStreamComplete?.()
         }
       }
     )
@@ -116,6 +119,7 @@ export function PromptActionsOverlay({
         setIsStreaming(false)
         setStreamingEvents([])
         lastKnownSeqRef.current = 0
+        onStreamComplete?.()
         return
       }
 
