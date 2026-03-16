@@ -4,7 +4,8 @@ import logging
 from datetime import UTC, datetime
 from sqlalchemy.orm.attributes import flag_modified
 from sqlmodel import Session, select
-from app.models import Agent, AgentCreate, AgentUpdate, User, SessionCreate, AgentHandoverConfig, AgentEnvironment, Session as ChatSession, AgentSdkConfig, InputTaskCreate
+from app.models import Agent, AgentCreate, AgentPublic, AgentUpdate, User, SessionCreate, AgentHandoverConfig, AgentEnvironment, Session as ChatSession, AgentSdkConfig, InputTaskCreate
+from app.models.agent_share import AgentShare
 from app.models.environment import AgentEnvironmentCreate
 from app.services.environment_service import EnvironmentService
 from app.services.environment_lifecycle import EnvironmentLifecycleManager
@@ -68,6 +69,57 @@ def _increment_version(version: str) -> str:
 
 class AgentService:
     @staticmethod
+    def to_public_with_clone_info(session: Session, agent: Agent) -> AgentPublic:
+        """Convert Agent to AgentPublic with resolved clone information."""
+        parent_agent_name = None
+        shared_by_email = None
+
+        if agent.is_clone and agent.parent_agent_id:
+            parent = session.get(Agent, agent.parent_agent_id)
+            if parent:
+                parent_agent_name = parent.name
+
+                stmt = select(AgentShare).where(
+                    AgentShare.cloned_agent_id == agent.id
+                )
+                share = session.exec(stmt).first()
+                if share:
+                    shared_by_user = session.get(User, share.shared_by_user_id)
+                    if shared_by_user:
+                        shared_by_email = shared_by_user.email
+
+        return AgentPublic(
+            id=agent.id,
+            name=agent.name,
+            description=agent.description,
+            workflow_prompt=agent.workflow_prompt,
+            entrypoint_prompt=agent.entrypoint_prompt,
+            refiner_prompt=agent.refiner_prompt,
+            is_active=agent.is_active,
+            active_environment_id=agent.active_environment_id,
+            ui_color_preset=agent.ui_color_preset,
+            show_on_dashboard=agent.show_on_dashboard,
+            conversation_mode_ui=agent.conversation_mode_ui,
+            agent_sdk_config=agent.agent_sdk_config,
+            a2a_config=agent.a2a_config,
+            example_prompts=agent.example_prompts,
+            inactivity_period_limit=agent.inactivity_period_limit,
+            webapp_enabled=agent.webapp_enabled,
+            created_at=agent.created_at,
+            updated_at=agent.updated_at,
+            owner_id=agent.owner_id,
+            user_workspace_id=agent.user_workspace_id,
+            is_clone=agent.is_clone,
+            clone_mode=agent.clone_mode,
+            update_mode=agent.update_mode,
+            pending_update=agent.pending_update,
+            parent_agent_id=agent.parent_agent_id,
+            parent_agent_name=parent_agent_name,
+            shared_by_email=shared_by_email,
+            is_general_assistant=agent.is_general_assistant,
+        )
+
+    @staticmethod
     def list_agents(
         session: Session,
         user_id: UUID,
@@ -108,7 +160,8 @@ class AgentService:
             # Include agents matching workspace OR clones (clones have user_workspace_id=None)
             workspace_condition = or_(
                 Agent.user_workspace_id == workspace_filter,
-                Agent.is_clone == True
+                Agent.is_clone == True,
+                Agent.is_general_assistant == True,
             )
             count_statement = count_statement.where(workspace_condition)
             statement = statement.where(workspace_condition)
@@ -259,6 +312,10 @@ class AgentService:
         agent = session.get(Agent, agent_id)
         if not agent:
             return False
+
+        # Guard: General Assistant cannot be deleted
+        if agent.is_general_assistant:
+            raise ValueError("The General Assistant cannot be deleted")
 
         # If this agent is a clone, update the share record status to 'deleted'
         if agent.is_clone:

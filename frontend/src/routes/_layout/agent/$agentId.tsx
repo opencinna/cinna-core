@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { ArrowLeft, EllipsisVertical, Share2 } from "lucide-react"
+import { ArrowLeft, EllipsisVertical, Share2, Sparkles } from "lucide-react"
 import { useState, useEffect } from "react"
 
 import { AgentsService, AgentSharesService } from "@/client"
@@ -94,6 +94,12 @@ function AgentDetail() {
                 {agent.is_clone && (
                   <Share2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                 )}
+                {agent.is_general_assistant && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 dark:bg-violet-900/40 px-2 py-0.5 text-xs font-medium text-violet-700 dark:text-violet-300 shrink-0">
+                    <Sparkles className="h-3 w-3" />
+                    General Assistant
+                  </span>
+                )}
               </div>
               <p className="text-xs text-muted-foreground">
                 {agent.is_clone && agent.shared_by_email
@@ -103,20 +109,22 @@ function AgentDetail() {
               </p>
             </div>
           </div>
-          <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="shrink-0">
-                <EllipsisVertical className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <EditAgent agent={agent} onSuccess={() => setMenuOpen(false)} />
-              <DeleteAgent
-                id={agent.id}
-                onSuccess={handleDeleteSuccess}
-              />
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {!agent.is_general_assistant && (
+            <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className="shrink-0">
+                  <EllipsisVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <EditAgent agent={agent} onSuccess={() => setMenuOpen(false)} />
+                <DeleteAgent
+                  id={agent.id}
+                  onSuccess={handleDeleteSuccess}
+                />
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </>
       )
     }
@@ -150,9 +158,14 @@ function AgentDetail() {
 
   // Filter tabs for user mode clones - show interface, configuration, environments, and clone settings
   // Environments is allowed since it doesn't expose credential values
-  const tabs = isUserModeClone
+  let tabs = isUserModeClone
     ? allTabs.filter(tab => ["interface", "configuration", "environments", "sharing"].includes(tab.value))
     : allTabs
+
+  // Hide sharing tab for General Assistant agents
+  if (agent.is_general_assistant) {
+    tabs = tabs.filter(tab => tab.value !== "sharing")
+  }
 
   const handleUpdateApplied = () => {
     queryClient.invalidateQueries({ queryKey: ["agent", agentId] })

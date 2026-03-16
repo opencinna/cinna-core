@@ -76,6 +76,13 @@ class Agent(AgentBase, table=True):
             "pending_update",
             postgresql_where=text("pending_update = true"),
         ),
+        # Partial unique index: one General Assistant per user
+        Index(
+            "ix_agent_general_assistant_per_user",
+            "owner_id",
+            postgresql_where=text("is_general_assistant = true"),
+            unique=True,
+        ),
         # Named foreign key for parent_agent_id
         ForeignKeyConstraint(
             ["parent_agent_id"],
@@ -118,6 +125,9 @@ class Agent(AgentBase, table=True):
     pending_update: bool = Field(default=False)
     pending_update_at: datetime | None = Field(default=None)
     last_update_status: str | None = Field(default=None)  # "synced" | "dismissed" | None
+
+    # General Assistant flag
+    is_general_assistant: bool = Field(default=False)
 
     owner: User | None = Relationship(back_populates="agents")
     credentials: List["app.models.credential.Credential"] = Relationship(
@@ -175,6 +185,9 @@ class AgentPublic(SQLModel):
     parent_agent_id: uuid.UUID | None = None
     parent_agent_name: str | None = None  # Resolved from parent_agent
     shared_by_email: str | None = None  # Resolved from share record
+
+    # General Assistant flag
+    is_general_assistant: bool = False
 
 
 class AgentsPublic(SQLModel):

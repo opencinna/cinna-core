@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { useEffect, useState, useMemo, KeyboardEvent, DragEvent } from "react"
+import { useEffect, useState, useMemo, Fragment, KeyboardEvent, DragEvent } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 
@@ -211,6 +211,12 @@ function Dashboard() {
     [agents]
   )
 
+  const sortedAgents = useMemo(() => {
+    const ga = agentsWithActiveEnv.filter((a) => a.is_general_assistant)
+    const regular = agentsWithActiveEnv.filter((a) => !a.is_general_assistant)
+    return [...ga, ...regular]
+  }, [agentsWithActiveEnv])
+
   useEffect(() => {
     setHeaderContent(<DashboardHeader />)
     return () => setHeaderContent(null)
@@ -253,6 +259,14 @@ function Dashboard() {
     // Clear any validation errors when auto-populating
     setInputError(null)
   }, [selectedAgentId, agentsWithActiveEnv, inputMode])
+
+  // Force building mode when GA agent is selected
+  useEffect(() => {
+    const selectedAgent = agentsWithActiveEnv.find((a) => a.id === selectedAgentId)
+    if (selectedAgent?.is_general_assistant && mode !== "building") {
+      setMode("building")
+    }
+  }, [selectedAgentId, agentsWithActiveEnv])
 
   // Handle input text when switching between conversation and building modes
   useEffect(() => {
@@ -471,24 +485,34 @@ function Dashboard() {
         <div className="w-full max-w-3xl space-y-6">
           {/* Agent Selector Pills */}
           <div className="space-y-2">
-            <div className="flex flex-wrap gap-2">
-              {agentsWithActiveEnv.map((agent) => {
+            <div className="flex flex-wrap gap-2 items-center">
+              {sortedAgents.map((agent, index) => {
                 const colorPreset = getColorPreset(agent.ui_color_preset)
                 const isSelected = selectedAgentId === agent.id
+                const isLastGA =
+                  agent.is_general_assistant &&
+                  (index === sortedAgents.length - 1 || !sortedAgents[index + 1]?.is_general_assistant)
                 return (
-                  <button
-                    key={agent.id}
-                    className={`
-                      cursor-pointer px-4 py-2 text-sm rounded-md transition-all
-                      ${colorPreset.badgeBg}
-                      ${colorPreset.badgeText}
-                      ${colorPreset.badgeHover}
-                      ${isSelected ? colorPreset.badgeOutline : ""}
-                    `}
-                    onClick={() => handleAgentClick(agent.id)}
-                  >
-                    {agent.name}
-                  </button>
+                  <Fragment key={agent.id}>
+                    <button
+                      className={`
+                        cursor-pointer px-4 py-2 text-sm rounded-md transition-all inline-flex items-center gap-1.5
+                        ${colorPreset.badgeBg}
+                        ${colorPreset.badgeText}
+                        ${colorPreset.badgeHover}
+                        ${isSelected ? colorPreset.badgeOutline : ""}
+                      `}
+                      onClick={() => handleAgentClick(agent.id)}
+                    >
+                      {agent.is_general_assistant && (
+                        <Sparkles className="h-3.5 w-3.5" />
+                      )}
+                      {agent.name}
+                    </button>
+                    {isLastGA && sortedAgents.some((a) => !a.is_general_assistant) && (
+                      <div className="h-6 w-px bg-border mx-1" />
+                    )}
+                  </Fragment>
                 )
               })}
               {/* New Agent Badge */}
@@ -685,41 +709,48 @@ function Dashboard() {
                       )}
                     </DropdownMenuContent>
                   </DropdownMenu>
-                ) : (
-                  /* Mode Switch for regular agents */
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground">
-                      {mode === "conversation" ? "Conversation" : "Building"}
-                    </span>
-                    <label className="flex cursor-pointer select-none items-center">
-                      <div className="relative">
-                        <input
-                          type="checkbox"
-                          checked={mode === "building"}
-                          onChange={() => {
-                            const newMode = mode === "conversation" ? "building" : "conversation"
-                            setMode(newMode)
-                            // Update previousMode if not on "New Agent" so it's saved for later
-                            if (selectedAgentId !== NEW_AGENT_ID) {
-                              setPreviousMode(newMode)
-                            }
-                          }}
-                          className="sr-only"
-                        />
-                        <div
-                          className={`block h-6 w-11 rounded-full transition-colors ${
-                            mode === "building" ? "bg-orange-400" : "bg-gray-300 dark:bg-gray-600"
-                          }`}
-                        ></div>
-                        <div
-                          className={`dot absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
-                            mode === "building" ? "translate-x-5" : ""
-                          }`}
-                        ></div>
-                      </div>
-                    </label>
-                  </div>
-                )}
+                ) : (() => {
+                  const selectedAgent = agentsWithActiveEnv.find((a) => a.id === selectedAgentId)
+                  const isGASelected = selectedAgent?.is_general_assistant ?? false
+                  if (isGASelected) {
+                    return null
+                  }
+                  return (
+                    /* Mode Switch for regular agents */
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        {mode === "conversation" ? "Conversation" : "Building"}
+                      </span>
+                      <label className="flex cursor-pointer select-none items-center">
+                        <div className="relative">
+                          <input
+                            type="checkbox"
+                            checked={mode === "building"}
+                            onChange={() => {
+                              const newMode = mode === "conversation" ? "building" : "conversation"
+                              setMode(newMode)
+                              // Update previousMode if not on "New Agent" so it's saved for later
+                              if (selectedAgentId !== NEW_AGENT_ID) {
+                                setPreviousMode(newMode)
+                              }
+                            }}
+                            className="sr-only"
+                          />
+                          <div
+                            className={`block h-6 w-11 rounded-full transition-colors ${
+                              mode === "building" ? "bg-orange-400" : "bg-gray-300 dark:bg-gray-600"
+                            }`}
+                          ></div>
+                          <div
+                            className={`dot absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
+                              mode === "building" ? "translate-x-5" : ""
+                            }`}
+                          ></div>
+                        </div>
+                      </label>
+                    </div>
+                  )
+                })()}
 
                 {/* Attach File Button */}
                 <DropdownMenu>

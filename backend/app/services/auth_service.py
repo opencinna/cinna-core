@@ -208,6 +208,11 @@ class AuthService:
         session.add(db_obj)
         session.commit()
         session.refresh(db_obj)
+
+        # Auto-create General Assistant for new OAuth users (non-blocking background task)
+        from app.services.general_assistant_service import GeneralAssistantService
+        GeneralAssistantService.trigger_auto_create_background(db_obj.id)
+
         return db_obj
 
     @classmethod

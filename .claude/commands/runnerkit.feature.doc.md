@@ -164,7 +164,22 @@ Not every feature needs the full 3-layer treatment. For simple features or stand
    - **Automatic**: path segments starting with `your_`, `$`, or `entit` (entity/entities/EntityCard etc.) are skipped automatically — no annotation needed.
    - **Manual**: for other direction references (e.g. `backend/app/crud.py` as a deprecated convention), append `<!-- nocheck -->` to that line so the checker ignores it.
 
+## General Assistant Knowledge Sync
+
+After creating or updating documentation, run the GA knowledge sync to keep the General Assistant environment template in sync:
+
+```
+python3 .runnerkit/scripts/sync_ga_knowledge.py
+```
+
+This script:
+1. Copies all non-`_tech` `.md` files from `docs/application/` and `docs/agents/` into the GA template's `knowledge/platform/` directory
+2. Auto-generates REST API reference files from `frontend/openapi.json` (grouped by tag) into `knowledge/platform/api_reference/`
+
+**Do NOT manually write `_api.md` files** — API reference is auto-generated from the OpenAPI spec. If API routes change, run `make gen-client` first (to update `openapi.json`), then `make sync-ga-knowledge`.
+
 ## Output
 
 Write documentation to `docs/{domain}/{feature}/` following the structure above.
 Report what was created/updated, any old files that can be removed, and the reference check results.
+Remind the user to run `python3 .runnerkit/scripts/sync_ga_knowledge.py` if documentation was created or updated.

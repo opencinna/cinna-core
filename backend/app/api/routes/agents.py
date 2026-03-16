@@ -6,8 +6,6 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlmodel import select
-
 from app.api.deps import CurrentUser, SessionDep
 
 logger = logging.getLogger(__name__)
@@ -48,8 +46,6 @@ from app.models import (
     UpdateSessionStateRequest,
     UpdateSessionStateResponse,
     RespondToTaskRequest,
-    AgentShare,
-    User,
     InputTask,
     Session as ChatSession,
 )
@@ -64,56 +60,9 @@ from app.models.session import SessionCreate
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 
-def _agent_to_public_with_clone_info(session, agent: Agent) -> AgentPublic:
+def _agent_to_public(session, agent: Agent) -> AgentPublic:
     """Convert Agent to AgentPublic with resolved clone information."""
-    parent_agent_name = None
-    shared_by_email = None
-
-    if agent.is_clone and agent.parent_agent_id:
-        parent = session.get(Agent, agent.parent_agent_id)
-        if parent:
-            parent_agent_name = parent.name
-
-            # Get the share record to find who shared it
-            stmt = select(AgentShare).where(
-                AgentShare.cloned_agent_id == agent.id
-            )
-            share = session.exec(stmt).first()
-            if share:
-                shared_by_user = session.get(User, share.shared_by_user_id)
-                if shared_by_user:
-                    shared_by_email = shared_by_user.email
-
-    return AgentPublic(
-        id=agent.id,
-        name=agent.name,
-        description=agent.description,
-        workflow_prompt=agent.workflow_prompt,
-        entrypoint_prompt=agent.entrypoint_prompt,
-        refiner_prompt=agent.refiner_prompt,
-        is_active=agent.is_active,
-        active_environment_id=agent.active_environment_id,
-        ui_color_preset=agent.ui_color_preset,
-        show_on_dashboard=agent.show_on_dashboard,
-        conversation_mode_ui=agent.conversation_mode_ui,
-        agent_sdk_config=agent.agent_sdk_config,
-        a2a_config=agent.a2a_config,
-        example_prompts=agent.example_prompts,
-        inactivity_period_limit=agent.inactivity_period_limit,
-        webapp_enabled=agent.webapp_enabled,
-        created_at=agent.created_at,
-        updated_at=agent.updated_at,
-        owner_id=agent.owner_id,
-        user_workspace_id=agent.user_workspace_id,
-        # Clone info
-        is_clone=agent.is_clone,
-        clone_mode=agent.clone_mode,
-        update_mode=agent.update_mode,
-        pending_update=agent.pending_update,
-        parent_agent_id=agent.parent_agent_id,
-        parent_agent_name=parent_agent_name,
-        shared_by_email=shared_by_email
-    )
+    return AgentService.to_public_with_clone_info(session, agent)
 
 
 @router.get("/", response_model=AgentsPublic)
@@ -160,7 +109,7 @@ def read_agents(
     )
 
     # Convert to public format with clone info
-    agents_public = [_agent_to_public_with_clone_info(session, a) for a in agents]
+    agents_public = [_agent_to_public(session, a) for a in agents]
     return AgentsPublic(data=agents_public, count=count)
 
 
@@ -178,7 +127,7 @@ def read_agent(session: SessionDep, current_user: CurrentUser, id: uuid.UUID) ->
         raise HTTPException(status_code=400, detail="Not enough permissions")
 
     # Return with clone info resolved
-    return _agent_to_public_with_clone_info(session, agent)
+    return _agent_to_public(session, agent)
 
 
 @router.post("/", response_model=AgentPublic)
@@ -273,7 +222,7 @@ def update_agent(
     )
     if not updated_agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    return _agent_to_public_with_clone_info(session, updated_agent)
+    return _agent_to_public(session, updated_agent)
 
 
 @router.post("/{id}/sync-prompts", response_model=Message)
@@ -348,7 +297,10 @@ async def delete_agent(
     if not current_user.is_superuser and (agent.owner_id != current_user.id):
         raise HTTPException(status_code=400, detail="Not enough permissions")
 
-    success = await AgentService.delete_agent(session=session, agent_id=id)
+    try:
+        success = await AgentService.delete_agent(session=session, agent_id=id)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
     if not success:
         raise HTTPException(status_code=404, detail="Agent not found")
     return Message(message="Agent deleted successfully")

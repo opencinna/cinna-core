@@ -159,6 +159,10 @@ test-backend: # run backend pytest suite inside the backend container
 check-docs: # check documentation for broken file references
 	python3 .runnerkit/scripts/check_docs_references.py
 
+.PHONY: sync-ga-knowledge
+sync-ga-knowledge: # sync docs + auto-generate API reference into GA env template
+	python3 .runnerkit/scripts/sync_ga_knowledge.py
+
 .PHONY: mcp-inspector
 mcp-inspector: # run mcp inspector for local development and testing
 	cd tools && npx --prefix . @modelcontextprotocol/inspector

@@ -24,6 +24,7 @@ from app.models import (
     UserUpdate,
     UserUpdateMe,
 )
+from app.models.agent import AgentPublic
 from app.models.user import (
     AIServiceCredentials,
     AIServiceCredentialsUpdate,
@@ -161,6 +162,29 @@ def set_password_me(
     return Message(message="Password set successfully")
 
 
+@router.post("/me/general-assistant", response_model=AgentPublic)
+async def generate_general_assistant(
+    *, session: SessionDep, current_user: CurrentUser
+) -> Any:
+    """
+    Create the General Assistant agent for the current user.
+
+    Returns HTTP 409 if a General Assistant already exists for this user.
+    Returns HTTP 400 if the General Assistant feature is not enabled on the account.
+    """
+    from app.services.general_assistant_service import GeneralAssistantService
+
+    try:
+        agent = await GeneralAssistantService.ensure_or_create(session, current_user)
+    except GeneralAssistantService.NotEnabledError:
+        raise HTTPException(status_code=400, detail="Enable General Assistant in your profile first")
+    except GeneralAssistantService.AlreadyExistsError:
+        raise HTTPException(status_code=409, detail="General Assistant already exists")
+
+    from app.services.agent_service import AgentService
+    return AgentService.to_public_with_clone_info(session, agent)
+
+
 @router.get("/me", response_model=UserPublic)
 def read_user_me(current_user: CurrentUser) -> Any:
     """
@@ -204,6 +228,11 @@ def register_user(session: SessionDep, user_in: UserRegister) -> Any:
         if "restricted" in detail:
             raise HTTPException(status_code=403, detail=detail)
         raise HTTPException(status_code=400, detail=detail)
+
+    # Auto-create General Assistant for new users (non-blocking background task)
+    from app.services.general_assistant_service import GeneralAssistantService
+    GeneralAssistantService.trigger_auto_create_background(user.id)
+
     return user
 
 

@@ -432,6 +432,7 @@ export type AgentPublic = {
     parent_agent_id?: (string | null);
     parent_agent_name?: (string | null);
     shared_by_email?: (string | null);
+    is_general_assistant?: boolean;
 };
 
 /**
@@ -2361,6 +2362,7 @@ export type UserPublic = {
     has_password?: boolean;
     default_sdk_conversation?: (string | null);
     default_sdk_building?: (string | null);
+    general_assistant_enabled?: boolean;
 };
 
 /**
@@ -2377,6 +2379,7 @@ export type UserPublicWithAICredentials = {
     has_password?: boolean;
     default_sdk_conversation?: (string | null);
     default_sdk_building?: (string | null);
+    general_assistant_enabled?: boolean;
     has_anthropic_api_key?: boolean;
     has_openai_api_key?: boolean;
     has_google_ai_api_key?: boolean;
@@ -2410,6 +2413,7 @@ export type UserUpdateMe = {
     username?: (string | null);
     default_sdk_conversation?: (string | null);
     default_sdk_building?: (string | null);
+    general_assistant_enabled?: (boolean | null);
 };
 
 export type UserWorkspaceCreate = {
@@ -4067,6 +4071,8 @@ export type UsersSetPasswordMeData = {
 };
 
 export type UsersSetPasswordMeResponse = (Message);
+
+export type UsersGenerateGeneralAssistantResponse = (AgentPublic);
 
 export type UsersRegisterUserData = {
     requestBody: UserRegister;

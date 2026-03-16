@@ -61,6 +61,13 @@ class AgentShareService:
                 detail="Cannot share a cloned agent. Detach it first to enable sharing."
             )
 
+        # 2b. General Assistant cannot be shared
+        if agent.is_general_assistant:
+            raise HTTPException(
+                status_code=403,
+                detail="The General Assistant cannot be shared.",
+            )
+
         # 3. Validate share_mode
         if share_mode not in [ShareMode.USER, ShareMode.BUILDER]:
             raise HTTPException(status_code=400, detail="Invalid share mode")

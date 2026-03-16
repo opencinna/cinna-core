@@ -2931,6 +2931,11 @@ export const AgentPublicSchema = {
                 }
             ],
             title: 'Shared By Email'
+        },
+        is_general_assistant: {
+            type: 'boolean',
+            title: 'Is General Assistant',
+            default: false
         }
     },
     type: 'object',
@@ -11281,6 +11286,11 @@ export const UserPublicSchema = {
             ],
             title: 'Default Sdk Building',
             default: 'claude-code/anthropic'
+        },
+        general_assistant_enabled: {
+            type: 'boolean',
+            title: 'General Assistant Enabled',
+            default: true
         }
     },
     type: 'object',
@@ -11368,6 +11378,11 @@ export const UserPublicWithAICredentialsSchema = {
             ],
             title: 'Default Sdk Building',
             default: 'claude-code/anthropic'
+        },
+        general_assistant_enabled: {
+            type: 'boolean',
+            title: 'General Assistant Enabled',
+            default: true
         },
         has_anthropic_api_key: {
             type: 'boolean',
@@ -11562,6 +11577,17 @@ export const UserUpdateMeSchema = {
                 }
             ],
             title: 'Default Sdk Building'
+        },
+        general_assistant_enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'General Assistant Enabled'
         }
     },
     type: 'object',

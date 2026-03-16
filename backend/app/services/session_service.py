@@ -52,6 +52,10 @@ class SessionService:
         if not agent or not agent.active_environment_id:
             return None
 
+        # Force building mode for General Assistant agents
+        if agent.is_general_assistant:
+            data = data.model_copy(update={"mode": "building"})
+
         # Use guest_share_id from parameter or from data
         effective_guest_share_id = guest_share_id or data.guest_share_id
         effective_webapp_share_id = webapp_share_id or data.webapp_share_id

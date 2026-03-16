@@ -4,6 +4,7 @@ import { useEffect } from "react"
 import { AICredentialsSettings } from "@/components/UserSettings/AICredentials"
 import ChangePassword from "@/components/UserSettings/ChangePassword"
 import DeleteAccount from "@/components/UserSettings/DeleteAccount"
+import { GeneralAssistantSettings } from "@/components/UserSettings/GeneralAssistantSettings"
 import OAuthAccounts from "@/components/UserSettings/OAuthAccounts"
 import SetPassword from "@/components/UserSettings/SetPassword"
 import { MailServerSettings } from "@/components/UserSettings/MailServerSettings"
@@ -51,6 +52,7 @@ function UserSettings() {
     { value: "oauth", title: "Connected Accounts", content: <OAuthAccounts /> },
     { value: "interface", title: "Interface", content: <WorkspaceSettings /> },
     { value: "ai-credentials", title: "AI Credentials", content: <AICredentialsSettings /> },
+    { value: "general-assistant", title: "General Assistant", content: <GeneralAssistantSettings /> },
     { value: "mail-servers", title: "Mail Servers", content: <MailServerSettings /> },
     { value: "keys", title: "SSH Keys", content: <SSHKeys /> },
     { value: "danger-zone", title: "Danger zone", content: <DeleteAccount /> },

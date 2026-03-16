@@ -1,0 +1,56 @@
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agent-${ENV_ID}
+    image: agent-general-assistant-env:${ENV_VERSION}
+
+    environment:
+      - ENV_ID=${ENV_ID}
+      - AGENT_ID=${AGENT_ID}
+      - ENV_NAME=${ENV_NAME}
+      - ENV_VERSION=${ENV_VERSION}
+      - DATABASE_URL=${DATABASE_URL}
+      - PYTHONPATH=/app
+      - AGENT_AUTH_TOKEN=${AGENT_AUTH_TOKEN}
+      - AGENT_PORT=${AGENT_PORT}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - CLAUDE_CODE_WORKSPACE=/app/workspace
+      - CLAUDE_CODE_PERMISSION_MODE=acceptEdits
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - DUMP_LLM_SESSION=${DUMP_LLM_SESSION:-true}
+      - SDK_ADAPTER_BUILDING=${SDK_ADAPTER_BUILDING:-claude-code/anthropic}
+      - SDK_ADAPTER_CONVERSATION=${SDK_ADAPTER_CONVERSATION:-claude-code/anthropic}
+      - BACKEND_URL=http://backend:8000
+
+    volumes:
+      - ${HOST_INSTANCE_DIR}/app/core:/app/core:ro
+      - ${HOST_INSTANCE_DIR}/app/workspace:/app/workspace
+
+    networks:
+      - agent-bridge
+
+    deploy:
+      resources:
+        limits:
+          cpus: '${CPU_LIMIT:-1.0}'
+          memory: ${MEMORY_LIMIT:-512M}
+        reservations:
+          cpus: '${CPU_RESERVATION:-0.25}'
+          memory: ${MEMORY_RESERVATION:-128M}
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:${AGENT_PORT}/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  agent-bridge:
+    external: true
+    name: agent-bridge
