@@ -1,16 +1,18 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 import { UsersService } from "@/client"
 import { Button } from "@/components/ui/button"
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import {
   Form,
   FormControl,
@@ -19,6 +21,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form"
+import { LoadingButton } from "@/components/ui/loading-button"
 import { PasswordInput } from "@/components/ui/password-input"
 import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -38,6 +41,7 @@ const formSchema = z
 type FormData = z.infer<typeof formSchema>
 
 export default function SetPassword() {
+  const [open, setOpen] = useState(false)
   const { user } = useAuth()
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -56,6 +60,7 @@ export default function SetPassword() {
     onSuccess: () => {
       showSuccessToast("Password set successfully")
       form.reset()
+      setOpen(false)
       queryClient.invalidateQueries({ queryKey: ["currentUser"] })
     },
     onError: (error: Error) => {
@@ -68,18 +73,21 @@ export default function SetPassword() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Set Password</CardTitle>
-        <CardDescription>
-          You signed up with Google. Set a password to enable password login.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
+    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) form.reset() }}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm">Set Password</Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Set Password</DialogTitle>
+          <DialogDescription>
+            You signed up with Google. Set a password to enable password login.
+          </DialogDescription>
+        </DialogHeader>
         <Form {...form}>
           <form
             onSubmit={form.handleSubmit((data) => mutation.mutate(data))}
-            className="space-y-4"
+            className="flex flex-col gap-4"
           >
             <FormField
               control={form.control}
@@ -107,12 +115,16 @@ export default function SetPassword() {
                 </FormItem>
               )}
             />
-            <Button type="submit" disabled={mutation.isPending}>
+            <LoadingButton
+              type="submit"
+              loading={mutation.isPending}
+              className="self-start"
+            >
               Set Password
-            </Button>
+            </LoadingButton>
           </form>
         </Form>
-      </CardContent>
-    </Card>
+      </DialogContent>
+    </Dialog>
   )
 }

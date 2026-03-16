@@ -1,9 +1,19 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation } from "@tanstack/react-query"
+import { useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 
 import { type UpdatePassword, UsersService } from "@/client"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import {
   Form,
   FormControl,
@@ -39,6 +49,7 @@ const formSchema = z
 type FormData = z.infer<typeof formSchema>
 
 const ChangePassword = () => {
+  const [open, setOpen] = useState(false)
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
@@ -57,6 +68,7 @@ const ChangePassword = () => {
     onSuccess: () => {
       showSuccessToast("Password updated successfully")
       form.reset()
+      setOpen(false)
     },
     onError: handleError.bind(showErrorToast),
   })
@@ -66,80 +78,90 @@ const ChangePassword = () => {
   }
 
   return (
-    <div className="max-w-md">
-      <h3 className="text-lg font-semibold py-4">Change Password</h3>
-      <Form {...form}>
-        <form
-          onSubmit={form.handleSubmit(onSubmit)}
-          className="flex flex-col gap-4"
-        >
-          <FormField
-            control={form.control}
-            name="current_password"
-            render={({ field, fieldState }) => (
-              <FormItem>
-                <FormLabel>Current Password</FormLabel>
-                <FormControl>
-                  <PasswordInput
-                    data-testid="current-password-input"
-                    placeholder="••••••••"
-                    aria-invalid={fieldState.invalid}
-                    {...field}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-
-          <FormField
-            control={form.control}
-            name="new_password"
-            render={({ field, fieldState }) => (
-              <FormItem>
-                <FormLabel>New Password</FormLabel>
-                <FormControl>
-                  <PasswordInput
-                    data-testid="new-password-input"
-                    placeholder="••••••••"
-                    aria-invalid={fieldState.invalid}
-                    {...field}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-
-          <FormField
-            control={form.control}
-            name="confirm_password"
-            render={({ field, fieldState }) => (
-              <FormItem>
-                <FormLabel>Confirm Password</FormLabel>
-                <FormControl>
-                  <PasswordInput
-                    data-testid="confirm-password-input"
-                    placeholder="••••••••"
-                    aria-invalid={fieldState.invalid}
-                    {...field}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-
-          <LoadingButton
-            type="submit"
-            loading={mutation.isPending}
-            className="self-start"
+    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) form.reset() }}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm">Change Password</Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Change Password</DialogTitle>
+          <DialogDescription>
+            Enter your current password and choose a new one.
+          </DialogDescription>
+        </DialogHeader>
+        <Form {...form}>
+          <form
+            onSubmit={form.handleSubmit(onSubmit)}
+            className="flex flex-col gap-4"
           >
-            Update Password
-          </LoadingButton>
-        </form>
-      </Form>
-    </div>
+            <FormField
+              control={form.control}
+              name="current_password"
+              render={({ field, fieldState }) => (
+                <FormItem>
+                  <FormLabel>Current Password</FormLabel>
+                  <FormControl>
+                    <PasswordInput
+                      data-testid="current-password-input"
+                      placeholder="••••••••"
+                      aria-invalid={fieldState.invalid}
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="new_password"
+              render={({ field, fieldState }) => (
+                <FormItem>
+                  <FormLabel>New Password</FormLabel>
+                  <FormControl>
+                    <PasswordInput
+                      data-testid="new-password-input"
+                      placeholder="••••••••"
+                      aria-invalid={fieldState.invalid}
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="confirm_password"
+              render={({ field, fieldState }) => (
+                <FormItem>
+                  <FormLabel>Confirm Password</FormLabel>
+                  <FormControl>
+                    <PasswordInput
+                      data-testid="confirm-password-input"
+                      placeholder="••••••••"
+                      aria-invalid={fieldState.invalid}
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <LoadingButton
+              type="submit"
+              loading={mutation.isPending}
+              className="self-start"
+            >
+              Update Password
+            </LoadingButton>
+          </form>
+        </Form>
+      </DialogContent>
+    </Dialog>
   )
 }
 
