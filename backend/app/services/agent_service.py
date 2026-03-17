@@ -219,44 +219,66 @@ class AgentService:
         """
         Handle workflow_prompt change - regenerate A2A skills and trigger description update.
 
-        This method should be called whenever workflow_prompt changes, regardless of source
-        (API update, sync from agent-env, etc.). It ensures consistent behavior across all
-        update paths.
+        All LLM-powered operations (A2A skills, description) run in a background thread
+        to avoid blocking the asyncio event loop. A2A skills are only regenerated if the
+        agent already has A2A configured (has existing skills).
 
         Args:
-            agent: The agent being updated (must be attached to a session)
+            agent: The agent being updated (used to read current state, not modified)
             new_workflow_prompt: The new workflow prompt value
             trigger_description_update: If True, triggers background description generation
-
-        Note:
-            This method modifies the agent object but does NOT commit the transaction.
-            The caller is responsible for committing.
         """
         import threading
 
-        # Regenerate A2A skills
-        try:
-            new_skills = generate_a2a_skills(new_workflow_prompt)
-            current_version = agent.a2a_config.get("version", "1.0.0") if agent.a2a_config else "1.0.0"
-            agent.a2a_config = {
-                "skills": new_skills,
-                "version": _increment_version(current_version),
-                "generated_at": datetime.now(UTC).isoformat()
-            }
-            flag_modified(agent, "a2a_config")
-            logger.info(f"Regenerated A2A skills for agent {agent.id}: {len(new_skills)} skills")
-        except Exception as e:
-            logger.warning(f"Failed to generate A2A skills for agent {agent.id}: {e}")
+        # Run LLM-powered regeneration in a background thread to avoid blocking
+        # the asyncio event loop (these are synchronous LLM calls that can take
+        # seconds, especially when providers hit rate limits and cascade).
+        agent_id = agent.id
+        agent_name = agent.name
+        # Only regenerate A2A skills if A2A is enabled for this agent.
+        # This avoids wasting LLM tokens on agents that don't use A2A.
+        a2a_enabled = bool(
+            agent.a2a_config and agent.a2a_config.get("enabled", False)
+        )
+        current_version = agent.a2a_config.get("version", "1.0.0") if agent.a2a_config else "1.0.0"
 
-        # Trigger background description generation
-        if trigger_description_update:
-            thread = threading.Thread(
-                target=_generate_description_background,
-                args=(agent.id, new_workflow_prompt, agent.name),
-                daemon=True
-            )
-            thread.start()
-            logger.info(f"Triggered background description generation for agent {agent.id}")
+        def _regenerate_in_background():
+            from sqlmodel import Session as SQLSession
+
+            # Generate A2A skills (only if agent already has A2A configured)
+            if a2a_enabled:
+                try:
+                    new_skills = generate_a2a_skills(new_workflow_prompt)
+                    with SQLSession(engine) as db:
+                        agent_db = db.get(Agent, agent_id)
+                        if agent_db:
+                            # Preserve existing config fields (e.g., "enabled")
+                            updated_config = dict(agent_db.a2a_config or {})
+                            updated_config.update({
+                                "skills": new_skills,
+                                "version": _increment_version(current_version),
+                                "generated_at": datetime.now(UTC).isoformat()
+                            })
+                            agent_db.a2a_config = updated_config
+                            flag_modified(agent_db, "a2a_config")
+                            db.add(agent_db)
+                            db.commit()
+                            logger.info(f"Regenerated A2A skills for agent {agent_id}: {len(new_skills)} skills")
+                except Exception as e:
+                    logger.warning(f"Failed to generate A2A skills for agent {agent_id}: {e}")
+            else:
+                logger.debug(f"Skipping A2A skills generation for agent {agent_id}: no existing A2A config")
+
+            # Generate description
+            if trigger_description_update:
+                _generate_description_background(agent_id, new_workflow_prompt, agent_name)
+
+        thread = threading.Thread(
+            target=_regenerate_in_background,
+            daemon=True
+        )
+        thread.start()
+        logger.info(f"Triggered background regeneration for agent {agent_id} (a2a_skills={a2a_enabled}, description={trigger_description_update})")
 
     @staticmethod
     def update_agent(session: Session, agent_id: UUID, data: AgentUpdate) -> Agent | None:
