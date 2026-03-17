@@ -16,16 +16,9 @@ The General Assistant (GA) is a system-created agent that helps users set up, co
 
 ## User Stories / Flows
 
-### New user signup (auto-create)
+### User opt-in (all users)
 
-1. User registers via password signup (`POST /api/v1/users/signup`) or Google OAuth callback
-2. The backend fires `GeneralAssistantService.trigger_auto_create_background()` in a daemon thread immediately after the user record is committed
-3. The background thread checks `general_assistant_enabled` (defaults to `true` for new users), then calls `GeneralAssistantService.create_general_assistant()` to create the agent record and build a `general-assistant-env` Docker environment
-4. The user sees the GA in the agent selector on the dashboard as soon as the environment finishes building
-
-### Existing user opt-in
-
-1. Existing users have `general_assistant_enabled=false` by default (set by the migration's `server_default`)
+1. All users start with `general_assistant_enabled=false` by default — the GA is not auto-created on signup
 2. User opens Settings → General Assistant tab
 3. User toggles the enable switch — this calls `PATCH /api/v1/users/me` with `{ general_assistant_enabled: true }`
 4. Once enabled, a "Generate Assistant" button appears; clicking it calls `POST /api/v1/users/me/general-assistant`
@@ -52,7 +45,7 @@ The General Assistant (GA) is a system-created agent that helps users set up, co
 
 - **One GA per user** — enforced by the partial unique index `ix_agent_general_assistant_per_user` (unique on `owner_id` where `is_general_assistant = true`). Attempting to create a second GA returns HTTP 409.
 - **Feature flag gate** — creating a GA via the API requires `general_assistant_enabled=true` on the user record; returns HTTP 400 if not enabled.
-- **New users** — `general_assistant_enabled` defaults to `true` in the `User` model (`Field(default=True)`); the migration sets `server_default='false'` for existing rows, so new sign-ups get the GA automatically, existing users must opt in.
+- **All users** — `general_assistant_enabled` defaults to `false` (`Field(default=False)`); users must explicitly opt in via Settings → General Assistant tab.
 - **Building mode enforcement** — `SessionService.create_session()` detects `agent.is_general_assistant` and overwrites the session mode to `"building"` regardless of what the caller requests.
 - **Cannot be deleted** — the delete route (`DELETE /api/v1/agents/{id}`) raises HTTP 403 if `agent.is_general_assistant` is true.
 - **Cannot be shared or cloned** — `AgentShareService.share_agent()` raises HTTP 403 if `agent.is_general_assistant` is true.

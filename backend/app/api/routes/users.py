@@ -229,10 +229,6 @@ def register_user(session: SessionDep, user_in: UserRegister) -> Any:
             raise HTTPException(status_code=403, detail=detail)
         raise HTTPException(status_code=400, detail=detail)
 
-    # Auto-create General Assistant for new users (non-blocking background task)
-    from app.services.general_assistant_service import GeneralAssistantService
-    GeneralAssistantService.trigger_auto_create_background(user.id)
-
     return user
 
 

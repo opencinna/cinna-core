@@ -57,9 +57,7 @@
 
 | Column | Type | Default | Notes |
 |--------|------|---------|-------|
-| `general_assistant_enabled` | `Boolean` | `true` (model) / `false` (migration server_default) | New users inherit the model default `true`; existing rows get `false` from the migration |
-
-The model default (`Field(default=True)`) applies to in-memory object creation (new sign-ups). The migration `server_default='false'` applies to rows that existed before the migration ran (existing users).
+| `general_assistant_enabled` | `Boolean` | `false` | All users start with GA disabled; opt-in via Settings |
 
 ---
 
@@ -122,11 +120,11 @@ Methods on `GeneralAssistantService`:
 
 ### `backend/app/services/auth_service.py`
 
-- `AuthService.create_user_from_google()` — after committing the new `User` record, calls `GeneralAssistantService.trigger_auto_create_background(db_obj.id)`
+- `AuthService.create_user_from_google()` — creates the new `User` record; GA is not auto-created (user must opt in via Settings)
 
 ### `backend/app/api/routes/users.py`
 
-- `register_user()` (`POST /users/signup`) — after `UserService.register_user()`, calls `GeneralAssistantService.trigger_auto_create_background(user.id)`
+- `register_user()` (`POST /users/signup`) — registers the user; GA is not auto-created (user must opt in via Settings)
 
 ---
 

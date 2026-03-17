@@ -62,7 +62,7 @@ class User(UserBase, table=True):
     default_sdk_conversation: str | None = Field(default=SDK_ANTHROPIC, max_length=50)
     default_sdk_building: str | None = Field(default=SDK_ANTHROPIC, max_length=50)
     # General Assistant feature flag
-    general_assistant_enabled: bool = Field(default=True)
+    general_assistant_enabled: bool = Field(default=False)
     items: List["app.models.item.Item"] = Relationship(back_populates="owner", cascade_delete=True)
     agents: List["app.models.agent.Agent"] = Relationship(back_populates="owner", cascade_delete=True)
     credentials: List["app.models.credential.Credential"] = Relationship(back_populates="owner", cascade_delete=True)
@@ -75,7 +75,7 @@ class UserPublic(UserBase):
     has_password: bool = False
     default_sdk_conversation: str | None = SDK_ANTHROPIC
     default_sdk_building: str | None = SDK_ANTHROPIC
-    general_assistant_enabled: bool = True
+    general_assistant_enabled: bool = False
 
 
 class UsersPublic(SQLModel):
