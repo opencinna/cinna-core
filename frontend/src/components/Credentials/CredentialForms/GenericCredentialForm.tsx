@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { EmailImapFields } from "@/components/Credentials/CredentialFields"
+import { EmailImapFields, EmailSmtpFields } from "@/components/Credentials/CredentialFields"
 
 interface GenericCredentialFormProps {
   form: UseFormReturn<any>
@@ -39,6 +39,10 @@ export function GenericCredentialForm({
 
       {credentialType === "email_imap" && (
         <EmailImapFields control={form.control} />
+      )}
+
+      {credentialType === "email_smtp" && (
+        <EmailSmtpFields control={form.control} />
       )}
 
       <FormField

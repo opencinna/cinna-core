@@ -68,6 +68,7 @@ def test_create_credential_various_types(
     """All credential types should be creatable."""
     types_to_test = [
         "email_imap",
+        "email_smtp",
         "odoo",
         "api_token",
         "gmail_oauth",

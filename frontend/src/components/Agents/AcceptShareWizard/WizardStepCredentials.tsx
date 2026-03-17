@@ -27,6 +27,7 @@ import { handleError } from "@/utils"
 // Credential type to display label mapping
 const CREDENTIAL_TYPE_LABELS: Record<string, string> = {
   email_imap: "Email (IMAP)",
+  email_smtp: "Email (SMTP)",
   odoo: "Odoo",
   gmail_oauth: "Gmail OAuth",
   gmail_oauth_readonly: "Gmail OAuth (Read-Only)",

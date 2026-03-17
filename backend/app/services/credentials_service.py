@@ -25,6 +25,7 @@ class CredentialsService:
     # Fields to redact in credentials (by credential type) - for README/prompt display
     SENSITIVE_FIELDS = {
         "email_imap": ["password"],
+        "email_smtp": ["password"],
         "odoo": ["api_token"],
         "gmail_oauth": ["access_token", "refresh_token"],
         "gmail_oauth_readonly": ["access_token", "refresh_token"],
@@ -42,6 +43,7 @@ class CredentialsService:
     AGENT_ENV_ALLOWED_FIELDS = {
         # Non-OAuth credentials: Need all functional fields for agent to use them
         "email_imap": ["host", "port", "login", "password", "is_ssl"],
+        "email_smtp": ["host", "port", "username", "password", "from_email", "use_tls", "use_ssl"],
         "odoo": ["url", "database_name", "login", "api_token"],
         "api_token": ["http_header_name", "http_header_value"],
         "google_service_account": ["file_path", "project_id", "client_email"],

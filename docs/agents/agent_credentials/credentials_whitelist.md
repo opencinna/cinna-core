@@ -45,6 +45,7 @@ Excluded (backend-only): `refresh_token`, `client_secret`, `granted_at`
 ### Non-OAuth Credentials
 
 - **email_imap** - Allowed: `host`, `port`, `login`, `password`, `is_ssl`
+- **email_smtp** - Allowed: `host`, `port`, `username`, `password`, `from_email`, `use_tls`, `use_ssl`
 - **odoo** - Allowed: `url`, `database_name`, `login`, `api_token`
 - **api_token** - Allowed: `http_header_name`, `http_header_value` (pre-processed from raw token + template)
 - **google_service_account** - Allowed: `file_path`, `project_id`, `client_email`

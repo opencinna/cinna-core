@@ -16,6 +16,8 @@ function getCredentialTypeLabel(type: string): string {
   switch (type) {
     case "email_imap":
       return "Email (IMAP)"
+    case "email_smtp":
+      return "Email (SMTP)"
     case "odoo":
       return "Odoo"
     case "gmail_oauth":

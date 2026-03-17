@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 # Credential types enum
 class CredentialType(str, Enum):
     EMAIL_IMAP = "email_imap"
+    EMAIL_SMTP = "email_smtp"
     ODOO = "odoo"
     GMAIL_OAUTH = "gmail_oauth"
     GMAIL_OAUTH_READONLY = "gmail_oauth_readonly"
@@ -40,6 +41,16 @@ class EmailImapData(SQLModel):
     login: str
     password: str
     is_ssl: bool = True
+
+
+class EmailSmtpData(SQLModel):
+    host: str
+    port: int
+    username: str
+    password: str
+    from_email: str
+    use_tls: bool = True
+    use_ssl: bool = False
 
 
 class OdooData(SQLModel):

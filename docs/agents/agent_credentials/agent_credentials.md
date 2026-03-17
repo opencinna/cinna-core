@@ -15,12 +15,13 @@ Agents access user-provided credentials (email, APIs, databases, OAuth services)
 ## Credential Types
 
 1. **email_imap** - IMAP email access (host, port, login, password)
-2. **odoo** - Odoo ERP API (url, database_name, login, api_token)
-3. **gmail_oauth / gmail_oauth_readonly** - Gmail OAuth (access_token, token_type, expires_at, scope)
-4. **gdrive_oauth / gdrive_oauth_readonly** - Google Drive OAuth
-5. **gcalendar_oauth / gcalendar_oauth_readonly** - Google Calendar OAuth
-6. **google_service_account** - Google Service Account (private key JSON)
-7. **api_token** - Generic API Token (Bearer or Custom template)
+2. **email_smtp** - SMTP email sending (host, port, username, password, from_email, use_tls, use_ssl)
+3. **odoo** - Odoo ERP API (url, database_name, login, api_token)
+4. **gmail_oauth / gmail_oauth_readonly** - Gmail OAuth (access_token, token_type, expires_at, scope)
+5. **gdrive_oauth / gdrive_oauth_readonly** - Google Drive OAuth
+6. **gcalendar_oauth / gcalendar_oauth_readonly** - Google Calendar OAuth
+7. **google_service_account** - Google Service Account (private key JSON)
+8. **api_token** - Generic API Token (Bearer or Custom template)
 
 ## User Stories / Flows
 
@@ -39,6 +40,35 @@ Agents access user-provided credentials (email, APIs, databases, OAuth services)
 2. For Bearer: system generates `Authorization: Bearer {token}` header pair
 3. For Custom: user provides template (e.g., `X-API-Key: {TOKEN}`), system parses to header name/value
 4. Agent environment receives pre-processed `http_header_name` and `http_header_value` - no parsing needed
+
+### Email SMTP Credential Usage in Agent Scripts
+
+1. User creates an `email_smtp` credential with SMTP server settings
+2. User links the credential to an agent
+3. Agent environment receives all 7 SMTP fields in `credentials.json` (password is accessible by scripts)
+4. In `README.md` (included in agent prompt), the `password` field is shown as `***REDACTED***`
+5. Agent scripts use the credential to send email via Python's `smtplib` or similar libraries
+
+Example script pattern:
+```python
+import json, smtplib
+from email.mime.text import MIMEText
+
+with open("workspace/credentials/credentials.json") as f:
+    creds = {c["id"]: c["credential_data"] for c in json.load(f)}
+
+smtp = creds["<credential-id>"]
+msg = MIMEText("Hello from agent")
+msg["Subject"] = "Test"
+msg["From"] = smtp["from_email"]
+msg["To"] = "recipient@example.com"
+
+with smtplib.SMTP(smtp["host"], smtp["port"]) as server:
+    if smtp["use_tls"]:
+        server.starttls()
+    server.login(smtp["username"], smtp["password"])
+    server.send_message(msg)
+```
 
 ### OAuth Token Refresh Before Stream
 

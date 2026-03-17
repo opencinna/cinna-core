@@ -38,13 +38,14 @@
 - `backend/app/alembic/versions/8deb1f26c518_*.py` - Agent-credential many-to-many link
 - `backend/app/alembic/versions/774f47bf7fdd_*.py` - API token credential type
 - `backend/app/alembic/versions/a52c4af4a9e5_*.py` - Additional OAuth credential types
+- `backend/app/alembic/versions/e1f2g3h4i5j6_*.py` - Email SMTP credential type
 
 ## Database Schema
 
 ### Credential Table
 - `id` (UUID, PK) - Unique credential identifier
 - `name` (str) - User-defined credential name
-- `credential_type` (enum) - Type of credential (email_imap, odoo, gmail_oauth, api_token, etc.)
+- `credential_type` (enum) - Type of credential (email_imap, email_smtp, odoo, gmail_oauth, api_token, etc.)
 - `encrypted_data` (str) - Fernet-encrypted JSON blob with credential fields
 - `owner_id` (UUID, FK → User) - Credential owner
 - `user_workspace_id` (UUID, FK → UserWorkspace, nullable) - Optional workspace assignment

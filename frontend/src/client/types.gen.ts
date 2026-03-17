@@ -1030,7 +1030,7 @@ export type CredentialsPublic = {
     count: number;
 };
 
-export type CredentialType = 'email_imap' | 'odoo' | 'gmail_oauth' | 'gmail_oauth_readonly' | 'gdrive_oauth' | 'gdrive_oauth_readonly' | 'gcalendar_oauth' | 'gcalendar_oauth_readonly' | 'google_service_account' | 'api_token';
+export type CredentialType = 'email_imap' | 'email_smtp' | 'odoo' | 'gmail_oauth' | 'gmail_oauth_readonly' | 'gdrive_oauth' | 'gdrive_oauth_readonly' | 'gcalendar_oauth' | 'gcalendar_oauth_readonly' | 'google_service_account' | 'api_token';
 
 export type CredentialUpdate = {
     name?: (string | null);

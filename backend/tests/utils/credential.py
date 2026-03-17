@@ -41,6 +41,16 @@ def _default_credential_data(credential_type: str) -> dict:
             "password": "test-password-123",
             "is_ssl": True,
         }
+    elif credential_type == "email_smtp":
+        return {
+            "host": "smtp.example.com",
+            "port": 587,
+            "username": "test@example.com",
+            "password": "test-smtp-password-456",
+            "from_email": "sender@example.com",
+            "use_tls": True,
+            "use_ssl": False,
+        }
     elif credential_type == "odoo":
         return {
             "url": "https://odoo.example.com",

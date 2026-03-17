@@ -34,6 +34,7 @@ function CopyId({ id }: { id: string }) {
 
 const credentialTypeLabels: Record<string, string> = {
   email_imap: "Email (IMAP)",
+  email_smtp: "Email (SMTP)",
   odoo: "Odoo",
   gmail_oauth: "Gmail OAuth",
   gmail_oauth_readonly: "Gmail OAuth (Read-Only)",

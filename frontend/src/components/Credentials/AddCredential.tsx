@@ -43,6 +43,7 @@ const formSchema = z.object({
   name: z.string().min(1, { message: "Name is required" }),
   type: z.enum([
     "email_imap",
+    "email_smtp",
     "odoo",
     "gmail_oauth",
     "gmail_oauth_readonly",
@@ -157,6 +158,7 @@ const AddCredential = () => {
                       </FormControl>
                       <SelectContent>
                         <SelectItem value="email_imap">Email (IMAP)</SelectItem>
+                        <SelectItem value="email_smtp">Email (SMTP)</SelectItem>
                         <SelectItem value="odoo">Odoo</SelectItem>
                         <SelectItem value="gmail_oauth">Gmail OAuth</SelectItem>
                         <SelectItem value="gmail_oauth_readonly">Gmail OAuth (Read-Only)</SelectItem>

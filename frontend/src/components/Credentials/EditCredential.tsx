@@ -138,7 +138,8 @@ const EditCredential = ({ credential, onSuccess }: EditCredentialProps) => {
                   />
                 )}
 
-                {credential.type === "email_imap" && (
+                {(credential.type === "email_imap" ||
+                  credential.type === "email_smtp") && (
                   <GenericCredentialForm
                     form={form}
                     credentialType={credential.type}

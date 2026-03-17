@@ -41,6 +41,7 @@ class CredentialGuard:
     # Keep in sync with the backend when new credential types are added.
     SENSITIVE_FIELDS: dict[str, list[str]] = {
         "email_imap": ["password"],
+        "email_smtp": ["password"],
         "odoo": ["api_token"],
         "gmail_oauth": ["access_token", "refresh_token"],
         "gmail_oauth_readonly": ["access_token", "refresh_token"],

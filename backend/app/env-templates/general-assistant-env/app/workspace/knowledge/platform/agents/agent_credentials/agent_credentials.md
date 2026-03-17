@@ -15,12 +15,13 @@ Agents access user-provided credentials (email, APIs, databases, OAuth services)
 ## Credential Types
 
 1. **email_imap** - IMAP email access (host, port, login, password)
-2. **odoo** - Odoo ERP API (url, database_name, login, api_token)
-3. **gmail_oauth / gmail_oauth_readonly** - Gmail OAuth (access_token, token_type, expires_at, scope)
-4. **gdrive_oauth / gdrive_oauth_readonly** - Google Drive OAuth
-5. **gcalendar_oauth / gcalendar_oauth_readonly** - Google Calendar OAuth
-6. **google_service_account** - Google Service Account (private key JSON)
-7. **api_token** - Generic API Token (Bearer or Custom template)
+2. **email_smtp** - SMTP email sending (host, port, username, password, from_email, use_tls, use_ssl)
+3. **odoo** - Odoo ERP API (url, database_name, login, api_token)
+4. **gmail_oauth / gmail_oauth_readonly** - Gmail OAuth (access_token, token_type, expires_at, scope)
+5. **gdrive_oauth / gdrive_oauth_readonly** - Google Drive OAuth
+6. **gcalendar_oauth / gcalendar_oauth_readonly** - Google Calendar OAuth
+7. **google_service_account** - Google Service Account (private key JSON)
+8. **api_token** - Generic API Token (Bearer or Custom template)
 
 ## User Stories / Flows
 
