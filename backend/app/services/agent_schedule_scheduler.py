@@ -1,7 +1,9 @@
 """
 Agent Schedule Scheduler - polls for due agent schedules and triggers execution.
 
-Follows the pattern of task_trigger_scheduler.py.
+Uses the main application event loop (captured at startup) so that
+fire-and-forget tasks spawned by send_session_message (title generation,
+process_pending_messages / streaming) survive beyond the poll cycle.
 """
 import asyncio
 import logging
@@ -17,6 +19,9 @@ from app.services.agent_scheduler_service import AgentSchedulerService
 logger = logging.getLogger(__name__)
 
 scheduler = BackgroundScheduler()
+
+# Captured at start_scheduler() time — the uvicorn / FastAPI event loop.
+_main_loop: asyncio.AbstractEventLoop | None = None
 
 
 async def _poll_due_schedules() -> None:
@@ -94,19 +99,32 @@ async def _poll_due_schedules() -> None:
 
 
 def run_schedule_poll():
-    """Synchronous wrapper for async _poll_due_schedules."""
+    """Submit the poll coroutine to the main application event loop.
+
+    APScheduler runs this in a background thread.  Previously we created
+    an ephemeral event loop here, but fire-and-forget tasks spawned by
+    send_session_message (title generation, streaming) were silently
+    cancelled when that loop closed.  By submitting to the main loop the
+    tasks live as long as the application does.
+    """
+    if _main_loop is None or _main_loop.is_closed():
+        logger.error("Main event loop not available — skipping schedule poll")
+        return
+
     try:
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(_poll_due_schedules())
-        finally:
-            loop.close()
+        future = asyncio.run_coroutine_threadsafe(_poll_due_schedules(), _main_loop)
+        # Wait for the poll itself to finish (not the fire-and-forget tasks it spawns).
+        # Timeout generously — the poll should be quick; streaming continues in the background.
+        future.result(timeout=120)
     except Exception as e:
         logger.error(f"Agent schedule poll job failed: {e}", exc_info=True)
 
 
 def start_scheduler():
     """Start background scheduler (call on app startup)."""
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
+
     scheduler.add_job(
         run_schedule_poll,
         "interval",
@@ -120,5 +138,7 @@ def start_scheduler():
 
 def shutdown_scheduler():
     """Stop background scheduler (call on app shutdown)."""
+    global _main_loop
     scheduler.shutdown()
+    _main_loop = None
     logger.info("Agent schedule scheduler stopped")
