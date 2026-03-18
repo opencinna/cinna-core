@@ -7,7 +7,7 @@ Covers:
   C. GA share protection via POST /agents/{agent_id}/shares
   D. GA session mode — sessions created for GA are forced to "building" mode
   E. GA workspace filtering — GA appears regardless of workspace filter
-  F. GA auto-creation on signup — trigger_auto_create_background is called
+  F. GA auto-creation NOT triggered on signup (GA disabled by default)
 
 Business rules verified:
   1. GA is created with is_general_assistant=True, show_on_dashboard=True, name="General Assistant"
@@ -18,7 +18,7 @@ Business rules verified:
   6. Sessions created for GA agents are always in "building" mode regardless of requested mode
   7. When filtering agents by workspace, GA appears alongside workspace-matching agents
   8. GA has no user_workspace_id (workspace-agnostic)
-  9. On signup, trigger_auto_create_background is invoked for the new user
+  9. On signup, trigger_auto_create_background is NOT invoked (GA disabled by default)
 
 Setup notes:
   - The migration adds general_assistant_enabled with server_default=false, so existing users
@@ -208,13 +208,14 @@ def test_general_assistant_creation_for_new_user(
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
-    A newly registered user (general_assistant_enabled=True from Python model default)
-    can create a GA immediately after setting up an AI credential.
+    A newly registered user has general_assistant_enabled=False by default.
+    After enabling it and setting up an AI credential, they can create a GA.
 
       1. Sign up a new user
-      2. Create AI credential for the new user
-      3. POST /users/me/general-assistant → 200
-      4. Second call → 409
+      2. Verify GA is disabled by default
+      3. Enable GA and create AI credential
+      4. POST /users/me/general-assistant → 200
+      5. Second call → 409
     """
     # ── Phase 1: Sign up new user ─────────────────────────────────────────
     email = random_email()
@@ -232,28 +233,22 @@ def test_general_assistant_creation_for_new_user(
         ).json()["access_token"]
     }
 
-    # Verify new user has general_assistant_enabled=True (Python model default)
+    # ── Phase 2: Verify GA is disabled by default ─────────────────────────
     r_me = client.get(f"{API}/users/me", headers=new_user_headers)
     assert r_me.status_code == 200
-    assert r_me.json()["general_assistant_enabled"] is True
+    assert r_me.json()["general_assistant_enabled"] is False
 
-    # ── Phase 2: Create AI credential ─────────────────────────────────────
-    create_random_ai_credential(
-        client, new_user_headers,
-        credential_type="anthropic",
-        api_key="sk-ant-api03-new-user-key",
-        name="new-user-ga-cred",
-        set_default=True,
-    )
+    # ── Phase 3: Enable GA and create AI credential ───────────────────────
+    _setup_user_for_ga(client, new_user_headers)
 
-    # ── Phase 3: Create GA → success ──────────────────────────────────────
+    # ── Phase 4: Create GA → success ──────────────────────────────────────
     ga = _create_general_assistant(client, new_user_headers)
     drain_tasks()
     assert ga["is_general_assistant"] is True
     assert ga["name"] == "General Assistant"
     assert ga["user_workspace_id"] is None
 
-    # ── Phase 4: Second call → 409 ────────────────────────────────────────
+    # ── Phase 5: Second call → 409 ────────────────────────────────────────
     r_dup = client.post(f"{API}/users/me/general-assistant", headers=new_user_headers)
     assert r_dup.status_code == 409
 
@@ -540,20 +535,16 @@ def test_general_assistant_workspace_agnostic_field(
 # ── F. GA Auto-Creation on Signup ─────────────────────────────────────────────
 
 
-def test_general_assistant_auto_creation_triggered_on_signup(
+def test_general_assistant_auto_creation_not_triggered_on_signup(
     client: TestClient,
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
-    When a new user registers via POST /users/signup, the GA auto-creation
-    background trigger is called.
+    Since GA is disabled by default, signup does NOT trigger auto-creation.
 
       1. Patch trigger_auto_create_background to capture invocations
       2. Register a new user
-      3. Verify trigger_auto_create_background was called with the new user's ID
-
-    The route imports GeneralAssistantService locally, so we patch the
-    method on the class object directly in its source module.
+      3. Verify trigger_auto_create_background was NOT called
     """
     captured_user_ids: list[uuid.UUID] = []
 
@@ -573,15 +564,10 @@ def test_general_assistant_auto_creation_triggered_on_signup(
         )
 
     assert r.status_code == 200, f"Signup failed: {r.text}"
-    new_user_id = r.json()["id"]
 
-    assert len(captured_user_ids) == 1, (
-        f"Expected trigger_auto_create_background to be called once, "
-        f"called {len(captured_user_ids)} times"
-    )
-    assert str(captured_user_ids[0]) == new_user_id, (
-        f"trigger_auto_create_background called with wrong user ID: "
-        f"expected {new_user_id}, got {captured_user_ids[0]}"
+    assert len(captured_user_ids) == 0, (
+        f"trigger_auto_create_background must NOT be called on signup "
+        f"(GA disabled by default), called {len(captured_user_ids)} times"
     )
 
 
@@ -657,33 +643,20 @@ def test_general_assistant_isolation_between_users(
     """
     Each user has their own independent GA. One user's GA is not visible to another.
 
-      1. Create user A, set up AI credential, and create their GA
-      2. Create user B, set up AI credential, and create their GA
+      1. Create user A, enable GA, set up AI credential, and create their GA
+      2. Create user B, enable GA, set up AI credential, and create their GA
       3. User A listing agents sees only their own GA
       4. User B listing agents sees only their own GA
     """
     # ── Phase 1: User A ────────────────────────────────────────────────────
     _user_a, headers_a = create_random_user_with_headers(client)
-    create_random_ai_credential(
-        client, headers_a,
-        credential_type="anthropic",
-        api_key="sk-ant-api03-user-a-key",
-        name="user-a-cred",
-        set_default=True,
-    )
-    # New users have general_assistant_enabled=True (Python model default)
+    _setup_user_for_ga(client, headers_a)
     ga_a = _create_general_assistant(client, headers_a)
     drain_tasks()
 
     # ── Phase 2: User B ────────────────────────────────────────────────────
     _user_b, headers_b = create_random_user_with_headers(client)
-    create_random_ai_credential(
-        client, headers_b,
-        credential_type="anthropic",
-        api_key="sk-ant-api03-user-b-key",
-        name="user-b-cred",
-        set_default=True,
-    )
+    _setup_user_for_ga(client, headers_b)
     ga_b = _create_general_assistant(client, headers_b)
     drain_tasks()
 
