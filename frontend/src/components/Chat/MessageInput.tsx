@@ -25,7 +25,10 @@ import useCustomToast from "@/hooks/useCustomToast"
 interface MessageInputProps {
   onSend: (content: string, fileIds?: string[]) => void
   onStop?: () => void
+  /** @deprecated Use isStreaming instead. Kept for backward compatibility. */
   sendDisabled?: boolean
+  /** When true, the stop button is shown and the agent is responding. Input remains enabled so the user can queue messages. */
+  isStreaming?: boolean
   isInterruptPending?: boolean
   placeholder?: string
   agentId?: string
@@ -38,12 +41,17 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
     onSend,
     onStop,
     sendDisabled = false,
+    isStreaming = false,
     isInterruptPending = false,
     placeholder = "Type your message...",
     agentId,
     mode = "conversation",
     isNewAgent = false,
   }, ref) {
+    // Resolve effective streaming state: prefer the new isStreaming prop, fall
+    // back to the legacy sendDisabled prop so callers that haven't migrated yet
+    // still work correctly.
+    const effectiveIsStreaming = isStreaming || sendDisabled
     const [message, setMessage] = useState("")
     const [attachedFiles, setAttachedFiles] = useState<FileUploadPublic[]>([])
     const [showFileModal, setShowFileModal] = useState(false)
@@ -90,7 +98,7 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
 
     const handleSend = () => {
       const trimmedMessage = message.trim()
-      if ((trimmedMessage || attachedFiles.length > 0) && !sendDisabled) {
+      if (trimmedMessage || attachedFiles.length > 0) {
         const fileIds = attachedFiles.map(f => f.id)
         onSend(trimmedMessage, fileIds)
         setMessage("")
@@ -105,7 +113,7 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
     }
 
     const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Enter" && !e.shiftKey && !sendDisabled) {
+      if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault()
         handleSend()
       }
@@ -160,7 +168,6 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
                 variant="outline"
                 size="icon"
                 className="h-[60px] w-[60px] shrink-0"
-                disabled={sendDisabled}
               >
                 <Plus className="h-5 w-5" />
               </Button>
@@ -192,7 +199,7 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
                 isDraggingOver ? 'border-primary border-2 bg-primary/5' : ''
               }`}
               rows={2}
-              disabled={sendDisabled || refineMutation.isPending}
+              disabled={refineMutation.isPending}
               readOnly={refineMutation.isPending}
             />
             {isDraggingOver && (
@@ -201,7 +208,7 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
               </div>
             )}
             {/* Refine Prompt Button - appears on hover */}
-            {message.trim() && !sendDisabled && (
+            {message.trim() && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -231,31 +238,34 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
             )}
           </div>
 
-          {/* Send/Stop Button */}
-          {sendDisabled ? (
-            <Button
-              onClick={handleStop}
-              variant="destructive"
-              size="icon"
-              className="h-[60px] w-[60px] shrink-0"
-              disabled={isInterruptPending}
-            >
-              {isInterruptPending ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              ) : (
-                <Square className="h-5 w-5" />
-              )}
-            </Button>
-          ) : (
+          {/* Send / Stop Buttons */}
+          <div className="flex flex-col gap-1 shrink-0">
+            {effectiveIsStreaming && (
+              <Button
+                onClick={handleStop}
+                variant="destructive"
+                size="icon"
+                className="h-[28px] w-[60px]"
+                disabled={isInterruptPending}
+                title="Stop agent"
+              >
+                {isInterruptPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Square className="h-4 w-4" />
+                )}
+              </Button>
+            )}
             <Button
               onClick={handleSend}
               disabled={!message.trim() && attachedFiles.length === 0}
               size="icon"
-              className="h-[60px] w-[60px] shrink-0"
+              className={effectiveIsStreaming ? "h-[28px] w-[60px]" : "h-[60px] w-[60px]"}
+              title="Send message"
             >
               <Send className="h-5 w-5" />
             </Button>
-          )}
+          </div>
         </div>
 
         {/* File Upload Modal */}

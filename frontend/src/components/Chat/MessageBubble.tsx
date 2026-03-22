@@ -9,7 +9,7 @@ import { MessageActions } from "./MessageActions"
 import { AnswerQuestionsModal } from "./AnswerQuestionsModal"
 import { FileBadge } from "./FileBadge"
 import { Button } from "@/components/ui/button"
-import { Info, AlertCircle, ExternalLink, CheckCircle2, HelpCircle, AlertTriangle, Mail, RefreshCw } from "lucide-react"
+import { Info, AlertCircle, ExternalLink, CheckCircle2, HelpCircle, AlertTriangle, Mail, RefreshCw, Clock } from "lucide-react"
 import { useToolApproval } from "@/hooks/useToolApproval"
 import { RecoverSessionModal } from "./RecoverSessionModal"
 
@@ -174,6 +174,9 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
     )
   }
 
+  // Check if this is a pending user message (sent but not yet delivered to agent)
+  const isPendingMessage = isUser && message.sent_to_agent_status === "pending"
+
   // Check if this is a command response (e.g. /files) - rendered directly, not via streaming events
   const isCommand = message.message_metadata?.command === true
 
@@ -296,6 +299,16 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
                 </p>
 
                 <div className="flex items-center gap-1.5">
+                  {/* Pending indicator — shown while the message is queued for the agent */}
+                  {isPendingMessage && (
+                    <div
+                      className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-amber-50 dark:bg-amber-950/30 text-amber-600 dark:text-amber-400"
+                      title="Waiting for agent to pick up this message"
+                    >
+                      <Clock className="h-3 w-3 animate-pulse" />
+                      <span>Pending</span>
+                    </div>
+                  )}
                   {/* Status badge for interrupted/error messages */}
                   {!isUser && (isInterrupted || isError) && (
                     <div

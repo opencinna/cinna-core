@@ -5,11 +5,11 @@
 ### Frontend — Core Chat Components
 
 - `frontend/src/components/Chat/MessageList.tsx` — Main scrollable message container, auto-scroll logic, streaming zone splitting (before/during/after streaming), scroll-down button
-- `frontend/src/components/Chat/MessageBubble.tsx` — Individual message renderer: user/agent/system routing, streaming events extraction, tool approval integration, question extraction, status badges, recovery modal trigger
+- `frontend/src/components/Chat/MessageBubble.tsx` — Individual message renderer: user/agent/system routing, streaming events extraction, tool approval integration, question extraction, status badges, recovery modal trigger, pending indicator for user messages with `sent_to_agent_status="pending"`
 - `frontend/src/components/Chat/StreamingMessage.tsx` — Live streaming message with pulsing loader dots, delegates to StreamEventRenderer
 - `frontend/src/components/Chat/StreamEventRenderer.tsx` — Event-type dispatcher: assistant→MarkdownRenderer, tool→ToolCallBlock, thinking→collapsible block (hidden in compact), system→notification block, webapp_action→WebappActionBlock
 - `frontend/src/components/Chat/MarkdownRenderer.tsx` — `react-markdown` + `remark-gfm` wrapper with custom code rendering (inline: background highlight, block: dark CLI-like slate-900 theme)
-- `frontend/src/components/Chat/MessageInput.tsx` — Textarea with file attachment, drag-drop upload, send/stop buttons, prompt refinement via utilities API
+- `frontend/src/components/Chat/MessageInput.tsx` — Textarea with file attachment, drag-drop upload, send/stop buttons, prompt refinement via utilities API. Input is always enabled; `isStreaming` prop shows stop button stacked above send button (both 28px tall) without disabling the textarea
 - `frontend/src/components/Chat/ChatHeader.tsx` — Session title, mode indicator dot (orange=building, blue=conversation), integration badges, sub-tasks badge, app button, options menu
 - `frontend/src/components/Chat/FileBadge.tsx` — File attachment visual badge with download link
 - `frontend/src/components/Chat/FileUploadModal.tsx` — Drag-drop file upload dialog, 100MB limit
@@ -42,7 +42,7 @@
 
 ### Frontend — Hooks & Services
 
-- `frontend/src/hooks/useSessionStreaming.ts` — Main streaming orchestration: `sendMessage()`, `stopMessage()`, WebSocket room subscription, event deduplication by `event_seq`, gap detection, optimistic message cache, title polling, cleanup
+- `frontend/src/hooks/useSessionStreaming.ts` — Main streaming orchestration: `sendMessage()`, `stopMessage()`, WebSocket room subscription, event deduplication by `event_seq`, gap detection, optimistic message cache (with `sent_to_agent_status="pending"`), title polling, cleanup. Sending a new message while streaming preserves existing stream events rather than clearing them
 - `frontend/src/hooks/useToolApproval.ts` — Tool approval state management, filters already-approved tools, handles API call
 - `frontend/src/hooks/useGuestShare.tsx` — Context provider for guest share metadata (`isGuest`, `guestShareId`, `agentId`, `guestShareToken`)
 - `frontend/src/services/eventService.ts` — Socket.IO singleton client, room subscription with `activeRooms` tracking, auto-reconnect (5 attempts, exponential backoff 1-32s), subscription ID management
@@ -191,6 +191,21 @@ Passed through the component tree to control display density:
 - `"compact"` — filenames only for Read/Edit, shortened bash, thinking blocks hidden
 - Set at route level: session page uses user's choice, webapp widget derives from `chatMode`
 
+### `MessageInput` Props
+
+| Prop | Type | Purpose |
+|------|------|---------|
+| `onSend` | `(content, fileIds?) => void` | Called when user sends a message |
+| `onStop` | `() => void` | Called when user clicks stop button |
+| `isStreaming` | `boolean` | Shows stop button stacked above send button; textarea remains enabled |
+| `sendDisabled` | `boolean` | Deprecated — use `isStreaming` instead. Kept for backward compatibility |
+| `isInterruptPending` | `boolean` | Disables stop button and shows spinner while interrupt request is in flight |
+| `placeholder` | `string` | Textarea placeholder text |
+| `agentId` | `string` | Used for prompt refinement API call |
+| `mode` | `"building" \| "conversation"` | Passed to prompt refinement API |
+
+When `isStreaming` is true, the button area shows a destructive stop button (28px) stacked above a primary send button (28px), totalling the same 60px height as the idle send button. Sending while streaming is always permitted — the backend queues the message via `pending_stream` status.
+
 ### Message Metadata Fields Used by Chat Components
 
 | Field | Component | Purpose |
@@ -203,6 +218,17 @@ Passed through the component tree to control display density:
 | `model`, `total_cost_usd`, `duration_ms`, `num_turns` | MessageBubble | Metadata tooltip on info icon |
 | `task_created`, `task_id`, `session_id`, `inbox_task` | MessageBubble | Task creation system message links |
 | `task_feedback`, `task_state` | MessageBubble | Task feedback message styling and icons |
+
+### `sent_to_agent_status` Field (Top-Level Message Field)
+
+`sent_to_agent_status` is a top-level field on `SessionMessage` (not inside `message_metadata`). It drives the pending indicator on user messages:
+
+| Value | Meaning | UI |
+|-------|---------|-----|
+| `"pending"` | Message created but not yet delivered to the agent | Amber "Pending" badge with pulsing clock icon |
+| `"sent"` | Message delivered to the agent | No badge |
+
+The optimistic message added to the React Query cache by `useSessionStreaming.sendMessage()` always sets `sent_to_agent_status: "pending"`. When the real message is fetched from the server (after stream completion), the status reflects the actual backend state. If additional messages were queued while the agent was streaming, they remain `"pending"` until the backend processes them in `process_pending_messages()`.
 
 ## Adding a New Tool Call Block
 

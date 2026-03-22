@@ -207,8 +207,13 @@ export function useSessionStreaming({
       pageContext?: string
     ) => {
       setIsPending(true)
-      setStreamingEvents([])
-      lastKnownSeqRef.current = 0
+      // Only reset streaming events if not currently streaming — if the agent
+      // is mid-response, preserve the live events so the UI stays consistent
+      // until the next stream starts for this queued message.
+      if (!isStreaming) {
+        setStreamingEvents([])
+        lastKnownSeqRef.current = 0
+      }
       setIsInterruptPending(false)
 
       try {
@@ -246,6 +251,12 @@ export function useSessionStreaming({
             message_metadata: {},
             answers_to_message_id: answersToMessageId || null,
             files: fileObjects || [],
+            // Mark as pending so the UI can show a visual indicator until the
+            // backend confirms the message was delivered to the agent.
+            sent_to_agent_status: "pending",
+            tool_questions_status: null,
+            status: "",
+            status_message: null,
           }
           return {
             ...old,
@@ -338,7 +349,7 @@ export function useSessionStreaming({
         onError?.(error instanceof Error ? error : new Error(String(error)))
       }
     },
-    [sessionId, queryClient, handleStreamEvent, onError]
+    [sessionId, isStreaming, queryClient, handleStreamEvent, onError]
   )
 
   const stopMessage = useCallback(async () => {

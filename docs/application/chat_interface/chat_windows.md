@@ -57,6 +57,7 @@ One-click chat shortcuts embedded inside dashboard blocks. Clicking a prompt act
 - Plain text with whitespace preservation
 - Email integration badge when `integration_type="email"`
 - File attachment badges with download links
+- **Pending indicator** — amber-colored "Pending" badge with pulsing clock icon when `sent_to_agent_status = "pending"` (message sent but agent has not yet picked it up). Clears automatically once the backend marks the message as `"sent"`
 
 ### Agent Messages
 - Left-aligned muted bubble
@@ -130,6 +131,8 @@ Key behaviors:
 - Chat windows require an active session linked to an agent environment
 - Messages are immutable once created — content updates only occur during streaming via incremental DB flushes
 - Streaming state is derived from `session.interaction_status`, not local component state
+- The message input is always enabled — users can type and queue messages while the agent is still responding. Queued messages display a "Pending" indicator until the agent processes them
+- Pending messages are tracked via `sent_to_agent_status = "pending"` on the `SessionMessage` model. The indicator clears automatically when the status transitions to `"sent"` (on message refetch after stream completion)
 - Compact mode is a UI-only preference — does not affect what data is stored or streamed
 - Guest share chats are forced to conversation mode
 - Webapp widget chats inherit mode from webapp configuration

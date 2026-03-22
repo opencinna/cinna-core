@@ -522,13 +522,9 @@ function ChatInterface() {
         ref={messageInputRef}
         onSend={handleSendMessage}
         onStop={stopMessage}
-        sendDisabled={isStreaming}
+        isStreaming={isStreaming}
         isInterruptPending={isInterruptPending}
-        placeholder={
-          isStreaming
-            ? "Agent is responding..."
-            : "Type your message..."
-        }
+        placeholder="Type your message..."
         agentId={session?.agent_id ?? undefined}
         mode={session?.mode as "building" | "conversation" | undefined}
       />

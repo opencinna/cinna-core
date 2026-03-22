@@ -418,8 +418,13 @@ export function WebappChatWidget({
     setIsSending(true)
     setError(null)
     setInputValue("")
-    setStreamingEvents([])
-    lastKnownSeqRef.current = 0
+    // Only reset streaming state if we're not currently streaming — if we are,
+    // the ongoing stream events should remain visible until the agent picks up
+    // the queued message and a new stream begins.
+    if (!isStreaming) {
+      setStreamingEvents([])
+      lastKnownSeqRef.current = 0
+    }
 
     try {
       // Collect page context and ensure session concurrently.
