@@ -138,7 +138,9 @@ Backend ──HTTP POST──→ Environment Container (FastAPI)
                            │        │
                            ├──→ SDK Adapter ── sends to LLM, streams SDKEvents
                            │        │   ├── ClaudeCodeAdapter (subprocess, port-less)
+                           │        │   │       └── ClaudeCodeEventTransformer (message → SDKEvent)
                            │        │   ├── OpenCodeAdapter (HTTP → opencode serve :4096)
+                           │        │   │       ├── OpenCodeEventTransformer (SSE → SDKEvent)
                            │        │   │       └── MCP bridge servers (custom tools)
                            │        │   └── GoogleADKAdapter (in-process library)
                            │        │
@@ -226,13 +228,14 @@ Backend ──HTTP POST──→ Environment Container (FastAPI)
 │   │   ├── agent_env_service.py   # Workspace file operations
 │   │   ├── active_session_manager.py  # Per-session context store (HMAC-verified)
 │   │   ├── models.py              # Pydantic request/response models
-│   │   ├── sdk_utils.py           # Logging and debugging utilities
+│   │   ├── sdk_utils.py           # SessionEventLogger (shared JSONL logger), format_message_for_debug
 │   │   ├── adapters/              # SDK adapter implementations
 │   │   │   ├── base.py            # SDKEvent, SDKConfig, BaseSDKAdapter, AdapterRegistry
-│   │   │   ├── claude_code.py     # ClaudeCodeAdapter (claude-code/* variants)
-│   │   │   ├── opencode_adapter.py  # OpenCodeAdapter (opencode/* variants, HTTP client)
-│   │   │   ├── opencode_event_adapter.py  # OpenCodeEventAdapter — stateful SSE event translator
-│   │   │   ├── google_adk.py      # GoogleADKAdapter (google-adk-wr/* variants)
+│   │   │   ├── claude_code_sdk_adapter.py   # ClaudeCodeAdapter (claude-code/* variants)
+│   │   │   ├── claude_code_event_transformer.py  # ClaudeCodeEventTransformer — Claude SDK message → SDKEvent
+│   │   │   ├── opencode_sdk_adapter.py      # OpenCodeAdapter (opencode/* variants, HTTP client)
+│   │   │   ├── opencode_event_transformer.py    # OpenCodeEventTransformer — stateful SSE event translator
+│   │   │   ├── google_adk_sdk_adapter.py    # GoogleADKAdapter (google-adk-wr/* variants)
 │   │   │   ├── tool_name_registry.py  # Unified lowercase tool name convention: maps, PRE_APPROVED_TOOLS, normalize_tool_name()
 │   │   │   └── sqlite_session_service.py  # SQLite-based session persistence
 │   │   └── tools/                 # Custom agent tools

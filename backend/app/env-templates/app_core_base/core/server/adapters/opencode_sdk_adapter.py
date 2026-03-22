@@ -1,6 +1,10 @@
 """
 OpenCode SDK Adapter
 
+Orchestrates the opencode serve subprocess lifecycle — server management,
+session creation, SSE streaming, and interrupt handling.
+Event translation is delegated to OpenCodeEventTransformer.
+
 This adapter handles all opencode/* variants by running `opencode serve` as a
 background subprocess and communicating with it over HTTP + SSE.
 
@@ -71,7 +75,7 @@ from .base import (
     SDKConfig,
     AdapterRegistry,
 )
-from .opencode_event_adapter import OpenCodeEventAdapter
+from .opencode_event_transformer import OpenCodeEventTransformer
 from .tool_name_registry import normalize_tool_name
 from ..prompt_generator import PromptGenerator
 from ..active_session_manager import active_session_manager
@@ -151,8 +155,8 @@ class OpenCodeAdapter(BaseSDKAdapter):
         self._base_url: Optional[str] = None
         self._runtime_dir: Optional[Path] = None
 
-        # Event adapter — translates raw OpenCode SSE events to SDKEvents
-        self._event_adapter = OpenCodeEventAdapter(self.workspace_dir)
+        # Event transformer — translates raw OpenCode SSE events to SDKEvents
+        self._event_transformer = OpenCodeEventTransformer(self.workspace_dir)
 
     def _resolve_mode(self, mode: str) -> None:
         """
@@ -319,7 +323,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
                 if not session_id:
                     raise RuntimeError(f"POST /session returned no session id: {data}")
                 logger.info("Created OpenCode session: %s", session_id)
-                self._event_adapter.event_logger.log_send(
+                self._event_transformer.event_logger.log_send(
                     "create_session", {"session_id": session_id}
                 )
                 return session_id
@@ -353,7 +357,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
                         f"({resp.status}): {text}"
                     )
                 logger.info("Message sent to OpenCode session %s", session_id)
-                self._event_adapter.event_logger.log_send(
+                self._event_transformer.event_logger.log_send(
                     "post_message",
                     {"session_id": session_id, "message": message},
                 )
@@ -368,7 +372,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
         self._runtime_dir.mkdir(parents=True, exist_ok=True)
         agents_md_path.write_text(system_prompt, encoding="utf-8")
         logger.info("Wrote AGENTS.md (%d chars)", len(system_prompt))
-        self._event_adapter.event_logger.log_send(
+        self._event_transformer.event_logger.log_send(
             "write_agents_md", {"chars": len(system_prompt)}
         )
 
@@ -613,7 +617,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
                             return
 
                         # Reset event adapter state for this message exchange
-                        self._event_adapter.reset()
+                        self._event_transformer.reset()
 
                         buffer = ""
                         async for raw_bytes in sse_resp.content:
@@ -698,7 +702,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
                                         last_progress_time = now
 
                                         # Translate via event adapter
-                                        sdk_events = self._event_adapter.translate(
+                                        sdk_events = self._event_transformer.translate(
                                             event_data, session_id
                                         )
                                         for sdk_event in sdk_events:

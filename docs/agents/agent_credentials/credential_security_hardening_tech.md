@@ -30,7 +30,7 @@
 ### Modified Files
 
 - `backend/app/env-templates/app_core_base/core/server/routes.py` — added `_redacted_event_stream()`, `POST /security/report` proxy endpoint, SSE stream wrapping
-- `backend/app/env-templates/app_core_base/core/server/adapters/google_adk.py` — added `_check_credential_access()`, inline interception in `Bash()` and `Read()` functions
+- `backend/app/env-templates/app_core_base/core/server/adapters/google_adk_sdk_adapter.py` — added `_check_credential_access()`, inline interception in `Bash()` and `Read()` functions
 - `backend/app/env-templates/app_core_base/core/server/agent_env_service.py` — `update_credentials()` now calls `credential_guard.update_values()` after credential sync
 - `backend/app/services/environment_lifecycle.py` — added `_write_claude_code_hook_settings()`, called during environment configuration
 - `backend/app/models/__init__.py` — added `SecurityEvent` model import

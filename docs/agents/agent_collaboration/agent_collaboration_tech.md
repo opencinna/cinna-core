@@ -21,7 +21,7 @@
 - `backend/app/env-templates/app_core_base/core/server/tools/post_finding.py` — `post_finding` MCP tool
 
 ### Agent Environment — Integration
-- `backend/app/env-templates/app_core_base/core/server/adapters/claude_code.py` — Registers collaboration tools in the `task` MCP server alongside existing task tools
+- `backend/app/env-templates/app_core_base/core/server/adapters/claude_code_sdk_adapter.py` — Registers collaboration tools in the `task` MCP server alongside existing task tools
 - `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` — `build_collaboration_context_section()` injects collaboration context into participant system prompts
 
 ### Backend — Integration Points
@@ -92,7 +92,7 @@
 
 ## Agent Environment Tools
 
-All three tools are registered in the `task` MCP server (alongside `create_agent_task`, `update_session_state`, `respond_to_task`) in `backend/app/env-templates/app_core_base/core/server/adapters/claude_code.py`.
+All three tools are registered in the `task` MCP server (alongside `create_agent_task`, `update_session_state`, `respond_to_task`) in `backend/app/env-templates/app_core_base/core/server/adapters/claude_code_sdk_adapter.py`.
 
 Tool names as exposed to the agent SDK:
 - `mcp__task__create_collaboration`

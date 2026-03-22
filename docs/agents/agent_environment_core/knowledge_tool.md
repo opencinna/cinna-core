@@ -57,7 +57,7 @@ Set in the container `.env` file by `backend/app/services/environment_lifecycle.
 ## File References
 
 - **Tool implementation**: `backend/app/env-templates/app_core_base/core/server/tools/knowledge_query.py`
-- **Adapter registration**: `backend/app/env-templates/app_core_base/core/server/adapters/claude_code.py` (~lines 344-360)
+- **Adapter registration**: `backend/app/env-templates/app_core_base/core/server/adapters/claude_code_sdk_adapter.py`
 - **Backend endpoint**: `backend/app/api/routes/knowledge.py` - `query_knowledge()` + `verify_agent_auth_token()` dependency
 - **Pre-allowed list**: `backend/app/services/message_service.py`
 - **Frontend rendering**: `frontend/src/components/Chat/ToolCallBlock.tsx` - `KnowledgeQueryToolBlock` component

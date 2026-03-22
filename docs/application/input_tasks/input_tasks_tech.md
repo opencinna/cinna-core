@@ -29,7 +29,7 @@
 **Agent-Env Tools:**
 - `backend/app/env-templates/app_core_base/core/server/tools/update_session_state.py`
 - `backend/app/env-templates/app_core_base/core/server/tools/respond_to_task.py`
-- `backend/app/env-templates/app_core_base/core/server/adapters/claude_code.py` — tool registration
+- `backend/app/env-templates/app_core_base/core/server/adapters/claude_code_sdk_adapter.py` — tool registration
 - `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` — session state prompt injection
 
 **Migrations:**

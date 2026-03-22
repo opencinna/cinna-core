@@ -794,8 +794,11 @@ await active_streaming_manager.update_last_flushed_seq(session_id, flush_seq)
 - `env-templates/app_core_base/core/server/sdk_manager.py` - Multi-adapter SDK manager
 - `env-templates/app_core_base/core/server/adapters/` - Adapter implementations
   - `base.py` - `SDKEvent`, `SDKEventType`, `SDKConfig`, `BaseSDKAdapter`, `AdapterRegistry`
-  - `claude_code.py` - `ClaudeCodeAdapter` for claude-code/* variants
-  - `google_adk.py` - `GoogleADKAdapter` placeholder for google-adk-wr/*
+  - `claude_code_sdk_adapter.py` - `ClaudeCodeAdapter` for claude-code/* variants
+  - `claude_code_event_transformer.py` - `ClaudeCodeEventTransformer` — Claude SDK message → SDKEvent
+  - `opencode_sdk_adapter.py` - `OpenCodeAdapter` for opencode/* variants
+  - `opencode_event_transformer.py` - `OpenCodeEventTransformer` — OpenCode SSE → SDKEvent
+  - `google_adk_sdk_adapter.py` - `GoogleADKAdapter` placeholder for google-adk-wr/*
 - `env-templates/app_core_base/core/server/sdk_utils.py` - Logging utilities
 - `env-templates/app_core_base/core/server/active_session_manager.py` - Interrupt tracking
 

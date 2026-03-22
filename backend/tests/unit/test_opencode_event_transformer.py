@@ -1,10 +1,10 @@
 """
-Unit tests for OpenCodeEventAdapter.
+Unit tests for OpenCodeEventTransformer.
 
 Tests event translation from raw OpenCode SSE events to SDKEvent objects
 using real event data captured from opencode serve 1.2.x sessions.
 
-Run: cd backend && python -m pytest tests/unit/test_opencode_event_adapter.py -v
+Run: cd backend && python -m pytest tests/unit/test_opencode_event_transformer.py -v
 """
 
 import json
@@ -13,10 +13,8 @@ from pathlib import Path
 import pytest
 
 # sys.path setup is handled by tests/unit/conftest.py
-from core.server.adapters.opencode_event_adapter import (
-    OpenCodeEventAdapter,
-    OpenCodeEventLogger,
-)
+from core.server.adapters.opencode_event_transformer import OpenCodeEventTransformer
+from core.server.sdk_utils import SessionEventLogger
 from core.server.adapters.base import SDKEvent, SDKEventType
 
 
@@ -28,19 +26,19 @@ SESSION_ID = "ses_test_session_001"
 
 
 @pytest.fixture
-def adapter(tmp_path):
-    """Create an event adapter with logging disabled."""
-    return OpenCodeEventAdapter(str(tmp_path))
+def transformer(tmp_path):
+    """Create an event transformer with logging disabled."""
+    return OpenCodeEventTransformer(str(tmp_path))
 
 
 @pytest.fixture
-def adapter_with_logging(tmp_path):
-    """Create an event adapter with logging enabled."""
+def transformer_with_logging(tmp_path):
+    """Create an event transformer with logging enabled."""
     import os
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("DUMP_LLM_SESSION", "true")
-        a = OpenCodeEventAdapter(str(tmp_path))
-    return a, tmp_path
+        t = OpenCodeEventTransformer(str(tmp_path))
+    return t, tmp_path
 
 
 # ---------------------------------------------------------------------------
@@ -254,17 +252,17 @@ class TestInformationalEvents:
         EVT_MESSAGE_UPDATED_USER,
         EVT_MESSAGE_UPDATED_ASSISTANT,
     ])
-    def test_skipped_events(self, adapter, event):
-        result = adapter.translate(event, SESSION_ID)
+    def test_skipped_events(self, transformer, event):
+        result = transformer.translate(event, SESSION_ID)
         assert result == []
 
-    def test_unknown_event_skipped(self, adapter):
-        result = adapter.translate(_evt("unknown.type"), SESSION_ID)
+    def test_unknown_event_skipped(self, transformer):
+        result = transformer.translate(_evt("unknown.type"), SESSION_ID)
         assert result == []
 
-    def test_project_updated_skipped(self, adapter):
+    def test_project_updated_skipped(self, transformer):
         """project.updated is sent on resume — should be silently skipped."""
-        result = adapter.translate(EVT_PROJECT_UPDATED, SESSION_ID)
+        result = transformer.translate(EVT_PROJECT_UPDATED, SESSION_ID)
         assert result == []
 
 
@@ -273,24 +271,24 @@ class TestInformationalEvents:
 # ===========================================================================
 
 class TestSessionCompletion:
-    def test_session_idle_emits_done(self, adapter):
-        result = adapter.translate(EVT_SESSION_IDLE, SESSION_ID)
+    def test_session_idle_emits_done(self, transformer):
+        result = transformer.translate(EVT_SESSION_IDLE, SESSION_ID)
         assert len(result) == 1
         assert result[0].type == SDKEventType.DONE
         assert result[0].session_id == SESSION_ID
 
-    def test_session_idle_flushes_remaining_text(self, adapter):
+    def test_session_idle_flushes_remaining_text(self, transformer):
         """Any buffered text should be flushed before DONE."""
         # Register a text part and buffer some text
-        adapter.translate(EVT_TEXT_PART_START, SESSION_ID)
-        adapter.translate(
+        transformer.translate(EVT_TEXT_PART_START, SESSION_ID)
+        transformer.translate(
             _text_delta("prt_text_001", "leftover text"),
             SESSION_ID,
         )
-        assert adapter._text_buffers.get("prt_text_001") == "leftover text"
+        assert transformer._text_buffers.get("prt_text_001") == "leftover text"
 
         # session.idle should flush then emit DONE
-        result = adapter.translate(EVT_SESSION_IDLE, SESSION_ID)
+        result = transformer.translate(EVT_SESSION_IDLE, SESSION_ID)
         assert len(result) == 2
         assert result[0].type == SDKEventType.ASSISTANT
         assert result[0].content == "leftover text"
@@ -302,15 +300,15 @@ class TestSessionCompletion:
 # ===========================================================================
 
 class TestErrorEvents:
-    def test_error_event(self, adapter):
-        result = adapter.translate(EVT_ERROR, SESSION_ID)
+    def test_error_event(self, transformer):
+        result = transformer.translate(EVT_ERROR, SESSION_ID)
         assert len(result) == 1
         assert result[0].type == SDKEventType.ERROR
         assert "rate limit" in result[0].content.lower()
 
-    def test_error_in_properties(self, adapter):
+    def test_error_in_properties(self, transformer):
         event = _evt("some.event", {"error": "Something broke"})
-        result = adapter.translate(event, SESSION_ID)
+        result = transformer.translate(event, SESSION_ID)
         assert len(result) == 1
         assert result[0].type == SDKEventType.ERROR
         assert result[0].content == "Something broke"
@@ -321,31 +319,31 @@ class TestErrorEvents:
 # ===========================================================================
 
 class TestTextStreaming:
-    def test_text_delta_buffered_until_newline(self, adapter):
+    def test_text_delta_buffered_until_newline(self, transformer):
         """Deltas without newlines should be buffered."""
-        adapter.translate(EVT_TEXT_PART_START, SESSION_ID)
+        transformer.translate(EVT_TEXT_PART_START, SESSION_ID)
 
-        result = adapter.translate(
+        result = transformer.translate(
             _text_delta("prt_text_001", "Hello "),
             SESSION_ID,
         )
         assert result == []  # No newline — buffered
 
-        result = adapter.translate(
+        result = transformer.translate(
             _text_delta("prt_text_001", "world"),
             SESSION_ID,
         )
         assert result == []  # Still no newline
 
-    def test_text_delta_flushed_on_newline(self, adapter):
+    def test_text_delta_flushed_on_newline(self, transformer):
         """When a newline appears, flush everything up to it."""
-        adapter.translate(EVT_TEXT_PART_START, SESSION_ID)
+        transformer.translate(EVT_TEXT_PART_START, SESSION_ID)
 
-        adapter.translate(
+        transformer.translate(
             _text_delta("prt_text_001", "Hello "),
             SESSION_ID,
         )
-        result = adapter.translate(
+        result = transformer.translate(
             _text_delta("prt_text_001", "world\nNext"),
             SESSION_ID,
         )
@@ -354,52 +352,52 @@ class TestTextStreaming:
         assert result[0].content == "Hello world\n"
 
         # "Next" should remain in buffer
-        assert adapter._text_buffers["prt_text_001"] == "Next"
+        assert transformer._text_buffers["prt_text_001"] == "Next"
 
-    def test_text_part_complete_flushes_buffer(self, adapter):
+    def test_text_part_complete_flushes_buffer(self, transformer):
         """When text part finishes, emit whatever is left."""
-        adapter.translate(EVT_TEXT_PART_START, SESSION_ID)
+        transformer.translate(EVT_TEXT_PART_START, SESSION_ID)
 
-        adapter.translate(
+        transformer.translate(
             _text_delta("prt_text_001", "remaining text"),
             SESSION_ID,
         )
 
-        result = adapter.translate(EVT_TEXT_PART_COMPLETE, SESSION_ID)
+        result = transformer.translate(EVT_TEXT_PART_COMPLETE, SESSION_ID)
         assert len(result) == 1
         assert result[0].type == SDKEventType.ASSISTANT
         assert result[0].content == "remaining text"
 
-    def test_text_part_complete_uses_snapshot_if_no_buffer(self, adapter):
+    def test_text_part_complete_uses_snapshot_if_no_buffer(self, transformer):
         """If buffer is empty, use the text from the part snapshot."""
-        adapter.translate(EVT_TEXT_PART_START, SESSION_ID)
+        transformer.translate(EVT_TEXT_PART_START, SESSION_ID)
 
-        result = adapter.translate(EVT_TEXT_PART_COMPLETE, SESSION_ID)
+        result = transformer.translate(EVT_TEXT_PART_COMPLETE, SESSION_ID)
         assert len(result) == 1
         assert result[0].content == "Hello, world!\nHow are you?"
 
-    def test_reasoning_deltas_buffered(self, adapter):
+    def test_reasoning_deltas_buffered(self, transformer):
         """Reasoning deltas should be buffered (no newline = no flush)."""
-        adapter.translate(EVT_REASONING_PART_START, SESSION_ID)
-        result = adapter.translate(EVT_REASONING_DELTA, SESSION_ID)
+        transformer.translate(EVT_REASONING_PART_START, SESSION_ID)
+        result = transformer.translate(EVT_REASONING_DELTA, SESSION_ID)
         # No newline in delta, so stays buffered
         assert result == []
 
-    def test_reasoning_part_complete_emits_thinking(self, adapter):
+    def test_reasoning_part_complete_emits_thinking(self, transformer):
         """Reasoning part completion should flush buffer as THINKING event."""
-        adapter.translate(EVT_REASONING_PART_START, SESSION_ID)
-        adapter.translate(EVT_REASONING_DELTA, SESSION_ID)
+        transformer.translate(EVT_REASONING_PART_START, SESSION_ID)
+        transformer.translate(EVT_REASONING_DELTA, SESSION_ID)
 
-        result = adapter.translate(EVT_REASONING_PART_COMPLETE, SESSION_ID)
+        result = transformer.translate(EVT_REASONING_PART_COMPLETE, SESSION_ID)
         assert len(result) == 1
         assert result[0].type == SDKEventType.THINKING
         assert result[0].content == "thinking about this..."
 
-    def test_reasoning_delta_with_newline_flushes_as_thinking(self, adapter):
+    def test_reasoning_delta_with_newline_flushes_as_thinking(self, transformer):
         """Reasoning deltas with newlines should flush as THINKING events."""
-        adapter.translate(EVT_REASONING_PART_START, SESSION_ID)
+        transformer.translate(EVT_REASONING_PART_START, SESSION_ID)
         delta_with_nl = _text_delta("prt_reason_001", "line one\nline two")
-        result = adapter.translate(delta_with_nl, SESSION_ID)
+        result = transformer.translate(delta_with_nl, SESSION_ID)
         assert len(result) == 1
         assert result[0].type == SDKEventType.THINKING
         assert result[0].content == "line one\n"
@@ -410,13 +408,13 @@ class TestTextStreaming:
 # ===========================================================================
 
 class TestToolEvents:
-    def test_tool_pending_no_input_skipped(self, adapter):
+    def test_tool_pending_no_input_skipped(self, transformer):
         """Pending with empty input should not emit."""
-        result = adapter.translate(EVT_TOOL_PENDING, SESSION_ID)
+        result = transformer.translate(EVT_TOOL_PENDING, SESSION_ID)
         assert result == []
 
-    def test_tool_running_emits_tool_use(self, adapter):
-        result = adapter.translate(EVT_TOOL_RUNNING, SESSION_ID)
+    def test_tool_running_emits_tool_use(self, transformer):
+        result = transformer.translate(EVT_TOOL_RUNNING, SESSION_ID)
         assert len(result) == 1
         evt = result[0]
         assert evt.type == SDKEventType.TOOL_USE
@@ -425,16 +423,16 @@ class TestToolEvents:
         assert evt.metadata["tool_call_id"] == "call_001"
         assert evt.metadata["tool_input"]["file_path"] == "/app/workspace/scripts"
 
-    def test_tool_completed_emits_tool_result(self, adapter):
-        result = adapter.translate(EVT_TOOL_COMPLETED, SESSION_ID)
+    def test_tool_completed_emits_tool_result(self, transformer):
+        result = transformer.translate(EVT_TOOL_COMPLETED, SESSION_ID)
         assert len(result) == 1
         evt = result[0]
         assert evt.type == SDKEventType.TOOL_RESULT
         assert "init_db.py" in evt.content
         assert evt.metadata["tool_name"] == "read"
 
-    def test_tool_error_emits_tool_result_with_error(self, adapter):
-        result = adapter.translate(EVT_TOOL_ERROR, SESSION_ID)
+    def test_tool_error_emits_tool_result_with_error(self, transformer):
+        result = transformer.translate(EVT_TOOL_ERROR, SESSION_ID)
         assert len(result) == 1
         evt = result[0]
         assert evt.type == SDKEventType.TOOL_RESULT
@@ -447,9 +445,9 @@ class TestToolEvents:
 # ===========================================================================
 
 class TestPermissionEvents:
-    def test_permission_asked_forwarded_as_system_event(self, adapter):
+    def test_permission_asked_forwarded_as_system_event(self, transformer):
         """Permission requests should be forwarded to the UI for user approval."""
-        result = adapter.translate(EVT_PERMISSION_ASKED, SESSION_ID)
+        result = transformer.translate(EVT_PERMISSION_ASKED, SESSION_ID)
         assert len(result) == 1
         evt = result[0]
         assert evt.type == SDKEventType.SYSTEM
@@ -461,17 +459,17 @@ class TestPermissionEvents:
         assert "external_directory" in evt.content
         assert "/app/workspace/scripts/*" in evt.content
 
-    def test_permission_includes_tool_context(self, adapter):
+    def test_permission_includes_tool_context(self, transformer):
         """Permission event should include which tool triggered it."""
-        result = adapter.translate(EVT_PERMISSION_ASKED, SESSION_ID)
+        result = transformer.translate(EVT_PERMISSION_ASKED, SESSION_ID)
         evt = result[0]
         tool_info = evt.metadata["permission"]["tool"]
         assert tool_info["messageID"] == "msg_asst_001"
         assert tool_info["callID"] == "call_001"
 
-    def test_permission_includes_request_id(self, adapter):
+    def test_permission_includes_request_id(self, transformer):
         """Permission event should include the request ID for replying."""
-        result = adapter.translate(EVT_PERMISSION_ASKED, SESSION_ID)
+        result = transformer.translate(EVT_PERMISSION_ASKED, SESSION_ID)
         evt = result[0]
         assert evt.metadata["permission"]["id"] == "per_001"
 
@@ -481,12 +479,12 @@ class TestPermissionEvents:
 # ===========================================================================
 
 class TestStepEvents:
-    def test_step_start_skipped(self, adapter):
-        result = adapter.translate(EVT_STEP_START, SESSION_ID)
+    def test_step_start_skipped(self, transformer):
+        result = transformer.translate(EVT_STEP_START, SESSION_ID)
         assert result == []
 
-    def test_step_finish_stop_skipped(self, adapter):
-        result = adapter.translate(EVT_STEP_FINISH_STOP, SESSION_ID)
+    def test_step_finish_stop_skipped(self, transformer):
+        result = transformer.translate(EVT_STEP_FINISH_STOP, SESSION_ID)
         assert result == []
 
 
@@ -519,11 +517,11 @@ class TestConversationReplay:
         _evt("session.idle", {"sessionID": SESSION_ID}),
     ]
 
-    def test_first_message_replay(self, adapter):
+    def test_first_message_replay(self, transformer):
         """Replay a simple text conversation and verify event stream."""
         all_events: list[SDKEvent] = []
         for raw in self.FIRST_MESSAGE_EVENTS:
-            all_events.extend(adapter.translate(raw, SESSION_ID))
+            all_events.extend(transformer.translate(raw, SESSION_ID))
 
         # Filter by type
         assistant_events = [e for e in all_events if e.type == SDKEventType.ASSISTANT]
@@ -564,11 +562,11 @@ class TestConversationReplay:
         _evt("session.idle", {"sessionID": SESSION_ID}),
     ]
 
-    def test_tool_use_replay(self, adapter):
+    def test_tool_use_replay(self, transformer):
         """Replay a conversation with tool use (pre-approved, no permission prompt)."""
         all_events: list[SDKEvent] = []
         for raw in self.TOOL_USE_EVENTS:
-            all_events.extend(adapter.translate(raw, SESSION_ID))
+            all_events.extend(transformer.translate(raw, SESSION_ID))
 
         tool_use = [e for e in all_events if e.type == SDKEventType.TOOL_USE]
         tool_result = [e for e in all_events if e.type == SDKEventType.TOOL_RESULT]
@@ -616,7 +614,7 @@ class TestConversationReplay:
         _evt("session.idle", {"sessionID": SESSION_ID}),
     ]
 
-    def test_tool_use_with_permission_approval(self, adapter):
+    def test_tool_use_with_permission_approval(self, transformer):
         """
         Replay a conversation where a tool requires permission approval.
 
@@ -626,7 +624,7 @@ class TestConversationReplay:
         """
         all_events: list[SDKEvent] = []
         for raw in self.TOOL_USE_WITH_PERMISSION_EVENTS:
-            all_events.extend(adapter.translate(raw, SESSION_ID))
+            all_events.extend(transformer.translate(raw, SESSION_ID))
 
         # Permission request should be forwarded as SYSTEM event
         permission_events = [
@@ -656,14 +654,14 @@ class TestConversationReplay:
         assert "Here are the scripts" in "".join(e.content for e in assistant)
         assert len(done) == 1
 
-    def test_permission_event_order_in_stream(self, adapter):
+    def test_permission_event_order_in_stream(self, transformer):
         """
         Verify that in the full event stream, the permission event appears
         before the tool use event — matching the real opencode behavior.
         """
         all_events: list[SDKEvent] = []
         for raw in self.TOOL_USE_WITH_PERMISSION_EVENTS:
-            all_events.extend(adapter.translate(raw, SESSION_ID))
+            all_events.extend(transformer.translate(raw, SESSION_ID))
 
         # Find indices
         perm_idx = next(
@@ -696,7 +694,7 @@ class TestConversationReplay:
         _evt("session.idle", {"sessionID": SESSION_ID}),
     ]
 
-    def test_second_message_no_server_connected(self, adapter):
+    def test_second_message_no_server_connected(self, transformer):
         """
         On session resume, opencode sends project.updated instead of
         server.connected. The adapter should still work — project.updated
@@ -704,7 +702,7 @@ class TestConversationReplay:
         """
         all_events: list[SDKEvent] = []
         for raw in self.SECOND_MESSAGE_EVENTS:
-            all_events.extend(adapter.translate(raw, SESSION_ID))
+            all_events.extend(transformer.translate(raw, SESSION_ID))
 
         assistant = [e for e in all_events if e.type == SDKEventType.ASSISTANT]
         done = [e for e in all_events if e.type == SDKEventType.DONE]
@@ -713,21 +711,21 @@ class TestConversationReplay:
         assert "Let me check" in "".join(e.content for e in assistant)
         assert len(done) == 1
 
-    def test_multi_turn_conversation(self, adapter):
+    def test_multi_turn_conversation(self, transformer):
         """Two consecutive messages through the same adapter instance."""
         # First message
         events_1: list[SDKEvent] = []
         for raw in self.FIRST_MESSAGE_EVENTS:
-            events_1.extend(adapter.translate(raw, SESSION_ID))
+            events_1.extend(transformer.translate(raw, SESSION_ID))
         assert any(e.type == SDKEventType.DONE for e in events_1)
 
         # Reset between messages (as the real adapter does)
-        adapter.reset()
+        transformer.reset()
 
         # Second message
         events_2: list[SDKEvent] = []
         for raw in self.SECOND_MESSAGE_EVENTS:
-            events_2.extend(adapter.translate(raw, SESSION_ID))
+            events_2.extend(transformer.translate(raw, SESSION_ID))
         assert any(e.type == SDKEventType.DONE for e in events_2)
 
         assistant_2 = [e for e in events_2 if e.type == SDKEventType.ASSISTANT]
@@ -747,7 +745,7 @@ class TestRealSessionReplay:
 
     MSG_ID = "msg_asst_real"
 
-    def test_reasoning_with_openai_metadata(self, adapter):
+    def test_reasoning_with_openai_metadata(self, transformer):
         """Reasoning parts with OpenAI encrypted content metadata should
         still emit THINKING events. The metadata should not break parsing."""
         # Reasoning part start with OpenAI encrypted content metadata
@@ -762,19 +760,19 @@ class TestRealSessionReplay:
             },
             "time": {"start": 1774176304824},
         }})
-        result = adapter.translate(start, SESSION_ID)
+        result = transformer.translate(start, SESSION_ID)
         assert result == []  # Start with empty text — nothing to emit
 
         # Delta with reasoning text
         delta = _text_delta("prt_reason_meta", "Inspecting files\n")
-        result = adapter.translate(delta, SESSION_ID)
+        result = transformer.translate(delta, SESSION_ID)
         assert len(result) == 1
         assert result[0].type == SDKEventType.THINKING
         assert result[0].content == "Inspecting files\n"
 
         # Another delta that stays buffered (no trailing newline)
         delta2 = _text_delta("prt_reason_meta", "in scripts folder")
-        result = adapter.translate(delta2, SESSION_ID)
+        result = transformer.translate(delta2, SESSION_ID)
         assert result == []  # No newline — buffered
 
         # Reasoning part complete — still has metadata; flushes remaining buffer
@@ -790,16 +788,16 @@ class TestRealSessionReplay:
             },
             "time": {"start": 1774176304824, "end": 1774176307000},
         }})
-        result = adapter.translate(complete, SESSION_ID)
+        result = transformer.translate(complete, SESSION_ID)
         assert len(result) == 1
         assert result[0].type == SDKEventType.THINKING
         assert result[0].content == "in scripts folder"
 
-    def test_reasoning_delta_with_newline_produces_thinking(self, adapter):
+    def test_reasoning_delta_with_newline_produces_thinking(self, transformer):
         """A reasoning delta containing a newline should flush the line(s)
         before the newline as a THINKING event."""
         # Register reasoning part
-        adapter.translate(_evt("message.part.updated", {"part": {
+        transformer.translate(_evt("message.part.updated", {"part": {
             "id": "prt_reason_nl", "sessionID": SESSION_ID,
             "messageID": self.MSG_ID, "type": "reasoning",
             "text": "", "time": {"start": 1000},
@@ -810,16 +808,16 @@ class TestRealSessionReplay:
             "prt_reason_nl",
             "**Inspecting files in scripts folder**\n\nI",
         )
-        result = adapter.translate(delta, SESSION_ID)
+        result = transformer.translate(delta, SESSION_ID)
         assert len(result) == 1
         assert result[0].type == SDKEventType.THINKING
         # Flush up to last newline
         assert result[0].content == "**Inspecting files in scripts folder**\n\n"
 
         # "I" should remain buffered
-        assert adapter._text_buffers["prt_reason_nl"] == "I"
+        assert transformer._text_buffers["prt_reason_nl"] == "I"
 
-    def test_parallel_tool_calls(self, adapter):
+    def test_parallel_tool_calls(self, transformer):
         """Two tool calls (glob + read) happening in parallel — pending,
         running, completed. Should produce 2 TOOL_USE and 2 TOOL_RESULT
         events in order."""
@@ -894,7 +892,7 @@ class TestRealSessionReplay:
 
         all_events: list[SDKEvent] = []
         for raw in events:
-            all_events.extend(adapter.translate(raw, SESSION_ID))
+            all_events.extend(transformer.translate(raw, SESSION_ID))
 
         tool_use = [e for e in all_events if e.type == SDKEventType.TOOL_USE]
         tool_result = [e for e in all_events if e.type == SDKEventType.TOOL_RESULT]
@@ -915,7 +913,7 @@ class TestRealSessionReplay:
         assert use_indices[0] < result_indices[0]
         assert use_indices[1] < result_indices[1]
 
-    def test_step_finish_tool_calls_reason_skipped(self, adapter):
+    def test_step_finish_tool_calls_reason_skipped(self, transformer):
         """Step-finish with reason 'tool-calls' should be silently skipped
         (same as 'stop')."""
         event = _evt("message.part.updated", {"part": {
@@ -929,10 +927,10 @@ class TestRealSessionReplay:
                 "cache": {"read": 0, "write": 0},
             },
         }})
-        result = adapter.translate(event, SESSION_ID)
+        result = transformer.translate(event, SESSION_ID)
         assert result == []
 
-    def test_full_session_with_reasoning_tools_and_text(self, adapter):
+    def test_full_session_with_reasoning_tools_and_text(self, transformer):
         """Full replay: reasoning -> tool calls -> step-finish(tool-calls)
         -> second reasoning -> text response -> step-finish(stop) -> idle.
 
@@ -1051,7 +1049,7 @@ class TestRealSessionReplay:
 
         all_events: list[SDKEvent] = []
         for raw in events:
-            all_events.extend(adapter.translate(raw, SESSION_ID))
+            all_events.extend(transformer.translate(raw, SESSION_ID))
 
         # Collect by type
         thinking = [e for e in all_events if e.type == SDKEventType.THINKING]
@@ -1097,7 +1095,7 @@ class TestRealSessionReplay:
 
 class TestEventLogger:
     def test_logging_disabled(self, tmp_path):
-        logger = OpenCodeEventLogger(tmp_path / "logs", enabled=False)
+        logger = SessionEventLogger(tmp_path / "logs", prefix="opencode_session", enabled=False)
         logger.log_recv({"type": "test"})
         logger.log_send("test", {"data": 1})
         # No files should be created
@@ -1107,7 +1105,7 @@ class TestEventLogger:
 
     def test_logging_enabled_bidirectional(self, tmp_path):
         log_dir = tmp_path / "logs"
-        logger = OpenCodeEventLogger(log_dir, enabled=True)
+        logger = SessionEventLogger(log_dir, prefix="opencode_session", enabled=True)
 
         logger.log_send("create_session", {"session_id": "ses_001"})
         logger.log_recv({"type": "server.connected", "properties": {}})

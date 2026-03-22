@@ -30,11 +30,13 @@
 
 **Agent Environment (inside container):**
 - `backend/app/env-templates/app_core_base/core/server/sdk_manager.py`
+- `backend/app/env-templates/app_core_base/core/server/sdk_utils.py` — `SessionEventLogger` (shared JSONL logger for all adapters)
 - `backend/app/env-templates/app_core_base/core/server/adapters/base.py`
-- `backend/app/env-templates/app_core_base/core/server/adapters/claude_code.py`
-- `backend/app/env-templates/app_core_base/core/server/adapters/opencode_adapter.py`
-- `backend/app/env-templates/app_core_base/core/server/adapters/opencode_event_adapter.py`
-- `backend/app/env-templates/app_core_base/core/server/adapters/google_adk.py`
+- `backend/app/env-templates/app_core_base/core/server/adapters/claude_code_sdk_adapter.py`
+- `backend/app/env-templates/app_core_base/core/server/adapters/claude_code_event_transformer.py` — `ClaudeCodeEventTransformer`
+- `backend/app/env-templates/app_core_base/core/server/adapters/opencode_sdk_adapter.py`
+- `backend/app/env-templates/app_core_base/core/server/adapters/opencode_event_transformer.py` — `OpenCodeEventTransformer`
+- `backend/app/env-templates/app_core_base/core/server/adapters/google_adk_sdk_adapter.py`
 - `backend/app/env-templates/app_core_base/core/server/adapters/tool_name_registry.py` — unified lowercase tool name convention: maps, pre-approved set, `normalize_tool_name()`
 - `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/knowledge_server.py`
 - `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/task_server.py`
@@ -187,22 +189,33 @@ Class-level declarations required:
 - `ADAPTER_TYPE: str` — must match the prefix used in SDK IDs
 - `SUPPORTED_PROVIDERS: list[str]` — providers this adapter handles
 
-### ClaudeCodeAdapter (`adapters/claude_code.py`)
+### ClaudeCodeAdapter (`adapters/claude_code_sdk_adapter.py`)
 
 - Handles `claude-code/*` variants (anthropic, minimax)
 - Settings file detection: checks `/app/core/.claude/{mode}_settings.json`; if present, passes path via `options.settings`
 - Falls back to `ANTHROPIC_API_KEY` env var if no settings file found
 - Uses Claude SDK Python library directly (subprocess-based streaming)
-- Translates Claude SDK message types to `SDKEvent` objects
+- Delegates all message-to-`SDKEvent` translation to `ClaudeCodeEventTransformer`
+- Logs all sent/received events via `SessionEventLogger` (JSONL format, same as OpenCode)
 
-### GoogleADKAdapter (`adapters/google_adk.py`)
+### ClaudeCodeEventTransformer (`adapters/claude_code_event_transformer.py`)
+
+Stateful translator from raw Claude Agent SDK messages to `SDKEvent` objects. Mirrors the `OpenCodeEventTransformer` pattern — a dedicated translator class that can be instantiated and tested in isolation.
+
+- `translate(message_obj, session_id, interrupt_initiated)` — maps Claude SDK message types to `SDKEvent`
+- `_handle_system_message()` — skips `init` subtype; forwards other system events
+- `_handle_assistant_message()` — extracts `TextBlock`, `ThinkingBlock`, `ToolUseBlock`; normalizes tool names via `tool_name_registry`
+- `_handle_result_message()` — emits `DONE` or `INTERRUPTED` based on subtype and interrupt flag
+- `_handle_user_message()` — forwards interrupt notifications, skips other user messages
+
+### GoogleADKAdapter (`adapters/google_adk_sdk_adapter.py`)
 
 - Handles `google-adk-wr/*` variants (openai-compatible, gemini)
 - `_load_settings_for_mode(mode)` — reads `/app/core/.google-adk/{mode}_settings.json`
 - `_get_openai_compatible_config(mode)` — extracts `api_key`, `base_url`, `model` from settings
 - Gemini provider is a placeholder
 
-### OpenCodeAdapter (`adapters/opencode_adapter.py`)
+### OpenCodeAdapter (`adapters/opencode_sdk_adapter.py`)
 
 The most complex adapter. Runs `opencode serve` as a managed subprocess and communicates over HTTP + SSE.
 
@@ -232,7 +245,7 @@ Each mode has its own `opencode serve` process. Model is baked into the config �
 7. Build plugin MCP config; yield `SYSTEM` event with `subtype="tools_init"` and full tool list
 8. Open SSE stream on `GET /global/event` first
 9. On first SSE event (any type), fire `POST /session/{id}/message` as a background `asyncio.Task` — this avoids missing events from fast models and prevents deadlock (POST blocks until LLM completes)
-10. For each SSE chunk: check for interrupt flag, check progress timeout, parse and translate via `OpenCodeEventAdapter`
+10. For each SSE chunk: check for interrupt flag, check progress timeout, parse and translate via `OpenCodeEventTransformer`
 11. Yield translated `SDKEvent` objects; stop on `DONE`, `ERROR`, or `INTERRUPTED`
 12. In `finally`: cancel pending POST task if needed; unregister session from `active_session_manager`
 
@@ -246,7 +259,7 @@ Each mode has its own `opencode serve` process. Model is baked into the config �
 - The SSE loop checks this flag between chunks; when set, calls `_delete_session()` and yields `INTERRUPTED`
 - Fallback: if session is not registered (already finishing), calls `DELETE /session/{id}` directly
 
-### OpenCodeEventAdapter (`adapters/opencode_event_adapter.py`)
+### OpenCodeEventTransformer (`adapters/opencode_event_transformer.py`)
 
 Stateful translator from raw OpenCode SSE events to `SDKEvent` objects. Instantiated once per `OpenCodeAdapter` instance and shared across sessions.
 
@@ -278,11 +291,12 @@ Stateful translator from raw OpenCode SSE events to `SDKEvent` objects. Instanti
 **State management:**
 - `reset()` — clears `_part_types` and `_text_buffers` between messages (called before each new SSE event sequence)
 
-**Raw event logging (`OpenCodeEventLogger`):**
+**Raw event logging (`SessionEventLogger` from `sdk_utils.py`):**
 - Enabled when `DUMP_LLM_SESSION=true`
-- Writes JSONL to `{workspace_dir}/logs/opencode_session_{timestamp}.jsonl`
+- Shared JSONL logger used by all adapters (Claude Code and OpenCode); each adapter passes a prefix (`"claude_code_session"` or `"opencode_session"`) to distinguish log files
+- Writes JSONL to `{workspace_dir}/logs/{prefix}_{timestamp}.jsonl`
 - Each line: `{"ts": "...", "dir": "recv"|"send", "event": {...}}`
-- Used for test development and offline debugging
+- Used for test development and offline debugging; cross-adapter format enables side-by-side comparison
 
 ### MCP Bridge Servers (OpenCode only)
 
@@ -301,7 +315,7 @@ MCP tool names visible to the agent follow the pattern `mcp__{server}__{tool}` (
 **Environment variables injected into container:**
 - `SDK_ADAPTER_BUILDING` — SDK ID for building mode (e.g., `claude-code/anthropic`)
 - `SDK_ADAPTER_CONVERSATION` — SDK ID for conversation mode
-- `DUMP_LLM_SESSION` — set to `true` to enable JSONL event logging for OpenCode sessions
+- `DUMP_LLM_SESSION` — set to `true` to enable JSONL event logging for all adapters (Claude Code and OpenCode); log files are written to `{workspace}/logs/` with adapter-specific prefixes
 - `OPENCODE_SKIP_UPDATE` — always set to `1` in subprocess env to suppress update prompts
 
 **Settings file locations inside container:**
@@ -336,7 +350,7 @@ MCP tool names visible to the agent follow the pattern `mcp__{server}__{tool}` (
 
 ## Tests
 
-- `backend/tests/unit/test_opencode_event_adapter.py` — 43 unit tests for `OpenCodeEventAdapter` in isolation (no HTTP, no async, no Docker)
+- `backend/tests/unit/test_opencode_event_transformer.py` — unit tests for `OpenCodeEventTransformer` in isolation (no HTTP, no async, no Docker)
   - Informational events (10) — verify silent skipping
   - Session completion (2) — `session.idle` → DONE with buffer flush
   - Error events (2) — error in event type name or properties
@@ -351,7 +365,7 @@ MCP tool names visible to the agent follow the pattern `mcp__{server}__{tool}` (
 Run without Docker:
 
     cd backend && source .venv/bin/activate
-    python -m pytest tests/unit/test_opencode_event_adapter.py -v --noconftest
+    python -m pytest tests/unit/test_opencode_event_transformer.py -v --noconftest
 
 ## Security
 

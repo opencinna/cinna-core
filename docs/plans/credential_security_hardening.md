@@ -167,9 +167,9 @@ This script:
 
 #### Google ADK — Direct Tool Interception
 
-Since the ADK adapter defines `Bash()` and `Read()` as our own Python functions (see `google_adk.py:226-311`), we intercept directly in those functions — no external hook mechanism needed.
+Since the ADK adapter defines `Bash()` and `Read()` as our own Python functions (see `google_adk_sdk_adapter.py`), we intercept directly in those functions — no external hook mechanism needed.
 
-**File**: `backend/app/env-templates/app_core_base/core/server/adapters/google_adk.py`
+**File**: `backend/app/env-templates/app_core_base/core/server/adapters/google_adk_sdk_adapter.py`
 
 Modify the `Bash()` and `Read()` function definitions:
 
@@ -655,7 +655,7 @@ Defense in depth: Phase 1 tries to prevent access, Phase 2 catches leaks that sl
 - [ ] Modify `backend/app/services/environment_lifecycle.py`: write hook settings to `/app/core/.claude/settings.json`
 
 **Google ADK adapter**:
-- [ ] Modify `backend/app/env-templates/app_core_base/core/server/adapters/google_adk.py`: add credential access checks to `Bash()` and `Read()` functions
+- [ ] Modify `backend/app/env-templates/app_core_base/core/server/adapters/google_adk_sdk_adapter.py`: add credential access checks to `Bash()` and `Read()` functions
 
 ### Phase 2 — Output Redaction
 

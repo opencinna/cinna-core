@@ -5,13 +5,14 @@ This adapter handles all claude-code/* variants:
 - claude-code/anthropic: Default Anthropic Claude
 - claude-code/minimax: MiniMax M2 (Anthropic-compatible API)
 
-The adapter converts Claude SDK messages to the unified SDKEvent format.
+The adapter orchestrates the Claude Agent SDK subprocess lifecycle —
+session creation, message sending, interrupt handling, and cleanup.
+Event translation is delegated to ClaudeCodeEventTransformer.
 """
 
 import os
 import logging
 import asyncio
-import json
 from typing import AsyncIterator, Optional
 from pathlib import Path
 from collections import deque
@@ -23,8 +24,9 @@ from .base import (
     SDKConfig,
     AdapterRegistry,
 )
+from .claude_code_event_transformer import ClaudeCodeEventTransformer
 from ..prompt_generator import PromptGenerator
-from ..sdk_utils import SessionLogger, format_message_for_debug
+from ..sdk_utils import SessionEventLogger, format_message_for_debug
 from ..active_session_manager import active_session_manager
 from ..agent_env_service import AgentEnvService
 from .tool_name_registry import normalize_tool_name
@@ -140,13 +142,18 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
         # Initialize prompt generator
         self.prompt_generator = PromptGenerator(self.workspace_dir)
 
-        # Initialize session logger
+        # Initialize event logger (shared JSONL format, same as OpenCode)
         dump_llm_session = os.getenv("DUMP_LLM_SESSION", "false").lower() == "true"
         logs_dir = Path(self.workspace_dir) / "logs"
-        self.session_logger = SessionLogger(logs_dir, dump_enabled=dump_llm_session)
+        self.event_logger = SessionEventLogger(
+            logs_dir, prefix="claude_code_session", enabled=dump_llm_session,
+        )
 
         # Initialize agent env service for plugin management
         self.agent_env_service = AgentEnvService(self.workspace_dir)
+
+        # Event transformer — translates raw Claude SDK messages to SDKEvents
+        self._event_transformer = ClaudeCodeEventTransformer()
 
     async def send_message_stream(
         self,
@@ -173,7 +180,11 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
         async with _sdk_session_lock:
             logger.info(f"Acquired SDK session lock for message: {message[:50]}...")
 
-            session_log_file = self.session_logger.init_session_log(message, session_id)
+            self.event_logger.log_send("query", {
+                "session_id": session_id,
+                "message": message,
+                "mode": mode,
+            })
 
             try:
                 # Import SDK
@@ -439,11 +450,16 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                                     )
                                     break
 
-                        # Dump message to log
-                        self.session_logger.dump_message(session_log_file, message_obj, message_count)
+                        # Log message as JSONL recv event
+                        self.event_logger.log_recv({
+                            "type": type(message_obj).__name__,
+                            "data": format_message_for_debug(message_obj),
+                        })
 
-                        # Format message to SDKEvent
-                        event = self._format_message(message_obj, current_session_id, interrupt_initiated)
+                        # Translate message via event transformer
+                        event = self._event_transformer.translate(
+                            message_obj, current_session_id, interrupt_initiated
+                        )
 
                         if event is not None:
                             yield event
@@ -454,7 +470,10 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                             break
 
                     logger.info(f"Finished. Total messages: {message_count}")
-                    self.session_logger.complete_session_log(session_log_file, message_count)
+                    self.event_logger.log_send("session_complete", {
+                        "session_id": current_session_id,
+                        "message_count": message_count,
+                    })
 
                 except Exception as e:
                     error_msg = str(e)
@@ -538,138 +557,3 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
             extracted_session_id = message_obj.session_id
 
         return extracted_session_id
-
-    def _format_message(
-        self,
-        message_obj,
-        session_id: str,
-        interrupt_initiated: bool = False
-    ) -> Optional[SDKEvent]:
-        """
-        Format Claude SDK message to unified SDKEvent.
-
-        Args:
-            message_obj: Claude SDK message object
-            session_id: Current session ID
-            interrupt_initiated: Whether interrupt was called
-
-        Returns:
-            SDKEvent or None to skip the message
-        """
-        from claude_agent_sdk import (
-            AssistantMessage,
-            TextBlock,
-            ToolUseBlock,
-            ToolResultBlock,
-            ResultMessage,
-            ThinkingBlock,
-            SystemMessage,
-            UserMessage,
-        )
-
-        # Handle SystemMessage
-        if isinstance(message_obj, SystemMessage):
-            if message_obj.subtype == "init":
-                # Skip init messages
-                return None
-            else:
-                return SDKEvent(
-                    type=SDKEventType.SYSTEM,
-                    content=f"System: {message_obj.subtype}",
-                    session_id=session_id,
-                    metadata={"subtype": message_obj.subtype},
-                )
-
-        # Handle AssistantMessage
-        elif isinstance(message_obj, AssistantMessage):
-            content_parts = []
-            event_type = SDKEventType.ASSISTANT
-
-            for block in message_obj.content:
-                if isinstance(block, TextBlock):
-                    content_parts.append(block.text)
-
-                elif isinstance(block, ThinkingBlock):
-                    event_type = SDKEventType.THINKING
-                    content_parts.append(f"[Thinking] {block.thinking}")
-
-                elif isinstance(block, ToolUseBlock):
-                    # Return tool use as separate event
-                    # Normalize tool name to unified lowercase convention
-                    unified_name = normalize_tool_name(block.name, sdk="claude-code")
-                    tool_input_str = ""
-                    if block.input:
-                        try:
-                            input_json = json.dumps(block.input, indent=2)
-                            if len(input_json) > 200:
-                                input_json = input_json[:200] + "..."
-                            tool_input_str = f"\nInput: {input_json}"
-                        except Exception:
-                            tool_input_str = f"\nInput: {str(block.input)[:200]}"
-
-                    return SDKEvent(
-                        type=SDKEventType.TOOL_USE,
-                        tool_name=unified_name,
-                        content=f"Using tool: {unified_name}{tool_input_str}",
-                        session_id=session_id,
-                        metadata={
-                            "tool_id": block.id,
-                            "tool_input": block.input,
-                        },
-                    )
-
-                elif isinstance(block, ToolResultBlock):
-                    # Skip tool results
-                    continue
-
-            content = "\n".join(content_parts) if content_parts else ""
-
-            metadata = {}
-            if hasattr(message_obj, "model"):
-                metadata["model"] = message_obj.model
-
-            return SDKEvent(
-                type=event_type,
-                content=content,
-                session_id=session_id,
-                metadata=metadata,
-            )
-
-        # Handle ResultMessage
-        elif isinstance(message_obj, ResultMessage):
-            is_interrupted = interrupt_initiated and message_obj.subtype == "error_during_execution"
-
-            if is_interrupted:
-                logger.info(f"Detected interrupted session from ResultMessage")
-
-            return SDKEvent(
-                type=SDKEventType.INTERRUPTED if is_interrupted else SDKEventType.DONE,
-                content="Request interrupted by user" if is_interrupted else "",
-                session_id=session_id,
-                metadata={
-                    "subtype": message_obj.subtype,
-                    "duration_ms": message_obj.duration_ms,
-                    "is_error": message_obj.is_error,
-                    "num_turns": message_obj.num_turns,
-                    "total_cost_usd": message_obj.total_cost_usd,
-                    "session_id": message_obj.session_id,
-                },
-            )
-
-        # Handle UserMessage (interrupt notifications)
-        elif isinstance(message_obj, UserMessage):
-            content_str = str(message_obj.content)
-            if "[Request interrupted by user" in content_str:
-                return SDKEvent(
-                    type=SDKEventType.SYSTEM,
-                    content="⚠️ Request interrupted by user",
-                    session_id=session_id,
-                    metadata={"interrupt_notification": True},
-                )
-            else:
-                # Skip other user messages
-                return None
-
-        else:
-            logger.warning(f"Unknown message type: {type(message_obj)}")
-            return None

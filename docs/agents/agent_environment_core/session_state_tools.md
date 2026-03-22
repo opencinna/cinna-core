@@ -72,7 +72,7 @@ Same bearer token mechanism as other agent-env → backend calls:
 - **Tool implementations**:
   - `backend/app/env-templates/app_core_base/core/server/tools/update_session_state.py`
   - `backend/app/env-templates/app_core_base/core/server/tools/respond_to_task.py`
-- **Adapter registration**: `backend/app/env-templates/app_core_base/core/server/adapters/claude_code.py`
+- **Adapter registration**: `backend/app/env-templates/app_core_base/core/server/adapters/claude_code_sdk_adapter.py`
 - **Target agent prompt injection**: `backend/app/env-templates/app_core_base/core/server/prompt_generator.py`
 - **Source agent prompt injection**: `backend/app/services/agent_service.py` — `sync_agent_handover_config()`
 - **Backend endpoints**:

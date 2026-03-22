@@ -63,10 +63,10 @@ class TestOpenCodeAdapterSupportedProviders:
 
     def test_core_providers_present(self):
         """SUPPORTED_PROVIDERS includes the currently implemented providers."""
-        src = (_ADAPTER_DIR / "opencode_adapter.py").read_text()
+        src = (_ADAPTER_DIR / "opencode_sdk_adapter.py").read_text()
         start_idx = src.find("SUPPORTED_PROVIDERS")
         if start_idx == -1:
-            pytest.fail("SUPPORTED_PROVIDERS not found in opencode_adapter.py")
+            pytest.fail("SUPPORTED_PROVIDERS not found in opencode_sdk_adapter.py")
         block_end = src.find("]", start_idx)
         block = src[start_idx:block_end + 1]
 

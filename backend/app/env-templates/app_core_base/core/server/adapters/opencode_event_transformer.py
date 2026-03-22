@@ -1,11 +1,11 @@
 """
-OpenCode Event Adapter
+OpenCode Event Transformer
 
 Translates raw OpenCode SSE events into the unified SDKEvent format used by
 all adapters. This module is intentionally stateful — it tracks part types
 and text buffers across events within a single message exchange.
 
-The adapter can be tested in isolation by feeding it raw event dicts and
+The transformer can be tested in isolation by feeding it raw event dicts and
 checking the SDKEvent output.
 
 Raw event logging (controlled by DUMP_LLM_SESSION env var) records every
@@ -39,70 +39,20 @@ Part types inside message.part.updated:
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from .base import SDKEvent, SDKEventType
 from .tool_name_registry import normalize_tool_name, normalize_tool_input
+from ..sdk_utils import SessionEventLogger
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Raw event logger
+# Event transformer
 # ---------------------------------------------------------------------------
 
-class OpenCodeEventLogger:
-    """
-    Records bi-directional OpenCode communication to a JSONL file.
-
-    Each line is a JSON object with:
-    - ts: ISO timestamp
-    - dir: "recv" (SSE event from opencode) or "send" (request to opencode)
-    - event: the raw data
-
-    This makes it possible to replay the full exchange in tests.
-    Enabled when DUMP_LLM_SESSION=true.
-    """
-
-    def __init__(self, logs_dir: Path, enabled: bool = False):
-        self.enabled = enabled
-        self._log_file: Optional[Path] = None
-        if enabled:
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-            self._log_file = logs_dir / f"opencode_session_{ts}.jsonl"
-            logger.info("OpenCode session logging enabled: %s", self._log_file)
-
-    def _write(self, direction: str, event_data: dict) -> None:
-        if not self._log_file:
-            return
-        try:
-            record = {
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "dir": direction,
-                "event": event_data,
-            }
-            with open(self._log_file, "a") as f:
-                f.write(json.dumps(record, default=str) + "\n")
-        except Exception as exc:
-            logger.debug("Failed to write session log: %s", exc)
-
-    def log_recv(self, event_data: dict) -> None:
-        """Log an event received from opencode (SSE)."""
-        self._write("recv", event_data)
-
-    def log_send(self, action: str, data: dict) -> None:
-        """Log a request sent to opencode (HTTP)."""
-        self._write("send", {"action": action, **data})
-
-
-# ---------------------------------------------------------------------------
-# Event adapter
-# ---------------------------------------------------------------------------
-
-class OpenCodeEventAdapter:
+class OpenCodeEventTransformer:
     """
     Stateful translator from raw OpenCode SSE events to SDKEvent objects.
 
@@ -130,10 +80,12 @@ class OpenCodeEventAdapter:
         # (with streaming output), but we only want one TOOL_USE event.
         self._emitted_tool_calls: set[str] = set()
 
-        # Raw event logger
+        # Raw event logger (shared JSONL format)
         dump_enabled = os.getenv("DUMP_LLM_SESSION", "false").lower() == "true"
         logs_dir = Path(workspace_dir) / "logs"
-        self.event_logger = OpenCodeEventLogger(logs_dir, enabled=dump_enabled)
+        self.event_logger = SessionEventLogger(
+            logs_dir, prefix="opencode_session", enabled=dump_enabled,
+        )
 
     def reset(self) -> None:
         """Clear state between messages (not between sessions)."""

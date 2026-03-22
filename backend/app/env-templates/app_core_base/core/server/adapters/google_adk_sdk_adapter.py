@@ -38,6 +38,7 @@ from .base import (
 from ..prompt_generator import PromptGenerator
 from .google_adk_wr_prompts import get_combined_tool_prompts
 from .sqlite_session_service import SQLiteSessionService, create_sqlite_session_service
+from .google_adk_event_transformer import GoogleADKEventTransformer
 from .tool_name_registry import normalize_tool_name
 
 logger = logging.getLogger(__name__)
@@ -479,6 +480,9 @@ class GoogleADKAdapter(BaseSDKAdapter):
         self._agent = None
         self._current_session_id: Optional[str] = None
 
+        # Event transformer — translates raw ADK events to SDKEvents
+        self._event_transformer = GoogleADKEventTransformer()
+
     def _load_settings_for_mode(self, mode: str) -> Optional[dict]:
         """
         Load settings from the .google-adk settings file for the given mode.
@@ -752,8 +756,10 @@ class GoogleADKAdapter(BaseSDKAdapter):
                         streaming_interrupted = True
                         break
 
-                    # Process ADK event and yield SDKEvents
-                    async for sdk_event in self._process_adk_event(event):
+                    # Translate ADK event via event transformer
+                    for sdk_event in self._event_transformer.translate(
+                        event, self._current_session_id,
+                    ):
                         yield sdk_event
 
             except asyncio.CancelledError:
@@ -808,86 +814,6 @@ class GoogleADKAdapter(BaseSDKAdapter):
                 error_type=type(e).__name__,
                 session_id=self._current_session_id,
             )
-
-    async def _process_adk_event(self, event: Any) -> AsyncIterator[SDKEvent]:
-        """
-        Process a Google ADK event and yield corresponding SDKEvents.
-
-        Handles:
-        - Text responses -> SDKEventType.ASSISTANT
-        - Function calls -> SDKEventType.TOOL_USE
-        - Function responses -> SDKEventType.TOOL_RESULT
-        """
-        if not event.content or not event.content.parts:
-            return
-
-        for part in event.content.parts:
-            # Handle function call (tool invocation)
-            if hasattr(part, "function_call") and part.function_call:
-                func_call = part.function_call
-                unified_name = normalize_tool_name(func_call.name, sdk="google-adk")
-                logger.info(f"Tool call: {unified_name}({func_call.args})")
-
-                # Format tool input for display
-                tool_input_str = ""
-                if func_call.args:
-                    try:
-                        input_json = json.dumps(dict(func_call.args), indent=2)
-                        if len(input_json) > 200:
-                            input_json = input_json[:200] + "..."
-                        tool_input_str = f"\nInput: {input_json}"
-                    except Exception:
-                        tool_input_str = f"\nInput: {str(func_call.args)[:200]}"
-
-                yield SDKEvent(
-                    type=SDKEventType.TOOL_USE,
-                    tool_name=unified_name,
-                    content=f"Using tool: {unified_name}{tool_input_str}",
-                    session_id=self._current_session_id,
-                    metadata={"tool_input": dict(func_call.args) if func_call.args else {}},
-                )
-
-            # Handle function response (tool result)
-            if hasattr(part, "function_response") and part.function_response:
-                func_resp = part.function_response
-                response_data = func_resp.response
-
-                # Format tool result for display
-                if isinstance(response_data, dict):
-                    stdout = str(response_data.get("stdout", ""))[:500]
-                    stderr = str(response_data.get("stderr", ""))[:500]
-                    return_code = response_data.get("return_code")
-
-                    if return_code is not None:
-                        result_content = f"Return code: {return_code}"
-                        if stdout:
-                            result_content += f"\nstdout: {stdout}"
-                        if stderr:
-                            result_content += f"\nstderr: {stderr}"
-                    else:
-                        # For non-bash tools (like Read), just show the response
-                        result_content = str(response_data)[:500]
-                else:
-                    result_content = str(response_data)[:500]
-
-                yield SDKEvent(
-                    type=SDKEventType.TOOL_RESULT,
-                    content=result_content,
-                    session_id=self._current_session_id,
-                    metadata={"result": response_data if isinstance(response_data, dict) else {"raw": str(response_data)}},
-                )
-
-            # Handle text response
-            if hasattr(part, "text") and part.text:
-                author = getattr(event, "author", "assistant")
-                logger.debug(f"Text from {author}: {part.text[:100]}...")
-
-                yield SDKEvent(
-                    type=SDKEventType.ASSISTANT,
-                    content=part.text,
-                    session_id=self._current_session_id,
-                    metadata={"author": author},
-                )
 
     async def interrupt_session(self, session_id: str) -> bool:
         """

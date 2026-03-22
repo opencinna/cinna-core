@@ -515,7 +515,7 @@ class TestOpenCodeAdapterPhase4:
             / "core"
             / "server"
             / "adapters"
-            / "opencode_adapter.py"
+            / "opencode_sdk_adapter.py"
         )
 
         # We need the whole adapters package; use sys.path manipulation
@@ -525,7 +525,7 @@ class TestOpenCodeAdapterPhase4:
 
         # Patch OPENCODE_CONFIG_DIR to tmp_path so file writes go there
         with patch(
-            "app.env-templates.app_core_base.core.server.adapters.opencode_adapter.OPENCODE_CONFIG_DIR",
+            "app.env-templates.app_core_base.core.server.adapters.opencode_sdk_adapter.OPENCODE_CONFIG_DIR",
             tmp_path,
         ):
             pass  # We'll patch at call time below
@@ -544,10 +544,10 @@ class TestOpenCodeAdapterPhase4:
             / "core"
             / "server"
             / "adapters"
-            / "opencode_adapter.py"
+            / "opencode_sdk_adapter.py"
         )
 
-        spec = importlib.util.spec_from_file_location("opencode_adapter_mod", adapter_path)
+        spec = importlib.util.spec_from_file_location("opencode_sdk_adapter_mod", adapter_path)
         mod = importlib.util.module_from_spec(spec)
 
         # Patch imports that the module needs but aren't available in test

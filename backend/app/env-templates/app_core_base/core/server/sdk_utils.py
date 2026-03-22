@@ -2,123 +2,76 @@
 Utility functions for SDK management, logging, and debugging.
 
 This module provides shared utilities used by SDK adapters:
-- SessionLogger: Logs SDK session interactions for debugging
+- SessionEventLogger: JSONL-based bidirectional event logger used by all adapters
 - format_message_for_debug: Formats SDK messages for debug output
 - format_sdk_message: DEPRECATED - use adapter-specific formatting
 
-Note: The format_sdk_message function is deprecated. Each adapter now
-handles message formatting internally via their _format_message method.
-See adapters/claude_code.py for the ClaudeCode implementation.
+All adapters use SessionEventLogger for unified JSONL logging controlled by
+the DUMP_LLM_SESSION environment variable. Each log line records a timestamp,
+direction (recv/send), and the raw event data — enabling offline replay and
+cross-adapter debugging with a single format.
 """
 import logging
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 import warnings
 
 logger = logging.getLogger(__name__)
 
 
-class SessionLogger:
+class SessionEventLogger:
     """
-    Handles session logging for SDK interactions.
+    Records bi-directional SDK communication to a JSONL file.
 
-    Responsibilities:
-    - Initialize session log files
-    - Dump raw messages to log files
-    - Write session completion markers
+    Each line is a JSON object with:
+    - ts: ISO timestamp
+    - dir: "recv" (event from SDK) or "send" (request to SDK)
+    - event: the raw data
+
+    This unified format is used by all adapters (Claude Code, OpenCode, etc.)
+    so session logs are consistent and can be replayed or compared across SDKs.
+
+    Enabled when DUMP_LLM_SESSION=true.
     """
 
-    def __init__(self, logs_dir: Path, dump_enabled: bool = False):
+    def __init__(self, logs_dir: Path, prefix: str, enabled: bool = False):
         """
-        Initialize SessionLogger.
-
         Args:
             logs_dir: Directory to store log files
-            dump_enabled: Whether to enable session dumping
+            prefix: Filename prefix (e.g. "claude_code_session", "opencode_session")
+            enabled: Whether logging is active
         """
-        self.logs_dir = logs_dir
-        self.dump_enabled = dump_enabled
+        self.enabled = enabled
+        self._log_file: Optional[Path] = None
+        if enabled:
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+            self._log_file = logs_dir / f"{prefix}_{ts}.jsonl"
+            logger.info("Session logging enabled: %s", self._log_file)
 
-        # Create logs directory if dump is enabled
-        if self.dump_enabled:
-            self.logs_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Session logging enabled. Logs will be saved to: {self.logs_dir}")
-
-    def init_session_log(self, message: str, session_id: Optional[str]) -> Optional[Path]:
-        """
-        Initialize a session log file for dumping raw LLM messages.
-
-        Args:
-            message: User message being sent
-            session_id: External session ID (None for new session)
-
-        Returns:
-            Path to the log file if dumping is enabled, None otherwise
-        """
-        if not self.dump_enabled:
-            return None
-
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
-        log_file = self.logs_dir / f"session_{timestamp}_run.log"
-
-        # Write header
-        with open(log_file, "w") as f:
-            f.write(f"# Claude Code SDK Session Log\n")
-            f.write(f"# Started at: {datetime.utcnow().isoformat()}\n")
-            f.write(f"# Session ID: {session_id or 'NEW SESSION'}\n")
-            f.write(f"# User Message: {message[:100]}{'...' if len(message) > 100 else ''}\n")
-            f.write(f"# ========================================\n\n")
-
-        logger.info(f"Session log initialized: {log_file}")
-        return log_file
-
-    def dump_message(self, log_file: Optional[Path], message_obj, message_count: int):
-        """
-        Dump raw message object to session log file.
-
-        Args:
-            log_file: Path to log file (None to skip)
-            message_obj: SDK message object to dump
-            message_count: Message sequence number
-        """
-        if not log_file:
+    def _write(self, direction: str, event_data: dict) -> None:
+        if not self._log_file:
             return
-
         try:
-            with open(log_file, "a") as f:
-                f.write(f"\n{'='*80}\n")
-                f.write(f"MESSAGE #{message_count}\n")
-                f.write(f"Timestamp: {datetime.utcnow().isoformat()}\n")
-                f.write(f"Type: {type(message_obj).__name__}\n")
-                f.write(f"{'-'*80}\n")
-                f.write(format_message_for_debug(message_obj))
-                f.write(f"\n{'='*80}\n")
-        except Exception as e:
-            logger.error(f"Error writing to session log: {e}", exc_info=True)
+            record = {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "dir": direction,
+                "event": event_data,
+            }
+            with open(self._log_file, "a") as f:
+                f.write(json.dumps(record, default=str) + "\n")
+        except Exception as exc:
+            logger.debug("Failed to write session log: %s", exc)
 
-    def complete_session_log(self, log_file: Optional[Path], message_count: int):
-        """
-        Write session completion marker to log file.
+    def log_recv(self, event_data: dict) -> None:
+        """Log an event received from the SDK."""
+        self._write("recv", event_data)
 
-        Args:
-            log_file: Path to log file
-            message_count: Total number of messages processed
-        """
-        if not log_file:
-            return
-
-        try:
-            with open(log_file, "a") as f:
-                f.write(f"\n\n{'='*80}\n")
-                f.write(f"SESSION COMPLETED\n")
-                f.write(f"Total messages: {message_count}\n")
-                f.write(f"Completed at: {datetime.utcnow().isoformat()}\n")
-                f.write(f"{'='*80}\n")
-            logger.info(f"Session log completed: {log_file}")
-        except Exception as e:
-            logger.error(f"Error writing session completion: {e}")
+    def log_send(self, action: str, data: dict) -> None:
+        """Log a request sent to the SDK."""
+        self._write("send", {"action": action, **data})
 
 
 def format_message_for_debug(message_obj) -> str:
@@ -206,7 +159,7 @@ def format_sdk_message(message_obj, session_id: str, interrupt_initiated: bool =
 
     DEPRECATED: This function is deprecated. Each SDK adapter now handles
     message formatting internally via their _format_message method.
-    See adapters/claude_code.py:ClaudeCodeAdapter._format_message() for
+    See adapters/claude_code_event_transformer.py:ClaudeCodeEventTransformer.translate() for
     the current implementation.
 
     Args:
@@ -219,7 +172,7 @@ def format_sdk_message(message_obj, session_id: str, interrupt_initiated: bool =
     """
     warnings.warn(
         "format_sdk_message is deprecated. Use adapter-specific formatting instead. "
-        "See adapters/claude_code.py:ClaudeCodeAdapter._format_message()",
+        "See adapters/claude_code_event_transformer.py:ClaudeCodeEventTransformer.translate()",
         DeprecationWarning,
         stacklevel=2
     )

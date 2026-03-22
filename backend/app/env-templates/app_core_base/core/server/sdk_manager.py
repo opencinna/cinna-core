@@ -38,8 +38,8 @@ from .adapters import (
     OpenCodeAdapter,
 )
 
-# Re-export session tracking functions from claude_code adapter for backward compatibility
-from .adapters.claude_code import (
+# Re-export session tracking functions from claude_code SDK adapter
+from .adapters.claude_code_sdk_adapter import (
     get_current_sdk_session_id,
     set_current_sdk_session_id,
     clear_current_sdk_session_id,

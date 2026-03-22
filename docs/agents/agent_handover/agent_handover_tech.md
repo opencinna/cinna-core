@@ -38,7 +38,7 @@
 - `backend/app/env-templates/app_core_base/core/server/agent_env_service.py` — `get_agent_handover_config()`, `update_agent_handover_config()`
 
 **Runtime:**
-- `backend/app/env-templates/app_core_base/core/server/adapters/claude_code.py` — tool registration (conversation mode only), global session state with async lock, helper functions
+- `backend/app/env-templates/app_core_base/core/server/adapters/claude_code_sdk_adapter.py` — tool registration (conversation mode only), global session state with async lock, helper functions
 - `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` — `_load_task_creation_prompt()`, system prompt injection
 - `backend/app/env-templates/app_core_base/core/server/tools/create_agent_task.py` — tool implementation
 

@@ -17,8 +17,11 @@
 - `server/sdk_utils.py` - Logging, debugging, message formatting
 - `server/active_session_manager.py` - Session tracking, HMAC-verified per-session context store
 - `server/adapters/base.py` - `SDKEvent`, `SDKConfig`, `BaseSDKAdapter`, `AdapterRegistry`
-- `server/adapters/claude_code.py` - `ClaudeCodeAdapter` for `claude-code/*` variants
-- `server/adapters/google_adk.py` - `GoogleADKAdapter` placeholder for `google-adk-wr/*`
+- `server/adapters/claude_code_sdk_adapter.py` - `ClaudeCodeAdapter` for `claude-code/*` variants
+- `server/adapters/claude_code_event_transformer.py` - `ClaudeCodeEventTransformer` — Claude SDK message → SDKEvent
+- `server/adapters/opencode_sdk_adapter.py` - `OpenCodeAdapter` for `opencode/*` variants
+- `server/adapters/opencode_event_transformer.py` - `OpenCodeEventTransformer` — OpenCode SSE → SDKEvent
+- `server/adapters/google_adk_sdk_adapter.py` - `GoogleADKAdapter` placeholder for `google-adk-wr/*`
 - `scripts/get_session_context.py` - Stdlib-only helper for agent scripts to query session context
 - `prompts/BUILDING_AGENT.md` - Building mode system prompt
 - `prompts/WEBAPP_BUILDING.md` - Webapp building instructions (read by agent on demand)

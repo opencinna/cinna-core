@@ -1660,8 +1660,8 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
                 "conversation": "openai/gpt-5.4-nano",
             },
             "openai_compatible": {
-                "building": openai_compatible_model or "openai/gpt-4",
-                "conversation": openai_compatible_model or "openai/gpt-4",
+                "building": openai_compatible_model or "gpt-4",
+                "conversation": openai_compatible_model or "gpt-4",
             },
             "google": {
                 "building": "google/gemini-2.5-pro",
@@ -1694,11 +1694,14 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
             else:
                 model_id = model
 
-            # Map our provider names to OpenCode provider IDs
+            # Map our provider names to OpenCode provider IDs.
+            # OpenAI-compatible uses a custom provider definition with the
+            # @ai-sdk/openai-compatible npm package, registered under a
+            # custom key ("custom") rather than the built-in provider name.
             provider_id = {
                 "anthropic": "anthropic",
                 "openai": "openai",
-                "openai_compatible": "openai-compatible",
+                "openai_compatible": "custom",
                 "google": "google",
             }.get(provider, provider)
 
@@ -1710,10 +1713,20 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
                 },
             }
 
+            # OpenAI-compatible endpoints are registered as custom providers
+            # with the @ai-sdk/openai-compatible npm adapter and require
+            # baseURL so OpenCode knows where to send requests.
+            if provider == "openai_compatible":
+                provider_entry["npm"] = "@ai-sdk/openai-compatible"
+                provider_entry["name"] = "OpenAI Compatible"
+
+            options: dict = {}
             if api_key:
-                provider_entry["options"] = {
-                    "apiKey": api_key,
-                }
+                options["apiKey"] = api_key
+            if provider == "openai_compatible" and openai_compatible_base_url:
+                options["baseURL"] = openai_compatible_base_url
+            if options:
+                provider_entry["options"] = options
 
             return {provider_id: provider_entry}
 
@@ -1770,9 +1783,21 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
             }.get(provider)
             provider_config = _build_provider_config(provider, model, api_key)
 
+            # For custom providers, the top-level model must be prefixed with
+            # the provider key so OpenCode routes it to the right adapter.
+            # E.g. "granite4:latest" → "custom/granite4:latest"
+            if provider == "openai_compatible":
+                if "/" in model:
+                    # Already has a prefix — replace with the custom provider key
+                    config_model = f"custom/{model.split('/', 1)[1]}"
+                else:
+                    config_model = f"custom/{model}"
+            else:
+                config_model = model
+
             config = {
                 "$schema": "https://opencode.ai/config.json",
-                "model": model,
+                "model": config_model,
                 "provider": provider_config,
                 "permission": {
                     "*": "allow",

@@ -14,7 +14,7 @@
 | `agent_env_service.py` | Business logic for workspace file operations (read/write prompts) |
 | `active_session_manager.py` | Per-session context store with HMAC verification, TTL cleanup |
 | `models.py` | Pydantic request/response models (`ChatRequest`, `ChatResponse`, `AgentPromptsResponse`, etc.) |
-| `sdk_utils.py` | `SessionLogger` class, message formatting and debugging utilities |
+| `sdk_utils.py` | `SessionEventLogger` class (shared JSONL logger for all adapters), `format_message_for_debug`, deprecated `format_sdk_message` |
 
 ### SDK Adapters
 
@@ -23,10 +23,11 @@
 | File | Purpose |
 |------|---------|
 | `base.py` | `SDKEvent`, `SDKEventType`, `SDKConfig`, `BaseSDKAdapter`, `AdapterRegistry` |
-| `claude_code.py` | `ClaudeCodeAdapter` - handles `claude-code/anthropic` and `claude-code/minimax` variants |
-| `opencode_adapter.py` | `OpenCodeAdapter` - handles all `opencode/*` variants via HTTP client to `opencode serve` |
-| `opencode_event_adapter.py` | `OpenCodeEventAdapter` - stateful translator from raw OpenCode SSE events to `SDKEvent` objects; `OpenCodeEventLogger` for JSONL session logging |
-| `google_adk.py` | `GoogleADKAdapter` - handles `google-adk-wr/*` variants |
+| `claude_code_sdk_adapter.py` | `ClaudeCodeAdapter` - handles `claude-code/anthropic` and `claude-code/minimax` variants |
+| `claude_code_event_transformer.py` | `ClaudeCodeEventTransformer` - translates raw Claude SDK messages to `SDKEvent` objects |
+| `opencode_sdk_adapter.py` | `OpenCodeAdapter` - handles all `opencode/*` variants via HTTP client to `opencode serve` |
+| `opencode_event_transformer.py` | `OpenCodeEventTransformer` - stateful translator from raw OpenCode SSE events to `SDKEvent` objects; uses shared `SessionEventLogger` for JSONL logging |
+| `google_adk_sdk_adapter.py` | `GoogleADKAdapter` - handles `google-adk-wr/*` variants |
 | `tool_name_registry.py` | Unified lowercase tool name convention: `CLAUDE_CODE_TOOL_NAME_MAP`, `OPENCODE_MCP_TOOL_NAME_MAP`, `PRE_APPROVED_TOOLS`, `normalize_tool_name()`, `normalize_tool_input()` |
 | `sqlite_session_service.py` | SQLite-based session persistence for adapters |
 | `google_adk_wr_prompts/` | Prompt templates for Google ADK adapter |
@@ -151,12 +152,16 @@ No dedicated database tables - the environment core runs inside Docker container
 - `AdapterRegistry.create_adapter(config)` - Instantiate adapter from `SDKConfig`
 - `SDKConfig.from_env(mode)` - Parse adapter ID from environment variables
 
-**Claude Code**: `backend/app/env-templates/app_core_base/core/server/adapters/claude_code.py`
+**Claude Code**: `backend/app/env-templates/app_core_base/core/server/adapters/claude_code_sdk_adapter.py`
 
-- `ClaudeCodeAdapter.send_message_stream()` - Configures Claude SDK, converts messages to SDKEvent format
+- `ClaudeCodeAdapter.send_message_stream()` - Configures Claude SDK, streams messages via `ClaudeCodeEventTransformer`, logs events via `SessionEventLogger`
 - `ClaudeCodeAdapter.interrupt_session()` - Interrupts running Claude session
 
-**OpenCode**: `backend/app/env-templates/app_core_base/core/server/adapters/opencode_adapter.py`
+**Claude Code Event Transformer**: `backend/app/env-templates/app_core_base/core/server/adapters/claude_code_event_transformer.py`
+
+- `ClaudeCodeEventTransformer.translate()` - Translates a single Claude SDK message object into an `SDKEvent` (or `None` to skip)
+
+**OpenCode**: `backend/app/env-templates/app_core_base/core/server/adapters/opencode_sdk_adapter.py`
 
 - `OpenCodeAdapter.__init__()` - Starts `opencode serve` subprocess on port 4096, waits for health
 - `OpenCodeAdapter.send_message_stream()` - Creates/resumes session via HTTP, writes AGENTS.md from system prompt, streams SSE events, yields `SDKEvent` objects
