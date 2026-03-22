@@ -25,7 +25,9 @@
 | `base.py` | `SDKEvent`, `SDKEventType`, `SDKConfig`, `BaseSDKAdapter`, `AdapterRegistry` |
 | `claude_code.py` | `ClaudeCodeAdapter` - handles `claude-code/anthropic` and `claude-code/minimax` variants |
 | `opencode_adapter.py` | `OpenCodeAdapter` - handles all `opencode/*` variants via HTTP client to `opencode serve` |
+| `opencode_event_adapter.py` | `OpenCodeEventAdapter` - stateful translator from raw OpenCode SSE events to `SDKEvent` objects; `OpenCodeEventLogger` for JSONL session logging |
 | `google_adk.py` | `GoogleADKAdapter` - handles `google-adk-wr/*` variants |
+| `tool_name_registry.py` | Unified lowercase tool name convention: `CLAUDE_CODE_TOOL_NAME_MAP`, `OPENCODE_MCP_TOOL_NAME_MAP`, `PRE_APPROVED_TOOLS`, `normalize_tool_name()`, `normalize_tool_input()` |
 | `sqlite_session_service.py` | SQLite-based session persistence for adapters |
 | `google_adk_wr_prompts/` | Prompt templates for Google ADK adapter |
 

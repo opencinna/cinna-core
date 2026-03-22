@@ -91,6 +91,7 @@ filterwarnings = [
     "ignore::DeprecationWarning:sqlmodel.*",
     "ignore::DeprecationWarning:pydantic.*",
     "ignore::UserWarning:pydantic.*",
+    "ignore::FutureWarning:google.cloud.aiplatform.*",
 ]
 
 [tool.coverage.run]

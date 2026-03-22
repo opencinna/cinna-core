@@ -804,7 +804,7 @@ def test_streaming_events_non_assistant_events_pass_through_unchanged(
     # Insert a synthetic tool event just before 'done'
     tool_event = {
         "type": "tool",
-        "tool_name": "Read",
+        "tool_name": "read",
         "content": "",
         "metadata": {"tool_id": "tool-123", "tool_input": {"file_path": "/readme.md"}},
     }
@@ -830,7 +830,7 @@ def test_streaming_events_non_assistant_events_pass_through_unchanged(
         f"streaming_events types: {[e.get('type') for e in streaming_events]}"
     )
     stored_tool = tool_events[0]
-    assert stored_tool.get("tool_name") == "Read", (
+    assert stored_tool.get("tool_name") == "read", (
         f"Tool event must retain its tool_name. Got: {stored_tool.get('tool_name')!r}"
     )
 

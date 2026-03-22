@@ -44,7 +44,7 @@ def _build_multi_step_events(
             "type": "system",
             "subtype": "tools_init",
             "content": "",
-            "data": {"tools": ["Bash", "Read", "Write"]},
+            "data": {"tools": ["bash", "read", "write"]},
             "metadata": {},
         },
     ]
@@ -150,8 +150,8 @@ def test_multi_step_agent_sends_progress_and_content_notifications(
     steps = [
         {"type": "thinking", "content": "Let me analyze this...", "metadata": {}},
         {"type": "assistant", "content": "First, I'll check the files.", "metadata": {"model": "test"}},
-        {"type": "tool", "name": "Bash", "content": "ls -la output", "metadata": {}},
-        {"type": "tool", "name": "Read", "content": "file contents here", "metadata": {}},
+        {"type": "tool", "name": "bash", "content": "ls -la output", "metadata": {}},
+        {"type": "tool", "name": "read", "content": "file contents here", "metadata": {}},
         {"type": "assistant", "content": "Based on my analysis, here are the results.", "metadata": {"model": "test"}},
     ]
     events = _build_multi_step_events(steps)
@@ -172,7 +172,7 @@ def test_multi_step_agent_sends_progress_and_content_notifications(
     # ── Verify progress notifications ────────────────────────────────────
     progress_calls = mock_ctx.report_progress.call_args_list
 
-    # Expected: initial(0) + thinking(10) + assistant(20) + Bash(30) + Read(40) + assistant(50) = 6
+    # Expected: initial(0) + thinking(10) + assistant(20) + bash(30) + read(40) + assistant(50) = 6
     assert len(progress_calls) >= 5, (
         f"Expected at least 5 progress calls (initial + streaming events), "
         f"got {len(progress_calls)}: {progress_calls}"
@@ -202,8 +202,8 @@ def test_multi_step_agent_sends_progress_and_content_notifications(
     labels = [c.args[2] for c in streaming_calls]
     assert any("Thinking" in lbl for lbl in labels), f"Expected 'Thinking' label in {labels}"
     assert any("Processing" in lbl for lbl in labels), f"Expected 'Processing' label in {labels}"
-    assert any("Bash" in lbl for lbl in labels), f"Expected tool 'Bash' in labels: {labels}"
-    assert any("Read" in lbl for lbl in labels), f"Expected tool 'Read' in labels: {labels}"
+    assert any("bash" in lbl for lbl in labels), f"Expected tool 'bash' in labels: {labels}"
+    assert any("read" in lbl for lbl in labels), f"Expected tool 'read' in labels: {labels}"
 
     # ── Verify content notifications ─────────────────────────────────────
     info_calls = mock_ctx.info.call_args_list
@@ -358,7 +358,7 @@ def test_notification_failures_and_error_resilience(
 
     error_steps = [
         {"type": "assistant", "content": "Starting analysis...", "metadata": {"model": "test"}},
-        {"type": "tool", "name": "Bash", "content": "running command", "metadata": {}},
+        {"type": "tool", "name": "bash", "content": "running command", "metadata": {}},
         {"type": "error", "content": "Agent crashed: out of memory"},
     ]
     stub2 = StubAgentEnvConnector(

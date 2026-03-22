@@ -195,7 +195,7 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
     const seen = new Set<string>()
 
     streamingEvents.forEach((event) => {
-      if (event.type === "tool" && event.tool_name === "AskUserQuestion") {
+      if (event.type === "tool" && event.tool_name?.toLowerCase() === "askuserquestion") {
         const toolQuestions = event.metadata?.tool_input?.questions || []
         toolQuestions.forEach((q: any) => {
           if (!seen.has(q.question)) {

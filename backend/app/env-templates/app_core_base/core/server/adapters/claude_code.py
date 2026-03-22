@@ -27,6 +27,7 @@ from ..prompt_generator import PromptGenerator
 from ..sdk_utils import SessionLogger, format_message_for_debug
 from ..active_session_manager import active_session_manager
 from ..agent_env_service import AgentEnvService
+from .tool_name_registry import normalize_tool_name
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +184,8 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                     create_sdk_mcp_server,
                 )
 
-                # Build pre-allowed tools
+                # Build pre-allowed tools — PascalCase is required by the Claude
+                # SDK config. Normalized to lowercase at tools_init emission.
                 pre_allowed_tools = [
                     "Read", "Edit", "Glob", "Grep", "Bash", "Write",
                     "WebFetch", "WebSearch", "TodoWrite"
@@ -346,12 +348,16 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                         content="",
                     )
 
-                # Emit tools_init event
+                # Emit tools_init event with unified lowercase tool names
+                unified_tools = [
+                    normalize_tool_name(t, sdk="claude-code")
+                    for t in (options.allowed_tools or [])
+                ]
                 yield SDKEvent(
                     type=SDKEventType.SYSTEM,
                     subtype="tools_init",
                     content="",
-                    data={"tools": options.allowed_tools.copy() if options.allowed_tools else []},
+                    data={"tools": unified_tools},
                 )
 
                 # Send the message
@@ -589,6 +595,8 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
 
                 elif isinstance(block, ToolUseBlock):
                     # Return tool use as separate event
+                    # Normalize tool name to unified lowercase convention
+                    unified_name = normalize_tool_name(block.name, sdk="claude-code")
                     tool_input_str = ""
                     if block.input:
                         try:
@@ -601,8 +609,8 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
 
                     return SDKEvent(
                         type=SDKEventType.TOOL_USE,
-                        tool_name=block.name,
-                        content=f"🔧 Using tool: {block.name}{tool_input_str}",
+                        tool_name=unified_name,
+                        content=f"Using tool: {unified_name}{tool_input_str}",
                         session_id=session_id,
                         metadata={
                             "tool_id": block.id,

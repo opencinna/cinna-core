@@ -38,6 +38,7 @@ from .base import (
 from ..prompt_generator import PromptGenerator
 from .google_adk_wr_prompts import get_combined_tool_prompts
 from .sqlite_session_service import SQLiteSessionService, create_sqlite_session_service
+from .tool_name_registry import normalize_tool_name
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +209,7 @@ def _check_credential_access(input_value: str, tool_type: str) -> str:
         reporter = SecurityEventReporter()
         return reporter.report(
             event_type=event_type,
-            tool_name="Bash" if tool_type == "bash" else "Read",
+            tool_name="bash" if tool_type == "bash" else "read",
             tool_input=input_value,
             session_id=None,
             severity="high",
@@ -256,15 +257,15 @@ class AgentFactory:
         os.environ["OPENAI_API_BASE"] = api_base
         os.environ["OPENAI_API_KEY"] = api_key
 
-        # Create Bash tool as a regular function tool (synchronous execution)
-        def Bash(command: str) -> dict:
+        # Create bash tool as a regular function tool (synchronous execution)
+        def bash(command: str) -> dict:
             """
             Execute a shell command in the workspace environment.
 
             Use for: running Python scripts (uv run python scripts/...), installing packages
             (uv pip install), listing directories (ls), git operations, and system commands.
 
-            Do NOT use for reading files - use the Read tool instead.
+            Do NOT use for reading files - use the read tool instead.
 
             Args:
                 command (str): The bash command to execute. Quote paths with spaces.
@@ -306,10 +307,10 @@ class AgentFactory:
                 "stderr": stderr,
             }
 
-        bash_tool = FunctionTool(func=Bash)
+        bash_tool = FunctionTool(func=bash)
 
-        # Create Read tool as a simple function tool
-        def Read(file_path: str) -> dict:
+        # Create read tool as a simple function tool
+        def read(file_path: str) -> dict:
             """
             Read the contents of a file from the workspace filesystem.
 
@@ -363,7 +364,7 @@ class AgentFactory:
                     "error": f"Failed to read file: {str(e)}",
                 }
 
-        read_tool = FunctionTool(func=Read)
+        read_tool = FunctionTool(func=read)
 
         # Create the agent
         # Note: description is for multi-agent scenarios, instruction is the system prompt
@@ -722,7 +723,7 @@ class GoogleADKAdapter(BaseSDKAdapter):
                 type=SDKEventType.SYSTEM,
                 subtype="tools_init",
                 content="",
-                data={"tools": ["Bash", "Read"]},
+                data={"tools": ["bash", "read"]},
             )
 
             # Send message to agent
@@ -824,7 +825,8 @@ class GoogleADKAdapter(BaseSDKAdapter):
             # Handle function call (tool invocation)
             if hasattr(part, "function_call") and part.function_call:
                 func_call = part.function_call
-                logger.info(f"Tool call: {func_call.name}({func_call.args})")
+                unified_name = normalize_tool_name(func_call.name, sdk="google-adk")
+                logger.info(f"Tool call: {unified_name}({func_call.args})")
 
                 # Format tool input for display
                 tool_input_str = ""
@@ -839,8 +841,8 @@ class GoogleADKAdapter(BaseSDKAdapter):
 
                 yield SDKEvent(
                     type=SDKEventType.TOOL_USE,
-                    tool_name=func_call.name,
-                    content=f"🔧 Using tool: {func_call.name}{tool_input_str}",
+                    tool_name=unified_name,
+                    content=f"Using tool: {unified_name}{tool_input_str}",
                     session_id=self._current_session_id,
                     metadata={"tool_input": dict(func_call.args) if func_call.args else {}},
                 )

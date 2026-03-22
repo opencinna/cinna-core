@@ -72,6 +72,7 @@ from .base import (
     AdapterRegistry,
 )
 from .opencode_event_adapter import OpenCodeEventAdapter
+from .tool_name_registry import normalize_tool_name
 from ..prompt_generator import PromptGenerator
 from ..active_session_manager import active_session_manager
 from ..agent_env_service import AgentEnvService
@@ -558,17 +559,23 @@ class OpenCodeAdapter(BaseSDKAdapter):
             await self._write_agents_md(resolved_prompt)
 
             # 6. Build tools list including plugin MCP servers
+            # All tool names are normalized to unified lowercase convention.
+            # OpenCode built-ins are already lowercase; MCP bridge tools with
+            # mcp__collaboration__* prefix are remapped to mcp__task__* for
+            # consistency with Claude Code naming.
             plugin_mcp = self._build_plugin_mcp_config(mode)
             all_tools = list(OPENCODE_BUILTIN_TOOLS)
-            # Append MCP bridge tool names so the frontend can display them
             mcp_tool_names = [
                 "mcp__knowledge__query_integration_knowledge",
                 "mcp__task__create_agent_task",
                 "mcp__task__update_session_state",
                 "mcp__task__respond_to_task",
-                "mcp__collaboration__create_collaboration",
-                "mcp__collaboration__post_finding",
-                "mcp__collaboration__get_collaboration_status",
+                # Collaboration tools — OpenCode runs them on a separate
+                # "collaboration" MCP server, but we emit unified names
+                # matching the mcp__task__* prefix used by Claude Code.
+                "mcp__task__create_collaboration",
+                "mcp__task__post_finding",
+                "mcp__task__get_collaboration_status",
             ]
             for key in plugin_mcp:
                 mcp_tool_names.append(f"mcp__{key}")

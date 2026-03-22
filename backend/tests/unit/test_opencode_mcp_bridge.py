@@ -590,7 +590,7 @@ class TestOpenCodeAdapterPhase4:
         # Directly verify the structure of the generated config from environment_lifecycle
         import importlib.util
         lifecycle_path = (
-            Path(__file__).parents[3]
+            Path(__file__).parents[2]
             / "app"
             / "services"
             / "environment_lifecycle.py"

@@ -39,11 +39,12 @@ Part types inside message.part.updated:
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from .base import SDKEvent, SDKEventType
+from .tool_name_registry import normalize_tool_name, normalize_tool_input
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ class OpenCodeEventLogger:
         self._log_file: Optional[Path] = None
         if enabled:
             logs_dir.mkdir(parents=True, exist_ok=True)
-            ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
             self._log_file = logs_dir / f"opencode_session_{ts}.jsonl"
             logger.info("OpenCode session logging enabled: %s", self._log_file)
 
@@ -79,7 +80,7 @@ class OpenCodeEventLogger:
             return
         try:
             record = {
-                "ts": datetime.utcnow().isoformat(),
+                "ts": datetime.now(timezone.utc).isoformat(),
                 "dir": direction,
                 "event": event_data,
             }
@@ -124,6 +125,11 @@ class OpenCodeEventAdapter:
         # Text accumulation: partID -> buffered text
         self._text_buffers: dict[str, str] = {}
 
+        # Tool call dedup: tracks callIDs that already emitted TOOL_USE.
+        # OpenCode sends multiple "running" updates for the same tool call
+        # (with streaming output), but we only want one TOOL_USE event.
+        self._emitted_tool_calls: set[str] = set()
+
         # Raw event logger
         dump_enabled = os.getenv("DUMP_LLM_SESSION", "false").lower() == "true"
         logs_dir = Path(workspace_dir) / "logs"
@@ -133,6 +139,7 @@ class OpenCodeEventAdapter:
         """Clear state between messages (not between sessions)."""
         self._part_types.clear()
         self._text_buffers.clear()
+        self._emitted_tool_calls.clear()
 
     # ------------------------------------------------------------------
     # Public API
@@ -265,7 +272,9 @@ class OpenCodeEventAdapter:
              "error": "...",              # present when error
              "time": {"start": ..., "end": ...}}
         """
-        tool_name = part.get("tool", "")
+        raw_tool_name = part.get("tool", "")
+        # Normalize to unified lowercase convention (remaps mcp__collaboration__* etc.)
+        tool_name = normalize_tool_name(raw_tool_name, sdk="opencode")
         call_id = part.get("callID", "")
         state = part.get("state", {})
 
@@ -286,12 +295,20 @@ class OpenCodeEventAdapter:
             # Only emit TOOL_USE when we have input (running state)
             if not tool_input:
                 return []
+            # Deduplicate: OpenCode sends multiple "running" updates for the
+            # same tool call as output streams in. Only emit the first one.
+            if call_id and call_id in self._emitted_tool_calls:
+                return []
+            if call_id:
+                self._emitted_tool_calls.add(call_id)
+            # Normalize input keys: OpenCode camelCase → snake_case
+            normalized_input = normalize_tool_input(tool_input, sdk="opencode")
             try:
-                input_str = json.dumps(tool_input, indent=2)
+                input_str = json.dumps(normalized_input, indent=2)
                 if len(input_str) > 200:
                     input_str = input_str[:200] + "..."
             except Exception:
-                input_str = str(tool_input)[:200]
+                input_str = str(normalized_input)[:200]
 
             return [SDKEvent(
                 type=SDKEventType.TOOL_USE,
@@ -300,7 +317,7 @@ class OpenCodeEventAdapter:
                 content=f"Using tool: {tool_name}\nInput: {input_str}",
                 metadata={
                     "tool_call_id": call_id,
-                    "tool_input": tool_input,
+                    "tool_input": normalized_input,
                 },
             )]
 

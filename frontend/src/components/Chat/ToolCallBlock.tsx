@@ -23,11 +23,21 @@ export function ToolCallBlock({ toolName, toolInput, conversationModeUi = "detai
   const isCompact = conversationModeUi === "compact"
   const toolNameLower = toolName.toLowerCase()
 
+  // Helper: get a tool input value by snake_case key, falling back to camelCase.
+  // Claude Code uses snake_case (file_path), OpenCode uses camelCase (filePath).
+  const getInput = (snakeKey: string): any => {
+    if (!toolInput) return undefined
+    if (toolInput[snakeKey] !== undefined) return toolInput[snakeKey]
+    // Convert snake_case to camelCase for fallback lookup
+    const camelKey = snakeKey.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
+    return toolInput[camelKey]
+  }
+
   // Special rendering for Read tool
-  if (toolNameLower === "read" && toolInput?.file_path) {
+  const filePath = getInput("file_path")
+  if (toolNameLower === "read" && filePath) {
     if (isCompact) {
-      // Compact mode: just show filename
-      const fileName = toolInput.file_path.split('/').pop() || toolInput.file_path
+      const fileName = filePath.split('/').pop() || filePath
       return (
         <div className="inline-flex items-center gap-2 text-sm text-muted-foreground/80 mb-1">
           <FileText className="h-3.5 w-3.5 flex-shrink-0" />
@@ -35,19 +45,21 @@ export function ToolCallBlock({ toolName, toolInput, conversationModeUi = "detai
         </div>
       )
     }
-    return <ReadToolBlock filePath={toolInput.file_path} />
+    return <ReadToolBlock filePath={filePath} />
   }
 
   // Special rendering for Write tool
-  if (toolNameLower === "write" && toolInput?.file_path && toolInput?.content) {
-    return <WriteToolBlock filePath={toolInput.file_path} content={toolInput.content} />
+  const writeContent = getInput("content")
+  if (toolNameLower === "write" && filePath && writeContent) {
+    return <WriteToolBlock filePath={filePath} content={writeContent} />
   }
 
   // Special rendering for Edit tool
-  if (toolNameLower === "edit" && toolInput?.file_path && toolInput?.old_string && toolInput?.new_string) {
+  const oldString = getInput("old_string")
+  const newString = getInput("new_string")
+  if (toolNameLower === "edit" && filePath && oldString && newString) {
     if (isCompact) {
-      // Compact mode: just show filename
-      const fileName = toolInput.file_path.split('/').pop() || toolInput.file_path
+      const fileName = filePath.split('/').pop() || filePath
       return (
         <div className="inline-flex items-center gap-2 text-sm text-muted-foreground/80 mb-1">
           <FileEdit className="h-3.5 w-3.5 flex-shrink-0" />
@@ -55,56 +67,65 @@ export function ToolCallBlock({ toolName, toolInput, conversationModeUi = "detai
         </div>
       )
     }
-    return <EditToolBlock filePath={toolInput.file_path} oldString={toolInput.old_string} newString={toolInput.new_string} />
+    return <EditToolBlock filePath={filePath} oldString={oldString} newString={newString} />
   }
 
   // Special rendering for TodoWrite tool
-  if (toolNameLower === "todowrite" && toolInput?.todos && Array.isArray(toolInput.todos)) {
-    return <TodoWriteToolBlock todos={toolInput.todos} />
+  const todos = getInput("todos")
+  if (toolNameLower === "todowrite" && todos && Array.isArray(todos)) {
+    return <TodoWriteToolBlock todos={todos} />
   }
 
   // Special rendering for AskUserQuestion tool
-  if (toolNameLower === "askuserquestion" && toolInput?.questions && Array.isArray(toolInput.questions)) {
-    return <AskUserQuestionToolBlock questions={toolInput.questions} />
+  const questions = getInput("questions")
+  if (toolNameLower === "askuserquestion" && questions && Array.isArray(questions)) {
+    return <AskUserQuestionToolBlock questions={questions} />
   }
 
   // Special rendering for Glob tool
-  if (toolNameLower === "glob" && toolInput?.pattern) {
-    return <GlobToolBlock pattern={toolInput.pattern} />
+  const globPattern = getInput("pattern") || toolInput?.glob
+  if (toolNameLower === "glob" && globPattern) {
+    return <GlobToolBlock pattern={globPattern} />
   }
 
   // Special rendering for WebSearch tool
-  if (toolNameLower === "websearch" && toolInput?.query) {
-    return <WebSearchToolBlock query={toolInput.query} />
+  const searchQuery = getInput("query")
+  if (toolNameLower === "websearch" && searchQuery) {
+    return <WebSearchToolBlock query={searchQuery} />
   }
 
   // Special rendering for Bash tool
-  if (toolNameLower === "bash" && toolInput?.command) {
+  const command = getInput("command")
+  if (toolNameLower === "bash" && command) {
     if (isCompact) {
-      return <CompactBashBlock command={toolInput.command} />
+      return <CompactBashBlock command={command} />
     }
-    return <BashToolBlock command={toolInput.command} />
+    return <BashToolBlock command={command} />
   }
 
   // Special rendering for Knowledge Query tool
-  if (toolNameLower === "mcp__knowledge__query_integration_knowledge" && toolInput?.query) {
-    return <KnowledgeQueryToolBlock query={toolInput.query} articleIds={toolInput.article_ids} />
+  const knowledgeQuery = getInput("query")
+  const articleIds = getInput("article_ids")
+  if (toolNameLower === "mcp__knowledge__query_integration_knowledge" && knowledgeQuery) {
+    return <KnowledgeQueryToolBlock query={knowledgeQuery} articleIds={articleIds} />
   }
 
   // Special rendering for Create Agent Task tool (handles both direct handover and inbox task)
-  if (toolNameLower === "mcp__task__create_agent_task" && toolInput?.task_message) {
+  const taskMessage = getInput("task_message")
+  if (toolNameLower === "mcp__task__create_agent_task" && taskMessage) {
     return (
       <AgentHandoverToolBlock
-        targetAgentId={toolInput.target_agent_id}
-        targetAgentName={toolInput.target_agent_name}
-        taskMessage={toolInput.task_message}
+        targetAgentId={getInput("target_agent_id")}
+        targetAgentName={getInput("target_agent_name")}
+        taskMessage={taskMessage}
       />
     )
   }
 
   // Special rendering for Update Session State tool
-  if (toolNameLower === "mcp__task__update_session_state" && toolInput?.state) {
-    return <UpdateSessionStateToolBlock state={toolInput.state} summary={toolInput.summary} />
+  const sessionState = getInput("state")
+  if (toolNameLower === "mcp__task__update_session_state" && sessionState) {
+    return <UpdateSessionStateToolBlock state={sessionState} summary={getInput("summary")} />
   }
 
   // Default rendering for other tools

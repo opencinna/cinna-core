@@ -231,7 +231,9 @@ Backend ──HTTP POST──→ Environment Container (FastAPI)
 │   │   │   ├── base.py            # SDKEvent, SDKConfig, BaseSDKAdapter, AdapterRegistry
 │   │   │   ├── claude_code.py     # ClaudeCodeAdapter (claude-code/* variants)
 │   │   │   ├── opencode_adapter.py  # OpenCodeAdapter (opencode/* variants, HTTP client)
+│   │   │   ├── opencode_event_adapter.py  # OpenCodeEventAdapter — stateful SSE event translator
 │   │   │   ├── google_adk.py      # GoogleADKAdapter (google-adk-wr/* variants)
+│   │   │   ├── tool_name_registry.py  # Unified lowercase tool name convention: maps, PRE_APPROVED_TOOLS, normalize_tool_name()
 │   │   │   └── sqlite_session_service.py  # SQLite-based session persistence
 │   │   └── tools/                 # Custom agent tools
 │   │       ├── knowledge_query.py # RAG knowledge source queries

@@ -1,34 +1,28 @@
 """
-Phase 5 advanced-provider and cross-SDK tests.
+Advanced-provider and cross-SDK tests.
 
 Tests cover:
-1. Ollama credential type — validation, config generation, adapter defaults
-2. Bedrock / Azure config generation (verifying Phase 2-3 work end-to-end)
-3. EnvironmentCard SDK badge label combinations (via pure Python logic extracted
-   from the TypeScript helper — we verify the Python-side lifecycle generates
-   the correct model strings for each provider)
-4. Cross-SDK scenario: Claude Code (building/Opus) + OpenCode (conversation/GPT-4o-mini)
-   — config generation produces two distinct per-mode configs with the right models
-5. Ollama local model scenario: OpenCode conversation with llama3.2
+1. OpenCode adapter SUPPORTED_PROVIDERS list
+2. Cross-SDK scenario: Claude Code (building) + OpenCode (conversation)
+   — config generation produces per-mode directories with correct configs
+3. OpenCode config structure validation (tools, MCP, permissions)
 
 All filesystem writes use tmp_path fixtures so no real environment directories
 are required. No Docker, no real API keys needed.
 """
 
 import json
-import sys
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
+
 # ---------------------------------------------------------------------------
-# Path helpers
+# Helpers
 # ---------------------------------------------------------------------------
 
 _BACKEND_DIR = Path(__file__).parents[2]
-_LIFECYCLE_MODULE = _BACKEND_DIR / "app" / "services" / "environment_lifecycle.py"
 _ADAPTER_DIR = (
     _BACKEND_DIR
     / "app"
@@ -39,10 +33,6 @@ _ADAPTER_DIR = (
     / "adapters"
 )
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _make_environment(
     sdk_building="claude-code/anthropic",
@@ -64,200 +54,89 @@ def _make_environment(
     return env
 
 
-def _load_lifecycle():
-    """Import EnvironmentLifecycleManager (lazy to avoid heavy app bootstrap)."""
-    import importlib.util
+# ---------------------------------------------------------------------------
+# 1. OpenCode adapter SUPPORTED_PROVIDERS
+# ---------------------------------------------------------------------------
 
-    spec = importlib.util.spec_from_file_location("environment_lifecycle", _LIFECYCLE_MODULE)
-    # The module has cross-imports — just import via the installed package path
-    from app.services.environment_lifecycle import EnvironmentLifecycleManager
+class TestOpenCodeAdapterSupportedProviders:
+    """Verify the adapter's SUPPORTED_PROVIDERS list."""
 
-    return EnvironmentLifecycleManager()
+    def test_core_providers_present(self):
+        """SUPPORTED_PROVIDERS includes the currently implemented providers."""
+        src = (_ADAPTER_DIR / "opencode_adapter.py").read_text()
+        start_idx = src.find("SUPPORTED_PROVIDERS")
+        if start_idx == -1:
+            pytest.fail("SUPPORTED_PROVIDERS not found in opencode_adapter.py")
+        block_end = src.find("]", start_idx)
+        block = src[start_idx:block_end + 1]
+
+        for provider in ("anthropic", "openai", "openai_compatible", "google"):
+            assert provider in block, f"'{provider}' not in SUPPORTED_PROVIDERS"
 
 
 # ---------------------------------------------------------------------------
-# 1. AICredentialType includes ollama
+# 2. Cross-SDK: Claude Code (building) + OpenCode (conversation)
 # ---------------------------------------------------------------------------
 
-class TestOllamaCredentialType:
-    """Verify the ollama credential type is registered in the enum."""
-
-    def test_ollama_in_enum(self):
-        from app.models.ai_credential import AICredentialType
-
-        assert AICredentialType.OLLAMA == "ollama"
-        assert "ollama" in [t.value for t in AICredentialType]
-
-    def test_ollama_validation_requires_base_url(self):
-        """ai_credentials_service rejects ollama credential without base_url."""
-        from app.services.ai_credentials_service import AICredentialsService
-        from app.models.ai_credential import AICredentialType
-        from fastapi import HTTPException
-
-        svc = AICredentialsService()
-        with pytest.raises(HTTPException) as exc_info:
-            svc._validate_credential_data(
-                cred_type=AICredentialType.OLLAMA,
-                api_key="ollama",
-                base_url=None,
-                model=None,
-            )
-        assert exc_info.value.status_code == 400
-        assert "Base URL" in str(exc_info.value.detail)
-
-    def test_ollama_validation_passes_with_base_url(self):
-        """ai_credentials_service accepts ollama credential with base_url."""
-        from app.services.ai_credentials_service import AICredentialsService
-        from app.models.ai_credential import AICredentialType
-
-        svc = AICredentialsService()
-        # Should not raise
-        svc._validate_credential_data(
-            cred_type=AICredentialType.OLLAMA,
-            api_key="ollama",
-            base_url="http://localhost:11434",
-            model=None,
-        )
-
-    def test_ollama_validation_optional_api_key(self):
-        """Ollama validation does not require a real API key (dummy 'ollama' works)."""
-        from app.services.ai_credentials_service import AICredentialsService
-        from app.models.ai_credential import AICredentialType
-
-        svc = AICredentialsService()
-        # Should not raise even with a dummy value
-        svc._validate_credential_data(
-            cred_type=AICredentialType.OLLAMA,
-            api_key="ollama",
-            base_url="http://host.docker.internal:11434",
-            model="llama3.2",
-        )
-
-
-# ---------------------------------------------------------------------------
-# 2. _generate_opencode_config_files — Ollama provider
-# ---------------------------------------------------------------------------
-
-class TestOpenCodeConfigGenerationOllama:
-    """Config file generation for the ollama provider."""
-
-    def test_ollama_config_uses_correct_model(self, tmp_path):
-        """Generated conversation config embeds ollama model string."""
-        from app.services.environment_lifecycle import EnvironmentLifecycleManager
-
-        mgr = EnvironmentLifecycleManager()
-        env = _make_environment(
-            sdk_building="claude-code/anthropic",
-            sdk_conversation="opencode/ollama",
-            model_override_conversation=None,  # use default
-        )
-
-        mgr._generate_opencode_config_files(
-            tmp_path,
-            env,
-            ollama_api_key="ollama",
-            ollama_base_url="http://localhost:11434",
-            ollama_model="llama3.2",
-        )
-
-        conv_config_path = tmp_path / "app" / "core" / ".opencode" / "conversation_config.json"
-        assert conv_config_path.exists(), "conversation_config.json not created"
-
-        config = json.loads(conv_config_path.read_text())
-        assert config["model"] == "ollama/llama3.2"
-
-    def test_ollama_config_auth_section(self, tmp_path):
-        """auth section in conversation config contains ollama key with baseURL."""
-        from app.services.environment_lifecycle import EnvironmentLifecycleManager
-
-        mgr = EnvironmentLifecycleManager()
-        env = _make_environment(
-            sdk_building="claude-code/anthropic",
-            sdk_conversation="opencode/ollama",
-        )
-
-        mgr._generate_opencode_config_files(
-            tmp_path,
-            env,
-            ollama_api_key="ollama",
-            ollama_base_url="http://localhost:11434",
-            ollama_model=None,
-        )
-
-        conv_config_path = tmp_path / "app" / "core" / ".opencode" / "conversation_config.json"
-        config = json.loads(conv_config_path.read_text())
-
-        assert "ollama" in config["auth"]
-        assert config["auth"]["ollama"]["baseURL"] == "http://localhost:11434"
-        assert config["auth"]["ollama"]["apiKey"] == "ollama"
-
-    def test_ollama_model_override_respected(self, tmp_path):
-        """Explicit model_override_conversation takes priority over ollama default."""
-        from app.services.environment_lifecycle import EnvironmentLifecycleManager
-
-        mgr = EnvironmentLifecycleManager()
-        env = _make_environment(
-            sdk_building="claude-code/anthropic",
-            sdk_conversation="opencode/ollama",
-            model_override_conversation="mistral",
-        )
-
-        mgr._generate_opencode_config_files(
-            tmp_path,
-            env,
-            ollama_api_key="ollama",
-            ollama_base_url="http://localhost:11434",
-            ollama_model="llama3.2",
-        )
-
-        conv_config_path = tmp_path / "app" / "core" / ".opencode" / "conversation_config.json"
-        config = json.loads(conv_config_path.read_text())
-        # model_override_conversation = "mistral" takes precedence
-        assert config["model"] == "mistral"
-
-    def test_ollama_no_building_config_when_building_uses_claude_code(self, tmp_path):
-        """Building config is NOT generated when building SDK is claude-code."""
-        from app.services.environment_lifecycle import EnvironmentLifecycleManager
-
-        mgr = EnvironmentLifecycleManager()
-        env = _make_environment(
-            sdk_building="claude-code/anthropic",
-            sdk_conversation="opencode/ollama",
-        )
-
-        mgr._generate_opencode_config_files(
-            tmp_path,
-            env,
-            ollama_api_key="ollama",
-            ollama_base_url="http://localhost:11434",
-        )
-
-        building_config_path = tmp_path / "app" / "core" / ".opencode" / "building_config.json"
-        # claude-code is not opencode → no building config
-        assert not building_config_path.exists()
-
-
-# ---------------------------------------------------------------------------
-# 3. Cross-SDK scenario: Claude Code Opus (building) + OpenCode GPT-4o-mini (conv)
-# ---------------------------------------------------------------------------
-
-class TestCrossSDKClaudeCodeBuildingOpenCodeConversation:
+class TestCrossSDKConfigGeneration:
     """
-    End-to-end config test for the canonical cross-SDK setup:
-    - Building: Claude Code + Anthropic + claude-opus-4 model override
-    - Conversation: OpenCode + OpenAI + gpt-4o-mini model override
+    Config generation for cross-SDK setup:
+    - Building: Claude Code (no opencode config generated)
+    - Conversation: OpenCode + OpenAI
     """
 
-    def test_cross_sdk_config_generation(self, tmp_path):
-        """Only conversation_config.json is generated; building uses Claude Code (no opencode config)."""
+    def test_conversation_config_generated(self, tmp_path):
+        """Conversation opencode.json is generated for opencode/openai."""
         from app.services.environment_lifecycle import EnvironmentLifecycleManager
 
         mgr = EnvironmentLifecycleManager()
         env = _make_environment(
             sdk_building="claude-code/anthropic",
             sdk_conversation="opencode/openai",
-            model_override_building="claude-opus-4",  # stored on env, used by claude code
-            model_override_conversation="gpt-4o-mini",
+            model_override_conversation="openai/gpt-4o-mini",
+        )
+
+        mgr._generate_opencode_config_files(
+            tmp_path,
+            env,
+            openai_api_key="sk-openai-test",
+        )
+
+        conv_config_path = tmp_path / "app" / "core" / ".opencode" / "conversation" / "opencode.json"
+        assert conv_config_path.exists(), "conversation/opencode.json must be created"
+
+        config = json.loads(conv_config_path.read_text())
+        assert config["model"] == "openai/gpt-4o-mini"
+
+    def test_no_building_config_for_claude_code(self, tmp_path):
+        """Building config is NOT generated when building SDK is claude-code."""
+        from app.services.environment_lifecycle import EnvironmentLifecycleManager
+
+        mgr = EnvironmentLifecycleManager()
+        env = _make_environment(
+            sdk_building="claude-code/anthropic",
+            sdk_conversation="opencode/openai",
+        )
+
+        mgr._generate_opencode_config_files(
+            tmp_path,
+            env,
+            openai_api_key="sk-openai-test",
+        )
+
+        building_config_path = tmp_path / "app" / "core" / ".opencode" / "building" / "opencode.json"
+        assert not building_config_path.exists(), (
+            "building/opencode.json must NOT be created when SDK is claude-code"
+        )
+
+    def test_both_modes_generated_for_opencode(self, tmp_path):
+        """Both building and conversation configs generated when both use opencode."""
+        from app.services.environment_lifecycle import EnvironmentLifecycleManager
+
+        mgr = EnvironmentLifecycleManager()
+        env = _make_environment(
+            sdk_building="opencode/anthropic",
+            sdk_conversation="opencode/openai",
         )
 
         mgr._generate_opencode_config_files(
@@ -268,338 +147,96 @@ class TestCrossSDKClaudeCodeBuildingOpenCodeConversation:
         )
 
         opencode_dir = tmp_path / "app" / "core" / ".opencode"
+        assert (opencode_dir / "building" / "opencode.json").exists()
+        assert (opencode_dir / "conversation" / "opencode.json").exists()
 
-        # Conversation config should exist with gpt-4o-mini
-        conv_path = opencode_dir / "conversation_config.json"
-        assert conv_path.exists(), "conversation_config.json must be created for opencode/openai"
 
-        conv_config = json.loads(conv_path.read_text())
-        assert conv_config["model"] == "gpt-4o-mini"
-        assert "openai" in conv_config["auth"]
-        assert conv_config["auth"]["openai"] == "sk-openai-test"
+# ---------------------------------------------------------------------------
+# 3. OpenCode config structure validation
+# ---------------------------------------------------------------------------
 
-        # Building config must NOT exist (claude-code, not opencode)
-        build_path = opencode_dir / "building_config.json"
-        assert not build_path.exists(), "building_config.json must NOT be created when SDK is claude-code"
+class TestOpenCodeConfigStructure:
+    """Verify structure of generated opencode.json config files."""
 
-    def test_cross_sdk_building_model_override_is_separate(self, tmp_path):
-        """model_override_building is stored on the environment but does not affect opencode config."""
+    def test_config_has_tools_section(self, tmp_path):
+        """Generated config enables built-in tools."""
         from app.services.environment_lifecycle import EnvironmentLifecycleManager
 
         mgr = EnvironmentLifecycleManager()
         env = _make_environment(
-            sdk_building="claude-code/anthropic",
-            sdk_conversation="opencode/openai",
-            model_override_building="claude-opus-4",
-            model_override_conversation="gpt-4o-mini",
+            sdk_building="opencode/anthropic",
+            sdk_conversation="opencode/anthropic",
         )
 
         mgr._generate_opencode_config_files(
-            tmp_path,
-            env,
-            anthropic_api_key="sk-ant-test",
-            openai_api_key="sk-openai-test",
+            tmp_path, env, anthropic_api_key="sk-ant-test",
         )
 
-        # The conversation config uses the conversation override only
-        conv_config = json.loads(
-            (tmp_path / "app" / "core" / ".opencode" / "conversation_config.json").read_text()
+        config = json.loads(
+            (tmp_path / "app" / "core" / ".opencode" / "conversation" / "opencode.json").read_text()
         )
-        assert conv_config["model"] == "gpt-4o-mini"
-        # The building model override is not leaking into the conversation config
-        assert conv_config["model"] != "claude-opus-4"
+        tools = config.get("tools", {})
+        for tool in ("bash", "read", "write", "edit", "glob", "grep"):
+            assert tools.get(tool) is True, f"Tool '{tool}' should be enabled"
 
-    def test_cross_sdk_openai_default_model_fallback(self, tmp_path):
-        """Without a model override, opencode/openai conversation uses gpt-4o-mini default."""
+    def test_config_has_mcp_bridges(self, tmp_path):
+        """Generated config includes MCP bridge servers."""
         from app.services.environment_lifecycle import EnvironmentLifecycleManager
 
         mgr = EnvironmentLifecycleManager()
         env = _make_environment(
-            sdk_building="claude-code/anthropic",
-            sdk_conversation="opencode/openai",
-            model_override_conversation=None,  # rely on provider default
+            sdk_building="opencode/anthropic",
+            sdk_conversation="opencode/anthropic",
         )
 
         mgr._generate_opencode_config_files(
-            tmp_path,
-            env,
-            openai_api_key="sk-openai-test",
+            tmp_path, env, anthropic_api_key="sk-ant-test",
         )
 
-        conv_config = json.loads(
-            (tmp_path / "app" / "core" / ".opencode" / "conversation_config.json").read_text()
+        config = json.loads(
+            (tmp_path / "app" / "core" / ".opencode" / "conversation" / "opencode.json").read_text()
         )
-        # Default for openai/conversation is gpt-4o-mini
-        assert conv_config["model"] == "openai/gpt-4o-mini"
+        mcp = config.get("mcp", {})
+        assert "knowledge" in mcp, "knowledge MCP bridge missing"
+        assert "task" in mcp, "task MCP bridge missing"
+        assert "collaboration" in mcp, "collaboration MCP bridge missing"
 
-
-# ---------------------------------------------------------------------------
-# 4. Bedrock config generation (verifying end-to-end Phase 2-3 integration)
-# ---------------------------------------------------------------------------
-
-class TestBedrockOpenCodeConfig:
-    """Config generation for opencode/bedrock."""
-
-    def test_bedrock_config_auth_structure(self, tmp_path):
-        """Bedrock auth section has the correct AWS credential structure."""
+    def test_config_has_server_ports(self, tmp_path):
+        """Building and conversation configs use different ports."""
         from app.services.environment_lifecycle import EnvironmentLifecycleManager
 
         mgr = EnvironmentLifecycleManager()
         env = _make_environment(
-            sdk_building="opencode/bedrock",
-            sdk_conversation="opencode/bedrock",
+            sdk_building="opencode/anthropic",
+            sdk_conversation="opencode/anthropic",
         )
 
         mgr._generate_opencode_config_files(
-            tmp_path,
-            env,
-            bedrock_access_key="AKIATEST",
-            bedrock_secret_key="secret123",
-            bedrock_region="us-east-1",
+            tmp_path, env, anthropic_api_key="sk-ant-test",
         )
 
-        building_config = json.loads(
-            (tmp_path / "app" / "core" / ".opencode" / "building_config.json").read_text()
-        )
-        conv_config = json.loads(
-            (tmp_path / "app" / "core" / ".opencode" / "conversation_config.json").read_text()
-        )
+        opencode_dir = tmp_path / "app" / "core" / ".opencode"
+        building_config = json.loads((opencode_dir / "building" / "opencode.json").read_text())
+        conv_config = json.loads((opencode_dir / "conversation" / "opencode.json").read_text())
 
-        for config in (building_config, conv_config):
-            assert "amazon-bedrock" in config["auth"]
-            creds = config["auth"]["amazon-bedrock"]
-            assert creds["accessKeyId"] == "AKIATEST"
-            assert creds["secretAccessKey"] == "secret123"
-            assert creds["region"] == "us-east-1"
+        assert building_config["server"]["port"] == 4096
+        assert conv_config["server"]["port"] == 4097
 
-    def test_bedrock_default_models(self, tmp_path):
-        """Bedrock uses different default models for building vs conversation."""
+    def test_config_file_permissions(self, tmp_path):
+        """Config files have restricted permissions (0600)."""
         from app.services.environment_lifecycle import EnvironmentLifecycleManager
+        import stat
 
         mgr = EnvironmentLifecycleManager()
         env = _make_environment(
-            sdk_building="opencode/bedrock",
-            sdk_conversation="opencode/bedrock",
+            sdk_building="opencode/anthropic",
+            sdk_conversation="opencode/anthropic",
         )
 
         mgr._generate_opencode_config_files(
-            tmp_path,
-            env,
-            bedrock_access_key="AKIATEST",
-            bedrock_secret_key="secret123",
-            bedrock_region="us-east-1",
+            tmp_path, env, anthropic_api_key="sk-ant-test",
         )
 
-        building_config = json.loads(
-            (tmp_path / "app" / "core" / ".opencode" / "building_config.json").read_text()
-        )
-        conv_config = json.loads(
-            (tmp_path / "app" / "core" / ".opencode" / "conversation_config.json").read_text()
-        )
-
-        # Building uses sonnet, conversation uses haiku
-        assert "sonnet" in building_config["model"].lower()
-        assert "haiku" in conv_config["model"].lower()
-
-
-# ---------------------------------------------------------------------------
-# 5. Azure config generation
-# ---------------------------------------------------------------------------
-
-class TestAzureOpenCodeConfig:
-    """Config generation for opencode/azure."""
-
-    def test_azure_auth_structure(self, tmp_path):
-        """Azure auth section has apiKey and resourceName."""
-        from app.services.environment_lifecycle import EnvironmentLifecycleManager
-
-        mgr = EnvironmentLifecycleManager()
-        env = _make_environment(
-            sdk_building="opencode/azure",
-            sdk_conversation="opencode/azure",
-        )
-
-        mgr._generate_opencode_config_files(
-            tmp_path,
-            env,
-            azure_api_key="azure-key-123",
-            azure_resource_name="my-azure-resource",
-        )
-
-        for fname in ("building_config.json", "conversation_config.json"):
-            config = json.loads(
-                (tmp_path / "app" / "core" / ".opencode" / fname).read_text()
-            )
-            assert "azure" in config["auth"]
-            assert config["auth"]["azure"]["apiKey"] == "azure-key-123"
-            assert config["auth"]["azure"]["resourceName"] == "my-azure-resource"
-
-    def test_azure_model_override(self, tmp_path):
-        """Model override is respected for Azure."""
-        from app.services.environment_lifecycle import EnvironmentLifecycleManager
-
-        mgr = EnvironmentLifecycleManager()
-        env = _make_environment(
-            sdk_building="opencode/azure",
-            sdk_conversation="opencode/azure",
-            model_override_building="azure/gpt-4o-2024-11-20",
-            model_override_conversation="azure/gpt-4o-mini",
-        )
-
-        mgr._generate_opencode_config_files(
-            tmp_path,
-            env,
-            azure_api_key="azure-key-123",
-            azure_resource_name="my-azure-resource",
-        )
-
-        building_config = json.loads(
-            (tmp_path / "app" / "core" / ".opencode" / "building_config.json").read_text()
-        )
-        conv_config = json.loads(
-            (tmp_path / "app" / "core" / ".opencode" / "conversation_config.json").read_text()
-        )
-
-        assert building_config["model"] == "azure/gpt-4o-2024-11-20"
-        assert conv_config["model"] == "azure/gpt-4o-mini"
-
-
-# ---------------------------------------------------------------------------
-# 6. OpenCode adapter _DEFAULT_MODELS includes ollama
-# ---------------------------------------------------------------------------
-
-class TestOpenCodeAdapterDefaults:
-    """Verify the adapter's default model table is correct for all providers."""
-
-    def _load_defaults(self):
-        """Load _DEFAULT_MODELS from the adapter module."""
-        import importlib.util
-
-        spec = importlib.util.spec_from_file_location(
-            "opencode_adapter",
-            _ADAPTER_DIR / "opencode_adapter.py",
-        )
-        mod = importlib.util.module_from_spec(spec)
-
-        # The adapter imports from sibling modules — patch those away
-        sys.modules.setdefault(
-            "opencode_adapter.base",
-            MagicMock(
-                BaseSDKAdapter=object,
-                SDKEvent=MagicMock,
-                SDKEventType=MagicMock(),
-                SDKConfig=MagicMock,
-                AdapterRegistry=MagicMock(register=lambda cls: cls),
-            ),
-        )
-        # Patch the relative import chain
-        for mod_name in [
-            "core.server.adapters.base",
-            "core.server.prompt_generator",
-            "core.server.active_session_manager",
-            "core.server.agent_env_service",
-        ]:
-            sys.modules.setdefault(mod_name, MagicMock())
-
-        # Manually load just the constants section without executing class body
-        src = (_ADAPTER_DIR / "opencode_adapter.py").read_text()
-        # Extract just the _DEFAULT_MODELS constant via exec on a minimal subset
-        local_ns: dict = {}
-        for line in src.split("\n"):
-            if line.startswith("_DEFAULT_MODELS") or (local_ns and line.startswith("}")):
-                break
-        # Parse by re-importing safely: use importlib in a subprocess-safe way
-        import ast
-
-        tree = ast.parse(src)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name) and target.id == "_DEFAULT_MODELS":
-                        return ast.literal_eval(node.value)
-        return {}
-
-    def test_ollama_in_default_models(self):
-        defaults = self._load_defaults()
-        assert "ollama" in defaults
-        assert "building" in defaults["ollama"]
-        assert "conversation" in defaults["ollama"]
-        assert defaults["ollama"]["building"].startswith("ollama/")
-
-    def test_all_expected_providers_in_defaults(self):
-        defaults = self._load_defaults()
-        expected = {"anthropic", "openai", "openai_compatible", "google", "bedrock", "azure", "ollama", "default"}
-        assert expected.issubset(set(defaults.keys()))
-
-    def test_ollama_supported_providers(self):
-        """SUPPORTED_PROVIDERS list in adapter includes ollama."""
-        src = (_ADAPTER_DIR / "opencode_adapter.py").read_text()
-        # SUPPORTED_PROVIDERS is a class attribute — find its line and check it contains "ollama"
-        for line in src.split("\n"):
-            if "SUPPORTED_PROVIDERS" in line and "ollama" in line:
-                return  # found it
-        # Also check multiline — the list may span multiple lines
-        # Find the block between SUPPORTED_PROVIDERS = [ ... ]
-        start_idx = src.find("SUPPORTED_PROVIDERS")
-        if start_idx == -1:
-            pytest.fail("SUPPORTED_PROVIDERS not found in opencode_adapter.py")
-        block_end = src.find("]", start_idx)
-        block = src[start_idx:block_end + 1]
-        assert "ollama" in block, f"'ollama' not in SUPPORTED_PROVIDERS block:\n{block}"
-
-
-# ---------------------------------------------------------------------------
-# 7. SDK→credential type mapping includes ollama in both lifecycle occurrences
-# ---------------------------------------------------------------------------
-
-class TestLifecycleSDKCredentialMapping:
-    """Verify both SDK_TO_CREDENTIAL_TYPE dicts in environment_lifecycle include ollama."""
-
-    def test_ollama_in_sdk_to_credential_map(self):
-        """Both occurrences of SDK_TO_CREDENTIAL_TYPE in lifecycle include opencode/ollama."""
-        src = _LIFECYCLE_MODULE.read_text()
-        # There should be two occurrences of "opencode/ollama" in the file
-        count = src.count('"opencode/ollama"')
-        assert count >= 2, (
-            f"Expected at least 2 occurrences of '\"opencode/ollama\"' in lifecycle, found {count}"
-        )
-
-    def test_ollama_maps_to_ollama_type(self):
-        """The opencode/ollama key maps to AICredentialType.OLLAMA."""
-        src = _LIFECYCLE_MODULE.read_text()
-        # Check that the mapping value is AICredentialType.OLLAMA
-        assert "AICredentialType.OLLAMA" in src
-
-
-# ---------------------------------------------------------------------------
-# 8. MCP bridge config presence for ollama-based environment
-# ---------------------------------------------------------------------------
-
-class TestOpenCodeOllamaMCPBridgeConfig:
-    """Generated ollama config includes MCP bridge servers."""
-
-    def test_ollama_config_has_mcp_bridges(self, tmp_path):
-        """Conversation config for ollama includes all three MCP bridge servers."""
-        from app.services.environment_lifecycle import EnvironmentLifecycleManager
-
-        mgr = EnvironmentLifecycleManager()
-        env = _make_environment(
-            sdk_building="claude-code/anthropic",
-            sdk_conversation="opencode/ollama",
-        )
-
-        mgr._generate_opencode_config_files(
-            tmp_path,
-            env,
-            ollama_api_key="ollama",
-            ollama_base_url="http://localhost:11434",
-        )
-
-        conv_config = json.loads(
-            (tmp_path / "app" / "core" / ".opencode" / "conversation_config.json").read_text()
-        )
-
-        mcp = conv_config.get("mcp", {})
-        assert "knowledge" in mcp, "knowledge MCP bridge missing from ollama config"
-        assert "task" in mcp, "task MCP bridge missing from ollama config"
-        assert "collaboration" in mcp, "collaboration MCP bridge missing from ollama config"
+        config_path = tmp_path / "app" / "core" / ".opencode" / "conversation" / "opencode.json"
+        mode = config_path.stat().st_mode & 0o777
+        assert mode == 0o600, f"Expected 0600 permissions, got {oct(mode)}"

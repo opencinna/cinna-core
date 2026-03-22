@@ -24,17 +24,27 @@ _WEBAPP_ACTION_TAG_RE = re.compile(
     re.DOTALL,
 )
 
-# Pre-allowed tools that never require user approval
-# These match the default tools in agent-env's sdk_manager.py
+# Pre-allowed tools that never require user approval.
+# Canonical source: tool_name_registry.PRE_APPROVED_TOOLS (inside agent-env).
+# Kept in sync here because the backend cannot import from agent-env templates.
+# Convention: all tool names are **lowercase**.
 PRE_ALLOWED_TOOLS = frozenset([
-    "Read", "Edit", "Glob", "Grep", "Bash", "Write", "WebFetch", "WebSearch", "TodoWrite",
-    "Task", "Skill", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "NotebookEdit",
-    "KillShell", "TaskOutput",
-    # Additional built-in tools
-    "mcp__knowledge__query_integration_knowledge", "mcp__task__create_agent_task",
-    "mcp__task__update_session_state", "mcp__task__respond_to_task",
-    # Collaboration tools
-    "mcp__task__create_collaboration", "mcp__task__post_finding",
+    # Built-in SDK tools (unified lowercase)
+    "read", "write", "edit", "bash", "glob", "grep",
+    "webfetch", "websearch", "todowrite",
+    "task", "skill", "askuserquestion",
+    "enterplanmode", "exitplanmode", "notebookedit",
+    "killshell", "taskoutput",
+    # OpenCode-only built-ins
+    "list", "patch",
+    # MCP bridge tools (knowledge)
+    "mcp__knowledge__query_integration_knowledge",
+    # MCP bridge tools (task + collaboration — unified under task prefix)
+    "mcp__task__create_agent_task",
+    "mcp__task__update_session_state",
+    "mcp__task__respond_to_task",
+    "mcp__task__create_collaboration",
+    "mcp__task__post_finding",
     "mcp__task__get_collaboration_status",
 ])
 
@@ -877,7 +887,7 @@ class MessageService:
     def detect_ask_user_question_tool(streaming_events: list[dict]) -> bool:
         """Check if AskUserQuestion tool was called in streaming events"""
         for event in streaming_events:
-            if event.get("type") == "tool" and event.get("tool_name") == "AskUserQuestion":
+            if event.get("type") == "tool" and (event.get("tool_name") or "").lower() == "askuserquestion":
                 return True
         return False
 
@@ -1257,11 +1267,15 @@ class MessageService:
         from app.models.event import EventType
 
         tool_name = event["tool_name"]
+        # Normalize to lowercase for comparison (adapters should already emit
+        # lowercase, but agent_allowed_tools in DB may contain legacy PascalCase)
+        tool_name_lower = tool_name.lower()
 
         # Check if tool needs approval (not in pre-allowed or agent's allowed_tools)
+        agent_allowed_lower = {t.lower() for t in agent_allowed_tools}
         needs_approval = (
-            tool_name not in PRE_ALLOWED_TOOLS and
-            tool_name not in agent_allowed_tools
+            tool_name_lower not in PRE_ALLOWED_TOOLS and
+            tool_name_lower not in agent_allowed_lower
         )
         if needs_approval:
             if "metadata" not in event:

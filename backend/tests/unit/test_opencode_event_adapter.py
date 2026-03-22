@@ -8,35 +8,11 @@ Run: cd backend && python -m pytest tests/unit/test_opencode_event_adapter.py -v
 """
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Path setup — adapters live in the env-template tree
-# ---------------------------------------------------------------------------
-
-_ADAPTERS_DIR = (
-    Path(__file__).parents[2]
-    / "app"
-    / "env-templates"
-    / "app_core_base"
-    / "core"
-    / "server"
-    / "adapters"
-)
-
-# We need the parent of adapters on sys.path so `from .base import ...` works.
-# But since adapters is a sub-package, we mock the package structure.
-_CORE_SERVER_DIR = _ADAPTERS_DIR.parent
-_CORE_DIR = _CORE_SERVER_DIR.parent
-_APP_CORE_BASE = _CORE_DIR.parent
-
-# Add the app_core_base to path so imports resolve
-if str(_APP_CORE_BASE) not in sys.path:
-    sys.path.insert(0, str(_APP_CORE_BASE))
-
+# sys.path setup is handled by tests/unit/conftest.py
 from core.server.adapters.opencode_event_adapter import (
     OpenCodeEventAdapter,
     OpenCodeEventLogger,
@@ -447,7 +423,7 @@ class TestToolEvents:
         assert evt.tool_name == "read"
         assert "read" in evt.content
         assert evt.metadata["tool_call_id"] == "call_001"
-        assert evt.metadata["tool_input"]["filePath"] == "/app/workspace/scripts"
+        assert evt.metadata["tool_input"]["file_path"] == "/app/workspace/scripts"
 
     def test_tool_completed_emits_tool_result(self, adapter):
         result = adapter.translate(EVT_TOOL_COMPLETED, SESSION_ID)
@@ -601,7 +577,7 @@ class TestConversationReplay:
 
         assert len(tool_use) == 1
         assert tool_use[0].tool_name == "read"
-        assert tool_use[0].metadata["tool_input"]["filePath"] == "/app/workspace/scripts"
+        assert tool_use[0].metadata["tool_input"]["file_path"] == "/app/workspace/scripts"
 
         assert len(tool_result) == 1
         assert "init_db.py" in tool_result[0].content
@@ -927,7 +903,7 @@ class TestRealSessionReplay:
         assert tool_use[0].tool_name == "glob"
         assert tool_use[0].metadata["tool_input"]["pattern"] == "*"
         assert tool_use[1].tool_name == "read"
-        assert tool_use[1].metadata["tool_input"]["filePath"] == "/app/workspace/scripts/README.md"
+        assert tool_use[1].metadata["tool_input"]["file_path"] == "/app/workspace/scripts/README.md"
 
         assert len(tool_result) == 2
         assert "README.md" in tool_result[0].content

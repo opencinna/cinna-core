@@ -982,9 +982,11 @@ class AgentService:
         sdk_tools = set(config.get("sdk_tools", []))
         allowed_tools = set(config.get("allowed_tools", []))
 
-        # Pending = sdk_tools - allowed_tools
-        pending = sdk_tools - allowed_tools
-        return list(pending)
+        # Pending = sdk_tools - allowed_tools (case-insensitive to handle
+        # legacy PascalCase data mixed with new lowercase convention)
+        allowed_lower = {t.lower() for t in allowed_tools}
+        pending = [t for t in sdk_tools if t.lower() not in allowed_lower]
+        return pending
 
     @staticmethod
     def update_sdk_tools(session: Session, agent_id: UUID, tools: list[str]) -> AgentSdkConfig:

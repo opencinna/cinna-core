@@ -149,7 +149,7 @@ Test categories (43 tests total):
 Run tests:
 ```bash
 cd backend && source .venv/bin/activate
-python -m pytest tests/unit/test_opencode_event_adapter.py -v --noconftest
+python -m pytest tests/unit/test_opencode_event_adapter.py -v
 ```
 
 ## Still TODO

@@ -15,14 +15,14 @@ Tool call rendering provides specialized visual feedback for each type of tool t
 
 | Tool Name | Block Component | What It Shows | Compact Behavior |
 |-----------|----------------|---------------|-----------------|
-| `Read` | ReadToolBlock | File path being read | Filename only with icon |
-| `Write` | WriteToolBlock | File path + content being written | Same (no compact variant) |
-| `Edit` | EditToolBlock | File path + old/new string comparison | Filename only with icon |
-| `Bash` | BashToolBlock | Shell command being executed | CompactBashBlock (shortened) |
-| `Glob` | GlobToolBlock | Glob pattern for file matching | Same |
-| `WebSearch` | WebSearchToolBlock | Search query text | Same |
-| `TodoWrite` | TodoWriteToolBlock | Todo items with completion status | Same |
-| `AskUserQuestion` | AskUserQuestionToolBlock | Count of questions received | Same |
+| `read` | ReadToolBlock | File path being read | Filename only with icon |
+| `write` | WriteToolBlock | File path + content being written | Same (no compact variant) |
+| `edit` | EditToolBlock | File path + old/new string comparison | Filename only with icon |
+| `bash` | BashToolBlock | Shell command being executed | CompactBashBlock (shortened) |
+| `glob` | GlobToolBlock | Glob pattern for file matching | Same |
+| `websearch` | WebSearchToolBlock | Search query text | Same |
+| `todowrite` | TodoWriteToolBlock | Todo items with completion status | Same |
+| `askuserquestion` | AskUserQuestionToolBlock | Count of questions received | Same |
 | `mcp__knowledge__query_integration_knowledge` | KnowledgeQueryToolBlock | Query + article IDs | Same |
 | `mcp__task__create_agent_task` | AgentHandoverToolBlock | Target agent + task message, or inbox task | Same |
 | `mcp__task__update_session_state` | UpdateSessionStateToolBlock | Result state + summary | Same |
@@ -33,7 +33,7 @@ Tool call rendering provides specialized visual feedback for each type of tool t
 
 The `ToolCallBlock` component matches tools by `toolName.toLowerCase()` and checks for required input fields:
 
-- Match requires both name AND required fields present (e.g., `Read` needs `file_path`, `Edit` needs `file_path` + `old_string` + `new_string`)
+- Match requires both name AND required fields present (e.g., `read` needs `file_path`, `edit` needs `file_path` + `old_string` + `new_string`)
 - If a known tool name is missing required fields, it falls to the default renderer
 - Compact mode is checked via `conversationModeUi === "compact"` — some tools have dedicated compact variants, others render the same in both modes
 

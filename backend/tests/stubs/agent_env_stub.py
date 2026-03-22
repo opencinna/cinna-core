@@ -20,7 +20,7 @@ def build_simple_response_events(
             "type": "system",
             "subtype": "tools_init",
             "content": "",
-            "data": {"tools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]},
+            "data": {"tools": ["bash", "read", "write", "edit", "glob", "grep"]},
             "metadata": {},
         },
         {"type": "assistant", "content": text, "metadata": {"model": model}},

@@ -26,19 +26,30 @@ def _get_test_engine():
     return create_engine(str(uri))
 
 
-test_engine = _get_test_engine()
+# Lazy engine — only created when a DB-dependent fixture is first used.
+# This allows unit tests (tests/unit/) to run without a database connection.
+_test_engine = None
+
+
+def _ensure_test_engine():
+    global _test_engine
+    if _test_engine is None:
+        _test_engine = _get_test_engine()
+    return _test_engine
 
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_db() -> Generator[None, None, None]:
     """Run Alembic migrations and seed the test database once per session."""
+    engine = _ensure_test_engine()
+
     # Run Alembic migrations against the test DB
     alembic_cfg = Config("alembic.ini")
     alembic_cfg.set_main_option("sqlalchemy.url", str(settings.TEST_SQLALCHEMY_DATABASE_URI))
     command.upgrade(alembic_cfg, "head")
 
     # Seed the superuser
-    with Session(test_engine) as session:
+    with Session(engine) as session:
         init_db(session)
     yield
 
@@ -53,7 +64,8 @@ def db() -> Generator[Session, None, None]:
     and re-open a savepoint so the outer transaction is never committed.
     After the test, we roll back the outer transaction, undoing all changes.
     """
-    connection = test_engine.connect()
+    engine = _ensure_test_engine()
+    connection = engine.connect()
     transaction = connection.begin()
     session = Session(bind=connection)
 

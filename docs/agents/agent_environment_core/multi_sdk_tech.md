@@ -35,6 +35,7 @@
 - `backend/app/env-templates/app_core_base/core/server/adapters/opencode_adapter.py`
 - `backend/app/env-templates/app_core_base/core/server/adapters/opencode_event_adapter.py`
 - `backend/app/env-templates/app_core_base/core/server/adapters/google_adk.py`
+- `backend/app/env-templates/app_core_base/core/server/adapters/tool_name_registry.py` — unified lowercase tool name convention: maps, pre-approved set, `normalize_tool_name()`
 - `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/knowledge_server.py`
 - `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/task_server.py`
 - `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/collaboration_server.py`
