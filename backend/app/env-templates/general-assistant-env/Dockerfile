@@ -32,7 +32,7 @@ RUN curl -fsSL https://opencode.ai/install | bash
 WORKDIR /app
 
 # Place executables in the environment at the front of the path
-ENV PATH="/app/.venv/bin:$PATH"
+ENV PATH="/app/.venv/bin:/root/.opencode/bin:$PATH"
 
 # Compile bytecode
 ENV UV_COMPILE_BYTECODE=1

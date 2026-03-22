@@ -33,7 +33,7 @@ WORKDIR /app
 
 # Place executables in the environment at the front of the path
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#using-the-environment
-ENV PATH="/app/.venv/bin:$PATH"
+ENV PATH="/app/.venv/bin:/root/.opencode/bin:$PATH"
 
 # Compile bytecode
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#compiling-bytecode

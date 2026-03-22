@@ -34,7 +34,10 @@ logger = logging.getLogger(__name__)
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8000")
 AGENT_AUTH_TOKEN = os.getenv("AGENT_AUTH_TOKEN", "")
 
-SESSION_CONTEXT_PATH = Path("/app/core/.opencode/session_context.json")
+# Session context is written by the adapter into the opencode serve runtime dir.
+# MCP bridge servers are spawned by opencode serve with cwd = runtime dir,
+# so reading from cwd works for per-mode dirs (/tmp/.opencode_{mode}).
+SESSION_CONTEXT_PATH = Path("session_context.json")
 HANDOVER_CONFIG_PATH = Path("/app/workspace/docs/agent_handover_config.json")
 
 # ---------------------------------------------------------------------------

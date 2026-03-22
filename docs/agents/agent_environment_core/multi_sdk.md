@@ -11,6 +11,7 @@ Allow users to choose different AI SDK engines and providers per agent environme
 | **SDK Engine** | The runtime technology used (e.g., `claude-code`, `opencode`, `google-adk-wr`) |
 | **SDK ID** | Full adapter identifier combining engine and provider (e.g., `claude-code/anthropic`, `opencode/openai`) |
 | **Adapter** | Runtime component inside the agent environment that translates SDK calls to a unified event stream |
+| **SDKEvent** | Unified event object produced by all adapters; the backend processes only this format regardless of SDK |
 | **Building Mode** | Environment state used for agent development and configuration |
 | **Conversation Mode** | Environment state used for executing tasks and chat |
 | **SDK Selection** | Per-environment choice of SDK for each mode — set at creation, immutable afterward |
@@ -18,6 +19,18 @@ Allow users to choose different AI SDK engines and providers per agent environme
 | **AI Credential** | Named, encrypted API key for a specific LLM provider; selected per environment mode |
 | **Model Override** | Optional per-mode field on the environment that overrides the adapter's default model selection |
 | **SDK ↔ Credential Compatibility** | Each SDK engine only works with certain credential types; filtered in UI and validated by backend |
+| **MCP Bridge** | Stdio MCP servers that expose platform tools (knowledge, task, collaboration) to OpenCode agents |
+
+## Adapter Pattern — Core Concept
+
+Every SDK adapter follows a single contract: implement `send_message_stream()` and yield `SDKEvent` objects. The backend never speaks to an SDK directly — it only processes `SDKEvent` streams.
+
+This means adding a new SDK requires only:
+1. A class implementing `BaseSDKAdapter` with `send_message_stream()` and `interrupt_session()`
+2. Registration via `@AdapterRegistry.register`
+3. A config file generator in `environment_lifecycle.py`
+
+The event translation layer for each adapter is responsible for converting SDK-specific event formats (streaming JSON, SSE, gRPC) into the six core `SDKEventType` values the backend understands.
 
 ## Supported SDKs
 
@@ -82,9 +95,9 @@ Defined as `SDK_CREDENTIAL_COMPATIBILITY` in `backend/app/services/environment_s
 
 1. Container starts; `SDK_ADAPTER_BUILDING` and `SDK_ADAPTER_CONVERSATION` env vars are set
 2. SDK Manager reads the adapter ID for the current mode
-3. Adapter checks for a settings file at the expected path
-4. If found, settings are loaded and the SDK client is configured (base URL, auth token, model)
-5. If not found, falls back to environment variable-based credentials (Anthropic default)
+3. Adapter loads its per-mode config file from the expected path
+4. For OpenCode: `opencode serve` subprocess is launched on a dedicated port (building: 4096, conversation: 4097)
+5. All adapters translate their SDK's native events into `SDKEvent` objects for the backend
 
 ## Business Rules
 
@@ -97,6 +110,7 @@ Defined as `SDK_CREDENTIAL_COMPATIBILITY` in `backend/app/services/environment_s
 - **Model override:** `model_override_building` / `model_override_conversation` are optional; when set they override the adapter's default model. Resolution order: explicit override → mode default → SDK default.
 - **Rebuild regeneration:** After an environment rebuild (core replacement), config files are regenerated from stored credentials for all three SDK types
 - **Encrypted storage:** All AI credentials are stored per the named `AICredential` model; no migration needed for new provider types
+- **OpenCode per-mode isolation:** Building and conversation modes each run their own `opencode serve` process on separate ports with separate config directories. No shared state between concurrent sessions.
 
 ## Architecture Overview
 
@@ -120,19 +134,21 @@ Backend: environment_lifecycle.py (generate .env + config files per SDK)
          │                            .claude/conversation_settings.json
          ├── Google ADK             → .google-adk/building_settings.json
          │                            .google-adk/conversation_settings.json
-         └── OpenCode               → .opencode/building_config.json
-                                      .opencode/conversation_config.json
-                                      (auth + model + mcp config embedded)
+         └── OpenCode               → .opencode/building/opencode.json
+                                      .opencode/conversation/opencode.json
+                                      (model, provider registration, API key,
+                                       permissions, tools, MCP bridges)
          │
          ▼
 Agent Environment Container
   SDK_ADAPTER_BUILDING / SDK_ADAPTER_CONVERSATION (env vars)
          │
          ▼
-sdk_manager.py → AdapterRegistry → ClaudeCodeAdapter
-                                 → OpenCodeAdapter (HTTP → opencode serve :4096)
-                                 → GoogleADKAdapter
+sdk_manager.py → AdapterRegistry → ClaudeCodeAdapter (subprocess python SDK)
+                                 → OpenCodeAdapter (HTTP → opencode serve :4096/:4097)
+                                 → GoogleADKAdapter (ADK runner)
          │
+         ▼ Each adapter translates SDK-native events
          ▼
 Unified SDKEvent stream → Backend WebSocket → Frontend
 ```
@@ -143,3 +159,4 @@ Unified SDKEvent stream → Backend WebSocket → Frontend
 - **AI Credentials:** User-level credential storage and encryption — see [AI Credentials](../../application/ai_credentials/ai_credentials.md)
 - **Agent Environment Core:** The `sdk_manager.py` and adapters live inside the environment core — see [Agent Environment Core](agent_environment_core.md)
 - **Environment Data Management:** Rebuild flow must regenerate settings files — see [Agent Environment Data Management](../agent_environment_data_management/agent_environment_data_management.md)
+- **Tools Approval:** OpenCode permission events (`permission.asked`) are forwarded to the frontend as SYSTEM events — see [Tools Approval Management](tools_approval_management.md)

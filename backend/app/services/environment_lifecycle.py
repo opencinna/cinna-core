@@ -1287,7 +1287,8 @@ class EnvironmentLifecycleManager:
         self._generate_env_file(
             instance_dir, environment, agent, port, auth_token,
             anthropic_api_key, minimax_api_key,
-            openai_compatible_api_key, openai_compatible_base_url, openai_compatible_model
+            openai_compatible_api_key, openai_compatible_base_url, openai_compatible_model,
+            openai_api_key=openai_api_key, google_api_key=google_api_key,
         )
 
         # 6. Write Claude Code PreToolUse hook settings for credential access detection
@@ -1363,7 +1364,9 @@ class EnvironmentLifecycleManager:
         minimax_api_key: str | None = None,
         openai_compatible_api_key: str | None = None,
         openai_compatible_base_url: str | None = None,
-        openai_compatible_model: str | None = None
+        openai_compatible_model: str | None = None,
+        openai_api_key: str | None = None,
+        google_api_key: str | None = None,
     ):
         """Generate .env files for docker-compose and application, and SDK settings files."""
         logger.debug(f"Generating .env files for environment {environment.id}")
@@ -1433,6 +1436,8 @@ CLAUDE_CODE_PERMISSION_MODE=acceptEdits
 # AI Service Credentials (passed to container)
 {anthropic_api_key_line}
 {claude_code_oauth_token_line}
+OPENAI_API_KEY={openai_api_key or ""}
+GOOGLE_API_KEY={google_api_key or ""}
 
 # SDK Adapter Configuration
 # These variables tell the agent-env which adapter to use for each mode
@@ -1651,8 +1656,8 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
                 "conversation": "anthropic/claude-haiku-4-5-20251001",
             },
             "openai": {
-                "building": "openai/gpt-4o",
-                "conversation": "openai/gpt-4o-mini",
+                "building": "openai/gpt-5.4-mini",
+                "conversation": "openai/gpt-5.4-nano",
             },
             "openai_compatible": {
                 "building": openai_compatible_model or "openai/gpt-4",
@@ -1670,18 +1675,47 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
                 return sdk_value.split("/", 1)[1]
             return "anthropic"  # default
 
-        def _build_auth(provider: str) -> dict:
-            """Build the auth section for the given provider."""
-            auth: dict = {}
-            if provider in ("anthropic", "default") and anthropic_api_key:
-                auth["anthropic"] = anthropic_api_key
-            elif provider == "openai" and openai_api_key:
-                auth["openai"] = openai_api_key
-            elif provider == "openai_compatible" and openai_compatible_api_key:
-                auth["openai-compatible"] = openai_compatible_api_key
-            elif provider == "google" and google_api_key:
-                auth["google"] = google_api_key
-            return auth
+        def _build_provider_config(provider: str, model: str, api_key: str | None) -> dict:
+            """
+            Build the provider section that registers the selected model
+            and embeds the API key for authentication.
+
+            OpenCode only recognizes models declared in its built-in list
+            or explicitly registered in the provider config.  This ensures
+            any model (including newer ones like gpt-5.4-nano) is accepted.
+
+            The API key is written directly into the config so it's available
+            immediately when opencode serve starts — no env-var indirection.
+            Config files live inside the read-only core volume (0o600 perms).
+            """
+            # Extract the model ID (part after the slash)
+            if "/" in model:
+                model_id = model.split("/", 1)[1]
+            else:
+                model_id = model
+
+            # Map our provider names to OpenCode provider IDs
+            provider_id = {
+                "anthropic": "anthropic",
+                "openai": "openai",
+                "openai_compatible": "openai-compatible",
+                "google": "google",
+            }.get(provider, provider)
+
+            provider_entry: dict = {
+                "models": {
+                    model_id: {
+                        "name": model_id,
+                    },
+                },
+            }
+
+            if api_key:
+                provider_entry["options"] = {
+                    "apiKey": api_key,
+                }
+
+            return {provider_id: provider_entry}
 
         def _build_config(mode: str, sdk_value: str) -> dict:
             """Build a complete opencode config dict for a given mode."""
@@ -1694,8 +1728,6 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
             )
             provider_defaults = _default_models.get(provider, _default_models.get("anthropic", {}))
             model = model_override or provider_defaults.get(mode, "anthropic/claude-sonnet-4-5")
-
-            auth = _build_auth(provider)
 
             # MCP bridge servers expose platform custom tools to OpenCode agents.
             # All three servers are registered for both modes so the agent can
@@ -1727,10 +1759,29 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
                 },
             }
 
+            # Register the selected model with OpenCode so it's recognized.
+            # OpenCode only knows about its built-in models; any model not in
+            # its default list must be declared in the provider config section.
+            api_key = {
+                "anthropic": anthropic_api_key,
+                "openai": openai_api_key,
+                "openai_compatible": openai_compatible_api_key,
+                "google": google_api_key,
+            }.get(provider)
+            provider_config = _build_provider_config(provider, model, api_key)
+
             config = {
                 "$schema": "https://opencode.ai/config.json",
                 "model": model,
-                "permission": {"*": "allow"},
+                "provider": provider_config,
+                "permission": {
+                    "*": "allow",
+                    "external_directory": {
+                        "/app/workspace/**": "allow",
+                        "/app/**": "allow",
+                        "/tmp/**": "allow",
+                    },
+                },
                 "tools": {
                     "webfetch": True,
                     "websearch": True,
@@ -1745,42 +1796,39 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
                 },
                 "mcp": mcp_bridge_servers,
                 "server": {
-                    "port": 4096,
+                    "port": 4096 if mode == "building" else 4097,
                     "hostname": "127.0.0.1",
                 },
-                "auth": auth,
             }
 
             return config
 
-        # Generate building mode config if building uses opencode
-        if sdk_building.startswith("opencode"):
-            building_config = _build_config("building", sdk_building)
-            building_config_path = opencode_dir / "building_config.json"
-            with open(building_config_path, 'w') as f:
-                _json.dump(building_config, f, indent=2)
-            logger.info(f"Generated OpenCode building config for environment {environment.id}")
+        # Generate per-mode config directories.
+        # Each mode gets its own subdirectory with an opencode.json that
+        # `opencode serve` reads from its cwd.  The adapter runs a separate
+        # server instance per mode so there is no config sharing or race.
+        for mode_name, sdk_id in [("building", sdk_building), ("conversation", sdk_conversation)]:
+            if not sdk_id.startswith("opencode"):
+                continue
 
-        # Generate conversation mode config if conversation uses opencode
-        if sdk_conversation.startswith("opencode"):
-            conversation_config = _build_config("conversation", sdk_conversation)
-            conversation_config_path = opencode_dir / "conversation_config.json"
-            with open(conversation_config_path, 'w') as f:
-                _json.dump(conversation_config, f, indent=2)
-            logger.info(f"Generated OpenCode conversation config for environment {environment.id}")
+            mode_dir = opencode_dir / mode_name
+            mode_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write a shared auth.json using the first available opencode mode's provider
-        # This is the credentials file that opencode serve reads on startup
-        first_opencode_sdk = sdk_building if sdk_building.startswith("opencode") else sdk_conversation
-        provider = _get_provider_from_sdk(first_opencode_sdk)
-        shared_auth = _build_auth(provider)
-        if shared_auth:
-            auth_path = opencode_dir / "auth.json"
-            with open(auth_path, 'w') as f:
-                _json.dump(shared_auth, f, indent=2)
-            # Restrict file permissions so credentials are not world-readable
-            auth_path.chmod(0o600)
-            logger.info(f"Generated OpenCode auth.json for environment {environment.id}")
+            config = _build_config(mode_name, sdk_id)
+
+            # Write opencode.json — the main config for this mode's server.
+            # Auth is handled via env var references in the provider config
+            # (e.g. {env:OPENAI_API_KEY}), not via auth.json.
+            opencode_json_path = mode_dir / "opencode.json"
+            with open(opencode_json_path, 'w') as f:
+                _json.dump(config, f, indent=2)
+            # Restrict permissions — config contains the API key
+            opencode_json_path.chmod(0o600)
+
+            logger.info(
+                f"Generated OpenCode {mode_name} config for environment {environment.id} "
+                f"(model={config.get('model')}, port={config.get('server', {}).get('port')})"
+            )
 
     def _write_claude_code_hook_settings(self, instance_dir: Path, environment: AgentEnvironment):
         """
