@@ -823,6 +823,12 @@ class MessageService:
 
             logger.info(f"Starting stream for session {session_id} with {len(pending_messages)} pending message(s)")
 
+            # Mark messages as sent now — they have been delivered to the agent.
+            # This prevents the "pending" indicator from showing while the agent
+            # is already streaming its response.
+            with get_fresh_db_session() as db:
+                MessageService.mark_messages_as_sent(db, message_ids)
+
             # Stream the concatenated messages and emit each event via WebSocket
             async for event in MessageService.stream_message_with_events(
                 session_id=session_id,
@@ -851,11 +857,8 @@ class MessageService:
                 }
             )
 
-            # After successful stream, mark messages as sent and update session
+            # Update session state after stream completes
             with get_fresh_db_session() as db:
-                MessageService.mark_messages_as_sent(db, message_ids)
-
-                # Update session state
                 chat_session = db.get(ChatSession, session_id)
                 if chat_session:
                     chat_session.pending_messages_count = 0
