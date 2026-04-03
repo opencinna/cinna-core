@@ -85,6 +85,11 @@ class CommandService:
         return name, args
 
     @classmethod
+    def list_handlers(cls) -> list[CommandHandler]:
+        """Return an ordered list of all registered command handlers."""
+        return list(cls._handlers.values())
+
+    @classmethod
     async def execute(cls, content: str, context: CommandContext) -> CommandResult:
         """Dispatch to the appropriate command handler."""
         name, args = cls.parse_command(content)

@@ -3,18 +3,22 @@ from typing import Any
 import logging
 
 from fastapi import APIRouter, HTTPException
+from sqlmodel import select
 
-from app.api.deps import CurrentUserOrGuest, GuestShareContext, SessionDep
+from app.api.deps import CurrentUser, CurrentUserOrGuest, GuestShareContext, SessionDep
 from app.models import (
     Session,
     AgentEnvironment,
     MessageCreate,
     MessagesPublic,
+    SessionCommandPublic,
+    SessionCommandsPublic,
     User,
 )
 from app.services.message_service import MessageService
 from app.services.active_streaming_manager import active_streaming_manager
 from app.services.agent_guest_share_service import AgentGuestShareService
+from app.services.command_service import CommandService
 
 logger = logging.getLogger(__name__)
 
@@ -258,3 +262,70 @@ async def get_streaming_status(
             "is_streaming": False,
             "stream_info": None
         }
+
+
+@router.get("/{session_id}/commands", response_model=SessionCommandsPublic)
+async def list_session_commands(
+    session: SessionDep,
+    current_user: CurrentUser,
+    session_id: uuid.UUID,
+) -> Any:
+    """
+    List available slash commands for a session.
+
+    Returns all registered slash commands with name, description, and availability status.
+    The /rebuild-env command is marked unavailable if any session on the same environment
+    is actively streaming.
+
+    Authenticated users only; no guest access (command autocomplete is a UX aid for
+    the main chat session page which requires authentication).
+    """
+    # Ensure command handlers are registered (lazy import mirrors session_service.py pattern)
+    import app.services.commands  # noqa: F401
+
+    chat_session = session.get(Session, session_id)
+    if not chat_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Verify ownership
+    if not current_user.is_superuser and chat_session.user_id != current_user.id:
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    # Determine /rebuild-env availability: unavailable if any session on the same
+    # environment is actively streaming (mirrors the check in RebuildEnvCommandHandler)
+    is_rebuild_env_available = True
+    if chat_session.environment_id:
+        try:
+            session_ids = set(
+                session.exec(
+                    select(Session.id).where(
+                        Session.environment_id == chat_session.environment_id
+                    )
+                ).all()
+            )
+            if session_ids:
+                is_rebuild_env_available = not await active_streaming_manager.is_any_session_streaming(
+                    session_ids
+                )
+        except Exception:
+            logger.warning(
+                "Failed to check streaming status for /rebuild-env availability",
+                exc_info=True,
+            )
+            is_rebuild_env_available = True  # Default to available on error
+
+    commands = []
+    for handler in CommandService.list_handlers():
+        if handler.name == "/rebuild-env":
+            is_available = is_rebuild_env_available
+        else:
+            is_available = True
+        commands.append(
+            SessionCommandPublic(
+                name=handler.name,
+                description=handler.description,
+                is_available=is_available,
+            )
+        )
+
+    return SessionCommandsPublic(commands=commands)

@@ -1,5 +1,5 @@
-import { useState, KeyboardEvent, forwardRef, DragEvent } from "react"
-import { useMutation } from "@tanstack/react-query"
+import { useState, useEffect, useMemo, KeyboardEvent, forwardRef, DragEvent } from "react"
+import { useQuery, useMutation } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -18,8 +18,9 @@ import { RotatingHints } from "@/components/Common/RotatingHints"
 import { FileUploadModal } from "./FileUploadModal"
 import { GettingStartedModal } from "@/components/Onboarding/GettingStartedModal"
 import { FileBadge } from "./FileBadge"
-import { FilesService, UtilsService } from "@/client"
-import type { FileUploadPublic } from "@/client"
+import { FilesService, MessagesService, UtilsService } from "@/client"
+import type { FileUploadPublic, SessionCommandPublic } from "@/client"
+import { SlashCommandPopup } from "./SlashCommandPopup"
 import useCustomToast from "@/hooks/useCustomToast"
 
 interface MessageInputProps {
@@ -34,6 +35,8 @@ interface MessageInputProps {
   agentId?: string
   mode?: "building" | "conversation"
   isNewAgent?: boolean
+  /** When provided, enables slash command autocomplete popup. */
+  sessionId?: string
 }
 
 export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
@@ -47,6 +50,7 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
     agentId,
     mode = "conversation",
     isNewAgent = false,
+    sessionId,
   }, ref) {
     // Resolve effective streaming state: prefer the new isStreaming prop, fall
     // back to the legacy sendDisabled prop so callers that haven't migrated yet
@@ -58,7 +62,31 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
     const [isDraggingOver, setIsDraggingOver] = useState(false)
     const [showGettingStarted, setShowGettingStarted] = useState(false)
     const [isHovering, setIsHovering] = useState(false)
+    const [showCommandPopup, setShowCommandPopup] = useState(false)
+    const [selectedCommandIndex, setSelectedCommandIndex] = useState(-1)
     const { showErrorToast } = useCustomToast()
+
+    const { data: commandsData } = useQuery({
+      queryKey: ["sessionCommands", sessionId],
+      queryFn: () => MessagesService.listSessionCommands({ sessionId: sessionId! }),
+      enabled: !!sessionId && showCommandPopup,
+      staleTime: 30_000,
+    })
+
+    const filteredCommands = useMemo<SessionCommandPublic[]>(() => {
+      if (!commandsData?.commands || !message.startsWith("/")) return []
+      const query = message.toLowerCase()
+      return commandsData.commands.filter((cmd) => cmd.name.startsWith(query))
+    }, [commandsData, message])
+
+    // Clamp selectedCommandIndex when filteredCommands length changes
+    useEffect(() => {
+      if (filteredCommands.length === 0) {
+        setSelectedCommandIndex(-1)
+      } else {
+        setSelectedCommandIndex((prev) => Math.min(prev, filteredCommands.length - 1))
+      }
+    }, [filteredCommands.length])
 
     const refineMutation = useMutation({
       mutationFn: () =>
@@ -112,7 +140,83 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
       }
     }
 
+    const handleCommandSelect = (command: SessionCommandPublic) => {
+      if (!command.is_available) return
+      const fileIds = attachedFiles.map((f) => f.id)
+      onSend(command.name, fileIds)
+      setMessage("")
+      setAttachedFiles([])
+      setShowCommandPopup(false)
+      setSelectedCommandIndex(-1)
+    }
+
     const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (showCommandPopup && filteredCommands.length > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault()
+          setSelectedCommandIndex((prev) => {
+            let next = prev + 1
+            // Skip unavailable commands going forward
+            while (next < filteredCommands.length && !filteredCommands[next].is_available) {
+              next++
+            }
+            if (next >= filteredCommands.length) {
+              // Wrap to first available
+              next = filteredCommands.findIndex((c) => c.is_available)
+            }
+            return next === -1 ? prev : next
+          })
+          return
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault()
+          setSelectedCommandIndex((prev) => {
+            let next = prev - 1
+            // Skip unavailable commands going backward
+            while (next >= 0 && !filteredCommands[next].is_available) {
+              next--
+            }
+            if (next < 0) {
+              // Wrap to last available
+              const entries = filteredCommands.map((c, i) => ({ c, i })).filter((x) => x.c.is_available)
+              next = entries.length > 0 ? entries[entries.length - 1].i : prev
+            }
+            return next
+          })
+          return
+        }
+        if (e.key === "Tab") {
+          e.preventDefault()
+          const targetIndex =
+            selectedCommandIndex >= 0
+              ? selectedCommandIndex
+              : filteredCommands.findIndex((c) => c.is_available)
+          if (targetIndex >= 0 && filteredCommands[targetIndex]) {
+            setMessage(filteredCommands[targetIndex].name + " ")
+          }
+          return
+        }
+        if (e.key === "Enter" && !e.shiftKey) {
+          const cmd =
+            selectedCommandIndex >= 0 ? filteredCommands[selectedCommandIndex] : null
+          if (cmd?.is_available) {
+            e.preventDefault()
+            const fileIds = attachedFiles.map((f) => f.id)
+            onSend(cmd.name, fileIds)
+            setMessage("")
+            setAttachedFiles([])
+            setShowCommandPopup(false)
+            setSelectedCommandIndex(-1)
+            return
+          }
+        }
+        if (e.key === "Escape") {
+          e.preventDefault()
+          setShowCommandPopup(false)
+          setSelectedCommandIndex(-1)
+          return
+        }
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault()
         handleSend()
@@ -159,7 +263,15 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
     }
 
     return (
-      <div className="border-t p-4 bg-background/60 shrink-0">
+      <div className="border-t p-4 bg-background/60 shrink-0 relative">
+        {showCommandPopup && filteredCommands.length > 0 && (
+          <SlashCommandPopup
+            commands={filteredCommands}
+            selectedIndex={selectedCommandIndex}
+            onSelect={handleCommandSelect}
+            filter={message}
+          />
+        )}
         <div className="flex gap-2 items-end max-w-7xl mx-auto">
           {/* Add Button */}
           <DropdownMenu>
@@ -192,7 +304,16 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
             <Textarea
               ref={ref}
               value={message}
-              onChange={(e) => setMessage(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value
+                setMessage(val)
+                if (sessionId && val.startsWith("/")) {
+                  setShowCommandPopup(true)
+                } else {
+                  setShowCommandPopup(false)
+                  setSelectedCommandIndex(-1)
+                }
+              }}
               onKeyDown={handleKeyDown}
               placeholder={placeholder}
               className={`min-h-[60px] max-h-[200px] resize-none transition-colors pr-12 ${

@@ -153,25 +153,6 @@ export type AgentAccessTokenUpdate = {
     is_revoked?: (boolean | null);
 };
 
-/**
- * Public response model for AgentCollaboration with subtask details.
- */
-export type AgentCollaborationPublic = {
-    id: string;
-    title: string;
-    description: (string | null);
-    status: string;
-    coordinator_agent_id: string;
-    source_session_id: (string | null);
-    shared_context: {
-        [key: string]: unknown;
-    };
-    owner_id: string;
-    created_at: string;
-    updated_at: string;
-    subtasks?: Array<CollaborationSubtaskPublic>;
-};
-
 export type AgentCreate = {
     name: string;
     workflow_prompt?: (string | null);
@@ -376,6 +357,7 @@ export type AgenticTeamConnectionUpdate = {
 export type AgenticTeamCreate = {
     name: string;
     icon?: (string | null);
+    task_prefix?: (string | null);
 };
 
 /**
@@ -632,12 +614,25 @@ export type AgentSubtaskCreate = {
     assigned_to?: (string | null);
     priority?: string;
     task?: (string | null);
+    source_session_id?: (string | null);
 };
 
 export type AgentTaskCommentCreate = {
     content: string;
     comment_type?: string;
     file_paths?: (Array<(string)> | null);
+    source_session_id?: (string | null);
+};
+
+/**
+ * Agent request to create a new task
+ */
+export type AgentTaskCreate = {
+    title: string;
+    description?: (string | null);
+    assigned_to?: (string | null);
+    priority?: string;
+    source_session_id?: (string | null);
 };
 
 /**
@@ -646,6 +641,8 @@ export type AgentTaskCommentCreate = {
 export type AgentTaskOperationResponse = {
     success: boolean;
     task?: (string | null);
+    parent_task?: (string | null);
+    assigned_to?: (string | null);
     message?: (string | null);
     error?: (string | null);
 };
@@ -657,6 +654,7 @@ export type AgentTaskStatusUpdate = {
     status: string;
     reason?: (string | null);
     task?: (string | null);
+    source_session_id?: (string | null);
 };
 
 export type AgentUpdate = {
@@ -1016,24 +1014,6 @@ export type CloneUpdateRequestsPublic = {
     count: number;
 };
 
-/**
- * Public representation of a collaboration subtask.
- */
-export type CollaborationSubtaskPublic = {
-    id: string;
-    collaboration_id: string;
-    target_agent_id: string;
-    target_agent_name?: (string | null);
-    task_message: string;
-    status: string;
-    result_summary: (string | null);
-    input_task_id: (string | null);
-    session_id: (string | null);
-    order: number;
-    created_at: string;
-    updated_at: string;
-};
-
 export type ConsentApproveResponse = {
     redirect_url: string;
 };
@@ -1070,31 +1050,6 @@ export type CreateAgentTaskResponse = {
     success: boolean;
     task_id?: (string | null);
     session_id?: (string | null);
-    message?: (string | null);
-    error?: (string | null);
-};
-
-/**
- * Request body for POST /agents/collaborations/create (called from agent-env).
- *
- * Uses environment auth token rather than user JWT.
- */
-export type CreateCollaborationRequest = {
-    title: string;
-    description?: (string | null);
-    subtasks: Array<{
-        [key: string]: unknown;
-    }>;
-    source_session_id: string;
-};
-
-/**
- * Response from collaboration creation.
- */
-export type CreateCollaborationResponse = {
-    success: boolean;
-    collaboration_id?: (string | null);
-    subtask_count?: number;
     message?: (string | null);
     error?: (string | null);
 };
@@ -1410,7 +1365,6 @@ export type HandoverConfigPublic = {
     target_agent_name: string;
     handover_prompt: string;
     enabled: boolean;
-    auto_feedback: boolean;
     created_at: string;
     updated_at: string;
 };
@@ -1429,7 +1383,6 @@ export type HandoverConfigsPublic = {
 export type HandoverConfigUpdate = {
     handover_prompt?: (string | null);
     enabled?: (boolean | null);
-    auto_feedback?: (boolean | null);
 };
 
 export type HTTPValidationError = {
@@ -1967,23 +1920,6 @@ export type PluginSyncResponse = {
     failed_syncs?: number;
 };
 
-/**
- * Request to post a finding to the collaboration shared context.
- */
-export type PostFindingRequest = {
-    finding: string;
-    source_session_id?: (string | null);
-};
-
-/**
- * Response after posting a finding.
- */
-export type PostFindingResponse = {
-    success: boolean;
-    findings?: Array<(string)>;
-    error?: (string | null);
-};
-
 export type PrivateUserCreate = {
     email: string;
     password: string;
@@ -2173,6 +2109,16 @@ export type SendAnswerResponse = {
     queue_entry_id?: (string | null);
     generated_reply?: (string | null);
     error?: (string | null);
+};
+
+export type SessionCommandPublic = {
+    name: string;
+    description: string;
+    is_available: boolean;
+};
+
+export type SessionCommandsPublic = {
+    commands: Array<SessionCommandPublic>;
 };
 
 export type SessionCreate = {
@@ -3256,6 +3202,42 @@ export type AgentSharesDismissUpdateRequestData = {
 
 export type AgentSharesDismissUpdateRequestResponse = (CloneUpdateRequestPublic);
 
+export type AgentTasksAgentCreateTaskData = {
+    requestBody: AgentTaskCreate;
+};
+
+export type AgentTasksAgentCreateTaskResponse = (AgentTaskOperationResponse);
+
+export type AgentTasksAgentResolveTaskByCodeData = {
+    shortCode: string;
+};
+
+export type AgentTasksAgentResolveTaskByCodeResponse = (unknown);
+
+export type AgentTasksAgentAddCommentCurrentData = {
+    requestBody: AgentTaskCommentCreate;
+};
+
+export type AgentTasksAgentAddCommentCurrentResponse = (TaskCommentPublic);
+
+export type AgentTasksAgentUpdateStatusCurrentData = {
+    requestBody: AgentTaskStatusUpdate;
+};
+
+export type AgentTasksAgentUpdateStatusCurrentResponse = (AgentTaskOperationResponse);
+
+export type AgentTasksAgentGetTaskDetailsCurrentData = {
+    sourceSessionId: string;
+};
+
+export type AgentTasksAgentGetTaskDetailsCurrentResponse = (unknown);
+
+export type AgentTasksAgentCreateSubtaskCurrentData = {
+    requestBody: AgentSubtaskCreate;
+};
+
+export type AgentTasksAgentCreateSubtaskCurrentResponse = (AgentTaskOperationResponse);
+
 export type AgentTasksAgentAddCommentData = {
     requestBody: AgentTaskCommentCreate;
     taskId: string;
@@ -3285,6 +3267,7 @@ export type AgentTasksAgentListTasksData = {
 export type AgentTasksAgentListTasksResponse = (InputTasksPublicExtended);
 
 export type AgentTasksAgentGetTaskDetailsData = {
+    sourceSessionId?: (string | null);
     taskId: string;
 };
 
@@ -3334,31 +3317,6 @@ export type AiCredentialsGetAffectedEnvironmentsData = {
 };
 
 export type AiCredentialsGetAffectedEnvironmentsResponse = (AffectedEnvironmentsPublic);
-
-export type CollaborationsCreateCollaborationData = {
-    requestBody: CreateCollaborationRequest;
-};
-
-export type CollaborationsCreateCollaborationResponse = (CreateCollaborationResponse);
-
-export type CollaborationsPostFindingData = {
-    collaborationId: string;
-    requestBody: PostFindingRequest;
-};
-
-export type CollaborationsPostFindingResponse = (PostFindingResponse);
-
-export type CollaborationsGetCollaborationStatusData = {
-    collaborationId: string;
-};
-
-export type CollaborationsGetCollaborationStatusResponse = (AgentCollaborationPublic);
-
-export type CollaborationsGetCollaborationBySessionData = {
-    sessionId: string;
-};
-
-export type CollaborationsGetCollaborationBySessionResponse = (unknown);
 
 export type CredentialsShareCredentialData = {
     credentialId: string;
@@ -4186,6 +4144,12 @@ export type MessagesGetStreamingStatusData = {
 };
 
 export type MessagesGetStreamingStatusResponse = (unknown);
+
+export type MessagesListSessionCommandsData = {
+    sessionId: string;
+};
+
+export type MessagesListSessionCommandsResponse = (SessionCommandsPublic);
 
 export type OauthGetOauthConfigResponse = (OAuthConfig);
 

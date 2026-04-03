@@ -775,6 +775,9 @@ class EnvironmentLifecycleManager:
         Returns:
             True if rebuild successful
         """
+        from app.services.event_service import event_service
+        from app.models.event import EventType
+
         try:
             # Check current status
             current_status = await self.get_status(environment)
@@ -787,6 +790,18 @@ class EnvironmentLifecycleManager:
             environment.status_message = "Stopping container for rebuild..."
             db_session.add(environment)
             db_session.commit()
+
+            # Notify frontend immediately so the App icon updates
+            await event_service.emit_event(
+                event_type=EventType.ENVIRONMENT_STATUS_CHANGED,
+                model_id=environment.id,
+                user_id=agent.owner_id,
+                meta={
+                    "environment_id": str(environment.id),
+                    "agent_id": str(agent.id),
+                    "status": "rebuilding",
+                }
+            )
 
             # Stop if running
             if was_running:
@@ -967,8 +982,6 @@ class EnvironmentLifecycleManager:
                 db_session.commit()
 
                 # Emit ENVIRONMENT_ACTIVATED event to process any pending sessions
-                from app.services.event_service import event_service
-                from app.models.event import EventType
                 await event_service.emit_event(
                     event_type=EventType.ENVIRONMENT_ACTIVATED,
                     model_id=environment.id,
@@ -986,6 +999,17 @@ class EnvironmentLifecycleManager:
                 db_session.add(environment)
                 db_session.commit()
 
+                await event_service.emit_event(
+                    event_type=EventType.ENVIRONMENT_STATUS_CHANGED,
+                    model_id=environment.id,
+                    user_id=agent.owner_id,
+                    meta={
+                        "environment_id": str(environment.id),
+                        "agent_id": str(agent.id),
+                        "status": "stopped",
+                    }
+                )
+
             logger.info(f"Environment {environment.id} rebuilt successfully")
             return True
 
@@ -997,6 +1021,19 @@ class EnvironmentLifecycleManager:
             flag_modified(environment, "config")
             db_session.add(environment)
             db_session.commit()
+
+            await event_service.emit_event(
+                event_type=EventType.ENVIRONMENT_STATUS_CHANGED,
+                model_id=environment.id,
+                user_id=agent.owner_id,
+                meta={
+                    "environment_id": str(environment.id),
+                    "agent_id": str(agent.id),
+                    "status": "error",
+                    "error": str(e),
+                }
+            )
+
             logger.error(f"Failed to rebuild environment {environment.id}: {e}")
             raise
 

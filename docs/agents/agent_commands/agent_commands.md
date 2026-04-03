@@ -36,6 +36,7 @@ Slash commands (`/files`, `/session-recover`, etc.) are instant, deterministic a
 
 - Commands bypass the LLM pipeline entirely — no streaming, no agent-env activation
 - Command messages are marked `sent_to_agent_status="sent"` to prevent them being picked up by the streaming system
+- Command responses are created as **system messages** (`role="system"`), not agent messages — they appear as centered system notifications in the UI, visually distinct from LLM-generated responses
 - Command detection occurs after session validation but before file handling — all callers (UI, A2A send, A2A stream) benefit automatically
 - Link format differs by caller: UI links point to frontend routes; A2A links use public backend endpoints with workspace view tokens
 - Non-matching `/xyz` inputs (unregistered commands) are forwarded to the LLM as normal messages
@@ -54,7 +55,7 @@ SessionService.send_session_message()   ← single entry point for all callers
          │       YES → Build CommandContext
          │             Create user message (sent_to_agent_status="sent")
          │             CommandService.execute() → handler.execute()
-         │             Create agent message with markdown response
+         │             Create system message with markdown response (role="system")
          │             Emit WebSocket events (UI real-time update)
          │             Return {action: "command_executed", ...}
          │

@@ -7,6 +7,7 @@ workspace data. Fails if any session connected to this environment is actively
 streaming.
 """
 import logging
+from uuid import UUID
 
 from sqlmodel import select
 
@@ -15,6 +16,7 @@ from app.models.session import Session
 from app.services.command_service import CommandHandler, CommandContext, CommandResult
 from app.services.active_streaming_manager import active_streaming_manager
 from app.core.db import create_session as create_db_session
+from app.utils import create_task_with_error_logging
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,7 @@ class RebuildEnvCommandHandler(CommandHandler):
         return "Rebuild the active environment for this agent"
 
     async def execute(self, context: CommandContext, args: str) -> CommandResult:
-        from app.services.environment_service import EnvironmentService, AgentEnvironmentError
+        from app.services.environment_service import EnvironmentService
 
         # Phase 1: Validate state and check for active streaming
         with create_db_session() as db:
@@ -61,18 +63,24 @@ class RebuildEnvCommandHandler(CommandHandler):
                     is_error=True,
                 )
 
-        # Phase 2: Perform the rebuild
-        try:
-            with create_db_session() as db:
-                await EnvironmentService.rebuild_environment(session=db, env_id=context.environment_id)
-            return CommandResult(
-                content="Environment rebuild initiated. The environment will be back online shortly."
-            )
-        except AgentEnvironmentError as e:
-            return CommandResult(content=f"Failed to rebuild environment: {e.message}", is_error=True)
-        except Exception as e:
-            logger.error(f"Failed to rebuild environment {context.environment_id}: {e}", exc_info=True)
-            return CommandResult(
-                content=f"Failed to rebuild environment: {str(e)}",
-                is_error=True,
-            )
+        # Phase 2: Fire off the rebuild in the background and return immediately.
+        # The environment status changes are pushed to the UI via realtime events,
+        # so the user will see progress without waiting for the HTTP response.
+        create_task_with_error_logging(
+            _rebuild_environment_background(context.environment_id),
+            task_name=f"rebuild_env_command_{context.environment_id}",
+        )
+        return CommandResult(
+            content="Environment rebuild initiated. The environment will be back online shortly."
+        )
+
+
+async def _rebuild_environment_background(env_id: UUID) -> None:
+    """Run the environment rebuild as a background task."""
+    from app.services.environment_service import EnvironmentService
+
+    try:
+        with create_db_session() as db:
+            await EnvironmentService.rebuild_environment(session=db, env_id=env_id)
+    except Exception as e:
+        logger.error(f"Background rebuild failed for environment {env_id}: {e}", exc_info=True)

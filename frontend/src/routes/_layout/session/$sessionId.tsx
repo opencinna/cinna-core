@@ -257,8 +257,8 @@ function ChatInterface() {
   useEffect(() => {
     if (environment) {
       const status = environment.status
-      // Show activating state for suspended, stopped, activating, or starting statuses
-      if (status === "suspended" || status === "stopped" || status === "activating" || status === "starting") {
+      // Show activating state for suspended, stopped, activating, starting, or rebuilding statuses
+      if (status === "suspended" || status === "stopped" || status === "activating" || status === "starting" || status === "rebuilding") {
         setIsEnvActivating(true)
       } else if (status === "running") {
         setIsEnvActivating(false)
@@ -329,6 +329,24 @@ function ChatInterface() {
       }
     })
     subscriptions.push(suspendedSub)
+
+    // Listen for generic status changes (e.g. rebuilding, stopped after rebuild, error)
+    const statusChangedSub = eventService.subscribe(EventTypes.ENVIRONMENT_STATUS_CHANGED, (event) => {
+      if (event.model_id === effectiveEnvId) {
+        const status = event.meta?.status
+        console.log(`Environment status changed: ${status}`)
+        if (status === "rebuilding" || status === "activating" || status === "starting") {
+          setIsEnvActivating(true)
+        } else if (status === "running" || status === "stopped" || status === "error") {
+          setIsEnvActivating(false)
+          if (status === "error") {
+            showErrorToast("Environment rebuild failed")
+          }
+        }
+        queryClient.invalidateQueries({ queryKey: ["environment", effectiveEnvId] })
+      }
+    })
+    subscriptions.push(statusChangedSub)
 
     // Cleanup subscriptions
     return () => {
@@ -527,6 +545,7 @@ function ChatInterface() {
         placeholder="Type your message..."
         agentId={session?.agent_id ?? undefined}
         mode={session?.mode as "building" | "conversation" | undefined}
+        sessionId={sessionId}
       />
     </div>
   )

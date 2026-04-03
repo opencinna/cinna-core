@@ -10,11 +10,10 @@ Each file below documents one API domain.
 | Access Tokens | [access_tokens.md](./access_tokens.md) | 5 |
 | Activities | [activities.md](./activities.md) | 7 |
 | Agent Shares | [agent_shares.md](./agent_shares.md) | 14 |
-| Agent Tasks | [agent_tasks.md](./agent_tasks.md) | 5 |
+| Agent Tasks | [agent_tasks.md](./agent_tasks.md) | 11 |
 | Agentic Teams | [agentic_teams.md](./agentic_teams.md) | 17 |
 | Agents | [agents.md](./agents.md) | 30 |
 | Ai Credentials | [ai_credentials.md](./ai_credentials.md) | 8 |
-| Collaborations | [collaborations.md](./collaborations.md) | 4 |
 | Credentials | [credentials.md](./credentials.md) | 16 |
 | Email Integration | [email_integration.md](./email_integration.md) | 6 |
 | Environments | [environments.md](./environments.md) | 11 |
@@ -27,7 +26,7 @@ Each file below documents one API domain.
 | Llm Plugins | [llm_plugins.md](./llm_plugins.md) | 13 |
 | Mail Servers | [mail_servers.md](./mail_servers.md) | 6 |
 | Mcp Connectors | [mcp_connectors.md](./mcp_connectors.md) | 5 |
-| Messages | [messages.md](./messages.md) | 4 |
+| Messages | [messages.md](./messages.md) | 5 |
 | Sessions | [sessions.md](./sessions.md) | 9 |
 | Ssh Keys | [ssh_keys.md](./ssh_keys.md) | 6 |
 | Task Triggers | [task_triggers.md](./task_triggers.md) | 16 |

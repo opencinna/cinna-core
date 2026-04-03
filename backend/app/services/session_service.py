@@ -1223,13 +1223,13 @@ class SessionService:
             # Execute command
             result = await CommandService.execute(content, context)
 
-            # Create agent message with response
+            # Create system message with response (commands are deterministic, not LLM)
             command_name = content.strip().split()[0]
             with get_fresh_db_session() as db:
                 agent_msg = MessageService.create_message(
                     session=db,
                     session_id=session_id,
-                    role="agent",
+                    role="system",
                     content=result.content,
                     message_metadata={"command": True, "command_name": command_name},
                     answers_to_message_id=user_msg.id,

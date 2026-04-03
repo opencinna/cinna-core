@@ -30,7 +30,7 @@
 No new database tables. Commands use existing session and message tables:
 - Session metadata fields: `external_session_id`, `sdk_type`, `last_sdk_message_id`, `recovery_pending`, `status` — modified by session recovery/reset commands
 - Message field: `sent_to_agent_status` — reset to `"pending"` by recovery command for auto-resend
-- Message metadata: `{"command": true, "command_name": "/name"}` — JSON field on agent message records identifying command responses
+- Message metadata: `{"command": true, "command_name": "/name"}` — JSON field on system message records (`role="system"`) identifying command responses
 
 ## API Endpoints
 
@@ -51,7 +51,7 @@ No new database tables. Commands use existing session and message tables:
 - `verify_workspace_view_token(token)` — Decodes and validates; returns payload dict or `None`; no exceptions exposed
 
 ### Session Service Integration (`session_service.py`)
-- `send_session_message(..., backend_base_url)` — Phase 1.5 command detection; builds `CommandContext`, creates messages, emits WebSocket events, auto-generates session title for new sessions
+- `send_session_message(..., backend_base_url)` — Phase 1.5 command detection; builds `CommandContext`, creates user message + system response message (`role="system"`), emits WebSocket events, auto-generates session title for new sessions
 
 ## Frontend Components
 

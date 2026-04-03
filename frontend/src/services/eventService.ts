@@ -34,6 +34,7 @@ export const EventTypes = {
   ENVIRONMENT_ACTIVATED: "environment_activated",
   ENVIRONMENT_ACTIVATION_FAILED: "environment_activation_failed",
   ENVIRONMENT_SUSPENDED: "environment_suspended",
+  ENVIRONMENT_STATUS_CHANGED: "environment_status_changed",
 
   // Streaming events
   STREAM_STARTED: "stream_started",

@@ -122,6 +122,8 @@ from .session import (
     MessageCreate,
     MessagePublic,
     MessagesPublic,
+    SessionCommandPublic,
+    SessionCommandsPublic,
 )
 from .activity import (
     Activity,
@@ -526,6 +528,8 @@ __all__ = [
     "MessageCreate",
     "MessagePublic",
     "MessagesPublic",
+    "SessionCommandPublic",
+    "SessionCommandsPublic",
     # Activities
     "Activity",
     "ActivityCreate",

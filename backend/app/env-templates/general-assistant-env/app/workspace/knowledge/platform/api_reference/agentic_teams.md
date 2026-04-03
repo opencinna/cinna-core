@@ -19,6 +19,7 @@ Auto-generated from OpenAPI spec. Tag: `agentic-teams`
 **Request body** (`AgenticTeamCreate`):
   - `name`: string (required)
   - `icon`: string | null
+  - `task_prefix`: string | null
 
 **Response:** `AgenticTeamPublic`
 

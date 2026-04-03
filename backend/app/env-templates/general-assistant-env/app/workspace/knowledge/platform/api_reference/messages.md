@@ -45,3 +45,13 @@ Auto-generated from OpenAPI spec. Tag: `messages`
 - `session_id`: uuid
 
 ---
+
+## GET `/api/v1/sessions/{session_id}/commands`
+**List Session Commands**
+
+**Path parameters:**
+- `session_id`: uuid
+
+**Response:** `SessionCommandsPublic`
+
+---

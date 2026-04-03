@@ -285,7 +285,6 @@ Auto-generated from OpenAPI spec. Tag: `agents`
 **Request body** (`HandoverConfigUpdate`):
   - `handover_prompt`: string | null
   - `enabled`: boolean | null
-  - `auto_feedback`: boolean | null
 
 **Response:** `HandoverConfigPublic`
 

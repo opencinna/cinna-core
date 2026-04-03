@@ -175,3 +175,13 @@ class MessagePublic(SQLModel):
 class MessagesPublic(SQLModel):
     data: list[MessagePublic]
     count: int
+
+
+class SessionCommandPublic(SQLModel):
+    name: str
+    description: str
+    is_available: bool
+
+
+class SessionCommandsPublic(SQLModel):
+    commands: list[SessionCommandPublic]

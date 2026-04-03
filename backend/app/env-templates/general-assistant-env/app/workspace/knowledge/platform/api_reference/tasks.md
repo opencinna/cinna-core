@@ -70,6 +70,7 @@ Auto-generated from OpenAPI spec. Tag: `tasks`
   - `selected_agent_id`: string | null
   - `title`: string | null
   - `priority`: string | null
+  - `team_id`: string | null
   - `assigned_node_id`: string | null
 
 **Response:** `InputTaskPublic`
