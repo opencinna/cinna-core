@@ -9,6 +9,7 @@ from app.services.commands.files_command import FilesCommandHandler, FilesAllCom
 from app.services.commands.session_recover_command import SessionRecoverCommandHandler
 from app.services.commands.session_reset_command import SessionResetCommandHandler
 from app.services.commands.webapp_command import WebappCommandHandler
+from app.services.commands.rebuild_env_command import RebuildEnvCommandHandler
 
 # Register all command handlers
 CommandService.register(FilesCommandHandler())
@@ -16,3 +17,4 @@ CommandService.register(FilesAllCommandHandler())
 CommandService.register(SessionRecoverCommandHandler())
 CommandService.register(SessionResetCommandHandler())
 CommandService.register(WebappCommandHandler())
+CommandService.register(RebuildEnvCommandHandler())

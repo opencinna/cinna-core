@@ -261,6 +261,19 @@ class ActiveStreamingManager:
                 "last_flushed_seq": stream.last_flushed_seq,
             }
 
+    async def is_any_session_streaming(self, session_ids: set[UUID]) -> bool:
+        """
+        Check if any of the given session IDs are currently streaming.
+
+        Args:
+            session_ids: Set of session UUIDs to check
+
+        Returns:
+            True if at least one session is actively streaming
+        """
+        async with self._lock:
+            return bool(session_ids & self._active_streams.keys())
+
     async def get_all_active_streams(self) -> list[dict]:
         """
         Get all active streams (for debugging/monitoring).

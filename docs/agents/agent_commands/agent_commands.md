@@ -76,6 +76,7 @@ Caller handles "command_executed":
 | `/session-recover` | Recover from lost SDK connection; optionally auto-resend the failed message | [session_recovery_command.md](session_recovery_command.md) |
 | `/session-reset` | Clear SDK session metadata for a clean-slate restart with no recovery context | [session_reset_command.md](session_reset_command.md) |
 | `/webapp` | Return the shareable webapp URL for the agent (first active share link) | [webapp_command.md](webapp_command.md) |
+| `/rebuild-env` | Rebuild the active environment (fails if any session is streaming) | [rebuild_env_command.md](rebuild_env_command.md) |
 
 ## Integration Points
 
