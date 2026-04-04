@@ -408,6 +408,7 @@ from .agentic_team import (
     AgenticTeamConnectionPublic,
     AgenticTeamConnectionsPublic,
     AgenticTeamChartPublic,
+    GenerateConnectionPromptResponse,
 )
 
 __all__ = [
@@ -782,4 +783,5 @@ __all__ = [
     "AgenticTeamConnectionPublic",
     "AgenticTeamConnectionsPublic",
     "AgenticTeamChartPublic",
+    "GenerateConnectionPromptResponse",
 ]

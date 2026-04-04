@@ -174,10 +174,19 @@ class AgenticTeamConnectionPublic(SQLModel):
     target_node_id: uuid.UUID
     source_node_name: str
     target_node_name: str
+    source_node_color_preset: str | None = None
+    target_node_color_preset: str | None = None
     connection_prompt: str
     enabled: bool
     created_at: datetime
     updated_at: datetime
+
+
+class GenerateConnectionPromptResponse(SQLModel):
+    """Response from AI connection prompt generation."""
+    success: bool
+    connection_prompt: str | None = None
+    error: str | None = None
 
 
 class AgenticTeamConnectionsPublic(SQLModel):

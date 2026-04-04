@@ -20,6 +20,7 @@ from app.models import (
     AgenticTeamConnectionPublic,
     AgenticTeamConnectionsPublic,
     AgenticTeamChartPublic,
+    GenerateConnectionPromptResponse,
 )
 from app.services.agentic_team_service import AgenticTeamService
 from app.services.agentic_team_node_service import AgenticTeamNodeService, TeamNodeError
@@ -365,3 +366,26 @@ def delete_team_connection(
     except TeamConnectionError as e:
         _handle_service_error(e)
     return Message(message="Connection deleted")
+
+
+@router.post(
+    "/{team_id}/connections/{conn_id}/generate-prompt",
+    response_model=GenerateConnectionPromptResponse,
+)
+def generate_connection_prompt(
+    team_id: uuid.UUID,
+    conn_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """Generate a connection handover prompt using AI based on both agents' configurations."""
+    try:
+        prompt = AgenticTeamConnectionService.generate_connection_prompt(
+            session=session,
+            team_id=team_id,
+            conn_id=conn_id,
+            user_id=current_user.id,
+        )
+    except TeamConnectionError as e:
+        _handle_service_error(e)
+    return GenerateConnectionPromptResponse(success=True, connection_prompt=prompt)

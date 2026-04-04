@@ -174,11 +174,23 @@ class AgenticTeamConnectionService:
     def connection_to_public(
         session: Session, conn: AgenticTeamConnection
     ) -> AgenticTeamConnectionPublic:
-        """Resolve source/target node names and build the public response model."""
+        """Resolve source/target node names, color presets, and build the public response model."""
+        from app.models.agent import Agent
+
         source_node = session.get(AgenticTeamNode, conn.source_node_id)
         target_node = session.get(AgenticTeamNode, conn.target_node_id)
         source_name = source_node.name if source_node else ""
         target_name = target_node.name if target_node else ""
+
+        source_color = None
+        target_color = None
+        if source_node:
+            source_agent = session.get(Agent, source_node.agent_id)
+            source_color = source_agent.ui_color_preset if source_agent else None
+        if target_node:
+            target_agent = session.get(Agent, target_node.agent_id)
+            target_color = target_agent.ui_color_preset if target_agent else None
+
         return AgenticTeamConnectionPublic(
             id=conn.id,
             team_id=conn.team_id,
@@ -186,8 +198,59 @@ class AgenticTeamConnectionService:
             target_node_id=conn.target_node_id,
             source_node_name=source_name,
             target_node_name=target_name,
+            source_node_color_preset=source_color,
+            target_node_color_preset=target_color,
             connection_prompt=conn.connection_prompt,
             enabled=conn.enabled,
             created_at=conn.created_at,
             updated_at=conn.updated_at,
         )
+
+    @staticmethod
+    def generate_connection_prompt(
+        session: Session,
+        team_id: UUID,
+        conn_id: UUID,
+        user_id: UUID,
+    ) -> str:
+        """Generate a connection prompt using AI, based on the source and target agents.
+
+        Returns the generated prompt string.
+        Raises TeamConnectionError on failure.
+
+        Inline imports avoid circular dependencies between model modules.
+        """
+        from app.models.agent import Agent
+        from app.models.user import User
+        from app.services.ai_functions_service import AIFunctionsService
+
+        conn = AgenticTeamConnectionService.get_connection(session, team_id, conn_id, user_id)
+
+        source_node = session.get(AgenticTeamNode, conn.source_node_id)
+        target_node = session.get(AgenticTeamNode, conn.target_node_id)
+        if not source_node or not target_node:
+            raise TeamConnectionError("Source or target node not found", status_code=404)
+
+        source_agent = session.get(Agent, source_node.agent_id)
+        target_agent = session.get(Agent, target_node.agent_id)
+        if not source_agent or not target_agent:
+            raise TeamConnectionError("Source or target agent not found", status_code=404)
+
+        user = session.get(User, user_id)
+
+        result = AIFunctionsService.generate_handover_prompt(
+            source_agent_name=source_agent.name,
+            source_entrypoint=source_agent.entrypoint_prompt,
+            source_workflow=source_agent.workflow_prompt,
+            target_agent_name=target_agent.name,
+            target_entrypoint=target_agent.entrypoint_prompt,
+            target_workflow=target_agent.workflow_prompt,
+            user=user,
+            db=session,
+        )
+
+        if not result.get("success"):
+            raise TeamConnectionError(
+                result.get("error", "Failed to generate prompt"), status_code=500
+            )
+        return result["handover_prompt"]

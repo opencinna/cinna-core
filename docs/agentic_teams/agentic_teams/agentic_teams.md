@@ -117,10 +117,18 @@ Connection editing is available in **edit mode only**, via a hover control on th
 1. In edit mode, hovering near the midpoint of any connection reveals a small pencil icon button.
 2. Clicking the pencil opens a popover with "Edit" and "Delete" options.
 3. "Edit" opens the Connection Edit Dialog showing:
-   - Direction label ("Source Node Name → Target Node Name")
+   - Source and target agent names as **colored badges** (Bot icon + agent name, styled with each agent's color preset), separated by an arrow icon
    - Handover Prompt textarea (max 2000 characters) with a character counter
+   - A **"Generate" button** (Sparkles icon) next to the "Handover Prompt" label that calls an AI function to auto-generate a handover prompt based on both agents' configurations
    - "Connection enabled" toggle switch
-4. User edits and clicks "Save".
+4. User edits the prompt (or clicks Generate to have AI draft it) and clicks "Save".
+
+**AI Prompt Generation:**
+- Clicking "Generate" calls the backend endpoint `POST /{team_id}/connections/{conn_id}/generate-prompt`.
+- The button shows "Generating..." and is disabled while the request is in flight.
+- When the response arrives, the generated text is automatically placed into the textarea (replacing whatever was there), ready for the user to review or edit before saving.
+- Generation uses the same AI function used by agent handover prompt generation (`AIFunctionsService.generate_handover_prompt`), passing both agents' names, entrypoint prompts, and workflow prompts as context.
+- If generation fails, an error toast is shown and the textarea is not modified.
 
 Enabled/disabled state is reflected visually: disabled connections render with a dashed stroke.
 

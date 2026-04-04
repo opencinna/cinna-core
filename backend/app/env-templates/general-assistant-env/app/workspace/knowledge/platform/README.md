@@ -62,7 +62,7 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | [application](#application) | User-facing platform features - authentication, integrations, real-time events, workspaces | 17 features |
 | [knowledge](#knowledge) | Git-based knowledge sources, vector search, RAG | 1 feature |
 | [sharing](#sharing) | Agent sharing, guest access, workspace collaboration | 3 features |
-| [agentic_teams](#agentic_teams) | Visual org-chart builder for agent orchestration topology — teams, nodes, connections | 1 feature |
+| [agentic_teams](#agentic_teams) | Visual org-chart builder for agent orchestration topology — teams, nodes, connections with AI-generated handover prompts | 1 feature |
 | [development](#development) | Backend/frontend patterns, AI functions, debugging | 4 features |
 
 ---
@@ -140,7 +140,7 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 
 | Feature | Description | Docs |
 |---------|-------------|------|
-| agentic_teams | Visual org-chart builder — users define named agentic teams, add agent nodes, and wire directed connections with handover prompts. Owner-only access, workspace-independent, MVP Blueprint phase. Sidebar switcher + Settings card + interactive React Flow chart with edit/view mode, auto-arrange (Dagre), and bulk position persistence. Teams define a `task_prefix` (e.g., "HR") used when generating short-code IDs for team-scoped tasks; directed connections enforce subtask delegation topology. | [business logic](agentic_teams/agentic_teams/agentic_teams.md) \| [tech](agentic_teams/agentic_teams/agentic_teams_tech.md) |
+| agentic_teams | Visual org-chart builder — users define named agentic teams, add agent nodes, and wire directed connections with handover prompts. Owner-only access, workspace-independent, MVP Blueprint phase. Sidebar switcher + Settings card + interactive React Flow chart with edit/view mode, auto-arrange (Dagre), and bulk position persistence. Teams define a `task_prefix` (e.g., "HR") used when generating short-code IDs for team-scoped tasks; directed connections enforce subtask delegation topology. Connection Edit Dialog shows colored agent badges and supports AI-generated handover prompts via a Generate button. | [business logic](agentic_teams/agentic_teams/agentic_teams.md) \| [tech](agentic_teams/agentic_teams/agentic_teams_tech.md) |
 
 ### development
 

@@ -201,6 +201,22 @@ function AgenticTeamChartPage() {
     onError: () => showErrorToast("Failed to delete connection"),
   })
 
+  const [generatedPrompt, setGeneratedPrompt] = useState<string | null>(null)
+
+  const generateConnectionPromptMutation = useMutation({
+    mutationFn: (connId: string) =>
+      AgenticTeamsService.generateConnectionPrompt({ teamId, connId }),
+    onSuccess: (data) => {
+      if (data.success && data.connection_prompt) {
+        setGeneratedPrompt(data.connection_prompt)
+        showSuccessToast("Prompt generated")
+      } else {
+        showErrorToast(data.error || "Failed to generate prompt")
+      }
+    },
+    onError: () => showErrorToast("Failed to generate prompt"),
+  })
+
   const team = chartData?.team
 
   useEffect(() => {
@@ -334,8 +350,14 @@ function AgenticTeamChartPage() {
               updateConnectionMutation.mutate({ connId, prompt, enabled })
             }
             onDeleteConnection={(connId) => deleteConnectionMutation.mutate(connId)}
+            onGenerateConnectionPrompt={(connId) => {
+              setGeneratedPrompt(null)
+              generateConnectionPromptMutation.mutate(connId)
+            }}
             isCreatingNode={createNodeMutation.isPending}
             isCreatingConnection={updateConnectionMutation.isPending}
+            isGeneratingPrompt={generateConnectionPromptMutation.isPending}
+            generatedPrompt={generatedPrompt}
           />
         ) : (
           <div className="p-6 overflow-y-auto h-full">

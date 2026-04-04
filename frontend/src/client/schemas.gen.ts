@@ -4075,6 +4075,28 @@ export const AgenticTeamConnectionPublicSchema = {
             type: 'string',
             title: 'Target Node Name'
         },
+        source_node_color_preset: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Node Color Preset'
+        },
+        target_node_color_preset: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Target Node Color Preset'
+        },
         connection_prompt: {
             type: 'string',
             title: 'Connection Prompt'
@@ -6111,6 +6133,41 @@ export const FileUploadPublicSchema = {
     required: ['id', 'filename', 'file_size', 'mime_type', 'status', 'uploaded_at'],
     title: 'FileUploadPublic',
     description: 'Response schema for file upload'
+} as const;
+
+export const GenerateConnectionPromptResponseSchema = {
+    properties: {
+        success: {
+            type: 'boolean',
+            title: 'Success'
+        },
+        connection_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Connection Prompt'
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        }
+    },
+    type: 'object',
+    required: ['success'],
+    title: 'GenerateConnectionPromptResponse',
+    description: 'Response from AI connection prompt generation.'
 } as const;
 
 export const GenerateHandoverPromptRequestSchema = {

@@ -338,6 +338,8 @@ export type AgenticTeamConnectionPublic = {
     target_node_id: string;
     source_node_name: string;
     target_node_name: string;
+    source_node_color_preset?: (string | null);
+    target_node_color_preset?: (string | null);
     connection_prompt: string;
     enabled: boolean;
     created_at: string;
@@ -1308,6 +1310,15 @@ export type FileUploadPublic = {
     mime_type: string;
     status: string;
     uploaded_at: string;
+};
+
+/**
+ * Response from AI connection prompt generation.
+ */
+export type GenerateConnectionPromptResponse = {
+    success: boolean;
+    connection_prompt?: (string | null);
+    error?: (string | null);
 };
 
 /**
@@ -2914,6 +2925,13 @@ export type AgenticTeamsDeleteTeamConnectionData = {
 };
 
 export type AgenticTeamsDeleteTeamConnectionResponse = (Message);
+
+export type AgenticTeamsGenerateConnectionPromptData = {
+    connId: string;
+    teamId: string;
+};
+
+export type AgenticTeamsGenerateConnectionPromptResponse = (GenerateConnectionPromptResponse);
 
 export type AgentsReadAgentsData = {
     limit?: number;

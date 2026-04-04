@@ -112,7 +112,7 @@ All endpoints are under prefix `/api/v1/agentic-teams`. All require authenticati
 |--------|------|----------|-------------|
 | GET | `/{team_id}/chart` | `AgenticTeamChartPublic` | Returns team + all nodes + all connections in one request. Primary fetch for the chart page. |
 
-The chart endpoint resolves `agent_ui_color_preset` for all nodes and `source_node_name`/`target_node_name` for all connections inside the response construction.
+The chart endpoint resolves `agent_ui_color_preset` for all nodes and `source_node_name`/`target_node_name`/`source_node_color_preset`/`target_node_color_preset` for all connections inside the response construction.
 
 ### Node Endpoints
 
@@ -136,6 +136,9 @@ The `/positions` endpoint is registered before `/{node_id}` in the router file t
 | GET | `/{team_id}/connections/{conn_id}` | — | `AgenticTeamConnectionPublic` | Get single connection |
 | PUT | `/{team_id}/connections/{conn_id}` | `AgenticTeamConnectionUpdate` | `AgenticTeamConnectionPublic` | Update prompt or enabled |
 | DELETE | `/{team_id}/connections/{conn_id}` | — | `Message` | Delete connection |
+| POST | `/{team_id}/connections/{conn_id}/generate-prompt` | — | `GenerateConnectionPromptResponse` | Generate a handover prompt via AI based on both agents' configurations |
+
+The generate-prompt endpoint is read-only (no state mutation); it returns the AI-generated text for the client to preview and optionally save via the standard PUT endpoint.
 
 ---
 
@@ -162,6 +165,7 @@ id: uuid.UUID
 owner_id: uuid.UUID
 name: str
 icon: str | None
+task_prefix: str | None  # default None; used for short-code generation (e.g., "HR" → HR-1)
 created_at: datetime
 updated_at: datetime
 ```
@@ -243,13 +247,25 @@ id: uuid.UUID
 team_id: uuid.UUID
 source_node_id: uuid.UUID
 target_node_id: uuid.UUID
-source_node_name: str   # resolved from source node at read time
-target_node_name: str   # resolved from target node at read time
+source_node_name: str              # resolved from source node at read time
+target_node_name: str              # resolved from target node at read time
+source_node_color_preset: str | None  # resolved from source agent.ui_color_preset at read time
+target_node_color_preset: str | None  # resolved from target agent.ui_color_preset at read time
 connection_prompt: str
 enabled: bool
 created_at: datetime
 updated_at: datetime
 ```
+
+### `GenerateConnectionPromptResponse`
+
+```python
+success: bool
+connection_prompt: str | None  # present when success is True
+error: str | None              # present when success is False
+```
+
+Response model for the AI prompt generation endpoint. When `success` is `True`, `connection_prompt` contains the AI-generated text. When `False`, `error` contains the reason.
 
 ### `AgenticTeamChartPublic`
 
@@ -296,7 +312,8 @@ All methods are `@staticmethod`.
 | `create_connection` | `(session, team_id, user_id, data) -> AgenticTeamConnection` | Rejects self-connections (400); verifies source and target nodes belong to team; rejects duplicates (409) |
 | `update_connection` | `(session, team_id, conn_id, user_id, data) -> AgenticTeamConnection` | Only `connection_prompt` and `enabled` are updatable |
 | `delete_connection` | `(session, team_id, conn_id, user_id) -> None` | Simple delete after ownership verification |
-| `connection_to_public` | `(session, conn) -> AgenticTeamConnectionPublic` | Resolves `source_node_name` and `target_node_name` from nodes; gracefully handles missing nodes (empty string fallback) |
+| `connection_to_public` | `(session, conn) -> AgenticTeamConnectionPublic` | Resolves `source_node_name`, `target_node_name`, `source_node_color_preset`, and `target_node_color_preset` from nodes and their linked agents; gracefully handles missing nodes/agents (empty string / None fallback) |
+| `generate_connection_prompt` | `(session, team_id, conn_id, user_id) -> str` | Loads both agents from the connection's nodes; calls `AIFunctionsService.generate_handover_prompt` with both agents' names, entrypoint prompts, and workflow prompts; raises `TeamConnectionError(500)` if AI generation fails |
 
 ---
 
@@ -336,12 +353,21 @@ The primary chart page. Owns all mutation logic and passes callbacks down to `Ag
 | `createConnectionMutation` | `["agenticTeamChart", teamId]` | Created with empty prompt and `enabled = true` |
 | `updateConnectionMutation` | `["agenticTeamChart", teamId]` | |
 | `deleteConnectionMutation` | `["agenticTeamChart", teamId]` | |
+| `generateConnectionPromptMutation` | none | Calls `POST /{team_id}/connections/{conn_id}/generate-prompt`; on success stores `data.connection_prompt` in local `generatedPrompt` state; no cache invalidation (does not modify the connection) |
+
+**Local state additions:**
+- `generatedPrompt: string | null` — holds the latest AI-generated prompt text. Reset to `null` just before the mutation fires. Passed as a prop through `AgenticTeamChart` → `ConnectionEditDialog`.
 
 **Page header:** dynamically set via `usePageHeader()`. Contains team name with `Network` icon, edit-mode toggle button (lock/unlock icon pair), and ⋮ dropdown for edit/delete team actions.
 
 ### `AgenticTeamChart`
 
 Pure presentational component (no direct API calls). Receives data and callbacks as props.
+
+New props added:
+- `onGenerateConnectionPrompt: (connId: string) => void` — called when the Generate button is clicked inside `ConnectionEditDialog`
+- `isGeneratingPrompt: boolean` — forwarded to `ConnectionEditDialog` as `isGenerating`
+- `generatedPrompt: string | null` — forwarded to `ConnectionEditDialog`; the chart passes this down so the dialog can auto-apply the text when it arrives
 
 **React Flow configuration:**
 - Custom node type: `agenticTeamNode` → `AgenticTeamChartNode`
@@ -435,11 +461,23 @@ Creating a team from the switcher auto-navigates to the new team chart via `navi
 
 ### `ConnectionEditDialog`
 
-- Props: `open`, `onClose`, `connection: AgenticTeamConnectionPublic | null`, `onSave`, `isPending`.
-- Shows source and target node names as a direction label (`SourceName → TargetName`).
-- Textarea for `connection_prompt` with a live character counter (`{n}/2000`).
+Props:
+- `open: boolean`
+- `onClose: () => void`
+- `connection: AgenticTeamConnectionPublic | null`
+- `onSave: (connectionId: string, prompt: string, enabled: boolean) => void`
+- `onGenerate: (connectionId: string) => void`
+- `isPending: boolean` — true while the save mutation is in flight
+- `isGenerating: boolean` — true while the AI generate mutation is in flight
+- `generatedPrompt: string | null` — when non-null, the dialog auto-applies this text to the textarea
+
+Behavior:
+- Shows source and target agent names as **colored badges**: each badge uses `getColorPreset(color_preset)` from `@/utils/colorPresets` and applies `badgeBg` + `badgeText` Tailwind classes, plus a `Bot` icon. The badges are separated by an `ArrowRight` icon.
+- Shows a "Generate" button (Sparkles icon) next to the "Handover Prompt" label. The button calls `onGenerate(connection.id)` and is disabled while `isGenerating` is true (label changes to "Generating...").
+- When `generatedPrompt` changes and the dialog is open, the textarea is updated automatically via `useEffect`. A local `appliedGeneratedPrompt` ref prevents the same generated text from being re-applied if props cycle.
+- Textarea for `connection_prompt` with a live character counter (`{n}/2000`), `maxLength=2000`, `rows=5`.
 - Switch for `enabled` state.
-- Pre-fills fields from `connection` when opened.
+- Pre-fills fields from `connection` when the dialog opens. Resets `appliedGeneratedPrompt` on open so a fresh generate applies correctly.
 
 ---
 

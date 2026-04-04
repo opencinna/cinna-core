@@ -107,8 +107,11 @@ interface AgenticTeamChartProps {
   onCreateConnection: (sourceId: string, targetId: string) => void
   onUpdateConnection: (connId: string, prompt: string, enabled: boolean) => void
   onDeleteConnection: (connId: string) => void
+  onGenerateConnectionPrompt: (connId: string) => void
   isCreatingNode: boolean
   isCreatingConnection: boolean
+  isGeneratingPrompt: boolean
+  generatedPrompt: string | null
 }
 
 export function AgenticTeamChart({
@@ -122,8 +125,11 @@ export function AgenticTeamChart({
   onCreateConnection,
   onUpdateConnection,
   onDeleteConnection,
+  onGenerateConnectionPrompt,
   isCreatingNode,
   isCreatingConnection,
+  isGeneratingPrompt,
+  generatedPrompt,
 }: AgenticTeamChartProps) {
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [showAddNode, setShowAddNode] = useState(false)
@@ -325,7 +331,10 @@ export function AgenticTeamChart({
           onUpdateConnection(connId, prompt, enabled)
           setEditingConnection(null)
         }}
+        onGenerate={(connId) => onGenerateConnectionPrompt(connId)}
         isPending={isCreatingConnection}
+        isGenerating={isGeneratingPrompt}
+        generatedPrompt={generatedPrompt}
       />
     </div>
   )

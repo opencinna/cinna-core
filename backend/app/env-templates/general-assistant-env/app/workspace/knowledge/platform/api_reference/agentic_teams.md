@@ -205,3 +205,14 @@ Auto-generated from OpenAPI spec. Tag: `agentic-teams`
 **Response:** `Message`
 
 ---
+
+## POST `/api/v1/agentic-teams/{team_id}/connections/{conn_id}/generate-prompt`
+**Generate Connection Prompt**
+
+**Path parameters:**
+- `team_id`: uuid
+- `conn_id`: uuid
+
+**Response:** `GenerateConnectionPromptResponse`
+
+---
