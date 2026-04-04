@@ -26,7 +26,7 @@ from tests.utils.a2a import (
     setup_a2a_agent,
 )
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.message import get_messages_by_role
+from tests.utils.message import get_messages_by_role, list_messages
 
 
 # Workspace tree returned after agent "generates" a file
@@ -123,13 +123,17 @@ def test_files_command_a2a_full_flow(
         # Extract task_id (= session_id) for continuing the session
         task_id = first["taskId"]
 
-        # Command response has answers_to_message_id and command metadata
+        # Command response is a system message with command metadata
         user_msgs = get_messages_by_role(client, superuser_token_headers, task_id, "user")
-        agent_msgs = get_messages_by_role(client, superuser_token_headers, task_id, "agent")
-        assert len(agent_msgs) == 1
-        assert agent_msgs[0]["answers_to_message_id"] == user_msgs[0]["id"]
-        assert agent_msgs[0]["message_metadata"]["command"] is True
-        assert agent_msgs[0]["message_metadata"]["command_name"] == "/files"
+        all_msgs = list_messages(client, superuser_token_headers, task_id)
+        cmd_msgs = [
+            m for m in all_msgs
+            if m["role"] == "system" and m.get("message_metadata", {}).get("command") is True
+        ]
+        assert len(cmd_msgs) == 1
+        assert cmd_msgs[0]["answers_to_message_id"] == user_msgs[0]["id"]
+        assert cmd_msgs[0]["message_metadata"]["command"] is True
+        assert cmd_msgs[0]["message_metadata"]["command_name"] == "/files"
 
         # ── Phase 3: Regular message → agent replies ──────────────────
         resp = client.post(
@@ -187,10 +191,14 @@ def test_files_command_a2a_full_flow(
 
         # Command response links back to the user command message
         user_msgs = get_messages_by_role(client, superuser_token_headers, task_id, "user")
-        agent_msgs = get_messages_by_role(client, superuser_token_headers, task_id, "agent")
-        assert len(agent_msgs) == 3
-        assert agent_msgs[2]["answers_to_message_id"] == user_msgs[2]["id"]
-        assert agent_msgs[2]["message_metadata"]["command"] is True
+        all_msgs = list_messages(client, superuser_token_headers, task_id)
+        cmd_msgs = [
+            m for m in all_msgs
+            if m["role"] == "system" and m.get("message_metadata", {}).get("command") is True
+        ]
+        assert len(cmd_msgs) == 2
+        assert cmd_msgs[1]["answers_to_message_id"] == user_msgs[2]["id"]
+        assert cmd_msgs[1]["message_metadata"]["command"] is True
 
         # ── Phase 6: Verify file is accessible via link ───────────────
         url_match = re.search(r"\[data\.csv\]\(([^)]+)\)", files_response)

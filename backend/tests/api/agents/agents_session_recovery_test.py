@@ -270,18 +270,22 @@ def test_session_recovery_via_command(
         "Expected exactly one 'Session recovered' system message"
     )
 
-    # Command response is an agent message
+    # Command response is a system message with command metadata
+    all_final = list_messages(client, superuser_token_headers, session_id)
+    cmd_msgs = [
+        m for m in all_final
+        if m["role"] == "system" and m.get("message_metadata", {}).get("command") is True
+    ]
+    assert len(cmd_msgs) == 1
+    assert "Session recovered" in cmd_msgs[0]["content"]
+    assert cmd_msgs[0]["message_metadata"]["command_name"] == "/session-recover"
+
+    # Agent messages: original reply + recovery reply (command response is system now)
     agent_msgs = get_messages_by_role(client, superuser_token_headers, session_id, "agent")
-    # 3 agent messages: original reply + command response + recovery reply
-    assert len(agent_msgs) == 3, (
-        f"Expected 3 agent messages (original + command response + recovery), got {len(agent_msgs)}"
+    assert len(agent_msgs) == 2, (
+        f"Expected 2 agent messages (original + recovery), got {len(agent_msgs)}"
     )
-    # Command response mentions recovery
-    assert "Session recovered" in agent_msgs[1]["content"]
-    assert agent_msgs[1]["message_metadata"]["command"] is True
-    assert agent_msgs[1]["message_metadata"]["command_name"] == "/session-recover"
-    # Streaming recovery response
-    assert recovery_agent_response in agent_msgs[2]["content"]
+    assert recovery_agent_response in agent_msgs[1]["content"]
 
     # User messages: original + failed + command
     user_msgs = get_messages_by_role(client, superuser_token_headers, session_id, "user")
@@ -337,11 +341,15 @@ def test_session_recover_command_no_error(
     # No LLM call was triggered (no resendable message)
     assert len(stub_noop.stream_calls) == 0
 
-    # Command response tells user to send a new message
-    agent_msgs = get_messages_by_role(client, superuser_token_headers, session_id, "agent")
-    assert len(agent_msgs) == 2  # original reply + command response
-    assert "Send a new message" in agent_msgs[1]["content"]
-    assert agent_msgs[1]["message_metadata"]["command"] is True
+    # Command response is a system message with command metadata
+    all_msgs = list_messages(client, superuser_token_headers, session_id)
+    cmd_msgs = [
+        m for m in all_msgs
+        if m["role"] == "system" and m.get("message_metadata", {}).get("command") is True
+    ]
+    assert len(cmd_msgs) == 1
+    assert "Send a new message" in cmd_msgs[0]["content"]
+    assert cmd_msgs[0]["message_metadata"]["command"] is True
 
     # "Session recovered" system message exists
     all_msgs = list_messages(client, superuser_token_headers, session_id)

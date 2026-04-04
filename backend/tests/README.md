@@ -294,6 +294,110 @@ def test_password_recovery(client: TestClient) -> None:
 6. **Mock external calls.** Patch SMTP, OAuth, and any external HTTP calls.
 7. **Extract repeated API calls into `tests/utils/` helpers.** If the same endpoint call appears in multiple tests as setup (not as the thing being tested), wrap it in a utility function. Compose common multi-step sequences via parameters (e.g., `set_default=True`).
 
+## Testing Session-Driven Flows (Tasks, Agents, Streaming)
+
+Tests that exercise agent streaming (message send → agent response → session completion) require understanding the async architecture. The key mental model:
+
+### Execution Timing
+
+`execute_task()` and `send_message()` **return immediately** — they only schedule `process_pending_messages` as a background task. The actual streaming (agent-env connector call, event emission, session status updates) happens inside `drain_tasks()`. This means:
+
+```python
+# WRONG — stub not active during streaming
+with patch("app.services.message_service.agent_env_connector", stub):
+    exec_result = execute_task(client, headers, task_id)
+# drain_tasks() runs outside the patch — stub not used!
+drain_tasks()
+
+# CORRECT — stub active during drain
+with patch("app.services.message_service.agent_env_connector", stub):
+    exec_result = execute_task(client, headers, task_id)
+    drain_tasks()  # streaming happens here, inside the patch
+```
+
+If you need the session_id before building the stub (e.g., to include `source_session_id` in a tool call), call `execute_task` first with a placeholder stub, then build the real stub and drain:
+
+```python
+with patch("...", StubAgentEnvConnector(response_text="placeholder")):
+    exec_result = execute_task(client, headers, task_id)
+
+session_id = str(exec_result["session_id"])
+real_stub = ScriptedAgentEnvConnector(client=client, auth_headers=headers, steps=[...])
+with patch("...", real_stub):
+    drain_tasks()
+```
+
+### Session Completion Drives Task Status
+
+After `drain_tasks()`, session completion event handlers fire and automatically sync task status via `sync_task_status_from_sessions`. **Do not manually call `agent_update_status("completed")`** — verify the automatic transition instead:
+
+```python
+with patch("...", stub):
+    execute_task(client, headers, task_id)
+    drain_tasks()
+
+# Task auto-completed by session lifecycle events
+task = get_task(client, headers, task_id)
+assert task["status"] == "completed"  # session-driven, not manual
+```
+
+A task with subtasks stays `in_progress` until ALL subtasks complete. When a subtask completes, feedback delivery sends a message to the parent's session, which re-streams and re-syncs the parent.
+
+### Cascading Drain Rounds
+
+`drain_tasks()` runs up to 10 rounds. Each round may spawn new tasks:
+
+1. `process_pending_messages` → stream → "done" → emits STREAM_COMPLETED
+2. Event handlers fire (SessionService, InputTaskService, ActivityService)
+3. `deliver_feedback_to_source` may schedule another `process_pending_messages`
+4. The feedback stream completes → another round of handlers
+
+This is correct behavior. Stubs must handle being called multiple times — `ScriptedAgentEnvConnector` runs scripted steps only on the first call and falls back to a simple response on subsequent calls.
+
+### Stub Selection
+
+| Scenario | Stub | Why |
+|----------|------|-----|
+| Simple agent response | `StubAgentEnvConnector(response_text="...")` | Just needs to yield events and complete |
+| Agent calls MCP tools mid-stream | `ScriptedAgentEnvConnector(client, headers, steps=[...])` | Makes real HTTP calls to backend during stream |
+| Error response | `StubAgentEnvConnector(events=[{"type": "error", ...}])` | Custom event sequence |
+
+### ScriptedAgentEnvConnector — Simulating MCP Tool Calls
+
+In production, the agent SDK calls MCP tools (HTTP requests back to the backend) **during** the SSE stream, before the "done" event. `ScriptedAgentEnvConnector` replicates this:
+
+```python
+stub = ScriptedAgentEnvConnector(
+    client=client,
+    auth_headers=headers,
+    steps=[
+        {"type": "assistant", "content": "I'll create a subtask."},
+        {
+            "type": "tool_call",
+            "endpoint": f"/api/v1/agent/tasks/{task_id}/subtask",
+            "method": "POST",
+            "json": {"title": "Do X", "assigned_to": "Worker Agent"},
+            "tool_name": "mcp__agent_task__create_subtask",
+        },
+        {"type": "assistant", "content": "Subtask created."},
+    ],
+)
+```
+
+The `tool_call` step makes a real HTTP request to the TestClient. Results are tracked in `stub.tool_results`. Only the first `stream_chat` call executes scripted steps; subsequent calls (from cascading feedback) use a simple fallback (`stub.fallback_call_count` tracks how many times).
+
+### Source Code Invariants That Tests Depend On
+
+Tests rely on these patterns in the application code. If you find code that violates them, **fix the source code rather than working around it in the test**:
+
+1. **Event handlers must use `create_session()`** (not `DBSession(engine)`). Handlers using `DBSession(engine)` create sessions outside the test transaction — they can't see test data and silently return. Every handler in `session_service.py`, `activity_service.py`, and `input_task_service.py` should use `with create_session() as db:`.
+
+2. **Status transitions must go through `update_task_status()`** for audit trail. If you find code setting `task.status = ...` directly, it bypasses `TaskStatusHistory` and system comments. Fix the source to use `update_task_status()`.
+
+3. **New services importing `create_session` must be added to patch targets.** If a new service file imports `from app.core.db import create_session`, add `"app.services.new_service.create_session"` to `CREATE_SESSION_TARGETS_AGENT` in `tests/utils/fixtures.py`. Similarly for `create_task_with_error_logging` → `BACKGROUND_TASK_TARGETS_FULL`.
+
+When a test needs a workaround (e.g., explicit status override, relaxed assertions), that's a signal to investigate whether the source code has a pattern violation.
+
 ## Code Style (for application code)
 
 - **Datetime**: Use `datetime.now(datetime.UTC)` instead of deprecated `datetime.utcnow()`.

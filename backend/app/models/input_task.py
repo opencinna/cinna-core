@@ -117,7 +117,7 @@ class InputTask(InputTaskBase, table=True):
 
     # ── New collaboration columns ──────────────────────────────────────────────
     # Short code: globally unique per owner (e.g., "TASK-1", "HR-42")
-    short_code: str | None = Field(default=None, max_length=20)
+    short_code: str | None = Field(default=None, max_length=20, index=True)
     # Monotonic sequence number from user.task_sequence_counter
     sequence_number: int | None = Field(default=None)
     # Human-readable title (derived from original_message on creation, editable)

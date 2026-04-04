@@ -19,7 +19,7 @@ from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.stubs.environment_adapter_stub import EnvironmentTestAdapter
 from tests.utils.agent import create_agent_via_api, get_agent
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.message import get_messages_by_role, send_message
+from tests.utils.message import get_messages_by_role, list_messages, send_message
 from tests.utils.session import create_session_via_api
 
 
@@ -64,6 +64,15 @@ _WORKSPACE_TREE_MULTI = {
 }
 
 
+def _get_command_messages(client, headers, session_id):
+    """Get system messages that are command responses (have command metadata)."""
+    all_msgs = list_messages(client, headers, session_id)
+    return [
+        m for m in all_msgs
+        if m["role"] == "system" and m.get("message_metadata", {}).get("command") is True
+    ]
+
+
 def test_files_command_ui_full_flow(
     client: TestClient,
     superuser_token_headers: dict[str, str],
@@ -104,13 +113,11 @@ def test_files_command_ui_full_flow(
         drain_tasks()
         assert result.get("command_executed") is True
 
-        agent_msgs = get_messages_by_role(
-            client, superuser_token_headers, session_id, "agent",
-        )
-        assert len(agent_msgs) == 1
-        assert "No files found" in agent_msgs[0]["content"]
-        assert agent_msgs[0]["message_metadata"]["command"] is True
-        assert agent_msgs[0]["message_metadata"]["command_name"] == "/files"
+        cmd_msgs = _get_command_messages(client, superuser_token_headers, session_id)
+        assert len(cmd_msgs) == 1
+        assert "No files found" in cmd_msgs[0]["content"]
+        assert cmd_msgs[0]["message_metadata"]["command"] is True
+        assert cmd_msgs[0]["message_metadata"]["command_name"] == "/files"
 
         # /files must NOT call the LLM
         assert len(stub.stream_calls) == 0
@@ -125,8 +132,8 @@ def test_files_command_ui_full_flow(
         agent_msgs = get_messages_by_role(
             client, superuser_token_headers, session_id, "agent",
         )
-        assert len(agent_msgs) == 2
-        assert "File generated" in agent_msgs[1]["content"]
+        assert len(agent_msgs) == 1
+        assert "File generated" in agent_msgs[0]["content"]
         # Regular message DID call the LLM
         assert len(stub.stream_calls) == 1
 
@@ -144,11 +151,9 @@ def test_files_command_ui_full_flow(
         drain_tasks()
         assert result.get("command_executed") is True
 
-        agent_msgs = get_messages_by_role(
-            client, superuser_token_headers, session_id, "agent",
-        )
-        assert len(agent_msgs) == 3
-        files_response = agent_msgs[2]["content"]
+        cmd_msgs = _get_command_messages(client, superuser_token_headers, session_id)
+        assert len(cmd_msgs) == 2
+        files_response = cmd_msgs[1]["content"]
 
         # /files shows only the files folder
         assert "**Files**" in files_response
@@ -165,8 +170,8 @@ def test_files_command_ui_full_flow(
         assert f"/environment/{env_id}/file?path=" in files_response
         assert "?token=" not in files_response
 
-        assert agent_msgs[2]["message_metadata"]["command"] is True
-        assert agent_msgs[2]["message_metadata"]["command_name"] == "/files"
+        assert cmd_msgs[1]["message_metadata"]["command"] is True
+        assert cmd_msgs[1]["message_metadata"]["command_name"] == "/files"
 
         # ── Phase 6: /files-all → all folders ─────────────────────────
         result = send_message(
@@ -175,11 +180,9 @@ def test_files_command_ui_full_flow(
         drain_tasks()
         assert result.get("command_executed") is True
 
-        agent_msgs = get_messages_by_role(
-            client, superuser_token_headers, session_id, "agent",
-        )
-        assert len(agent_msgs) == 4
-        all_response = agent_msgs[3]["content"]
+        cmd_msgs = _get_command_messages(client, superuser_token_headers, session_id)
+        assert len(cmd_msgs) == 3
+        all_response = cmd_msgs[2]["content"]
 
         # /files-all shows all sections
         assert "**Files**" in all_response
@@ -189,8 +192,8 @@ def test_files_command_ui_full_flow(
         assert "**Logs**" in all_response
         assert "session.log" in all_response
 
-        assert agent_msgs[3]["message_metadata"]["command"] is True
-        assert agent_msgs[3]["message_metadata"]["command_name"] == "/files-all"
+        assert cmd_msgs[2]["message_metadata"]["command"] is True
+        assert cmd_msgs[2]["message_metadata"]["command_name"] == "/files-all"
 
         # ── Phase 7: Neither command called the LLM ───────────────────
         assert len(stub.stream_calls) == 1  # unchanged from phase 3

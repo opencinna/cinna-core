@@ -66,6 +66,10 @@ Before finalizing any test file, verify:
 - [ ] Test names are descriptive and follow naming conventions
 - [ ] Code style matches existing tests in the project
 - [ ] No hardcoded secrets or sensitive data
+- [ ] Session-driven status transitions verified (no manual `agent_update_status` workarounds)
+- [ ] `drain_tasks()` called inside `with patch(...)` blocks (not outside)
+- [ ] `ScriptedAgentEnvConnector` used when test involves MCP tool calls during agent stream
+- [ ] No source code workarounds needed — if they are, flag the source code issue
 
 ## Running Tests — Delegate to `runnerkit-test-runner`
 
@@ -95,6 +99,34 @@ Report a concise summary of each step."
 **On failure:** Read the test-runner's summary, fix the failing tests in your context, then spawn the test-runner agent again to re-run the chain from the beginning.
 
 **Important:** Do NOT run `docker compose exec`, `pytest`, or `make test-backend` commands yourself. Always delegate to the test-runner agent. This separation keeps your context focused on test writing and code fixes while the test-runner handles execution and reporting.
+
+## Testing Agent Streaming and MCP Tool Flows
+
+When writing tests for features involving agent sessions, task execution, or MCP tools, you MUST understand the async execution model. Read the "Testing Session-Driven Flows" section in `backend/tests/README.md` thoroughly. Key rules:
+
+### Execution Timing
+- `execute_task()` and `send_message()` return immediately — they schedule `process_pending_messages` as a background task
+- Actual streaming happens in `drain_tasks()`, not during the API call
+- The `with patch("app.services.message_service.agent_env_connector", stub):` block must wrap `drain_tasks()`, not just the API call
+
+### Session-Driven Completion
+- After `drain_tasks()`, session completion event handlers automatically sync task status
+- **Never use `agent_update_status("completed")` as a workaround** — verify the automatic transition instead
+- If automatic completion doesn't work, investigate the source code (likely a `DBSession(engine)` vs `create_session()` issue)
+
+### ScriptedAgentEnvConnector for MCP Tools
+- Use `ScriptedAgentEnvConnector` when the agent needs to call MCP tools (create_subtask, add_comment, etc.) during its stream
+- Include `source_session_id` in subtask creation tool calls for feedback delivery
+- The stub only executes scripted steps on the first `stream_chat` call; subsequent calls use a fallback
+- Verify tool results via `stub.tool_results`
+
+### Source Code Invariants
+If a test needs a workaround, **stop and check the source code first**:
+1. Event handlers must use `create_session()` not `DBSession(engine)` — handlers with the latter are invisible to test transactions
+2. Status transitions must go through `update_task_status()` for audit trail — direct `task.status = ...` bypasses history
+3. New service imports of `create_session` need patch targets in `tests/utils/fixtures.py`
+
+**Flag source code violations to the user rather than writing workarounds in tests.**
 
 ## Update Your Agent Memory
 

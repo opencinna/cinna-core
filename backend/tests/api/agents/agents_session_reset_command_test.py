@@ -70,12 +70,16 @@ def test_session_reset_basic(
     # No LLM call was triggered
     assert len(stub_noop.stream_calls) == 0
 
-    # Command response agent message
-    agent_msgs = get_messages_by_role(client, superuser_token_headers, session_id, "agent")
-    assert len(agent_msgs) == 2  # original reply + command response
-    assert "Session reset" in agent_msgs[1]["content"]
-    assert agent_msgs[1]["message_metadata"]["command"] is True
-    assert agent_msgs[1]["message_metadata"]["command_name"] == "/session-reset"
+    # Command response is a system message with command metadata
+    all_msgs = list_messages(client, superuser_token_headers, session_id)
+    cmd_msgs = [
+        m for m in all_msgs
+        if m["role"] == "system" and m.get("message_metadata", {}).get("command") is True
+    ]
+    assert len(cmd_msgs) == 1
+    assert "Session reset" in cmd_msgs[0]["content"]
+    assert cmd_msgs[0]["message_metadata"]["command"] is True
+    assert cmd_msgs[0]["message_metadata"]["command_name"] == "/session-reset"
 
     # "Session reset" system message exists
     all_msgs = list_messages(client, superuser_token_headers, session_id)

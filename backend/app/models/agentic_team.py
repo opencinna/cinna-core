@@ -31,7 +31,7 @@ class AgenticTeam(AgenticTeamBase, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     owner_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+        foreign_key="user.id", nullable=False, ondelete="CASCADE", index=True
     )
     # Task prefix for short-code generation (e.g., "HR" → HR-1, HR-2)
     # When NULL, tasks in this team use the default "TASK" prefix
@@ -94,11 +94,11 @@ class AgenticTeamNode(AgenticTeamNodeBase, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     team_id: uuid.UUID = Field(
-        foreign_key="agentic_team.id", nullable=False, ondelete="CASCADE"
+        foreign_key="agentic_team.id", nullable=False, ondelete="CASCADE", index=True
     )
     # Re-declare agent_id with FK constraint (overrides base plain field)
     agent_id: uuid.UUID = Field(
-        foreign_key="agent.id", nullable=False, ondelete="CASCADE"
+        foreign_key="agent.id", nullable=False, ondelete="CASCADE", index=True
     )
     created_at: datetime = Field(default_factory=_utc_now)
     updated_at: datetime = Field(default_factory=_utc_now)
@@ -154,11 +154,11 @@ class AgenticTeamConnection(AgenticTeamConnectionBase, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     team_id: uuid.UUID = Field(
-        foreign_key="agentic_team.id", nullable=False, ondelete="CASCADE"
+        foreign_key="agentic_team.id", nullable=False, ondelete="CASCADE", index=True
     )
     # Re-declare with FK constraints (override base plain fields)
     source_node_id: uuid.UUID = Field(
-        foreign_key="agentic_team_node.id", nullable=False, ondelete="CASCADE"
+        foreign_key="agentic_team_node.id", nullable=False, ondelete="CASCADE", index=True
     )
     target_node_id: uuid.UUID = Field(
         foreign_key="agentic_team_node.id", nullable=False, ondelete="CASCADE"

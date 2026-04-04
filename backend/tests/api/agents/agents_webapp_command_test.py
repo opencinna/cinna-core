@@ -16,9 +16,18 @@ from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.stubs.environment_adapter_stub import EnvironmentTestAdapter
 from tests.utils.agent import create_agent_via_api, get_agent, update_agent
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.message import get_messages_by_role, send_message
+from tests.utils.message import list_messages, send_message
 from tests.utils.session import create_session_via_api
 from tests.utils.webapp_share import create_webapp_share, list_webapp_shares, update_webapp_share
+
+
+def _get_command_messages(client, headers, session_id):
+    """Get system messages that are command responses (have command metadata)."""
+    all_msgs = list_messages(client, headers, session_id)
+    return [
+        m for m in all_msgs
+        if m["role"] == "system" and m.get("message_metadata", {}).get("command") is True
+    ]
 
 
 def test_webapp_command_full_flow(
@@ -57,13 +66,11 @@ def test_webapp_command_full_flow(
         drain_tasks()
         assert result.get("command_executed") is True
 
-        agent_msgs = get_messages_by_role(
-            client, superuser_token_headers, session_id, "agent",
-        )
-        assert len(agent_msgs) == 1
-        assert "No Web App available for this agent" in agent_msgs[0]["content"]
-        assert agent_msgs[0]["message_metadata"]["command"] is True
-        assert agent_msgs[0]["message_metadata"]["command_name"] == "/webapp"
+        cmd_msgs = _get_command_messages(client, superuser_token_headers, session_id)
+        assert len(cmd_msgs) == 1
+        assert "No Web App available for this agent" in cmd_msgs[0]["content"]
+        assert cmd_msgs[0]["message_metadata"]["command"] is True
+        assert cmd_msgs[0]["message_metadata"]["command_name"] == "/webapp"
 
         # ── Phase 3: Enable webapp, but no shares ─────────────────────
         update_agent(client, superuser_token_headers, agent_id, webapp_enabled=True)
@@ -74,11 +81,9 @@ def test_webapp_command_full_flow(
         drain_tasks()
         assert result.get("command_executed") is True
 
-        agent_msgs = get_messages_by_role(
-            client, superuser_token_headers, session_id, "agent",
-        )
-        assert len(agent_msgs) == 2
-        assert "No Web App available for this agent" in agent_msgs[1]["content"]
+        cmd_msgs = _get_command_messages(client, superuser_token_headers, session_id)
+        assert len(cmd_msgs) == 2
+        assert "No Web App available for this agent" in cmd_msgs[1]["content"]
 
         # ── Phase 4: Create share, /webapp returns URL ────────────────
         share = create_webapp_share(
@@ -92,15 +97,13 @@ def test_webapp_command_full_flow(
         drain_tasks()
         assert result.get("command_executed") is True
 
-        agent_msgs = get_messages_by_role(
-            client, superuser_token_headers, session_id, "agent",
-        )
-        assert len(agent_msgs) == 3
-        assert share_url in agent_msgs[2]["content"]
-        assert "Web App" in agent_msgs[2]["content"]
-        assert "Access Code" not in agent_msgs[2]["content"]
-        assert agent_msgs[2]["message_metadata"]["command"] is True
-        assert agent_msgs[2]["message_metadata"]["command_name"] == "/webapp"
+        cmd_msgs = _get_command_messages(client, superuser_token_headers, session_id)
+        assert len(cmd_msgs) == 3
+        assert share_url in cmd_msgs[2]["content"]
+        assert "Web App" in cmd_msgs[2]["content"]
+        assert "Access Code" not in cmd_msgs[2]["content"]
+        assert cmd_msgs[2]["message_metadata"]["command"] is True
+        assert cmd_msgs[2]["message_metadata"]["command_name"] == "/webapp"
 
         # ── Phase 5: Deactivate first share, create one with security code ─
         # Deactivate the existing share so the new code-protected one is picked
@@ -125,13 +128,11 @@ def test_webapp_command_full_flow(
         drain_tasks()
         assert result.get("command_executed") is True
 
-        agent_msgs = get_messages_by_role(
-            client, superuser_token_headers, session_id, "agent",
-        )
-        assert len(agent_msgs) == 4
-        assert code_share_url in agent_msgs[3]["content"]
-        assert "Access Code" in agent_msgs[3]["content"]
-        assert security_code in agent_msgs[3]["content"]
+        cmd_msgs = _get_command_messages(client, superuser_token_headers, session_id)
+        assert len(cmd_msgs) == 4
+        assert code_share_url in cmd_msgs[3]["content"]
+        assert "Access Code" in cmd_msgs[3]["content"]
+        assert security_code in cmd_msgs[3]["content"]
 
         # ── Phase 6: No LLM calls were made ──────────────────────────
         assert len(stub.stream_calls) == 0

@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, UTC
+from sqlalchemy import Index
 from sqlmodel import SQLModel, Field
 
 # Event type constants
@@ -22,27 +23,32 @@ class SecurityEvent(SQLModel, table=True):
     - CREDENTIAL_WRITE_ATTEMPT: Attempt to write/edit credential files
     """
     __tablename__ = "security_event"
+    __table_args__ = (
+        Index("ix_security_event_guest_share_created", "guest_share_id", "created_at"),
+    )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), index=True
+    )
 
     # Context — who and where
-    user_id: uuid.UUID = Field(foreign_key="user.id", ondelete="CASCADE")
+    user_id: uuid.UUID = Field(foreign_key="user.id", ondelete="CASCADE", index=True)
     agent_id: uuid.UUID | None = Field(
-        default=None, foreign_key="agent.id", ondelete="SET NULL"
+        default=None, foreign_key="agent.id", ondelete="SET NULL", index=True
     )
     environment_id: uuid.UUID | None = Field(
         default=None, foreign_key="agent_environment.id", ondelete="SET NULL"
     )
     session_id: uuid.UUID | None = Field(
-        default=None, foreign_key="session.id", ondelete="SET NULL"
+        default=None, foreign_key="session.id", ondelete="SET NULL", index=True
     )
     guest_share_id: uuid.UUID | None = Field(
         default=None, foreign_key="agent_guest_share.id", ondelete="SET NULL"
     )
 
     # Event classification
-    event_type: str  # See constants above
+    event_type: str = Field(index=True)  # See constants above
     severity: str = Field(default="medium")  # "low", "medium", "high", "critical"
 
     # Free-form details stored as JSON string

@@ -54,7 +54,7 @@ class Session(SQLModel, table=True):
     mcp_session_id: str | None = Field(default=None)
     # Track which dashboard block triggered this session (for prompt action session reuse)
     dashboard_block_id: uuid.UUID | None = Field(
-        default=None, foreign_key="user_dashboard_block.id", ondelete="SET NULL"
+        default=None, foreign_key="user_dashboard_block.id", ondelete="SET NULL", index=True
     )
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

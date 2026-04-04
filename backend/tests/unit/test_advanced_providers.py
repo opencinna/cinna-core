@@ -198,8 +198,7 @@ class TestOpenCodeConfigStructure:
         )
         mcp = config.get("mcp", {})
         assert "knowledge" in mcp, "knowledge MCP bridge missing"
-        assert "task" in mcp, "task MCP bridge missing"
-        assert "collaboration" in mcp, "collaboration MCP bridge missing"
+        assert "agent_task" in mcp, "agent_task MCP bridge missing"
 
     def test_config_has_server_ports(self, tmp_path):
         """Building and conversation configs use different ports."""

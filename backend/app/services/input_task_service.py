@@ -34,7 +34,7 @@ from app.models.outgoing_email_queue import OutgoingEmailQueue, OutgoingEmailSta
 from app.models.agent_email_integration import AgentEmailIntegration
 from app.models.file_upload import FileUpload, FileUploadPublic, InputTaskFile
 from app.models.agentic_team import AgenticTeamNode
-from app.core.db import engine, create_session
+from app.core.db import create_session
 from app.utils import create_task_with_error_logging
 from app.services.session_service import SessionService
 from app.services.event_service import event_service
@@ -1026,15 +1026,28 @@ class InputTaskService:
         task: InputTask,
         session_id: UUID,
     ) -> InputTask:
-        """Link a session to the task and transition to in_progress."""
-        task.session_id = session_id
-        task.status = InputTaskStatus.IN_PROGRESS
-        task.executed_at = datetime.now(UTC)
-        task.updated_at = datetime.now(UTC)
+        """Link a session to the task and transition to in_progress.
 
+        Sets session_id first, then delegates to update_task_status so the
+        transition gets a TaskStatusHistory entry and system comment.
+        """
+        task.session_id = session_id
         db_session.add(task)
         db_session.commit()
         db_session.refresh(task)
+
+        # Transition via update_task_status for audit trail (history + comment).
+        # If task is already in_progress (re-execute), this is a no-op.
+        if task.status != InputTaskStatus.IN_PROGRESS:
+            InputTaskService.update_task_status(
+                db_session=db_session,
+                task_id=task.id,
+                new_status=InputTaskStatus.IN_PROGRESS,
+                changed_by_system=True,
+                reason="Session started",
+            )
+            db_session.refresh(task)
+
         return task
 
     @staticmethod
@@ -1402,7 +1415,7 @@ class InputTaskService:
                 logger.debug("STREAM_STARTED event missing session_id, skipping task sync")
                 return
 
-            with DBSession(engine) as db:
+            with create_session() as db:
                 # Get session to find source_task_id
                 session = db.get(Session, UUID(session_id))
                 if not session or not session.source_task_id:
@@ -1448,7 +1461,7 @@ class InputTaskService:
                 logger.debug("STREAM_COMPLETED event missing session_id, skipping task sync")
                 return
 
-            with DBSession(engine) as db:
+            with create_session() as db:
                 # Get session to find source_task_id
                 session = db.get(Session, UUID(session_id))
                 if not session or not session.source_task_id:
@@ -1508,7 +1521,7 @@ class InputTaskService:
                 logger.debug("STREAM_ERROR event missing session_id, skipping task sync")
                 return
 
-            with DBSession(engine) as db:
+            with create_session() as db:
                 # Get session to find source_task_id
                 session = db.get(Session, UUID(session_id))
                 if not session or not session.source_task_id:
@@ -1562,7 +1575,7 @@ class InputTaskService:
                 logger.debug("TODO_LIST_UPDATED event missing session_id, skipping")
                 return
 
-            with DBSession(engine) as db:
+            with create_session() as db:
                 session = db.get(Session, UUID(session_id))
                 if not session or not session.source_task_id:
                     return  # Session not linked to a task
@@ -1611,7 +1624,7 @@ class InputTaskService:
                 logger.debug("SESSION_STATE_UPDATED event missing fields, skipping")
                 return
 
-            with DBSession(engine) as db:
+            with create_session() as db:
                 session = db.get(Session, UUID(session_id))
                 if not session or not session.source_task_id:
                     return  # Not a task session
