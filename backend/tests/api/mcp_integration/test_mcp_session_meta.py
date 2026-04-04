@@ -114,7 +114,7 @@ def _run_send_message(
             mcp_session_id_var.reset(token_sess)
             mcp_authenticated_user_id_var.reset(token_auth)
 
-    with patch("app.services.message_service.agent_env_connector", agent_env_stub):
+    with patch("app.services.sessions.message_service.agent_env_connector", agent_env_stub):
         result = asyncio.run(_run())
     drain_tasks()
 

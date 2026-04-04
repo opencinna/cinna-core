@@ -5,8 +5,8 @@ from mcp.server.auth.provider import TokenVerifier, AccessToken
 from sqlmodel import Session as DBSession, select
 
 from app.core.db import engine
-from app.models.mcp_connector import MCPConnector
-from app.models.mcp_token import MCPToken
+from app.models.mcp.mcp_connector import MCPConnector
+from app.models.mcp.mcp_token import MCPToken
 from app.core.config import settings
 from app.mcp.context_vars import mcp_authenticated_user_id_var
 

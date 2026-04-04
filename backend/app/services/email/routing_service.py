@@ -9,13 +9,13 @@ import uuid
 
 from sqlmodel import Session, select
 
-from app.models.agent import Agent
-from app.models.agent_share import AgentShare, ShareSource, ShareStatus
-from app.models.agent_email_integration import AgentEmailIntegration, AgentSessionMode
-from app.models.environment import AgentEnvironment
-from app.models.user import User
+from app.models.agents.agent import Agent
+from app.models.sharing.agent_share import AgentShare, ShareSource, ShareStatus
+from app.models.email.agent_email_integration import AgentEmailIntegration, AgentSessionMode
+from app.models.environments.environment import AgentEnvironment
+from app.models.users.user import User
 from app.services.email.integration_service import EmailIntegrationService
-from app.services.user_service import UserService
+from app.services.users.user_service import UserService
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +184,7 @@ class EmailRoutingService:
         clone_share_mode: str,
     ) -> uuid.UUID:
         """Create an auto-share and clone for email integration."""
-        from app.services.agent_share_service import AgentShareService
+        from app.services.sharing.agent_share_service import AgentShareService
 
         share, clone = await AgentShareService.create_auto_share(
             session=session,
@@ -217,7 +217,7 @@ class EmailRoutingService:
         user_id: uuid.UUID,
     ) -> uuid.UUID | None:
         """If user has a pending share for this agent, auto-accept it."""
-        from app.services.agent_share_service import AgentShareService
+        from app.services.sharing.agent_share_service import AgentShareService
 
         stmt = select(AgentShare).where(
             AgentShare.original_agent_id == agent_id,

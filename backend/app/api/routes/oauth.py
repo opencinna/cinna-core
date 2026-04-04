@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from app.api.deps import CurrentUser, SessionDep
 from app.core.config import settings
 from app.models import Message, OAuthConfig, Token
-from app.services.auth_service import AuthService
+from app.services.users.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["oauth"])
 

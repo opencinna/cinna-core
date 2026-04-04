@@ -17,10 +17,10 @@ from uuid import UUID
 from sqlmodel import Session as DbSession
 
 from app.models import Agent
-from app.models.environment import AgentEnvironment
-from app.models.mcp_connector import MCPConnector
-from app.services.session_service import SessionService
-from app.services.message_service import MessageService
+from app.models.environments.environment import AgentEnvironment
+from app.models.mcp.mcp_connector import MCPConnector
+from app.services.sessions.session_service import SessionService
+from app.services.sessions.message_service import MessageService
 from app.utils import create_task_with_error_logging
 
 logger = logging.getLogger(__name__)

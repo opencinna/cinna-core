@@ -17,9 +17,9 @@ from app.models import (
     Agent,
     Session,
 )
-from app.services.activity_service import ActivityService
-from app.services.event_service import event_service
-from app.models.event import EventType
+from app.services.events.activity_service import ActivityService
+from app.services.events.event_service import event_service
+from app.models.events.event import EventType
 
 router = APIRouter(prefix="/activities", tags=["activities"])
 

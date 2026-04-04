@@ -10,8 +10,8 @@ import uuid
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from app.models.environment import AgentEnvironment
-from app.services.environment_service import EnvironmentService
+from app.models.environments.environment import AgentEnvironment
+from app.services.environments.environment_service import EnvironmentService
 from tests.utils.ai_credential import (
     create_random_ai_credential,
     delete_ai_credential,

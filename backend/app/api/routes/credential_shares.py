@@ -18,7 +18,7 @@ from app.models import (
     CredentialPublic,
     Message,
 )
-from app.services.credential_share_service import CredentialShareService
+from app.services.credentials.credential_share_service import CredentialShareService
 
 router = APIRouter(prefix="/credentials", tags=["credentials"])
 

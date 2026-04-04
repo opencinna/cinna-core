@@ -14,13 +14,13 @@ from datetime import UTC, datetime
 from sqlmodel import Session as DBSession, select
 
 from app.core.db import create_session
-from app.models.email_message import EmailMessage
-from app.models.session import Session, SessionCreate
-from app.models.input_task import InputTask, InputTaskStatus
-from app.models.agent_email_integration import EmailProcessAs
+from app.models.email.email_message import EmailMessage
+from app.models.sessions.session import Session, SessionCreate
+from app.models.tasks.input_task import InputTask, InputTaskStatus
+from app.models.email.agent_email_integration import EmailProcessAs
 from app.services.email.routing_service import EmailRoutingService, EmailAccessDenied
 from app.services.email.integration_service import EmailIntegrationService
-from app.services.session_service import SessionService
+from app.services.sessions.session_service import SessionService
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +169,7 @@ class EmailProcessingService:
                 else:
                     target_agent_id = email_msg.clone_agent_id
                     # Determine session_mode from integration config
-                    from app.models.agent_email_integration import AgentSessionMode
+                    from app.models.email.agent_email_integration import AgentSessionMode
                     session_mode = (
                         integration.agent_session_mode
                         if integration
@@ -225,8 +225,8 @@ class EmailProcessingService:
         3. Send message via SessionService.send_session_message
         4. Mark email as processed
         """
-        from app.models.agent import Agent
-        from app.models.agent_email_integration import AgentSessionMode
+        from app.models.agents.agent import Agent
+        from app.models.email.agent_email_integration import AgentSessionMode
 
         # Determine thread ID: use In-Reply-To or Message-ID for threading
         thread_id = email_msg.in_reply_to or email_msg.email_message_id
@@ -331,7 +331,7 @@ class EmailProcessingService:
 
         The task retains source_agent_id for SMTP config lookup when sending replies.
         """
-        from app.models.agent import Agent
+        from app.models.agents.agent import Agent
 
         # Get the parent agent and its owner
         agent = db_session.get(Agent, email_msg.agent_id)
@@ -366,8 +366,8 @@ class EmailProcessingService:
 
         # Emit TASK_CREATED event for activity tracking
         from app.utils import create_task_with_error_logging
-        from app.services.event_service import event_service
-        from app.models.event import EventType
+        from app.services.events.event_service import event_service
+        from app.models.events.event import EventType
 
         create_task_with_error_logging(
             event_service.emit_event(

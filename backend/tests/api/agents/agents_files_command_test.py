@@ -105,7 +105,7 @@ def test_files_command_ui_full_flow(
     # Single stub to track all LLM calls throughout the test
     stub = StubAgentEnvConnector(response_text="File generated")
 
-    with patch("app.services.message_service.agent_env_connector", stub):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub):
         # ── Phase 2: /files on empty workspace ────────────────────────
         result = send_message(
             client, superuser_token_headers, session_id, content="/files",

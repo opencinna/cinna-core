@@ -5,16 +5,16 @@ from datetime import UTC, datetime
 
 from sqlmodel import Session, select, func
 
-from app.models.agent import Agent
-from app.models.agent_email_integration import (
+from app.models.agents.agent import Agent
+from app.models.email.agent_email_integration import (
     AgentEmailIntegration,
     AgentEmailIntegrationCreate,
     AgentEmailIntegrationUpdate,
     AgentEmailIntegrationPublic,
     ProcessEmailsResult,
 )
-from app.models.agent_share import AgentShare
-from app.models.mail_server_config import MailServerConfig, MailServerType
+from app.models.sharing.agent_share import AgentShare
+from app.models.email.mail_server_config import MailServerConfig, MailServerType
 
 logger = logging.getLogger(__name__)
 
@@ -254,7 +254,7 @@ class EmailIntegrationService:
         agent_id: uuid.UUID,
     ) -> int:
         """Count clones created via email integration for this agent."""
-        from app.models.agent_share import ShareSource, ShareStatus
+        from app.models.sharing.agent_share import ShareSource, ShareStatus
         statement = (
             select(func.count())
             .select_from(AgentShare)

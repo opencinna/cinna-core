@@ -789,7 +789,7 @@ def test_get_adapter_inactive_connector(
     )
 
     import pytest
-    from app.services.mcp_errors import ConnectorInactiveError
+    from app.services.mcp.mcp_errors import ConnectorInactiveError
     with pytest.raises(ConnectorInactiveError):
         _run_with_connector_context(
             connector_id,

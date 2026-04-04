@@ -555,7 +555,7 @@ def test_general_assistant_auto_creation_not_triggered_on_signup(
     password = random_lower_string()
 
     with patch(
-        "app.services.general_assistant_service.GeneralAssistantService.trigger_auto_create_background",
+        "app.services.users.general_assistant_service.GeneralAssistantService.trigger_auto_create_background",
         side_effect=_capture_trigger,
     ):
         r = client.post(
@@ -585,7 +585,7 @@ def test_general_assistant_auto_creation_not_triggered_on_login(
     captured_calls: list = []
 
     with patch(
-        "app.services.general_assistant_service.GeneralAssistantService.trigger_auto_create_background",
+        "app.services.users.general_assistant_service.GeneralAssistantService.trigger_auto_create_background",
         side_effect=lambda uid: captured_calls.append(uid),
     ):
         r = client.post(

@@ -7,7 +7,7 @@ Tests swap it with a stub that returns preconfigured emails.
 import imaplib
 import ssl
 
-from app.models.mail_server_config import MailServerConfig, EncryptionType
+from app.models.email.mail_server_config import MailServerConfig, EncryptionType
 
 
 class IMAPConnector:

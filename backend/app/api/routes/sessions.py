@@ -20,8 +20,8 @@ from app.models import (
     AgentEnvironment,
     User,
 )
-from app.services.session_service import SessionService
-from app.services.agent_guest_share_service import AgentGuestShareService
+from app.services.sessions.session_service import SessionService
+from app.services.sharing.agent_guest_share_service import AgentGuestShareService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -489,7 +489,7 @@ async def recover_session(
     has_resendable = SessionService.mark_session_for_recovery(db=session, session=chat_session)
 
     # Add a system message to the chat indicating recovery
-    from app.services.message_service import MessageService
+    from app.services.sessions.message_service import MessageService
     MessageService.create_message(
         session=session,
         session_id=id,
@@ -528,7 +528,7 @@ def delete_session(
 
     # If session was linked to a task, check if task needs status reset
     if source_task_id:
-        from app.services.input_task_service import InputTaskService
+        from app.services.tasks.input_task_service import InputTaskService
         InputTaskService.reset_task_if_no_sessions(db_session=session, task_id=source_task_id)
 
     return Message(message="Session deleted successfully")
@@ -557,7 +557,7 @@ def bulk_delete_sessions(
         source_task_id = SessionService.delete_session(db_session=session, session_id=session_id)
 
         if source_task_id:
-            from app.services.input_task_service import InputTaskService
+            from app.services.tasks.input_task_service import InputTaskService
             InputTaskService.reset_task_if_no_sessions(db_session=session, task_id=source_task_id)
 
         deleted_count += 1

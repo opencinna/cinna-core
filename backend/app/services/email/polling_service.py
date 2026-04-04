@@ -15,9 +15,9 @@ from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 
 from sqlmodel import Session, select
 
-from app.models.agent_email_integration import AgentEmailIntegration
-from app.models.email_message import EmailMessage
-from app.models.mail_server_config import MailServerConfig, EncryptionType
+from app.models.email.agent_email_integration import AgentEmailIntegration
+from app.models.email.email_message import EmailMessage
+from app.models.email.mail_server_config import MailServerConfig, EncryptionType
 from app.services.email.imap_connector import imap_connector
 from app.services.email.mail_server_service import MailServerService
 

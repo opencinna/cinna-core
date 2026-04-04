@@ -21,12 +21,12 @@ from sqlmodel import Session
 
 from app.api.deps import SessionDep, get_db, get_current_user
 from app.models import Agent, User, A2ATokenPayload
-from app.models.environment import AgentEnvironment
-from app.services.a2a_service import A2AService
-from app.services.a2a_request_handler import A2ARequestHandler
-from app.services.a2a_task_store import DatabaseTaskStore
-from app.services.access_token_service import AccessTokenService
-from app.services.a2a_v1_adapter import A2AV1Adapter
+from app.models.environments.environment import AgentEnvironment
+from app.services.a2a.a2a_service import A2AService
+from app.services.a2a.a2a_request_handler import A2ARequestHandler
+from app.services.a2a.a2a_task_store import DatabaseTaskStore
+from app.services.a2a.access_token_service import AccessTokenService
+from app.services.a2a.a2a_v1_adapter import A2AV1Adapter
 from app.core.db import engine
 from app.utils import get_base_url
 

@@ -12,8 +12,8 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.models import AgentEnvironment
-from app.services.agent_workspace_token_service import AgentWorkspaceTokenService
-from app.services.environment_service import EnvironmentService
+from app.services.environments.agent_workspace_token_service import AgentWorkspaceTokenService
+from app.services.environments.environment_service import EnvironmentService
 from app.core.db import create_session
 
 logger = logging.getLogger(__name__)

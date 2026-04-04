@@ -8,7 +8,7 @@ import smtplib
 import ssl
 from email.mime.multipart import MIMEMultipart
 
-from app.models.mail_server_config import MailServerConfig, EncryptionType
+from app.models.email.mail_server_config import MailServerConfig, EncryptionType
 
 
 class SMTPConnector:

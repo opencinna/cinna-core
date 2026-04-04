@@ -19,8 +19,8 @@ from contextlib import contextmanager, ExitStack
 from unittest.mock import patch, AsyncMock
 
 from app.core.config import settings
-from app.services.environment_service import EnvironmentService
-from app.services.environment_lifecycle import EnvironmentLifecycleManager, APP_CORE_BASE_DIR_NAME
+from app.services.environments.environment_service import EnvironmentService
+from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager, APP_CORE_BASE_DIR_NAME
 from tests.stubs.environment_adapter_stub import EnvironmentTestAdapter
 from tests.stubs.socketio_stub import StubSocketIOConnector
 from tests.utils.ai_credential import create_random_ai_credential
@@ -32,26 +32,26 @@ from tests.utils.db_proxy import NonClosingSessionProxy
 
 CREATE_SESSION_TARGETS_BASE = [
     "app.core.db.create_session",
-    "app.services.environment_service.create_session",
+    "app.services.environments.environment_service.create_session",
 ]
 
 CREATE_SESSION_TARGETS_AGENT = CREATE_SESSION_TARGETS_BASE + [
     "app.services.email.processing_service.create_session",
-    "app.services.session_service.create_session",
-    "app.services.input_task_service.create_session",
-    "app.services.commands.files_command.create_session",
+    "app.services.sessions.session_service.create_session",
+    "app.services.tasks.input_task_service.create_session",
+    "app.services.agents.commands.files_command.create_session",
 ]
 
 BACKGROUND_TASK_TARGETS_BASE = [
-    "app.services.event_service.create_task_with_error_logging",
-    "app.services.environment_service.create_task_with_error_logging",
+    "app.services.events.event_service.create_task_with_error_logging",
+    "app.services.environments.environment_service.create_task_with_error_logging",
 ]
 
 BACKGROUND_TASK_TARGETS_FULL = BACKGROUND_TASK_TARGETS_BASE + [
-    "app.services.session_service.create_task_with_error_logging",
-    "app.services.input_task_service.create_task_with_error_logging",
-    "app.services.task_comment_service.create_task_with_error_logging",
-    "app.services.task_attachment_service.create_task_with_error_logging",
+    "app.services.sessions.session_service.create_task_with_error_logging",
+    "app.services.tasks.input_task_service.create_task_with_error_logging",
+    "app.services.tasks.task_comment_service.create_task_with_error_logging",
+    "app.services.tasks.task_attachment_service.create_task_with_error_logging",
     "app.utils.create_task_with_error_logging",
 ]
 
@@ -127,21 +127,21 @@ def patched_external_services(
     """
     with ExitStack() as stack:
         stack.enter_context(patch(
-            "app.services.credentials_service.CredentialsService.refresh_expiring_credentials_for_agent",
+            "app.services.credentials.credentials_service.CredentialsService.refresh_expiring_credentials_for_agent",
             new=AsyncMock(return_value=False),
         ))
         stack.enter_context(patch(
-            "app.services.event_service.socketio_connector",
+            "app.services.events.event_service.socketio_connector",
             StubSocketIOConnector(),
         ))
         if mock_ai_functions:
             stack.enter_context(patch(
-                "app.services.ai_functions_service.AIFunctionsService.is_available",
+                "app.services.ai_functions.ai_functions_service.AIFunctionsService.is_available",
                 return_value=False,
             ))
         if mock_a2a_skills:
             stack.enter_context(patch(
-                "app.services.agent_service.generate_a2a_skills",
+                "app.services.agents.agent_service.generate_a2a_skills",
                 return_value=[],
             ))
         yield

@@ -15,12 +15,12 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from app.api.deps import SessionDep, CurrentUser
-from app.models.security_event import (
+from app.models.events.security_event import (
     SecurityEventCreate,
     SecurityEventPublic,
     SecurityEventsPublic,
 )
-from app.services.security_event_service import SecurityEventService
+from app.services.events.security_event_service import SecurityEventService
 
 router = APIRouter(prefix="/security-events", tags=["security-events"])
 logger = logging.getLogger(__name__)

@@ -15,7 +15,7 @@ from app.models import (
     AgentAccessTokensPublic,
     Message,
 )
-from app.services.access_token_service import AccessTokenService
+from app.services.a2a.access_token_service import AccessTokenService
 
 router = APIRouter(prefix="/agents/{agent_id}/access-tokens", tags=["access-tokens"])
 

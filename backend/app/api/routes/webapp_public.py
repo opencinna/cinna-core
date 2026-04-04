@@ -11,9 +11,9 @@ from fastapi.responses import Response, HTMLResponse
 
 from app.api.deps import SessionDep
 from app.models import Agent, AgentWebappShare
-from app.services.agent_webapp_share_service import AgentWebappShareService
-from app.services.environment_service import EnvironmentService
-from app.services.webapp_service import WebappService, WEBAPP_SIZE_LIMIT_BYTES
+from app.services.webapp.agent_webapp_share_service import AgentWebappShareService
+from app.services.environments.environment_service import EnvironmentService
+from app.services.webapp.webapp_service import WebappService, WEBAPP_SIZE_LIMIT_BYTES
 from app.api.routes.webapp_templates import ERROR_HTML, LOADING_HTML
 
 logger = logging.getLogger(__name__)

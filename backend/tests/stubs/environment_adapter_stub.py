@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import AsyncIterator
 from datetime import datetime, UTC
 
-from app.services.adapters.base import (
+from app.services.environments.adapters.base import (
     EnvironmentAdapter,
     EnvInitConfig,
     File,

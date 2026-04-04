@@ -20,8 +20,8 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models.email_message import EmailMessage
-from app.models.outgoing_email_queue import OutgoingEmailQueue, OutgoingEmailStatus
+from app.models.email.email_message import EmailMessage
+from app.models.email.outgoing_email_queue import OutgoingEmailQueue, OutgoingEmailStatus
 from app.services.email.sending_service import EmailSendingService
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.stubs.email_stubs import StubSMTPConnector
@@ -36,8 +36,8 @@ from tests.utils.mail_server import (
     create_smtp_server,
     process_emails_with_stub,
 )
-from app.services.input_task_service import InputTaskService
-from app.models.input_task import InputTask
+from app.services.tasks.input_task_service import InputTaskService
+from app.models.tasks.input_task import InputTask
 from tests.utils.message import get_messages_by_role
 from tests.utils.session import get_agent_session
 
@@ -218,7 +218,7 @@ def test_email_task_mode_full_flow(
     stub_agent_env = StubAgentEnvConnector(response_text=agent_response_text)
 
     with patch(
-        "app.services.message_service.agent_env_connector",
+        "app.services.sessions.message_service.agent_env_connector",
         stub_agent_env,
     ):
         exec_r = client.post(
@@ -314,7 +314,7 @@ def test_email_task_mode_full_flow(
     mock_reply_subject = "Re: Help with order #12345"
 
     with patch(
-        "app.services.ai_functions_service.AIFunctionsService.generate_email_reply",
+        "app.services.ai_functions.ai_functions_service.AIFunctionsService.generate_email_reply",
         return_value={
             "success": True,
             "reply_body": mock_reply_body,

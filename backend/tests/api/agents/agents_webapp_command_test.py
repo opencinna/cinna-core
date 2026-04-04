@@ -58,7 +58,7 @@ def test_webapp_command_full_flow(
 
     stub = StubAgentEnvConnector(response_text="OK")
 
-    with patch("app.services.message_service.agent_env_connector", stub):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub):
         # ── Phase 2: /webapp with webapp_enabled=False ────────────────
         result = send_message(
             client, superuser_token_headers, session_id, content="/webapp",

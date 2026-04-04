@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 # Set DEBUG level for specific modules we want to debug
 if settings.ENVIRONMENT == "local":
-    logging.getLogger("app.services.adapters.docker_adapter").setLevel(logging.DEBUG)
-    logging.getLogger("app.services.environment_lifecycle").setLevel(logging.DEBUG)
+    logging.getLogger("app.services.environments.adapters.docker_adapter").setLevel(logging.DEBUG)
+    logging.getLogger("app.services.environments.environment_lifecycle").setLevel(logging.DEBUG)
 
 
 def custom_generate_unique_id(route: APIRoute) -> str:
@@ -33,20 +33,20 @@ if settings.SENTRY_DSN and settings.ENVIRONMENT != "local":
 
 
 # Startup and shutdown imports
-from app.services.event_service import event_service
-from app.services.file_cleanup_scheduler import (
+from app.services.events.event_service import event_service
+from app.services.files.file_cleanup_scheduler import (
     start_scheduler as start_file_cleanup_scheduler,
     shutdown_scheduler as shutdown_file_cleanup_scheduler
 )
-from app.services.environment_suspension_scheduler import (
+from app.services.environments.environment_suspension_scheduler import (
     start_scheduler as start_suspension_scheduler,
     shutdown_scheduler as shutdown_suspension_scheduler
 )
-from app.services.task_trigger_scheduler import (
+from app.services.tasks.task_trigger_scheduler import (
     start_scheduler as start_task_trigger_scheduler,
     shutdown_scheduler as shutdown_task_trigger_scheduler
 )
-from app.services.agent_schedule_scheduler import (
+from app.services.agents.agent_schedule_scheduler import (
     start_scheduler as start_agent_schedule_scheduler,
     shutdown_scheduler as shutdown_agent_schedule_scheduler
 )
@@ -58,7 +58,7 @@ from app.services.email.sending_scheduler import (
     start_scheduler as start_email_sending_scheduler,
     shutdown_scheduler as shutdown_email_sending_scheduler
 )
-from app.services.environment_status_scheduler import (
+from app.services.environments.environment_status_scheduler import (
     start_scheduler as start_env_status_scheduler,
     shutdown_scheduler as shutdown_env_status_scheduler
 )
@@ -77,10 +77,10 @@ async def lifespan(app: FastAPI):
     start_env_status_scheduler()
 
     # Register backend event handlers
-    from app.models.event import EventType
-    from app.services.environment_service import EnvironmentService
-    from app.services.activity_service import ActivityService
-    from app.services.session_service import SessionService
+    from app.models.events.event import EventType
+    from app.services.environments.environment_service import EnvironmentService
+    from app.services.events.activity_service import ActivityService
+    from app.services.sessions.session_service import SessionService
 
     # Environment service handlers
     event_service.register_handler(
@@ -130,7 +130,7 @@ async def lifespan(app: FastAPI):
     )
 
     # Input task service handlers for task status sync from sessions
-    from app.services.input_task_service import InputTaskService
+    from app.services.tasks.input_task_service import InputTaskService
 
     event_service.register_handler(
         event_type=EventType.STREAM_STARTED,

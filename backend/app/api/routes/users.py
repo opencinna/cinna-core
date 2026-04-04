@@ -10,9 +10,8 @@ from app.api.deps import (
     get_current_active_superuser,
 )
 from app.core.config import settings
-from app.services.user_service import UserService
+from app.services.users.user_service import UserService
 from app.models import (
-    Item,
     Message,
     SetPassword,
     UpdatePassword,
@@ -24,21 +23,21 @@ from app.models import (
     UserUpdate,
     UserUpdateMe,
 )
-from app.models.agent import AgentPublic
-from app.models.user import (
+from app.models.agents.agent import AgentPublic
+from app.models.users.user import (
     AIServiceCredentials,
     AIServiceCredentialsUpdate,
     UserPublicWithAICredentials,
     VALID_SDK_OPTIONS,
     VALID_AI_FUNCTIONS_SDK_OPTIONS,
 )
-from app.services.sdk_constants import is_valid_sdk
-from app.models.ai_credential import (
+from app.services.environments.sdk_constants import is_valid_sdk
+from app.models.credentials.ai_credential import (
     AICredentialType,
     AICredentialCreate,
     AICredentialUpdate,
 )
-from app.services.ai_credentials_service import ai_credentials_service
+from app.services.credentials.ai_credentials_service import ai_credentials_service
 from app.utils import generate_new_account_email, send_email
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -131,7 +130,7 @@ def update_user_me(
         user_in.default_ai_functions_credential_id = None
     # Validate AI functions credential_id if provided
     if user_in.default_ai_functions_credential_id is not None:
-        from app.models.ai_credential import AICredential, AICredentialType
+        from app.models.credentials.ai_credential import AICredential, AICredentialType
         cred = session.get(AICredential, user_in.default_ai_functions_credential_id)
         if not cred or cred.owner_id != current_user.id:
             raise HTTPException(status_code=404, detail="AI credential not found")
@@ -141,7 +140,7 @@ def update_user_me(
                 detail="Only Anthropic credentials can be used for AI functions",
             )
         # Check for OAuth token
-        from app.services.ai_credentials_service import ai_credentials_service
+        from app.services.credentials.ai_credentials_service import ai_credentials_service
         data = ai_credentials_service.decrypt_credential(cred)
         if data.api_key and data.api_key.startswith("sk-ant-oat"):
             raise HTTPException(
@@ -202,7 +201,7 @@ async def generate_general_assistant(
     Returns HTTP 409 if a General Assistant already exists for this user.
     Returns HTTP 400 if the General Assistant feature is not enabled on the account.
     """
-    from app.services.general_assistant_service import GeneralAssistantService
+    from app.services.users.general_assistant_service import GeneralAssistantService
 
     try:
         agent = await GeneralAssistantService.ensure_or_create(session, current_user)
@@ -211,7 +210,7 @@ async def generate_general_assistant(
     except GeneralAssistantService.AlreadyExistsError:
         raise HTTPException(status_code=409, detail="General Assistant already exists")
 
-    from app.services.agent_service import AgentService
+    from app.services.agents.agent_service import AgentService
     return AgentService.to_public_with_clone_info(session, agent)
 
 
@@ -326,8 +325,6 @@ def delete_user(
         raise HTTPException(
             status_code=403, detail="Super users are not allowed to delete themselves"
         )
-    statement = delete(Item).where(col(Item.owner_id) == user_id)
-    session.exec(statement)  # type: ignore
     session.delete(user)
     session.commit()
     return Message(message="User deleted successfully")

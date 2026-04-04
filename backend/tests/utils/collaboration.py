@@ -28,7 +28,7 @@ def _mock_create_agent_task(task_id: uuid.UUID | None = None, session_id: uuid.U
     collaboration service imports AgentService locally inside the function body.
     """
     return patch(
-        "app.services.agent_service.AgentService.create_agent_task",
+        "app.services.agents.agent_service.AgentService.create_agent_task",
         new=AsyncMock(return_value=(True, task_id, session_id, None)),
     )
 
@@ -40,7 +40,7 @@ def _mock_create_agent_task_failure(error: str = "Dispatch failed"):
     status="error" with the given error message in result_summary.
     """
     return patch(
-        "app.services.agent_service.AgentService.create_agent_task",
+        "app.services.agents.agent_service.AgentService.create_agent_task",
         new=AsyncMock(return_value=(False, None, None, error)),
     )
 

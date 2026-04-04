@@ -52,7 +52,7 @@ def test_session_recovery_auto_resend(
     first_agent_response = "Hello! I can help you with that."
     stub_success = StubAgentEnvConnector(response_text=first_agent_response)
 
-    with patch("app.services.message_service.agent_env_connector", stub_success):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_success):
         send_message(client, superuser_token_headers, session_id, content=first_user_msg)
         drain_tasks()
 
@@ -75,7 +75,7 @@ def test_session_recovery_auto_resend(
     ]
     stub_error = StubAgentEnvConnector(events=error_events)
 
-    with patch("app.services.message_service.agent_env_connector", stub_error):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_error):
         send_message(client, superuser_token_headers, session_id, content=second_user_msg)
         drain_tasks()
 
@@ -94,7 +94,7 @@ def test_session_recovery_auto_resend(
     recovery_agent_response = "Of course! Continuing from where we left off."
     stub_recovery = StubAgentEnvConnector(response_text=recovery_agent_response)
 
-    with patch("app.services.message_service.agent_env_connector", stub_recovery):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_recovery):
         r = client.post(
             f"{settings.API_V1_STR}/sessions/{session_id}/recover",
             headers=superuser_token_headers,
@@ -181,7 +181,7 @@ def test_session_recovery_via_command(
     first_agent_response = "Hello! I can help you with that."
     stub_success = StubAgentEnvConnector(response_text=first_agent_response)
 
-    with patch("app.services.message_service.agent_env_connector", stub_success):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_success):
         send_message(client, superuser_token_headers, session_id, content=first_user_msg)
         drain_tasks()
 
@@ -204,7 +204,7 @@ def test_session_recovery_via_command(
     ]
     stub_error = StubAgentEnvConnector(events=error_events)
 
-    with patch("app.services.message_service.agent_env_connector", stub_error):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_error):
         send_message(client, superuser_token_headers, session_id, content=second_user_msg)
         drain_tasks()
 
@@ -223,7 +223,7 @@ def test_session_recovery_via_command(
     recovery_agent_response = "Of course! Continuing from where we left off."
     stub_recovery = StubAgentEnvConnector(response_text=recovery_agent_response)
 
-    with patch("app.services.message_service.agent_env_connector", stub_recovery):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_recovery):
         result = send_message(
             client, superuser_token_headers, session_id, content="/session-recover",
         )
@@ -322,7 +322,7 @@ def test_session_recover_command_no_error(
     first_agent_response = "Hi! How can I help?"
     stub_success = StubAgentEnvConnector(response_text=first_agent_response)
 
-    with patch("app.services.message_service.agent_env_connector", stub_success):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_success):
         send_message(client, superuser_token_headers, session_id, content=first_user_msg)
         drain_tasks()
 
@@ -330,7 +330,7 @@ def test_session_recover_command_no_error(
     # No LLM stub needed since no resendable message exists — no stream triggered
     stub_noop = StubAgentEnvConnector(response_text="should not be called")
 
-    with patch("app.services.message_service.agent_env_connector", stub_noop):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_noop):
         result = send_message(
             client, superuser_token_headers, session_id, content="/session-recover",
         )
@@ -361,7 +361,7 @@ def test_session_recover_command_no_error(
     followup_response = "Sure, picking up where we left off."
     stub_followup = StubAgentEnvConnector(response_text=followup_response)
 
-    with patch("app.services.message_service.agent_env_connector", stub_followup):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_followup):
         send_message(client, superuser_token_headers, session_id, content=followup_msg)
         drain_tasks()
 

@@ -121,7 +121,7 @@ def _send_webapp_message(
     if page_context is not None:
         payload["page_context"] = page_context
 
-    with patch("app.services.message_service.agent_env_connector", stub_agent_env):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_agent_env):
         r = client.post(
             f"{_chat_base(share_token)}/sessions/{session_id}/messages/stream",
             headers=webapp_hdrs,
@@ -498,7 +498,7 @@ def test_regular_session_message_never_includes_extra_instructions(
     for i, content in enumerate(["Hello!", "How are you?", "What can you help with?"]):
         stub = StubAgentEnvConnector(response_text=f"Regular reply {i}")
 
-        with patch("app.services.message_service.agent_env_connector", stub):
+        with patch("app.services.sessions.message_service.agent_env_connector", stub):
             send_message(client, superuser_token_headers, session_id, content=content)
             drain_tasks()
 

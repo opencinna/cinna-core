@@ -7,9 +7,9 @@ from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, CurrentUserOrGuest, GuestShareContext, SessionDep
 from app.models import AgentEnvironment, Agent, User
-from app.services.environment_service import EnvironmentService
-from app.services.ai_functions_service import AIFunctionsService
-from app.services.agent_guest_share_service import AgentGuestShareService
+from app.services.environments.environment_service import EnvironmentService
+from app.services.ai_functions.ai_functions_service import AIFunctionsService
+from app.services.sharing.agent_guest_share_service import AgentGuestShareService
 
 router = APIRouter(prefix="/environments", tags=["workspace"])
 

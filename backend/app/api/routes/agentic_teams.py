@@ -22,9 +22,9 @@ from app.models import (
     AgenticTeamChartPublic,
     GenerateConnectionPromptResponse,
 )
-from app.services.agentic_team_service import AgenticTeamService
-from app.services.agentic_team_node_service import AgenticTeamNodeService, TeamNodeError
-from app.services.agentic_team_connection_service import (
+from app.services.agentic_teams.agentic_team_service import AgenticTeamService
+from app.services.agentic_teams.agentic_team_node_service import AgenticTeamNodeService, TeamNodeError
+from app.services.agentic_teams.agentic_team_connection_service import (
     AgenticTeamConnectionService,
     TeamConnectionError,
 )

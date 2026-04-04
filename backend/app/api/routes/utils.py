@@ -5,7 +5,7 @@ from pydantic.networks import EmailStr
 from app.api.deps import get_current_active_superuser, CurrentUser, SessionDep
 from app.models import Message
 from app.utils import generate_test_email, send_email
-from app.services.ai_functions_service import AIFunctionsService
+from app.services.ai_functions.ai_functions_service import AIFunctionsService
 
 router = APIRouter(prefix="/utils", tags=["utils"])
 

@@ -13,7 +13,7 @@ from app.models import (
     UserWorkspacesPublic,
     Message,
 )
-from app.services.user_workspace_service import UserWorkspaceService
+from app.services.users.user_workspace_service import UserWorkspaceService
 
 router = APIRouter(prefix="/user-workspaces", tags=["user-workspaces"])
 

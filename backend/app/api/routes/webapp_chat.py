@@ -18,13 +18,13 @@ from app.models import (
     MessageCreate,
     MessagesPublic,
 )
-from app.services.webapp_chat_service import (
+from app.services.webapp.webapp_chat_service import (
     WebappChatService,
     WebappChatError,
 )
-from app.services.message_service import MessageService
-from app.services.webapp_service import WebappService
-from app.services.session_service import SessionService
+from app.services.sessions.message_service import MessageService
+from app.services.webapp.webapp_service import WebappService
+from app.services.sessions.session_service import SessionService
 
 logger = logging.getLogger(__name__)
 

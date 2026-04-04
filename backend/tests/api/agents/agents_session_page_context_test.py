@@ -48,7 +48,7 @@ def _send_message_with_context(
     page_context. Patches agent_env_connector and drains background tasks.
     Returns the parsed JSON response.
     """
-    patch_target = "app.services.message_service.agent_env_connector"
+    patch_target = "app.services.sessions.message_service.agent_env_connector"
     with patch(patch_target, stub_agent_env):
         payload: dict = {"content": content, "file_ids": []}
         if page_context is not None:

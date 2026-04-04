@@ -46,7 +46,7 @@ def test_session_reset_basic(
     first_agent_response = "Hi! How can I help?"
     stub_success = StubAgentEnvConnector(response_text=first_agent_response)
 
-    with patch("app.services.message_service.agent_env_connector", stub_success):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_success):
         send_message(client, superuser_token_headers, session_id, content=first_user_msg)
         drain_tasks()
 
@@ -58,7 +58,7 @@ def test_session_reset_basic(
     # ── Phase 3: Send /session-reset command ──────────────────────────
     stub_noop = StubAgentEnvConnector(response_text="should not be called")
 
-    with patch("app.services.message_service.agent_env_connector", stub_noop):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_noop):
         result = send_message(
             client, superuser_token_headers, session_id, content="/session-reset",
         )
@@ -119,14 +119,14 @@ def test_session_reset_then_message_no_recovery_context(
     first_agent_response = "Hi! How can I help?"
     stub_success = StubAgentEnvConnector(response_text=first_agent_response)
 
-    with patch("app.services.message_service.agent_env_connector", stub_success):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_success):
         send_message(client, superuser_token_headers, session_id, content=first_user_msg)
         drain_tasks()
 
     # ── Phase 3: Send /session-reset ──────────────────────────────────
     stub_noop = StubAgentEnvConnector(response_text="should not be called")
 
-    with patch("app.services.message_service.agent_env_connector", stub_noop):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_noop):
         result = send_message(
             client, superuser_token_headers, session_id, content="/session-reset",
         )
@@ -139,7 +139,7 @@ def test_session_reset_then_message_no_recovery_context(
     followup_response = "Sure, what would you like to discuss?"
     stub_followup = StubAgentEnvConnector(response_text=followup_response)
 
-    with patch("app.services.message_service.agent_env_connector", stub_followup):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_followup):
         send_message(client, superuser_token_headers, session_id, content=followup_msg)
         drain_tasks()
 
@@ -189,7 +189,7 @@ def test_session_reset_after_error_no_auto_resend(
     first_agent_response = "Hello! I can help you with that."
     stub_success = StubAgentEnvConnector(response_text=first_agent_response)
 
-    with patch("app.services.message_service.agent_env_connector", stub_success):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_success):
         send_message(client, superuser_token_headers, session_id, content=first_user_msg)
         drain_tasks()
 
@@ -204,7 +204,7 @@ def test_session_reset_after_error_no_auto_resend(
     ]
     stub_error = StubAgentEnvConnector(events=error_events)
 
-    with patch("app.services.message_service.agent_env_connector", stub_error):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_error):
         send_message(client, superuser_token_headers, session_id, content=second_user_msg)
         drain_tasks()
 
@@ -218,7 +218,7 @@ def test_session_reset_after_error_no_auto_resend(
     # ── Phase 4: Send /session-reset ──────────────────────────────────
     stub_noop = StubAgentEnvConnector(response_text="should not be called")
 
-    with patch("app.services.message_service.agent_env_connector", stub_noop):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_noop):
         result = send_message(
             client, superuser_token_headers, session_id, content="/session-reset",
         )

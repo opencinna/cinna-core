@@ -32,8 +32,8 @@ from mcp.server.fastmcp.resources.resource_manager import ResourceManager
 from mcp.server.fastmcp.resources.types import FunctionResource
 
 from app.core.db import create_session
-from app.services.mcp_connector_service import MCPConnectorService
-from app.services.environment_service import EnvironmentService
+from app.services.mcp.mcp_connector_service import MCPConnectorService
+from app.services.environments.environment_service import EnvironmentService
 from app.mcp.server import mcp_connector_id_var
 
 logger = logging.getLogger(__name__)

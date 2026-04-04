@@ -15,8 +15,8 @@ import logging
 
 from app.core.config import settings
 from app.core.db import create_session
-from app.services.mcp_connector_service import MCPConnectorService
-from app.services.mcp_errors import MCPError
+from app.services.mcp.mcp_connector_service import MCPConnectorService
+from app.services.mcp.mcp_errors import MCPError
 from app.mcp.request_handler import MCPRequestHandler
 from app.mcp.upload_token import create_file_upload_token
 from app.mcp.context_vars import mcp_connector_id_var, mcp_session_id_var, mcp_authenticated_user_id_var

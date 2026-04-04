@@ -101,7 +101,7 @@ def test_prompt_sync_building_session_lifecycle(
     agent_response = "I've updated the workflow to include invoice parsing and summarization."
     stub_agent_env = StubAgentEnvConnector(response_text=agent_response)
 
-    with patch("app.services.message_service.agent_env_connector", stub_agent_env):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_agent_env):
         send_message(
             client, superuser_token_headers, session_id,
             content="Build an invoice parser workflow",

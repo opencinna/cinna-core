@@ -18,7 +18,6 @@ from app.api.routes import (
     files,
     guest_shares,
     input_tasks,
-    items,
     knowledge,
     knowledge_sources,
     llm_plugins,
@@ -55,7 +54,6 @@ api_router.include_router(login.router)
 api_router.include_router(oauth.router)
 api_router.include_router(users.router)
 api_router.include_router(utils.router)
-api_router.include_router(items.router)
 api_router.include_router(agents.router)
 api_router.include_router(agentic_teams.router)
 api_router.include_router(agent_shares.router)

@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import SessionDep, get_current_active_superuser
 from app.models import User
-from app.models.knowledge import (
+from app.models.knowledge.knowledge import (
     AIKnowledgeGitRepoCreate,
     AIKnowledgeGitRepoPublic,
     AIKnowledgeGitRepoUpdate,
@@ -22,7 +22,7 @@ from app.models.knowledge import (
     KnowledgeArticlePublic,
     RefreshKnowledgeResponse,
 )
-from app.services import knowledge_source_service
+from app.services.knowledge import knowledge_source_service
 
 router = APIRouter(prefix="/knowledge-sources", tags=["knowledge-sources"])
 

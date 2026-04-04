@@ -49,13 +49,13 @@ from app.models import (
     InputTask,
     Session as ChatSession,
 )
-from app.services.environment_service import EnvironmentService
-from app.services.agent_service import AgentService
-from app.services.credentials_service import CredentialsService
-from app.services.agent_scheduler_service import AgentSchedulerService, ScheduleError
-from app.services.agent_handover_service import AgentHandoverService, HandoverError
-from app.services.session_service import SessionService
-from app.models.session import SessionCreate
+from app.services.environments.environment_service import EnvironmentService
+from app.services.agents.agent_service import AgentService
+from app.services.credentials.credentials_service import CredentialsService
+from app.services.agents.agent_scheduler_service import AgentSchedulerService, ScheduleError
+from app.services.agents.agent_handover_service import AgentHandoverService, HandoverError
+from app.services.sessions.session_service import SessionService
+from app.models.sessions.session import SessionCreate
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -858,8 +858,8 @@ async def update_session_state(
     Called by the update_session_state tool to declare session outcomes.
     Creates activities and optionally propagates feedback to source agent.
     """
-    from app.services.event_service import event_service
-    from app.models.event import EventType
+    from app.services.events.event_service import event_service
+    from app.models.events.event import EventType
 
     # Validate state
     allowed_states = ("completed", "needs_input", "error")

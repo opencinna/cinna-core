@@ -31,9 +31,9 @@ You are given a **phase** (or section) from an **implementation plan document** 
 ### 3. Implement Following Project Patterns
 
 **Backend (FastAPI + SQLModel):**
-- Models go in `backend/app/models/[entity].py` with Base, Public, Update, Create pattern.
+- Models go in `backend/app/models/[domain]/[entity].py` with Base, Public, Update, Create pattern. Re-export new models in `backend/app/models/__init__.py`.
 - Routes go in `backend/app/api/routes/[domain].py` using `SessionDep`, `CurrentUser`.
-- Business logic goes in `backend/app/services/`.
+- Business logic goes in `backend/app/services/[domain]/` (organized by domain subfolder: agents, environments, sessions, tasks, credentials, a2a, mcp, knowledge, sharing, agentic_teams, webapp, files, plugins, users, events, ai_functions, email).
 - Use dependency injection (`SessionDep`, `CurrentUser`, `get_current_active_superuser`).
 - UUID primary keys for database models.
 - Register new routers in `backend/app/api/main.py`.

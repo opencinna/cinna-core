@@ -34,8 +34,8 @@ from app.models import (
     TaskAttachmentPublic,
     TaskAttachmentsPublic,
 )
-from app.models.file_upload import FileUploadPublic
-from app.services.input_task_service import (
+from app.models.files.file_upload import FileUploadPublic
+from app.services.tasks.input_task_service import (
     InputTaskService,
     InputTaskError,
     TaskNotFoundError,
@@ -43,9 +43,9 @@ from app.services.input_task_service import (
     PermissionDeniedError,
     ValidationError,
 )
-from app.services.session_service import SessionService
-from app.services.task_comment_service import TaskCommentService
-from app.services.task_attachment_service import TaskAttachmentService
+from app.services.sessions.session_service import SessionService
+from app.services.tasks.task_comment_service import TaskCommentService
+from app.services.tasks.task_attachment_service import TaskAttachmentService
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -220,9 +220,9 @@ async def delete_task(
         # Emit ACTIVITY_DELETED for any activities linked to this task
         # (CASCADE will clean up the DB rows, but we need WebSocket notifications)
         from sqlmodel import select
-        from app.models.activity import Activity
-        from app.services.event_service import event_service
-        from app.models.event import EventType
+        from app.models.sessions.activity import Activity
+        from app.services.events.event_service import event_service
+        from app.models.events.event import EventType
 
         activities = session.exec(
             select(Activity).where(Activity.input_task_id == id)
@@ -466,7 +466,7 @@ def attach_file_to_task(
             )
 
         # Return the file info
-        from app.models.file_upload import FileUpload
+        from app.models.files.file_upload import FileUpload
         file = session.get(FileUpload, file_id)
         return FileUploadPublic.model_validate(file)
 

@@ -16,9 +16,9 @@ from sqlmodel import Session as DBSession
 from app.core.config import settings
 from app.core.db import create_session
 from app.mcp.upload_token import verify_file_upload_token
-from app.services.mcp_connector_service import MCPConnectorService
-from app.services.mcp_errors import MCPError
-from app.services.environment_service import EnvironmentService
+from app.services.mcp.mcp_connector_service import MCPConnectorService
+from app.services.mcp.mcp_errors import MCPError
+from app.services.environments.environment_service import EnvironmentService
 
 logger = logging.getLogger(__name__)
 

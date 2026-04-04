@@ -108,7 +108,7 @@ def _run_send_message_with_ctx(
             mcp_connector_id_var.reset(token_conn)
             mcp_session_id_var.reset(token_sess)
 
-    with patch("app.services.message_service.agent_env_connector", agent_env_stub):
+    with patch("app.services.sessions.message_service.agent_env_connector", agent_env_stub):
         result = asyncio.run(_run())
     drain_tasks()
 

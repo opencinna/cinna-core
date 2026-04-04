@@ -92,7 +92,7 @@ def process_emails_with_stub(
         )
         if agent_env_stub:
             stack.enter_context(
-                patch("app.services.message_service.agent_env_connector", agent_env_stub)
+                patch("app.services.sessions.message_service.agent_env_connector", agent_env_stub)
             )
         r = client.post(
             f"{settings.API_V1_STR}/agents/{agent_id}/email-integration/process-emails",

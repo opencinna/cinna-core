@@ -87,7 +87,7 @@ class TestCrossSDKConfigGeneration:
 
     def test_conversation_config_generated(self, tmp_path):
         """Conversation opencode.json is generated for opencode/openai."""
-        from app.services.environment_lifecycle import EnvironmentLifecycleManager
+        from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
 
         mgr = EnvironmentLifecycleManager()
         env = _make_environment(
@@ -110,7 +110,7 @@ class TestCrossSDKConfigGeneration:
 
     def test_no_building_config_for_claude_code(self, tmp_path):
         """Building config is NOT generated when building SDK is claude-code."""
-        from app.services.environment_lifecycle import EnvironmentLifecycleManager
+        from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
 
         mgr = EnvironmentLifecycleManager()
         env = _make_environment(
@@ -131,7 +131,7 @@ class TestCrossSDKConfigGeneration:
 
     def test_both_modes_generated_for_opencode(self, tmp_path):
         """Both building and conversation configs generated when both use opencode."""
-        from app.services.environment_lifecycle import EnvironmentLifecycleManager
+        from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
 
         mgr = EnvironmentLifecycleManager()
         env = _make_environment(
@@ -160,7 +160,7 @@ class TestOpenCodeConfigStructure:
 
     def test_config_has_tools_section(self, tmp_path):
         """Generated config enables built-in tools."""
-        from app.services.environment_lifecycle import EnvironmentLifecycleManager
+        from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
 
         mgr = EnvironmentLifecycleManager()
         env = _make_environment(
@@ -181,7 +181,7 @@ class TestOpenCodeConfigStructure:
 
     def test_config_has_mcp_bridges(self, tmp_path):
         """Generated config includes MCP bridge servers."""
-        from app.services.environment_lifecycle import EnvironmentLifecycleManager
+        from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
 
         mgr = EnvironmentLifecycleManager()
         env = _make_environment(
@@ -202,7 +202,7 @@ class TestOpenCodeConfigStructure:
 
     def test_config_has_server_ports(self, tmp_path):
         """Building and conversation configs use different ports."""
-        from app.services.environment_lifecycle import EnvironmentLifecycleManager
+        from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
 
         mgr = EnvironmentLifecycleManager()
         env = _make_environment(
@@ -223,7 +223,7 @@ class TestOpenCodeConfigStructure:
 
     def test_config_file_permissions(self, tmp_path):
         """Config files have restricted permissions (0600)."""
-        from app.services.environment_lifecycle import EnvironmentLifecycleManager
+        from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
         import stat
 
         mgr = EnvironmentLifecycleManager()

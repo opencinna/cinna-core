@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlmodel import func, select
 
 from app.api.deps import CurrentUser, SessionDep
-from app.models.credential import CredentialType
+from app.models.credentials.credential import CredentialType
 from app.models import (
     Credential,
     CredentialCreate,
@@ -18,8 +18,8 @@ from app.models import (
     Message,
     UserWorkspace,
 )
-from app.services.credentials_service import CredentialsService
-from app.services.credential_share_service import CredentialShareService
+from app.services.credentials.credentials_service import CredentialsService
+from app.services.credentials.credential_share_service import CredentialShareService
 
 
 # Request/Response models for credential verification
@@ -143,7 +143,7 @@ def read_credential(
     Returns credential if user owns it OR has it shared with them.
     For shared credentials, is_shared=True and owner_email is set.
     """
-    from app.models.user import User
+    from app.models.users.user import User
 
     credential = session.get(Credential, id)
     if not credential:

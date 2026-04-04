@@ -147,8 +147,8 @@ async def query_knowledge(
     Returns:
         Discovery response (article list) or retrieval response (full articles)
     """
-    from app.services.embedding_service import generate_query_embedding, DEFAULT_EMBEDDING_MODEL
-    from app.services.vector_search_service import (
+    from app.services.knowledge.embedding_service import generate_query_embedding, DEFAULT_EMBEDDING_MODEL
+    from app.services.knowledge.vector_search_service import (
         search_knowledge,
         get_articles_by_ids,
         get_accessible_source_ids,

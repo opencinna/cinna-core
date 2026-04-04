@@ -19,8 +19,8 @@ from app.models import (
     UserDashboardBlockPromptActionUpdate,
     UserDashboardBlockPromptActionPublic,
 )
-from app.services.session_service import SessionService
-from app.services.user_dashboard_service import UserDashboardService, UserDashboardError
+from app.services.sessions.session_service import SessionService
+from app.services.users.user_dashboard_service import UserDashboardService, UserDashboardError
 
 router = APIRouter(prefix="/dashboards", tags=["Dashboards"])
 

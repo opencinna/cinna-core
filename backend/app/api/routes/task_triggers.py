@@ -20,7 +20,7 @@ from app.models import (
     TaskTriggerPublicWithToken,
     TaskTriggersPublic,
 )
-from app.services.task_trigger_service import (
+from app.services.tasks.task_trigger_service import (
     TaskTriggerService,
     TriggerError,
 )

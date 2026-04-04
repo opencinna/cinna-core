@@ -20,7 +20,7 @@ import uuid
 from mcp import types as mcp_types
 
 from app.core.db import create_session
-from app.services.mcp_connector_service import MCPConnectorService
+from app.services.mcp.mcp_connector_service import MCPConnectorService
 from app.mcp.server import mcp_connector_id_var
 
 logger = logging.getLogger(__name__)

@@ -5,8 +5,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, SessionDep
-from app.services.mcp_consent_service import MCPConsentService
-from app.services.mcp_errors import MCPError
+from app.services.mcp.mcp_consent_service import MCPConsentService
+from app.services.mcp.mcp_errors import MCPError
 
 router = APIRouter(prefix="/mcp/consent", tags=["mcp-consent"])
 

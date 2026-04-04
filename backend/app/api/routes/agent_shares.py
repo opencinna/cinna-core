@@ -30,10 +30,10 @@ from pydantic import BaseModel
 from sqlmodel import select
 
 from app.api.deps import SessionDep, CurrentUser
-from app.services.agent_share_service import AgentShareService
-from app.services.agent_clone_service import AgentCloneService
-from app.models.agent import Agent, AgentPublic
-from app.models.agent_share import (
+from app.services.sharing.agent_share_service import AgentShareService
+from app.services.sharing.agent_clone_service import AgentCloneService
+from app.models.agents.agent import Agent, AgentPublic
+from app.models.sharing.agent_share import (
     AgentShare,
     AgentShareCreate,
     AgentSharePublic,
@@ -43,18 +43,18 @@ from app.models.agent_share import (
     CredentialRequirement,
     AICredentialRequirement,
 )
-from app.models.clone_update_request import (
+from app.models.sharing.clone_update_request import (
     CloneUpdateRequest,
     CloneUpdateRequestPublic,
     CloneUpdateRequestsPublic,
     PushUpdateActionsRequest,
 )
-from app.models.credential import Credential
-from app.models.environment import AgentEnvironment
-from app.models.link_models import AgentCredentialLink
-from app.models.user import User
-from app.services.ai_credentials_service import ai_credentials_service
-from app.services.environment_service import SDK_TO_CREDENTIAL_TYPE
+from app.models.credentials.credential import Credential
+from app.models.environments.environment import AgentEnvironment
+from app.models.credentials.link_models import AgentCredentialLink
+from app.models.users.user import User
+from app.services.credentials.ai_credentials_service import ai_credentials_service
+from app.services.environments.environment_service import SDK_TO_CREDENTIAL_TYPE
 
 router = APIRouter(tags=["agent-shares"])
 

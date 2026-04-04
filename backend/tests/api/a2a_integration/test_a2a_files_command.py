@@ -97,7 +97,7 @@ def test_files_command_a2a_full_flow(
     # Single stub to track all LLM calls
     stub = StubAgentEnvConnector(response_text="File generated")
 
-    with patch("app.services.message_service.agent_env_connector", stub):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub):
         # ── Phase 2: /files on empty workspace via A2A ────────────────
         resp = client.post(
             f"{settings.API_V1_STR}/a2a/{agent_id}/",

@@ -19,8 +19,8 @@ from app.api.deps import CurrentUser, SessionDep
 from app.core import security
 from app.core.config import settings
 from app.models import Agent, AgentEnvironment, TokenPayload, User
-from app.services.environment_service import EnvironmentService
-from app.services.webapp_service import (
+from app.services.environments.environment_service import EnvironmentService
+from app.services.webapp.webapp_service import (
     WebappService,
     WebappError,
     WEBAPP_SIZE_LIMIT_BYTES,

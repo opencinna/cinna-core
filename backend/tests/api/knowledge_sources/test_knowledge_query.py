@@ -144,7 +144,7 @@ def test_knowledge_query_two_step_flow(
     source_id = uuid.UUID(source["id"])
 
     with patch(
-        "app.services.knowledge_source_service.verify_repository_access",
+        "app.services.knowledge.knowledge_source_service.verify_repository_access",
         return_value=(True, "Repository accessible"),
     ):
         r = client.post(
@@ -204,7 +204,7 @@ def test_knowledge_query_two_step_flow(
     # Mock Gemini so no real API call is made. The vector search service (cosine
     # similarity) runs unpatched, exercising the real ranking logic.
     with patch(
-        "app.services.embedding_service.generate_query_embedding",
+        "app.services.knowledge.embedding_service.generate_query_embedding",
         return_value=(QUERY_EMBEDDING, EMBEDDING_DIMS),
     ):
         r = client.post(_QUERY_URL, headers=auth_headers, json=payload)

@@ -5,10 +5,10 @@ from fastapi import APIRouter, HTTPException, File, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import CurrentUser, CurrentUserOrGuest, GuestShareContext, SessionDep
-from app.models.file_upload import FileUploadPublic, FileUpload
+from app.models.files.file_upload import FileUploadPublic, FileUpload
 from app.models import User
-from app.services.file_service import FileService
-from app.services.file_storage_service import FileStorageService
+from app.services.files.file_service import FileService
+from app.services.files.file_storage_service import FileStorageService
 
 router = APIRouter(prefix="/files", tags=["files"])
 

@@ -13,7 +13,7 @@ from app.models import (
     AgentWebappInterfaceConfigPublic,
     AgentWebappInterfaceConfigUpdate,
 )
-from app.services.agent_webapp_interface_config_service import (
+from app.services.webapp.agent_webapp_interface_config_service import (
     AgentWebappInterfaceConfigService,
     InterfaceConfigError,
 )

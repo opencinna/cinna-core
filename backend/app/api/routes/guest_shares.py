@@ -20,7 +20,7 @@ from app.models import (
     AgentGuestSharesPublic,
     Message,
 )
-from app.services.agent_guest_share_service import AgentGuestShareService
+from app.services.sharing.agent_guest_share_service import AgentGuestShareService
 
 
 class GuestShareAuthRequest(BaseModel):

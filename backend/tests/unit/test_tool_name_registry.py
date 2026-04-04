@@ -394,7 +394,7 @@ class TestPreApprovedToolsSync:
     """Ensure the two copies of pre-approved tools stay in sync."""
 
     def test_registry_matches_message_service(self):
-        from app.services.message_service import PRE_ALLOWED_TOOLS
+        from app.services.sessions.message_service import PRE_ALLOWED_TOOLS
 
         missing_in_backend = PRE_APPROVED_TOOLS - PRE_ALLOWED_TOOLS
         missing_in_registry = PRE_ALLOWED_TOOLS - PRE_APPROVED_TOOLS

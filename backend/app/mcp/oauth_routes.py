@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.db import create_session
-from app.services.mcp_oauth_service import (
+from app.services.mcp.mcp_oauth_service import (
     MCPOAuthService,
     DCRInput,
     AuthorizeInput,
@@ -21,7 +21,7 @@ from app.services.mcp_oauth_service import (
     extract_connector_id_from_resource_path,
     get_as_metadata_dict,
 )
-from app.services.mcp_errors import MCPError
+from app.services.mcp.mcp_errors import MCPError
 
 logger = logging.getLogger(__name__)
 

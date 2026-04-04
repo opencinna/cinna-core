@@ -635,7 +635,7 @@ def test_generate_schedule_returns_cron_on_success(
     }
 
     with patch(
-        "app.services.ai_functions_service.AIFunctionsService.generate_schedule",
+        "app.services.ai_functions.ai_functions_service.AIFunctionsService.generate_schedule",
         return_value=mock_ai_result,
     ):
         body = generate_schedule(
@@ -667,7 +667,7 @@ def test_generate_schedule_returns_error_on_ai_failure(
     }
 
     with patch(
-        "app.services.ai_functions_service.AIFunctionsService.generate_schedule",
+        "app.services.ai_functions.ai_functions_service.AIFunctionsService.generate_schedule",
         return_value=mock_ai_result,
     ):
         body = generate_schedule(

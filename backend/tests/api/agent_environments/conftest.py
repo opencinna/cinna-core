@@ -21,7 +21,7 @@ from tests.utils.fixtures import (
 # Additional create_session patch target for the environment status scheduler,
 # which opens its own session independently of the service layer.
 _EXTRA_SESSION_TARGETS = [
-    "app.services.environment_status_scheduler.create_session",
+    "app.services.environments.environment_status_scheduler.create_session",
 ]
 
 

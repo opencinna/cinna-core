@@ -19,7 +19,7 @@ from app.models import (
     Agent,
     Message,
 )
-from app.models.llm_plugin import (
+from app.models.plugins.llm_plugin import (
     LLMPluginMarketplace,
     LLMPluginMarketplaceCreate,
     LLMPluginMarketplaceUpdate,
@@ -36,7 +36,7 @@ from app.models.llm_plugin import (
     AgentPluginLinksPublic,
     PluginSyncResponse,
 )
-from app.services.llm_plugin_service import LLMPluginService
+from app.services.plugins.llm_plugin_service import LLMPluginService
 
 logger = logging.getLogger(__name__)
 

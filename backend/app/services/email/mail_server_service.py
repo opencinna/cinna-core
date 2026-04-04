@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from sqlmodel import Session, select, func
 
 from app.core.security import encrypt_field, decrypt_field
-from app.models.mail_server_config import (
+from app.models.email.mail_server_config import (
     MailServerConfig,
     MailServerConfigCreate,
     MailServerConfigUpdate,

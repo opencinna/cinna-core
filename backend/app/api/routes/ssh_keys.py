@@ -12,7 +12,7 @@ from app.models import (
     SSHKeyUpdate,
     Message,
 )
-from app.services.ssh_key_service import SSHKeyService
+from app.services.users.ssh_key_service import SSHKeyService
 
 router = APIRouter(prefix="/ssh-keys", tags=["ssh-keys"])
 

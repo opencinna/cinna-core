@@ -50,23 +50,23 @@ def _refresh_patches():
     """Stack of patches that prevent real git/embedding work in refresh tests."""
     return (
         patch(
-            "app.services.knowledge_source_service.clone_repository_context",
+            "app.services.knowledge.knowledge_source_service.clone_repository_context",
             side_effect=_fake_clone_context,
         ),
         patch(
-            "app.services.knowledge_source_service.parse_settings_json",
+            "app.services.knowledge.knowledge_source_service.parse_settings_json",
             return_value=_mock_parse_settings(),
         ),
         patch(
-            "app.services.knowledge_source_service.process_repository_articles",
+            "app.services.knowledge.knowledge_source_service.process_repository_articles",
             return_value={"total": 1, "created": 1, "updated": 0, "skipped": 0, "errors": []},
         ),
         patch(
-            "app.services.knowledge_source_service.delete_orphaned_articles",
+            "app.services.knowledge.knowledge_source_service.delete_orphaned_articles",
             return_value=0,
         ),
         patch(
-            "app.services.knowledge_source_service.chunk_and_embed_all_articles",
+            "app.services.knowledge.knowledge_source_service.chunk_and_embed_all_articles",
             return_value={
                 "articles_processed": 0,
                 "articles_failed": 0,
@@ -75,7 +75,7 @@ def _refresh_patches():
             },
         ),
         patch(
-            "app.services.knowledge_source_service.get_current_commit_hash",
+            "app.services.knowledge.knowledge_source_service.get_current_commit_hash",
             return_value="abc123",
         ),
     )
@@ -178,7 +178,7 @@ def test_knowledge_source_lifecycle(
 
     # ── Phase 8: Changing branch resets status to pending ────────────────
     with patch(
-        "app.services.knowledge_source_service.verify_repository_access",
+        "app.services.knowledge.knowledge_source_service.verify_repository_access",
         return_value=(True, "Repository accessible"),
     ):
         client.post(f"{_BASE}/{source_id}/check-access", headers=superuser_token_headers)
@@ -231,7 +231,7 @@ def test_check_access_and_refresh(
 
     # ── Phase 2: Check access success ─────────────────────────────────────
     with patch(
-        "app.services.knowledge_source_service.verify_repository_access",
+        "app.services.knowledge.knowledge_source_service.verify_repository_access",
         return_value=(True, "Repository accessible"),
     ):
         r = client.post(f"{_BASE}/{source_id}/check-access", headers=superuser_token_headers)
@@ -244,7 +244,7 @@ def test_check_access_and_refresh(
 
     # ── Phase 3: Check access failure ─────────────────────────────────────
     with patch(
-        "app.services.knowledge_source_service.verify_repository_access",
+        "app.services.knowledge.knowledge_source_service.verify_repository_access",
         return_value=(False, "Connection refused"),
     ):
         r = client.post(f"{_BASE}/{source_id}/check-access", headers=superuser_token_headers)
@@ -255,7 +255,7 @@ def test_check_access_and_refresh(
 
     # ── Phase 4: Restore to connected ─────────────────────────────────────
     with patch(
-        "app.services.knowledge_source_service.verify_repository_access",
+        "app.services.knowledge.knowledge_source_service.verify_repository_access",
         return_value=(True, "Repository accessible"),
     ):
         client.post(f"{_BASE}/{source_id}/check-access", headers=superuser_token_headers)
@@ -313,7 +313,7 @@ def test_discoverable_sources_flow(
     source_id = source["id"]
 
     with patch(
-        "app.services.knowledge_source_service.verify_repository_access",
+        "app.services.knowledge.knowledge_source_service.verify_repository_access",
         return_value=(True, "Repository accessible"),
     ):
         client.post(f"{_BASE}/{source_id}/check-access", headers=superuser_token_headers)

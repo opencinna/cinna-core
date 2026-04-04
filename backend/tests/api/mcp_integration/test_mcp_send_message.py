@@ -100,7 +100,7 @@ def _run_send_message(
             mcp_connector_id_var.reset(token_conn)
             mcp_session_id_var.reset(token_sess)
 
-    with patch("app.services.message_service.agent_env_connector", agent_env_stub):
+    with patch("app.services.sessions.message_service.agent_env_connector", agent_env_stub):
         result = asyncio.run(_run())
     drain_tasks()
 
@@ -289,7 +289,7 @@ def test_send_message_reuses_session_after_stream_completed(
     # In production, handle_stream_completed sets status = "completed" for
     # non-integration sessions. With our fix, MCP sessions should stay
     # "active". We test the fix by calling handle_stream_completed directly.
-    from app.services.session_service import SessionService
+    from app.services.sessions.session_service import SessionService
     event_data = {
         "meta": {
             "session_id": session_id,
@@ -297,7 +297,7 @@ def test_send_message_reuses_session_after_stream_completed(
         }
     }
     # Patch create_session() to use the test DB session
-    with patch("app.services.session_service.create_session", return_value=db):
+    with patch("app.services.sessions.session_service.create_session", return_value=db):
         with patch.object(db, "close", lambda: None):
             asyncio.run(SessionService.handle_stream_completed(event_data))
     drain_tasks()

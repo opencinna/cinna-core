@@ -1,7 +1,7 @@
 # Re-export all models for backward compatibility
 from sqlmodel import SQLModel
-from .link_models import AgentCredentialLink
-from .user import (
+from .credentials.link_models import AgentCredentialLink
+from .users.user import (
     User,
     UserCreate,
     UserRegister,
@@ -17,7 +17,7 @@ from .user import (
     SetPassword,
     OAuthConfig,
 )
-from .agent import (
+from .agents.agent import (
     Agent,
     AgentCreate,
     AgentUpdate,
@@ -33,7 +33,7 @@ from .agent import (
     CloneMode,
     UpdateMode,
 )
-from .credential import (
+from .credentials.credential import (
     Credential,
     CredentialCreate,
     CredentialUpdate,
@@ -46,7 +46,7 @@ from .credential import (
     ApiTokenData,
     CredentialWithData,
 )
-from .ai_credential import (
+from .credentials.ai_credential import (
     AICredential,
     AICredentialCreate,
     AICredentialUpdate,
@@ -55,7 +55,7 @@ from .ai_credential import (
     AICredentialType,
     AICredentialData,
 )
-from .ai_credential_share import (
+from .credentials.ai_credential_share import (
     AICredentialShare,
     AICredentialShareBase,
     AICredentialSharePublic,
@@ -64,7 +64,7 @@ from .ai_credential_share import (
     SharedAICredentialPublic,
     SharedAICredentialsPublic,
 )
-from .credential_share import (
+from .credentials.credential_share import (
     CredentialShare,
     CredentialShareBase,
     CredentialSharePublic,
@@ -73,7 +73,7 @@ from .credential_share import (
     SharedCredentialPublic,
     SharedCredentialsPublic,
 )
-from .agent_share import (
+from .sharing.agent_share import (
     AgentShare,
     AgentShareBase,
     AgentSharePublic,
@@ -88,7 +88,7 @@ from .agent_share import (
     ShareMode,
     ShareSource,
 )
-from .clone_update_request import (
+from .sharing.clone_update_request import (
     CloneUpdateRequest,
     CloneUpdateRequestBase,
     CloneUpdateRequestPublic,
@@ -96,21 +96,14 @@ from .clone_update_request import (
     PushUpdateActionsRequest,
     UpdateRequestStatus,
 )
-from .item import (
-    Item,
-    ItemCreate,
-    ItemUpdate,
-    ItemPublic,
-    ItemsPublic,
-)
-from .environment import (
+from .environments.environment import (
     AgentEnvironment,
     AgentEnvironmentCreate,
     AgentEnvironmentUpdate,
     AgentEnvironmentPublic,
     AgentEnvironmentsPublic,
 )
-from .session import (
+from .sessions.session import (
     Session,
     SessionCreate,
     SessionUpdate,
@@ -125,7 +118,7 @@ from .session import (
     SessionCommandPublic,
     SessionCommandsPublic,
 )
-from .activity import (
+from .sessions.activity import (
     Activity,
     ActivityCreate,
     ActivityUpdate,
@@ -135,14 +128,14 @@ from .activity import (
     ActivitiesPublicExtended,
     ActivityStats,
 )
-from .event import (
+from .events.event import (
     EventType,
     EventBase,
     EventPublic,
     EventBroadcast,
     ConnectionInfo,
 )
-from .agent_schedule import (
+from .agents.agent_schedule import (
     AgentSchedule,
     ScheduleRequest,
     ScheduleResponse,
@@ -151,7 +144,7 @@ from .agent_schedule import (
     AgentSchedulePublic,
     AgentSchedulesPublic,
 )
-from .agent_handover import (
+from .agents.agent_handover import (
     AgentHandoverConfig,
     HandoverConfigCreate,
     HandoverConfigUpdate,
@@ -167,14 +160,14 @@ from .agent_handover import (
     UpdateSessionStateResponse,
     RespondToTaskRequest,
 )
-from .user_workspace import (
+from .users.user_workspace import (
     UserWorkspace,
     UserWorkspaceCreate,
     UserWorkspaceUpdate,
     UserWorkspacePublic,
     UserWorkspacesPublic,
 )
-from .ssh_key import (
+from .users.ssh_key import (
     UserSSHKey,
     SSHKeyGenerate,
     SSHKeyImport,
@@ -182,7 +175,7 @@ from .ssh_key import (
     SSHKeysPublic,
     SSHKeyUpdate,
 )
-from .knowledge import (
+from .knowledge.knowledge import (
     AIKnowledgeGitRepo,
     AIKnowledgeGitRepoCreate,
     AIKnowledgeGitRepoUpdate,
@@ -202,7 +195,7 @@ from .knowledge import (
     ArticleListItem,
     ArticleContent,
 )
-from .llm_plugin import (
+from .plugins.llm_plugin import (
     LLMPluginMarketplace,
     LLMPluginMarketplaceCreate,
     LLMPluginMarketplaceUpdate,
@@ -221,7 +214,7 @@ from .llm_plugin import (
     MarketplaceStatus,
     PluginSourceType,
 )
-from .agent_access_token import (
+from .a2a.agent_access_token import (
     AgentAccessToken,
     AgentAccessTokenCreate,
     AgentAccessTokenUpdate,
@@ -232,7 +225,7 @@ from .agent_access_token import (
     AccessTokenScope,
     A2ATokenPayload,
 )
-from .agent_guest_share import (
+from .sharing.agent_guest_share import (
     AgentGuestShare,
     AgentGuestShareBase,
     AgentGuestShareCreate,
@@ -243,7 +236,7 @@ from .agent_guest_share import (
     GuestShareGrant,
     GuestShareTokenPayload,
 )
-from .input_task import (
+from .tasks.input_task import (
     InputTask,
     InputTaskCreate,
     InputTaskUpdate,
@@ -265,7 +258,7 @@ from .input_task import (
     AgentTaskCreate,
     AgentTaskOperationResponse,
 )
-from .task_comment import (
+from .tasks.task_comment import (
     TaskComment,
     TaskCommentBase,
     TaskCommentCreate,
@@ -273,18 +266,18 @@ from .task_comment import (
     TaskCommentPublic,
     TaskCommentsPublic,
 )
-from .task_attachment import (
+from .tasks.task_attachment import (
     TaskAttachment,
     TaskAttachmentBase,
     TaskAttachmentPublic,
     TaskAttachmentsPublic,
 )
-from .task_status_history import (
+from .tasks.task_status_history import (
     TaskStatusHistory,
     TaskStatusHistoryPublic,
     TaskStatusHistoriesPublic,
 )
-from .task_trigger import (
+from .tasks.task_trigger import (
     TaskTrigger,
     TriggerType,
     TaskTriggerCreateSchedule,
@@ -295,7 +288,7 @@ from .task_trigger import (
     TaskTriggerPublicWithToken,
     TaskTriggersPublic,
 )
-from .agent_email_integration import (
+from .email.agent_email_integration import (
     AgentEmailIntegration,
     AgentEmailIntegrationCreate,
     AgentEmailIntegrationUpdate,
@@ -305,7 +298,7 @@ from .agent_email_integration import (
     EmailProcessAs,
     ProcessEmailsResult,
 )
-from .mail_server_config import (
+from .email.mail_server_config import (
     MailServerConfig,
     MailServerConfigCreate,
     MailServerConfigUpdate,
@@ -314,41 +307,41 @@ from .mail_server_config import (
     MailServerType,
     EncryptionType,
 )
-from .email_message import (
+from .email.email_message import (
     EmailMessage,
     EmailMessagePublic,
 )
-from .outgoing_email_queue import (
+from .email.outgoing_email_queue import (
     OutgoingEmailQueue,
     OutgoingEmailQueuePublic,
     OutgoingEmailStatus,
 )
-from .mcp_connector import (
+from .mcp.mcp_connector import (
     MCPConnector,
     MCPConnectorCreate,
     MCPConnectorUpdate,
     MCPConnectorPublic,
     MCPConnectorsPublic,
 )
-from .mcp_oauth_client import (
+from .mcp.mcp_oauth_client import (
     MCPOAuthClient,
     MCPOAuthClientPublic,
 )
-from .mcp_auth_code import (
+from .mcp.mcp_auth_code import (
     MCPAuthCode,
     MCPAuthRequest,
 )
-from .mcp_token import (
+from .mcp.mcp_token import (
     MCPToken,
 )
-from .mcp_session_meta import (
+from .mcp.mcp_session_meta import (
     MCPSessionMeta,
     MCPSessionMetaPublic,
 )
-from .mcp_transport_session import (
+from .mcp.mcp_transport_session import (
     MCPTransportSession,
 )
-from .agent_webapp_share import (
+from .webapp.agent_webapp_share import (
     AgentWebappShare,
     AgentWebappShareBase,
     AgentWebappShareCreate,
@@ -358,14 +351,14 @@ from .agent_webapp_share import (
     AgentWebappSharesPublic,
     WebappShareTokenPayload,
 )
-from .agent_webapp_interface_config import (
+from .webapp.agent_webapp_interface_config import (
     AgentWebappInterfaceConfig,
     AgentWebappInterfaceConfigBase,
     AgentWebappInterfaceConfigCreate,
     AgentWebappInterfaceConfigUpdate,
     AgentWebappInterfaceConfigPublic,
 )
-from .security_event import (
+from .events.security_event import (
     SecurityEvent,
     SecurityEventCreate,
     SecurityEventPublic,
@@ -375,7 +368,7 @@ from .security_event import (
     OUTPUT_REDACTED,
     CREDENTIAL_WRITE_ATTEMPT,
 )
-from .user_dashboard import (
+from .users.user_dashboard import (
     UserDashboard,
     UserDashboardCreate,
     UserDashboardUpdate,
@@ -390,7 +383,7 @@ from .user_dashboard import (
     UserDashboardBlockPromptActionUpdate,
     UserDashboardBlockPromptActionPublic,
 )
-from .agentic_team import (
+from .agentic_teams.agentic_team import (
     AgenticTeam,
     AgenticTeamCreate,
     AgenticTeamUpdate,
@@ -504,12 +497,6 @@ __all__ = [
     "CloneUpdateRequestsPublic",
     "PushUpdateActionsRequest",
     "UpdateRequestStatus",
-    # Items
-    "Item",
-    "ItemCreate",
-    "ItemUpdate",
-    "ItemPublic",
-    "ItemsPublic",
     # Environments
     "AgentEnvironment",
     "AgentEnvironmentCreate",

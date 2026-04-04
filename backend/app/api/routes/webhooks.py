@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Header, Query, Request
 from sqlmodel import Session
 
 from app.core.db import engine
-from app.services.task_trigger_service import (
+from app.services.tasks.task_trigger_service import (
     TaskTriggerService,
     TriggerError,
     TriggerNotFoundError,

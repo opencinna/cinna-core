@@ -428,6 +428,7 @@ class TestOpenCodeAdapterPhase4:
             Path(__file__).parents[2]
             / "app"
             / "services"
+            / "environments"
             / "environment_lifecycle.py"
         )
 

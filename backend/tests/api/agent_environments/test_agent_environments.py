@@ -424,7 +424,7 @@ def test_environment_exception_classes() -> None:
 
     Verifies correct status codes and message attributes on each exception class.
     """
-    from app.services.environment_service import (
+    from app.services.environments.environment_service import (
         AgentEnvironmentError,
         EnvironmentNotFoundError,
         AgentNotFoundError,

@@ -93,7 +93,7 @@ def _send_chat_message_with_context(
     agent-env connector so the message is processed without a real Docker env.
     Drains background tasks so collect_pending_messages runs synchronously.
     """
-    patch_target = "app.services.message_service.agent_env_connector"
+    patch_target = "app.services.sessions.message_service.agent_env_connector"
     with patch(patch_target, stub_agent_env):
         payload = {"content": user_message, "file_ids": []}
         if page_context is not None:
@@ -243,7 +243,7 @@ def test_webapp_chat_message_without_page_context_unchanged(
 
     # ── Phase 3b: page_context: null (send via raw HTTP to include null) ──
     stub_null_ctx = StubAgentEnvConnector(response_text="Summary with null ctx")
-    with patch("app.services.message_service.agent_env_connector", stub_null_ctx):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_null_ctx):
         r = client.post(
             f"{_chat_base(share_token)}/sessions/{session_id}/messages/stream",
             headers=webapp_hdrs,

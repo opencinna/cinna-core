@@ -7,8 +7,8 @@ from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, SessionDep
 from app.models import Credential
-from app.services.oauth_credentials_service import OAuthCredentialsService
-from app.services.credentials_service import CredentialsService
+from app.services.credentials.oauth_credentials_service import OAuthCredentialsService
+from app.services.credentials.credentials_service import CredentialsService
 
 
 router = APIRouter()

@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models.outgoing_email_queue import OutgoingEmailQueue, OutgoingEmailStatus
+from app.models.email.outgoing_email_queue import OutgoingEmailQueue, OutgoingEmailStatus
 from app.services.email.sending_service import EmailSendingService
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.stubs.email_stubs import StubSMTPConnector

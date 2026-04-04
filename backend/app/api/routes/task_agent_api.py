@@ -39,12 +39,12 @@ from app.models import (
     AgentTaskCommentCreate,
     TaskCommentPublic,
 )
-from app.services.input_task_service import (
+from app.services.tasks.input_task_service import (
     InputTaskService,
     InputTaskError,
     ValidationError,
 )
-from app.services.task_comment_service import TaskCommentService
+from app.services.tasks.task_comment_service import TaskCommentService
 
 logger = logging.getLogger(__name__)
 

@@ -120,7 +120,7 @@ def test_agentic_team_full_delegation_lifecycle(
     # We build the lead stub AFTER getting the session_id so the create_subtask
     # tool call can include source_session_id (needed for feedback delivery
     # when the subtask completes — this is how the real MCP tool works).
-    with patch("app.services.message_service.agent_env_connector", StubAgentEnvConnector(response_text="placeholder")):
+    with patch("app.services.sessions.message_service.agent_env_connector", StubAgentEnvConnector(response_text="placeholder")):
         exec_result = execute_task(client, headers, parent_task_id)
 
     assert exec_result["success"] is True
@@ -163,7 +163,7 @@ def test_agentic_team_full_delegation_lifecycle(
     # The auto-execute runs (lead_stub fallback), worker session completes →
     # subtask completed → feedback sent to lead session → re-stream → parent
     # re-synced → parent completed.
-    with patch("app.services.message_service.agent_env_connector", lead_stub):
+    with patch("app.services.sessions.message_service.agent_env_connector", lead_stub):
         drain_tasks()
 
     # Verify the create_subtask tool call succeeded during the lead's stream
@@ -289,7 +289,7 @@ def test_agentic_team_scripted_worker_comments_during_stream(
 
     # Execute lead's task
     lead_stub = StubAgentEnvConnector(response_text="Starting coordination.")
-    with patch("app.services.message_service.agent_env_connector", lead_stub):
+    with patch("app.services.sessions.message_service.agent_env_connector", lead_stub):
         exec_result = execute_task(client, headers, parent_id)
         drain_tasks()
 
@@ -341,7 +341,7 @@ def test_agentic_team_scripted_worker_comments_during_stream(
         ],
     )
 
-    with patch("app.services.message_service.agent_env_connector", worker_stub):
+    with patch("app.services.sessions.message_service.agent_env_connector", worker_stub):
         drain_tasks()
 
     # Verify MCP tool calls succeeded during stream
@@ -416,7 +416,7 @@ def test_agentic_team_delegation_topology_enforcement(
 
     # ── Delegate to Worker A — should succeed ────────────────────────────
     stub_a = StubAgentEnvConnector(response_text="On it")
-    with patch("app.services.message_service.agent_env_connector", stub_a):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_a):
         result_a = agent_create_subtask(
             client, headers,
             task_id=parent_id,
@@ -524,7 +524,7 @@ def test_agentic_team_current_session_endpoints(
     parent_id = parent["id"]
 
     stub_lead = StubAgentEnvConnector(response_text="Acknowledged")
-    with patch("app.services.message_service.agent_env_connector", stub_lead):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_lead):
         exec_result = execute_task(client, headers, parent_id)
         drain_tasks()
 
@@ -533,7 +533,7 @@ def test_agentic_team_current_session_endpoints(
     # ── POST /agent/tasks/current/subtask ────────────────────────────────
     from tests.utils.input_task import agent_create_subtask_current
     stub_worker = StubAgentEnvConnector(response_text="Working on it")
-    with patch("app.services.message_service.agent_env_connector", stub_worker):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub_worker):
         sub_result = agent_create_subtask_current(
             client, headers,
             title="Subtask via current endpoint",

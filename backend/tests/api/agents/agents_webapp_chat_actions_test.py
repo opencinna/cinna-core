@@ -25,7 +25,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
-from app.services.message_service import _extract_webapp_actions
+from app.services.sessions.message_service import _extract_webapp_actions
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.stubs.socketio_stub import StubSocketIOConnector
 from tests.utils.background_tasks import drain_tasks
@@ -101,8 +101,8 @@ def _send_stubbed_message(
             stub = StubAgentEnvConnector(response_text=agent_response)
     socketio_stub = StubSocketIOConnector()
 
-    with patch("app.services.message_service.agent_env_connector", stub), \
-         patch("app.services.event_service.socketio_connector", socketio_stub):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub), \
+         patch("app.services.events.event_service.socketio_connector", socketio_stub):
         r = client.post(
             f"{_chat_base(share_token)}/sessions/{session_id}/messages/stream",
             headers=webapp_hdrs,
@@ -187,7 +187,7 @@ def test_stream_handlers_emit_to_session_stream_room(
       4. Verify each handler emits session_interaction_status_changed to
          both the user room AND the session stream room
     """
-    from app.services.session_service import SessionService
+    from app.services.sessions.session_service import SessionService
 
     # ── Phase 1: Create agent + webapp share, enable chat ─────────────────
     agent, share = setup_webapp_agent(
@@ -221,7 +221,7 @@ def test_stream_handlers_emit_to_session_stream_room(
     def _run_handler_and_collect(handler_coro):
         """Runs an async handler using its own StubSocketIOConnector."""
         stub = StubSocketIOConnector()
-        with patch("app.services.event_service.socketio_connector", stub):
+        with patch("app.services.events.event_service.socketio_connector", stub):
             asyncio.run(handler_coro)
         return stub.emitted_events
 

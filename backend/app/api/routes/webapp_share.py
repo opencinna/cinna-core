@@ -20,7 +20,7 @@ from app.models import (
     AgentWebappSharesPublic,
     Message,
 )
-from app.services.agent_webapp_share_service import (
+from app.services.webapp.agent_webapp_share_service import (
     AgentWebappShareService,
     WebappShareError,
     ShareNotFoundError,

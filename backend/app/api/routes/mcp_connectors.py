@@ -8,15 +8,15 @@ from app.models import (
     Agent,
     Message,
 )
-from app.models.mcp_connector import (
+from app.models.mcp.mcp_connector import (
     MCPConnectorCreate,
     MCPConnectorUpdate,
     MCPConnectorPublic,
     MCPConnectorsPublic,
 )
 from app.core.config import settings
-from app.services.mcp_connector_service import MCPConnectorService
-from app.services.mcp_errors import MCPError
+from app.services.mcp.mcp_connector_service import MCPConnectorService
+from app.services.mcp.mcp_errors import MCPError
 
 router = APIRouter(prefix="/agents", tags=["mcp-connectors"])
 

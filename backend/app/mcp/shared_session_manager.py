@@ -43,7 +43,7 @@ from mcp.server.lowlevel.server import Server as MCPServer
 from mcp.types import INVALID_REQUEST, ErrorData, JSONRPCError
 
 from app.core.db import engine
-from app.models.mcp_transport_session import MCPTransportSession
+from app.models.mcp.mcp_transport_session import MCPTransportSession
 
 logger = logging.getLogger(__name__)
 

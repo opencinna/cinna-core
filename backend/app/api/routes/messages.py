@@ -15,10 +15,10 @@ from app.models import (
     SessionCommandsPublic,
     User,
 )
-from app.services.message_service import MessageService
-from app.services.active_streaming_manager import active_streaming_manager
-from app.services.agent_guest_share_service import AgentGuestShareService
-from app.services.command_service import CommandService
+from app.services.sessions.message_service import MessageService
+from app.services.sessions.active_streaming_manager import active_streaming_manager
+from app.services.sharing.agent_guest_share_service import AgentGuestShareService
+from app.services.agents.command_service import CommandService
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +136,7 @@ async def send_message_stream(
     Streaming events are emitted via WebSocket to room: session_{session_id}_stream
     Frontend should subscribe to this room before calling this endpoint.
     """
-    from app.services.session_service import SessionService
+    from app.services.sessions.session_service import SessionService
 
     # Verify session access for guest callers
     chat_session = session.get(Session, session_id)
@@ -281,7 +281,7 @@ async def list_session_commands(
     the main chat session page which requires authentication).
     """
     # Ensure command handlers are registered (lazy import mirrors session_service.py pattern)
-    import app.services.commands  # noqa: F401
+    import app.services.agents.commands  # noqa: F401
 
     chat_session = session.get(Session, session_id)
     if not chat_session:

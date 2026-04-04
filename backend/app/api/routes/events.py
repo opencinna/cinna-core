@@ -6,8 +6,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from app.api.deps import CurrentUser
-from app.models.event import EventBroadcast
-from app.services.event_service import event_service
+from app.models.events.event import EventBroadcast
+from app.services.events.event_service import event_service
 
 router = APIRouter(prefix="/events", tags=["events"])
 

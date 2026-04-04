@@ -9,7 +9,7 @@ from app.models import (
     AgentEnvironmentPublic,
     Message,
 )
-from app.services.environment_service import (
+from app.services.environments.environment_service import (
     EnvironmentService,
     AgentEnvironmentError,
 )

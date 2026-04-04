@@ -10,14 +10,14 @@ from fastapi import APIRouter
 
 from app.api.deps import CurrentUser, SessionDep
 from app.models import Message
-from app.models.ai_credential import (
+from app.models.credentials.ai_credential import (
     AICredentialCreate,
     AICredentialUpdate,
     AICredentialPublic,
     AICredentialsPublic,
     AffectedEnvironmentsPublic,
 )
-from app.services.ai_credentials_service import ai_credentials_service
+from app.services.credentials.ai_credentials_service import ai_credentials_service
 
 router = APIRouter(prefix="/ai-credentials", tags=["ai-credentials"])
 

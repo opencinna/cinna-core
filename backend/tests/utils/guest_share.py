@@ -195,7 +195,7 @@ class mock_expired_guest_share:
 
     def __enter__(self):
         future_time = datetime.now(UTC) + timedelta(hours=2)
-        self._patcher = patch("app.services.agent_guest_share_service.datetime")
+        self._patcher = patch("app.services.sharing.agent_guest_share_service.datetime")
         mock_dt = self._patcher.start()
         mock_dt.now.return_value = future_time
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)

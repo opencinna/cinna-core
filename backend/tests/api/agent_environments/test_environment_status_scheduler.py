@@ -17,8 +17,8 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
-from app.services.adapters.base import HealthResponse
-from app.services.environment_status_scheduler import _check_environment_statuses
+from app.services.environments.adapters.base import HealthResponse
+from app.services.environments.environment_status_scheduler import _check_environment_statuses
 from tests.utils.agent import create_agent_via_api
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.environment import get_environment, list_environments
@@ -62,7 +62,7 @@ def test_healthy_environment_remains_running(
     # ── Phase 3: Patch scheduler's EnvironmentLifecycleManager to use lm ──
     lm = patch_environment_adapter
     with patch(
-        "app.services.environment_status_scheduler.EnvironmentLifecycleManager",
+        "app.services.environments.environment_status_scheduler.EnvironmentLifecycleManager",
         return_value=lm,
     ):
         asyncio.run(_check_environment_statuses())
@@ -127,7 +127,7 @@ def test_unhealthy_environment_marked_as_error(
 
     # ── Phase 3: Run scheduler ─────────────────────────────────────────────
     with patch(
-        "app.services.environment_status_scheduler.EnvironmentLifecycleManager",
+        "app.services.environments.environment_status_scheduler.EnvironmentLifecycleManager",
         return_value=lm,
     ):
         asyncio.run(_check_environment_statuses())
@@ -183,7 +183,7 @@ def test_unhealthy_health_check_but_container_running_no_error(
 
     # ── Phase 3: Run scheduler ─────────────────────────────────────────────
     with patch(
-        "app.services.environment_status_scheduler.EnvironmentLifecycleManager",
+        "app.services.environments.environment_status_scheduler.EnvironmentLifecycleManager",
         return_value=lm,
     ):
         asyncio.run(_check_environment_statuses())
@@ -227,7 +227,7 @@ def test_no_running_environments_is_noop(
     # ── Phase 2: Run scheduler — should be a no-op ─────────────────────────
     lm = patch_environment_adapter
     with patch(
-        "app.services.environment_status_scheduler.EnvironmentLifecycleManager",
+        "app.services.environments.environment_status_scheduler.EnvironmentLifecycleManager",
         return_value=lm,
     ):
         # Must not raise any exception

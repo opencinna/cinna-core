@@ -17,7 +17,7 @@ from sqlmodel import Session as DBSession
 
 from app.core.config import settings
 from app.core.db import engine
-from app.models.mcp_connector import MCPConnector
+from app.models.mcp.mcp_connector import MCPConnector
 from app.mcp.token_verifier import MCPTokenVerifier
 from app.mcp.context_vars import (
     mcp_connector_id_var,

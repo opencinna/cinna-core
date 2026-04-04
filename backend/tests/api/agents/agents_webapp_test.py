@@ -914,7 +914,7 @@ def test_public_webapp_loading_page_when_env_not_running(
     token = share["token"]
 
     # Patch the environment status to "suspended" so it's not running
-    from app.models.environment import AgentEnvironment
+    from app.models.environments.environment import AgentEnvironment
 
     with patch.object(AgentEnvironment, "status", new_callable=lambda: property(lambda self: "suspended")):
         # index.html → loading page HTML with status 200

@@ -14,11 +14,11 @@ from typing import Any
 
 from sqlmodel import Session, select
 
-from app.models.agent import Agent
-from app.models.agent_email_integration import AgentEmailIntegration
-from app.models.outgoing_email_queue import OutgoingEmailQueue, OutgoingEmailStatus
-from app.models.session import Session as ChatSession, SessionMessage
-from app.models.user import User
+from app.models.agents.agent import Agent
+from app.models.email.agent_email_integration import AgentEmailIntegration
+from app.models.email.outgoing_email_queue import OutgoingEmailQueue, OutgoingEmailStatus
+from app.models.sessions.session import Session as ChatSession, SessionMessage
+from app.models.users.user import User
 from app.services.email.mail_server_service import MailServerService
 from app.services.email.smtp_connector import smtp_connector
 
@@ -60,8 +60,8 @@ class EmailSendingService:
             return None
 
         # Get environment -> agent (clone or owner agent)
-        from app.models.environment import AgentEnvironment
-        from app.models.agent_email_integration import AgentSessionMode
+        from app.models.environments.environment import AgentEnvironment
+        from app.models.email.agent_email_integration import AgentSessionMode
         env = db_session.get(AgentEnvironment, chat_session.environment_id)
         if not env:
             logger.warning(f"Environment {chat_session.environment_id} not found")

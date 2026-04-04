@@ -97,7 +97,7 @@ def send_a2a_streaming_message(
     stub = StubAgentEnvConnector(response_text=response_text)
     request = build_streaming_request(message_text, task_id=task_id)
 
-    with patch("app.services.message_service.agent_env_connector", stub):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub):
         resp = client.post(
             f"{settings.API_V1_STR}/a2a/{agent_id}/",
             headers=_a2a_headers(a2a_token),

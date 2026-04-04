@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.core.config import settings
-from app.models.environment import AgentEnvironment
+from app.models.environments.environment import AgentEnvironment
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.utils.agent import (
     configure_email_integration,
@@ -138,7 +138,7 @@ def test_non_email_session_context_and_hmac(
 
     # Send a message with StubAgentEnvConnector
     stub = StubAgentEnvConnector(response_text="Hello from agent")
-    with patch("app.services.message_service.agent_env_connector", stub):
+    with patch("app.services.sessions.message_service.agent_env_connector", stub):
         send_message(client, superuser_token_headers, session_id, "Hi there")
         drain_tasks()
 

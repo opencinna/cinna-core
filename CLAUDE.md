@@ -40,25 +40,53 @@ workflow-runner-core/
 ├── backend/                      # FastAPI backend
 │   ├── app/
 │   │   ├── main.py              # FastAPI app entry point
-│   │   ├── models/              # SQLModel database models (one file per entity)
+│   │   ├── models/              # SQLModel database models (organized by domain)
+│   │   │   ├── __init__.py      # Re-exports all models for package-level imports
+│   │   │   ├── agents/          # Agent, AgentSchedule, AgentHandover
+│   │   │   ├── environments/    # AgentEnvironment
+│   │   │   ├── sessions/        # Session, Activity
+│   │   │   ├── tasks/           # InputTask, TaskComment, TaskAttachment, TaskTrigger, etc.
+│   │   │   ├── credentials/     # Credential, AICredential, shares, link_models
+│   │   │   ├── a2a/             # AgentAccessToken
+│   │   │   ├── mcp/             # MCPConnector, MCPToken, MCPOAuthClient, etc.
+│   │   │   ├── knowledge/       # AIKnowledgeGitRepo, KnowledgeArticle
+│   │   │   ├── sharing/         # AgentShare, AgentGuestShare, CloneUpdateRequest
+│   │   │   ├── agentic_teams/   # AgenticTeam, nodes, connections
+│   │   │   ├── webapp/          # AgentWebappShare, AgentWebappInterfaceConfig
+│   │   │   ├── files/           # FileUpload
+│   │   │   ├── plugins/         # LLMPluginMarketplace, AgentPluginLink
+│   │   │   ├── users/           # User, UserWorkspace, UserDashboard, SSHKey
+│   │   │   ├── events/          # Event, SecurityEvent
+│   │   │   └── email/           # AgentEmailIntegration, MailServerConfig, EmailMessage
 │   │   ├── crud.py              # Database CRUD operations
 │   │   ├── api/
 │   │   │   ├── main.py          # API router registration
 │   │   │   ├── deps.py          # Dependency injection (auth, db)
 │   │   │   └── routes/          # API endpoints by domain
-│   │   │       ├── login.py     # Password authentication
-│   │   │       ├── oauth.py     # OAuth authentication
-│   │   │       ├── users.py     # User management
-│   │   │       ├── items.py     # Items CRUD
-│   │   │       ├── utils.py     # Utility endpoints
-│   │   │       └── private.py   # Dev/testing endpoints
 │   │   ├── core/
 │   │   │   ├── config.py        # Settings (Pydantic Settings)
 │   │   │   ├── security.py      # JWT, password hashing, OAuth verification
 │   │   │   └── db.py            # Database connection
 │   │   ├── alembic/
 │   │   │   └── versions/        # Database migrations
-│   │   ├── services/            # Business logic layer
+│   │   ├── services/            # Business logic layer (organized by domain)
+│   │   │   ├── agents/          # Agent CRUD, handover, scheduling, commands
+│   │   │   ├── environments/    # Lifecycle, status, adapters, connectors
+│   │   │   ├── sessions/        # Session, message, streaming
+│   │   │   ├── tasks/           # Input tasks, triggers, comments, attachments
+│   │   │   ├── credentials/     # Credentials, AI credentials, OAuth, sharing
+│   │   │   ├── a2a/             # A2A protocol, request handling, tokens
+│   │   │   ├── mcp/             # MCP connectors, OAuth, consent
+│   │   │   ├── knowledge/       # Knowledge sources, articles, embeddings, search
+│   │   │   ├── sharing/         # Agent cloning, sharing, guest access
+│   │   │   ├── agentic_teams/   # Team, node, connection services
+│   │   │   ├── webapp/          # Webapp serving, sharing, chat
+│   │   │   ├── files/           # File upload, storage, cleanup
+│   │   │   ├── plugins/         # Plugin marketplace
+│   │   │   ├── users/           # Auth, user, workspace, dashboard, SSH keys
+│   │   │   ├── events/          # Event bus, SocketIO, security events, activities
+│   │   │   ├── ai_functions/    # AI utility functions (LLM cascade)
+│   │   │   └── email/           # IMAP/SMTP, polling, sending, processing
 │   │   ├── utils.py             # Utilities (email, tokens, etc.)
 │   │   └── initial_data.py      # DB seeding (creates superuser)
 │   ├── pyproject.toml           # Python dependencies (uv format)
@@ -106,7 +134,9 @@ workflow-runner-core/
 **Framework**: FastAPI with async support
 
 **Models**: SQLModel (combines SQLAlchemy ORM + Pydantic validation)
-- Database models in `backend/app/models/` (separate files: `agent.py`, `user.py`, etc.)
+- Database models in `backend/app/models/` organized by domain subfolder (e.g., `agents/agent.py`, `users/user.py`)
+- `__init__.py` re-exports all models, so `from app.models import Agent` still works
+- Direct imports also work: `from app.models.agents.agent import Agent`
 - Models with `table=True` are database tables
 - Models without `table=True` are Pydantic schemas (API request/response)
 - See `docs/development/backend/backend_development_llm.md` for detailed patterns
@@ -159,16 +189,16 @@ workflow-runner-core/
 ## Common Development Tasks
 
 ### Adding API Endpoint
-1. Add models in `backend/app/models/[entity].py` (Base, Public, Update, Create)
+1. Add models in `backend/app/models/[domain]/[entity].py` (Base, Public, Update, Create) and re-export in `models/__init__.py`
 2. Add route in `backend/app/api/routes/[domain].py` using `SessionDep`, `CurrentUser`
-3. Use service layer for business logic (`backend/app/services/`)
+3. Use service layer for business logic (`backend/app/services/[domain]/`)
 4. Regenerate client: `bash scripts/generate-client.sh`
 5. Use in frontend: `import { ServiceName } from "@/client"`
 
 **Details**: See `docs/development/backend/backend_development_llm.md`
 
 ### Database Schema Changes
-1. Modify models in `backend/app/models/[entity].py`
+1. Modify models in `backend/app/models/[domain]/[entity].py`
 2. Generate migration: `make migration` or `docker compose exec backend alembic revision --autogenerate -m "desc"`
 3. Review & edit migration in `backend/app/alembic/versions/`
 4. Apply: `make migrate` or `docker compose exec backend alembic upgrade head`
@@ -243,6 +273,8 @@ See `Makefile` for: `make prestart`, `make migrate`, `make migration`, `make dev
 ### Backend
 - Use `SessionDep`, `CurrentUser` for dependency injection
 - Service layer (`backend/app/services/`) for business logic
+- Models in `backend/app/models/[domain]/` subfolders; re-exported via `__init__.py`
+- Services in `backend/app/services/[domain]/` subfolders
 - Models: Base (shared), Database (`table=True`), Public (API response), Update/Create (API input)
 - See `docs/development/backend/backend_development_llm.md` for detailed patterns
 
