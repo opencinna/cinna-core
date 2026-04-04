@@ -4,7 +4,7 @@
 
 ### Models
 
-File: `backend/app/models/agentic_team.py`
+File: `backend/app/models/agentic_teams/agentic_team.py`
 
 #### DB Tables
 
@@ -49,7 +49,7 @@ AgenticTeamChartPublic — team: AgenticTeamPublic, nodes: list[AgenticTeamNodeP
 
 ### Services
 
-#### `AgenticTeamService` (`backend/app/services/agentic_team_service.py`)
+#### `AgenticTeamService` (`backend/app/services/agentic_teams/agentic_team_service.py`)
 
 - `get_team(session, team_id, user_id) -> AgenticTeam` — Raises 404 for both not-found and wrong-owner
 - `list_teams(session, user_id, skip, limit) -> tuple[list, int]`
@@ -57,7 +57,7 @@ AgenticTeamChartPublic — team: AgenticTeamPublic, nodes: list[AgenticTeamNodeP
 - `update_team(session, team_id, user_id, data) -> AgenticTeam`
 - `delete_team(session, team_id, user_id) -> None`
 
-#### `AgenticTeamNodeService` (`backend/app/services/agentic_team_node_service.py`)
+#### `AgenticTeamNodeService` (`backend/app/services/agentic_teams/agentic_team_node_service.py`)
 
 - `get_node(session, team_id, node_id, user_id) -> AgenticTeamNode`
 - `list_nodes(session, team_id, user_id) -> list[AgenticTeamNode]`
@@ -74,7 +74,7 @@ AgenticTeamChartPublic — team: AgenticTeamPublic, nodes: list[AgenticTeamNodeP
   - Validates all IDs belong to team before writing any — raises 400 on foreign IDs
 - `node_to_public(session, node) -> AgenticTeamNodePublic` — resolves `agent_ui_color_preset`
 
-#### `AgenticTeamConnectionService` (`backend/app/services/agentic_team_connection_service.py`)
+#### `AgenticTeamConnectionService` (`backend/app/services/agentic_teams/agentic_team_connection_service.py`)
 
 - `get_connection(session, team_id, conn_id, user_id) -> AgenticTeamConnection`
 - `list_connections(session, team_id, user_id) -> list[AgenticTeamConnection]`

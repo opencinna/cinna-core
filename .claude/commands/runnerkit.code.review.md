@@ -119,7 +119,7 @@ For each issue:
 
 See the refactoring pattern in:
 - **Routes (thin controller):** `backend/app/api/routes/input_tasks.py`
-- **Service (business logic):** `backend/app/services/input_task_service.py`
+- **Service (business logic):** `backend/app/services/input_task_service.py` <!-- nocheck -->
 
 Key patterns from reference:
 - `_handle_service_error()` - Convert service exceptions to HTTP

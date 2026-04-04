@@ -78,7 +78,7 @@ Same bearer token mechanism as other agent-env → backend calls:
 - **MCP bridge (OpenCode)**: `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/task_server.py`
 - **Adapter registration**: `backend/app/env-templates/app_core_base/core/server/adapters/claude_code_sdk_adapter.py`
 - **Task context prompt injection**: `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` — `build_task_context_section()`
-- **Source agent prompt injection**: `backend/app/services/agent_service.py` — `sync_agent_handover_config()`
+- **Source agent prompt injection**: `backend/app/services/agents/agent_service.py` — `sync_agent_handover_config()`
 - **Backend endpoints**:
   - `backend/app/api/routes/task_agent_api.py` — `GET /api/v1/agent/tasks/by-code/{short_code}` (short code → UUID resolution)
   - `backend/app/api/routes/task_agent_api.py` — `POST /api/v1/agent/tasks/current/status` (session-resolved variant)
@@ -86,9 +86,9 @@ Same bearer token mechanism as other agent-env → backend calls:
   - `backend/app/api/routes/task_agent_api.py` — `POST /api/v1/agent/tasks/current/comment` (session-resolved variant)
   - `backend/app/api/routes/task_agent_api.py` — `POST /api/v1/agent/tasks/{task_id}/comment` (explicit task_id variant)
 - **Session event handlers**:
-  - `backend/app/services/input_task_service.py` — `handle_session_completed()`, `handle_session_error()`
-  - `backend/app/services/activity_service.py` — `handle_session_state_updated()`
-- **Pre-allowed list**: `backend/app/services/message_service.py`
+  - `backend/app/services/tasks/input_task_service.py` — `handle_session_completed()`, `handle_session_error()`
+  - `backend/app/services/events/activity_service.py` — `handle_session_state_updated()`
+- **Pre-allowed list**: `backend/app/services/sessions/message_service.py`
 
 ## Related Docs
 

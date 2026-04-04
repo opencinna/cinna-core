@@ -3,22 +3,22 @@
 ## File Locations
 
 ### Backend — Framework
-- `backend/app/services/command_service.py` — Core framework: `CommandContext`, `CommandResult`, `CommandHandler` (ABC), `CommandService` (static registry)
-- `backend/app/services/commands/__init__.py` — Handler registration (imported by session service to ensure handlers are loaded)
-- `backend/app/services/commands/files_command.py` — `/files` and `/files-all` handlers
-- `backend/app/services/commands/session_recover_command.py` — `/session-recover` handler
-- `backend/app/services/commands/session_reset_command.py` — `/session-reset` handler
-- `backend/app/services/commands/webapp_command.py` — `/webapp` handler
-- `backend/app/services/commands/rebuild_env_command.py` — `/rebuild-env` handler
+- `backend/app/services/agents/command_service.py` — Core framework: `CommandContext`, `CommandResult`, `CommandHandler` (ABC), `CommandService` (static registry)
+- `backend/app/services/agents/commands/__init__.py` — Handler registration (imported by session service to ensure handlers are loaded)
+- `backend/app/services/agents/commands/files_command.py` — `/files` and `/files-all` handlers
+- `backend/app/services/agents/commands/session_recover_command.py` — `/session-recover` handler
+- `backend/app/services/agents/commands/session_reset_command.py` — `/session-reset` handler
+- `backend/app/services/agents/commands/webapp_command.py` — `/webapp` handler
+- `backend/app/services/agents/commands/rebuild_env_command.py` — `/rebuild-env` handler
 
 ### Backend — Integration Points
-- `backend/app/services/session_service.py` — `send_session_message()` — command detection at Phase 1.5, between session validation and file handling; takes optional `backend_base_url` param for A2A callers
+- `backend/app/services/sessions/session_service.py` — `send_session_message()` — command detection at Phase 1.5, between session validation and file handling; takes optional `backend_base_url` param for A2A callers
 - `backend/app/api/routes/messages.py` — `send_message_stream()` — handles `"command_executed"` action result
-- `backend/app/services/a2a_request_handler.py` — `handle_message_send()` and `handle_message_stream()` — handle `"command_executed"` action
+- `backend/app/services/a2a/a2a_request_handler.py` — `handle_message_send()` and `handle_message_stream()` — handle `"command_executed"` action
 - `backend/app/api/routes/a2a.py` — `handle_jsonrpc()` — extracts `backend_base_url` from request (handles `X-Forwarded-Proto` for reverse proxies)
 
 ### Backend — Workspace View Tokens
-- `backend/app/services/agent_workspace_token_service.py` — `AgentWorkspaceTokenService`: `create_workspace_view_token()`, `verify_workspace_view_token()`
+- `backend/app/services/environments/agent_workspace_token_service.py` — `AgentWorkspaceTokenService`: `create_workspace_view_token()`, `verify_workspace_view_token()`
 - `backend/app/api/routes/shared_workspace.py` — `GET /api/v1/shared/workspace/{env_id}/view/{path}` — public file view endpoint (no `CurrentUser` dependency)
 - `backend/app/api/main.py` — router registration for `shared_workspace` under prefix `/shared/workspace` with tag `shared-workspace`
 

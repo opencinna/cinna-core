@@ -3,7 +3,7 @@
 ## File Locations
 
 ### Backend - Service
-- `backend/app/services/auth_service.py` - OAuth flow orchestration, state management, Google API interactions
+- `backend/app/services/users/auth_service.py` - OAuth flow orchestration, state management, Google API interactions
 
 ### Backend - Routes
 - `backend/app/api/routes/oauth.py` - OAuth endpoints (config, authorize, callback, link, unlink)
@@ -30,7 +30,7 @@
 
 ## Services & Key Methods
 
-### AuthService (`backend/app/services/auth_service.py`)
+### AuthService (`backend/app/services/users/auth_service.py`)
 
 **OAuth Flow Methods:**
 - `is_google_oauth_enabled()` - Checks if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are configured

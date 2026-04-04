@@ -3,12 +3,12 @@
 ## File Locations
 
 **Backend — Models:**
-- `backend/app/models/user.py` — `User`, `UserUpdateMe`, `UserPublic` (SDK default fields), `AIServiceCredentials`, `AIServiceCredentialsUpdate`, `UserPublicWithAICredentials`
-- `backend/app/models/environment.py` — `AgentEnvironment`, `AgentEnvironmentCreate`, `AgentEnvironmentPublic` (SDK selection fields)
+- `backend/app/models/users/user.py` — `User`, `UserUpdateMe`, `UserPublic` (SDK default fields), `AIServiceCredentials`, `AIServiceCredentialsUpdate`, `UserPublicWithAICredentials`
+- `backend/app/models/environments/environment.py` — `AgentEnvironment`, `AgentEnvironmentCreate`, `AgentEnvironmentPublic` (SDK selection fields)
 
 **Backend — Services:**
-- `backend/app/services/environment_service.py` — SDK constants, default cascade logic, credential validation
-- `backend/app/services/environment_lifecycle.py` — env file generation, settings file generation, rebuild regeneration
+- `backend/app/services/environments/environment_service.py` — SDK constants, default cascade logic, credential validation
+- `backend/app/services/environments/environment_lifecycle.py` — env file generation, settings file generation, rebuild regeneration
 
 **Backend — Routes:**
 - `backend/app/api/routes/users.py` — AI credential endpoints, SDK default update
@@ -48,7 +48,7 @@
 
 ## Database Schema
 
-**User table** (`backend/app/models/user.py`):
+**User table** (`backend/app/models/users/user.py`):
 - `default_sdk_conversation` — nullable string, SDK ID for conversation mode default (e.g., `claude-code/anthropic`)
 - `default_sdk_building` — nullable string, SDK ID for building mode default
 - `ai_credentials_encrypted` — encrypted JSON blob containing all AI provider credentials (legacy; still used for backward compat when no named credential is set)
@@ -57,13 +57,13 @@
 - `default_model_override_conversation` — nullable string (max 255); optional model override saved as part of user's conversation mode default preference
 - `default_model_override_building` — nullable string (max 255); optional model override saved as part of user's building mode default preference
 
-**AgentEnvironment table** (`backend/app/models/environment.py`):
+**AgentEnvironment table** (`backend/app/models/environments/environment.py`):
 - `agent_sdk_conversation` — string, SDK ID selected at creation, immutable
 - `agent_sdk_building` — string, SDK ID selected at creation, immutable
 - `model_override_conversation: str | None` — optional model override for conversation mode (e.g., `gpt-4o-mini`)
 - `model_override_building: str | None` — optional model override for building mode (e.g., `claude-opus-4`)
 
-**Schema constants** (`backend/app/services/environment_service.py`):
+**Schema constants** (`backend/app/services/environments/environment_service.py`):
 - `SDK_ANTHROPIC` (`claude-code/anthropic`), `SDK_MINIMAX` (`claude-code/minimax`)
 - `SDK_ENGINE_CLAUDE_CODE`, `SDK_ENGINE_OPENCODE` — engine-only prefix constants
 - `VALID_SDK_ENGINES` — list of the two valid engine prefixes
@@ -84,13 +84,13 @@
 
 ## Services & Key Methods
 
-**`backend/app/services/environment_service.py`:**
+**`backend/app/services/environments/environment_service.py`:**
 - `SDK_API_KEY_MAP` — maps legacy SDK ID to required credential field name (for backward compat)
 - `SDK_CREDENTIAL_COMPATIBILITY` — maps engine prefix to list of compatible credential type strings
 - `_validate_sdk_credential_compatibility()` — raises `EnvironmentCredentialError` if SDK engine and credential type are incompatible
 - `create_environment()` — applies default SDK cascade, validates SDK ↔ credential compatibility, passes credential params to background task
 
-**`backend/app/services/environment_lifecycle.py`:**
+**`backend/app/services/environments/environment_lifecycle.py`:**
 - `create_environment_instance()` — accepts all credential params for supported provider types
 - `_update_environment_config()` — fetches user credentials and triggers env file generation
 - `_generate_env_file()` — writes `.env`; conditionally includes `ANTHROPIC_API_KEY`; calls settings generators for MiniMax, OpenAI Compatible, and OpenCode

@@ -3,13 +3,13 @@
 ## File Locations
 
 ### Backend — Models
-- `backend/app/models/mail_server_config.py` — `MailServerConfig`, `MailServerConfigPublic`, `MailServerConfigCreate`, `MailServerConfigUpdate`, `MailServerType`, `EncryptionType`
-- `backend/app/models/agent_email_integration.py` — `AgentEmailIntegration`, `AgentEmailIntegrationPublic`, `EmailAccessMode`, `AgentSessionMode`, `EmailProcessAs`, `EmailCloneShareMode`, `ProcessEmailsResult`
-- `backend/app/models/email_message.py` — `EmailMessage`, `EmailMessagePublic`
-- `backend/app/models/outgoing_email_queue.py` — `OutgoingEmailQueue`, `OutgoingEmailQueuePublic`, `OutgoingEmailStatus`
-- `backend/app/models/session.py` — Added: `email_thread_id`, `integration_type`, `sender_email` fields
-- `backend/app/models/agent_share.py` — Added: `source` field (`manual` | `email_integration`)
-- `backend/app/models/input_task.py` — Added: `source_email_message_id`, `source_agent_id`, `SendAnswerRequest`, `SendAnswerResponse`
+- `backend/app/models/email/mail_server_config.py` — `MailServerConfig`, `MailServerConfigPublic`, `MailServerConfigCreate`, `MailServerConfigUpdate`, `MailServerType`, `EncryptionType`
+- `backend/app/models/email/agent_email_integration.py` — `AgentEmailIntegration`, `AgentEmailIntegrationPublic`, `EmailAccessMode`, `AgentSessionMode`, `EmailProcessAs`, `EmailCloneShareMode`, `ProcessEmailsResult`
+- `backend/app/models/email/email_message.py` — `EmailMessage`, `EmailMessagePublic`
+- `backend/app/models/email/outgoing_email_queue.py` — `OutgoingEmailQueue`, `OutgoingEmailQueuePublic`, `OutgoingEmailStatus`
+- `backend/app/models/sessions/session.py` — Added: `email_thread_id`, `integration_type`, `sender_email` fields
+- `backend/app/models/sharing/agent_share.py` — Added: `source` field (`manual` | `email_integration`)
+- `backend/app/models/tasks/input_task.py` — Added: `source_email_message_id`, `source_agent_id`, `SendAnswerRequest`, `SendAnswerResponse`
 
 ### Backend — Services
 - `backend/app/services/email/` — All email-related services (see below)
@@ -26,13 +26,13 @@
 - `backend/app/services/email/sending_scheduler.py` — APScheduler job (2 min interval)
 
 ### Backend — Updated Services
-- `backend/app/services/agent_share_service.py` — `create_auto_share()` for email sender clones
-- `backend/app/services/user_service.py` — `create_email_user()` for auto user provisioning
-- `backend/app/services/session_service.py` — `get_session_by_email_thread()`, email params on `create_session()`
-- `backend/app/services/message_service.py` — HMAC-signed `session_context` emission (includes `email_subject` from linked `EmailMessage`)
-- `backend/app/services/session_context_signer.py` — HMAC-SHA256 signing/verification for session context
-- `backend/app/services/input_task_service.py` — `send_email_answer()` for task-originated replies
-- `backend/app/services/ai_functions_service.py` — `generate_email_reply()` wrapper
+- `backend/app/services/sharing/agent_share_service.py` — `create_auto_share()` for email sender clones
+- `backend/app/services/users/user_service.py` — `create_email_user()` for auto user provisioning
+- `backend/app/services/sessions/session_service.py` — `get_session_by_email_thread()`, email params on `create_session()`
+- `backend/app/services/sessions/message_service.py` — HMAC-signed `session_context` emission (includes `email_subject` from linked `EmailMessage`)
+- `backend/app/services/sessions/session_context_signer.py` — HMAC-SHA256 signing/verification for session context
+- `backend/app/services/tasks/input_task_service.py` — `send_email_answer()` for task-originated replies
+- `backend/app/services/ai_functions/ai_functions_service.py` — `generate_email_reply()` wrapper
 
 ### Backend — AI Functions
 - `backend/app/agents/email_reply_generator.py` — `generate_email_reply()` AI function

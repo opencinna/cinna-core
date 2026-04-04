@@ -2,7 +2,7 @@
 
 ## Database Models
 
-**File:** `backend/app/models/user_dashboard.py`
+**File:** `backend/app/models/users/user_dashboard.py`
 
 ### `user_dashboard_block_prompt_action` table
 
@@ -162,7 +162,7 @@ Cookie is set via `Response.set_cookie()` with `httponly=True`, `samesite="stric
 
 ## Service Layer
 
-**File:** `backend/app/services/user_dashboard_service.py`
+**File:** `backend/app/services/users/user_dashboard_service.py`
 
 ### Exception Hierarchy
 

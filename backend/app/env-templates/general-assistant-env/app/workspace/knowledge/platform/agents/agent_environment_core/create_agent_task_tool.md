@@ -118,11 +118,11 @@ The tools use the same bearer token as other agent-env → backend calls:
   - `backend/app/api/routes/task_agent_api.py` — `GET /api/v1/agent/tasks/by-code/{short_code}` (used by `get_details`, `update_status`, `add_comment` tools to resolve explicit `task` params)
   - `backend/app/api/routes/task_agent_api.py` — `POST /api/v1/agent/tasks/current/subtask`
   - `backend/app/api/routes/task_agent_api.py` — `GET /api/v1/agent/tasks/current/details` and `GET /api/v1/agent/tasks/{task_id}/details` — both `async def`; delegate file upload to service
-- **Service methods**: `backend/app/services/input_task_service.py`
+- **Service methods**: `backend/app/services/tasks/input_task_service.py`
   - `create_task_from_agent()`, `create_subtask()`
   - `_collect_task_files_info()` — gathers `InputTaskFile` + `TaskAttachment` records for a task
   - `upload_task_files_to_agent_env()` — async; reads files from backend storage and POSTs to agent-env `/files/upload` with `subfolder`
-- **Pre-allowed list**: `backend/app/services/message_service.py`
+- **Pre-allowed list**: `backend/app/services/sessions/message_service.py`
 - **System message rendering**: `frontend/src/components/Chat/MessageBubble.tsx` — renders task creation notifications with session/task links
 
 ## Related Docs

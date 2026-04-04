@@ -121,10 +121,10 @@ Error Message  →  Recover Button / /session-recover command
 ## Technical Reference
 
 **Backend:**
-- `backend/app/services/session_service.py` — `mark_session_for_recovery()` (clears SDK metadata, sets `recovery_pending`, detects and resets failed message)
-- `backend/app/services/message_service.py` — `build_recovery_context()` (builds history block), `process_pending_messages()` (injects context, clears flag)
+- `backend/app/services/sessions/session_service.py` — `mark_session_for_recovery()` (clears SDK metadata, sets `recovery_pending`, detects and resets failed message)
+- `backend/app/services/sessions/message_service.py` — `build_recovery_context()` (builds history block), `process_pending_messages()` (injects context, clears flag)
 - `backend/app/api/routes/sessions.py` — `POST /api/v1/sessions/{id}/recover`
-- `backend/app/services/commands/session_recover_command.py` — `/session-recover` command handler
+- `backend/app/services/agents/commands/session_recover_command.py` — `/session-recover` command handler
 
 **Frontend:**
 - `frontend/src/components/Chat/RecoverSessionModal.tsx` — Confirmation dialog; detects auto-resend pattern; calls `SessionsService.recoverSession()`

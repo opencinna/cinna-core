@@ -4,10 +4,10 @@
 
 ### Backend
 
-- `backend/app/models/session.py` — `page_context: str | None` optional field on `MessageCreate`
+- `backend/app/models/sessions/session.py` — `page_context: str | None` optional field on `MessageCreate`
 - `backend/app/api/routes/webapp_chat.py` — `_PAGE_CONTEXT_MAX_CHARS` constant (10,000); truncation and dispatch in `send_chat_message_stream`
-- `backend/app/services/session_service.py` — `send_session_message(page_context=...)` stores context in `message_metadata`
-- `backend/app/services/message_service.py` — `_compute_context_diff()` function; `collect_pending_messages()` with three-tier injection logic
+- `backend/app/services/sessions/session_service.py` — `send_session_message(page_context=...)` stores context in `message_metadata`
+- `backend/app/services/sessions/message_service.py` — `_compute_context_diff()` function; `collect_pending_messages()` with three-tier injection logic
 
 ### Frontend
 
@@ -49,13 +49,13 @@ File: `backend/app/api/routes/webapp_chat.py`
 
 ## Service: Metadata Storage
 
-File: `backend/app/services/session_service.py`
+File: `backend/app/services/sessions/session_service.py`
 
 `send_session_message` accepts `page_context: str | None`. When provided, stores it in `message_metadata["page_context"]` on the created `SessionMessage`. The `message.content` DB column always contains only the user's typed text.
 
 ## Service: Agent-Side Injection with Context Diff
 
-File: `backend/app/services/message_service.py`
+File: `backend/app/services/sessions/message_service.py`
 
 ### `collect_pending_messages()` — Three-Tier Logic
 

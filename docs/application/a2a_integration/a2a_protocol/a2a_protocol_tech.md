@@ -7,23 +7,23 @@
 - `backend/app/api/main.py` - Router registration
 
 ### Backend - A2A Services
-- `backend/app/services/a2a_service.py` - AgentCard generation
-- `backend/app/services/a2a_request_handler.py` - Request handling (uses service layer)
-- `backend/app/services/a2a_event_mapper.py` - Centralized A2A protocol mapping logic
-- `backend/app/services/a2a_task_store.py` - Task store adapter (uses service layer)
-- `backend/app/services/a2a_v1_adapter.py` - A2A Protocol v1.0 adapter
+- `backend/app/services/a2a/a2a_service.py` - AgentCard generation
+- `backend/app/services/a2a/a2a_request_handler.py` - Request handling (uses service layer)
+- `backend/app/services/a2a/a2a_event_mapper.py` - Centralized A2A protocol mapping logic
+- `backend/app/services/a2a/a2a_task_store.py` - Task store adapter (uses service layer)
+- `backend/app/services/a2a/a2a_v1_adapter.py` - A2A Protocol v1.0 adapter
 
 ### Backend - Core Services (used by A2A)
-- `backend/app/services/session_service.py` - Session operations
-- `backend/app/services/message_service.py` - Message operations
-- `backend/app/services/agent_service.py` - Skills generation integration
+- `backend/app/services/sessions/session_service.py` - Session operations
+- `backend/app/services/sessions/message_service.py` - Message operations
+- `backend/app/services/agents/agent_service.py` - Skills generation integration
 
 ### Backend - AI Functions
 - `backend/app/agents/skills_generator.py` - Skills extraction from workflow_prompt
 - `backend/app/agents/prompts/skills_generator_prompt.md` - Prompt template
 
 ### Backend - Models
-- `backend/app/models/agent.py` - Agent model with `a2a_config` JSON field
+- `backend/app/models/agents/agent.py` - Agent model with `a2a_config` JSON field
 
 ### Backend - Migrations
 - `backend/app/alembic/versions/e5f6a7b8c9d0_add_a2a_config_field.py` - Adds a2a_config field to Agent
@@ -45,7 +45,7 @@
 
 **Migration:** `backend/app/alembic/versions/e5f6a7b8c9d0_add_a2a_config_field.py`
 
-**Model:** `backend/app/models/agent.py`
+**Model:** `backend/app/models/agents/agent.py`
 
 **Field:** `Agent.a2a_config` (JSON) - Stores skills, version, generated_at, enabled flag
 
@@ -74,7 +74,7 @@
 ## Services & Key Methods
 
 ### A2A Service
-**File:** `backend/app/services/a2a_service.py`
+**File:** `backend/app/services/a2a/a2a_service.py`
 
 - `A2AService.build_agent_card()` - Generates full (extended) AgentCard from Agent model
 - `A2AService.build_public_agent_card()` - Generates minimal public AgentCard (name only)
@@ -82,7 +82,7 @@
 - `A2AService.get_public_agent_card_dict()` - Returns public card as JSON-serializable dict
 
 ### A2A Request Handler
-**File:** `backend/app/services/a2a_request_handler.py`
+**File:** `backend/app/services/a2a/a2a_request_handler.py`
 
 - `A2ARequestHandler.handle_message_send()` - Non-streaming message handling
 - `A2ARequestHandler.handle_message_stream()` - SSE streaming handler
@@ -93,7 +93,7 @@
 - Uses `SessionService` and `MessageService` for all data access (no direct DB queries)
 
 ### A2A Event Mapper
-**File:** `backend/app/services/a2a_event_mapper.py`
+**File:** `backend/app/services/a2a/a2a_event_mapper.py`
 
 - `A2AEventMapper.map_stream_event()` - Internal streaming event to A2A event
 - `A2AEventMapper.map_session_status_to_task_state()` - Session status to TaskState
@@ -101,14 +101,14 @@
 - `A2AEventMapper._create_status_update()` - TaskStatusUpdateEvent construction
 
 ### A2A Task Store
-**File:** `backend/app/services/a2a_task_store.py`
+**File:** `backend/app/services/a2a/a2a_task_store.py`
 
 - `DatabaseTaskStore.get()` - Get task by ID (via SessionService)
 - `DatabaseTaskStore.get_task_with_limited_history()` - Get task with message limit
 - Delegates all A2A conversions to `A2AEventMapper`
 
 ### A2A v1.0 Adapter
-**File:** `backend/app/services/a2a_v1_adapter.py`
+**File:** `backend/app/services/a2a/a2a_v1_adapter.py`
 
 - `A2AV1Adapter.should_use_v1(request)` - Check header for protocol version
 - `A2AV1Adapter.transform_request_inbound(body)` - Transform v1.0 method names to internal
@@ -122,7 +122,7 @@
 
 ### Integration with Existing Services
 
-**SessionService:** `backend/app/services/session_service.py`
+**SessionService:** `backend/app/services/sessions/session_service.py`
 - `send_session_message()` - Creates session (if agent_id provided) + message, initiates streaming
 - `get_session()` - Get session by ID
 - `list_environment_sessions()` - List sessions for environment with pagination and access token filter
@@ -130,12 +130,12 @@
 - `auto_generate_session_title()` - AI-generated session titles from first message
 - `ensure_environment_ready_for_streaming()` - Activate suspended environments
 
-**MessageService:** `backend/app/services/message_service.py`
+**MessageService:** `backend/app/services/sessions/message_service.py`
 - `stream_message_with_events()` - Streams responses as internal events
 - `get_last_message()` - Get last message (for tool_questions_status check)
 - `get_last_n_messages()` - Get message history
 
-**AgentService:** `backend/app/services/agent_service.py:update_agent()`
+**AgentService:** `backend/app/services/agents/agent_service.py:update_agent()`
 - Detects workflow_prompt changes, triggers skills regeneration
 - Updates a2a_config with new skills and incremented version
 

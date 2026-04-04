@@ -3,7 +3,7 @@
 ## File Locations
 
 ### Backend
-- `backend/app/models/mail_server_config.py` — `MailServerConfig` (table), `MailServerConfigPublic`, `MailServerConfigCreate`, `MailServerConfigUpdate`, `MailServerType`, `EncryptionType`
+- `backend/app/models/email/mail_server_config.py` — `MailServerConfig` (table), `MailServerConfigPublic`, `MailServerConfigCreate`, `MailServerConfigUpdate`, `MailServerType`, `EncryptionType`
 - `backend/app/services/email/mail_server_service.py` — `MailServerService` (CRUD + connection testing)
 - `backend/app/api/routes/mail_servers.py` — Mail server CRUD + test endpoints
 

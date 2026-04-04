@@ -4,9 +4,9 @@
 
 ### Backend
 
-- **Model**: `backend/app/models/ssh_key.py` - `UserSSHKey` (table), `SSHKeyBase`, `SSHKeyPublic`, `SSHKeysPublic`, `SSHKeyGenerate`, `SSHKeyImport`, `SSHKeyUpdate`
+- **Model**: `backend/app/models/users/ssh_key.py` - `UserSSHKey` (table), `SSHKeyBase`, `SSHKeyPublic`, `SSHKeysPublic`, `SSHKeyGenerate`, `SSHKeyImport`, `SSHKeyUpdate`
 - **Routes**: `backend/app/api/routes/ssh_keys.py` - 6 endpoints under `/api/v1/ssh-keys`
-- **Service**: `backend/app/services/ssh_key_service.py` - `SSHKeyService` (static methods)
+- **Service**: `backend/app/services/users/ssh_key_service.py` - `SSHKeyService` (static methods)
 - **Security**: `backend/app/core/security.py` - `encrypt_field()`, `decrypt_field()`, Fernet cipher setup
 - **Migration**: `backend/app/alembic/versions/dcbfc8267939_add_user_ssh_keys_table.py`
 
@@ -55,7 +55,7 @@ All endpoints require `CurrentUser` authentication. GET/PUT/DELETE verify owners
 
 ## Services & Key Methods
 
-### `backend/app/services/ssh_key_service.py` - SSHKeyService
+### `backend/app/services/users/ssh_key_service.py` - SSHKeyService
 
 | Method | Purpose |
 |--------|---------|

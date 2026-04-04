@@ -104,7 +104,7 @@ Each adapter instance (cached per mode by `SDKManager`) manages its own `opencod
 - `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/` — MCP bridge servers (read `session_context.json` from cwd)
 
 ### Config generation (backend)
-- `backend/app/services/environment_lifecycle.py` — `_generate_opencode_config_files()` — generates per-mode `opencode.json` with model, provider registration, API key, permissions, tools, MCP bridges
+- `backend/app/services/environments/environment_lifecycle.py` — `_generate_opencode_config_files()` — generates per-mode `opencode.json` with model, provider registration, API key, permissions, tools, MCP bridges
 
 ### Dockerfiles
 - `backend/app/env-templates/general-env/Dockerfile`

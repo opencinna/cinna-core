@@ -3,12 +3,12 @@
 ## File Locations
 
 **Backend**
-- `backend/app/models/llm_plugin.py` — All database models and API schemas (LLMPluginMarketplace, LLMPluginMarketplacePlugin, AgentPluginLink, PluginSyncResponse, EnvironmentSyncStatus)
-- `backend/app/services/llm_plugin_service.py` — Main business logic service
-- `backend/app/services/git_operations.py` — Git clone/pull shared utilities
+- `backend/app/models/plugins/llm_plugin.py` — All database models and API schemas (LLMPluginMarketplace, LLMPluginMarketplacePlugin, AgentPluginLink, PluginSyncResponse, EnvironmentSyncStatus)
+- `backend/app/services/plugins/llm_plugin_service.py` — Main business logic service
+- `backend/app/services/knowledge/git_operations.py` — Git clone/pull shared utilities
 - `backend/app/api/routes/llm_plugins.py` — All API endpoints
-- `backend/app/services/environment_lifecycle.py` — Plugin sync during environment start (`_sync_plugins_to_environment`, `_sync_dynamic_data`)
-- `backend/app/services/adapters/docker_adapter.py` — `set_plugins()` method
+- `backend/app/services/environments/environment_lifecycle.py` — Plugin sync during environment start (`_sync_plugins_to_environment`, `_sync_dynamic_data`)
+- `backend/app/services/environments/adapters/docker_adapter.py` — `set_plugins()` method
 
 **Agent-Env (inside Docker container)**
 - `backend/app/env-templates/app_core_base/core/server/routes.py` — `/config/plugins` endpoints
@@ -90,7 +90,7 @@ All routes in `backend/app/api/routes/llm_plugins.py`:
 
 ## Services & Key Methods
 
-**`backend/app/services/llm_plugin_service.py` — `LLMPluginService`**
+**`backend/app/services/plugins/llm_plugin_service.py` — `LLMPluginService`**
 
 Marketplace Management:
 - `create_marketplace()` — Creates record, generates temp name from URL
@@ -117,10 +117,10 @@ Environment Sync:
 - `prepare_plugins_for_environment()` — Returns `all_plugins` (for file sync) and `active_plugins` (enabled only, for settings.json)
 - `sync_plugins_to_agent_environments()` — Queries running/suspended environments, activates suspended ones, syncs files, returns `PluginSyncResponse`
 
-**`backend/app/services/environment_lifecycle.py`**
+**`backend/app/services/environments/environment_lifecycle.py`**
 - `_sync_plugins_to_environment()` — Called in `_sync_dynamic_data()` during environment start; encodes plugin files as base64 and sends via adapter
 
-**`backend/app/services/adapters/docker_adapter.py`**
+**`backend/app/services/environments/adapters/docker_adapter.py`**
 - `set_plugins()` — HTTP POST to `/config/plugins` in agent-env with base64-encoded files and `settings.json` content
 
 **Agent-Env: `agent_env_service.py`**

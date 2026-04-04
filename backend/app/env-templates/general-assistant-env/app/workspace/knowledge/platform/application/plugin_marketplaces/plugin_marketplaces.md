@@ -77,4 +77,4 @@ Update detection → compare AgentPluginLink.installed_commit_hash
 
 - **Agent Plugins** — Plugins discovered from marketplaces are installed per-agent via `AgentPluginLink`. Marketplace re-syncs propagate `has_update` to installed agent plugins. See [agent_plugins](../../agents/agent_plugins/agent_plugins.md).
 - **SSH Keys** — Uses the same `user_ssh_keys` table as knowledge source Git repos for private repository authentication. See [ssh_keys](../ssh_keys/ssh_keys.md).
-- **Git Operations** — Shares the `backend/app/services/git_operations.py` utility with knowledge sources for clone/pull operations.
+- **Git Operations** — Shares the `backend/app/services/knowledge/git_operations.py` utility with knowledge sources for clone/pull operations.

@@ -43,7 +43,7 @@ Route calls AI function (e.g., utils.py, workspace.py)
 
 ## Data Models
 
-### User model changes (backend/app/models/user.py)
+### User model changes (backend/app/models/users/user.py)
 
 **New constant:**
 ```python
@@ -81,7 +81,7 @@ No new tables. No relationships. No encryption.
 
 ## Backend Implementation
 
-### 1. backend/app/models/user.py
+### 1. backend/app/models/users/user.py
 
 Add to constants section (near VALID_SDK_OPTIONS):
 ```python
@@ -229,7 +229,7 @@ if api_key:
 ```
 Place this check at the top of `generate_content`, before the cascade loop.
 
-### 7. backend/app/services/ai_functions_service.py
+### 7. backend/app/services/ai_functions/ai_functions_service.py
 
 **New imports:**
 ```python
@@ -324,7 +324,7 @@ result = AIFunctionsService.generate_sql(
 )
 ```
 
-**backend/app/services/agent_service.py** — `_generate_description_background` creates its own db session; needs user lookup. Pass `user_id` to background function and fetch user from db:
+**backend/app/services/agents/agent_service.py** — `_generate_description_background` creates its own db session; needs user lookup. Pass `user_id` to background function and fetch user from db:
 ```python
 def _generate_description_background(agent_id, workflow_prompt, agent_name, user_id=None):
     with SQLSession(engine) as db_session:
@@ -341,7 +341,7 @@ config = AIFunctionsService.generate_agent_configuration(description, user=curre
 ```
 Note: Need to ensure `user` object is available in the calling context (agent_service already has `user_id` in some methods; may need to fetch from db).
 
-**backend/app/services/session_service.py** — `auto_generate_session_title` is async background task with `get_fresh_db_session`. Modify to accept optional `user_id`:
+**backend/app/services/sessions/session_service.py** — `auto_generate_session_title` is async background task with `get_fresh_db_session`. Modify to accept optional `user_id`:
 ```python
 async def auto_generate_session_title(session_id, first_message_content, get_fresh_db_session, user_id=None):
     with get_fresh_db_session() as db:
@@ -448,14 +448,14 @@ Run: `make migration` then review + `make migrate`.
 
 ## Implementation Order (with dependencies)
 
-1. `backend/app/models/user.py` — add field + constant
+1. `backend/app/models/users/user.py` — add field + constant
 2. Create Alembic migration (`make migration`, review, `make migrate`)
 3. `backend/app/api/routes/users.py` — add validation
 4. `backend/app/agents/providers/anthropic_provider.py` — NEW file
 5. `backend/app/agents/providers/__init__.py` — export
 6. `backend/app/agents/provider_manager.py` — register + api_key param
 7. Individual agent functions — add `provider_kwargs` param pass-through
-8. `backend/app/services/ai_functions_service.py` — helpers + user context
+8. `backend/app/services/ai_functions/ai_functions_service.py` — helpers + user context
 9. Route/service integration points
 10. `source ./backend/.venv/bin/activate && make gen-client`
 11. `frontend/src/components/UserSettings/AICredentials.tsx` — new UI row
@@ -465,7 +465,7 @@ Run: `make migration` then review + `make migrate`.
 ## Summary Checklist
 
 ### Backend
-- [ ] Add `default_ai_functions_sdk` field + `VALID_AI_FUNCTIONS_SDK_OPTIONS` to `backend/app/models/user.py`
+- [ ] Add `default_ai_functions_sdk` field + `VALID_AI_FUNCTIONS_SDK_OPTIONS` to `backend/app/models/users/user.py`
 - [ ] Add field to `UserUpdateMe` and `UserPublic` in same file
 - [ ] Create and apply Alembic migration
 - [ ] Add validation in `backend/app/api/routes/users.py:update_user_me`

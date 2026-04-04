@@ -8,27 +8,44 @@ This document contains project-specific patterns, commands, and pitfalls for LLM
 workflow-runner-core/
 ├── backend/                      # FastAPI backend
 │   ├── app/
-│   │   ├── models/              # Domain-based model files (NEW structure)
-│   │   │   ├── __init__.py      # Re-exports all models
-│   │   │   ├── user.py
-│   │   │   ├── item.py
-│   │   │   ├── agent.py
-│   │   │   ├── credential.py
-│   │   │   ├── link_models.py   # Many-to-many link tables
-│   │   │   ├── environment.py
-│   │   │   └── session.py
-│   │   ├── services/            # Business logic layer (NEW)
-│   │   │   ├── agent_service.py
-│   │   │   ├── environment_service.py
-│   │   │   ├── session_service.py
-│   │   │   └── message_service.py
+│   │   ├── models/              # Domain-based model subfolders
+│   │   │   ├── __init__.py      # Re-exports all models for backward-compatible imports
+│   │   │   ├── agents/          # agent.py, agent_handover.py, agent_schedule.py
+│   │   │   ├── environments/    # environment.py
+│   │   │   ├── sessions/        # session.py, activity.py
+│   │   │   ├── credentials/     # credential.py, ai_credential.py, link_models.py, shares
+│   │   │   ├── tasks/           # input_task.py, task_trigger.py, task_comment.py, etc.
+│   │   │   ├── users/           # user.py, user_workspace.py, user_dashboard.py, ssh_key.py
+│   │   │   ├── knowledge/       # knowledge.py
+│   │   │   ├── mcp/             # mcp_connector.py, mcp_token.py, etc.
+│   │   │   ├── sharing/         # agent_share.py, agent_guest_share.py, clone_update_request.py
+│   │   │   ├── agentic_teams/   # agentic_team.py
+│   │   │   ├── webapp/          # agent_webapp_share.py, agent_webapp_interface_config.py
+│   │   │   ├── files/           # file_upload.py
+│   │   │   ├── plugins/         # llm_plugin.py
+│   │   │   ├── events/          # event.py, security_event.py
+│   │   │   ├── a2a/             # agent_access_token.py
+│   │   │   └── email/           # agent_email_integration.py, mail_server_config.py, etc.
+│   │   ├── services/            # Business logic layer (organized by domain subfolder)
+│   │   │   ├── agents/          # agent_service.py, agent_handover_service.py, command_service.py, commands/
+│   │   │   ├── environments/    # environment_service.py, environment_lifecycle.py, adapters/
+│   │   │   ├── sessions/        # session_service.py, message_service.py
+│   │   │   ├── credentials/     # credentials_service.py, ai_credentials_service.py, oauth_credentials_service.py
+│   │   │   ├── tasks/           # input_task_service.py, task_trigger_service.py, task_comment_service.py
+│   │   │   ├── users/           # user_service.py, auth_service.py, user_workspace_service.py, user_dashboard_service.py
+│   │   │   ├── knowledge/       # knowledge_source_service.py, knowledge_article_service.py
+│   │   │   ├── mcp/             # mcp_connector_service.py, mcp_oauth_service.py
+│   │   │   ├── sharing/         # agent_share_service.py, agent_clone_service.py, agent_guest_share_service.py
+│   │   │   ├── agentic_teams/   # agentic_team_service.py, agentic_team_node_service.py, agentic_team_connection_service.py
+│   │   │   ├── webapp/          # webapp_service.py, webapp_chat_service.py, agent_webapp_share_service.py
+│   │   │   ├── files/           # file_service.py, file_storage_service.py, file_cleanup_scheduler.py
+│   │   │   ├── plugins/         # llm_plugin_service.py
+│   │   │   ├── events/          # event_service.py, activity_service.py, security_event_service.py
+│   │   │   ├── a2a/             # a2a_service.py, a2a_request_handler.py, access_token_service.py
+│   │   │   ├── email/           # integration_service.py, mail_server_service.py, sending_service.py, etc.
+│   │   │   └── ai_functions/    # ai_functions_service.py
 │   │   ├── api/
-│   │   │   ├── routes/
-│   │   │   │   ├── agents.py
-│   │   │   │   ├── credentials.py
-│   │   │   │   ├── environments.py  # NEW
-│   │   │   │   ├── sessions.py      # NEW
-│   │   │   │   └── messages.py      # NEW
+│   │   │   ├── routes/          # one flat .py file per domain (agents.py, environments.py, sessions.py, etc.)
 │   │   │   └── main.py          # Router registration
 │   │   ├── crud.py              # DEPRECATED for new code
 │   │   └── core/
@@ -45,12 +62,10 @@ workflow-runner-core/
 **CRITICAL**: Current working directory is `/Users/evgenyl/dev/ml-llm/workflow-runner-core/backend`
 
 **Architecture Pattern**:
-- **Models** in `app/models/` - Database entities and Pydantic schemas (domain-based files)
-- **Services** in `app/services/` - Business logic (NEW: use for complex operations)
-- **Routes** in `app/api/routes/` - HTTP endpoints (lightweight, delegate to services)
-- **CRUD** in `app/crud.py` - DEPRECATED for new code (use services instead)
-
-**MIGRATION NOTE (Dec 2023)**: Models refactored from single `models.py` to `models/` directory. All imports remain backward compatible via `__init__.py`. No code changes required for existing imports like `from app.models import User, Agent`.
+- **Models** in `app/models/<domain>/` — Database entities and Pydantic schemas; re-exported via `models/__init__.py` for backward-compatible imports
+- **Services** in `app/services/<domain>/` — Business logic organized by domain subfolder
+- **Routes** in `app/api/routes/` — HTTP endpoints (lightweight, delegate to services)
+- **CRUD** in `app/crud.py` — DEPRECATED for new code (use services instead)
 
 ## Command Execution Patterns
 
@@ -88,27 +103,27 @@ npm run build  # Check TypeScript errors
 
 ### 1. Backend Models (`backend/app/models/`)
 
-**IMPORTANT**: Models are now organized in domain-based files, not a single monolithic file.
+**IMPORTANT**: Models are organized in domain-based subfolders (e.g., `models/agents/agent.py`, `models/users/user.py`). All models are re-exported from `models/__init__.py` for backward-compatible imports.
 
 **Structure**:
 ```
 backend/app/models/
-├── __init__.py           # Re-exports all models for backward compatibility
-├── user.py               # User, auth, OAuth models
-├── item.py               # Item models
-├── agent.py              # Agent models
-├── credential.py         # Credential models
-├── link_models.py        # Many-to-many link tables (e.g., AgentCredentialLink)
-├── environment.py        # AgentEnvironment models
-└── session.py            # Session, SessionMessage models
+├── __init__.py               # Re-exports all models for backward compatibility
+├── agents/agent.py           # Agent, AgentHandover, AgentSchedule models
+├── environments/environment.py
+├── sessions/session.py       # Session, SessionMessage, Activity models
+├── credentials/              # credential.py, ai_credential.py, link_models.py, shares
+├── tasks/                    # input_task.py, task_trigger.py, task_comment.py, etc.
+├── users/                    # user.py, user_workspace.py, user_dashboard.py, ssh_key.py
+└── ...                       # (other domains: knowledge, mcp, sharing, email, events, etc.)
 ```
 
 **When adding a new entity**:
-1. Create a new file `backend/app/models/your_entity.py`
+1. Create a new file `backend/app/models/<domain>/your_entity.py`
 2. Define models following the pattern below
 3. Export models in `backend/app/models/__init__.py`
 
-**Pattern in `backend/app/models/entity.py`**:
+**Pattern in `backend/app/models/<domain>/entity.py`**:
 ```python
 import uuid
 from typing import List, Optional
@@ -146,7 +161,7 @@ class EntitiesPublic(SQLModel):
 
 **Then export in `backend/app/models/__init__.py`**:
 ```python
-from .entity import (
+from .domain.entity import (
     Entity,
     EntityCreate,
     EntityUpdate,
@@ -232,7 +247,7 @@ class Agent(AgentBase, table=True):
 - ✅ Full module path strings (`"app.models.x.Y"`) resolve circular dependencies
 - ✅ This pattern matches SQLModel/SQLAlchemy best practices for split models
 
-**For many-to-many relationships**, create link model in `backend/app/models/link_models.py`:
+**For many-to-many relationships**, create link model in the relevant domain folder (e.g., `backend/app/models/credentials/link_models.py`):
 ```python
 import uuid
 from sqlmodel import Field, SQLModel
@@ -253,9 +268,9 @@ categories: List["app.models.category.Category"] = Relationship(back_populates="
 
 ### 2. Service Layer (`backend/app/services/`)
 
-**NEW**: Business logic should be in service classes, not routes or CRUD.
+Business logic should be in service classes organized by domain subfolder, not routes or CRUD.
 
-**Pattern in `backend/app/services/entity_service.py`**:
+**Pattern in `backend/app/services/<domain>/entity_service.py`**:
 ```python
 from uuid import UUID
 from sqlmodel import Session, select
@@ -629,9 +644,9 @@ After implementing a new entity:
 source .venv/bin/activate
 
 # Backend: Add entity
-# 1. Create backend/app/models/entity.py with models
+# 1. Create backend/app/models/<domain>/entity.py with models
 # 2. Export models in backend/app/models/__init__.py
-# 3. Create backend/app/services/entity_service.py with business logic
+# 3. Create backend/app/services/<domain>/entity_service.py with business logic
 # 4. Create backend/app/api/routes/entities.py with endpoints
 # 5. Register router in backend/app/api/main.py
 alembic revision --autogenerate -m "Add entity"

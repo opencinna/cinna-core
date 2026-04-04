@@ -5,14 +5,14 @@
 ### Backend
 
 **Models:**
-- `backend/app/models/agent_schedule.py` — AgentSchedule database model + request/response schemas
+- `backend/app/models/agents/agent_schedule.py` — AgentSchedule database model + request/response schemas
 
 **Routes:**
 - `backend/app/api/routes/agents.py` — Schedule CRUD and AI generation endpoints (nested under agent routes)
 
 **Services:**
-- `backend/app/services/agent_scheduler_service.py` — Schedule CRUD, CRON conversion, next execution calculation
-- `backend/app/services/agent_schedule_scheduler.py` — Background scheduler (APScheduler) that polls and executes due schedules
+- `backend/app/services/agents/agent_scheduler_service.py` — Schedule CRUD, CRON conversion, next execution calculation
+- `backend/app/services/agents/agent_schedule_scheduler.py` — Background scheduler (APScheduler) that polls and executes due schedules
 
 **AI Function:**
 - `backend/app/agents/schedule_generator.py` — Natural language to CRON conversion via LLM
@@ -68,7 +68,7 @@ All endpoints in `backend/app/api/routes/agents.py`, nested under `/api/v1/agent
 
 ### Request/Response Models
 
-Defined in `backend/app/models/agent_schedule.py`:
+Defined in `backend/app/models/agents/agent_schedule.py`:
 
 - **ScheduleRequest** — `natural_language: str`, `timezone: str` (for AI generation)
 - **ScheduleResponse** — `success: bool`, `description`, `cron_string`, `next_execution` (ISO 8601), `error`
@@ -79,7 +79,7 @@ Defined in `backend/app/models/agent_schedule.py`:
 
 ## Services & Key Methods
 
-### Scheduler Service — `backend/app/services/agent_scheduler_service.py`
+### Scheduler Service — `backend/app/services/agents/agent_scheduler_service.py`
 
 | Method | Purpose |
 |--------|---------|
@@ -96,7 +96,7 @@ Defined in `backend/app/models/agent_schedule.py`:
 | `verify_agent_access(session, agent_id, user)` | Validates user owns the agent |
 | `get_schedule_for_agent(session, schedule_id, agent_id)` | Validates schedule belongs to agent |
 
-### Background Scheduler — `backend/app/services/agent_schedule_scheduler.py`
+### Background Scheduler — `backend/app/services/agents/agent_schedule_scheduler.py`
 
 - Uses **APScheduler BackgroundScheduler**
 - Polls every 1 minute for due schedules (`next_execution <= now`, `enabled = true`)

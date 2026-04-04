@@ -103,8 +103,8 @@ This ensures any sessions waiting for the environment (with `pending_stream` sta
 ## Key Files
 
 ### Backend
-- **`backend/app/models/event.py`** - Event models (`EventType`, `EventBase`, `EventPublic`, `EventBroadcast`)
-- **`backend/app/services/event_service.py`** - `EventService` class (connection management, event emission)
+- **`backend/app/models/events/event.py`** - Event models (`EventType`, `EventBase`, `EventPublic`, `EventBroadcast`)
+- **`backend/app/services/events/event_service.py`** - `EventService` class (connection management, event emission)
 - **`backend/app/api/routes/events.py`** - Event API routes (`/broadcast`, `/stats`, `/test`)
 - **`backend/app/main.py`** - Socket.IO mount at `/ws` path
 
@@ -141,7 +141,7 @@ Backend services can react to events without using WebSockets. This enables **ev
 
 **1. Create Handler Function**:
 ```python
-# backend/app/services/environment_service.py
+# backend/app/services/environments/environment_service.py
 @staticmethod
 async def handle_stream_completed_event(event_data: dict[str, Any]):
     """
@@ -589,18 +589,18 @@ When event handlers fail silently:
 ### Implementation Files
 
 Event handlers using these patterns:
-- `backend/app/services/session_service.py` - `handle_environment_activated()`
-- `backend/app/services/activity_service.py` - `handle_stream_started()`, `handle_stream_completed()`
-- `backend/app/services/environment_service.py` - `handle_stream_completed_event()`
-- `backend/app/services/input_task_service.py` - `handle_stream_started()`, `handle_stream_completed()`, `handle_stream_error()`, `handle_todo_list_updated()`
-- `backend/app/services/event_service.py` - `agent_usage_intent` WebSocket handler
+- `backend/app/services/sessions/session_service.py` - `handle_environment_activated()`
+- `backend/app/services/events/activity_service.py` - `handle_stream_started()`, `handle_stream_completed()`
+- `backend/app/services/environments/environment_service.py` - `handle_stream_completed_event()`
+- `backend/app/services/tasks/input_task_service.py` - `handle_stream_started()`, `handle_stream_completed()`, `handle_stream_error()`, `handle_todo_list_updated()`
+- `backend/app/services/events/event_service.py` - `agent_usage_intent` WebSocket handler
 
 ## Extension Points
 
 To extend this system:
 
 1. **Add new event types**:
-   - Update `EventType` enum in `backend/app/models/event.py`
+   - Update `EventType` enum in `backend/app/models/events/event.py`
    - Document the event's metadata structure
 
 2. **Add backend event handlers**:

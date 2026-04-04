@@ -48,5 +48,5 @@ No `recovery_pending` flag is set. No message scanning. No `initiate_stream()`.
 
 ## Technical Reference
 
-- `backend/app/services/commands/session_reset_command.py` — Command handler
-- `backend/app/services/session_service.py` — `clear_external_session()` method
+- `backend/app/services/agents/commands/session_reset_command.py` — Command handler
+- `backend/app/services/sessions/session_service.py` — `clear_external_session()` method

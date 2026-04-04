@@ -4,20 +4,20 @@
 
 ### Backend - Models
 
-- `backend/app/models/agent.py` - `Agent` model with clone fields (`is_clone`, `parent_agent_id`, `workflow_prompt`, `entrypoint_prompt`, etc.)
-- `backend/app/models/environment.py` - `AgentEnvironment` model (`status`, `config`, `conversation_ai_credential_id`, `building_ai_credential_id`)
-- `backend/app/models/session.py` - `Session` model (`environment_id`, `updated_at`) used for source environment detection
-- `backend/app/models/credential.py` - `Credential` model (`allow_sharing`, `is_placeholder`)
-- `backend/app/models/link_models.py` - `AgentCredentialLink`, `AgentPluginLink` junction tables
+- `backend/app/models/agents/agent.py` - `Agent` model with clone fields (`is_clone`, `parent_agent_id`, `workflow_prompt`, `entrypoint_prompt`, etc.)
+- `backend/app/models/environments/environment.py` - `AgentEnvironment` model (`status`, `config`, `conversation_ai_credential_id`, `building_ai_credential_id`)
+- `backend/app/models/sessions/session.py` - `Session` model (`environment_id`, `updated_at`) used for source environment detection
+- `backend/app/models/credentials/credential.py` - `Credential` model (`allow_sharing`, `is_placeholder`)
+- `backend/app/models/credentials/link_models.py` - `AgentCredentialLink`, `AgentPluginLink` junction tables
 
 ### Backend - Services
 
-- `backend/app/services/environment_lifecycle.py` - `EnvironmentLifecycleManager` - core lifecycle and sync operations
-- `backend/app/services/environment_service.py` - `EnvironmentService` - route-level orchestration, activation, workspace copy coordination
-- `backend/app/services/agent_clone_service.py` - `AgentCloneService` - clone creation, workspace copy, push updates
-- `backend/app/services/credentials_service.py` - `CredentialsService` - credential preparation for environments
-- `backend/app/services/llm_plugin_service.py` - `LLMPluginService` - plugin preparation for environments
-- `backend/app/services/adapters/docker_adapter.py` - `DockerEnvironmentAdapter` - HTTP proxy to agent-env config endpoints
+- `backend/app/services/environments/environment_lifecycle.py` - `EnvironmentLifecycleManager` - core lifecycle and sync operations
+- `backend/app/services/environments/environment_service.py` - `EnvironmentService` - route-level orchestration, activation, workspace copy coordination
+- `backend/app/services/sharing/agent_clone_service.py` - `AgentCloneService` - clone creation, workspace copy, push updates
+- `backend/app/services/credentials/credentials_service.py` - `CredentialsService` - credential preparation for environments
+- `backend/app/services/plugins/llm_plugin_service.py` - `LLMPluginService` - plugin preparation for environments
+- `backend/app/services/environments/adapters/docker_adapter.py` - `DockerEnvironmentAdapter` - HTTP proxy to agent-env config endpoints
 
 ### Agent-Env Internal (inside Docker container)
 
@@ -30,7 +30,7 @@
 
 ## Database Schema
 
-### Agent model (`backend/app/models/agent.py`)
+### Agent model (`backend/app/models/agents/agent.py`)
 
 Clone-related fields:
 - `is_clone` (bool) - Whether this agent is a clone
@@ -38,14 +38,14 @@ Clone-related fields:
 - `workflow_prompt` (str, nullable) - Workflow prompt text (synced to environment)
 - `entrypoint_prompt` (str, nullable) - Entrypoint prompt text (synced to environment)
 
-### AgentEnvironment model (`backend/app/models/environment.py`)
+### AgentEnvironment model (`backend/app/models/environments/environment.py`)
 
 Data management fields:
 - `conversation_ai_credential_id` (UUID, nullable, FK) - AI credential for conversation mode
 - `building_ai_credential_id` (UUID, nullable, FK) - AI credential for building mode
 - `config` (JSON) - Runtime configuration including `auth_token`
 
-### Junction tables (`backend/app/models/link_models.py`)
+### Junction tables (`backend/app/models/credentials/link_models.py`)
 
 - `AgentCredentialLink` - Links agents to integration credentials
 - `AgentPluginLink` - Links agents to LLM plugins
@@ -61,7 +61,7 @@ Data management fields:
 
 ## Services & Key Methods
 
-### EnvironmentLifecycleManager (`backend/app/services/environment_lifecycle.py`)
+### EnvironmentLifecycleManager (`backend/app/services/environments/environment_lifecycle.py`)
 
 - `create_environment_instance()` - Copy template, build image (no data sync)
 - `start_environment()` - Start container, detect new vs existing, sync data
@@ -73,7 +73,7 @@ Data management fields:
 - `copy_workspace_between_environments()` - Copy workspace folders between environment instance directories
 - `_update_environment_config()` - Regenerate auth token, resolve AI credentials, generate .env
 
-### EnvironmentService (`backend/app/services/environment_service.py`)
+### EnvironmentService (`backend/app/services/environments/environment_service.py`)
 
 - `create_environment()` - Entry point for environment creation
 - `activate_environment()` - Activate environment for agent, orchestrate workspace copy
@@ -81,7 +81,7 @@ Data management fields:
 - `_activate_environment_background()` - Background task for activation with workspace copy
 - `_find_source_environment_for_workspace_copy()` - Find best source environment by priority (active → recent suspended → recent session)
 
-### AgentCloneService (`backend/app/services/agent_clone_service.py`)
+### AgentCloneService (`backend/app/services/sharing/agent_clone_service.py`)
 
 - `create_clone()` - Create clone agent record and environment
 - `copy_workspace()` - Copy workspace files from original to clone (scripts, docs, knowledge, files, uploads, workspace_requirements.txt)
@@ -93,10 +93,10 @@ Data management fields:
 
 ### Supporting Services
 
-- `backend/app/services/credentials_service.py` - `prepare_credentials_for_environment()` - Gather and format credentials for sync
-- `backend/app/services/llm_plugin_service.py` - `prepare_plugins_for_environment()` - Gather and format plugins for sync
+- `backend/app/services/credentials/credentials_service.py` - `prepare_credentials_for_environment()` - Gather and format credentials for sync
+- `backend/app/services/plugins/llm_plugin_service.py` - `prepare_plugins_for_environment()` - Gather and format plugins for sync
 
-### DockerEnvironmentAdapter (`backend/app/services/adapters/docker_adapter.py`)
+### DockerEnvironmentAdapter (`backend/app/services/environments/adapters/docker_adapter.py`)
 
 - `set_agent_prompts()` - HTTP POST to agent-env `/config/agent-prompts`
 - `set_credentials()` - HTTP POST to agent-env `/config/credentials`

@@ -6,13 +6,13 @@
 
 **Backend**
 
-- `backend/app/models/agent.py` — `Agent` table model (`is_general_assistant` field, partial unique index)
-- `backend/app/models/user.py` — `User` table model (`general_assistant_enabled` field), `UserUpdateMe` schema
-- `backend/app/services/general_assistant_service.py` — GA creation, lookup, background auto-create
-- `backend/app/services/agent_service.py` — workspace filter inclusion, no model-level guard needed
-- `backend/app/services/agent_share_service.py` — sharing guard
-- `backend/app/services/session_service.py` — building mode enforcement
-- `backend/app/services/auth_service.py` — triggers auto-create after OAuth user creation
+- `backend/app/models/agents/agent.py` — `Agent` table model (`is_general_assistant` field, partial unique index)
+- `backend/app/models/users/user.py` — `User` table model (`general_assistant_enabled` field), `UserUpdateMe` schema
+- `backend/app/services/users/general_assistant_service.py` — GA creation, lookup, background auto-create
+- `backend/app/services/agents/agent_service.py` — workspace filter inclusion, no model-level guard needed
+- `backend/app/services/sharing/agent_share_service.py` — sharing guard
+- `backend/app/services/sessions/session_service.py` — building mode enforcement
+- `backend/app/services/users/auth_service.py` — triggers auto-create after OAuth user creation
 - `backend/app/api/routes/users.py` — `POST /users/me/general-assistant` endpoint
 - `backend/app/api/routes/agents.py` — deletion guard in `DELETE /{id}`
 - `backend/app/alembic/versions/4d769edd79d2_add_general_assistant.py` — schema migration
@@ -89,7 +89,7 @@ Returns HTTP 403 with `"The General Assistant cannot be deleted"` if `agent.is_g
 
 ## Services & Key Methods
 
-### `backend/app/services/general_assistant_service.py`
+### `backend/app/services/users/general_assistant_service.py`
 
 Constants defined at module level:
 
@@ -106,19 +106,19 @@ Methods on `GeneralAssistantService`:
 - `ensure_general_assistant(session, user)` — idempotent wrapper used during registration: calls `get_general_assistant` first, then `create_general_assistant` if no GA exists
 - `trigger_auto_create_background(user_id)` — launches a daemon `threading.Thread`; the thread opens its own `SQLSession`, checks `general_assistant_enabled` and the absence of an existing GA, then calls `asyncio.run(create_general_assistant(...))` — safe to call from sync routes
 
-### `backend/app/services/agent_service.py`
+### `backend/app/services/agents/agent_service.py`
 
 - `AgentService.list_agents(session, user_id, ..., workspace_filter, apply_workspace_filter)` — when `apply_workspace_filter=True`, the WHERE clause includes `OR Agent.is_general_assistant == True` alongside the workspace UUID condition; this ensures the GA is always returned regardless of the active workspace
 
-### `backend/app/services/agent_share_service.py`
+### `backend/app/services/sharing/agent_share_service.py`
 
 - `AgentShareService.share_agent()` — raises `HTTPException(403)` before processing if `agent.is_general_assistant` is `true`
 
-### `backend/app/services/session_service.py`
+### `backend/app/services/sessions/session_service.py`
 
 - `SessionService.create_session()` — after loading the `Agent`, checks `agent.is_general_assistant`; if `true`, calls `data.model_copy(update={"mode": "building"})` to override whatever mode the caller passed in
 
-### `backend/app/services/auth_service.py`
+### `backend/app/services/users/auth_service.py`
 
 - `AuthService.create_user_from_google()` — creates the new `User` record; GA is not auto-created (user must opt in via Settings)
 

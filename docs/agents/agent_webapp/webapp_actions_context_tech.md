@@ -4,8 +4,8 @@
 
 ### Backend Services
 
-- `backend/app/services/session_service.py` — `SessionService.activate_webapp_context()` method: checks and sets the session flag
-- `backend/app/services/message_service.py` — one-time injection logic in the dispatch path; `send_message_to_environment_stream()` and `stream_message_with_events()` with `include_extra_instructions` / `extra_instructions_prepend` parameters
+- `backend/app/services/sessions/session_service.py` — `SessionService.activate_webapp_context()` method: checks and sets the session flag
+- `backend/app/services/sessions/message_service.py` — one-time injection logic in the dispatch path; `send_message_to_environment_stream()` and `stream_message_with_events()` with `include_extra_instructions` / `extra_instructions_prepend` parameters
 
 ### Agent-Core (Inside Docker, Env-Template)
 
@@ -26,7 +26,7 @@ No new database tables or migrations. The flag lives in the existing JSON column
 
 | Model | File | Field |
 |-------|------|-------|
-| `Session` | `backend/app/models/session.py` | `session_metadata: dict = Field(default_factory=dict, sa_column=Column(JSON))` |
+| `Session` | `backend/app/models/sessions/session.py` | `session_metadata: dict = Field(default_factory=dict, sa_column=Column(JSON))` |
 
 **Key**: `"webapp_actions_context_sent"`
 **Type**: `bool`

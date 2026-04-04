@@ -5,11 +5,11 @@
 ### Backend
 
 **Models:**
-- `backend/app/models/input_task.py` — InputTask table, all schema classes, `InputTaskStatus` constants
-- `backend/app/models/task_comment.py` — TaskComment table, `TaskCommentCreate`, `AgentTaskCommentCreate`, `TaskCommentPublic`
-- `backend/app/models/task_attachment.py` — TaskAttachment table, `TaskAttachmentPublic`
-- `backend/app/models/task_status_history.py` — TaskStatusHistory table, `TaskStatusHistoryPublic`
-- `backend/app/models/session.py` — `source_task_id`, `todo_progress`, `result_state`, `result_summary` additions
+- `backend/app/models/tasks/input_task.py` — InputTask table, all schema classes, `InputTaskStatus` constants
+- `backend/app/models/tasks/task_comment.py` — TaskComment table, `TaskCommentCreate`, `AgentTaskCommentCreate`, `TaskCommentPublic`
+- `backend/app/models/tasks/task_attachment.py` — TaskAttachment table, `TaskAttachmentPublic`
+- `backend/app/models/tasks/task_status_history.py` — TaskStatusHistory table, `TaskStatusHistoryPublic`
+- `backend/app/models/sessions/session.py` — `source_task_id`, `todo_progress`, `result_state`, `result_summary` additions
 - `backend/app/models/__init__.py` — exports
 
 **Routes:**
@@ -18,12 +18,12 @@
 - `backend/app/api/main.py` — router registration
 
 **Services:**
-- `backend/app/services/input_task_service.py` — main service (extended with collaboration methods)
-- `backend/app/services/task_comment_service.py` — comment creation, listing, deletion
-- `backend/app/services/task_attachment_service.py` — file upload, workspace attach, download
-- `backend/app/services/session_service.py` — `create_session`, `list_task_sessions`, `delete_session`
-- `backend/app/services/activity_service.py` — task activity lifecycle handlers
-- `backend/app/services/ai_functions_service.py` — `refine_task` method
+- `backend/app/services/tasks/input_task_service.py` — main service (extended with collaboration methods)
+- `backend/app/services/tasks/task_comment_service.py` — comment creation, listing, deletion
+- `backend/app/services/tasks/task_attachment_service.py` — file upload, workspace attach, download
+- `backend/app/services/sessions/session_service.py` — `create_session`, `list_task_sessions`, `delete_session`
+- `backend/app/services/events/activity_service.py` — task activity lifecycle handlers
+- `backend/app/services/ai_functions/ai_functions_service.py` — `refine_task` method
 
 **AI Functions:**
 - `backend/app/agents/task_refiner.py` — LLM task refinement agent
@@ -185,7 +185,7 @@ Index: `ix_task_status_history_task_id`
 
 ### Model Schema Classes
 
-**`backend/app/models/input_task.py`:**
+**`backend/app/models/tasks/input_task.py`:**
 - `InputTaskBase` — `original_message`, `current_description`
 - `InputTask` — DB table (all columns above)
 - `InputTaskCreate` — includes new: `title?`, `priority?`, `team_id?`, `assigned_node_id?`, `parent_task_id?`
@@ -262,7 +262,7 @@ Called by MCP tools inside agent environments. Authentication via JWT (same Curr
 
 ## Services & Key Methods
 
-### `InputTaskService` (`backend/app/services/input_task_service.py`)
+### `InputTaskService` (`backend/app/services/tasks/input_task_service.py`)
 
 Exception classes: `InputTaskError`, `TaskNotFoundError`, `AgentNotFoundError`, `PermissionDeniedError`, `ValidationError`
 
@@ -310,7 +310,7 @@ Exception classes: `InputTaskError`, `TaskNotFoundError`, `AgentNotFoundError`, 
 - `send_email_answer()` — generates AI email reply, queues for SMTP delivery; deletes `email_task_reply_pending` activity
 - `update_status()` — emits `TASK_STATUS_UPDATED` for email-originated tasks
 
-### `MessageService` — task context enrichment (`backend/app/services/message_service.py`)
+### `MessageService` — task context enrichment (`backend/app/services/sessions/message_service.py`)
 
 The module-level function `_build_session_context(db, session_db, env, agent)` now queries `InputTask` by `session_id` and — when a matching task is found — populates the following keys into the session context dict. These are consumed by `PromptGenerator.build_task_context_section()` inside the agent environment:
 
@@ -335,7 +335,7 @@ The module-level function `_build_session_context(db, session_db, env, agent)` n
 
 The enrichment runs inside a `try/except` block — failures are logged as warnings and do not break message delivery.
 
-### `TaskCommentService` (`backend/app/services/task_comment_service.py`)
+### `TaskCommentService` (`backend/app/services/tasks/task_comment_service.py`)
 
 - `add_comment(session, task_id, data, author_agent_id=None, author_node_id=None, author_user_id=None)` — creates comment record, emits `TASK_COMMENT_ADDED`
 - `add_comment_from_agent(session, task_id, agent_id, data: AgentTaskCommentCreate)` — resolves agent's node in team context; if `file_paths` provided delegates to `TaskAttachmentService.attach_from_workspace()`; creates comment with agent/node author
@@ -344,7 +344,7 @@ The enrichment runs inside a `try/except` block — failures are logged as warni
 - `delete_comment(session, comment_id, user_id)` — ownership check via task
 - `_to_public(session, comment, include_attachments=True)` — resolves `author_name`, `author_role`, `inline_attachments`
 
-### `TaskAttachmentService` (`backend/app/services/task_attachment_service.py`)
+### `TaskAttachmentService` (`backend/app/services/tasks/task_attachment_service.py`)
 
 - `upload_attachment(session, task_id, file: UploadFile, uploaded_by_user_id=None, comment_id=None)` — stores file, creates `TaskAttachment` record, emits `TASK_ATTACHMENT_ADDED`
 - `attach_from_workspace(session, task_id, agent_id, file_paths, comment_id=None)` — resolves agent's active environment; for each path: normalizes to a relative path (handles `./reports/file.json`, `/app/workspace/reports/file.json`, and `reports/file.json` formats), then calls `GET /workspace/download/{rel_path}` on agent-env HTTP API; stores file; creates `TaskAttachment` with origin tracking
@@ -368,7 +368,7 @@ Base path resolved from `settings.UPLOAD_BASE_PATH`. Path traversal protection a
 
 ## Real-Time Events
 
-New events emitted from the task collaboration system (file: `backend/app/models/event.py`):
+New events emitted from the task collaboration system (file: `backend/app/models/events/event.py`):
 
 | Event | Trigger | Payload |
 |-------|---------|---------|

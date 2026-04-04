@@ -62,9 +62,9 @@ The rebuild lifecycle emits `ENVIRONMENT_STATUS_CHANGED` events so the frontend 
 
 ## Technical Reference
 
-- `backend/app/services/commands/rebuild_env_command.py` — Command handler (validation + background task dispatch)
-- `backend/app/services/commands/rebuild_env_command.py:_rebuild_environment_background()` — Background coroutine that performs the actual rebuild
-- `backend/app/services/active_streaming_manager.py` — `is_any_session_streaming()` method
-- `backend/app/services/environment_service.py` — `rebuild_environment()` method
-- `backend/app/services/environment_lifecycle.py` — `rebuild_environment()` — emits `ENVIRONMENT_STATUS_CHANGED` events at start, completion, and error
+- `backend/app/services/agents/commands/rebuild_env_command.py` — Command handler (validation + background task dispatch)
+- `backend/app/services/agents/commands/rebuild_env_command.py:_rebuild_environment_background()` — Background coroutine that performs the actual rebuild
+- `backend/app/services/sessions/active_streaming_manager.py` — `is_any_session_streaming()` method
+- `backend/app/services/environments/environment_service.py` — `rebuild_environment()` method
+- `backend/app/services/environments/environment_lifecycle.py` — `rebuild_environment()` — emits `ENVIRONMENT_STATUS_CHANGED` events at start, completion, and error
 - `frontend/src/routes/_layout/session/$sessionId.tsx` — Subscribes to `ENVIRONMENT_STATUS_CHANGED` to update App icon state

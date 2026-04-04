@@ -13,23 +13,23 @@
 - `backend/app/services/email/sending_scheduler.py` — APScheduler (2 min interval)
 
 ### Backend — Updated Services
-- `backend/app/services/session_service.py` — `get_session_by_email_thread()`, `create_session()` with email params
-- `backend/app/services/message_service.py` — HMAC-signed `session_context` emission with `email_subject` from linked `EmailMessage`
-- `backend/app/services/session_context_signer.py` — HMAC-SHA256 signing/verification
-- `backend/app/services/agent_share_service.py` — `create_auto_share()` for email senders
-- `backend/app/services/user_service.py` — `create_email_user()` for auto user provisioning
-- `backend/app/services/input_task_service.py` — `send_email_answer()` for task-originated replies
-- `backend/app/services/ai_functions_service.py` — `generate_email_reply()` wrapper
+- `backend/app/services/sessions/session_service.py` — `get_session_by_email_thread()`, `create_session()` with email params
+- `backend/app/services/sessions/message_service.py` — HMAC-signed `session_context` emission with `email_subject` from linked `EmailMessage`
+- `backend/app/services/sessions/session_context_signer.py` — HMAC-SHA256 signing/verification
+- `backend/app/services/sharing/agent_share_service.py` — `create_auto_share()` for email senders
+- `backend/app/services/users/user_service.py` — `create_email_user()` for auto user provisioning
+- `backend/app/services/tasks/input_task_service.py` — `send_email_answer()` for task-originated replies
+- `backend/app/services/ai_functions/ai_functions_service.py` — `generate_email_reply()` wrapper
 
 ### Backend — AI Functions
 - `backend/app/agents/email_reply_generator.py` — `generate_email_reply()` AI function
 - `backend/app/agents/prompts/email_reply_generator_prompt.md` — Prompt template
 
 ### Backend — Models
-- `backend/app/models/email_message.py` — `EmailMessage`, `EmailMessagePublic`
-- `backend/app/models/outgoing_email_queue.py` — `OutgoingEmailQueue`, `OutgoingEmailQueuePublic`, `OutgoingEmailStatus`
-- `backend/app/models/session.py` — Added: `email_thread_id`, `integration_type`, `sender_email`
-- `backend/app/models/input_task.py` — Added: `source_email_message_id`, `source_agent_id`, `SendAnswerRequest`, `SendAnswerResponse`
+- `backend/app/models/email/email_message.py` — `EmailMessage`, `EmailMessagePublic`
+- `backend/app/models/email/outgoing_email_queue.py` — `OutgoingEmailQueue`, `OutgoingEmailQueuePublic`, `OutgoingEmailStatus`
+- `backend/app/models/sessions/session.py` — Added: `email_thread_id`, `integration_type`, `sender_email`
+- `backend/app/models/tasks/input_task.py` — Added: `source_email_message_id`, `source_agent_id`, `SendAnswerRequest`, `SendAnswerResponse`
 
 ### Backend — Agent Environment (Session Context)
 - `backend/app/env-templates/app_core_base/core/server/active_session_manager.py` — Per-session HMAC-verified context store with TTL cleanup
@@ -102,15 +102,15 @@
 
 ### AI Reply Generation
 - `backend/app/agents/email_reply_generator.py:generate_email_reply()` — Takes original email details + session results, produces professional reply
-- `backend/app/services/ai_functions_service.py:generate_email_reply()` — Wrapper using multi-provider cascade
-- `backend/app/services/input_task_service.py:send_email_answer()` — Retrieves last agent message or result_summary, generates reply, queues outgoing email
+- `backend/app/services/ai_functions/ai_functions_service.py:generate_email_reply()` — Wrapper using multi-provider cascade
+- `backend/app/services/tasks/input_task_service.py:send_email_answer()` — Retrieves last agent message or result_summary, generates reply, queues outgoing email
 
 ## Session Context Implementation
 
 ### Backend Side
-- `backend/app/services/message_service.py` — On every stream, emits HMAC-signed `session_context` to agent-env
+- `backend/app/services/sessions/message_service.py` — On every stream, emits HMAC-signed `session_context` to agent-env
   - Context includes: `integration_type`, `sender_email`, `email_subject` (fetched from linked `EmailMessage` via `email_thread_id`), `email_thread_id`, `backend_session_id`
-- `backend/app/services/session_context_signer.py` — HMAC-SHA256 signing with `AGENT_AUTH_TOKEN`
+- `backend/app/services/sessions/session_context_signer.py` — HMAC-SHA256 signing with `AGENT_AUTH_TOKEN`
 
 ### Agent-Env Side
 - `active_session_manager.py:ActiveSessionManager`

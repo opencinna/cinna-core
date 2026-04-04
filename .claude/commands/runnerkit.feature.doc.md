@@ -85,7 +85,7 @@ Deep-dive for developers. Explains HOW the feature is implemented with file refe
 6. **Configuration** - Settings keys, env vars relevant to this feature
 7. **Security** - Access control, validation, encryption relevant to this feature
 
-**Style:** Heavy use of file path references like `backend/app/services/file_service.py:upload_files()`. NO code blocks - only file/method references.
+**Style:** Heavy use of file path references like `backend/app/services/file_service.py:upload_files()`. NO code blocks - only file/method references. <!-- nocheck -->
 
 #### 3c. Widget Documentation: `{feature}_widget.md` (optional)
 
@@ -125,7 +125,7 @@ Not every feature needs the full 3-layer treatment. For simple features or stand
 ## Documentation Style Rules
 
 **DO:**
-- Use file path references: `backend/app/services/file_service.py:upload_files_to_agent_env()`
+- Use file path references: `backend/app/services/file_service.py:upload_files_to_agent_env()` <!-- nocheck -->
 - Use endpoint references: `POST /api/v1/files/upload` - Upload file (creates temporary record)
 - Use component references: `frontend/src/components/Chat/FileUploadModal.tsx`
 - Link to related feature docs: `See [Agent Sessions](../agents/agent_sessions/agent_sessions.md)` <!-- nocheck -->

@@ -33,8 +33,8 @@ No Web App available for this agent.
 
 ## Technical Details
 
-- **Handler**: `WebappCommandHandler` in `backend/app/services/commands/webapp_command.py`
-- **Share lookup**: Delegates to `AgentWebappShareService.get_first_active_share_url()` in `backend/app/services/agent_webapp_share_service.py`
+- **Handler**: `WebappCommandHandler` in `backend/app/services/agents/commands/webapp_command.py`
+- **Share lookup**: Delegates to `AgentWebappShareService.get_first_active_share_url()` in `backend/app/services/webapp/agent_webapp_share_service.py`
 - **No environment required**: Unlike `/files`, this command only queries the database (agent + shares), so it works even if the environment is not running
 - **Share selection**: Picks the oldest active, non-expired share — consistent and predictable for users with multiple shares
 - **Link format**: Always uses `{FRONTEND_HOST}/webapp/{token}` regardless of caller context (UI or A2A), since the webapp is a standalone page

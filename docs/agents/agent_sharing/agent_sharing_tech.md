@@ -4,11 +4,11 @@
 
 ### Backend - Models
 
-- `backend/app/models/agent_share.py` - AgentShare model (share records between users)
-- `backend/app/models/agent.py` - Clone fields on Agent model (`is_clone`, `parent_agent_id`, `clone_mode`, `update_mode`, `pending_update`, `pending_update_at`, `last_sync_at`)
-- `backend/app/models/clone_update_request.py` - CloneUpdateRequest model (queued updates from parent to clone)
-- `backend/app/models/credential.py` - Sharing fields (`allow_sharing`, `is_placeholder`, `placeholder_source_id`)
-- `backend/app/models/credential_share.py` - CredentialShare model (read-only credential links)
+- `backend/app/models/sharing/agent_share.py` - AgentShare model (share records between users)
+- `backend/app/models/agents/agent.py` - Clone fields on Agent model (`is_clone`, `parent_agent_id`, `clone_mode`, `update_mode`, `pending_update`, `pending_update_at`, `last_sync_at`)
+- `backend/app/models/sharing/clone_update_request.py` - CloneUpdateRequest model (queued updates from parent to clone)
+- `backend/app/models/credentials/credential.py` - Sharing fields (`allow_sharing`, `is_placeholder`, `placeholder_source_id`)
+- `backend/app/models/credentials/credential_share.py` - CredentialShare model (read-only credential links)
 
 ### Backend - Routes
 
@@ -16,9 +16,9 @@
 
 ### Backend - Services
 
-- `backend/app/services/agent_share_service.py` - Share workflow logic (create, accept, decline, revoke)
-- `backend/app/services/agent_clone_service.py` - Clone operations (create, detach, push updates, apply updates)
-- `backend/app/services/agent_service.py` - `list_agents()` method (includes clone visibility rules)
+- `backend/app/services/sharing/agent_share_service.py` - Share workflow logic (create, accept, decline, revoke)
+- `backend/app/services/sharing/agent_clone_service.py` - Clone operations (create, detach, push updates, apply updates)
+- `backend/app/services/agents/agent_service.py` - `list_agents()` method (includes clone visibility rules)
 
 ### Frontend - Share Management
 
@@ -149,7 +149,7 @@
 
 ## Services & Key Methods
 
-### AgentShareService (`backend/app/services/agent_share_service.py`)
+### AgentShareService (`backend/app/services/sharing/agent_share_service.py`)
 
 - `share_agent()` - Create pending share, validate ownership and target user, enforce unique constraint
 - `create_auto_share()` - Create pre-accepted share for email integration (skips pending state)
@@ -161,7 +161,7 @@
 - `get_agent_shares()` - List all shares for an agent (owner view)
 - `get_agent_clones()` - List all clones of an agent
 
-### AgentCloneService (`backend/app/services/agent_clone_service.py`)
+### AgentCloneService (`backend/app/services/sharing/agent_clone_service.py`)
 
 - `create_clone()` - Create clone agent record, environment with `source_environment_id`, copy workspace, setup credentials, AI credential sharing
 - `copy_workspace()` - Copy workspace directories (scripts, docs, knowledge, files, uploads) using `ENV_INSTANCES_DIR` paths

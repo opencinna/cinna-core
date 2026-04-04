@@ -3,13 +3,13 @@
 ## File Locations
 
 ### Backend - Models
-- `backend/app/models/credential.py` - Credential model with encrypted_data, credential types enum, agent link model
-- `backend/app/models/link_models.py` - AgentCredentialLink many-to-many junction table
+- `backend/app/models/credentials/credential.py` - Credential model with encrypted_data, credential types enum, agent link model
+- `backend/app/models/credentials/link_models.py` - AgentCredentialLink many-to-many junction table
 
 ### Backend - Services
-- `backend/app/services/credentials_service.py` - Core credential preparation, syncing, redaction, whitelisting
-- `backend/app/services/oauth_credentials_service.py` - OAuth token refresh and flow management
-- `backend/app/services/environment_lifecycle.py` - Credential sync during environment lifecycle events
+- `backend/app/services/credentials/credentials_service.py` - Core credential preparation, syncing, redaction, whitelisting
+- `backend/app/services/credentials/oauth_credentials_service.py` - OAuth token refresh and flow management
+- `backend/app/services/environments/environment_lifecycle.py` - Credential sync during environment lifecycle events
 
 ### Backend - Routes
 - `backend/app/api/routes/credentials.py` - Credential CRUD with auto-sync triggers
@@ -83,7 +83,7 @@
 
 ## Services & Key Methods
 
-### CredentialsService (`backend/app/services/credentials_service.py`)
+### CredentialsService (`backend/app/services/credentials/credentials_service.py`)
 - `prepare_credentials_for_environment()` - Decrypts credentials, applies field whitelisting, returns JSON and README data
 - `generate_credentials_readme()` - Creates redacted README with ID-based lookup examples
 - `redact_credential_data()` - Replaces sensitive field values with `***REDACTED***` (only for non-empty values)
@@ -95,14 +95,14 @@
 - `event_credential_shared()` / `event_credential_unshared()` - Event handlers for credential link changes
 - `AGENT_ENV_ALLOWED_FIELDS` - Dict mapping credential types to their whitelisted field names
 
-### OAuthCredentialsService (`backend/app/services/oauth_credentials_service.py`)
+### OAuthCredentialsService (`backend/app/services/credentials/oauth_credentials_service.py`)
 - `initiate_oauth_flow()` - Generates state token, builds Google authorization URL with type-specific scopes
 - `handle_oauth_callback()` - Validates state token, exchanges code for tokens, stores encrypted in credential
 - `refresh_oauth_token()` - Refreshes OAuth access token using stored refresh token
 - `get_oauth_scopes_for_type()` - Maps credential type to required Google OAuth scopes
 - `get_oauth_metadata()` - Extracts non-sensitive metadata (email, scopes, expiration) for display
 
-### EnvironmentLifecycleManager (`backend/app/services/environment_lifecycle.py`)
+### EnvironmentLifecycleManager (`backend/app/services/environments/environment_lifecycle.py`)
 - `_sync_agent_data()` - Called after start/restart/rebuild, syncs prompts and credentials to container
 
 ### AgentEnvService (`backend/app/env-templates/app_core_base/core/server/agent_env_service.py`)

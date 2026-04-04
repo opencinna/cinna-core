@@ -75,14 +75,14 @@ No dedicated endpoint for the widget. It reuses the standard session message sen
 
 - `POST /api/v1/sessions/{session_id}/messages/stream` — Sends the formatted answer message. The request body includes `answers_to_message_id` to link the answer to the original question message
 
-**Backend detection** (`backend/app/services/message_service.py`):
+**Backend detection** (`backend/app/services/sessions/message_service.py`):
 - `detect_ask_user_question_tool()` — Scans `streaming_events` for `AskUserQuestion` tool calls
 - `stream_message_with_events()` — Sets `tool_questions_status = "unanswered"` when detected
 - `create_message()` — When `answers_to_message_id` is provided, automatically sets the referenced message's `tool_questions_status = "answered"`
 
 **Related files:**
-- `backend/app/models/session.py` — `tool_questions_status`, `answers_to_message_id` fields on `AgentSessionMessage`
-- `backend/app/services/message_service.py` — Detection and status logic
+- `backend/app/models/sessions/session.py` — `tool_questions_status`, `answers_to_message_id` fields on `AgentSessionMessage`
+- `backend/app/services/sessions/message_service.py` — Detection and status logic
 - `backend/app/api/routes/messages.py` — Message send endpoint
 - `frontend/src/hooks/useSessionStreaming.ts` — `sendMessage()` extended with `answersToMessageId` param
 - Migration: `backend/app/alembic/versions/bfbae71690bb_add_tool_questions_status_and_answers_.py`

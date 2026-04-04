@@ -12,8 +12,8 @@
 | `frontend/src/services/eventService.ts` | Socket.IO event bus: `subscribe`, `subscribeToRoom`, `unsubscribe`, `unsubscribeFromRoom` |
 | `frontend/src/components/Chat/StreamingMessage.tsx` | Streaming display component reused inside the overlay |
 | `backend/app/api/routes/user_dashboards.py` | Dashboard/block/prompt-action CRUD routes + `/latest-session` endpoint |
-| `backend/app/services/session_service.py` | `get_recent_block_session()` + `create_session()` with `dashboard_block_id` param |
-| `backend/app/models/user_dashboard.py` | `UserDashboardBlockPromptAction` model and schema classes |
+| `backend/app/services/sessions/session_service.py` | `get_recent_block_session()` + `create_session()` with `dashboard_block_id` param |
+| `backend/app/models/users/user_dashboard.py` | `UserDashboardBlockPromptAction` model and schema classes |
 
 ---
 

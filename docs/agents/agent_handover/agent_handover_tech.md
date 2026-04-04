@@ -5,23 +5,23 @@
 ### Backend
 
 **Models:**
-- `backend/app/models/agent_handover.py` — `AgentHandoverConfig` (table), request/response schemas
+- `backend/app/models/agents/agent_handover.py` — `AgentHandoverConfig` (table), request/response schemas
 - `backend/app/models/__init__.py` — model exports
-- `backend/app/models/agent.py` — `Agent.handover_configs` relationship
+- `backend/app/models/agents/agent.py` — `Agent.handover_configs` relationship
 
 **API Routes:**
 - `backend/app/api/routes/agents.py` — handover and task-creation endpoints (thin controllers)
 
 **Services:**
-- `backend/app/services/agent_handover_service.py` — `AgentHandoverService` with handover config CRUD, access verification, prompt generation; exception hierarchy (`HandoverError`, `HandoverNotFoundError`, `AgentNotFoundError`, `PermissionDeniedError`)
-- `backend/app/services/agent_service.py` — `sync_agent_handover_config()`, `create_agent_task()`
-- `backend/app/services/input_task_service.py` — `create_task()`, `create_task_with_auto_refine()`, `execute_task()`, `link_session()`
-- `backend/app/services/session_service.py` — `create_session()`, `send_session_message()`
-- `backend/app/services/message_service.py` — system message creation with task metadata
-- `backend/app/services/ai_functions_service.py` — `generate_handover_prompt()`, `refine_task()`
-- `backend/app/services/environment_lifecycle.py` — `_sync_dynamic_data()` (syncs handover config on env activation)
-- `backend/app/services/adapters/base.py` — `set_agent_handover_config()` abstract method
-- `backend/app/services/adapters/docker_adapter.py` — `set_agent_handover_config()` implementation
+- `backend/app/services/agents/agent_handover_service.py` — `AgentHandoverService` with handover config CRUD, access verification, prompt generation; exception hierarchy (`HandoverError`, `HandoverNotFoundError`, `AgentNotFoundError`, `PermissionDeniedError`)
+- `backend/app/services/agents/agent_service.py` — `sync_agent_handover_config()`, `create_agent_task()`
+- `backend/app/services/tasks/input_task_service.py` — `create_task()`, `create_task_with_auto_refine()`, `execute_task()`, `link_session()`
+- `backend/app/services/sessions/session_service.py` — `create_session()`, `send_session_message()`
+- `backend/app/services/sessions/message_service.py` — system message creation with task metadata
+- `backend/app/services/ai_functions/ai_functions_service.py` — `generate_handover_prompt()`, `refine_task()`
+- `backend/app/services/environments/environment_lifecycle.py` — `_sync_dynamic_data()` (syncs handover config on env activation)
+- `backend/app/services/environments/adapters/base.py` — `set_agent_handover_config()` abstract method
+- `backend/app/services/environments/adapters/docker_adapter.py` — `set_agent_handover_config()` implementation
 
 **AI Functions:**
 - `backend/app/agents/handover_generator.py` — handover prompt generation agent
@@ -91,7 +91,7 @@ All routes are in `backend/app/api/routes/agents.py`:
 
 ## Services & Key Methods
 
-### AgentHandoverService (`backend/app/services/agent_handover_service.py`)
+### AgentHandoverService (`backend/app/services/agents/agent_handover_service.py`)
 
 - `verify_agent_access(agent_id, user_id)` — checks agent exists and user has ownership; raises domain exceptions
 - `list_configs(agent_id, user_id)` — lists all handover configs for source agent with target agent names resolved
@@ -100,29 +100,29 @@ All routes are in `backend/app/api/routes/agents.py`:
 - `delete_config(agent_id, handover_id, user_id)` — deletes config permanently, syncs to agent-env
 - `generate_handover_prompt(agent_id, target_agent_id, user_id)` — validates both agents, delegates to `AIFunctionsService`
 
-### AgentService (`backend/app/services/agent_service.py`)
+### AgentService (`backend/app/services/agents/agent_service.py`)
 
 - `sync_agent_handover_config(agent_id)` — queries all enabled handover configs, formats JSON with targets and consolidated prompt, pushes to agent-env via adapter
 - `create_agent_task(task_message, source_session_id, target_agent_id?, target_agent_name?)` — orchestrates direct handover or inbox task creation; delegates to `InputTaskService`
 - `delete_agent(agent_id)` — handles clone relationship cleanup (detaches clones from parent, updates share records for deleted clones) before deleting environments and agent
 
-### InputTaskService (`backend/app/services/input_task_service.py`)
+### InputTaskService (`backend/app/services/tasks/input_task_service.py`)
 
 - `create_task(...)` — creates `InputTask` with `agent_initiated=true`, `auto_execute=false` (inbox task)
 - `create_task_with_auto_refine(...)` — creates `InputTask` with `auto_execute=true`; if target has `refiner_prompt`, calls `AIFunctionsService.refine_task()` before returning message
 - `execute_task(task, message)` — creates session via `SessionService`, links session to task, sends message
 - `link_session(task_id, session_id)` — updates task with `session_id` reference
 
-### AIFunctionsService (`backend/app/services/ai_functions_service.py`)
+### AIFunctionsService (`backend/app/services/ai_functions/ai_functions_service.py`)
 
 - `generate_handover_prompt(source_agent, target_agent)` — invokes handover generator agent to produce draft prompt
 - `refine_task(task_message, refiner_prompt)` — refines handover message for direct handover mode
 
-### Environment Lifecycle (`backend/app/services/environment_lifecycle.py`)
+### Environment Lifecycle (`backend/app/services/environments/environment_lifecycle.py`)
 
 - `_sync_dynamic_data()` — called on every environment start/activation; re-syncs handover config from DB, ensuring clones receive empty config rather than stale parent workspace data
 
-### DockerAdapter (`backend/app/services/adapters/docker_adapter.py`)
+### DockerAdapter (`backend/app/services/environments/adapters/docker_adapter.py`)
 
 - `set_agent_handover_config(env, config)` — calls `POST /config/agent-handovers` on the agent-env container
 

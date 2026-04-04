@@ -855,9 +855,9 @@ Store IDs and fetch fresh objects with a new DB session in the background task.
 ### Implementation Files Using These Patterns
 
 - `backend/app/utils.py` - `create_task_with_error_logging()` utility function
-- `backend/app/services/session_service.py` - `initiate_stream()`, `process_pending_messages()`, stream event handlers
-- `backend/app/services/event_service.py` - `agent_usage_intent` handler
-- `backend/app/services/message_service.py` - `_flush_streaming_content` (runs in background thread)
+- `backend/app/services/sessions/session_service.py` - `initiate_stream()`, `process_pending_messages()`, stream event handlers
+- `backend/app/services/events/event_service.py` - `agent_usage_intent` handler
+- `backend/app/services/sessions/message_service.py` - `_flush_streaming_content` (runs in background thread)
 
 ## Future Enhancements
 

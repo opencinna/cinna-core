@@ -5,25 +5,25 @@
 ### Backend
 
 **Models:**
-- `backend/app/models/ai_credential.py` - `AICredential` (table), `AICredentialCreate`, `AICredentialUpdate`, `AICredentialPublic`, `AICredentialsPublic`, `AICredentialType` (enum), `AICredentialData`, `AffectedEnvironmentPublic`, `SharedUserPublic`, `AffectedEnvironmentsPublic`
-- `backend/app/models/ai_credential_share.py` - `AICredentialShare` (table), `AICredentialSharePublic`, `AICredentialShareCreate`
-- `backend/app/models/user.py` - `ai_credentials_encrypted` field (sync target)
+- `backend/app/models/credentials/ai_credential.py` - `AICredential` (table), `AICredentialCreate`, `AICredentialUpdate`, `AICredentialPublic`, `AICredentialsPublic`, `AICredentialType` (enum), `AICredentialData`, `AffectedEnvironmentPublic`, `SharedUserPublic`, `AffectedEnvironmentsPublic`
+- `backend/app/models/credentials/ai_credential_share.py` - `AICredentialShare` (table), `AICredentialSharePublic`, `AICredentialShareCreate`
+- `backend/app/models/users/user.py` - `ai_credentials_encrypted` field (sync target)
 
 **Routes:**
 - `backend/app/api/routes/ai_credentials.py` - CRUD + set-default + affected-environments + resolve-default endpoints
 - `backend/app/api/main.py` - Router registration
 
 **Services:**
-- `backend/app/services/ai_credentials_service.py` - `AICredentialsService` (singleton: `ai_credentials_service`)
-- `backend/app/services/environment_service.py:27` - `SDK_API_KEY_MAP`, `SDK_TO_CREDENTIAL_TYPE` mappings
-- `backend/app/services/agent_share_service.py` - AI credential provision handling in shares
-- `backend/app/services/agent_clone_service.py` - Clone AI credential setup
-- `backend/app/services/environment_lifecycle.py` - Credential type detection and `.env` generation
+- `backend/app/services/credentials/ai_credentials_service.py` - `AICredentialsService` (singleton: `ai_credentials_service`)
+- `backend/app/services/environments/environment_service.py:27` - `SDK_API_KEY_MAP`, `SDK_TO_CREDENTIAL_TYPE` mappings
+- `backend/app/services/sharing/agent_share_service.py` - AI credential provision handling in shares
+- `backend/app/services/sharing/agent_clone_service.py` - Clone AI credential setup
+- `backend/app/services/environments/environment_lifecycle.py` - Credential type detection and `.env` generation
 
 **Utilities:**
 - `backend/app/utils.py:163` - `detect_anthropic_credential_type()` function
 - `backend/app/core/security.py` - `encrypt_field()`, `decrypt_field()` (Fernet encryption)
-- `backend/app/services/ai_credentials_service.py` - `_sync_default_to_user_profile()` for profile sync
+- `backend/app/services/credentials/ai_credentials_service.py` - `_sync_default_to_user_profile()` for profile sync
 
 **Templates:**
 - `backend/app/env-templates/python-env-advanced/docker-compose.template.yml` - Container env var pass-through
@@ -111,7 +111,7 @@ Indexes: `ix_ai_credential_shares_credential` (ai_credential_id), `ix_ai_credent
 
 ## Services & Key Methods
 
-### `AICredentialsService` (`backend/app/services/ai_credentials_service.py`)
+### `AICredentialsService` (`backend/app/services/credentials/ai_credentials_service.py`)
 
 **Core CRUD:**
 - `list_credentials(session, user_id)` - List all credentials for user
@@ -148,13 +148,13 @@ Indexes: `ix_ai_credential_shares_credential` (ai_credential_id), `ix_ai_credent
 | `minimax` | `minimax_api_key` |
 | `openai_compatible` | `openai_compatible_api_key`, `openai_compatible_base_url`, `openai_compatible_model` |
 
-### Environment Service (`backend/app/services/environment_service.py`)
+### Environment Service (`backend/app/services/environments/environment_service.py`)
 
 - `SDK_API_KEY_MAP` (line 27) - Maps SDK IDs to API key field names
 - `SDK_TO_CREDENTIAL_TYPE` (line 34) - Maps SDK IDs to `AICredentialType` values
 - `create_environment()` - Resolves default or validates linked credentials per SDK type
 
-### Clone Service (`backend/app/services/agent_clone_service.py`)
+### Clone Service (`backend/app/services/sharing/agent_clone_service.py`)
 
 - `create_clone()` - If share has `provide_ai_credentials=true`: creates `AICredentialShare` links and links clone environment. If false: uses recipient's selected or default credentials.
 

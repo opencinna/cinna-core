@@ -20,18 +20,18 @@
 
 ### Backend — Services
 
-- `backend/app/services/message_service.py` — `prepare_user_message_with_files()`:
+- `backend/app/services/sessions/message_service.py` — `prepare_user_message_with_files()`:
   1. Validates file ownership and "temporary" status
   2. Calls `FileService.upload_files_to_agent_env()` to transfer files into Docker container
   3. Creates user message with original content (no file paths in stored content)
   4. Creates `MessageFile` junction records with `agent_env_path`
   5. Marks files as "attached" via `FileService.mark_files_as_attached()`
   6. Returns `(user_message, augmented_content)` — augmented content has file paths prepended for agent
-- `backend/app/services/file_service.py` — `upload_files_to_agent_env()`: transfers files from platform storage to agent environment container, returns `{file_id: container_path}` mapping
+- `backend/app/services/files/file_service.py` — `upload_files_to_agent_env()`: transfers files from platform storage to agent environment container, returns `{file_id: container_path}` mapping
 
 ### Backend — Models
 
-- `backend/app/models/file_upload.py` — Three models:
+- `backend/app/models/files/file_upload.py` — Three models:
   - `FileUpload` (table) — `id`, `user_id`, `filename`, `file_path`, `file_size`, `mime_type`, `status` ("temporary"/"attached"/"marked_for_deletion"), timestamps, `file_metadata`
   - `MessageFile` (junction table) — `message_id`, `file_id`, `agent_env_path`
   - `FileUploadPublic` (response schema) — `id`, `filename`, `file_size`, `mime_type`, `status`, `uploaded_at`

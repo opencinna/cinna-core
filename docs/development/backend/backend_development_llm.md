@@ -1,14 +1,14 @@
 # Backend Development - LLM Quick Reference
 
 ## Project Structure
-- **Models**: `backend/app/models/` (one file per entity)
+- **Models**: `backend/app/models/` (organized by domain subfolder, e.g., `models/agents/agent.py`, `models/users/user.py`)
 - **Routes**: `backend/app/api/routes/` (one file per domain)
-- **Services**: `backend/app/services/` (business logic)
+- **Services**: `backend/app/services/` (organized by domain subfolder, e.g., `services/agents/agent_service.py`, `services/environments/environment_service.py`)
 - **Migrations**: `backend/app/alembic/versions/`
 
 ## Database Models (SQLModel)
 ```python
-# backend/app/models/agent.py
+# backend/app/models/agents/agent.py
 
 # Base schema (shared properties)
 class AgentBase(SQLModel):
@@ -103,7 +103,7 @@ def update_agent(
 
 ## Services Pattern
 ```python
-# backend/app/services/agent_service.py
+# backend/app/services/agents/agent_service.py
 from sqlmodel import Session, select
 
 class AgentService:
@@ -152,7 +152,7 @@ bash scripts/generate-client.sh
 ## Common Patterns
 
 ### Update model fields:
-1. Edit model in `backend/app/models/`
+1. Edit model in `backend/app/models/<domain>/` subfolder <!-- nocheck -->
 2. Add field to `Agent`, `AgentPublic`, `AgentUpdate` classes
 3. Generate migration: `alembic revision --autogenerate -m "..."`
 4. Review and edit migration file if needed

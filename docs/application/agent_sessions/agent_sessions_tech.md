@@ -3,7 +3,7 @@
 ## File Locations
 
 ### Backend — Models
-- `backend/app/models/session.py` — `Session`, `SessionMessage`, `SessionCreate`, `SessionUpdate`, `SessionPublic`, `SessionPublicExtended`, `SessionsPublicExtended`, `MessageCreate`, `MessagePublic`, `MessagesPublic`
+- `backend/app/models/sessions/session.py` — `Session`, `SessionMessage`, `SessionCreate`, `SessionUpdate`, `SessionPublic`, `SessionPublicExtended`, `SessionsPublicExtended`, `MessageCreate`, `MessagePublic`, `MessagesPublic`
 
 ### Backend — Routes
 - `backend/app/api/routes/sessions.py` — Session CRUD endpoints
@@ -11,10 +11,10 @@
 - `backend/app/api/main.py` — Router registration (tag: `sessions`, `messages`)
 
 ### Backend — Services
-- `backend/app/services/session_service.py` — All session lifecycle logic, streaming orchestration, environment activation
-- `backend/app/services/message_service.py` — Message creation, streaming from agent-env, incremental DB flush
-- `backend/app/services/active_streaming_manager.py` — In-memory streaming state tracker (singleton)
-- `backend/app/services/event_service.py` — WebSocket event emission to `session_{id}_stream` rooms and user rooms
+- `backend/app/services/sessions/session_service.py` — All session lifecycle logic, streaming orchestration, environment activation
+- `backend/app/services/sessions/message_service.py` — Message creation, streaming from agent-env, incremental DB flush
+- `backend/app/services/sessions/active_streaming_manager.py` — In-memory streaming state tracker (singleton)
+- `backend/app/services/events/event_service.py` — WebSocket event emission to `session_{id}_stream` rooms and user rooms
 
 ### Backend — Dependencies
 - `backend/app/api/deps.py` — `CurrentUserOrGuest`, `GuestShareContext`, `get_current_user_or_guest()`
@@ -179,7 +179,7 @@ After streaming completes, assistant events containing `<webapp_action>` tags ar
 
 ## Services & Key Methods
 
-### `SessionService` (`backend/app/services/session_service.py`)
+### `SessionService` (`backend/app/services/sessions/session_service.py`)
 
 **Session lifecycle:**
 - `create_session(db, agent_id, user_id, ...)` — Resolves active environment, creates `Session` record; handles `access_token_id`, `source_task_id`, `guest_share_id`, `email_thread_id`
@@ -220,7 +220,7 @@ After streaming completes, assistant events containing `<webapp_action>` tags ar
 **Title generation:**
 - `auto_generate_session_title(db, session_id)` — Reads first assistant message, calls `AIFunctionsService` to generate concise title; updates session
 
-### `MessageService` (`backend/app/services/message_service.py`)
+### `MessageService` (`backend/app/services/sessions/message_service.py`)
 
 **Message creation:**
 - `create_message(db, session_id, role, content, ...)` — Creates `SessionMessage` with auto-incremented sequence, associates file IDs
@@ -248,7 +248,7 @@ After streaming completes, assistant events containing `<webapp_action>` tags ar
 - `get_auth_headers(environment)` — Builds `Authorization: Bearer` headers for agent-env requests
 - `forward_interrupt_to_environment(env_url, auth_headers, external_session_id)` — POST to `/chat/interrupt/{id}`
 
-### `ActiveStreamingManager` (`backend/app/services/active_streaming_manager.py`)
+### `ActiveStreamingManager` (`backend/app/services/sessions/active_streaming_manager.py`)
 
 Singleton in-memory store tracking live backend-to-agent-env streams.
 

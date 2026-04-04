@@ -4,11 +4,11 @@
 
 ### Backend
 
-- **Model**: `backend/app/models/activity.py` - `Activity` (table), `ActivityCreate`, `ActivityUpdate`, `ActivityPublic`, `ActivityPublicExtended`, `ActivitiesPublic`, `ActivitiesPublicExtended`, `ActivityStats`
-- **Service**: `backend/app/services/activity_service.py` - `ActivityService` (CRUD + event handlers)
+- **Model**: `backend/app/models/sessions/activity.py` - `Activity` (table), `ActivityCreate`, `ActivityUpdate`, `ActivityPublic`, `ActivityPublicExtended`, `ActivitiesPublic`, `ActivitiesPublicExtended`, `ActivityStats`
+- **Service**: `backend/app/services/events/activity_service.py` - `ActivityService` (CRUD + event handlers)
 - **Routes**: `backend/app/api/routes/activities.py` - REST API endpoints
 - **Event Registration**: `backend/app/main.py` - Registers activity event handlers on startup
-- **Event Types**: `backend/app/models/event.py` - `ACTIVITY_CREATED`, `ACTIVITY_UPDATED`, `ACTIVITY_DELETED`, `STREAM_STARTED`, `STREAM_COMPLETED`, `STREAM_ERROR`, `STREAM_INTERRUPTED`, `SESSION_STATE_UPDATED`, `TASK_CREATED`, `TASK_STATUS_UPDATED`
+- **Event Types**: `backend/app/models/events/event.py` - `ACTIVITY_CREATED`, `ACTIVITY_UPDATED`, `ACTIVITY_DELETED`, `STREAM_STARTED`, `STREAM_COMPLETED`, `STREAM_ERROR`, `STREAM_INTERRUPTED`, `SESSION_STATE_UPDATED`, `TASK_CREATED`, `TASK_STATUS_UPDATED`
 
 ### Frontend
 
@@ -57,7 +57,7 @@
 
 ## Services & Key Methods
 
-### `backend/app/services/activity_service.py` - `ActivityService`
+### `backend/app/services/events/activity_service.py` - `ActivityService`
 
 **CRUD Methods:**
 - `create_activity()` - Creates activity, auto-inherits `user_workspace_id` from linked session/task/agent
@@ -130,9 +130,9 @@
 
 ## Related Context
 
-- Session model with `interaction_status` and `result_state`: `backend/app/models/session.py`
-- Message model with `tool_questions_status`: `backend/app/models/session.py` (SessionMessage)
-- Message service emitting streaming events: `backend/app/services/message_service.py`
-- Event bus system: `backend/app/services/event_service.py`
-- User connection tracking: `backend/app/services/event_service.py:is_user_connected()`
-- Active streaming manager: `backend/app/services/active_streaming_manager.py`
+- Session model with `interaction_status` and `result_state`: `backend/app/models/sessions/session.py`
+- Message model with `tool_questions_status`: `backend/app/models/sessions/session.py` (SessionMessage)
+- Message service emitting streaming events: `backend/app/services/sessions/message_service.py`
+- Event bus system: `backend/app/services/events/event_service.py`
+- User connection tracking: `backend/app/services/events/event_service.py:is_user_connected()`
+- Active streaming manager: `backend/app/services/sessions/active_streaming_manager.py`

@@ -3,10 +3,10 @@
 ## File Locations
 
 **Backend**
-- `backend/app/models/llm_plugin.py` — `LLMPluginMarketplace`, `LLMPluginMarketplacePlugin`, and all related schemas
+- `backend/app/models/plugins/llm_plugin.py` — `LLMPluginMarketplace`, `LLMPluginMarketplacePlugin`, and all related schemas
 - `backend/app/api/routes/llm_plugins.py` — Marketplace CRUD + sync endpoints
-- `backend/app/services/llm_plugin_service.py` — `create_marketplace()`, `sync_marketplace()`, `_parse_claude_marketplace()`, `_upsert_plugins()`, `discover_plugins()`
-- `backend/app/services/git_operations.py` — Shared git clone/pull utilities used during sync
+- `backend/app/services/plugins/llm_plugin_service.py` — `create_marketplace()`, `sync_marketplace()`, `_parse_claude_marketplace()`, `_upsert_plugins()`, `discover_plugins()`
+- `backend/app/services/knowledge/git_operations.py` — Shared git clone/pull utilities used during sync
 
 **Frontend**
 - `frontend/src/routes/_layout/admin/marketplaces.tsx` — Marketplace list page
@@ -20,7 +20,7 @@
 
 ## Database Schema
 
-**Table: `llmpluginmarketplace`** (`LLMPluginMarketplace`, `backend/app/models/llm_plugin.py:52`)
+**Table: `llmpluginmarketplace`** (`LLMPluginMarketplace`, `backend/app/models/plugins/llm_plugin.py:52`)
 
 Defined via `LLMPluginMarketplaceBase` (line 34):
 
@@ -80,7 +80,7 @@ All in `backend/app/api/routes/llm_plugins.py`, admin-only (superuser guard):
 
 ## Services & Key Methods
 
-**`backend/app/services/llm_plugin_service.py` — `LLMPluginService`**
+**`backend/app/services/plugins/llm_plugin_service.py` — `LLMPluginService`**
 
 Marketplace lifecycle:
 - `create_marketplace()` — Creates `LLMPluginMarketplace` record, immediately calls `sync_marketplace()` in background; generates temp name from URL until repo metadata is read

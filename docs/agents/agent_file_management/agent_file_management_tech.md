@@ -7,13 +7,13 @@
 - **Routes:** `backend/app/api/routes/files.py` - File upload, delete, download endpoints
 - **Routes:** `backend/app/api/routes/workspace.py` - File viewing endpoint (stream file content)
 - **Routes:** `backend/app/api/routes/messages.py` - Message send flow with file attachment
-- **Models:** `backend/app/models/file_upload.py` - FileUpload, MessageFile, FileUploadPublic, FileUploadCreate
-- **Models:** `backend/app/models/session.py` - MessageCreate (file_ids field), MessagePublic (files field)
-- **Services:** `backend/app/services/file_service.py` - File upload, transfer, permissions, quota
-- **Services:** `backend/app/services/file_storage_service.py` - Disk storage, streaming, deletion
-- **Services:** `backend/app/services/garbage_collection_service.py` - Soft-delete cleanup
-- **Services:** `backend/app/services/file_cleanup_scheduler.py` - Daily cleanup scheduler (APScheduler)
-- **Adapter:** `backend/app/services/adapters/docker_adapter.py` - Agent-env file transfer
+- **Models:** `backend/app/models/files/file_upload.py` - FileUpload, MessageFile, FileUploadPublic, FileUploadCreate
+- **Models:** `backend/app/models/sessions/session.py` - MessageCreate (file_ids field), MessagePublic (files field)
+- **Services:** `backend/app/services/files/file_service.py` - File upload, transfer, permissions, quota
+- **Services:** `backend/app/services/files/file_storage_service.py` - Disk storage, streaming, deletion
+- **Services:** `backend/app/services/files/garbage_collection_service.py` - Soft-delete cleanup
+- **Services:** `backend/app/services/files/file_cleanup_scheduler.py` - Daily cleanup scheduler (APScheduler)
+- **Adapter:** `backend/app/services/environments/adapters/docker_adapter.py` - Agent-env file transfer
 - **Config:** `backend/app/core/config.py` - Upload settings (size limits, quotas, MIME types)
 - **Migration:** `backend/app/alembic/versions/8510f306b385_add_file_uploads_table.py`
 - **App startup:** `backend/app/main.py` - Registers file cleanup scheduler
@@ -54,13 +54,13 @@
 - `file_uploads` - File metadata: filename, path, size, mime_type, status (temporary/attached/marked_for_deletion), timestamps, user_id
 - `message_files` - Junction table linking messages to files; stores `agent_env_path` after transfer
 
-**Models:** `backend/app/models/file_upload.py`
+**Models:** `backend/app/models/files/file_upload.py`
 - `FileUpload` (table=True) - Database table model
 - `FileUploadPublic` - API response schema
 - `FileUploadCreate` - API input schema
 - `MessageFile` (table=True) - Junction table model
 
-**Updated models:** `backend/app/models/session.py`
+**Updated models:** `backend/app/models/sessions/session.py`
 - `MessageCreate` - Added `file_ids: list[uuid.UUID] | None`
 - `MessagePublic` - Added `files: list[FilePublic]`
 
@@ -82,7 +82,7 @@
 
 ## Services & Key Methods
 
-### FileService - `backend/app/services/file_service.py`
+### FileService - `backend/app/services/files/file_service.py`
 
 - `create_file_upload()` - Store file to disk, create DB record
 - `upload_files_to_agent_env()` - Transfer files to Docker container via adapter
@@ -91,7 +91,7 @@
 - `check_download_permission()` - Auth logic (owner or session participant)
 - `check_user_storage_quota()` - Enforce 10GB limit
 
-### FileStorageService - `backend/app/services/file_storage_service.py`
+### FileStorageService - `backend/app/services/files/file_storage_service.py`
 
 - `store_file()` - Save to `backend/data/uploads/{user_id}/{file_id}/`
 - `get_file_path()` - Resolve file path from DB record
@@ -99,16 +99,16 @@
 - `delete_file()` - Remove from disk
 - `get_user_storage_usage()` - Calculate user's total storage
 
-### GarbageCollectionService - `backend/app/services/garbage_collection_service.py`
+### GarbageCollectionService - `backend/app/services/files/garbage_collection_service.py`
 
 - `collect_garbage()` - Delete files marked for deletion >24h ago
 
-### FileCleanupScheduler - `backend/app/services/file_cleanup_scheduler.py`
+### FileCleanupScheduler - `backend/app/services/files/file_cleanup_scheduler.py`
 
 - Runs daily at 3 AM via APScheduler
 - Triggers garbage collection
 
-### DockerAdapter - `backend/app/services/adapters/docker_adapter.py`
+### DockerAdapter - `backend/app/services/environments/adapters/docker_adapter.py`
 
 - `upload_file_to_agent_env()` - Async HTTP POST with file content to agent-env `/files/upload`
 

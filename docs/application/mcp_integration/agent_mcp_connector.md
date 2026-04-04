@@ -92,7 +92,7 @@ MCP Client (Claude Desktop / Cursor)
 | `max_clients` | INTEGER | Maximum DCR registrations (default 10) |
 | `created_at`, `updated_at` | DATETIME | Timestamps |
 
-**Models:** `backend/app/models/mcp_connector.py`
+**Models:** `backend/app/models/mcp/mcp_connector.py`
 - `MCPConnector` (table model)
 - `MCPConnectorCreate`, `MCPConnectorUpdate` (input schemas)
 - `MCPConnectorPublic`, `MCPConnectorsPublic` (response schemas)
@@ -113,7 +113,7 @@ MCP Client (Claude Desktop / Cursor)
 | `connector_id` | UUID, FK → mcp_connector.id (CASCADE) | Parent connector |
 | `created_at` | DATETIME | Registration timestamp |
 
-**Models:** `backend/app/models/mcp_oauth_client.py`
+**Models:** `backend/app/models/mcp/mcp_oauth_client.py`
 - `MCPOAuthClient` (table model)
 - `MCPOAuthClientPublic` (response schema)
 
@@ -150,7 +150,7 @@ MCP Client (Claude Desktop / Cursor)
 | `used` | BOOLEAN | Whether request was approved |
 | `created_at` | DATETIME | Timestamp |
 
-**Models:** `backend/app/models/mcp_auth_code.py`
+**Models:** `backend/app/models/mcp/mcp_auth_code.py`
 - `MCPAuthCode` (table model)
 - `MCPAuthRequest` (table model)
 
@@ -170,7 +170,7 @@ MCP Client (Claude Desktop / Cursor)
 | `revoked` | BOOLEAN | Revocation flag |
 | `created_at` | DATETIME | Timestamp |
 
-**Models:** `backend/app/models/mcp_token.py`
+**Models:** `backend/app/models/mcp/mcp_token.py`
 - `MCPToken` (table model)
 
 ### Table: `mcp_session_meta`
@@ -187,7 +187,7 @@ Tracks the OAuth-authenticated user's identity for MCP sessions. When an MCP con
 | `oauth_client_id` | VARCHAR, nullable | Audit trail |
 | `created_at` | DATETIME | Timestamp |
 
-**Models:** `backend/app/models/mcp_session_meta.py`
+**Models:** `backend/app/models/mcp/mcp_session_meta.py`
 - `MCPSessionMeta` (table model)
 - `MCPSessionMetaPublic` (response schema)
 
@@ -195,7 +195,7 @@ Tracks the OAuth-authenticated user's identity for MCP sessions. When an MCP con
 
 ### Session Table Updates
 
-**File:** `backend/app/models/session.py:46-50`
+**File:** `backend/app/models/sessions/session.py:46-50`
 
 Two new nullable fields added to the `session` table:
 - `mcp_connector_id` (UUID, FK → mcp_connector.id, SET NULL on delete)
@@ -230,7 +230,7 @@ Two new nullable fields added to the `session` table:
 
 **Router Registration:** `backend/app/api/main.py` (tag: `mcp-consent`)
 
-**Service Layer:** Route handlers delegate to `MCPConsentService` (`backend/app/services/mcp_consent_service.py`). Domain exceptions are converted to HTTP responses via `_handle_mcp_error()`.
+**Service Layer:** Route handlers delegate to `MCPConsentService` (`backend/app/services/mcp/mcp_consent_service.py`). Domain exceptions are converted to HTTP responses via `_handle_mcp_error()`.
 
 **Consent Info Response (`ConsentInfo`):** agent name, connector name/mode, client name, scopes, expiry.
 
@@ -245,7 +245,7 @@ Two new nullable fields added to the `session` table:
 
 **File:** `backend/app/mcp/oauth_routes.py`
 
-Mounted at `/mcp/oauth` in `backend/app/main.py`. Route handlers are thin wrappers that delegate all business logic to `MCPOAuthService` (`backend/app/services/mcp_oauth_service.py`) and convert domain exceptions to HTTP responses.
+Mounted at `/mcp/oauth` in `backend/app/main.py`. Route handlers are thin wrappers that delegate all business logic to `MCPOAuthService` (`backend/app/services/mcp/mcp_oauth_service.py`) and convert domain exceptions to HTTP responses.
 
 | Endpoint | Purpose | Spec |
 |----------|---------|------|
@@ -302,7 +302,7 @@ Mounted at `/mcp/oauth` in `backend/app/main.py`. Route handlers are thin wrappe
 
 ### Connector Service
 
-**File:** `backend/app/services/mcp_connector_service.py`
+**File:** `backend/app/services/mcp/mcp_connector_service.py`
 
 **Class:** `MCPConnectorService` (static methods)
 
@@ -439,9 +439,9 @@ During the streaming loop, the handler sends MCP notifications to keep the clien
 - All notification calls are wrapped in try/except — failures are logged at debug level and never affect the tool response
 
 **Service Layer:**
-- `backend/app/services/mcp_connector_service.py` — `MCPConnectorService.resolve_connector_context()` loads and validates connector, agent, environment for tool requests
-- `backend/app/services/mcp_consent_service.py` — `MCPConsentService` handles OAuth consent flow (get_consent_details, approve_consent)
-- `backend/app/services/mcp_oauth_service.py` — `MCPOAuthService` handles OAuth 2.1 logic (register_client, create_authorization, exchange_authorization_code, refresh_access_token, revoke_token)
+- `backend/app/services/mcp/mcp_connector_service.py` — `MCPConnectorService.resolve_connector_context()` loads and validates connector, agent, environment for tool requests
+- `backend/app/services/mcp/mcp_consent_service.py` — `MCPConsentService` handles OAuth consent flow (get_consent_details, approve_consent)
+- `backend/app/services/mcp/mcp_oauth_service.py` — `MCPOAuthService` handles OAuth 2.1 logic (register_client, create_authorization, exchange_authorization_code, refresh_access_token, revoke_token)
 
 **Authenticated User Tracking (MCPSessionMeta):**
 - When `authenticated_user_id` is provided, `SessionService.get_or_create_mcp_session()` creates an `MCPSessionMeta` record after creating the session
@@ -493,7 +493,7 @@ Exposes agent workspace files as MCP resources so clients can browse and read th
 
 Exposes agent-defined example prompts as MCP prompts so clients can discover them via `prompts/list` and `prompts/get`.
 
-**Agent model field:** `example_prompts: list[str]` on `Agent` (JSON column, `backend/app/models/agent.py`). Each line follows `slug: prompt text` format.
+**Agent model field:** `example_prompts: list[str]` on `Agent` (JSON column, `backend/app/models/agents/agent.py`). Each line follows `slug: prompt text` format.
 
 **`register_mcp_prompts(server)`:**
 1. Patches the low-level `server._mcp_server` handlers for `prompts/list` and `prompts/get`
@@ -689,12 +689,12 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 
 ### Backend — Models
 
-- `backend/app/models/mcp_connector.py` — MCPConnector model and schemas
-- `backend/app/models/mcp_oauth_client.py` — MCPOAuthClient model
-- `backend/app/models/mcp_auth_code.py` — MCPAuthCode + MCPAuthRequest models
-- `backend/app/models/mcp_token.py` — MCPToken model
-- `backend/app/models/mcp_session_meta.py` — MCPSessionMeta model (authenticated user tracking)
-- `backend/app/models/session.py:46-50` — MCP fields on session table
+- `backend/app/models/mcp/mcp_connector.py` — MCPConnector model and schemas
+- `backend/app/models/mcp/mcp_oauth_client.py` — MCPOAuthClient model
+- `backend/app/models/mcp/mcp_auth_code.py` — MCPAuthCode + MCPAuthRequest models
+- `backend/app/models/mcp/mcp_token.py` — MCPToken model
+- `backend/app/models/mcp/mcp_session_meta.py` — MCPSessionMeta model (authenticated user tracking)
+- `backend/app/models/sessions/session.py:46-50` — MCP fields on session table
 - `backend/app/models/__init__.py` — Exports added
 
 ### Backend — Routes
@@ -707,10 +707,10 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 
 ### Backend — Services
 
-- `backend/app/services/mcp_errors.py` — MCPError exception hierarchy (ConnectorNotFoundError, ConnectorInactiveError, MCPPermissionDeniedError, AgentNotAvailableError, EnvironmentNotFoundError, AuthRequestNotFoundError/Expired/Used, InvalidClientError, InvalidGrantError, MaxClientsReachedError)
-- `backend/app/services/mcp_connector_service.py` — Connector CRUD logic; raises domain exceptions from `mcp_errors.py`
-- `backend/app/services/mcp_consent_service.py` — OAuth consent flow (get_consent_details, approve_consent, _validate_auth_request)
-- `backend/app/services/mcp_oauth_service.py` — OAuth 2.1 logic (register_client, create_authorization, exchange_authorization_code, refresh_access_token, revoke_token) plus helpers (get_as_metadata_dict, extract_connector_id_from_resource)
+- `backend/app/services/mcp/mcp_errors.py` — MCPError exception hierarchy (ConnectorNotFoundError, ConnectorInactiveError, MCPPermissionDeniedError, AgentNotAvailableError, EnvironmentNotFoundError, AuthRequestNotFoundError/Expired/Used, InvalidClientError, InvalidGrantError, MaxClientsReachedError)
+- `backend/app/services/mcp/mcp_connector_service.py` — Connector CRUD logic; raises domain exceptions from `mcp_errors.py`
+- `backend/app/services/mcp/mcp_consent_service.py` — OAuth consent flow (get_consent_details, approve_consent, _validate_auth_request)
+- `backend/app/services/mcp/mcp_oauth_service.py` — OAuth 2.1 logic (register_client, create_authorization, exchange_authorization_code, refresh_access_token, revoke_token) plus helpers (get_as_metadata_dict, extract_connector_id_from_resource)
 
 ### Backend — MCP Infrastructure
 

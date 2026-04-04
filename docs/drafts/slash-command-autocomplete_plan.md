@@ -67,7 +67,7 @@ This feature is read-only on the backend. No new tables or Alembic migrations ar
 
 ### New Pydantic Models (Backend — no `table=True`)
 
-**Location**: `backend/app/models/session.py` (add alongside existing session models) or inline in `messages.py` if the models are small and single-use. Prefer `session.py` for discoverability.
+**Location**: `backend/app/models/sessions/session.py` (add alongside existing session models) or inline in `messages.py` if the models are small and single-use. Prefer `session.py` for discoverability.
 
 **`SessionCommandPublic`** — represents a single command in the list response:
 ```
@@ -141,7 +141,7 @@ Add `list_handlers() -> list[CommandHandler]` classmethod:
 - Keeps the private `_handlers` dict encapsulated
 - Used by the route rather than accessing `_handlers` directly
 
-**`SessionCommandPublic` and `SessionCommandsPublic`** added to `backend/app/models/session.py` (or a new `backend/app/models/command.py` if preferred for separation — `session.py` is simpler since no new file is needed).
+**`SessionCommandPublic` and `SessionCommandsPublic`** added to `backend/app/models/sessions/session.py` (or a new `backend/app/models/command.py` if preferred for separation — `session.py` is simpler since no new file is needed).
 
 **Availability check for `/rebuild-env`**:
 
@@ -375,7 +375,7 @@ source ./backend/.venv/bin/activate && make gen-client
 
 ### Backend Tasks
 
-- [ ] Add `SessionCommandPublic` and `SessionCommandsPublic` Pydantic models to `backend/app/models/session.py` (no `table=True`)
+- [ ] Add `SessionCommandPublic` and `SessionCommandsPublic` Pydantic models to `backend/app/models/sessions/session.py` (no `table=True`)
 - [ ] Export new models from `backend/app/models/__init__.py` (add to the existing `__all__` or import block)
 - [ ] Add `list_handlers() -> list[CommandHandler]` classmethod to `CommandService` in `backend/app/services/command_service.py`
 - [ ] Add `GET /{session_id}/commands` endpoint to `backend/app/api/routes/messages.py`:

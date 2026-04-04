@@ -11,9 +11,9 @@
 
 ### Backend
 - `backend/app/api/routes/users.py` — `get_ai_credentials_status()` and `update_ai_credentials()` endpoints
-- `backend/app/services/ai_credentials_service.py` — Credential CRUD and default management
-- `backend/app/models/ai_credential.py` — `AICredential` model and schemas
-- `backend/app/models/user.py` — `UserPublicWithAICredentials` schema, `has_anthropic_api_key` flag
+- `backend/app/services/credentials/ai_credentials_service.py` — Credential CRUD and default management
+- `backend/app/models/credentials/ai_credential.py` — `AICredential` model and schemas
+- `backend/app/models/users/user.py` — `UserPublicWithAICredentials` schema, `has_anthropic_api_key` flag
 
 ## API Endpoints
 

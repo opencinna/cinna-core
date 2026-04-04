@@ -4,8 +4,8 @@
 
 ### Backend
 
-- **Model**: `backend/app/models/user_workspace.py` - `UserWorkspace`, `UserWorkspaceBase`, `UserWorkspaceCreate`, `UserWorkspaceUpdate`, `UserWorkspacePublic`, `UserWorkspacesPublic`
-- **Service**: `backend/app/services/user_workspace_service.py` - `UserWorkspaceService`
+- **Model**: `backend/app/models/users/user_workspace.py` - `UserWorkspace`, `UserWorkspaceBase`, `UserWorkspaceCreate`, `UserWorkspaceUpdate`, `UserWorkspacePublic`, `UserWorkspacesPublic`
+- **Service**: `backend/app/services/users/user_workspace_service.py` - `UserWorkspaceService`
 - **Routes**: `backend/app/api/routes/user_workspaces.py` - CRUD endpoints
 - **Migrations**:
   - `backend/app/alembic/versions/3a154fd039f5_add_user_workspaces_support.py` - initial table + FK columns on 4 tables
@@ -21,12 +21,12 @@
 
 ### Modified Entity Models (workspace FK column)
 
-- `backend/app/models/agent.py` - `user_workspace_id` on `AgentBase`, `Agent`, `AgentPublic`, `AgentCreate`
-- `backend/app/models/credential.py` - `user_workspace_id` on `CredentialCreate`, `Credential`, `CredentialPublic`
-- `backend/app/models/session.py` - `user_workspace_id` on `SessionBase`, `Session`, `SessionPublic`
-- `backend/app/models/activity.py` - `user_workspace_id` on `ActivityBase`, `ActivityPublic`
-- `backend/app/models/input_task.py` - `user_workspace_id` on `InputTaskBase`, `InputTask`, `InputTaskPublic`
-- `backend/app/models/knowledge.py` - `user_workspace_id` on `KnowledgeSource` (non-nullable, with unique index)
+- `backend/app/models/agents/agent.py` - `user_workspace_id` on `AgentBase`, `Agent`, `AgentPublic`, `AgentCreate`
+- `backend/app/models/credentials/credential.py` - `user_workspace_id` on `CredentialCreate`, `Credential`, `CredentialPublic`
+- `backend/app/models/sessions/session.py` - `user_workspace_id` on `SessionBase`, `Session`, `SessionPublic`
+- `backend/app/models/sessions/activity.py` - `user_workspace_id` on `ActivityBase`, `ActivityPublic`
+- `backend/app/models/tasks/input_task.py` - `user_workspace_id` on `InputTaskBase`, `InputTask`, `InputTaskPublic`
+- `backend/app/models/knowledge/knowledge.py` - `user_workspace_id` on `KnowledgeSource` (non-nullable, with unique index)
 
 ### Routes with Workspace Filtering
 
@@ -95,7 +95,7 @@ All entity list endpoints accept optional `user_workspace_id` query parameter:
 
 ## Services & Key Methods
 
-`backend/app/services/user_workspace_service.py` - `UserWorkspaceService`:
+`backend/app/services/users/user_workspace_service.py` - `UserWorkspaceService`:
 - `create_workspace()` - validates and creates workspace for user
 - `get_workspace()` - fetch by ID
 - `get_user_workspaces()` - paginated list for user

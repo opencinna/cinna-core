@@ -3,14 +3,14 @@
 ## File Locations
 
 ### Backend - Models
-- `backend/app/models/credential.py` - `GOOGLE_SERVICE_ACCOUNT` enum value in `CredentialType`
-- `backend/app/models/credential.py` - `GoogleServiceAccountData` Pydantic validation model
+- `backend/app/models/credentials/credential.py` - `GOOGLE_SERVICE_ACCOUNT` enum value in `CredentialType`
+- `backend/app/models/credentials/credential.py` - `GoogleServiceAccountData` Pydantic validation model
 
 ### Backend - Services
-- `backend/app/services/credentials_service.py` - Validation, processing, environment preparation for SA credentials
-- `backend/app/services/credentials_service.py` - `SENSITIVE_FIELDS["google_service_account"]`: `["private_key", "private_key_id"]`
-- `backend/app/services/credentials_service.py` - `AGENT_ENV_ALLOWED_FIELDS["google_service_account"]`: `["file_path", "project_id", "client_email"]`
-- `backend/app/services/credentials_service.py` - `REQUIRED_FIELDS["google_service_account"]`: `["type", "project_id", "private_key", "client_email"]`
+- `backend/app/services/credentials/credentials_service.py` - Validation, processing, environment preparation for SA credentials
+- `backend/app/services/credentials/credentials_service.py` - `SENSITIVE_FIELDS["google_service_account"]`: `["private_key", "private_key_id"]`
+- `backend/app/services/credentials/credentials_service.py` - `AGENT_ENV_ALLOWED_FIELDS["google_service_account"]`: `["file_path", "project_id", "client_email"]`
+- `backend/app/services/credentials/credentials_service.py` - `REQUIRED_FIELDS["google_service_account"]`: `["type", "project_id", "private_key", "client_email"]`
 
 ### Backend - Routes
 - `backend/app/api/routes/credentials.py` - Server-side SA JSON validation on `POST /credentials/` and `PUT /credentials/{id}`
@@ -34,7 +34,7 @@
 
 ## Services & Key Methods
 
-### CredentialsService (`backend/app/services/credentials_service.py`)
+### CredentialsService (`backend/app/services/credentials/credentials_service.py`)
 
 - `validate_service_account_json()` - Validates JSON structure: `type` must be `"service_account"`, checks required fields (`project_id`, `private_key_id`, `private_key`, `client_email`)
 - `_process_service_account_credential()` - Converts full SA JSON into `{file_path, project_id, client_email}` reference for `credentials.json`; private key never appears in the reference

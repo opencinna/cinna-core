@@ -4,9 +4,9 @@
 
 ### Backend - Models
 
-- `backend/app/models/agent.py` - `webapp_enabled` field on `Agent` (table model), `AgentUpdate`, and `AgentPublic`
-- `backend/app/models/agent_webapp_share.py` - `AgentWebappShare` table model + schema hierarchy (Base, Create, Update, Public, Created, TokenPayload)
-- `backend/app/models/agent_webapp_interface_config.py` - `AgentWebappInterfaceConfig` table model (one-to-one with agent)
+- `backend/app/models/agents/agent.py` - `webapp_enabled` field on `Agent` (table model), `AgentUpdate`, and `AgentPublic`
+- `backend/app/models/webapp/agent_webapp_share.py` - `AgentWebappShare` table model + schema hierarchy (Base, Create, Update, Public, Created, TokenPayload)
+- `backend/app/models/webapp/agent_webapp_interface_config.py` - `AgentWebappInterfaceConfig` table model (one-to-one with agent)
 - `backend/app/models/__init__.py` - re-exports all webapp share and interface config models
 
 ### Backend - Routes
@@ -19,11 +19,11 @@
 
 ### Backend - Services
 
-- `backend/app/services/webapp_service.py` - `WebappService` with agent+environment resolution, activity tracking, public status polling logic; exception hierarchy (`WebappError`, `WebappNotFoundError`, `WebappPermissionError`, `WebappNotAvailableError`)
-- `backend/app/services/agent_webapp_share_service.py` - `AgentWebappShareService` with CRUD, token validation, security code verification, JWT issuance. Exception hierarchy: `WebappShareError` (base), `ShareAgentNotFoundError`, `ShareAgentNotOwnedError`, `ShareWebappDisabledError`, `ShareNotFoundError`, `ShareExpiredError`, `SecurityCodeError`.
-- `backend/app/services/agent_webapp_interface_config_service.py` - `AgentWebappInterfaceConfigService` with get-or-create and partial update
-- `backend/app/services/adapters/docker_adapter.py` - `get_webapp_status()`, `get_webapp_file()`, `call_webapp_api()` methods
-- `backend/app/services/environment_lifecycle.py` - `webapp` added to `dirs_to_copy` in `copy_workspace_between_environments()`
+- `backend/app/services/webapp/webapp_service.py` - `WebappService` with agent+environment resolution, activity tracking, public status polling logic; exception hierarchy (`WebappError`, `WebappNotFoundError`, `WebappPermissionError`, `WebappNotAvailableError`)
+- `backend/app/services/webapp/agent_webapp_share_service.py` - `AgentWebappShareService` with CRUD, token validation, security code verification, JWT issuance. Exception hierarchy: `WebappShareError` (base), `ShareAgentNotFoundError`, `ShareAgentNotOwnedError`, `ShareWebappDisabledError`, `ShareNotFoundError`, `ShareExpiredError`, `SecurityCodeError`.
+- `backend/app/services/webapp/agent_webapp_interface_config_service.py` - `AgentWebappInterfaceConfigService` with get-or-create and partial update
+- `backend/app/services/environments/adapters/docker_adapter.py` - `get_webapp_status()`, `get_webapp_file()`, `call_webapp_api()` methods
+- `backend/app/services/environments/environment_lifecycle.py` - `webapp` added to `dirs_to_copy` in `copy_workspace_between_environments()`
 
 ### Backend - Agent-Env Core (inside container)
 
@@ -171,13 +171,13 @@ All require webapp-viewer JWT. See [Webapp Chat Tech](webapp_chat_tech.md) for d
 
 ## Services & Key Methods
 
-### `WebappService` (`backend/app/services/webapp_service.py`)
+### `WebappService` (`backend/app/services/webapp/webapp_service.py`)
 
 - `resolve_agent_environment()` - Resolves agent + active running environment with ownership check; raises domain exceptions for not found, permission denied, webapp disabled, env not running
 - `update_last_activity()` - Updates `last_activity_at` on environment to prevent suspension from webapp traffic
 - `get_public_status()` - Returns environment readiness status for loading page polling; handles auto-activation of suspended environments
 
-### `AgentWebappShareService` (`backend/app/services/agent_webapp_share_service.py`)
+### `AgentWebappShareService` (`backend/app/services/webapp/agent_webapp_share_service.py`)
 
 - `_verify_agent_ownership()` - Reusable agent lookup + ownership check helper; raises `ShareAgentNotFoundError` or `ShareAgentNotOwnedError` (404 to avoid leaking existence)
 - `create_webapp_share()` - Verifies ownership + webapp enabled, generates token (secrets.token_urlsafe), hashes it (SHA256), optionally generates and encrypts security code (Fernet), creates DB record
@@ -191,7 +191,7 @@ All require webapp-viewer JWT. See [Webapp Chat Tech](webapp_chat_tech.md) for d
 - `_create_webapp_jwt()` - Creates JWT with role "webapp-viewer", 24h max lifetime
 - Exception hierarchy: `WebappShareError` (base with `message` + `status_code`), `ShareAgentNotFoundError` (404), `ShareAgentNotOwnedError` (404), `ShareWebappDisabledError` (400), `ShareNotFoundError` (404), `ShareExpiredError` (410), `SecurityCodeError` (403)
 
-### `AgentWebappInterfaceConfigService` (`backend/app/services/agent_webapp_interface_config_service.py`)
+### `AgentWebappInterfaceConfigService` (`backend/app/services/webapp/agent_webapp_interface_config_service.py`)
 
 - `get_or_create()` - Returns existing config for the agent, or creates one with default values (show_header=true, chat_mode=null) if none exists
 - `update()` - Partial update of config fields; only fields provided in the request body are modified (uses `model_dump(exclude_unset=True)`)
@@ -201,7 +201,7 @@ All require webapp-viewer JWT. See [Webapp Chat Tech](webapp_chat_tech.md) for d
 - `_get_or_create_config()` - Internal helper that gets or creates config record (used by both `get_or_create` and `update`)
 - Exception hierarchy: `InterfaceConfigError` (base), `AgentNotFoundError`, `AgentPermissionError`
 
-### Docker Adapter (`backend/app/services/adapters/docker_adapter.py`)
+### Docker Adapter (`backend/app/services/environments/adapters/docker_adapter.py`)
 
 - `get_webapp_status()` - `GET {base_url}/webapp/status`
 - `get_webapp_file(path, request_headers)` - `GET {base_url}/webapp/{path}` with cache header pass-through

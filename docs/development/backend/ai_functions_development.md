@@ -8,7 +8,7 @@ AI Functions provide simple, fast LLM-powered utilities for text generation task
 
 ### Key Components
 
-- **`backend/app/services/ai_functions_service.py`** - Service layer that encapsulates AI function calls
+- **`backend/app/services/ai_functions/ai_functions_service.py`** - Service layer that encapsulates AI function calls
 - **`backend/app/agents/`** - Individual agent implementations for specific tasks
 - **`backend/app/agents/providers/`** - Provider implementations for different LLM backends
 - **`backend/app/agents/provider_manager.py`** - Cascade provider selection logic
@@ -41,7 +41,7 @@ AI_FUNCTIONS_PROVIDERS=gemini
    - Uses prompt templates from `backend/app/agents/prompts/`:
      - `entrypoint_generator_prompt.md` - Creates natural, conversational trigger messages
      - `workflow_generator_prompt.md` - Creates simple draft workflow prompts (2-4 sentences)
-   - Used in: `backend/app/services/agent_service.py:132-156`
+   - Used in: `backend/app/services/agents/agent_service.py:132-156`
    - **Note**: Generated prompts are **initial drafts** that building agents will refine later
 
 3. **SQL Query Generator** (`backend/app/agents/sql_generator.py`)
@@ -79,7 +79,7 @@ AI_FUNCTIONS_PROVIDERS=gemini
    - **Auto-triggered**: Runs in background whenever workflow_prompt is updated
    - Takes context: workflow_prompt, optional agent_name
    - Returns: Plain text description (1-2 sentences)
-   - Used in: `backend/app/services/agent_service.py` (via `handle_workflow_prompt_change`)
+   - Used in: `backend/app/services/agents/agent_service.py` (via `handle_workflow_prompt_change`)
    - **Unified handling**: Called from both API updates and agent-env prompt syncs
    - **Background execution**: Runs in a separate thread to avoid blocking requests
 
@@ -133,7 +133,7 @@ __all__ = ["...", "my_function"]
 
 ### Step 3: Add Service Method
 
-Add method to `AIFunctionsService` in `backend/app/services/ai_functions_service.py`:
+Add method to `AIFunctionsService` in `backend/app/services/ai_functions/ai_functions_service.py`:
 
 ```python
 @staticmethod
@@ -403,9 +403,9 @@ See existing implementations:
 - Task description refinement: `backend/app/agents/task_refiner.py`
 - Auto-triggered generation: `backend/app/agents/description_generator.py`
 - Prompt templates: `backend/app/agents/prompts/`
-- Service integration: `backend/app/services/ai_functions_service.py`
+- Service integration: `backend/app/services/ai_functions/ai_functions_service.py`
 - Usage in routes: `backend/app/api/routes/messages.py:155-175`, `backend/app/api/routes/workspace.py`, `backend/app/api/routes/utils.py`, `backend/app/api/routes/input_tasks.py`
-- Usage in services: `backend/app/services/agent_service.py` (see `handle_workflow_prompt_change` and `update_agent`)
+- Usage in services: `backend/app/services/agents/agent_service.py` (see `handle_workflow_prompt_change` and `update_agent`)
 
 ## Future Enhancements
 

@@ -141,7 +141,7 @@ Clone created → Uses owner's shared or recipient's own credentials
 - **User Profile** - Default credentials auto-sync to `ai_credentials_encrypted` for backward compatibility
 - **Anthropic Dual Types** - Special handling for API Keys vs OAuth Tokens. See [Anthropic Credential Types](anthropic_credential_types.md)
 - **Affected Environments** - After credential updates, automatic detection and batch rebuild of affected environments. See [Affected Environments Widget](affected_environments_widget.md)
-- **Environment Lifecycle** - Credential type detection determines which environment variables are set. See `backend/app/services/environment_lifecycle.py`
+- **Environment Lifecycle** - Credential type detection determines which environment variables are set. See `backend/app/services/environments/environment_lifecycle.py`
 
 ---
 

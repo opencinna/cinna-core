@@ -4,8 +4,8 @@
 
 ### Backend - Models
 
-- `backend/app/models/agent_guest_share.py` - `AgentGuestShare`, `GuestShareGrant`, `AgentGuestShareBase`, `AgentGuestShareCreate`, `AgentGuestShareUpdate`, `AgentGuestSharePublic`, `AgentGuestShareCreated`, `AgentGuestSharesPublic`, `GuestShareTokenPayload`
-- `backend/app/models/session.py` - Added `guest_share_id` field on `Session`, `SessionCreate`, `SessionPublic`, `SessionPublicExtended`
+- `backend/app/models/sharing/agent_guest_share.py` - `AgentGuestShare`, `GuestShareGrant`, `AgentGuestShareBase`, `AgentGuestShareCreate`, `AgentGuestShareUpdate`, `AgentGuestSharePublic`, `AgentGuestShareCreated`, `AgentGuestSharesPublic`, `GuestShareTokenPayload`
+- `backend/app/models/sessions/session.py` - Added `guest_share_id` field on `Session`, `SessionCreate`, `SessionPublic`, `SessionPublicExtended`
 
 ### Backend - Routes
 
@@ -13,8 +13,8 @@
 
 ### Backend - Services
 
-- `backend/app/services/agent_guest_share_service.py` - `AgentGuestShareService` (token CRUD, validation, auth, grants)
-- `backend/app/services/session_service.py` - `create_session()` accepts `guest_share_id` parameter
+- `backend/app/services/sharing/agent_guest_share_service.py` - `AgentGuestShareService` (token CRUD, validation, auth, grants)
+- `backend/app/services/sessions/session_service.py` - `create_session()` accepts `guest_share_id` parameter
 
 ### Backend - Auth Layer
 
@@ -127,7 +127,7 @@ Prefix: `/api/v1/guest-share`, tags: `guest-share`
 
 ## Services & Key Methods
 
-### AgentGuestShareService (`backend/app/services/agent_guest_share_service.py`)
+### AgentGuestShareService (`backend/app/services/sharing/agent_guest_share_service.py`)
 
 All methods are `@staticmethod`:
 

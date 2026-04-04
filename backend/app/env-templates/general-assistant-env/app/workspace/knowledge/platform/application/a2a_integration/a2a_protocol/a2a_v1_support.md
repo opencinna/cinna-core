@@ -64,7 +64,7 @@ Already properly formatted by A2AEventMapper:
 
 ## Adapter Implementation
 
-**File:** `backend/app/services/a2a_v1_adapter.py`
+**File:** `backend/app/services/a2a/a2a_v1_adapter.py`
 
 - `A2AV1Adapter.should_use_v1(request)` - Check header for protocol version
 - `A2AV1Adapter.transform_request_inbound(body)` - Transform v1.0 method names (PascalCase to slash-case)
@@ -105,7 +105,7 @@ Already properly formatted by A2AEventMapper:
 
 ## Implementation Status
 
-- [x] `backend/app/services/a2a_v1_adapter.py` - Adapter class
+- [x] `backend/app/services/a2a/a2a_v1_adapter.py` - Adapter class
 - [x] `GET /{agent_id}/` route - AgentCard transformation
 - [x] `POST /{agent_id}/` route - Method name and response transformation
 - [ ] Unit tests for adapter transformations

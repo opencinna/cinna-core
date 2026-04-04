@@ -65,13 +65,13 @@ When "+ New Agent" is selected:
 
 ## Backend Components
 
-**Agent Model:** `backend/app/models/agent.py:107`
+**Agent Model:** `backend/app/models/agents/agent.py:107`
 - `AgentCreateFlowRequest`: Request schema with fields:
   - `description`, `mode`, `auto_create_session`, `user_workspace_id`
   - `agent_sdk_conversation`: SDK for conversation mode
   - `agent_sdk_building`: SDK for building mode
 
-**Agent Service:** `backend/app/services/agent_service.py:119`
+**Agent Service:** `backend/app/services/agents/agent_service.py:119`
 - `create_agent_flow()`: Async generator that yields progress events
 - Accepts `agent_sdk_conversation` and `agent_sdk_building` parameters
 - Passes SDK params to `AgentEnvironmentCreate` for environment setup
@@ -293,10 +293,10 @@ When extending the wizard, test these scenarios:
 ## File Locations Reference
 
 **Backend:**
-- Models: `backend/app/models/agent.py` (AgentCreateFlowRequest with SDK fields)
-- Service: `backend/app/services/agent_service.py:create_agent_flow()`
+- Models: `backend/app/models/agents/agent.py` (AgentCreateFlowRequest with SDK fields)
+- Service: `backend/app/services/agents/agent_service.py:create_agent_flow()`
 - Routes: `backend/app/api/routes/agents.py` (create-flow endpoint)
-- Environment: `backend/app/models/environment.py` (AgentEnvironmentCreate with SDK fields)
+- Environment: `backend/app/models/environments/environment.py` (AgentEnvironmentCreate with SDK fields)
 
 **Frontend:**
 - Dashboard: `frontend/src/routes/_layout/index.tsx` (SDK config dropdown, NEW_AGENT_ID handling)
@@ -304,8 +304,8 @@ When extending the wizard, test these scenarios:
 - Client: Auto-generated from OpenAPI (`frontend/src/client/*`)
 
 **Related SDK Configuration:**
-- Environment Service: `backend/app/services/environment_service.py` (SDK validation, defaults)
-- Environment Lifecycle: `backend/app/services/environment_lifecycle.py` (SDK settings file generation)
+- Environment Service: `backend/app/services/environments/environment_service.py` (SDK validation, defaults)
+- Environment Lifecycle: `backend/app/services/environments/environment_lifecycle.py` (SDK settings file generation)
 - User Settings: `frontend/src/components/UserSettings/AICredentials.tsx` (API key management)
 
 ## Related Documentation

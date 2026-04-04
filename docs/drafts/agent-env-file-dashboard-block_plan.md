@@ -45,11 +45,11 @@ UserDashboardBlock (view_type="agent_env_file", config={env_id, file_path})
 ```
 
 **Integration points:**
-- `backend/app/services/adapters/base.py` — add `LocalFilesAccessInterface`
-- `backend/app/services/adapters/docker_adapter.py` — implement `LocalFilesAccessInterface`
+- `backend/app/services/environments/adapters/base.py` — add `LocalFilesAccessInterface`
+- `backend/app/services/environments/adapters/docker_adapter.py` — implement `LocalFilesAccessInterface`
 - `backend/app/api/routes/user_dashboards.py` — add `env-file` endpoint
-- `backend/app/models/user_dashboard.py` — update Literal type to include `"agent_env_file"`
-- `backend/app/services/user_dashboard_service.py` — update `add_block()` validation
+- `backend/app/models/users/user_dashboard.py` — update Literal type to include `"agent_env_file"`
+- `backend/app/services/users/user_dashboard_service.py` — update `add_block()` validation
 - `frontend/src/components/Dashboard/UserDashboards/views/AgentEnvFileView.tsx` — new component
 - `frontend/src/components/Dashboard/UserDashboards/AddBlockDialog.tsx` — env/file selectors
 - `frontend/src/components/Dashboard/UserDashboards/EditBlockDialog.tsx` — env/file edit fields
@@ -75,7 +75,7 @@ Both fields are required when `view_type = "agent_env_file"`.
 
 ### Schema changes (no migration)
 
-**File:** `backend/app/models/user_dashboard.py`
+**File:** `backend/app/models/users/user_dashboard.py`
 
 Update `view_type` Literal in `UserDashboardBlockBase` and `UserDashboardBlockUpdate`:
 
@@ -112,7 +112,7 @@ Apply in both `UserDashboardBlockBase` and `UserDashboardBlockUpdate`. The DB mo
 
 ### 1. LocalFilesAccessInterface
 
-**File:** `backend/app/services/adapters/base.py`
+**File:** `backend/app/services/environments/adapters/base.py`
 
 Add after the existing class definitions, before `EnvironmentAdapter`:
 
@@ -156,7 +156,7 @@ Import `Path` from `pathlib` is already present in `base.py`.
 
 ### 2. DockerEnvironmentAdapter implements LocalFilesAccessInterface
 
-**File:** `backend/app/services/adapters/docker_adapter.py`
+**File:** `backend/app/services/environments/adapters/docker_adapter.py`
 
 Change class signature:
 ```python
@@ -346,7 +346,7 @@ it naturally is, since those are under a different sub-path).
 
 ### 4. Service Layer Changes
 
-**File:** `backend/app/services/user_dashboard_service.py`
+**File:** `backend/app/services/users/user_dashboard_service.py`
 
 Update `add_block()` to include `"agent_env_file"` in the valid view types set:
 
@@ -611,22 +611,22 @@ This will:
 
 ### Backend Tasks
 
-- [ ] Add `LocalFilesAccessInterface` ABC to `backend/app/services/adapters/base.py`
+- [ ] Add `LocalFilesAccessInterface` ABC to `backend/app/services/environments/adapters/base.py`
   - Place it before `EnvironmentAdapter` class definition
   - Add `get_local_workspace_file_path(self, relative_path: str) -> Path | None` abstract method
   - Add docstring explaining the optional capability pattern
 
-- [ ] Update `DockerEnvironmentAdapter` in `backend/app/services/adapters/docker_adapter.py`
+- [ ] Update `DockerEnvironmentAdapter` in `backend/app/services/environments/adapters/docker_adapter.py`
   - Change class signature to `class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface)`
   - Add import for `LocalFilesAccessInterface` from `.base`
   - Implement `get_local_workspace_file_path()` method with path traversal prevention
   - Place in the `# === File Operations ===` section
 
-- [ ] Update `backend/app/models/user_dashboard.py`
+- [ ] Update `backend/app/models/users/user_dashboard.py`
   - Add `"agent_env_file"` to Literal in `UserDashboardBlockBase.view_type`
   - Add `"agent_env_file"` to Literal in `UserDashboardBlockUpdate.view_type`
 
-- [ ] Update `backend/app/services/user_dashboard_service.py`
+- [ ] Update `backend/app/services/users/user_dashboard_service.py`
   - Add `"agent_env_file"` to `VALID_VIEW_TYPES` (or equivalent validation set)
   - Add config validation in `add_block()`: require `env_id` and `file_path` when `view_type == "agent_env_file"`
 

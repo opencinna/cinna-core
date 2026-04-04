@@ -59,7 +59,7 @@ Each SDK engine only supports certain credential types. This is enforced by back
 | `claude-code` | `anthropic`, `minimax` |
 | `opencode` | `anthropic`, `openai`, `openai_compatible`, `google` |
 
-Defined as `SDK_CREDENTIAL_COMPATIBILITY` in `backend/app/services/environment_service.py`.
+Defined as `SDK_CREDENTIAL_COMPATIBILITY` in `backend/app/services/environments/environment_service.py`.
 
 ## User Stories / Flows
 

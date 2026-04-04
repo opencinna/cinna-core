@@ -8,13 +8,13 @@
 - `backend/app/api/main.py` - Router registration
 
 ### Backend - Services
-- `backend/app/services/access_token_service.py` - Token operations and validation
-- `backend/app/services/a2a_request_handler.py` - Updated with scope enforcement
-- `backend/app/services/session_service.py` - Updated with `access_token_id` param
+- `backend/app/services/a2a/access_token_service.py` - Token operations and validation
+- `backend/app/services/a2a/a2a_request_handler.py` - Updated with scope enforcement
+- `backend/app/services/sessions/session_service.py` - Updated with `access_token_id` param
 
 ### Backend - Models
-- `backend/app/models/agent_access_token.py` - Token model and schemas
-- `backend/app/models/session.py` - Added `access_token_id` field
+- `backend/app/models/a2a/agent_access_token.py` - Token model and schemas
+- `backend/app/models/sessions/session.py` - Added `access_token_id` field
 - `backend/app/models/__init__.py` - Exports
 
 ### Backend - Migrations
@@ -31,13 +31,13 @@
 **Tables:**
 - `agent_access_tokens` - Token metadata (name, mode, scope, hash, prefix, expiration, revoked status)
 
-**Models:** `backend/app/models/agent_access_token.py`
+**Models:** `backend/app/models/a2a/agent_access_token.py`
 - `AgentAccessToken` (table model)
 - `AgentAccessTokenPublic`, `AgentAccessTokenCreated`, `AgentAccessTokenCreate`, `AgentAccessTokenUpdate` (schemas)
 - `AccessTokenMode`, `AccessTokenScope` (enums)
 - `A2ATokenPayload` (JWT payload structure)
 
-**Updated:** `backend/app/models/session.py`
+**Updated:** `backend/app/models/sessions/session.py`
 - `Session.access_token_id` - Foreign key to `agent_access_tokens.id` (nullable, SET NULL on delete)
 
 ### JWT Token Payload Structure
@@ -73,7 +73,7 @@
 ## Services & Key Methods
 
 ### AccessTokenService
-**File:** `backend/app/services/access_token_service.py`
+**File:** `backend/app/services/a2a/access_token_service.py`
 
 - `create_token()` - Generate JWT, hash it, store in DB, return JWT once
 - `verify_a2a_token()` - Decode JWT, check `token_type='agent'`
@@ -85,7 +85,7 @@
 - `can_use_mode()` - Check mode allows requested operation
 
 ### A2ARequestHandler (token integration)
-**File:** `backend/app/services/a2a_request_handler.py`
+**File:** `backend/app/services/a2a/a2a_request_handler.py`
 
 - Constructor accepts `a2a_token_payload` and `access_token_id`
 - `_parse_and_validate_session_id()` - Stores `access_token_id` on new sessions, checks scope on existing
@@ -93,7 +93,7 @@
 - `handle_tasks_cancel()` - Checks scope before canceling
 
 ### SessionService (token integration)
-**File:** `backend/app/services/session_service.py`
+**File:** `backend/app/services/sessions/session_service.py`
 
 - `create_session()` - Accepts optional `access_token_id` parameter
 - `list_environment_sessions()` - Filters by access_token_id for limited scope

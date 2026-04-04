@@ -3,12 +3,12 @@
 ## File Locations
 
 ### Backend - Models
-- `backend/app/models/credential_share.py` - CredentialShare table model, CredentialSharePublic, CredentialShareCreate, SharedCredentialPublic response models
-- `backend/app/models/credential.py` - Updated: added `allow_sharing` field to CredentialBase/CredentialUpdate, added `share_count`, `is_shared`, `owner_email` to CredentialPublic
+- `backend/app/models/credentials/credential_share.py` - CredentialShare table model, CredentialSharePublic, CredentialShareCreate, SharedCredentialPublic response models
+- `backend/app/models/credentials/credential.py` - Updated: added `allow_sharing` field to CredentialBase/CredentialUpdate, added `share_count`, `is_shared`, `owner_email` to CredentialPublic
 
 ### Backend - Services
-- `backend/app/services/credential_share_service.py` - Core sharing logic: share, revoke, toggle, access checks
-- `backend/app/services/credentials_service.py` - Updated: `link_credential_to_agent()` allows linking shared credentials (not just owned)
+- `backend/app/services/credentials/credential_share_service.py` - Core sharing logic: share, revoke, toggle, access checks
+- `backend/app/services/credentials/credentials_service.py` - Updated: `link_credential_to_agent()` allows linking shared credentials (not just owned)
 
 ### Backend - Routes
 - `backend/app/api/routes/credential_shares.py` - Sharing CRUD endpoints (share, list, revoke, toggle, shared-with-me)
@@ -60,7 +60,7 @@
 
 ## Services & Key Methods
 
-### CredentialShareService (`backend/app/services/credential_share_service.py`)
+### CredentialShareService (`backend/app/services/credentials/credential_share_service.py`)
 - `share_credential()` - Create share with validations (ownership, allow_sharing, target exists, not self, not duplicate)
 - `revoke_credential_share()` - Delete share record with ownership check
 - `get_shares_by_credential()` - List shares with resolved user emails
@@ -70,7 +70,7 @@
 - `can_user_access_credential()` - Check if user owns OR has share
 - `delete_all_shares_for_credential()` - Bulk delete for credential deletion
 
-### Updated CredentialsService (`backend/app/services/credentials_service.py`)
+### Updated CredentialsService (`backend/app/services/credentials/credentials_service.py`)
 - `link_credential_to_agent()` - Updated to allow linking shared credentials (not just owned)
 
 ## Frontend Components

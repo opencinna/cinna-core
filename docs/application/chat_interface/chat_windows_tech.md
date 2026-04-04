@@ -64,15 +64,15 @@
 
 ### Backend — Services
 
-- `backend/app/services/session_service.py` — `initiate_stream()`, `process_pending_messages()`, `handle_stream_started/completed/error/interrupted()`, `handle_environment_activated()`
-- `backend/app/services/message_service.py` — `stream_message_with_events()`: event_seq assignment, incremental DB flush (every ~2s via background thread), streaming event accumulation, TodoWrite detection, session state reset
-- `backend/app/services/active_streaming_manager.py` — In-memory stream tracking: `ActiveStream` dataclass with event buffer, interrupt management, `get_stream_events()` for API merge
-- `backend/app/services/event_service.py` — `EventService` singleton: Socket.IO server, room-based broadcasting, `emit_stream_event()`, backend event handler registration
+- `backend/app/services/sessions/session_service.py` — `initiate_stream()`, `process_pending_messages()`, `handle_stream_started/completed/error/interrupted()`, `handle_environment_activated()`
+- `backend/app/services/sessions/message_service.py` — `stream_message_with_events()`: event_seq assignment, incremental DB flush (every ~2s via background thread), streaming event accumulation, TodoWrite detection, session state reset
+- `backend/app/services/sessions/active_streaming_manager.py` — In-memory stream tracking: `ActiveStream` dataclass with event buffer, interrupt management, `get_stream_events()` for API merge
+- `backend/app/services/events/event_service.py` — `EventService` singleton: Socket.IO server, room-based broadcasting, `emit_stream_event()`, backend event handler registration
 
 ### Backend — Models
 
-- `backend/app/models/session.py` — `ChatSession`: `interaction_status`, `streaming_started_at`, `result_state`, `result_summary`, `todo_progress`, `session_metadata`
-- `backend/app/models/session.py` — `SessionMessage`: `content`, `message_metadata` (contains `streaming_events[]`, `streaming_in_progress`, `tools_needing_approval`, `model`, `total_cost_usd`, `duration_ms`, `num_turns`, `command`)
+- `backend/app/models/sessions/session.py` — `ChatSession`: `interaction_status`, `streaming_started_at`, `result_state`, `result_summary`, `todo_progress`, `session_metadata`
+- `backend/app/models/sessions/session.py` — `SessionMessage`: `content`, `message_metadata` (contains `streaming_events[]`, `streaming_in_progress`, `tools_needing_approval`, `model`, `total_cost_usd`, `duration_ms`, `num_turns`, `command`)
 
 ## Streaming Architecture
 

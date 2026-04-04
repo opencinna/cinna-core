@@ -6,11 +6,11 @@
 
 | File | Purpose |
 |------|---------|
-| `backend/app/models/agentic_team.py` | All SQLModel models and Pydantic schemas for teams, nodes, connections |
+| `backend/app/models/agentic_teams/agentic_team.py` | All SQLModel models and Pydantic schemas for teams, nodes, connections |
 | `backend/app/api/routes/agentic_teams.py` | 17 API endpoints, router prefix `/agentic-teams` |
-| `backend/app/services/agentic_team_service.py` | Team CRUD service |
-| `backend/app/services/agentic_team_node_service.py` | Node CRUD service, lead enforcement, bulk positions, color resolution |
-| `backend/app/services/agentic_team_connection_service.py` | Connection CRUD service, node name resolution |
+| `backend/app/services/agentic_teams/agentic_team_service.py` | Team CRUD service |
+| `backend/app/services/agentic_teams/agentic_team_node_service.py` | Node CRUD service, lead enforcement, bulk positions, color resolution |
+| `backend/app/services/agentic_teams/agentic_team_connection_service.py` | Connection CRUD service, node name resolution |
 | `backend/app/alembic/versions/e8c9e80a2914_add_agentic_teams_tables.py` | Migration: creates all three tables |
 
 ### Frontend

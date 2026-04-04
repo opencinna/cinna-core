@@ -19,8 +19,8 @@
 
 ### Backend - Services
 
-- `backend/app/services/environment_service.py` - `EnvironmentService`: bidirectional prompt sync between backend DB and agent environments
-- `backend/app/services/agent_service.py` - `AgentService`: handles workflow prompt changes, triggers A2A skills regeneration
+- `backend/app/services/environments/environment_service.py` - `EnvironmentService`: bidirectional prompt sync between backend DB and agent environments
+- `backend/app/services/agents/agent_service.py` - `AgentService`: handles workflow prompt changes, triggers A2A skills regeneration
 
 ### Backend - Routes
 
@@ -29,7 +29,7 @@
 
 ### Backend - Models
 
-- `backend/app/models/agent.py` - Agent model with prompt fields
+- `backend/app/models/agents/agent.py` - Agent model with prompt fields
 
 ### Frontend - Components
 
@@ -51,7 +51,7 @@
 
 ### Agent Model
 
-- Table: `agent` (defined in `backend/app/models/agent.py`)
+- Table: `agent` (defined in `backend/app/models/agents/agent.py`)
 - `workflow_prompt: str | None` - System prompt for conversation mode (WORKFLOW_PROMPT.md content)
 - `entrypoint_prompt: str | None` - Trigger message for workflow execution (ENTRYPOINT_PROMPT.md content)
 - `refiner_prompt: str | None` - Task refinement instructions (REFINER_PROMPT.md content, Text column)

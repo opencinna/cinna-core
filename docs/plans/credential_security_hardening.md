@@ -50,8 +50,8 @@ Each layer is independently deployable and backward-compatible. Existing agents 
 ┌───────────────▼─────────────────────────────────────────────────┐
 │                    Backend (FastAPI)                             │
 │                                                                  │
-│  backend/app/models/security_event.py   ── Phase 3 model        │
-│  backend/app/services/security_event_service.py                  │
+│  backend/app/models/events/security_event.py   ── Phase 3 model        │
+│  backend/app/services/events/security_event_service.py                  │
 │  backend/app/api/routes/security_events.py                       │
 │    POST /security-events/report  ← blockable (returns action)   │
 │                                                                  │
@@ -244,7 +244,7 @@ The blocking logic is intentionally left as a hook point. Future implementations
 
 ### Settings File Integration
 
-**File**: `backend/app/services/environment_lifecycle.py`
+**File**: `backend/app/services/environments/environment_lifecycle.py`
 
 In environment creation/rebuild, write the Claude Code hook settings:
 
@@ -412,7 +412,7 @@ No escalation logic, risk scoring, or automated responses in this phase. The tab
 
 ### Data Model
 
-**New file**: `backend/app/models/security_event.py`
+**New file**: `backend/app/models/events/security_event.py`
 
 ```python
 import uuid
@@ -537,7 +537,7 @@ The `action` field is the hook point for future policy logic. Initially it alway
 
 ### Service Layer
 
-**New file**: `backend/app/services/security_event_service.py`
+**New file**: `backend/app/services/events/security_event_service.py`
 
 ```python
 class SecurityEventService:
@@ -601,9 +601,9 @@ Defense in depth: Phase 1 tries to prevent access, Phase 2 catches leaks that sl
 ### Phase 3 — Security Event Logging (implement first)
 
 **Backend**:
-- [ ] Create `backend/app/models/security_event.py` with model, schemas, and event type constants
+- [ ] Create `backend/app/models/events/security_event.py` with model, schemas, and event type constants
 - [ ] Generate Alembic migration: `add_security_event_table`
-- [ ] Create `backend/app/services/security_event_service.py` with `create_event()` and `list_events()`
+- [ ] Create `backend/app/services/events/security_event_service.py` with `create_event()` and `list_events()`
 - [ ] Create `backend/app/api/routes/security_events.py` with `/report` (blockable) and `/` (fire-and-forget) ingest endpoints, plus `GET /` for retrieval
 - [ ] Register router in `backend/app/api/main.py`
 
@@ -616,7 +616,7 @@ Defense in depth: Phase 1 tries to prevent access, Phase 2 catches leaks that sl
 
 **Claude Code adapter**:
 - [ ] Create `backend/app/env-templates/app_core_base/core/hooks/credential_guard_hook.py`
-- [ ] Modify `backend/app/services/environment_lifecycle.py`: write hook settings to `/app/core/.claude/settings.json`
+- [ ] Modify `backend/app/services/environments/environment_lifecycle.py`: write hook settings to `/app/core/.claude/settings.json`
 
 ### Phase 2 — Output Redaction
 

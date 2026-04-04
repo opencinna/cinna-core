@@ -46,9 +46,9 @@ Create separate model files following project pattern (one file per entity):
 
 ### Modified Model Files
 
-**backend/app/models/user.py** (no changes for Step 1, already has id/email/etc)
+**backend/app/models/users/user.py** (no changes for Step 1, already has id/email/etc)
 
-**backend/app/models/agent.py** (add org ownership)
+**backend/app/models/agents/agent.py** (add org ownership)
 - Add `organization_id: UUID | None` (FK → Organization, nullable)
 - Nullable allows private agents (null = private mode)
 - Update `AgentPublic` to include organization_id
@@ -331,7 +331,7 @@ Roles exist structurally but don't control resource access yet - foundation for 
 
 ### Backend
 - `backend/app/models/` - New model files: organization.py, role.py, organization_member.py, team.py, team_member.py
-- `backend/app/models/agent.py` - Modify to add organization_id
+- `backend/app/models/agents/agent.py` - Modify to add organization_id
 - `backend/app/models/workspace.py` - Modify to add organization_id, is_org_workspace
 - `backend/app/services/` - New service files: organization_service.py, role_service.py, organization_member_service.py, team_service.py
 - `backend/app/api/deps.py` - Add `ActiveOrgDep` dependency injection

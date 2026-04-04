@@ -3,16 +3,16 @@
 ## File Locations
 
 ### Whitelist Configuration
-- `backend/app/services/credentials_service.py:42` - `AGENT_ENV_ALLOWED_FIELDS` dict mapping credential types to their allowed field names
-- `backend/app/services/credentials_service.py:26` - `SENSITIVE_FIELDS` dict mapping credential types to fields that get redacted in README
+- `backend/app/services/credentials/credentials_service.py:42` - `AGENT_ENV_ALLOWED_FIELDS` dict mapping credential types to their allowed field names
+- `backend/app/services/credentials/credentials_service.py:26` - `SENSITIVE_FIELDS` dict mapping credential types to fields that get redacted in README
 
 ### Filter Implementation
-- `backend/app/services/credentials_service.py:258` - `filter_credential_data_for_agent_env()` - Core whitelist filter function
-- `backend/app/services/credentials_service.py:736` - `prepare_credentials_for_environment()` - Orchestrates decryption + whitelisting + README generation
+- `backend/app/services/credentials/credentials_service.py:258` - `filter_credential_data_for_agent_env()` - Core whitelist filter function
+- `backend/app/services/credentials/credentials_service.py:736` - `prepare_credentials_for_environment()` - Orchestrates decryption + whitelisting + README generation
 
 ### Sync Path
-- `backend/app/services/credentials_service.py:774` - Whitelist applied per-credential inside `prepare_credentials_for_environment()`
-- `backend/app/services/credentials_service.py` - `sync_credentials_to_agent_environments()` - Sends filtered credentials to running containers
+- `backend/app/services/credentials/credentials_service.py:774` - Whitelist applied per-credential inside `prepare_credentials_for_environment()`
+- `backend/app/services/credentials/credentials_service.py` - `sync_credentials_to_agent_environments()` - Sends filtered credentials to running containers
 
 ### Agent Environment (Inside Container)
 - `backend/app/env-templates/app_core_base/core/server/agent_env_service.py` - `update_credentials()` writes filtered `credentials.json` and redacted `README.md` to workspace
@@ -21,7 +21,7 @@
 
 ### `CredentialsService.filter_credential_data_for_agent_env()`
 
-Located at `backend/app/services/credentials_service.py:258`
+Located at `backend/app/services/credentials/credentials_service.py:258`
 
 - Accepts `credential_type` (str) and `credential_data` (dict)
 - Looks up allowed fields from `AGENT_ENV_ALLOWED_FIELDS` for the given type
@@ -30,7 +30,7 @@ Located at `backend/app/services/credentials_service.py:258`
 
 ### `CredentialsService.prepare_credentials_for_environment()`
 
-Located at `backend/app/services/credentials_service.py:736`
+Located at `backend/app/services/credentials/credentials_service.py:736`
 
 - Retrieves all credentials linked to an agent with decrypted data
 - For each credential, applies `filter_credential_data_for_agent_env()` to produce `credentials.json` content
@@ -39,7 +39,7 @@ Located at `backend/app/services/credentials_service.py:736`
 
 ### `CredentialsService.redact_credential_data()`
 
-Located at `backend/app/services/credentials_service.py`
+Located at `backend/app/services/credentials/credentials_service.py`
 
 - Uses `SENSITIVE_FIELDS` to identify which values to replace with `***REDACTED***`
 - Only redacts non-empty values; empty/null fields shown as-is (indicates missing config)

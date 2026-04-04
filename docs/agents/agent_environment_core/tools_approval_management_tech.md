@@ -6,13 +6,13 @@
 
 | File | Purpose |
 |------|---------|
-| `backend/app/models/agent.py` | `agent_sdk_config` JSON field, `AgentSdkConfig` Pydantic schema (`sdk_tools`, `allowed_tools`) |
-| `backend/app/services/agent_service.py` | `get_sdk_config()`, `add_allowed_tools()`, `get_pending_tools()`, `update_sdk_tools()`, `sync_allowed_tools_to_environment()` |
-| `backend/app/services/llm_plugin_service.py` | `prepare_plugins_for_environment()` — accepts optional `allowed_tools`, includes in returned `settings_json` |
-| `backend/app/services/environment_lifecycle.py` | `_sync_plugins_to_environment()` — reads agent's `allowed_tools`, passes to plugin service |
+| `backend/app/models/agents/agent.py` | `agent_sdk_config` JSON field, `AgentSdkConfig` Pydantic schema (`sdk_tools`, `allowed_tools`) |
+| `backend/app/services/agents/agent_service.py` | `get_sdk_config()`, `add_allowed_tools()`, `get_pending_tools()`, `update_sdk_tools()`, `sync_allowed_tools_to_environment()` |
+| `backend/app/services/plugins/llm_plugin_service.py` | `prepare_plugins_for_environment()` — accepts optional `allowed_tools`, includes in returned `settings_json` |
+| `backend/app/services/environments/environment_lifecycle.py` | `_sync_plugins_to_environment()` — reads agent's `allowed_tools`, passes to plugin service |
 | `backend/app/api/routes/agents.py` | Tool management endpoints: `sdk-config`, `allowed-tools`, `pending-tools` |
 | `backend/app/api/routes/messages.py` | Filters `tools_needing_approval` against current `allowed_tools` on message fetch (response-only) |
-| `backend/app/services/message_service.py` | Stores `tools_needing_approval` in message metadata during streaming |
+| `backend/app/services/sessions/message_service.py` | Stores `tools_needing_approval` in message metadata during streaming |
 
 ### Agent-Env (inside Docker container)
 
@@ -34,7 +34,7 @@
 
 ## Database Schema
 
-**Table**: `agent` — `backend/app/models/agent.py`
+**Table**: `agent` — `backend/app/models/agents/agent.py`
 
 `agent_sdk_config` is a JSON column storing an `AgentSdkConfig` object:
 
@@ -55,17 +55,17 @@
 
 ## Services & Key Methods
 
-**Agent Service**: `backend/app/services/agent_service.py`
+**Agent Service**: `backend/app/services/agents/agent_service.py`
 - `get_sdk_config(agent_id)` — Returns `AgentSdkConfig`
 - `add_allowed_tools(agent_id, tools)` — Appends to `allowed_tools` (deduplicates)
 - `get_pending_tools(agent_id)` — Returns `sdk_tools - allowed_tools`
 - `update_sdk_tools(agent_id, tools)` — Incrementally adds newly discovered tools to `sdk_tools`
 - `sync_allowed_tools_to_environment(agent_id)` — Triggers plugin sync with updated `allowed_tools`
 
-**Plugin Service**: `backend/app/services/llm_plugin_service.py`
+**Plugin Service**: `backend/app/services/plugins/llm_plugin_service.py`
 - `prepare_plugins_for_environment(agent, allowed_tools=None)` — Builds `settings_json` dict; includes `allowed_tools` key when provided
 
-**Environment Lifecycle**: `backend/app/services/environment_lifecycle.py`
+**Environment Lifecycle**: `backend/app/services/environments/environment_lifecycle.py`
 - `_sync_plugins_to_environment(agent)` — Reads `agent.agent_sdk_config.allowed_tools`; passes to `prepare_plugins_for_environment()`
 
 **Agent Env Service** (container): `backend/app/env-templates/app_core_base/core/server/agent_env_service.py`

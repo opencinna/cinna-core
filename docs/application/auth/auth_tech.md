@@ -3,7 +3,7 @@
 ## File Locations
 
 ### Backend - Models
-- `backend/app/models/user.py` - User model (table), UserBase, UserCreate, UserRegister, UserUpdate, UserUpdateMe, UserPublic, Token, TokenPayload, OAuthConfig, SetPassword, NewPassword, UpdatePassword
+- `backend/app/models/users/user.py` - User model (table), UserBase, UserCreate, UserRegister, UserUpdate, UserUpdateMe, UserPublic, Token, TokenPayload, OAuthConfig, SetPassword, NewPassword, UpdatePassword
 
 ### Backend - Routes
 - `backend/app/api/routes/login.py` - Password login, test token, password recovery, password reset
@@ -11,8 +11,8 @@
 - `backend/app/api/routes/users.py` - Signup, profile, password management, admin user CRUD
 
 ### Backend - Services
-- `backend/app/services/auth_service.py` - OAuth flows, domain whitelist, state management
-- `backend/app/services/user_service.py` - User CRUD, password hashing, registration, password recovery
+- `backend/app/services/users/auth_service.py` - OAuth flows, domain whitelist, state management
+- `backend/app/services/users/user_service.py` - User CRUD, password hashing, registration, password recovery
 
 ### Backend - Core
 - `backend/app/core/security.py` - JWT creation, bcrypt hashing, Google token verification, field encryption
@@ -34,7 +34,7 @@
 
 ## Database Schema
 
-### User Table (`backend/app/models/user.py`)
+### User Table (`backend/app/models/users/user.py`)
 
 Auth-relevant fields:
 
@@ -70,7 +70,7 @@ Auth-relevant fields:
 
 ## Services & Key Methods
 
-### UserService (`backend/app/services/user_service.py`)
+### UserService (`backend/app/services/users/user_service.py`)
 - `authenticate(session, email, password)` - Validate credentials, return User or None
 - `register_user(session, email, password, full_name)` - Public signup with whitelist check
 - `create_user(session, user_create)` - Admin user creation with password hashing
@@ -80,7 +80,7 @@ Auth-relevant fields:
 - `recover_password(session, email)` - Generate reset token and send email
 - `create_email_user(session, email)` - Create user from email (email integration, bypasses whitelist)
 
-### AuthService (`backend/app/services/auth_service.py`)
+### AuthService (`backend/app/services/users/auth_service.py`)
 - `is_email_domain_allowed(email)` - Validate against whitelist
 - `create_access_token(user_id)` - Generate JWT via `security.create_access_token()`
 - See [Google OAuth Tech](google_oauth_tech.md) for OAuth-specific methods

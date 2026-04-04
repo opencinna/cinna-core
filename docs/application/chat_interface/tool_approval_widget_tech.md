@@ -10,7 +10,7 @@
 
 ### Backend
 
-- `backend/app/services/message_service.py` — Detects tools needing approval from streaming events, sets `message_metadata.tools_needing_approval`
+- `backend/app/services/sessions/message_service.py` — Detects tools needing approval from streaming events, sets `message_metadata.tools_needing_approval`
 - `backend/app/api/routes/messages.py` — When returning messages, filters `tools_needing_approval` against agent's current `allowed_tools` (removes already-approved)
 - `backend/app/api/routes/agents.py` — `addAllowedTools` endpoint: adds tools to agent's `allowed_tools` list
 

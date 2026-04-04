@@ -4,7 +4,7 @@
 
 ### Backend
 
-- `backend/app/services/message_service.py` — `_WEBAPP_ACTION_TAG_RE` regex, `_extract_webapp_actions()`, `_emit_webapp_action_events()`, mid-stream scanning in `stream_message_with_events()`, post-processing of `streaming_events` after stream completion
+- `backend/app/services/sessions/message_service.py` — `_WEBAPP_ACTION_TAG_RE` regex, `_extract_webapp_actions()`, `_emit_webapp_action_events()`, mid-stream scanning in `stream_message_with_events()`, post-processing of `streaming_events` after stream completion
 
 ### Frontend
 
@@ -28,7 +28,7 @@
 
 ### `_extract_webapp_actions(content: str) -> tuple[list[dict], str]`
 
-Location: `backend/app/services/message_service.py`
+Location: `backend/app/services/sessions/message_service.py`
 
 Scans `content` for complete `<webapp_action>` tags using `_WEBAPP_ACTION_TAG_RE` (compiled regex with `re.DOTALL`). For each tag:
 - Parses JSON payload
@@ -40,7 +40,7 @@ Returns `(actions, cleaned_content)`.
 
 ### `_emit_webapp_action_events(session_id, actions) -> None`
 
-Location: `backend/app/services/message_service.py`
+Location: `backend/app/services/sessions/message_service.py`
 
 Calls `event_service.emit_stream_event()` once per action:
 - `event_type="webapp_action"`

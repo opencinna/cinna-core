@@ -132,7 +132,7 @@ Sidebar "Dashboard" hover menu
 
 ### Models
 
-**File:** `backend/app/models/user_dashboard.py`
+**File:** `backend/app/models/users/user_dashboard.py`
 
 ```
 UserDashboardBase(SQLModel):
@@ -218,7 +218,7 @@ Register model import in `backend/app/models/__init__.py`.
 
 ### Service Layer
 
-**File:** `backend/app/services/user_dashboard_service.py`
+**File:** `backend/app/services/users/user_dashboard_service.py`
 
 ```
 class UserDashboardService:
@@ -557,9 +557,9 @@ src/components/Dashboard/
 
 ### Backend Tasks
 
-- [ ] Create model file `backend/app/models/user_dashboard.py` with `UserDashboard`, `UserDashboardBlock`, and all schema variants (Base, Create, Update, Public)
+- [ ] Create model file `backend/app/models/users/user_dashboard.py` with `UserDashboard`, `UserDashboardBlock`, and all schema variants (Base, Create, Update, Public)
 - [ ] Register models in `backend/app/models/__init__.py`
-- [ ] Create service `backend/app/services/user_dashboard_service.py` with CRUD operations, layout bulk update, and validation logic
+- [ ] Create service `backend/app/services/users/user_dashboard_service.py` with CRUD operations, layout bulk update, and validation logic
 - [ ] Create routes `backend/app/api/routes/user_dashboards.py` with all endpoints (list, create, get, update, delete dashboards; add, update, delete, layout-update blocks)
 - [ ] Register router in `backend/app/api/main.py` with prefix `/api/v1/dashboards` and tag `"Dashboards"`
 - [ ] Generate Alembic migration: `alembic revision --autogenerate -m "add user dashboard tables"`

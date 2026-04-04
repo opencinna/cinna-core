@@ -77,18 +77,18 @@ Add agent-repository link endpoints (following credential pattern):
 
 ## Phase 4: Backend Environment Integration
 
-### 4.1 Modify: `backend/app/services/adapters/base.py`
+### 4.1 Modify: `backend/app/services/environments/adapters/base.py`
 
 Add abstract method:
 ```python
 async def set_repositories(self, repositories_data: dict) -> bool:
 ```
 
-### 4.2 Modify: `backend/app/services/adapters/docker_adapter.py`
+### 4.2 Modify: `backend/app/services/environments/adapters/docker_adapter.py`
 
 Implement `set_repositories()` - POST to `/config/repositories` on agent-env container.
 
-### 4.3 Modify: `backend/app/services/environment_lifecycle.py`
+### 4.3 Modify: `backend/app/services/environments/environment_lifecycle.py`
 
 **In `_sync_dynamic_data()`** - add after credentials/plugins sync:
 ```python
@@ -254,9 +254,9 @@ source backend/.venv/bin/activate && make gen-client
 - `backend/app/models/__init__.py` - register new models
 - `backend/app/api/main.py` - register route
 - `backend/app/api/routes/agents.py` - add agent-repo endpoints
-- `backend/app/services/adapters/base.py` - add set_repositories abstract method
-- `backend/app/services/adapters/docker_adapter.py` - implement set_repositories
-- `backend/app/services/environment_lifecycle.py` - sync in _sync_dynamic_data + copy in workspace copy
+- `backend/app/services/environments/adapters/base.py` - add set_repositories abstract method
+- `backend/app/services/environments/adapters/docker_adapter.py` - implement set_repositories
+- `backend/app/services/environments/environment_lifecycle.py` - sync in _sync_dynamic_data + copy in workspace copy
 - `backend/app/env-templates/app_core_base/core/server/routes.py` - POST /config/repositories
 - `backend/app/env-templates/app_core_base/core/server/agent_env_service.py` - repository file ops
 - `backend/app/env-templates/app_core_base/core/server/models.py` - request model

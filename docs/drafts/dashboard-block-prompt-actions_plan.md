@@ -142,7 +142,7 @@ already uses `selectinload(UserDashboard.blocks)` — extend it to also load
 
 ### New model file additions
 
-**File:** `backend/app/models/user_dashboard.py`
+**File:** `backend/app/models/users/user_dashboard.py`
 
 Add `UserDashboardBlockPromptAction`, `UserDashboardBlockPromptActionCreate`,
 `UserDashboardBlockPromptActionUpdate`, `UserDashboardBlockPromptActionPublic` to the
@@ -191,7 +191,7 @@ Update all imports in the models `__init__.py` to export the new schema classes.
 
 ### Service Layer
 
-**File:** `backend/app/services/user_dashboard_service.py`
+**File:** `backend/app/services/users/user_dashboard_service.py`
 
 Add methods to `UserDashboardService`:
 
@@ -458,7 +458,7 @@ make migrate    # or: docker compose exec backend alembic upgrade head
 
 ### Backend Tasks
 
-- [ ] Add `UserDashboardBlockPromptAction` DB model to `backend/app/models/user_dashboard.py`
+- [ ] Add `UserDashboardBlockPromptAction` DB model to `backend/app/models/users/user_dashboard.py`
 - [ ] Add `UserDashboardBlockPromptActionCreate`, `Update`, `Public` schema classes to same file
 - [ ] Add `prompt_actions` Relationship to `UserDashboardBlock` model
 - [ ] Update `UserDashboardBlockPublic` to include `prompt_actions: list[UserDashboardBlockPromptActionPublic] = []`

@@ -175,7 +175,7 @@ to return a proper validation error.
 
 ### Model Schema Classes
 
-File: `backend/app/models/agentic_team.py`
+File: `backend/app/models/agentic_teams/agentic_team.py`
 
 ```
 AgenticTeamBase        — name, icon
@@ -327,7 +327,7 @@ pattern as `PUT /api/v1/dashboards/{id}/blocks/layout` for grid layout).
 
 ### Service Layer
 
-File: `backend/app/services/agentic_team_service.py` — `AgenticTeamService`
+File: `backend/app/services/agentic_teams/agentic_team_service.py` — `AgenticTeamService`
 
 Key methods:
 
@@ -337,7 +337,7 @@ Key methods:
 - `update_team(session, team_id, user_id, data: AgenticTeamUpdate) -> AgenticTeam`
 - `delete_team(session, team_id, user_id) -> None`
 
-File: `backend/app/services/agentic_team_node_service.py` — `AgenticTeamNodeService`
+File: `backend/app/services/agentic_teams/agentic_team_node_service.py` — `AgenticTeamNodeService`
 
 Key methods:
 
@@ -356,7 +356,7 @@ Key methods:
 - `bulk_update_positions(session, team_id, user_id, positions: list[AgenticTeamNodePositionUpdate]) -> list[AgenticTeamNode]`
   - Validates all node IDs belong to the team before batch updating
 
-File: `backend/app/services/agentic_team_connection_service.py` — `AgenticTeamConnectionService`
+File: `backend/app/services/agentic_teams/agentic_team_connection_service.py` — `AgenticTeamConnectionService`
 
 Key methods:
 
@@ -759,10 +759,10 @@ roadmap. Key items for reference:
 
 ### Backend Tasks
 
-- [ ] Create `backend/app/models/agentic_team.py` with `AgenticTeam`, `AgenticTeamNode`, `AgenticTeamConnection` DB models and all schema variants (`Base`, `Create`, `Update`, `Public`, `Public` lists, `AgenticTeamChartPublic`, `AgenticTeamNodePositionUpdate`)
-- [ ] Create `backend/app/services/agentic_team_service.py` with `AgenticTeamService` (list, create, get, update, delete) and owner-only enforcement (no superuser bypass)
-- [ ] Create `backend/app/services/agentic_team_node_service.py` with `AgenticTeamNodeService` including `bulk_update_positions`, agent ownership validation, and `is_lead` toggle logic (auto-unmark previous lead)
-- [ ] Create `backend/app/services/agentic_team_connection_service.py` with `AgenticTeamConnectionService` including self-connection and duplicate-connection guards
+- [ ] Create `backend/app/models/agentic_teams/agentic_team.py` with `AgenticTeam`, `AgenticTeamNode`, `AgenticTeamConnection` DB models and all schema variants (`Base`, `Create`, `Update`, `Public`, `Public` lists, `AgenticTeamChartPublic`, `AgenticTeamNodePositionUpdate`)
+- [ ] Create `backend/app/services/agentic_teams/agentic_team_service.py` with `AgenticTeamService` (list, create, get, update, delete) and owner-only enforcement (no superuser bypass)
+- [ ] Create `backend/app/services/agentic_teams/agentic_team_node_service.py` with `AgenticTeamNodeService` including `bulk_update_positions`, agent ownership validation, and `is_lead` toggle logic (auto-unmark previous lead)
+- [ ] Create `backend/app/services/agentic_teams/agentic_team_connection_service.py` with `AgenticTeamConnectionService` including self-connection and duplicate-connection guards
 - [ ] Create `backend/app/api/routes/agentic_teams.py` with all AgenticTeam, AgenticTeamNode, AgenticTeamConnection, and bulk endpoints (list + chart + positions) using `SessionDep` and `CurrentUser`
 - [ ] Register `agentic-teams` router in `backend/app/api/main.py`
 - [ ] Generate Alembic migration `add_agentic_teams_tables.py` creating `agentic_team`, `agentic_team_node`, `agentic_team_connection` tables with all FK constraints and indexes

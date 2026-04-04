@@ -46,8 +46,8 @@
 
 ### Backend - Models
 
-- `backend/app/models/environment.py` - `AgentEnvironment`, `AgentEnvironmentBase`, `AgentEnvironmentPublic`, `AgentEnvironmentCreate`, `AgentEnvironmentUpdate`
-- `backend/app/models/agent.py` - `Agent` model (includes `inactivity_period_limit` field)
+- `backend/app/models/environments/environment.py` - `AgentEnvironment`, `AgentEnvironmentBase`, `AgentEnvironmentPublic`, `AgentEnvironmentCreate`, `AgentEnvironmentUpdate`
+- `backend/app/models/agents/agent.py` - `Agent` model (includes `inactivity_period_limit` field)
 
 ### Backend - Routes
 
@@ -56,13 +56,13 @@
 
 ### Backend - Services
 
-- `backend/app/services/environment_lifecycle.py` - `EnvironmentLifecycleManager` - core lifecycle operations
-- `backend/app/services/environment_service.py` - `EnvironmentService` - route-level orchestration
-- `backend/app/services/environment_suspension_scheduler.py` - APScheduler background job (inactivity suspension)
-- `backend/app/services/environment_status_scheduler.py` - APScheduler background job (health monitoring)
-- `backend/app/services/adapters/base.py` - `EnvironmentAdapter` abstract interface, `LocalFilesAccessInterface` optional mixin
-- `backend/app/services/adapters/docker_adapter.py` - `DockerEnvironmentAdapter` - Docker-specific implementation (implements `LocalFilesAccessInterface`)
-- `backend/app/services/session_context_signer.py` - HMAC signing/verification for session context
+- `backend/app/services/environments/environment_lifecycle.py` - `EnvironmentLifecycleManager` - core lifecycle operations
+- `backend/app/services/environments/environment_service.py` - `EnvironmentService` - route-level orchestration
+- `backend/app/services/environments/environment_suspension_scheduler.py` - APScheduler background job (inactivity suspension)
+- `backend/app/services/environments/environment_status_scheduler.py` - APScheduler background job (health monitoring)
+- `backend/app/services/environments/adapters/base.py` - `EnvironmentAdapter` abstract interface, `LocalFilesAccessInterface` optional mixin
+- `backend/app/services/environments/adapters/docker_adapter.py` - `DockerEnvironmentAdapter` - Docker-specific implementation (implements `LocalFilesAccessInterface`)
+- `backend/app/services/sessions/session_context_signer.py` - HMAC signing/verification for session context
 
 ### Frontend - Components
 
@@ -80,7 +80,7 @@
 
 ## Database Schema
 
-### AgentEnvironment model (`backend/app/models/environment.py`)
+### AgentEnvironment model (`backend/app/models/environments/environment.py`)
 
 Key fields:
 - `id` (UUID) - Primary key
@@ -92,7 +92,7 @@ Key fields:
 - `building_ai_credential_id` (UUID, nullable, FK) - AI credential for building mode
 - `config` (JSON) - Runtime configuration including `auth_token`
 
-### Agent model (`backend/app/models/agent.py`)
+### Agent model (`backend/app/models/agents/agent.py`)
 
 Relevant field:
 - `inactivity_period_limit` (str, nullable) - Controls auto-suspension threshold. Values: `None` (10 min default), `"2_days"`, `"1_week"`, `"1_month"`, `"always_on"`
@@ -124,7 +124,7 @@ Relevant field:
 
 ## Services & Key Methods
 
-### LocalFilesAccessInterface (`backend/app/services/adapters/base.py`)
+### LocalFilesAccessInterface (`backend/app/services/environments/adapters/base.py`)
 
 An optional mixin interface for adapters that can provide direct local filesystem access to workspace files without requiring the container to be running.
 
@@ -137,7 +137,7 @@ An optional mixin interface for adapters that can provide direct local filesyste
 - Used by `UserDashboardService` env-file methods: `list_env_files()` calls `list_local_workspace_files()`, `get_env_file_local_path()` calls `get_local_workspace_file_path()`
 - Dashboard endpoints: `GET /api/v1/dashboards/{id}/blocks/{block_id}/env-files` (list) and `GET .../env-file` (stream)
 
-### EnvironmentLifecycleManager (`backend/app/services/environment_lifecycle.py`)
+### EnvironmentLifecycleManager (`backend/app/services/environments/environment_lifecycle.py`)
 
 - `create_environment_instance()` - Copy template + shared core, generate configs, build Docker image
 - `start_environment()` - UP operation with smart container detection (new vs existing)
@@ -153,7 +153,7 @@ An optional mixin interface for adapters that can provide direct local filesyste
 - `_generate_auth_token()` - Create 10-year JWT with user ID as subject
 - `_generate_env_file()` - Generate .env with AI credential auto-detection by prefix
 
-### DockerEnvironmentAdapter (`backend/app/services/adapters/docker_adapter.py`)
+### DockerEnvironmentAdapter (`backend/app/services/environments/adapters/docker_adapter.py`)
 
 - `initialize()` - Build Docker image (`docker-compose build`)
 - `start()` - UP operation (`docker-compose up -d`), wait for health check
@@ -170,20 +170,20 @@ An optional mixin interface for adapters that can provide direct local filesyste
 - `get_local_workspace_file_path(relative_path)` - Returns the absolute local filesystem path for a workspace file, or None if not found or unsafe. Rejects `..` and absolute paths. Resolves symlinks and validates the result stays within `{env_dir}/app/workspace/`. (`LocalFilesAccessInterface` implementation)
 - `list_local_workspace_files(subfolder)` - Lists files under `{env_dir}/app/workspace/{subfolder}/` recursively. Returns sorted relative paths from the subfolder root. (`LocalFilesAccessInterface` implementation)
 
-### EnvironmentSuspensionScheduler (`backend/app/services/environment_suspension_scheduler.py`)
+### EnvironmentSuspensionScheduler (`backend/app/services/environments/environment_suspension_scheduler.py`)
 
 - `start_scheduler()` - Initialize APScheduler background job (10-minute interval)
 - `shutdown_scheduler()` - Clean shutdown
 - `run_suspension_check()` - Check all running environments against inactivity thresholds
 
-### EnvironmentStatusScheduler (`backend/app/services/environment_status_scheduler.py`)
+### EnvironmentStatusScheduler (`backend/app/services/environments/environment_status_scheduler.py`)
 
 - `start_scheduler()` - Initialize APScheduler background job (10-minute interval)
 - `shutdown_scheduler()` - Clean shutdown
 - `run_status_check()` - Check all running environments via health check; mark crashed ones as `error`
 - `_check_environment_statuses()` - Async implementation: queries running envs, calls `health_check()` + `get_status()`, updates `last_health_check`, emits `ENVIRONMENT_STATUS_CHANGED` event on failure
 
-### EventService (`backend/app/services/event_service.py`)
+### EventService (`backend/app/services/events/event_service.py`)
 
 - `is_user_online(user_id)` - Check active WebSocket connections
 - `agent_usage_intent` handler - Updates `last_activity_at`, triggers background activation if suspended
@@ -286,7 +286,7 @@ Infrastructure files overwritten from template during rebuild (defined in `REBUI
 The `app/core/` directory is maintained in a single shared location (`backend/app/env-templates/app_core_base/core/`) and is:
 - Copied into environment instances during creation (overlaid after template-specific files)
 - Used as the source during rebuild (replaces the instance's `app/core/` entirely)
-- Defined by `APP_CORE_BASE_DIR_NAME` constant in `backend/app/services/environment_lifecycle.py`
+- Defined by `APP_CORE_BASE_DIR_NAME` constant in `backend/app/services/environments/environment_lifecycle.py`
 
 ### Agent-Level Settings
 
@@ -309,7 +309,7 @@ The `app/core/` directory is maintained in a single shared location (`backend/ap
 - Canonical JSON (`sort_keys=True, separators=(',',':')`) for deterministic signing
 - Per-session context store keyed by `backend_session_id` supports parallel sessions
 - Cleanup: explicit on stream end + TTL-based (24h) fallback
-- Signing module: `backend/app/services/session_context_signer.py`
+- Signing module: `backend/app/services/sessions/session_context_signer.py`
 
 ### Workspace Isolation
 
@@ -340,7 +340,7 @@ The `app/core/` directory is maintained in a single shared location (`backend/ap
 | `ENVIRONMENT_STATUS_CHANGED` | Backend → Frontend | Environment status changed (e.g., health check detected crash → error) |
 | `agent_usage_intent` | Frontend → Backend | User opened session, triggers activity tracking and potential activation |
 
-Event types defined in `backend/app/models/event.py`
+Event types defined in `backend/app/models/events/event.py`
 
 ### Thread Pool Isolation
 

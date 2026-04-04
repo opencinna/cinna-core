@@ -5,7 +5,7 @@
 ### Backend
 
 **Models:**
-- `backend/app/models/task_trigger.py` — TaskTrigger table, TriggerType constants, all schema classes
+- `backend/app/models/tasks/task_trigger.py` — TaskTrigger table, TriggerType constants, all schema classes
 - `backend/app/models/__init__.py` — exports (TaskTrigger, TriggerType, all create/update/public schemas)
 
 **Routes:**
@@ -14,13 +14,13 @@
 - `backend/app/api/main.py` — router registration
 
 **Services:**
-- `backend/app/services/task_trigger_service.py` — main service
-- `backend/app/services/task_trigger_scheduler.py` — APScheduler polling job
+- `backend/app/services/tasks/task_trigger_service.py` — main service
+- `backend/app/services/tasks/task_trigger_scheduler.py` — APScheduler polling job
 
 **Reused Services:**
-- `backend/app/services/agent_scheduler_service.py` — calculate_next_execution, convert_local_cron_to_utc
-- `backend/app/services/ai_functions_service.py` — generate_schedule NL→CRON AI function
-- `backend/app/services/input_task_service.py` — execute_task called on trigger fire
+- `backend/app/services/agents/agent_scheduler_service.py` — calculate_next_execution, convert_local_cron_to_utc
+- `backend/app/services/ai_functions/ai_functions_service.py` — generate_schedule NL→CRON AI function
+- `backend/app/services/tasks/input_task_service.py` — execute_task called on trigger fire
 - `backend/app/core/security.py` — encrypt_field, decrypt_field for webhook tokens
 
 **Migrations:**
@@ -85,7 +85,7 @@ Indexes:
 - `ix_task_trigger_webhook_id` UNIQUE on `(webhook_id)` — webhook URL lookup
 - `ix_task_trigger_owner_id` on `(owner_id)`
 
-**Schema classes** (`backend/app/models/task_trigger.py`):
+**Schema classes** (`backend/app/models/tasks/task_trigger.py`):
 - `TriggerType` — constants: SCHEDULE, EXACT_DATE, WEBHOOK
 - `TaskTrigger(table=True)` — database model
 - `TaskTriggerCreateSchedule` — name, type literal, payload_template, natural_language, timezone
@@ -115,7 +115,7 @@ Indexes:
 
 ## Services & Key Methods
 
-**TaskTriggerService** (`backend/app/services/task_trigger_service.py`):
+**TaskTriggerService** (`backend/app/services/tasks/task_trigger_service.py`):
 
 Exception classes: `TriggerError`, `TriggerNotFoundError`, `TriggerValidationError`, `TriggerPermissionError`, `WebhookTokenInvalidError`
 
@@ -138,7 +138,7 @@ Webhook execution methods:
 Scheduler method:
 - `poll_due_triggers()` — queries due schedule triggers (next_execution <= now) and due exact-date triggers (execute_at <= now, executed=False); fires each as background task with error logging
 
-**TaskTriggerScheduler** (`backend/app/services/task_trigger_scheduler.py`):
+**TaskTriggerScheduler** (`backend/app/services/tasks/task_trigger_scheduler.py`):
 - APScheduler BackgroundScheduler; interval=1 minute; max_instances=1 (prevents overlapping poll cycles)
 - Functions named `start_scheduler` / `shutdown_scheduler`; aliased on import in main.py to `start_task_trigger_scheduler` / `shutdown_task_trigger_scheduler`
 - Follows the pattern of `file_cleanup_scheduler.py` and `environment_suspension_scheduler.py`

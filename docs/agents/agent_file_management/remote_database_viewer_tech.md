@@ -11,7 +11,7 @@
 ### Backend
 
 - **Routes:** `backend/app/api/routes/workspace.py` - Proxy endpoints for database operations
-- **Adapter:** `backend/app/services/adapters/docker_adapter.py` - HTTP forwarding to agent-env
+- **Adapter:** `backend/app/services/environments/adapters/docker_adapter.py` - HTTP forwarding to agent-env
 
 ### Frontend
 
@@ -53,7 +53,7 @@
 4. DML queries: executes and commits, returns `rows_affected`
 5. Errors returned in response (not HTTP error) with classification
 
-### DockerAdapter - `backend/app/services/adapters/docker_adapter.py`
+### DockerAdapter - `backend/app/services/environments/adapters/docker_adapter.py`
 
 - `get_database_tables(path)` - GET request to agent-env
 - `get_database_schema(path)` - GET request to agent-env

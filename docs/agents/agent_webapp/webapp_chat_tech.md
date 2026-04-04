@@ -4,8 +4,8 @@
 
 ### Backend - Models
 
-- `backend/app/models/agent_webapp_interface_config.py` — `chat_mode` field on `AgentWebappInterfaceConfig` (table), `AgentWebappInterfaceConfigBase`, `AgentWebappInterfaceConfigUpdate`, `AgentWebappInterfaceConfigPublic`
-- `backend/app/models/session.py` — `webapp_share_id` nullable FK on `Session` table; also on `SessionCreate`, `SessionPublic`, `SessionPublicExtended`; `page_context` optional field on `MessageCreate`
+- `backend/app/models/webapp/agent_webapp_interface_config.py` — `chat_mode` field on `AgentWebappInterfaceConfig` (table), `AgentWebappInterfaceConfigBase`, `AgentWebappInterfaceConfigUpdate`, `AgentWebappInterfaceConfigPublic`
+- `backend/app/models/sessions/session.py` — `webapp_share_id` nullable FK on `Session` table; also on `SessionCreate`, `SessionPublic`, `SessionPublicExtended`; `page_context` optional field on `MessageCreate`
 
 ### Backend - Routes
 
@@ -15,10 +15,10 @@
 
 ### Backend - Services
 
-- `backend/app/services/webapp_chat_service.py` — `WebappChatService` with chat validation, session management, and access verification. Exception hierarchy: `WebappChatError` (base), `WebappChatDisabledError`, `WebappChatSessionNotFoundError`, `WebappChatAccessDeniedError`.
-- `backend/app/services/message_service.py` — `MessageService` provides shared streaming enrichment (`enrich_messages_with_streaming()`), interrupt orchestration (`interrupt_stream()`), response building (`build_stream_response()`), and context-aware message dispatch (`collect_pending_messages` with diff logic). These methods are reused by both webapp chat and regular session routes.
-- `backend/app/services/session_service.py` — `send_session_message` accepts `page_context: str | None` and stores it in `message_metadata` when creating the user `SessionMessage`.
-- `backend/app/services/agent_webapp_interface_config_service.py` — `AgentWebappInterfaceConfigService` with get-or-create, partial update, public read. Exception hierarchy: `InterfaceConfigError` (base), `AgentNotFoundError`, `AgentPermissionError`.
+- `backend/app/services/webapp/webapp_chat_service.py` — `WebappChatService` with chat validation, session management, and access verification. Exception hierarchy: `WebappChatError` (base), `WebappChatDisabledError`, `WebappChatSessionNotFoundError`, `WebappChatAccessDeniedError`.
+- `backend/app/services/sessions/message_service.py` — `MessageService` provides shared streaming enrichment (`enrich_messages_with_streaming()`), interrupt orchestration (`interrupt_stream()`), response building (`build_stream_response()`), and context-aware message dispatch (`collect_pending_messages` with diff logic). These methods are reused by both webapp chat and regular session routes.
+- `backend/app/services/sessions/session_service.py` — `send_session_message` accepts `page_context: str | None` and stores it in `message_metadata` when creating the user `SessionMessage`.
+- `backend/app/services/webapp/agent_webapp_interface_config_service.py` — `AgentWebappInterfaceConfigService` with get-or-create, partial update, public read. Exception hierarchy: `InterfaceConfigError` (base), `AgentNotFoundError`, `AgentPermissionError`.
 
 ### Backend - Dependencies
 
@@ -87,14 +87,14 @@ Prefix: `/api/v1/agents/{agent_id}/webapp-interface-config`
 
 ## Services & Key Methods
 
-### `WebappChatService` (`backend/app/services/webapp_chat_service.py`)
+### `WebappChatService` (`backend/app/services/webapp/webapp_chat_service.py`)
 
 - `validate_chat_enabled()` — Checks `chat_mode` from interface config; raises `WebappChatDisabledError` if null; returns the chat_mode string
 - `get_or_create_session()` — Finds active session by `webapp_share_id` or creates new one via `SessionService.create_session()`; delegates to `get_active_session()` internally to avoid query duplication
 - `get_active_session()` — Returns most recent active session for a `webapp_share_id`, or None
 - `verify_session_access()` — Fetches session by ID, verifies `webapp_share_id` match; raises `WebappChatSessionNotFoundError` or `WebappChatAccessDeniedError`
 
-### `MessageService` (`backend/app/services/message_service.py`) — shared methods
+### `MessageService` (`backend/app/services/sessions/message_service.py`) — shared methods
 
 These methods are shared between webapp chat routes and regular session routes (`messages.py`), eliminating duplication of streaming enrichment, interrupt orchestration, and response building logic.
 
@@ -103,7 +103,7 @@ These methods are shared between webapp chat routes and regular session routes (
 - `build_stream_response()` — Builds standardized response dict from `SessionService.send_session_message()` result; handles `command_executed`, `streaming`, `pending`, and default actions
 - `collect_pending_messages()` — Builds agent-bound message content; contains context diff logic (see Context Management section)
 
-### `AgentWebappInterfaceConfigService` (`backend/app/services/agent_webapp_interface_config_service.py`)
+### `AgentWebappInterfaceConfigService` (`backend/app/services/webapp/agent_webapp_interface_config_service.py`)
 
 - `get_or_create()` — Returns config for agent (creates with defaults if missing); verifies agent ownership
 - `update()` — Partial update of config fields using `model_dump(exclude_unset=True)`; verifies agent ownership

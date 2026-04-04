@@ -118,9 +118,9 @@ Route calls AI function (e.g., refine_user_prompt in routes/agents.py)
 ## Integration Points
 
 - **AI Credentials** — The user's Anthropic credential is looked up via `ai_credentials_service.get_default_for_type` (when no credential ID is pinned) or via direct `db.get(AICredential, credential_id)` (when a specific credential is pinned). See [AI Credentials](ai_credentials.md).
-- **`AICredentialPublic.is_oauth_token`** — The `is_oauth_token: bool` field (computed in `_to_public()`, not stored) tells the frontend whether a credential is an OAuth token so it can disable incompatible options in the picker. See `backend/app/models/ai_credential.py`.
+- **`AICredentialPublic.is_oauth_token`** — The `is_oauth_token: bool` field (computed in `_to_public()`, not stored) tells the frontend whether a credential is an OAuth token so it can disable incompatible options in the picker. See `backend/app/models/credentials/ai_credential.py`.
 - **Provider Manager** — `generate_content(prompt, api_key=key)` triggers the bypass path (bypasses cascade, calls `AnthropicProvider` directly). See `backend/app/agents/provider_manager.py`.
-- **User Model** — `default_ai_functions_sdk` and `default_ai_functions_credential_id` fields on the `User` table, exposed in `UserPublic` and `UserUpdateMe`. See `backend/app/models/user.py`.
+- **User Model** — `default_ai_functions_sdk` and `default_ai_functions_credential_id` fields on the `User` table, exposed in `UserPublic` and `UserUpdateMe`. See `backend/app/models/users/user.py`.
 - **Background Tasks** — `session_service.auto_generate_session_title` and `agent_service._generate_description_background` both accept a `user_id` parameter and resolve provider kwargs when user context is available.
 
 ## Database Migration

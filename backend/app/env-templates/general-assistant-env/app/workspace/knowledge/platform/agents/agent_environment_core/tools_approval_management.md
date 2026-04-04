@@ -12,7 +12,7 @@ Controls which tools agent environments are permitted to use autonomously. Plugi
 - Core SDK tools always permitted: `read`, `edit`, `glob`, `grep`, `bash`, `write`, `webfetch`, `websearch`, `todowrite`, `task`, `skill`, `askuserquestion`, and others
 - OpenCode-only built-ins also pre-allowed: `list`, `patch`
 - MCP bridge tools pre-allowed: knowledge query (`mcp__knowledge__*`) and agent task tools (`mcp__agent_task__*`)
-- Canonical set defined in `adapters/tool_name_registry.PRE_APPROVED_TOOLS` (inside agent-env); mirrored in `backend/app/services/message_service.py` (`PRE_ALLOWED_TOOLS`)
+- Canonical set defined in `adapters/tool_name_registry.PRE_APPROVED_TOOLS` (inside agent-env); mirrored in `backend/app/services/sessions/message_service.py` (`PRE_ALLOWED_TOOLS`)
 - All tool names use the **unified lowercase convention**
 
 **User-Approved Tools** (require explicit approval)

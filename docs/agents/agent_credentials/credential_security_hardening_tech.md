@@ -4,12 +4,12 @@
 
 ### Backend — Models & Migration
 
-- `backend/app/models/security_event.py` — `SecurityEvent` table model, `SecurityEventCreate`, `SecurityEventPublic`, `SecurityEventsPublic` schemas, event type constants
+- `backend/app/models/events/security_event.py` — `SecurityEvent` table model, `SecurityEventCreate`, `SecurityEventPublic`, `SecurityEventsPublic` schemas, event type constants
 - `backend/app/alembic/versions/5432134b1366_add_security_event_table.py` — migration creating `security_event` table with indexes
 
 ### Backend — Service Layer
 
-- `backend/app/services/security_event_service.py` — `SecurityEventService` with `create_event()`, `create_event_from_report()`, `list_events()`, `to_public()`
+- `backend/app/services/events/security_event_service.py` — `SecurityEventService` with `create_event()`, `create_event_from_report()`, `list_events()`, `to_public()`
 
 ### Backend — API Routes
 
@@ -31,7 +31,7 @@
 
 - `backend/app/env-templates/app_core_base/core/server/routes.py` — added `_redacted_event_stream()`, `POST /security/report` proxy endpoint, SSE stream wrapping
 - `backend/app/env-templates/app_core_base/core/server/agent_env_service.py` — `update_credentials()` now calls `credential_guard.update_values()` after credential sync
-- `backend/app/services/environment_lifecycle.py` — added `_write_claude_code_hook_settings()`, called during environment configuration
+- `backend/app/services/environments/environment_lifecycle.py` — added `_write_claude_code_hook_settings()`, called during environment configuration
 - `backend/app/models/__init__.py` — added `SecurityEvent` model import
 
 ### Tests
@@ -80,7 +80,7 @@ Migration: `backend/app/alembic/versions/5432134b1366_add_security_event_table.p
 
 ## Services & Key Methods
 
-### `SecurityEventService` (`backend/app/services/security_event_service.py`)
+### `SecurityEventService` (`backend/app/services/events/security_event_service.py`)
 
 - `create_event(session, user_id, data)` — creates SecurityEvent from `SecurityEventCreate` schema
 - `create_event_from_report(session, user_id, event_type, severity, details, tool_name, tool_input, ...)` — creates event from raw report payload, merges tool info into details, parses UUID strings safely

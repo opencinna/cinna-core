@@ -4,14 +4,14 @@
 
 ### Backend
 
-- **Models**: `backend/app/models/knowledge.py` - `AIKnowledgeGitRepo`, `AIKnowledgeGitRepoWorkspace`, `KnowledgeArticle`, `KnowledgeArticleChunk`, `UserEnabledDiscoverableSource` (kept for migration compatibility, not used in routes or services), enums (`SourceStatus`, `WorkspaceAccessType`), request/response schemas
+- **Models**: `backend/app/models/knowledge/knowledge.py` - `AIKnowledgeGitRepo`, `AIKnowledgeGitRepoWorkspace`, `KnowledgeArticle`, `KnowledgeArticleChunk`, `UserEnabledDiscoverableSource` (kept for migration compatibility, not used in routes or services), enums (`SourceStatus`, `WorkspaceAccessType`), request/response schemas
 - **Routes (admin CRUD)**: `backend/app/api/routes/knowledge_sources.py` - Source management, articles, discoverable list. All endpoints use `SuperUser` dependency
 - **Routes (agent query)**: `backend/app/api/routes/knowledge.py` - Knowledge query endpoint for agents
-- **Source service**: `backend/app/services/knowledge_source_service.py` - CRUD, check-access, refresh, discoverable list (read-only)
-- **Article service**: `backend/app/services/knowledge_article_service.py` - Article parsing, upserting, content hashing, embedding orchestration
-- **Git operations**: `backend/app/services/git_operations.py` - Clone, verify, SSH key file management, URL conversion
-- **Embedding service**: `backend/app/services/embedding_service.py` - Google Gemini embeddings, text chunking
-- **Vector search**: `backend/app/services/vector_search_service.py` - Cosine similarity, access control, article retrieval
+- **Source service**: `backend/app/services/knowledge/knowledge_source_service.py` - CRUD, check-access, refresh, discoverable list (read-only)
+- **Article service**: `backend/app/services/knowledge/knowledge_article_service.py` - Article parsing, upserting, content hashing, embedding orchestration
+- **Git operations**: `backend/app/services/knowledge/git_operations.py` - Clone, verify, SSH key file management, URL conversion
+- **Embedding service**: `backend/app/services/knowledge/embedding_service.py` - Google Gemini embeddings, text chunking
+- **Vector search**: `backend/app/services/knowledge/vector_search_service.py` - Cosine similarity, access control, article retrieval
 
 ### Migrations
 
@@ -124,7 +124,7 @@ Unique: `idx_user_source_unique` on `(user_id, git_repo_id)`
 
 ## Environment Variables (Agent Container)
 
-Injected into the agent container's `.env` file by `backend/app/services/environment_lifecycle.py:_generate_env_file()`:
+Injected into the agent container's `.env` file by `backend/app/services/environments/environment_lifecycle.py:_generate_env_file()`:
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
@@ -134,7 +134,7 @@ Injected into the agent container's `.env` file by `backend/app/services/environ
 
 ## Pre-Allowed Tools
 
-`backend/app/services/message_service.py` - `mcp__knowledge__query_integration_knowledge` is in the pre-allowed tools list, meaning agents can invoke it without per-call user approval. Other pre-allowed tools: `mcp__agent_task__add_comment`, `mcp__agent_task__update_status`, `mcp__agent_task__create_task`, `mcp__agent_task__create_subtask`, `mcp__agent_task__get_details`, `mcp__agent_task__list_tasks`.
+`backend/app/services/sessions/message_service.py` - `mcp__knowledge__query_integration_knowledge` is in the pre-allowed tools list, meaning agents can invoke it without per-call user approval. Other pre-allowed tools: `mcp__agent_task__add_comment`, `mcp__agent_task__update_status`, `mcp__agent_task__create_task`, `mcp__agent_task__create_subtask`, `mcp__agent_task__get_details`, `mcp__agent_task__list_tasks`.
 
 ## API Endpoints
 
@@ -185,7 +185,7 @@ Request body: `{ "query": "string", "article_ids": ["uuid"] }` - omit `article_i
 
 ## Services & Key Methods
 
-### `backend/app/services/knowledge_source_service.py` - KnowledgeSourceService
+### `backend/app/services/knowledge/knowledge_source_service.py` - KnowledgeSourceService
 
 | Method | Purpose |
 |--------|---------|
@@ -203,7 +203,7 @@ Request body: `{ "query": "string", "article_ids": ["uuid"] }` - omit `article_i
 
 Removed methods (no longer exist): `enable_discoverable_source`, `disable_discoverable_source`, `get_user_enabled_discoverable_source_ids`.
 
-### `backend/app/services/vector_search_service.py` - Access Control
+### `backend/app/services/knowledge/vector_search_service.py` - Access Control
 
 #### `get_accessible_source_ids(session, user_id, workspace_id)`
 
@@ -214,7 +214,7 @@ Implements the simplified access model with two source pools:
 
 The previous `UserEnabledDiscoverableSource` join is gone. Public sources are included for all users automatically.
 
-### `backend/app/services/knowledge_article_service.py`
+### `backend/app/services/knowledge/knowledge_article_service.py`
 
 | Method | Purpose |
 |--------|---------|
@@ -227,7 +227,7 @@ The previous `UserEnabledDiscoverableSource` join is gone. Public sources are in
 | `chunk_and_embed_article(session, article_id, model)` | Chunks article text and generates embeddings |
 | `chunk_and_embed_all_articles(session, git_repo_id, model)` | Smart batch: only processes new/updated articles |
 
-### `backend/app/services/git_operations.py`
+### `backend/app/services/knowledge/git_operations.py`
 
 | Method | Purpose |
 |--------|---------|
@@ -242,7 +242,7 @@ The previous `UserEnabledDiscoverableSource` join is gone. Public sources are in
 
 Custom exceptions: `GitAuthenticationError`, `GitConnectionError`, `GitOperationError`
 
-### `backend/app/services/embedding_service.py`
+### `backend/app/services/knowledge/embedding_service.py`
 
 | Method | Purpose |
 |--------|---------|
@@ -324,7 +324,7 @@ Default config: model `gemini-embedding-001`, 768 dimensions, 1000 char chunks, 
 - **Superuser-only**: All routes use `SuperUser = Annotated[User, Depends(get_current_active_superuser)]`. FastAPI returns 403 for non-superuser requests before the handler runs
 - **Source ownership**: CRUD operations also verify `user_id` at the service level
 - **Agent auth**: Knowledge query uses two-factor header-based auth (`Authorization: Bearer <env_token>` + `X-Agent-Env-Id`), separate from user JWT. Backend validates both match the database record via `verify_agent_auth_token()` dependency in `backend/app/api/routes/knowledge.py`
-- **Access filtering**: `backend/app/services/vector_search_service.py:get_accessible_source_ids()` enforces ownership, enablement, and status. Public sources bypass per-user check but still require `is_enabled=true` and `status=connected`
+- **Access filtering**: `backend/app/services/knowledge/vector_search_service.py:get_accessible_source_ids()` enforces ownership, enablement, and status. Public sources bypass per-user check but still require `is_enabled=true` and `status=connected`
 - **Article access**: Retrieval step validates all requested articles belong to accessible sources (403 if not)
 - **SSH key handling**: Decrypted in-memory only, temp files `0o600`, cleanup in `finally`
 

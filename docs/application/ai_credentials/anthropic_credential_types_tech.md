@@ -8,14 +8,14 @@
 - `backend/app/utils.py:163` - `detect_anthropic_credential_type()` - Returns `(env_var_name, key_type_description)` tuple
 
 **Service Logic:**
-- `backend/app/services/ai_credentials_service.py:76-83` - Auto-set expiry on credential creation (OAuth tokens)
-- `backend/app/services/ai_credentials_service.py:130-136` - Auto-set expiry on credential update (key changed to OAuth)
+- `backend/app/services/credentials/ai_credentials_service.py:76-83` - Auto-set expiry on credential creation (OAuth tokens)
+- `backend/app/services/credentials/ai_credentials_service.py:130-136` - Auto-set expiry on credential update (key changed to OAuth)
 
 **Environment Generation:**
-- `backend/app/services/environment_lifecycle.py:1293-1344` - Credential type detection and `.env` variable selection
+- `backend/app/services/environments/environment_lifecycle.py:1293-1344` - Credential type detection and `.env` variable selection
 
 **Models:**
-- `backend/app/models/ai_credential.py` - `expiry_notification_date` field on `AICredentialBase`, `AICredentialCreate`, `AICredentialUpdate`, `AICredentialPublic`
+- `backend/app/models/credentials/ai_credential.py` - `expiry_notification_date` field on `AICredentialBase`, `AICredentialCreate`, `AICredentialUpdate`, `AICredentialPublic`
 
 **Templates:**
 - `backend/app/env-templates/python-env-advanced/docker-compose.template.yml:22-23` - Both env vars passed with optional syntax (`${VAR:-}`)
