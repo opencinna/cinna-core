@@ -60,7 +60,7 @@
 
 ### Frontend — Routes
 - `frontend/src/routes/_layout/settings.tsx` — "Mail Servers" tab
-- `frontend/src/routes/_layout/tasks.tsx` — "Send Answer" button for email-originated tasks
+- `frontend/src/routes/_layout/tasks/index.tsx` — "Send Answer" button for email-originated tasks
 - `frontend/src/routes/_layout/task/$taskId.tsx` — "Send Answer" button in task detail
 - `frontend/src/routes/_layout/session/$sessionId.tsx` — Email/A2A integration type badges
 
@@ -253,7 +253,7 @@ Both schedulers registered in `backend/app/main.py` during app lifespan:
 - Only shown for non-clone agents on the Integrations tab
 
 ### Task Actions
-- `frontend/src/routes/_layout/tasks.tsx` — "Send Answer" button (Mail icon) for email-originated tasks when status is `completed` or `error`
+- `frontend/src/routes/_layout/tasks/index.tsx` — "Send Answer" button (Mail icon) for email-originated tasks when status is `completed` or `error`
 - `frontend/src/routes/_layout/task/$taskId.tsx` — "Send Answer" button in task detail footer
 
 ### Share & Session Badges

@@ -41,9 +41,9 @@
 
 - `frontend/src/routes/_layout/agents.tsx` - query key includes `activeWorkspaceId`
 - `frontend/src/routes/_layout/credentials.tsx`
-- `frontend/src/routes/_layout/sessions.index.tsx`
+- `frontend/src/routes/_layout/sessions/index.tsx`
 - `frontend/src/routes/_layout/activities.tsx`
-- `frontend/src/routes/_layout/tasks.tsx`
+- `frontend/src/routes/_layout/tasks/index.tsx`
 - `frontend/src/routes/_layout/index.tsx` (dashboard)
 - `frontend/src/routes/_layout/agent/creating.tsx`
 - `frontend/src/routes/_layout/agent/$agentId/conversations.tsx`

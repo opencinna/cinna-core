@@ -763,8 +763,7 @@ def get_discoverable_sources(
     limit: int = 100,
 ) -> list:
     """
-    Get all discoverable knowledge sources (public_discovery=True, not owned by user).
-    Enabled sources are sorted first.
+    Get all public knowledge sources from other admins (read-only view).
 
     Args:
         session: Database session
@@ -773,12 +772,11 @@ def get_discoverable_sources(
         limit: Maximum number of records to return
 
     Returns:
-        List of discoverable knowledge sources with owner info and enabled status
+        List of public knowledge sources with owner info
     """
-    from app.models.knowledge import DiscoverableSourcePublic, UserEnabledDiscoverableSource
+    from app.models.knowledge import DiscoverableSourcePublic
     from app.models.user import User
 
-    # Get all discoverable sources not owned by user
     query = (
         select(AIKnowledgeGitRepo, User)
         .join(User, AIKnowledgeGitRepo.user_id == User.id)
@@ -787,24 +785,16 @@ def get_discoverable_sources(
             AIKnowledgeGitRepo.user_id != user_id,
             AIKnowledgeGitRepo.status == SourceStatus.connected,
         )
+        .order_by(AIKnowledgeGitRepo.name)
+        .offset(skip)
+        .limit(limit)
     )
 
     sources_with_users = session.exec(query).all()
 
-    # Get user's enabled discoverable sources
-    enabled_source_ids = set(
-        session.exec(
-            select(UserEnabledDiscoverableSource.git_repo_id).where(
-                UserEnabledDiscoverableSource.user_id == user_id
-            )
-        ).all()
-    )
-
-    # Build result list
     result = []
     for source, owner in sources_with_users:
         article_count = get_article_count(session=session, source_id=source.id)
-        is_enabled = source.id in enabled_source_ids
         result.append(
             DiscoverableSourcePublic(
                 id=source.id,
@@ -813,118 +803,7 @@ def get_discoverable_sources(
                 status=source.status,
                 article_count=article_count,
                 owner_username=owner.username,
-                is_enabled_by_user=is_enabled,
             )
         )
 
-    # Sort: enabled sources first, then by name
-    result.sort(key=lambda x: (not x.is_enabled_by_user, x.name.lower()))
-
-    # Apply pagination
-    return result[skip : skip + limit]
-
-
-def enable_discoverable_source(
-    *,
-    session: Session,
-    source_id: uuid.UUID,
-    user_id: uuid.UUID,
-) -> bool:
-    """
-    Enable a discoverable source for the user.
-
-    Args:
-        session: Database session
-        source_id: ID of the discoverable source
-        user_id: ID of the user enabling the source
-
-    Returns:
-        True if enabled successfully, False if source not found or not discoverable
-    """
-    from app.models.knowledge import UserEnabledDiscoverableSource
-
-    # Verify source exists and is discoverable (and not owned by user)
-    source = session.get(AIKnowledgeGitRepo, source_id)
-    if not source or not source.public_discovery or source.user_id == user_id:
-        return False
-
-    # Check if already enabled
-    existing = session.exec(
-        select(UserEnabledDiscoverableSource).where(
-            UserEnabledDiscoverableSource.user_id == user_id,
-            UserEnabledDiscoverableSource.git_repo_id == source_id,
-        )
-    ).first()
-
-    if existing:
-        return True  # Already enabled
-
-    # Create new record
-    enabled_source = UserEnabledDiscoverableSource(
-        user_id=user_id,
-        git_repo_id=source_id,
-    )
-    session.add(enabled_source)
-    session.commit()
-    return True
-
-
-def disable_discoverable_source(
-    *,
-    session: Session,
-    source_id: uuid.UUID,
-    user_id: uuid.UUID,
-) -> bool:
-    """
-    Disable a discoverable source for the user.
-
-    Args:
-        session: Database session
-        source_id: ID of the discoverable source
-        user_id: ID of the user disabling the source
-
-    Returns:
-        True if disabled successfully, False if not found
-    """
-    from app.models.knowledge import UserEnabledDiscoverableSource
-
-    # Find the enabled record
-    enabled_record = session.exec(
-        select(UserEnabledDiscoverableSource).where(
-            UserEnabledDiscoverableSource.user_id == user_id,
-            UserEnabledDiscoverableSource.git_repo_id == source_id,
-        )
-    ).first()
-
-    if not enabled_record:
-        return False
-
-    session.delete(enabled_record)
-    session.commit()
-    return True
-
-
-def get_user_enabled_discoverable_source_ids(
-    *,
-    session: Session,
-    user_id: uuid.UUID,
-) -> list[uuid.UUID]:
-    """
-    Get IDs of discoverable sources enabled by the user.
-
-    Args:
-        session: Database session
-        user_id: ID of the user
-
-    Returns:
-        List of enabled discoverable source IDs
-    """
-    from app.models.knowledge import UserEnabledDiscoverableSource
-
-    source_ids = session.exec(
-        select(UserEnabledDiscoverableSource.git_repo_id).where(
-            UserEnabledDiscoverableSource.user_id == user_id
-        )
-    ).all()
-
-    return list(source_ids)
+    return result

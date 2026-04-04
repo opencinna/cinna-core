@@ -39,7 +39,7 @@
 - `backend/app/env-templates/app_core_base/core/scripts/get_session_context.py` — Stdlib-only CLI/import helper
 
 ### Frontend — Task Actions
-- `frontend/src/routes/_layout/tasks.tsx` — "Send Answer" button for email-originated tasks
+- `frontend/src/routes/_layout/tasks/index.tsx` — "Send Answer" button for email-originated tasks
 - `frontend/src/routes/_layout/task/$taskId.tsx` — "Send Answer" button in task detail footer
 
 ### Frontend — Session Badges
@@ -132,7 +132,7 @@
 ## Frontend Components
 
 ### Task "Send Answer" Actions
-- `frontend/src/routes/_layout/tasks.tsx` — "Send Answer" button with Mail icon on email-originated tasks (has `source_email_message_id`)
+- `frontend/src/routes/_layout/tasks/index.tsx` — "Send Answer" button with Mail icon on email-originated tasks (has `source_email_message_id`)
   - Visible when task status is `completed` or `error`
   - Shows loading state during AI reply generation
   - Toast notification on success/error

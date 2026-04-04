@@ -22,7 +22,7 @@ Each file below documents one API domain.
 | Guest Share | [guest_share.md](./guest_share.md) | 3 |
 | Guest Shares | [guest_shares.md](./guest_shares.md) | 5 |
 | Knowledge | [knowledge.md](./knowledge.md) | 1 |
-| Knowledge Sources | [knowledge_sources.md](./knowledge_sources.md) | 13 |
+| Knowledge Sources | [knowledge_sources.md](./knowledge_sources.md) | 11 |
 | Llm Plugins | [llm_plugins.md](./llm_plugins.md) | 13 |
 | Mail Servers | [mail_servers.md](./mail_servers.md) | 6 |
 | Mcp Connectors | [mcp_connectors.md](./mcp_connectors.md) | 5 |

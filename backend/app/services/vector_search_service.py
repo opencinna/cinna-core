@@ -66,8 +66,12 @@ def get_accessible_source_ids(
     workspace_id: Optional[uuid.UUID] = None
 ) -> List[uuid.UUID]:
     """
-    Get list of knowledge source IDs accessible to the user and workspace.
-    Includes both user-owned sources and enabled discoverable sources.
+    Get list of knowledge source IDs accessible to the user.
+
+    Access model:
+    - Public sources (public_discovery=True) are available to ALL users
+    - Private sources are only available to the admin who owns them
+    - Workspace filtering applies to owner's own sources only
 
     Args:
         session: Database session
@@ -77,10 +81,8 @@ def get_accessible_source_ids(
     Returns:
         List of accessible source IDs
     """
-    from app.models.knowledge import UserEnabledDiscoverableSource
-
-    # Build query for user's own accessible sources
-    query = select(AIKnowledgeGitRepo).where(
+    # 1. User's own sources (admin's private + public sources)
+    own_query = select(AIKnowledgeGitRepo).where(
         and_(
             AIKnowledgeGitRepo.user_id == user_id,
             AIKnowledgeGitRepo.is_enabled == True,
@@ -90,8 +92,7 @@ def get_accessible_source_ids(
 
     # Apply workspace filtering if specified
     if workspace_id:
-        # Sources with 'all' access OR sources with specific workspace permission
-        query = query.where(
+        own_query = own_query.where(
             or_(
                 AIKnowledgeGitRepo.workspace_access_type == WorkspaceAccessType.all,
                 and_(
@@ -105,34 +106,27 @@ def get_accessible_source_ids(
             )
         )
 
-    sources = session.exec(query).all()
-    source_ids = [source.id for source in sources]
+    own_sources = session.exec(own_query).all()
+    own_ids = [source.id for source in own_sources]
 
-    # Get enabled discoverable sources
-    enabled_discoverable_query = (
-        select(AIKnowledgeGitRepo)
-        .join(
-            UserEnabledDiscoverableSource,
-            AIKnowledgeGitRepo.id == UserEnabledDiscoverableSource.git_repo_id
-        )
-        .where(
-            and_(
-                UserEnabledDiscoverableSource.user_id == user_id,
-                AIKnowledgeGitRepo.public_discovery == True,
-                AIKnowledgeGitRepo.status == SourceStatus.connected,
-            )
+    # 2. All public sources from other admins (automatically available to everyone)
+    public_query = select(AIKnowledgeGitRepo).where(
+        and_(
+            AIKnowledgeGitRepo.user_id != user_id,
+            AIKnowledgeGitRepo.public_discovery == True,
+            AIKnowledgeGitRepo.is_enabled == True,
+            AIKnowledgeGitRepo.status == SourceStatus.connected,
         )
     )
 
-    enabled_discoverable_sources = session.exec(enabled_discoverable_query).all()
-    discoverable_ids = [source.id for source in enabled_discoverable_sources]
+    public_sources = session.exec(public_query).all()
+    public_ids = [source.id for source in public_sources]
 
-    # Combine both lists (deduplicate just in case)
-    all_source_ids = list(set(source_ids + discoverable_ids))
+    all_source_ids = list(set(own_ids + public_ids))
 
     logger.info(
-        f"Found {len(source_ids)} user sources and {len(discoverable_ids)} "
-        f"enabled discoverable sources for user {user_id}"
+        f"Found {len(own_ids)} own sources and {len(public_ids)} "
+        f"public sources for user {user_id}"
     )
     return all_source_ids
 

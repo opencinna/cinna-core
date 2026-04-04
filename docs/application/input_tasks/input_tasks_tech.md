@@ -52,9 +52,9 @@
 ### Frontend
 
 **Routes:**
-- `frontend/src/routes/_layout/tasks.index.tsx` — Tasks page with view mode toggle (Board / List); header has "New Task" button and view switcher; Board view renders `TaskBoard` component; List view renders a compact table with left sidebar status filters (Active, Completed, All, Archived), rows grouped by date (Today, Yesterday, Last week, Older), sorted by `updated_at` desc; each row shows status dot, short code, title, team/agent badge with color preset, and relative time
+- `frontend/src/routes/_layout/tasks/index.tsx` — Tasks page with view mode toggle (Board / List); header has "New Task" button and view switcher; Board view renders `TaskBoard` component; List view renders a compact table with left sidebar status filters (Active, Completed, All, Archived), rows grouped by date (Today, Yesterday, Last week, Older), sorted by `updated_at` desc; each row shows status dot, short code, title, team/agent badge with color preset, and relative time
 - `frontend/src/routes/_layout/task/$taskId.tsx` — unified task detail page; `taskId` param accepts either a UUID or a short code; detects format with `isUUID()` regex and calls `TasksService.getTaskDetail()` (UUID) or `TasksService.getTaskDetailByCode()` (short code) accordingly; full-width layout (no max-width constraints); sessions displayed as a tab alongside Comments/Sub-tasks/Activity (not as a standalone block)
-- `frontend/src/routes/_layout/tasks.$shortCode.tsx` — redirect-only route; performs `beforeLoad` redirect from `/tasks/$shortCode` to `/task/$taskId` preserving the short code value
+- `frontend/src/routes/_layout/tasks/$shortCode.tsx` — redirect-only route; performs `beforeLoad` redirect from `/tasks/$shortCode` to `/task/$taskId` preserving the short code value
 
 **Components:**
 - `frontend/src/components/Tasks/TaskBoard.tsx` — kanban board with 4 columns: Open (includes `new`, `refining`, `open` statuses), In Progress, Blocked, Completed; subscribes to `TASK_STATUS_CHANGED`, `TASK_SUBTASK_CREATED`, `SUBTASK_COMPLETED` for real-time updates; no inline filters or create button (handled by parent page header)
@@ -392,9 +392,9 @@ These events are matched by `meta.source_task_id` or by `meta.session_id` / `eve
 
 ## Frontend Components
 
-- `frontend/src/routes/_layout/tasks.index.tsx` — Tasks page: Board/List view toggle in header; Board view delegates to `TaskBoard` component; List view shows compact table with status sidebar filters, date-grouped rows (Today/Yesterday/Last week/Older), status dots, agent/team badges with color presets, relative timestamps
+- `frontend/src/routes/_layout/tasks/index.tsx` — Tasks page: Board/List view toggle in header; Board view delegates to `TaskBoard` component; List view shows compact table with status sidebar filters, date-grouped rows (Today/Yesterday/Last week/Older), status dots, agent/team badges with color presets, relative timestamps
 - `frontend/src/routes/_layout/task/$taskId.tsx` — unified task detail page (Linear-style layout): accepts UUID or short code in `$taskId` param; full-width layout with left body and right sidebar panel; four tabs: Comments, Sessions, Sub-tasks, Activity; session and subtask tab icons pulse blue when active sessions or in-progress subtasks exist; tab counters rendered as round pill badges; session rows are clickable (navigate to session page) with agent color-preset badges and relative timestamps; WebSocket session event handler uses a `sessionIdsRef` to avoid stale closure issues — matches events by `meta.session_id` or `event.model_id` against known task session IDs; subscribes to `TASK_COMMENT_ADDED`, `TASK_STATUS_CHANGED`, `TASK_ATTACHMENT_ADDED`, `SUBTASK_COMPLETED`, `TASK_SUBTASK_CREATED` (task events) and `SESSION_UPDATED`, `SESSION_INTERACTION_STATUS_CHANGED`, `SESSION_STATE_UPDATED`, `STREAM_COMPLETED` (session events)
-- `frontend/src/routes/_layout/tasks.$shortCode.tsx` — redirect-only: `beforeLoad` redirects `/tasks/$shortCode` to `/task/$taskId`
+- `frontend/src/routes/_layout/tasks/$shortCode.tsx` — redirect-only: `beforeLoad` redirects `/tasks/$shortCode` to `/task/$taskId`
 - `frontend/src/components/Tasks/TaskBoard.tsx` — kanban board: 4 columns (Open merges `new`/`refining`/`open`, In Progress, Blocked, Completed); `TaskShortCodeBadge`, `TaskPriorityBadge`, `SubtaskProgressChip` per card; workspace-aware via `useWorkspace`; no inline filters or create dialog (managed by parent page)
 - `frontend/src/components/Tasks/TaskShortCodeBadge.tsx` — status-color-coded short code badge; `clickable` prop controls navigation to `/task/$taskId`
 - `frontend/src/components/Tasks/TaskPriorityBadge.tsx` — colored label for `low`, `normal`, `high`, `urgent`; hides for `"normal"` (default)

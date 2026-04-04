@@ -107,7 +107,7 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | agent_sessions | Persistent chat sessions between users/external systems and agent environments — lifecycle, modes, streaming, integration types, UI | [business logic](application/agent_sessions/agent_sessions.md) \| [tech](application/agent_sessions/agent_sessions_tech.md) \| [env panel widget](application/agent_sessions/app_env_panel_widget.md) |
 | auth | User authentication - JWT tokens, password login, Google OAuth, domain whitelist, password recovery | [business logic](application/auth/auth.md) \| [tech](application/auth/auth_tech.md) \| [google oauth](application/auth/google_oauth.md) |
 | ssh_keys | User SSH key management for private Git repository access | [business logic](application/ssh_keys/ssh_keys.md) \| [tech](application/ssh_keys/ssh_keys_tech.md) |
-| knowledge_sources | Git-based knowledge sources with article indexing, embeddings, and semantic search | [business logic](application/knowledge_sources/knowledge_sources.md) \| [tech](application/knowledge_sources/knowledge_sources_tech.md) |
+| knowledge_sources | Admin-only Git-based knowledge sources with article indexing, embeddings, and semantic search. Public sources are automatically available to all users' agents; private sources are owner-only | [business logic](application/knowledge_sources/knowledge_sources.md) \| [tech](application/knowledge_sources/knowledge_sources_tech.md) |
 | user_workspaces | Workspace isolation for organizing agents, credentials, sessions by context | [business logic](application/user_workspaces/user_workspaces.md) \| [tech](application/user_workspaces/user_workspaces_tech.md) |
 | email_integration | Email-to-agent automation overview, access control, security model | [business logic](application/email_integration/email_integration.md) \| [tech](application/email_integration/email_integration_tech.md) |
 | mail_servers | IMAP/SMTP server configuration, credential encryption, connection testing | [business logic](application/email_integration/mail_servers.md) \| [tech](application/email_integration/mail_servers_tech.md) |
@@ -127,7 +127,7 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 
 | Feature | Description | Docs |
 |---------|-------------|------|
-| knowledge_management | Git-based knowledge sources, article indexing, vector search | [business logic](application/knowledge_sources/knowledge_sources.md) |
+| knowledge_management | Admin-only Git-based knowledge sources, article indexing, vector search. Public sources auto-available to all users' agents | [business logic](application/knowledge_sources/knowledge_sources.md) \| [tech](application/knowledge_sources/knowledge_sources_tech.md) |
 
 ### sharing
 

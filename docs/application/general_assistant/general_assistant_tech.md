@@ -15,7 +15,7 @@
 - `backend/app/services/auth_service.py` — triggers auto-create after OAuth user creation
 - `backend/app/api/routes/users.py` — `POST /users/me/general-assistant` endpoint
 - `backend/app/api/routes/agents.py` — deletion guard in `DELETE /{id}`
-- `backend/app/alembic/versions/a1b2c3d4e5f6_add_general_assistant.py` — schema migration
+- `backend/app/alembic/versions/4d769edd79d2_add_general_assistant.py` — schema migration
 
 **Environment Template**
 

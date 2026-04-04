@@ -17,8 +17,8 @@
 
 | File | Purpose |
 |------|---------|
-| `frontend/src/routes/_layout/agentic-teams.index.tsx` | Index page — redirects to first team or shows settings card |
-| `frontend/src/routes/_layout/agentic-teams.$teamId.tsx` | Chart page — fetches chart data, owns all mutations, renders header |
+| `frontend/src/routes/_layout/agentic-teams/index.tsx` | Index page — redirects to first team or shows settings card |
+| `frontend/src/routes/_layout/agentic-teams/$teamId.tsx` | Chart page — fetches chart data, owns all mutations, renders header |
 | `frontend/src/components/AgenticTeams/AgenticTeamChart.tsx` | Main chart component — React Flow canvas, auto-arrange, position debounce |
 | `frontend/src/components/AgenticTeams/AgenticTeamChartNode.tsx` | Custom React Flow node — color mapping, lead badge, kebab menu |
 | `frontend/src/components/AgenticTeams/AgenticTeamChartEdge.tsx` | Custom React Flow edge — bezier path, hover popover with edit/delete |

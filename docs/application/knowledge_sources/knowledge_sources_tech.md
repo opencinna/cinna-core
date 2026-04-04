@@ -4,10 +4,10 @@
 
 ### Backend
 
-- **Models**: `backend/app/models/knowledge.py` - `AIKnowledgeGitRepo`, `AIKnowledgeGitRepoWorkspace`, `KnowledgeArticle`, `KnowledgeArticleChunk`, `UserEnabledDiscoverableSource`, enums (`SourceStatus`, `WorkspaceAccessType`), request/response schemas
-- **Routes (user CRUD)**: `backend/app/api/routes/knowledge_sources.py` - Source management, articles, discovery endpoints
+- **Models**: `backend/app/models/knowledge.py` - `AIKnowledgeGitRepo`, `AIKnowledgeGitRepoWorkspace`, `KnowledgeArticle`, `KnowledgeArticleChunk`, `UserEnabledDiscoverableSource` (kept for migration compatibility, not used in routes or services), enums (`SourceStatus`, `WorkspaceAccessType`), request/response schemas
+- **Routes (admin CRUD)**: `backend/app/api/routes/knowledge_sources.py` - Source management, articles, discoverable list. All endpoints use `SuperUser` dependency
 - **Routes (agent query)**: `backend/app/api/routes/knowledge.py` - Knowledge query endpoint for agents
-- **Source service**: `backend/app/services/knowledge_source_service.py` - `KnowledgeSourceService` (CRUD, check-access, refresh, discovery)
+- **Source service**: `backend/app/services/knowledge_source_service.py` - CRUD, check-access, refresh, discoverable list (read-only)
 - **Article service**: `backend/app/services/knowledge_article_service.py` - Article parsing, upserting, content hashing, embedding orchestration
 - **Git operations**: `backend/app/services/git_operations.py` - Clone, verify, SSH key file management, URL conversion
 - **Embedding service**: `backend/app/services/embedding_service.py` - Google Gemini embeddings, text chunking
@@ -16,7 +16,7 @@
 ### Migrations
 
 - `backend/app/alembic/versions/240176144d01_add_knowledge_management_tables.py` - Core tables (git_repo, workspaces, articles)
-- `backend/app/alembic/versions/0df6011bb22d_add_public_discovery_and_user_enabled.py` - Public discovery, user enablement, username column
+- `backend/app/alembic/versions/0df6011bb22d_add_public_discovery_and_user_enabled.py` - Public discovery, user enablement table, username column
 - `backend/app/alembic/versions/f8a9c3d1e4b2_add_knowledge_article_chunks_table.py` - Article chunks for semantic search
 
 ### Agent Environment (Docker Container)
@@ -27,12 +27,13 @@
 
 ### Frontend
 
-- **Sources list page**: `frontend/src/routes/_layout/knowledge-sources.tsx` - My sources + discoverable sources
+- **Sources list page**: `frontend/src/routes/_layout/knowledge-sources.tsx` - My sources table (with Visibility column) + read-only Discoverable Sources table
 - **Source detail page**: `frontend/src/routes/_layout/knowledge-source/$sourceId.tsx` - Tabs for configuration and articles
 - **Add modal**: `frontend/src/components/KnowledgeSources/AddSourceModal.tsx` - Create source with SSH key and workspace selection
-- **Edit modal**: `frontend/src/components/KnowledgeSources/EditSourceModal.tsx` - Update source settings (Git URL read-only)
-- **Configuration tab**: `frontend/src/components/KnowledgeSources/KnowledgeSourceConfigurationTab.tsx` - Status display, enable/disable, check access, refresh
+- **Edit modal**: `frontend/src/components/KnowledgeSources/EditSourceModal.tsx` - Update name, description, branch, SSH key. Git URL is read-only. No public_discovery toggle here (moved to Configuration tab)
+- **Configuration tab**: `frontend/src/components/KnowledgeSources/KnowledgeSourceConfigurationTab.tsx` - Status display, check access, refresh. Footer contains Enabled toggle + Public toggle side by side
 - **Articles tab**: `frontend/src/components/KnowledgeSources/KnowledgeSourceArticlesTab.tsx` - Article list with tags and features
+- **Admin sidebar menu**: `frontend/src/components/Sidebar/AdminMenu.tsx` - Knowledge Sources entry (BookOpen icon) between Users and Plugin Marketplaces in the Admin dropdown
 - **Knowledge tool render**: `frontend/src/components/Chat/ToolCallBlock.tsx` - Detects `mcp__knowledge__query_integration_knowledge` tool calls, renders via `KnowledgeQueryToolBlock` component
 - **API client**: `frontend/src/client/sdk.gen.ts` - `KnowledgeSourcesService`
 
@@ -110,6 +111,8 @@ Unique: `idx_chunk_article_idx_unique` on `(article_id, chunk_index)`
 
 ### Table: `user_enabled_discoverable_sources`
 
+This table is kept in the database for migration compatibility but is **no longer used** in any service or route code. It previously tracked per-user enablement of discoverable sources. The access model was simplified: all public sources are now automatically available.
+
 | Column | Type | Constraints |
 |--------|------|-------------|
 | id | UUID | PK |
@@ -135,14 +138,20 @@ Injected into the agent container's `.env` file by `backend/app/services/environ
 
 ## API Endpoints
 
-### User Source Management
+### Admin Source Management
 
 **Route file**: `backend/app/api/routes/knowledge_sources.py`
 **Prefix**: `/api/v1/knowledge-sources` | **Tag**: `knowledge-sources`
+**Auth**: All endpoints require `SuperUser` (`get_current_active_superuser`). Non-superusers receive 403.
+
+Route-level dependency declaration:
+```python
+SuperUser = Annotated[User, Depends(get_current_active_superuser)]
+```
 
 | Method | Path | Description | Request | Response |
 |--------|------|-------------|---------|----------|
-| GET | `/` | List user's sources | `?workspace_id&skip&limit` | `list[AIKnowledgeGitRepoPublic]` |
+| GET | `/` | List admin's sources | `?workspace_id&skip&limit` | `list[AIKnowledgeGitRepoPublic]` |
 | POST | `/` | Create source | `AIKnowledgeGitRepoCreate` | `AIKnowledgeGitRepoPublic` |
 | GET | `/{source_id}` | Get source by ID | - | `AIKnowledgeGitRepoPublic` |
 | PUT | `/{source_id}` | Update source | `AIKnowledgeGitRepoUpdate` | `AIKnowledgeGitRepoPublic` |
@@ -153,13 +162,15 @@ Injected into the agent container's `.env` file by `backend/app/services/environ
 | POST | `/{source_id}/refresh` | Clone + parse + embed articles | - | `RefreshKnowledgeResponse` |
 | GET | `/{source_id}/articles` | List articles | `?skip&limit` | `list[KnowledgeArticlePublic]` |
 
-### Discovery Endpoints
+### Discoverable Sources Endpoint
 
-| Method | Path | Description | Response |
-|--------|------|-------------|----------|
-| GET | `/discoverable/list` | List public sources from other users | `list[DiscoverableSourcePublic]` |
-| POST | `/discoverable/{source_id}/enable` | Enable discoverable source for user | `{"ok": true}` |
-| POST | `/discoverable/{source_id}/disable` | Disable discoverable source for user | `{"ok": true}` |
+Read-only cross-admin visibility. No enable/disable endpoints exist.
+
+| Method | Path | Description | Auth | Response |
+|--------|------|-------------|------|----------|
+| GET | `/discoverable/list` | List public sources from other admins | SuperUser | `list[DiscoverableSourcePublic]` |
+
+`DiscoverableSourcePublic` fields: `id`, `name`, `description`, `status`, `article_count`, `owner_username`. The `is_enabled_by_user` field that existed in the previous model has been removed.
 
 ### Agent Knowledge Query
 
@@ -188,9 +199,20 @@ Request body: `{ "query": "string", "article_ids": ["uuid"] }` - omit `article_i
 | `check_access(session, source_id, user_id)` | Decrypts SSH key, runs `git ls-remote`, updates status |
 | `refresh_knowledge(session, source_id, user_id)` | Full clone + parse + embed workflow |
 | `get_source_articles(session, source_id, user_id, skip, limit)` | Lists articles for a source |
-| `get_discoverable_sources(session, user_id, skip, limit)` | Lists public sources from other users with enablement status |
-| `enable_discoverable_source(session, source_id, user_id)` | Creates `UserEnabledDiscoverableSource` record |
-| `disable_discoverable_source(session, source_id, user_id)` | Removes enablement record |
+| `get_discoverable_sources(session, user_id, skip, limit)` | Lists public sources from other admins (read-only, no enablement state) |
+
+Removed methods (no longer exist): `enable_discoverable_source`, `disable_discoverable_source`, `get_user_enabled_discoverable_source_ids`.
+
+### `backend/app/services/vector_search_service.py` - Access Control
+
+#### `get_accessible_source_ids(session, user_id, workspace_id)`
+
+Implements the simplified access model with two source pools:
+
+1. **Own sources** — sources where `user_id == current_user_id`, `is_enabled=true`, `status=connected`. Workspace filtering applies here
+2. **Public sources** — sources from other admins where `public_discovery=True`, `is_enabled=true`, `status=connected`. No per-user opt-in check. No workspace filtering
+
+The previous `UserEnabledDiscoverableSource` join is gone. Public sources are included for all users automatically.
 
 ### `backend/app/services/knowledge_article_service.py`
 
@@ -232,26 +254,16 @@ Custom exceptions: `GitAuthenticationError`, `GitConnectionError`, `GitOperation
 
 Default config: model `gemini-embedding-001`, 768 dimensions, 1000 char chunks, 10% overlap, batch size 100
 
-### `backend/app/services/vector_search_service.py`
-
-| Method | Purpose |
-|--------|---------|
-| `get_accessible_source_ids(session, user_id, workspace_id)` | Returns source IDs: owned+enabled+connected + discoverable enabled |
-| `cosine_similarity(vec1, vec2)` | In-memory cosine similarity calculation |
-| `search_article_chunks(session, query_embedding, source_ids, model, limit)` | Finds most similar chunks across sources |
-| `get_top_articles_from_chunks(chunk_results, limit)` | Groups by article, ranks by max similarity, deduplicates |
-| `get_articles_by_ids(session, article_ids, source_ids)` | Full content retrieval with access validation |
-| `search_knowledge(session, query_embedding, user_id, workspace_id, model, limit)` | High-level search combining access control + similarity |
-
 ## Frontend Components
 
 ### `frontend/src/routes/_layout/knowledge-sources.tsx`
 
-- Two sections: "My Knowledge Sources" (own sources) + "Discoverable Sources" (public sources from others)
-- Status badges (green=connected, yellow=pending, red=error, gray=disconnected)
-- Article count badges, last sync timestamp
-- Search and workspace filter for own sources
-- Toggle switches for discoverable source enablement
+- Two sections: "My Knowledge Sources" (own sources) + "Discoverable Sources" (public sources from other admins)
+- My sources table columns: Name, Status, **Visibility**, Articles, Last Sync
+  - Visibility column shows a blue "Public" badge (Globe icon) when `public_discovery=true`, or "Private" text when false
+  - Disabled sources render at 60% opacity
+- Discoverable sources table columns: Name, Owner, Articles — **read-only, no toggle switches**
+- Empty state text in Discoverable section: "No public sources from other admins"
 
 ### `frontend/src/routes/_layout/knowledge-source/$sourceId.tsx`
 
@@ -268,16 +280,18 @@ Default config: model `gemini-embedding-001`, 768 dimensions, 1000 char chunks, 
 
 ### `frontend/src/components/KnowledgeSources/EditSourceModal.tsx`
 
-- Same fields as Add modal except Git URL is read-only with explanation text
-- Public discovery toggle
+- Fields: name, description, branch, SSH key. Git URL is read-only with explanation text
+- No `public_discovery` toggle — that control was moved to the Configuration tab
 
 ### `frontend/src/components/KnowledgeSources/KnowledgeSourceConfigurationTab.tsx`
 
 - Displays: Git URL (monospace), branch, SSH key status, connection status badge, last sync time
-- Enable/disable toggle
-- "Check Access" button (when not connected)
-- "Refresh Knowledge" button (when enabled and connected)
 - Status message display (error details, sync statistics)
+- **Footer (left side)**: Enabled toggle + Public toggle, rendered side by side
+  - Enabled toggle calls `/enable` or `/disable` endpoints
+  - Public toggle calls `updateKnowledgeSource` with `{ public_discovery: boolean }`
+  - Public toggle success toast: "Source is now public — available to all users" / "Source is now private — only available to you"
+- **Footer (right side)**: "Check Access" button (shown when status is not `connected`) + "Refresh Knowledge" button (disabled when source is not enabled)
 
 ### `frontend/src/components/KnowledgeSources/KnowledgeSourceArticlesTab.tsx`
 
@@ -285,6 +299,12 @@ Default config: model `gemini-embedding-001`, 768 dimensions, 1000 char chunks, 
 - Table: title (bold), description, tags (first 3 + overflow), features (first 2 + overflow)
 - Empty state with instructions about `.ai-knowledge/settings.json`
 - Skeleton loaders during fetch
+
+### `frontend/src/components/Sidebar/AdminMenu.tsx`
+
+- Admin dropdown menu containing: Users, **Knowledge Sources**, Plugin Marketplaces
+- Knowledge Sources entry uses `BookOpen` icon, links to `/knowledge-sources`
+- Sidebar button shows active state when current path is `/knowledge-sources` or starts with `/knowledge-source/`
 
 ## Configuration
 
@@ -301,12 +321,12 @@ Default config: model `gemini-embedding-001`, 768 dimensions, 1000 char chunks, 
 
 ## Security
 
-- **Source ownership**: All CRUD operations verify `user_id` before access
+- **Superuser-only**: All routes use `SuperUser = Annotated[User, Depends(get_current_active_superuser)]`. FastAPI returns 403 for non-superuser requests before the handler runs
+- **Source ownership**: CRUD operations also verify `user_id` at the service level
 - **Agent auth**: Knowledge query uses two-factor header-based auth (`Authorization: Bearer <env_token>` + `X-Agent-Env-Id`), separate from user JWT. Backend validates both match the database record via `verify_agent_auth_token()` dependency in `backend/app/api/routes/knowledge.py`
-- **Access filtering**: `backend/app/services/vector_search_service.py:get_accessible_source_ids()` enforces ownership, enablement, status, and workspace constraints
+- **Access filtering**: `backend/app/services/vector_search_service.py:get_accessible_source_ids()` enforces ownership, enablement, and status. Public sources bypass per-user check but still require `is_enabled=true` and `status=connected`
 - **Article access**: Retrieval step validates all requested articles belong to accessible sources (403 if not)
 - **SSH key handling**: Decrypted in-memory only, temp files `0o600`, cleanup in `finally`
-- **Discovery opt-in**: Users must explicitly enable discoverable sources before agents can access them
 
 ## Related Aspect Docs
 

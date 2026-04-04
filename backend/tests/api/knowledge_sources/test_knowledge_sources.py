@@ -1,10 +1,11 @@
 """
 Integration tests for the knowledge-sources API.
 
+All knowledge source endpoints are admin-only (superuser).
 Three scenario-based tests covering the full surface:
   1. Lifecycle   — CRUD, enable/disable, ownership guards, status transitions
   2. Operational — check-access (success + failure), refresh (success + disabled)
-  3. Discovery   — public discovery, enable/disable by another user
+  3. Discovery   — public discovery visibility for admins, non-admin rejection
 """
 
 import uuid
@@ -95,7 +96,7 @@ def test_knowledge_source_lifecycle(
       3.  Source appears in list
       4.  GET by ID — fields match
       5.  Update name and description — changes persist
-      6.  Another user cannot read, update, or delete the source
+      6.  Non-admin user gets 403 on all endpoints
       7.  Requests for a non-existent ID return 404
       8.  Changing branch resets status to 'pending'
       9.  Disable source — is_enabled=False
@@ -142,17 +143,25 @@ def test_knowledge_source_lifecycle(
     re_fetched = get_knowledge_source(client, superuser_token_headers, source_id)
     assert re_fetched["name"] == new_name
 
-    # ── Phase 6: Other user cannot read, update, or delete ───────────────
+    # ── Phase 6: Non-admin user gets 403 on all endpoints ────────────────
     other_user = create_random_user(client)
     other_headers = user_authentication_headers(
         client=client, email=other_user["email"], password=other_user["_password"]
     )
 
-    assert client.get(f"{_BASE}/{source_id}", headers=other_headers).status_code == 404
+    assert client.get(f"{_BASE}/", headers=other_headers).status_code == 403
+    assert client.get(f"{_BASE}/{source_id}", headers=other_headers).status_code == 403
     assert client.put(
         f"{_BASE}/{source_id}", headers=other_headers, json={"name": "hacked"}
-    ).status_code == 404
-    assert client.delete(f"{_BASE}/{source_id}", headers=other_headers).status_code == 404
+    ).status_code == 403
+    assert client.delete(f"{_BASE}/{source_id}", headers=other_headers).status_code == 403
+    assert client.post(
+        f"{_BASE}/{source_id}/enable", headers=other_headers
+    ).status_code == 403
+    assert client.post(
+        f"{_BASE}/{source_id}/check-access", headers=other_headers
+    ).status_code == 403
+
     # Original owner's source is still intact
     get_knowledge_source(client, superuser_token_headers, source_id)
 
@@ -182,7 +191,7 @@ def test_knowledge_source_lifecycle(
     assert branch_updated["branch"] == "develop"
     assert branch_updated["status"] == "pending"
 
-    # ── Phase 9: Disable ──────────────────────────────────────────────────
+    # ── Phase 9: Disable ─────────────────────────────────────��────────────
     disabled = disable_knowledge_source(client, superuser_token_headers, source_id)
     assert disabled["is_enabled"] is False
     assert get_knowledge_source(client, superuser_token_headers, source_id)["is_enabled"] is False
@@ -271,7 +280,7 @@ def test_check_access_and_refresh(
     assert after_refresh["status"] == "connected"
     assert after_refresh["last_sync_at"] is not None
 
-    # ── Phase 7: Disabled source → refresh returns error ──────────────────
+    # ── Phase 7: Disabled source → refresh returns error ────────��─────────
     disable_knowledge_source(client, superuser_token_headers, source_id)
 
     r = client.post(f"{_BASE}/{source_id}/refresh", headers=superuser_token_headers)
@@ -282,7 +291,7 @@ def test_check_access_and_refresh(
 
 
 # ---------------------------------------------------------------------------
-# Scenario 3: Discoverable sources
+# Scenario 3: Discoverable sources (admin cross-visibility)
 # ---------------------------------------------------------------------------
 
 def test_discoverable_sources_flow(
@@ -291,15 +300,13 @@ def test_discoverable_sources_flow(
     normal_user_token_headers: dict[str, str],
 ) -> None:
     """
-    Public discovery workflow:
+    Public discovery workflow (admin-only, read-only):
       1. Superuser creates a source and makes it connected
       2. Superuser enables public_discovery=True
-      3. Normal user lists discoverable sources → source appears, is_enabled_by_user=False
-      4. Normal user enables the source → ok=true
-      5. Normal user lists again → is_enabled_by_user=True
-      6. Normal user disables the source → ok=true
-      7. Normal user lists again → is_enabled_by_user=False
-      8. Superuser's own source does not appear in their own discoverable list
+      3. Non-admin user gets 403 on discoverable list
+      4. Superuser's own source does not appear in their own discoverable list
+      5. Source has no is_enabled_by_user field in response
+      6. Superuser disables public_discovery → source no longer discoverable
     """
     # ── Phase 1: Superuser creates and connects a source ──────────────────
     source = create_knowledge_source(client, superuser_token_headers)
@@ -317,42 +324,24 @@ def test_discoverable_sources_flow(
     )
     assert updated["public_discovery"] is True
 
-    # ── Phase 3: Normal user sees it with is_enabled_by_user=False ────────
+    # ── Phase 3: Non-admin user gets 403 on discoverable list ─────────────
     r = client.get(f"{_BASE}/discoverable/list", headers=normal_user_token_headers)
-    assert r.status_code == 200
-    discoverable = r.json()
-    match = next((s for s in discoverable if s["id"] == source_id), None)
-    assert match is not None, "Superuser's discoverable source not visible to normal user"
-    assert match["is_enabled_by_user"] is False
+    assert r.status_code == 403
 
-    # ── Phase 4: Normal user enables it ───────────────────────────────────
-    r = client.post(
-        f"{_BASE}/discoverable/{source_id}/enable", headers=normal_user_token_headers
-    )
-    assert r.status_code == 200
-    assert r.json().get("ok") is True
-
-    # ── Phase 5: Now is_enabled_by_user=True ──────────────────────────────
-    r = client.get(f"{_BASE}/discoverable/list", headers=normal_user_token_headers)
-    match = next((s for s in r.json() if s["id"] == source_id), None)
-    assert match is not None
-    assert match["is_enabled_by_user"] is True
-
-    # ── Phase 6: Normal user disables it ──────────────────────────────────
-    r = client.post(
-        f"{_BASE}/discoverable/{source_id}/disable", headers=normal_user_token_headers
-    )
-    assert r.status_code == 200
-    assert r.json().get("ok") is True
-
-    # ── Phase 7: Back to is_enabled_by_user=False ─────────────────────────
-    r = client.get(f"{_BASE}/discoverable/list", headers=normal_user_token_headers)
-    match = next((s for s in r.json() if s["id"] == source_id), None)
-    assert match is not None
-    assert match["is_enabled_by_user"] is False
-
-    # ── Phase 8: Owner does not see own source in discoverable list ────────
+    # ── Phase 4: Owner does not see own source in discoverable list ────────
     r = client.get(f"{_BASE}/discoverable/list", headers=superuser_token_headers)
     assert r.status_code == 200
     owner_view = r.json()
     assert not any(s["id"] == source_id for s in owner_view)
+
+    # ── Phase 5: Response has no is_enabled_by_user field ──────���──────────
+    for s in owner_view:
+        assert "is_enabled_by_user" not in s
+
+    # ── Phase 6: Disable public_discovery → no longer discoverable ────────
+    update_knowledge_source(
+        client, superuser_token_headers, source_id, public_discovery=False
+    )
+    r = client.get(f"{_BASE}/discoverable/list", headers=superuser_token_headers)
+    assert r.status_code == 200
+    assert not any(s["id"] == source_id for s in r.json())

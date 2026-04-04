@@ -5783,17 +5783,12 @@ export const DiscoverableSourcePublicSchema = {
                 }
             ],
             title: 'Owner Username'
-        },
-        is_enabled_by_user: {
-            type: 'boolean',
-            title: 'Is Enabled By User',
-            default: false
         }
     },
     type: 'object',
     required: ['id', 'name', 'status'],
     title: 'DiscoverableSourcePublic',
-    description: 'Public schema for discoverable knowledge sources.'
+    description: 'Public schema for discoverable knowledge sources (read-only admin view).'
 } as const;
 
 export const EmailAccessModeSchema = {

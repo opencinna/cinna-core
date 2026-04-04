@@ -98,8 +98,8 @@ Each adapter instance (cached per mode by `SDKManager`) manages its own `opencod
 ## Key Files
 
 ### Adapter code (inside agent container)
-- `backend/app/env-templates/app_core_base/core/server/adapters/opencode_adapter.py` — main adapter (per-mode process mgmt, HTTP, SSE loop, progress timeout)
-- `backend/app/env-templates/app_core_base/core/server/adapters/opencode_event_adapter.py` — event translation (text/reasoning buffering, tool events, permissions) + JSONL logging
+- `backend/app/env-templates/app_core_base/core/server/adapters/opencode_sdk_adapter.py` — main adapter (per-mode process mgmt, HTTP, SSE loop, progress timeout)
+- `backend/app/env-templates/app_core_base/core/server/adapters/opencode_event_transformer.py` — event translation (text/reasoning buffering, tool events, permissions) + JSONL logging
 - `backend/app/env-templates/app_core_base/core/server/adapters/base.py` — `SDKEvent`, `SDKEventType` definitions
 - `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/` — MCP bridge servers (read `session_context.json` from cwd)
 
@@ -112,7 +112,7 @@ Each adapter instance (cached per mode by `SDKManager`) manages its own `opencod
 - `backend/app/env-templates/python-env-advanced/Dockerfile`
 
 ### Tests
-- `backend/tests/unit/test_opencode_event_adapter.py` — **43 tests** for the event adapter
+- `backend/tests/unit/test_opencode_event_transformer.py` — **43 tests** for the event transformer
 
 ### Real captured logs (for test development)
 - `backend/agent-environments/91a6340c-fec1-4b44-af8b-cf84a269f673/app/workspace/logs/opencode_session_*.jsonl`

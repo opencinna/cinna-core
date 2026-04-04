@@ -126,19 +126,3 @@ Auto-generated from OpenAPI spec. Tag: `knowledge-sources`
 - `limit`: integer, default: `100`
 
 ---
-
-## POST `/api/v1/knowledge-sources/discoverable/{source_id}/enable`
-**Enable Discoverable Source**
-
-**Path parameters:**
-- `source_id`: uuid
-
----
-
-## POST `/api/v1/knowledge-sources/discoverable/{source_id}/disable`
-**Disable Discoverable Source**
-
-**Path parameters:**
-- `source_id`: uuid
-
----

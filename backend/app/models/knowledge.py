@@ -139,7 +139,7 @@ class UserEnabledDiscoverableSource(SQLModel, table=True):
 
 # Discoverable Source Public Schema
 class DiscoverableSourcePublic(SQLModel):
-    """Public schema for discoverable knowledge sources."""
+    """Public schema for discoverable knowledge sources (read-only admin view)."""
 
     id: uuid.UUID
     name: str
@@ -147,7 +147,6 @@ class DiscoverableSourcePublic(SQLModel):
     status: SourceStatus
     article_count: int = 0
     owner_username: Optional[str] = None
-    is_enabled_by_user: bool = False
 
 
 # Knowledge Article Model

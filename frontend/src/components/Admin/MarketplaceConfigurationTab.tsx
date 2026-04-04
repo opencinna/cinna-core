@@ -8,7 +8,6 @@ import {
   RefreshCw,
   Key,
   Globe,
-  Lock,
 } from "lucide-react"
 
 import type { LLMPluginMarketplacePublic } from "@/client"
@@ -22,6 +21,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Label as UILabel } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import useCustomToast from "@/hooks/useCustomToast"
 
@@ -106,12 +106,9 @@ export function MarketplaceConfigurationTab({
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle>Marketplace Configuration</CardTitle>
-            <CardDescription>Git repository settings and status</CardDescription>
-          </div>
-          <StatusBadge status={marketplace.status} />
+        <div>
+          <CardTitle>Marketplace Configuration</CardTitle>
+          <CardDescription>Git repository settings and status</CardDescription>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -147,26 +144,9 @@ export function MarketplaceConfigurationTab({
             </Badge>
           </div>
           <div>
-            <Label>Publicly Discoverable</Label>
-            <div className="flex items-center gap-2 mt-1">
-              <Switch
-                checked={marketplace.public_discovery}
-                onCheckedChange={(checked) => updateMutation.mutate(checked)}
-                disabled={updateMutation.isPending}
-              />
-              <div className="flex items-center gap-1">
-                {marketplace.public_discovery ? (
-                  <>
-                    <Globe className="h-3 w-3" />
-                    <span className="text-sm">Public</span>
-                  </>
-                ) : (
-                  <>
-                    <Lock className="h-3 w-3" />
-                    <span className="text-sm">Private</span>
-                  </>
-                )}
-              </div>
+            <Label>Status</Label>
+            <div className="mt-1">
+              <StatusBadge status={marketplace.status} />
             </div>
           </div>
           <div>
@@ -218,7 +198,19 @@ export function MarketplaceConfigurationTab({
           </div>
         )}
 
-        <div className="flex justify-end gap-2 pt-4">
+        <div className="flex items-center justify-between pt-4 border-t">
+          <div className="flex items-center gap-2">
+            <Globe className="h-4 w-4 text-muted-foreground" />
+            <UILabel htmlFor="public_discovery" className="text-sm cursor-pointer">
+              Public
+            </UILabel>
+            <Switch
+              id="public_discovery"
+              checked={marketplace.public_discovery}
+              onCheckedChange={(checked) => updateMutation.mutate(checked)}
+              disabled={updateMutation.isPending}
+            />
+          </div>
           <Button
             onClick={() => syncMutation.mutate()}
             disabled={syncMutation.isPending}

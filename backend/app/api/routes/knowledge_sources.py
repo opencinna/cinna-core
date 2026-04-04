@@ -1,16 +1,18 @@
 """
 API routes for knowledge source management.
 
-This module provides endpoints for managing Git-based knowledge repositories,
-including CRUD operations, access checking, and knowledge refresh triggering.
+Admin-only feature: only superusers can create, manage, and configure
+knowledge sources. Public sources are automatically available to all users
+via the knowledge query tool.
 """
 
 import uuid
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import SessionDep, get_current_active_superuser
+from app.models import User
 from app.models.knowledge import (
     AIKnowledgeGitRepoCreate,
     AIKnowledgeGitRepoPublic,
@@ -24,19 +26,21 @@ from app.services import knowledge_source_service
 
 router = APIRouter(prefix="/knowledge-sources", tags=["knowledge-sources"])
 
+SuperUser = Annotated[User, Depends(get_current_active_superuser)]
+
 
 @router.get("/", response_model=list[AIKnowledgeGitRepoPublic])
 def list_knowledge_sources(
     session: SessionDep,
-    current_user: CurrentUser,
+    current_user: SuperUser,
     workspace_id: Optional[uuid.UUID] = Query(None),
     skip: int = 0,
     limit: int = 100,
 ) -> Any:
     """
-    Retrieve knowledge sources for the current user.
+    Retrieve knowledge sources for the current admin user.
 
-    Optionally filter by workspace ID.
+    Only superusers can manage knowledge sources.
     """
     sources = knowledge_source_service.get_user_sources(
         session=session,
@@ -52,14 +56,11 @@ def list_knowledge_sources(
 def create_knowledge_source(
     *,
     session: SessionDep,
-    current_user: CurrentUser,
+    current_user: SuperUser,
     source_in: AIKnowledgeGitRepoCreate,
 ) -> Any:
     """
-    Create a new knowledge source.
-
-    The source will be created with status 'pending' and needs to be verified
-    using the check-access endpoint.
+    Create a new knowledge source. Admin only.
     """
     source = knowledge_source_service.create_source(
         session=session,
@@ -73,11 +74,11 @@ def create_knowledge_source(
 def get_knowledge_source(
     *,
     session: SessionDep,
-    current_user: CurrentUser,
+    current_user: SuperUser,
     source_id: uuid.UUID,
 ) -> Any:
     """
-    Get a knowledge source by ID.
+    Get a knowledge source by ID. Admin only.
     """
     source = knowledge_source_service.get_source_by_id(
         session=session,
@@ -93,15 +94,12 @@ def get_knowledge_source(
 def update_knowledge_source(
     *,
     session: SessionDep,
-    current_user: CurrentUser,
+    current_user: SuperUser,
     source_id: uuid.UUID,
     source_in: AIKnowledgeGitRepoUpdate,
 ) -> Any:
     """
-    Update a knowledge source.
-
-    If Git configuration (URL, branch, SSH key) is changed, the source will
-    be marked as 'pending' and needs to be re-verified.
+    Update a knowledge source. Admin only.
     """
     source = knowledge_source_service.update_source(
         session=session,
@@ -118,13 +116,11 @@ def update_knowledge_source(
 def delete_knowledge_source(
     *,
     session: SessionDep,
-    current_user: CurrentUser,
+    current_user: SuperUser,
     source_id: uuid.UUID,
 ) -> Any:
     """
-    Delete a knowledge source.
-
-    This will also delete all associated articles and workspace permissions.
+    Delete a knowledge source. Admin only.
     """
     deleted = knowledge_source_service.delete_source(
         session=session,
@@ -140,13 +136,11 @@ def delete_knowledge_source(
 def enable_knowledge_source(
     *,
     session: SessionDep,
-    current_user: CurrentUser,
+    current_user: SuperUser,
     source_id: uuid.UUID,
 ) -> Any:
     """
-    Enable a knowledge source.
-
-    Enabled sources are included in knowledge queries.
+    Enable a knowledge source. Admin only.
     """
     source = knowledge_source_service.enable_source(
         session=session,
@@ -162,13 +156,11 @@ def enable_knowledge_source(
 def disable_knowledge_source(
     *,
     session: SessionDep,
-    current_user: CurrentUser,
+    current_user: SuperUser,
     source_id: uuid.UUID,
 ) -> Any:
     """
-    Disable a knowledge source.
-
-    Disabled sources are excluded from knowledge queries but data is preserved.
+    Disable a knowledge source. Admin only.
     """
     source = knowledge_source_service.disable_source(
         session=session,
@@ -184,17 +176,11 @@ def disable_knowledge_source(
 def check_knowledge_source_access(
     *,
     session: SessionDep,
-    current_user: CurrentUser,
+    current_user: SuperUser,
     source_id: uuid.UUID,
 ) -> Any:
     """
-    Check if the Git repository is accessible.
-
-    This verifies that the repository can be accessed with the provided
-    credentials (SSH key for private repos, or public access for HTTPS repos).
-
-    NOTE: Git access checking is not yet implemented. This endpoint currently
-    marks the source as 'connected' without actual verification.
+    Check if the Git repository is accessible. Admin only.
     """
     response = knowledge_source_service.check_access(
         session=session,
@@ -208,17 +194,11 @@ def check_knowledge_source_access(
 def refresh_knowledge_source(
     *,
     session: SessionDep,
-    current_user: CurrentUser,
+    current_user: SuperUser,
     source_id: uuid.UUID,
 ) -> Any:
     """
-    Trigger knowledge refresh from Git repository.
-
-    This will clone/pull the repository, parse the knowledge configuration,
-    and extract/update articles with embeddings.
-
-    NOTE: Git operations, parsing, and embedding generation are not yet
-    implemented. This endpoint currently updates the last sync timestamp only.
+    Trigger knowledge refresh from Git repository. Admin only.
     """
     response = knowledge_source_service.refresh_knowledge(
         session=session,
@@ -232,15 +212,13 @@ def refresh_knowledge_source(
 def list_knowledge_articles(
     *,
     session: SessionDep,
-    current_user: CurrentUser,
+    current_user: SuperUser,
     source_id: uuid.UUID,
     skip: int = 0,
     limit: int = 100,
 ) -> Any:
     """
-    List articles for a knowledge source.
-
-    Returns article metadata including title, description, tags, and features.
+    List articles for a knowledge source. Admin only.
     """
     articles = knowledge_source_service.get_source_articles(
         session=session,
@@ -275,15 +253,15 @@ def list_knowledge_articles(
 @router.get("/discoverable/list", response_model=list[DiscoverableSourcePublic])
 def list_discoverable_sources(
     session: SessionDep,
-    current_user: CurrentUser,
+    current_user: SuperUser,
     skip: int = 0,
     limit: int = 100,
 ) -> Any:
     """
-    List discoverable knowledge sources from other users.
+    List public knowledge sources from other admins. Admin only, read-only.
 
-    Returns sources marked as public_discovery=True by their owners.
-    Enabled sources (by the current user) are sorted first.
+    Shows sources marked as public_discovery=True by other admins,
+    for cross-admin visibility of globally available knowledge.
     """
     sources = knowledge_source_service.get_discoverable_sources(
         session=session,
@@ -292,53 +270,3 @@ def list_discoverable_sources(
         limit=limit,
     )
     return sources
-
-
-@router.post("/discoverable/{source_id}/enable")
-def enable_discoverable_source(
-    *,
-    session: SessionDep,
-    current_user: CurrentUser,
-    source_id: uuid.UUID,
-) -> Any:
-    """
-    Enable a discoverable source for the current user.
-
-    Once enabled, this source will be included in agent knowledge queries.
-    """
-    success = knowledge_source_service.enable_discoverable_source(
-        session=session,
-        source_id=source_id,
-        user_id=current_user.id,
-    )
-    if not success:
-        raise HTTPException(
-            status_code=404,
-            detail="Discoverable source not found or not available"
-        )
-    return {"ok": True}
-
-
-@router.post("/discoverable/{source_id}/disable")
-def disable_discoverable_source(
-    *,
-    session: SessionDep,
-    current_user: CurrentUser,
-    source_id: uuid.UUID,
-) -> Any:
-    """
-    Disable a discoverable source for the current user.
-
-    Once disabled, this source will no longer be included in agent knowledge queries.
-    """
-    success = knowledge_source_service.disable_discoverable_source(
-        session=session,
-        source_id=source_id,
-        user_id=current_user.id,
-    )
-    if not success:
-        raise HTTPException(
-            status_code=404,
-            detail="Enabled discoverable source not found"
-        )
-    return {"ok": True}

@@ -151,8 +151,8 @@ All FKs use `ondelete="CASCADE"`.
 | `frontend/src/components/AgenticTeams/AgenticTeamChartEdge.tsx` | Custom React Flow edge with hover menu |
 | `frontend/src/components/AgenticTeams/ConnectionEditDialog.tsx` | Dialog to edit connection prompt + enabled |
 | `frontend/src/components/AgenticTeams/AddNodeDialog.tsx` | Dialog to add agent node to team |
-| `frontend/src/routes/_layout/agentic-teams.tsx` | Index route — redirect or empty state |
-| `frontend/src/routes/_layout/agentic-teams.$teamId.tsx` | Chart page — mutations + header |
+| `frontend/src/routes/_layout/agentic-teams/index.tsx` | Index route — redirect or empty state |
+| `frontend/src/routes/_layout/agentic-teams/$teamId.tsx` | Chart page — mutations + header |
 
 ### Files Modified
 

@@ -1197,7 +1197,7 @@ export type DeclineResponse = {
 };
 
 /**
- * Public schema for discoverable knowledge sources.
+ * Public schema for discoverable knowledge sources (read-only admin view).
  */
 export type DiscoverableSourcePublic = {
     id: string;
@@ -1206,7 +1206,6 @@ export type DiscoverableSourcePublic = {
     status: SourceStatus;
     article_count?: number;
     owner_username?: (string | null);
-    is_enabled_by_user?: boolean;
 };
 
 export type EmailAccessMode = 'open' | 'restricted';
@@ -3869,18 +3868,6 @@ export type KnowledgeSourcesListDiscoverableSourcesData = {
 };
 
 export type KnowledgeSourcesListDiscoverableSourcesResponse = (Array<DiscoverableSourcePublic>);
-
-export type KnowledgeSourcesEnableDiscoverableSourceData = {
-    sourceId: string;
-};
-
-export type KnowledgeSourcesEnableDiscoverableSourceResponse = (unknown);
-
-export type KnowledgeSourcesDisableDiscoverableSourceData = {
-    sourceId: string;
-};
-
-export type KnowledgeSourcesDisableDiscoverableSourceResponse = (unknown);
 
 export type LlmPluginsCreateMarketplaceData = {
     requestBody: LLMPluginMarketplaceCreate;

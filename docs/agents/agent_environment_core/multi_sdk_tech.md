@@ -39,7 +39,7 @@
 - `backend/app/env-templates/app_core_base/core/server/adapters/tool_name_registry.py` — unified lowercase tool name convention: maps, pre-approved set, `normalize_tool_name()`
 - `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/knowledge_server.py`
 - `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/task_server.py`
-- `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/collaboration_server.py`
+- `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/collaboration_server.py` <!-- nocheck -->
 
 **Dockerfiles (OpenCode PATH fix applied to all three):**
 - `backend/app/env-templates/general-env/Dockerfile`
@@ -346,7 +346,7 @@ MCP tool names visible to the agent follow the pattern `mcp__{server}__{tool}` (
   - Conversation replays (10) — full event sequences
   - Real session replays (5) — from captured JSONL files
 - `backend/tests/unit/test_opencode_mcp_bridge.py` — MCP bridge server tests
-- `backend/tests/unit/test_phase5_advanced_providers.py` — provider config generation tests
+- `backend/tests/unit/test_phase5_advanced_providers.py` — provider config generation tests <!-- nocheck -->
 
 Run without Docker:
 

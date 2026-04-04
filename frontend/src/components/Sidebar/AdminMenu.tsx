@@ -1,5 +1,5 @@
 import { Link as RouterLink, useRouterState } from "@tanstack/react-router"
-import { Shield, Users, Store } from "lucide-react"
+import { Shield, Users, Store, BookOpen } from "lucide-react"
 
 import {
   SidebarMenu,
@@ -25,7 +25,9 @@ export function AdminMenu() {
     }
   }
 
-  const isActive = currentPath.startsWith("/admin")
+  const isActive = currentPath.startsWith("/admin") ||
+    currentPath === "/knowledge-sources" ||
+    currentPath.startsWith("/knowledge-source/")
 
   return (
     <SidebarMenu>
@@ -46,6 +48,12 @@ export function AdminMenu() {
               <RouterLink to="/admin/users" onClick={handleMenuClick}>
                 <Users className="mr-2 h-4 w-4" />
                 Users
+              </RouterLink>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <RouterLink to="/knowledge-sources" onClick={handleMenuClick}>
+                <BookOpen className="mr-2 h-4 w-4" />
+                Knowledge Sources
               </RouterLink>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>

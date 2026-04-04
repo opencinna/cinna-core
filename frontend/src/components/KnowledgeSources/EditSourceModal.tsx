@@ -13,7 +13,6 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { Switch } from "@/components/ui/switch"
 import {
   Select,
   SelectContent,
@@ -53,7 +52,6 @@ export function EditSourceModal({ source, open, onOpenChange, onSuccess }: EditS
       description: source.description || "",
       branch: source.branch,
       ssh_key_id: source.ssh_key_id || undefined,
-      public_discovery: source.public_discovery || false,
     },
   })
 
@@ -150,20 +148,6 @@ export function EditSourceModal({ source, open, onOpenChange, onSuccess }: EditS
                 ))}
               </SelectContent>
             </Select>
-          </div>
-
-          <div className="flex items-center justify-between rounded-lg border p-4">
-            <div className="space-y-0.5">
-              <Label htmlFor="public_discovery">Public Discovery</Label>
-              <p className="text-xs text-muted-foreground">
-                Allow other users to discover and enable this knowledge source
-              </p>
-            </div>
-            <Switch
-              id="public_discovery"
-              checked={watch("public_discovery") || false}
-              onCheckedChange={(checked) => setValue("public_discovery", checked)}
-            />
           </div>
 
           <DialogFooter>

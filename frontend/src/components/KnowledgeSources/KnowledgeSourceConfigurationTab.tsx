@@ -7,6 +7,7 @@ import {
   AlertCircle,
   RefreshCw,
   Key,
+  Globe,
 } from "lucide-react"
 
 import type { AIKnowledgeGitRepoPublic as KnowledgeSourceRead } from "@/client"
@@ -20,6 +21,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Label as UILabel } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import useCustomToast from "@/hooks/useCustomToast"
 
@@ -119,19 +121,32 @@ export function KnowledgeSourceConfigurationTab({
     },
   })
 
+  const togglePublicDiscoveryMutation = useMutation({
+    mutationFn: (publicDiscovery: boolean) =>
+      KnowledgeSourcesService.updateKnowledgeSource({
+        sourceId,
+        requestBody: { public_discovery: publicDiscovery },
+      }),
+    onSuccess: (_, publicDiscovery) => {
+      showSuccessToast(
+        publicDiscovery
+          ? "Source is now public — available to all users"
+          : "Source is now private — only available to you"
+      )
+      queryClient.invalidateQueries({ queryKey: ["knowledge-source", sourceId] })
+      queryClient.invalidateQueries({ queryKey: ["knowledge-sources"] })
+    },
+    onError: (error: any) => {
+      showErrorToast(error.message || "Failed to update public discovery")
+    },
+  })
+
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle>Source Configuration</CardTitle>
-            <CardDescription>Git repository settings and status</CardDescription>
-          </div>
-          <Switch
-            checked={source.is_enabled}
-            onCheckedChange={(checked) => toggleEnabledMutation.mutate(checked)}
-            disabled={toggleEnabledMutation.isPending}
-          />
+        <div>
+          <CardTitle>Source Configuration</CardTitle>
+          <CardDescription>Git repository settings and status</CardDescription>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -182,42 +197,69 @@ export function KnowledgeSourceConfigurationTab({
           </div>
         )}
 
-        <div className="flex justify-end gap-2 pt-4">
-          {source.status !== "connected" && (
+        <div className="flex items-center justify-between pt-4 border-t">
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2">
+              <UILabel htmlFor="is_enabled" className="text-sm cursor-pointer">
+                Enabled
+              </UILabel>
+              <Switch
+                id="is_enabled"
+                checked={source.is_enabled}
+                onCheckedChange={(checked) => toggleEnabledMutation.mutate(checked)}
+                disabled={toggleEnabledMutation.isPending}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Globe className="h-4 w-4 text-muted-foreground" />
+              <UILabel htmlFor="public_discovery" className="text-sm cursor-pointer">
+                Public
+              </UILabel>
+              <Switch
+                id="public_discovery"
+                checked={source.public_discovery || false}
+                onCheckedChange={(checked) => togglePublicDiscoveryMutation.mutate(checked)}
+                disabled={togglePublicDiscoveryMutation.isPending}
+              />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            {source.status !== "connected" && (
+              <Button
+                variant="outline"
+                onClick={() => checkAccessMutation.mutate()}
+                disabled={checkAccessMutation.isPending}
+              >
+                {checkAccessMutation.isPending ? (
+                  <>
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                    Checking...
+                  </>
+                ) : (
+                  <>
+                    <Check className="mr-2 h-4 w-4" />
+                    Check Access
+                  </>
+                )}
+              </Button>
+            )}
             <Button
-              variant="outline"
-              onClick={() => checkAccessMutation.mutate()}
-              disabled={checkAccessMutation.isPending}
+              onClick={() => refreshMutation.mutate()}
+              disabled={refreshMutation.isPending || !source.is_enabled}
             >
-              {checkAccessMutation.isPending ? (
+              {refreshMutation.isPending ? (
                 <>
                   <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                  Checking...
+                  Refreshing...
                 </>
               ) : (
                 <>
-                  <Check className="mr-2 h-4 w-4" />
-                  Check Access
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Refresh Knowledge
                 </>
               )}
             </Button>
-          )}
-          <Button
-            onClick={() => refreshMutation.mutate()}
-            disabled={refreshMutation.isPending || !source.is_enabled}
-          >
-            {refreshMutation.isPending ? (
-              <>
-                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                Refreshing...
-              </>
-            ) : (
-              <>
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Refresh Knowledge
-              </>
-            )}
-          </Button>
+          </div>
         </div>
       </CardContent>
     </Card>

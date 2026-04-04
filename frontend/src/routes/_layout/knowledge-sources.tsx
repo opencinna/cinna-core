@@ -1,13 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router"
 import { useState, useEffect } from "react"
-import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Plus, BookOpen, Check, X, Clock, AlertCircle, Globe } from "lucide-react"
 
 import { KnowledgeSourcesService } from "@/client"
-import type { DiscoverableSourcePublic } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Switch } from "@/components/ui/switch"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Table,
@@ -105,6 +103,7 @@ function MyKnowledgeSourcesList() {
         <TableRow>
           <TableHead>Name</TableHead>
           <TableHead>Status</TableHead>
+          <TableHead>Visibility</TableHead>
           <TableHead>Articles</TableHead>
           <TableHead>Last Sync</TableHead>
         </TableRow>
@@ -128,6 +127,16 @@ function MyKnowledgeSourcesList() {
               <StatusBadge status={source.status || "disconnected"} />
             </TableCell>
             <TableCell>
+              {source.public_discovery ? (
+                <Badge variant="outline" className="bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+                  <Globe className="mr-1 h-3 w-3" />
+                  Public
+                </Badge>
+              ) : (
+                <span className="text-xs text-muted-foreground">Private</span>
+              )}
+            </TableCell>
+            <TableCell>
               <Badge variant="secondary">{source.article_count}</Badge>
             </TableCell>
             <TableCell className="text-xs text-muted-foreground">
@@ -143,36 +152,10 @@ function MyKnowledgeSourcesList() {
 }
 
 function DiscoverableSourcesList() {
-  const queryClient = useQueryClient()
-
   const { data: sources, isLoading, error } = useQuery({
     queryKey: ["discoverable-sources"],
     queryFn: () => KnowledgeSourcesService.listDiscoverableSources(),
   })
-
-  const enableMutation = useMutation({
-    mutationFn: (sourceId: string) =>
-      KnowledgeSourcesService.enableDiscoverableSource({ sourceId }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["discoverable-sources"] })
-    },
-  })
-
-  const disableMutation = useMutation({
-    mutationFn: (sourceId: string) =>
-      KnowledgeSourcesService.disableDiscoverableSource({ sourceId }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["discoverable-sources"] })
-    },
-  })
-
-  const handleToggle = (source: DiscoverableSourcePublic) => {
-    if (source.is_enabled_by_user) {
-      disableMutation.mutate(source.id)
-    } else {
-      enableMutation.mutate(source.id)
-    }
-  }
 
   if (isLoading) {
     return <PendingItems />
@@ -194,7 +177,7 @@ function DiscoverableSourcesList() {
         <div className="rounded-full bg-muted p-3 mb-3">
           <Globe className="h-6 w-6 text-muted-foreground" />
         </div>
-        <p className="text-sm text-muted-foreground">No discoverable sources available</p>
+        <p className="text-sm text-muted-foreground">No public sources from other admins</p>
       </div>
     )
   }
@@ -206,7 +189,6 @@ function DiscoverableSourcesList() {
           <TableHead>Name</TableHead>
           <TableHead>Owner</TableHead>
           <TableHead>Articles</TableHead>
-          <TableHead>Enabled</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -228,13 +210,6 @@ function DiscoverableSourcesList() {
             <TableCell>
               <Badge variant="secondary">{source.article_count}</Badge>
             </TableCell>
-            <TableCell>
-              <Switch
-                checked={source.is_enabled_by_user}
-                onCheckedChange={() => handleToggle(source)}
-                disabled={enableMutation.isPending || disableMutation.isPending}
-              />
-            </TableCell>
           </TableRow>
         ))}
       </TableBody>
@@ -252,7 +227,7 @@ function KnowledgeSourcesPage() {
       <>
         <div className="min-w-0">
           <h1 className="text-lg font-semibold truncate">Knowledge Sources</h1>
-          <p className="text-xs text-muted-foreground">Manage your Git-based knowledge repositories</p>
+          <p className="text-xs text-muted-foreground">Manage Git-based knowledge repositories for agents</p>
         </div>
         <Button onClick={() => setIsAddModalOpen(true)}>
           <Plus className="mr-2 h-4 w-4" />
@@ -273,7 +248,7 @@ function KnowledgeSourcesPage() {
               My Knowledge Sources
             </CardTitle>
             <CardDescription>
-              Knowledge sources you own and manage
+              Knowledge sources you manage. Public sources are available to all users.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -288,7 +263,7 @@ function KnowledgeSourcesPage() {
               Discoverable Sources
             </CardTitle>
             <CardDescription>
-              Public knowledge sources from other users. Enable them to include in your agent's knowledge queries.
+              Public knowledge sources from other admins, automatically available to all users.
             </CardDescription>
           </CardHeader>
           <CardContent>

@@ -21,8 +21,8 @@
 
 ### Frontend — Routes
 - `frontend/src/routes/_layout/session/$sessionId.tsx` — Session chat page (main entry point)
-- `frontend/src/routes/_layout/sessions.index.tsx` — All sessions list grouped by agent
-- `frontend/src/routes/_layout/sessions.agent.$agentId.tsx` — Per-agent sessions table
+- `frontend/src/routes/_layout/sessions/index.tsx` — All sessions list grouped by agent
+- `frontend/src/routes/_layout/sessions/agent/$agentId.tsx` — Per-agent sessions table
 - `frontend/src/routes/_layout/sessions.tsx` — Layout shell (passthrough outlet)
 
 ### Frontend — Hooks
@@ -284,12 +284,12 @@ Takes `{sessionId, session, messagesData, onSuccess, onError}`, returns `{sendMe
 - Listens for WS events: `ENVIRONMENT_ACTIVATING`, `ENVIRONMENT_ACTIVATED`, `ENVIRONMENT_ACTIVATION_FAILED`, `ENVIRONMENT_SUSPENDED`, `SESSION_INTERACTION_STATUS_CHANGED`, `SESSION_STATE_UPDATED`
 - Header built dynamically via `setHeaderContent()` from `usePageHeader` context
 
-### Sessions list (`frontend/src/routes/_layout/sessions.index.tsx`)
+### Sessions list (`frontend/src/routes/_layout/sessions/index.tsx`)
 
 - Query: `["sessions", activeWorkspaceId]` via `SessionsService.listSessions({userWorkspaceId})`
 - Groups sessions by `agent_id` using `useMemo`, renders `AgentSessionsGroup` cards in a responsive grid
 
-### Agent sessions table (`frontend/src/routes/_layout/sessions.agent.$agentId.tsx`)
+### Agent sessions table (`frontend/src/routes/_layout/sessions/agent/$agentId.tsx`)
 
 - Query: `["sessions", "agent", agentId]` via `SessionsService.listSessions({agentId, limit:500, orderBy:"last_message_at", orderDesc:true})`
 - Renders `AgentSessionsTable` component
