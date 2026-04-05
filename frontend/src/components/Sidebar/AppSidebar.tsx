@@ -2,9 +2,7 @@ import { Link as RouterLink, useRouterState } from "@tanstack/react-router"
 import { Bot, Key, MessageSquare, Bell, ClipboardList, Home } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 
-import { SidebarAppearance } from "@/components/Common/Appearance"
 import { Logo } from "@/components/Common/Logo"
-import { WebSocketStatus } from "@/components/Common/WebSocketStatus"
 import { SidebarWorkspaceSwitcher } from "@/components/Common/WorkspaceSwitcher"
 import { AgenticTeamsSwitcher } from "@/components/AgenticTeams/AgenticTeamsSwitcher"
 import {
@@ -17,6 +15,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarSeparator,
   useSidebar,
 } from "@/components/ui/sidebar"
 import useAuth from "@/hooks/useAuth"
@@ -26,14 +25,11 @@ import { AdminMenu } from "./AdminMenu"
 import { SidebarDashboardSwitcher } from "./SidebarDashboardMenu"
 import { ActivitiesService } from "@/client"
 import { cn } from "@/lib/utils"
-import { useMultiEventSubscription, EventTypes } from "@/hooks/useEventBus"
+import { useMultiEventSubscription, useConnectionStatus, EventTypes } from "@/hooks/useEventBus"
 
-const itemsBeforeActivities: Item[] = [
+const menuItems: Item[] = [
   { icon: Home, title: "Dashboard", path: "/" },
   { icon: ClipboardList, title: "Tasks", path: "/tasks" },
-]
-
-const itemsAfterActivities: Item[] = [
   { icon: Bot, title: "Agents", path: "/agents" },
   { icon: MessageSquare, title: "Sessions", path: "/sessions" },
   { icon: Key, title: "Credentials", path: "/credentials" },
@@ -44,19 +40,18 @@ function ActivitiesMenu() {
   const router = useRouterState()
   const currentPath = router.location.pathname
   const queryClient = useQueryClient()
+  const connectionStatus = useConnectionStatus()
 
   const { data: activityStats } = useQuery({
     queryKey: ["activity-stats"],
     queryFn: () => ActivitiesService.getActivityStats(),
-    refetchInterval: 10000, // Refetch every 10 seconds
+    refetchInterval: 10000,
   })
 
-  // Subscribe to WebSocket events for activities to update stats in real-time
   useMultiEventSubscription(
     [EventTypes.ACTIVITY_CREATED, EventTypes.ACTIVITY_UPDATED, EventTypes.ACTIVITY_DELETED],
     (event) => {
       console.log("[Sidebar] Received activity event:", event.type, event)
-      // Invalidate stats to refetch with latest data
       queryClient.invalidateQueries({ queryKey: ["activity-stats"] })
     }
   )
@@ -71,26 +66,41 @@ function ActivitiesMenu() {
   const hasActionRequired = (activityStats?.action_required_count || 0) > 0
   const hasUnread = (activityStats?.unread_count || 0) > 0
 
+  const statusDotColor = {
+    connected: "bg-green-500",
+    connecting: "bg-yellow-500",
+    disconnected: "bg-red-500",
+  }[connectionStatus]
+
+  const statusLabel = {
+    connected: "Online",
+    connecting: "Connecting...",
+    disconnected: "Offline",
+  }[connectionStatus]
+
   return (
-    <SidebarGroup>
-      <SidebarGroupContent>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton tooltip="Activities" isActive={isActive} asChild>
-              <RouterLink to="/activities" onClick={handleMenuClick}>
-                <Bell
-                  className={cn(
-                    hasUnread && !hasActionRequired && "text-primary",
-                    hasActionRequired && "text-destructive"
-                  )}
-                />
-                <span>Activities</span>
-              </RouterLink>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarGroupContent>
-    </SidebarGroup>
+    <SidebarMenuItem>
+      <SidebarMenuButton tooltip={`Activities (${statusLabel})`} isActive={isActive} asChild>
+        <RouterLink to="/activities" onClick={handleMenuClick}>
+          <span className="relative">
+            <Bell
+              className={cn(
+                "size-4",
+                hasUnread && !hasActionRequired && "text-primary",
+                hasActionRequired && "text-destructive"
+              )}
+            />
+            <span
+              className={cn(
+                "absolute -top-0.5 -right-0.5 size-1.5 rounded-full border border-sidebar-background",
+                statusDotColor
+              )}
+            />
+          </span>
+          <span>Activities</span>
+        </RouterLink>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
   )
 }
 
@@ -104,16 +114,20 @@ export function AppSidebar() {
         <Logo variant="responsive" />
       </SidebarHeader>
       <SidebarContent>
-        <Main items={itemsBeforeActivities} />
-        <ActivitiesMenu />
-        <Main items={itemsAfterActivities} />
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarWorkspaceSwitcher />
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+        <SidebarSeparator />
+        <Main items={menuItems} />
       </SidebarContent>
       <SidebarFooter>
-        <WebSocketStatus />
+        <ActivitiesMenu />
         <SidebarDashboardSwitcher />
         <AgenticTeamsSwitcher />
-        <SidebarWorkspaceSwitcher />
-        <SidebarAppearance />
         {currentUser?.is_superuser && <AdminMenu />}
         <User user={currentUser} />
       </SidebarFooter>

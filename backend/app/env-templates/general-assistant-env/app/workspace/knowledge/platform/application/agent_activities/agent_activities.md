@@ -66,9 +66,19 @@ Activities are a persistent notification/logging system that tracks important sy
 
 ### Sidebar Bell Indicator
 
-- Default color: No unread activities
-- Green (primary): Unread informational activities
-- Red (destructive): Unread activities requiring action
+Located in the sidebar footer. The bell icon has two visual indicators:
+
+**Icon color** (notification state):
+- Default: No unread activities
+- Primary (blue): Unread informational activities
+- Destructive (red): Unread activities requiring action
+
+**Status dot** (connection state — small colored circle on the bell icon):
+- Green: Connected (online)
+- Yellow: Connecting
+- Red: Disconnected (offline)
+
+The tooltip shows both the label "Activities" and the current connection status (e.g., "Activities (Online)").
 
 ## Architecture Overview
 
@@ -79,7 +89,7 @@ Email/Task Events ──→ EventBus ──→ Activity Event Handlers ──→
                                                           WebSocket (ACTIVITY_CREATED/UPDATED/DELETED)
                                                                       │
 Frontend Activities Page ←── React Query ←── REST API ←── Activities Routes
-Frontend Sidebar Bell ←── Polling (10s) ←── Stats Endpoint
+Frontend Sidebar Bell ←── Polling (10s) + WebSocket connection status ←── Stats Endpoint
 ```
 
 ## Event-Driven Architecture
@@ -108,10 +118,14 @@ Activities are created/managed by event handlers registered at app startup:
 - [Agent Environments](../../agents/agent_environments/agent_environments.md) - Activities resolve agent_id through environment lookup
 - [Agent Handover](../../agents/agent_handover/agent_handover.md) - Direct handovers create target-agent sessions that generate the full session activity lifecycle (running → completed/error), notifying target agent owners of delegated work
 
+## Sidebar Layout
+
+The Activities bell is in the sidebar footer (below the main navigation), alongside dashboard switcher, agentic teams, appearance, and user menu. The main navigation menu (Dashboard, Tasks, Agents, Sessions, Credentials) is in the content area above.
+
 ## Statistics & Polling
 
 - Stats endpoint returns `unread_count` and `action_required_count`
-- Sidebar polls stats every 10 seconds
+- Sidebar polls stats every 10 seconds, plus real-time WebSocket event invalidation
 - Activities list page subscribes to WebSocket events for real-time updates
 - Pagination: default limit 100, loaded at once
 

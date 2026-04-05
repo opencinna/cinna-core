@@ -32,11 +32,12 @@ The current phase is the **Blueprint** — the chart is a static structural defi
 Two entry points exist:
 
 **Via Sidebar Switcher**
-1. User clicks the "Agentic Teams" item in the sidebar (shows "Agentic Teams" when no team is active, or the current team name when on a chart page).
-2. Dropdown opens showing all existing teams and a "New Agentic Team" option at the bottom.
-3. User clicks "New Agentic Team" — a create dialog appears.
-4. User enters a name (required, 1–255 characters) and selects an icon (defaults to "users").
-5. Team is created and the user is immediately navigated to `/agentic-teams/{teamId}`.
+1. User clicks the "Agentic Teams" item in the sidebar footer (shows "Agentic Teams" when no team is active, or the current team name when on a chart page).
+2. Dropdown opens showing all existing teams and a "Manage Teams" option at the bottom.
+3. User clicks "Manage Teams" — navigates to Settings → Interface tab.
+4. In the Agentic Teams card, user clicks "New Agentic Team" — a create dialog appears.
+5. User enters a name (required, 1–255 characters) and selects an icon (defaults to "users").
+6. Team is created; user stays on the Settings page.
 
 **Via Settings → Interface Tab**
 1. User opens Settings, navigates to the Interface tab.
@@ -218,7 +219,7 @@ The AgenticTeamSettings card is embedded in the Interface settings tab alongside
 
 ### Sidebar Navigation
 
-The `AgenticTeamsSwitcher` component renders as a `SidebarMenuItem` above the workspace switcher. It mirrors the workspace switcher pattern (dropdown with items + "New ..." action).
+The `AgenticTeamsSwitcher` component renders as a `SidebarMenuItem` in the sidebar footer. It mirrors the workspace switcher pattern (dropdown with items + "Manage Teams" link to Settings → Interface).
 
 ---
 

@@ -166,11 +166,7 @@ Not every feature needs the full 3-layer treatment. For simple features or stand
 
 ## General Assistant Knowledge Sync
 
-After creating or updating documentation, run the GA knowledge sync to keep the General Assistant environment template in sync:
-
-```
-python3 .runnerkit/scripts/sync_ga_knowledge.py
-```
+The GA knowledge sync keeps the General Assistant environment template in sync with docs changes. It is run automatically as the final step of this command (see below).
 
 This script:
 1. Copies all non-`_tech` `.md` files from `docs/application/` and `docs/agents/` into the GA template's `knowledge/platform/` directory
@@ -178,8 +174,17 @@ This script:
 
 **Do NOT manually write `_api.md` files** — API reference is auto-generated from the OpenAPI spec. If API routes change, run `make gen-client` first (to update `openapi.json`), then `make sync-ga-knowledge`.
 
+## General Assistant Knowledge Sync (Final Step)
+
+After all documentation changes are complete and references are verified, **always** run the GA knowledge sync as the final step:
+
+```
+python3 .runnerkit/scripts/sync_ga_knowledge.py
+```
+
+This is mandatory — do not skip it or ask the user to run it manually.
+
 ## Output
 
 Write documentation to `docs/{domain}/{feature}/` following the structure above.
-Report what was created/updated, any old files that can be removed, and the reference check results.
-Remind the user to run `python3 .runnerkit/scripts/sync_ga_knowledge.py` if documentation was created or updated.
+Report what was created/updated, any old files that can be removed, the reference check results, and the GA knowledge sync output.

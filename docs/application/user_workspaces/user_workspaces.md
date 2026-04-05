@@ -15,15 +15,16 @@ Workspaces let users organize agents, credentials, sessions, and tasks into sepa
 
 ### Creating a Workspace
 
-1. User clicks workspace switcher in sidebar footer
-2. User clicks "New Workspace"
-3. Modal appears with name field and icon selector (5x4 grid of 20 themed icons)
-4. User enters name, optionally selects icon (defaults to folder-kanban)
-5. Workspace created and automatically becomes the active workspace
+1. User clicks workspace switcher at the top of the sidebar (above navigation menu)
+2. User clicks "Manage Workspaces" — navigates to Settings → Interface tab
+3. In the Workspaces card, user clicks "New Workspace"
+4. Modal appears with name field and icon selector (5x4 grid of 20 themed icons)
+5. User enters name, optionally selects icon (defaults to folder-kanban)
+6. Workspace created
 
 ### Switching Workspaces
 
-1. User clicks workspace switcher in sidebar
+1. User clicks workspace switcher at the top of the sidebar
 2. Dropdown shows "Default" + all user-created workspaces with their icons
 3. Active workspace highlighted with background color and check icon
 4. User selects a workspace

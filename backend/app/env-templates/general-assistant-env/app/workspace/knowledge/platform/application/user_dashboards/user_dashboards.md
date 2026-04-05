@@ -190,7 +190,7 @@ The `webapp` view type embeds the agent's webapp in an iframe via the owner prev
 
 ## Sidebar Integration
 
-The sidebar footer contains two stacked components: `SidebarDashboardSwitcher` (above) and `SidebarWorkspaceSwitcher` (below). They follow the same dropdown pattern.
+The sidebar footer contains `SidebarDashboardSwitcher` alongside Activities, AgenticTeamsSwitcher, Appearance, and User menu. The workspace switcher is at the top of the sidebar content area.
 
 `SidebarDashboardSwitcher` shows a button labeled with the active dashboard name, or "Dashboards" when not on a dashboard route. Clicking it opens a dropdown:
 
@@ -200,8 +200,10 @@ The sidebar footer contains two stacked components: `SidebarDashboardSwitcher` (
   ├── [Dashboard B]      → /dashboards/{id}
   │   (all dashboards shown, no limit)
   ├── ---separator---
-  └── Manage Dashboards  → /dashboards
+  └── Manage Dashboards  → /settings#interface
 ```
+
+All three sidebar switchers (Workspaces, Dashboards, Agentic Teams) follow the same pattern: dropdown lists existing items, with a "Manage ..." action at the bottom that navigates to Settings → Interface tab. Creation is handled in the Settings page, not inline in the sidebar.
 
 A separate "Dashboard" link (Home icon) exists as a standard nav item in the main sidebar nav pointing to `/`.
 

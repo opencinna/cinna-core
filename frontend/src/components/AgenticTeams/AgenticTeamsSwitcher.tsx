@@ -1,7 +1,6 @@
-import { Check, Network, Plus } from "lucide-react"
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { Check, Network, Settings } from "lucide-react"
+import { useQuery } from "@tanstack/react-query"
 import { useNavigate, useRouterState } from "@tanstack/react-router"
-import { useState } from "react"
 
 import {
   DropdownMenu,
@@ -18,33 +17,14 @@ import {
 import { AgenticTeamsService } from "@/client"
 import { cn } from "@/lib/utils"
 import { getWorkspaceIcon } from "@/config/workspaceIcons"
-import { AgenticTeamFormDialog } from "@/components/AgenticTeams/AgenticTeamSettings"
-import useCustomToast from "@/hooks/useCustomToast"
 
 export const AgenticTeamsSwitcher = () => {
   const { isMobile } = useSidebar()
   const navigate = useNavigate()
   const routerState = useRouterState()
-  const queryClient = useQueryClient()
-  const { showSuccessToast, showErrorToast } = useCustomToast()
-
-  const [showCreateDialog, setShowCreateDialog] = useState(false)
-
   const { data: teamsData } = useQuery({
     queryKey: ["agenticTeams"],
     queryFn: () => AgenticTeamsService.listAgenticTeams(),
-  })
-
-  const createMutation = useMutation({
-    mutationFn: (data: { name: string; icon: string }) =>
-      AgenticTeamsService.createAgenticTeam({ requestBody: data }),
-    onSuccess: (newTeam) => {
-      queryClient.invalidateQueries({ queryKey: ["agenticTeams"] })
-      showSuccessToast("Agentic team created")
-      setShowCreateDialog(false)
-      navigate({ to: "/agentic-teams/$teamId", params: { teamId: newTeam.id } })
-    },
-    onError: () => showErrorToast("Failed to create agentic team"),
   })
 
   const teams = teamsData?.data ?? []
@@ -104,20 +84,13 @@ export const AgenticTeamsSwitcher = () => {
 
             <DropdownMenuSeparator />
 
-            <DropdownMenuItem onClick={() => setShowCreateDialog(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              New Agentic Team
+<DropdownMenuItem onClick={() => navigate({ to: "/settings", hash: "interface" })}>
+              <Settings className="mr-2 h-4 w-4" />
+              Manage Teams
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>
-
-      <AgenticTeamFormDialog
-        open={showCreateDialog}
-        onClose={() => setShowCreateDialog(false)}
-        onSubmit={(name, icon) => createMutation.mutate({ name, icon })}
-        isPending={createMutation.isPending}
-      />
     </>
   )
 }
