@@ -165,6 +165,8 @@ Files are deduplicated by filename within a single task. Files exceeding the pla
 
 Before the `mcp__agent_task__add_comment` tool sends a comment to the backend, it validates that every file path in the `files` parameter exists locally in the agent's workspace at `/app/workspace`. Relative paths are resolved against `/app/workspace`. If any file is missing, the tool returns an error listing the missing paths and does **not** post the comment. This prevents posting comments with broken file references.
 
+As defense-in-depth, the backend also tracks attachment outcomes. The API returns `AgentCommentResponse` with `attachments_count` and `failed_attachments` fields, so even if validation is bypassed (e.g., stale environment without updated tool code), the MCP tool can detect and report partial or total attachment failure to the agent.
+
 ### Team Assignment Rules
 
 - A task's team can be changed after creation via `PATCH /api/v1/tasks/{id}` (the `InputTaskUpdate` model now includes `team_id`)

@@ -26,7 +26,6 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from sqlmodel import select
 
 from app.api.deps import CurrentUser, SessionDep
 from app.models import (
@@ -36,8 +35,8 @@ from app.models import (
     AgentTaskStatusUpdate,
     AgentSubtaskCreate,
     AgentTaskOperationResponse,
+    AgentCommentResponse,
     AgentTaskCommentCreate,
-    TaskCommentPublic,
     Session,
 )
 from app.services.tasks.input_task_service import (
@@ -45,7 +44,7 @@ from app.services.tasks.input_task_service import (
     InputTaskError,
     ValidationError,
 )
-from app.services.tasks.task_comment_service import TaskCommentService
+from app.services.tasks.task_comment_service import TaskCommentService, AgentCommentResult
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +74,27 @@ def _resolve_task_from_session(
     if not task:
         raise ValidationError("No task linked to this session")
     return task
+
+
+def _build_agent_comment_response(
+    task: InputTask, result: AgentCommentResult,
+) -> AgentCommentResponse:
+    """Map service result to agent-facing response model."""
+    message = None
+    if result.attachments_failed > 0:
+        message = (
+            f"{result.attachments_failed} of "
+            f"{result.attachments_created + result.attachments_failed} "
+            f"file(s) could not be attached. "
+            f"Check that the file paths exist in the agent workspace."
+        )
+    return AgentCommentResponse(
+        comment_id=str(result.comment.id),
+        task=task.short_code or "",
+        attachments_count=result.attachments_created,
+        failed_attachments=result.attachments_failed,
+        message=message,
+    )
 
 
 @router.post("/agent/tasks/create", response_model=AgentTaskOperationResponse)
@@ -132,7 +152,7 @@ def agent_resolve_task_by_code(
         _handle_error(e)
 
 
-@router.post("/agent/tasks/current/comment", response_model=TaskCommentPublic)
+@router.post("/agent/tasks/current/comment", response_model=AgentCommentResponse)
 async def agent_add_comment_current(
     *,
     db_session: SessionDep,
@@ -148,13 +168,13 @@ async def agent_add_comment_current(
         if not data.source_session_id:
             raise ValidationError("source_session_id is required")
         task = _resolve_task_from_session(db_session, data.source_session_id)
-        comment = TaskCommentService.add_comment_from_agent(
+        result = TaskCommentService.add_comment_from_agent(
             db_session=db_session,
             task_id=task.id,
             agent_id=task.selected_agent_id,
             data=data,
         )
-        return TaskCommentService._to_public(db_session, comment)
+        return _build_agent_comment_response(task, result)
     except InputTaskError as e:
         _handle_error(e)
 
@@ -254,7 +274,7 @@ async def agent_create_subtask_current(
         _handle_error(e)
 
 
-@router.post("/agent/tasks/{task_id}/comment", response_model=TaskCommentPublic)
+@router.post("/agent/tasks/{task_id}/comment", response_model=AgentCommentResponse)
 async def agent_add_comment(
     *,
     db_session: SessionDep,
@@ -273,13 +293,13 @@ async def agent_add_comment(
             task_id=task_id,
             user_id=current_user.id,
         )
-        comment = TaskCommentService.add_comment_from_agent(
+        result = TaskCommentService.add_comment_from_agent(
             db_session=db_session,
             task_id=task_id,
             agent_id=task.selected_agent_id,
             data=data,
         )
-        return TaskCommentService._to_public(db_session, comment)
+        return _build_agent_comment_response(task, result)
     except InputTaskError as e:
         _handle_error(e)
 

@@ -6,8 +6,10 @@ results, and progress updates as comments. System events (status changes,
 assignments, subtask notifications) also appear as system-type comments.
 """
 import logging
+from dataclasses import dataclass
 from uuid import UUID
 
+import httpx
 from sqlmodel import Session as DBSession, select
 
 from app.models.tasks.task_comment import TaskComment, TaskCommentCreate, AgentTaskCommentCreate, TaskCommentPublic
@@ -17,6 +19,14 @@ from app.models.agents.agent import Agent
 from app.models.events.event import EventType
 from app.services.events.event_service import event_service
 from app.utils import create_task_with_error_logging
+
+
+@dataclass
+class AgentCommentResult:
+    """Result of an agent comment creation, including attachment outcome."""
+    comment: TaskComment
+    attachments_created: int = 0
+    attachments_failed: int = 0
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +219,7 @@ class TaskCommentService:
         task_id: UUID,
         agent_id: UUID,
         data: AgentTaskCommentCreate,
-    ) -> TaskComment:
+    ) -> AgentCommentResult:
         """
         Agent posts a comment on a task (potentially with file attachments).
 
@@ -224,7 +234,7 @@ class TaskCommentService:
             data: Comment content, type, and optional workspace file paths
 
         Returns:
-            Created TaskComment
+            AgentCommentResult with the comment and attachment outcome.
         """
         # Determine team context: find the agent's node in the task's team (if any)
         author_node_id: UUID | None = None
@@ -254,23 +264,36 @@ class TaskCommentService:
         )
 
         # Attach workspace files if provided
+        requested = len(data.file_paths) if data.file_paths else 0
+        attachments_created = 0
         if data.file_paths:
             try:
                 from app.services.tasks.task_attachment_service import TaskAttachmentService
-                TaskAttachmentService.attach_from_workspace(
+                created = TaskAttachmentService.attach_from_workspace(
                     db_session=db_session,
                     task_id=task_id,
                     agent_id=agent_id,
                     file_paths=data.file_paths,
                     comment_id=comment.id,
                 )
-            except Exception as e:
+                attachments_created = len(created)
+            except (httpx.HTTPError, OSError) as e:
                 logger.warning(
-                    f"Failed to attach files for comment {comment.id}: {e}",
+                    f"Comment {comment.id}: workspace attachment failed: {e}",
                     exc_info=True,
                 )
 
-        return comment
+            if attachments_created < requested:
+                failed = requested - attachments_created
+                logger.warning(
+                    f"Comment {comment.id}: {failed}/{requested} file(s) failed to attach"
+                )
+
+        return AgentCommentResult(
+            comment=comment,
+            attachments_created=attachments_created,
+            attachments_failed=requested - attachments_created,
+        )
 
     @staticmethod
     def add_system_comment(

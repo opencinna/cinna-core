@@ -265,6 +265,7 @@ from .tasks.task_comment import (
     AgentTaskCommentCreate,
     TaskCommentPublic,
     TaskCommentsPublic,
+    AgentCommentResponse,
 )
 from .tasks.task_attachment import (
     TaskAttachment,

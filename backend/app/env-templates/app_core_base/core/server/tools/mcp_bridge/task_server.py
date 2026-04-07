@@ -190,9 +190,14 @@ def add_comment(
             comment_id = data.get("comment_id")
             result_task = data.get("task", task_short_code or "")
             attachments_count = data.get("attachments_count", 0)
+            failed_attachments = data.get("failed_attachments", 0)
             parts = [f"Comment posted on task {result_task} (comment_id: {comment_id})."]
             if attachments_count:
                 parts.append(f"Attached {attachments_count} file(s).")
+            if failed_attachments:
+                detail = data.get("message", f"{failed_attachments} file(s) could not be attached.")
+                prefix = "Error" if attachments_count == 0 else "WARNING"
+                return f"{prefix}: {detail}\n\n" + " ".join(parts)
             return " ".join(parts)
 
         if resp.status_code == 401:

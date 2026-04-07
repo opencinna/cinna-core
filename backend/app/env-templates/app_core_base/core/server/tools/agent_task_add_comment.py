@@ -153,10 +153,18 @@ async def agent_task_add_comment(args: dict[str, Any]) -> dict[str, Any]:
             comment_id = data.get("comment_id")
             result_task = data.get("task", task_short_code or "")
             attachments_count = data.get("attachments_count", 0)
+            failed_attachments = data.get("failed_attachments", 0)
             logger.info(f"Comment posted on task {result_task}: comment_id={comment_id}")
             parts = [f"Comment posted on task {result_task} (comment_id: {comment_id})."]
             if attachments_count:
                 parts.append(f"Attached {attachments_count} file(s).")
+            if failed_attachments:
+                detail = data.get("message", f"{failed_attachments} file(s) could not be attached.")
+                prefix = "Error" if attachments_count == 0 else "WARNING"
+                return {
+                    "content": [{"type": "text", "text": f"{prefix}: {detail}\n\n" + " ".join(parts)}],
+                    "is_error": True,
+                }
             return {"content": [{"type": "text", "text": " ".join(parts)}]}
 
         if comment_resp.status_code == 401:

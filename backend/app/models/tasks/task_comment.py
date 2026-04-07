@@ -77,3 +77,12 @@ class TaskCommentPublic(SQLModel):
 class TaskCommentsPublic(SQLModel):
     data: list[TaskCommentPublic]
     count: int
+
+
+# Agent-facing response for add_comment endpoints (MCP tool contract)
+class AgentCommentResponse(SQLModel):
+    comment_id: str
+    task: str
+    attachments_count: int = 0
+    failed_attachments: int = 0
+    message: str | None = None
