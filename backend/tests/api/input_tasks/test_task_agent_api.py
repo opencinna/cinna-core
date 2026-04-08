@@ -97,11 +97,9 @@ def test_agent_comment_endpoint(
     assert r.status_code == 200, f"Agent comment failed: {r.text}"
     comment = r.json()
 
-    assert comment["task_id"] == task_id
-    assert comment["content"] == "Agent progress update: completed phase 1"
-    assert comment["comment_type"] == "message"
-    # agent_id should be set (from task.selected_agent_id)
-    assert comment["author_agent_id"] == agent_id
+    # Response is AgentCommentResponse: comment_id, task (short_code), attachments_count
+    assert "comment_id" in comment
+    assert comment["task"] == task["short_code"]
 
     # ── Phase 3: Comment appears in list ─────────────────────────────────────
     comments_result = client.get(
@@ -110,7 +108,7 @@ def test_agent_comment_endpoint(
     )
     assert comments_result.status_code == 200
     comment_ids = [c["id"] for c in comments_result.json()["data"]]
-    assert comment["id"] in comment_ids
+    assert comment["comment_id"] in comment_ids
 
     # ── Phase 4: Non-existent task returns 404 ───────────────────────────────
     ghost = str(uuid.uuid4())

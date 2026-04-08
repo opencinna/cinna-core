@@ -552,7 +552,8 @@ def test_agentic_team_current_session_endpoints(
         content="Progress update from current endpoint",
         source_session_id=session_id,
     )
-    assert comment["task_id"] == parent_id
+    # Response is AgentCommentResponse: comment_id, task (short_code), attachments_count
+    assert comment["task"] == parent["short_code"]
 
     # ── GET /agent/tasks/current/details ─────────────────────────────────
     from tests.utils.input_task import agent_get_task_details_current
