@@ -379,23 +379,35 @@ const LogEntryRow = forwardRef<
         isRunning
           ? "bg-emerald-500/10"
           : isUnread
-            ? "bg-muted/30"
+            ? "bg-primary/8 border-l-2 border-l-primary"
             : "",
       )}
     >
-      {isUnread && (
-        <div
-          className={cn(
-            "absolute top-3 right-3 w-1.5 h-1.5 rounded-full shrink-0",
-            hasActionRequired ? "bg-destructive" : "bg-primary",
-          )}
-        />
-      )}
       <div className={cn("mt-0.5 shrink-0", colorClass)}>
         {icon}
       </div>
       <div className="flex-1 min-w-0 space-y-0.5">
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm text-foreground flex items-center gap-1.5">
+            {getEntityIcon(activity.activity_type)}
+            {activity.text}
+            {isUnread && (
+              <span
+                className={cn(
+                  "inline-block w-1.5 h-1.5 rounded-full shrink-0",
+                  hasActionRequired ? "bg-destructive" : "bg-primary",
+                )}
+              />
+            )}
+          </p>
+          <RelativeTime timestamp={activity.created_at} className="text-xs text-muted-foreground shrink-0" />
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          {contextText ? (
+            <span className="text-xs text-muted-foreground truncate">
+              {contextText}
+            </span>
+          ) : <span />}
           {activity.agent_name && (
             <span
               className={cn(
@@ -407,18 +419,8 @@ const LogEntryRow = forwardRef<
               {activity.agent_name}
             </span>
           )}
-          {contextText && (
-            <span className="text-xs text-muted-foreground truncate">
-              {contextText}
-            </span>
-          )}
         </div>
-        <p className="text-sm text-foreground flex items-center gap-1.5">
-          {getEntityIcon(activity.activity_type)}
-          {activity.text}
-        </p>
       </div>
-      <RelativeTime timestamp={activity.created_at} className="text-xs text-muted-foreground shrink-0 mt-0.5" />
     </div>
   )
 })
@@ -598,7 +600,7 @@ function ActivitiesList() {
     if (unread.length === 0) return
     const timer = setTimeout(() => {
       markAsReadMutation.mutate(unread)
-    }, 2000)
+    }, 4000)
     return () => clearTimeout(timer)
   }, [visibleActivities, activitiesData?.data])
 

@@ -451,6 +451,16 @@ class ActivityService:
         This activity will be shown if user is not watching the session.
         """
         try:
+            # Prevent duplicate session_running activities for the same session
+            existing = ActivityService.find_activity_by_session_and_type(
+                db_session=db_session,
+                session_id=session_id,
+                activity_type="session_running"
+            )
+            if existing:
+                logger.debug(f"session_running activity already exists for session {session_id}, skipping")
+                return existing
+
             # Get session to find user_id and environment_id
             chat_session = db_session.get(Session, session_id)
             if not chat_session:
