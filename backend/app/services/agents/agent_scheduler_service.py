@@ -562,6 +562,56 @@ class AgentSchedulerService:
         )
         return list(session.exec(statement).all())
 
+    # ==================== Manual Execution ====================
+
+    @staticmethod
+    async def execute_now(session: Session, agent_id: uuid.UUID, schedule_id: uuid.UUID) -> None:
+        """
+        Execute a schedule immediately, identical to cron execution.
+
+        Args:
+            session: Database session
+            agent_id: Agent UUID
+            schedule_id: Schedule UUID (must belong to agent, already verified by caller)
+
+        Raises:
+            ScheduleError: If agent is inactive or execution fails
+        """
+        from app.services.sessions.session_service import SessionService
+        from app.services.environments.agent_env_connector import agent_env_connector
+        from app.services.events.activity_service import ActivityService
+        from app.services.agents.agent_schedule_scheduler import (
+            _execute_static_prompt,
+            _execute_script_trigger,
+        )
+
+        agent = session.get(Agent, agent_id)
+        if not agent or not agent.is_active:
+            raise ScheduleError("Agent is not active", status_code=400)
+
+        schedule = session.get(AgentSchedule, schedule_id)
+
+        try:
+            if schedule.schedule_type == "script_trigger":
+                await _execute_script_trigger(
+                    schedule=schedule,
+                    agent=agent,
+                    db_session=session,
+                    session_service=SessionService,
+                    activity_service=ActivityService,
+                    env_connector=agent_env_connector,
+                )
+            else:
+                await _execute_static_prompt(
+                    schedule=schedule,
+                    agent=agent,
+                    db_session=session,
+                    session_service=SessionService,
+                )
+        except Exception as e:
+            logger.error(f"Manual schedule execution failed for {schedule_id}: {e}", exc_info=True)
+            raise ScheduleError(f"Schedule execution failed: {e}", status_code=500)
+
     # ==================== Environment Helpers ====================
 
     @staticmethod
