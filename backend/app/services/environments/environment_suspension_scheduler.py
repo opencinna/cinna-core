@@ -79,7 +79,7 @@ async def _check_and_suspend_environments():
                     logger.debug(f"Skipping environment {env.id}: agent {agent.id} is always_on")
                     continue
 
-                threshold_time = datetime.now(UTC) - inactivity_limit
+                threshold_time = datetime.utcnow() - inactivity_limit
 
                 # Check if user is online
                 user_online = event_service.is_user_online(agent.owner_id)
