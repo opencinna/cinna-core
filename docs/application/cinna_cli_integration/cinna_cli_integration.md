@@ -8,7 +8,7 @@ Enables local development of remote agents using the `cinna` CLI tool. Users dev
 
 | Concept | Description |
 |---------|-------------|
-| **Bootstrap Script** | Python script served by the platform at `GET /cli-setup/{token}`. Checks if `cinna` is installed — if yes, delegates to `cinna setup`; if no, prints install instructions |
+| **Bootstrap Script** | Python script served by the platform at `GET /api/cli-setup/{token}`. Checks if `cinna` is installed — if yes, delegates to `cinna setup`; if no, prints install instructions |
 | **Setup Token** | Short-lived (15min), single-use token embedded in the bootstrap URL. Generated from the UI, consumed when `cinna setup` exchanges it for a CLI token |
 | **CLI Token** | Long-lived JWT (7-day rolling expiry) stored on the user's machine. Created by exchanging a setup token. Supports revocation from the UI |
 | **Build Context** | Tarball containing the agent's Docker build context (Dockerfile, dependencies, app core) — used to replicate the production container locally |
@@ -24,7 +24,7 @@ Enables local development of remote agents using the `cinna` CLI tool. Users dev
 2. Clicks **Setup** in the Local Development card
 3. Platform generates a setup token and displays a `curl | python3` oneliner with inline **Copy** and **Regenerate** buttons
 4. User copies the command and runs it in their terminal
-5. Platform serves a bootstrap script (`GET /cli-setup/{token}`) that checks if `cinna` CLI is installed:
+5. Platform serves a bootstrap script (`GET /api/cli-setup/{token}`) that checks if `cinna` CLI is installed:
    - **If installed**: runs `cinna setup <url>` which exchanges the token, downloads build context, builds container, clones workspace, configures MCP proxy
    - **If not installed**: prints install instructions (`uv tool install cinna-cli` or `pip install cinna-cli`) and exits
 6. User opens the agent directory in their editor/AI tool and starts developing

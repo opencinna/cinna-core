@@ -54,16 +54,16 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 
 ## Domain Map
 
-| Domain | Description | Features |
-|--------|-------------|----------|
-| [agents](#agents) | Core agent lifecycle - creation, configuration, environments, sessions, chat, file management | 11 features |
-| [tasks](#tasks) | Task submission, refinement, triggers, and scheduling | 3 features |
-| [credentials](#credentials) | Credential management, encryption, AI provider keys | 1 feature |
-| [application](#application) | User-facing platform features - authentication, integrations, real-time events, workspaces | 18 features |
-| [knowledge](#knowledge) | Git-based knowledge sources, vector search, RAG | 1 feature |
-| [sharing](#sharing) | Agent sharing, guest access, workspace collaboration | 3 features |
-| [agentic_teams](#agentic_teams) | Visual org-chart builder for agent orchestration topology — teams, nodes, connections with AI-generated handover prompts | 1 feature |
-| [development](#development) | Backend/frontend patterns, AI functions, debugging | 4 features |
+| Domain | Description |
+|--------|-------------|
+| [agents](#agents) | Core agent lifecycle - creation, configuration, environments, sessions, chat, file management |
+| [tasks](#tasks) | Task submission, refinement, triggers, and scheduling |
+| [credentials](#credentials) | Credential management, encryption, AI provider keys |
+| [application](#application) | User-facing platform features - authentication, integrations, real-time events, workspaces |
+| [knowledge](#knowledge) | Git-based knowledge sources, vector search, RAG |
+| [sharing](#sharing) | Agent sharing, guest access, workspace collaboration |
+| [agentic_teams](#agentic_teams) | Visual org-chart builder for agent orchestration topology — teams, nodes, connections with AI-generated handover prompts |
+| [development](#development) | Backend/frontend patterns, AI functions, debugging |
 
 ---
 

@@ -52,7 +52,7 @@ The response includes `token` and `setup_command` fields.
 ### 3. Exchange the setup token for a CLI token
 
 ```
-curl -X POST http://localhost:8000/cli-setup/<token> \
+curl -X POST http://localhost:8000/api/cli-setup/<token> \
   -H "Content-Type: application/json" \
   -d '{"machine_name": "Dev Machine", "machine_info": "darwin/arm64"}'
 ```

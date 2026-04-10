@@ -11,7 +11,7 @@
 
 ### Backend — Routes
 
-- `backend/app/api/routes/cli.py` — Two routers: `setup_router` (top-level `/cli-setup`) and `router` (under `/api/v1/cli`). Also contains `_verify_cli_agent_scope()` helper and `get_bootstrap_script()` endpoint
+- `backend/app/api/routes/cli.py` — Two routers: `setup_router` (`/api/cli-setup`) and `router` (under `/api/v1/cli`). Also contains `_verify_cli_agent_scope()` helper and `get_bootstrap_script()` endpoint
 
 ### Backend — Services
 
@@ -25,7 +25,7 @@
 
 ### Backend — App Registration
 
-- `backend/app/main.py` — `setup_router` registered at top level; cleanup scheduler started/stopped in lifespan
+- `backend/app/main.py` — `setup_router` registered at app level (prefix `/api/cli-setup`); cleanup scheduler started/stopped in lifespan
 - `backend/app/api/main.py` — `router` registered under api_router
 
 ### Frontend — Components
@@ -85,12 +85,12 @@ Indexes: `ix_cli_token_token_hash` (unique), `ix_cli_token_owner_agent` (composi
 
 ## API Endpoints
 
-### Setup Bootstrap (no auth, top-level)
+### Setup Bootstrap (no auth, under /api)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/cli-setup/{token}` | Serve bootstrap Python script (checks for `cinna`, delegates or shows install instructions) |
-| POST | `/cli-setup/{token}` | Exchange setup token for CLI token + bootstrap payload (called by `cinna setup`) |
+| GET | `/api/cli-setup/{token}` | Serve bootstrap Python script (checks for `cinna`, delegates or shows install instructions) |
+| POST | `/api/cli-setup/{token}` | Exchange setup token for CLI token + bootstrap payload (called by `cinna setup`) |
 
 ### CLI Management (user JWT auth)
 
