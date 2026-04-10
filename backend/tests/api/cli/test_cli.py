@@ -95,7 +95,7 @@ def test_setup_token_and_cli_token_full_lifecycle(
 
     # ── Phase 6: Re-exchange same setup token → 400 (already used) ────────
     r = client.post(
-        f"/cli-setup/{setup_token_str}",
+        f"/api/cli-setup/{setup_token_str}",
         json={"machine_name": "Another Machine"},
     )
     assert r.status_code == 400
@@ -103,7 +103,7 @@ def test_setup_token_and_cli_token_full_lifecycle(
 
     # ── Phase 7: Exchange a non-existent token → 400 ──────────────────────
     r = client.post(
-        "/cli-setup/this-token-does-not-exist-at-all",
+        "/api/cli-setup/this-token-does-not-exist-at-all",
         json={"machine_name": "Ghost"},
     )
     assert r.status_code == 400

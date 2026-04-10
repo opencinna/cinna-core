@@ -28,12 +28,12 @@ def exchange_setup_token(
     machine_name: str = "Test Machine",
     machine_info: str | None = None,
 ) -> dict:
-    """POST /cli-setup/{token} — exchange a setup token for a CLI JWT.
+    """POST /api/cli-setup/{token} — exchange a setup token for a CLI JWT.
 
-    Note: this endpoint is mounted at the app root, NOT under /api/v1.
+    Note: this endpoint is mounted at /api/cli-setup, NOT under /api/v1.
     """
     r = client.post(
-        f"/cli-setup/{token_str}",
+        f"/api/cli-setup/{token_str}",
         json={"machine_name": machine_name, "machine_info": machine_info},
     )
     assert r.status_code == 200, f"Exchange setup token failed: {r.text}"

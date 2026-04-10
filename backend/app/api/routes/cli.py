@@ -2,7 +2,7 @@
 CLI API Routes.
 
 Provides two routers:
-- setup_router: top-level /cli-setup/{token} (no auth, short URL for curl oneliner)
+- setup_router: /api/cli-setup/{token} (no auth, short URL for curl oneliner)
 - router: /cli prefix under /api/v1 (user auth + CLI token auth)
 """
 import uuid
@@ -26,7 +26,7 @@ def _verify_cli_agent_scope(cli_ctx: CLIContext, agent_id: uuid.UUID) -> None:
 # ── Setup Bootstrap Router ───────────────────────────────────────────────────
 # Registered directly on the FastAPI app at top level (short URL for curl oneliner)
 
-setup_router = APIRouter(prefix="/cli-setup", tags=["cli"])
+setup_router = APIRouter(prefix="/api/cli-setup", tags=["cli"])
 
 
 from pydantic import BaseModel
@@ -51,7 +51,7 @@ async def get_bootstrap_script(
     """
     from app.services.cli.cli_service import _get_platform_url
     platform_url = _get_platform_url(request)
-    setup_url = f"{platform_url}/cli-setup/{token}"
+    setup_url = f"{platform_url}/api/cli-setup/{token}"
 
     return f'''\
 #!/usr/bin/env python3

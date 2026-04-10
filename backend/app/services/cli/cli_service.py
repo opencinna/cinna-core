@@ -116,7 +116,7 @@ class CLIService:
         db.refresh(token)
 
         platform_url = _get_platform_url(request)
-        setup_command = f"curl -sL {platform_url}/cli-setup/{token_value} | python3 -"
+        setup_command = f"curl -sL {platform_url}/api/cli-setup/{token_value} | python3 -"
 
         return CLISetupTokenCreated(
             id=token.id,
