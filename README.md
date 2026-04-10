@@ -87,13 +87,12 @@ User ──> Frontend (React) ──> Backend API (FastAPI) ──> Services ─
 ```bash
 git clone https://github.com/opencinna/cinna-core.git
 cd cinna-core
-cp .env.example .env
-cp frontend/.env.example frontend/.env
-make up
-make prestart
+make install
 ```
 
-Open http://localhost:5173.
+The install wizard will walk you through configuring admin credentials, database settings, and security keys. It copies `.env.example`, applies your values, builds Docker images, runs migrations, and seeds the admin user — everything needed to go from clone to running instance.
+
+Open http://localhost:5173 and log in with the admin credentials you chose during setup.
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the full development setup, workflow, and Makefile reference.
 
