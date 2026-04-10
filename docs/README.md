@@ -4,8 +4,6 @@ A conversational AI agent platform where users create custom AI agents, run them
 
 **Stack:** FastAPI + PostgreSQL | React + TypeScript + TanStack | Docker isolation | SQLModel ORM
 
-[![Getting Started](img/getting_started_page.jpg)](https://youtu.be/5-d_OPuqA4I)
-
 ## Core Idea
 
 The platform separates three distinct layers:

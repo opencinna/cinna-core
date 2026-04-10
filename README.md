@@ -18,6 +18,8 @@ Cinna gives you the full operational layer on top (not just SDK):
 - **Multi-SDK support** — use Claude Code (with Anthropic) or OpenCode (with OpenAI, Google, and many other providers). Switch between them without changing your agent
 - **No vendor lock-in** — self-hosted, GPL-3.0 licensed, runs anywhere Docker runs
 
+[![Getting Started](img/getting_started_video_preview.jpg)](https://youtu.be/5-d_OPuqA4I)
+
 ## Key Features
 
 ### Agent Management
