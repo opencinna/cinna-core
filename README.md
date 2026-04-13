@@ -11,6 +11,10 @@ Create custom AI agents with their own prompts, credentials, and tools — each 
 
 ## Why Cinna
 
+### Skills vs Prebuilt Agents
+
+AI "skills" require LLM inference on every run — each execution costs tokens, needs careful prompt tuning, and can hallucinate. Cinna takes a different approach: agents run **prebuilt scripts in persistent environments**. Once an agent's workflow is built, routine tasks execute as deterministic code with zero token cost — effectively becoming a standalone application. You get the flexibility of AI for building and iterating, with the predictability and reliability of traditional software for day-to-day operation.
+
 Cinna gives you the full operational layer on top (not just SDK):
 
 - **Isolated runtime per agent** — each agent runs in its own Docker container with a persistent workspace, so agents can create files, install packages, and maintain state across sessions
