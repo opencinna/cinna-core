@@ -8,6 +8,8 @@ import {
   Copy,
   Check,
   HelpCircle,
+  Wrench,
+  MessageCircle,
 } from "lucide-react"
 import { useState } from "react"
 
@@ -26,6 +28,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -38,6 +46,7 @@ export function AppAgentRoutesCard() {
   const { showErrorToast } = useCustomToast()
   const [copied, setCopied] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
+  const [detailRoute, setDetailRoute] = useState<SharedRoutePublic | null>(null)
 
   const { data: mcpInfo } = useQuery({
     queryKey: ["mcp-info"],
@@ -127,13 +136,20 @@ export function AppAgentRoutesCard() {
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium truncate">{route.agent_name}</span>
-                      <Badge variant="secondary" className="text-xs shrink-0">
-                        {route.session_mode}
-                      </Badge>
+                      {route.session_mode === "building" ? (
+                        <Wrench className="h-3.5 w-3.5 text-orange-500 shrink-0" />
+                      ) : (
+                        <MessageCircle className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                      )}
+                      <button
+                        className="text-sm font-medium truncate text-left hover:underline cursor-pointer"
+                        onClick={() => setDetailRoute(route)}
+                      >
+                        {route.agent_name}
+                      </button>
                     </div>
                     {route.agent_owner_name && (
-                      <p className="text-xs text-muted-foreground mt-0.5">
+                      <p className="text-xs text-muted-foreground mt-0.5 ml-[22px]">
                         by {route.agent_owner_name}
                         {route.shared_by_name && route.shared_by_name !== route.agent_owner_name && (
                           <span className="ml-1">· shared by {route.shared_by_name}</span>
@@ -141,8 +157,8 @@ export function AppAgentRoutesCard() {
                       </p>
                     )}
                     {!route.is_active && (
-                      <p className="text-xs mt-0.5">
-                        <span className="text-orange-500">Disabled by admin</span>
+                      <p className="text-xs mt-0.5 ml-[22px]">
+                        <span className="text-orange-500">Disabled by agent owner</span>
                       </p>
                     )}
                   </div>
@@ -195,6 +211,53 @@ export function AppAgentRoutesCard() {
           </div>
         )}
       </CardContent>
+
+      {/* Shared route detail modal */}
+      <Dialog open={!!detailRoute} onOpenChange={(open) => !open && setDetailRoute(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {detailRoute?.session_mode === "building" ? (
+                <Wrench className="h-4 w-4 text-orange-500 shrink-0" />
+              ) : (
+                <MessageCircle className="h-4 w-4 text-blue-500 shrink-0" />
+              )}
+              {detailRoute?.agent_name}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {detailRoute?.agent_owner_name && (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-1">Owner</p>
+                <p className="text-sm">{detailRoute.agent_owner_name}</p>
+              </div>
+            )}
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-1">Trigger Prompt</p>
+              <p className="text-sm whitespace-pre-wrap bg-muted rounded-md p-2">
+                {detailRoute?.trigger_prompt || "—"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-1">Message Patterns</p>
+              {detailRoute?.message_patterns ? (
+                <div className="space-y-1">
+                  {detailRoute.message_patterns.split("\n").filter(Boolean).map((pattern, i) => (
+                    <code
+                      key={i}
+                      className="block text-xs bg-muted rounded px-2 py-1"
+                    >
+                      {pattern}
+                    </code>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No patterns configured</p>
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <GettingStartedModal
         open={showHelp}

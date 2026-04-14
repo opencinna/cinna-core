@@ -2401,6 +2401,7 @@ export type SharedRoutePublic = {
     shared_by_name?: string;
     session_mode: string;
     trigger_prompt: string;
+    message_patterns?: (string | null);
     is_active: boolean;
     assignment_id: string;
     is_enabled: boolean;

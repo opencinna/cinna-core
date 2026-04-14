@@ -173,6 +173,7 @@ class SharedRoutePublic(SQLModel):
     shared_by_name: str = ""
     session_mode: str
     trigger_prompt: str
+    message_patterns: str | None = None
     is_active: bool  # route-level toggle (set by route creator)
     assignment_id: uuid.UUID
     is_enabled: bool  # user-level toggle

@@ -606,6 +606,7 @@ class UserAppAgentRouteService:
                     shared_by_name=shared_by_name,
                     session_mode=route.session_mode,
                     trigger_prompt=route.trigger_prompt,
+                    message_patterns=route.message_patterns,
                     is_active=route.is_active,
                     assignment_id=assignment.id,
                     is_enabled=assignment.is_enabled,

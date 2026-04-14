@@ -11772,6 +11772,17 @@ export const SharedRoutePublicSchema = {
             type: 'string',
             title: 'Trigger Prompt'
         },
+        message_patterns: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Message Patterns'
+        },
         is_active: {
             type: 'boolean',
             title: 'Is Active'
