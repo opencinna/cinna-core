@@ -26,7 +26,7 @@ class SocketIOConnector:
             async_mode="asgi",
             cors_allowed_origins="*",
             logger=True,
-            engineio_logger=True,
+            engineio_logger=False,
         )
 
     async def emit(self, event: str, data: Any, room: str | None = None):
