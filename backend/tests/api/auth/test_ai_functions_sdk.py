@@ -16,6 +16,17 @@ Covers:
   8. Setting another user's credential — 404
   9. Setting a non-Anthropic credential — 400 with "Only Anthropic credentials"
   10. Setting an OAuth token credential — 400 with "OAuth tokens cannot be used"
+
+Tests for OpenAI provider support (personal:openai).
+
+Covers:
+  11. Setting SDK to "personal:openai" is accepted and persisted
+  12. Pinning an OpenAI credential when SDK is "personal:openai" — 200, persisted
+  13. Pinning an Anthropic credential when SDK is "personal:openai" — 400 (wrong type)
+  14. Pinning an OpenAI credential when SDK is "personal:anthropic" — 400 (wrong type)
+  15. Switching SDK to "system" from "personal:openai" auto-clears credential_id
+  16. Auto-set to "personal:openai" when first OpenAI credential created and no personal preference set
+  17. Auto-set is skipped when personal preference already configured (Anthropic takes priority)
 """
 import uuid
 
@@ -284,4 +295,276 @@ def test_default_ai_functions_credential_id_full_lifecycle(
     detail = r.json().get("detail", "")
     assert "oauth" in detail.lower(), (
         f"Expected 'OAuth' in error detail, got: {detail!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# OpenAI provider support (personal:openai)
+# ---------------------------------------------------------------------------
+
+
+def test_personal_openai_sdk_lifecycle(
+    client: TestClient,
+) -> None:
+    """
+    Full lifecycle for the personal:openai AI functions SDK preference:
+      1. Set SDK to "personal:openai" — accepted, persisted
+      2. Create an OpenAI credential and pin it — 200, credential_id persisted
+      3. Verify the pinned credential_id is returned in GET /users/me
+      4. Switch SDK to "system" — credential_id is auto-cleared to null
+      5. Set SDK back to "personal:openai" and pin an Anthropic credential — 400 (wrong type)
+      6. Pin the OpenAI credential again — 200 (correct type)
+      7. Switch SDK to "personal:anthropic" and attempt to pin the OpenAI credential — 400 (wrong type)
+    """
+    _, headers = create_random_user_with_headers(client)
+
+    # ── Phase 1: Set SDK to "personal:openai" ─────────────────────────────
+    r = client.patch(
+        f"{settings.API_V1_STR}/users/me",
+        headers=headers,
+        json={"default_ai_functions_sdk": "personal:openai"},
+    )
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+    data = r.json()
+    assert data["default_ai_functions_sdk"] == "personal:openai"
+
+    # Verify persistence via GET
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["default_ai_functions_sdk"] == "personal:openai"
+
+    # ── Phase 2: Create an OpenAI credential and pin it ───────────────────
+    openai_cred = create_random_ai_credential(
+        client,
+        headers,
+        credential_type="openai",
+        api_key="sk-openai-test-key-for-ai-functions",
+    )
+    openai_cred_id = openai_cred["id"]
+
+    r = client.patch(
+        f"{settings.API_V1_STR}/users/me",
+        headers=headers,
+        json={"default_ai_functions_credential_id": openai_cred_id},
+    )
+    assert r.status_code == 200, f"Expected 200 pinning OpenAI cred, got {r.status_code}: {r.text}"
+    data = r.json()
+    assert data["default_ai_functions_credential_id"] == openai_cred_id
+
+    # ── Phase 3: Verify pinned credential_id via GET ──────────────────────
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["default_ai_functions_credential_id"] == openai_cred_id
+
+    # ── Phase 4: Switch SDK to "system" — credential_id is auto-cleared ───
+    r = client.patch(
+        f"{settings.API_V1_STR}/users/me",
+        headers=headers,
+        json={"default_ai_functions_sdk": "system"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["default_ai_functions_sdk"] == "system"
+    assert data["default_ai_functions_credential_id"] is None, (
+        "Switching to 'system' SDK should auto-clear default_ai_functions_credential_id"
+    )
+
+    # Verify cleared state via GET
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["default_ai_functions_credential_id"] is None
+
+    # ── Phase 5: Re-enable personal:openai; attempt to pin Anthropic cred → 400
+    r = client.patch(
+        f"{settings.API_V1_STR}/users/me",
+        headers=headers,
+        json={"default_ai_functions_sdk": "personal:openai"},
+    )
+    assert r.status_code == 200
+
+    anthropic_cred = create_random_ai_credential(
+        client,
+        headers,
+        credential_type="anthropic",
+        api_key="sk-ant-api03-wrong-type-for-openai-sdk",
+    )
+    r = client.patch(
+        f"{settings.API_V1_STR}/users/me",
+        headers=headers,
+        json={"default_ai_functions_credential_id": anthropic_cred["id"]},
+    )
+    assert r.status_code == 400, (
+        f"Expected 400 pinning Anthropic cred with personal:openai SDK, got {r.status_code}: {r.text}"
+    )
+    detail = r.json().get("detail", "")
+    assert "openai" in detail.lower(), (
+        f"Expected 'openai' in error detail, got: {detail!r}"
+    )
+
+    # ── Phase 6: Pin the OpenAI credential again — 200 ───────────────────
+    r = client.patch(
+        f"{settings.API_V1_STR}/users/me",
+        headers=headers,
+        json={"default_ai_functions_credential_id": openai_cred_id},
+    )
+    assert r.status_code == 200, f"Expected 200 re-pinning OpenAI cred, got {r.status_code}: {r.text}"
+    assert r.json()["default_ai_functions_credential_id"] == openai_cred_id
+
+    # ── Phase 7: Switch to personal:anthropic; OpenAI cred now invalid → 400
+    r = client.patch(
+        f"{settings.API_V1_STR}/users/me",
+        headers=headers,
+        json={
+            "default_ai_functions_sdk": "personal:anthropic",
+            "default_ai_functions_credential_id": openai_cred_id,
+        },
+    )
+    assert r.status_code == 400, (
+        f"Expected 400 pinning OpenAI cred with personal:anthropic SDK, got {r.status_code}: {r.text}"
+    )
+    detail = r.json().get("detail", "")
+    assert "anthropic" in detail.lower(), (
+        f"Expected 'anthropic' in error detail, got: {detail!r}"
+    )
+
+
+def test_personal_openai_sdk_is_valid_option(
+    client: TestClient,
+) -> None:
+    """
+    Verify that "personal:openai" is accepted as a valid AI functions SDK value
+    alongside "system" and "personal:anthropic", and that it round-trips correctly
+    through the API without being rejected as invalid.
+    """
+    _, headers = create_random_user_with_headers(client)
+
+    for valid_sdk in ["system", "personal:anthropic", "personal:openai"]:
+        r = client.patch(
+            f"{settings.API_V1_STR}/users/me",
+            headers=headers,
+            json={"default_ai_functions_sdk": valid_sdk},
+        )
+        assert r.status_code == 200, (
+            f"Expected 200 for valid SDK {valid_sdk!r}, got {r.status_code}: {r.text}"
+        )
+        assert r.json()["default_ai_functions_sdk"] == valid_sdk
+
+
+def test_auto_set_personal_openai_on_first_openai_credential(
+    client: TestClient,
+) -> None:
+    """
+    When the first OpenAI (type="openai") credential is created via the onboarding
+    AI credentials update endpoint (PATCH /users/me/ai-credentials), and the user
+    has no personal AI functions preference (still "system"), the system auto-sets
+    the SDK preference to "personal:openai".
+
+      1. New user starts with "system" AI functions SDK
+      2. Submit openai_api_key via PATCH /users/me/ai-credentials
+      3. Verify default_ai_functions_sdk is now "personal:openai"
+    """
+    _, headers = create_random_user_with_headers(client)
+
+    # ── Phase 1: New user starts with "system" ────────────────────────────
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["default_ai_functions_sdk"] == "system"
+
+    # ── Phase 2: Submit OpenAI key via onboarding endpoint ───────────────
+    r = client.patch(
+        f"{settings.API_V1_STR}/users/me/ai-credentials",
+        headers=headers,
+        json={"openai_api_key": "sk-openai-auto-set-test-key"},
+    )
+    assert r.status_code == 200, f"Expected 200 from ai-credentials update, got {r.status_code}: {r.text}"
+
+    # ── Phase 3: Verify auto-set to "personal:openai" ────────────────────
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["default_ai_functions_sdk"] == "personal:openai", (
+        f"Expected auto-set to 'personal:openai' after first OpenAI credential, "
+        f"got {data['default_ai_functions_sdk']!r}"
+    )
+
+
+def test_auto_set_anthropic_takes_priority_over_openai_when_both_submitted(
+    client: TestClient,
+) -> None:
+    """
+    When both anthropic_api_key and openai_api_key are submitted in the same
+    onboarding request, the Anthropic auto-set fires first and sets the SDK to
+    "personal:anthropic". The OpenAI auto-set check then sees a personal preference
+    already set and skips, so the final value remains "personal:anthropic".
+
+      1. New user starts with "system" SDK
+      2. Submit both anthropic_api_key and openai_api_key in one request
+      3. Verify default_ai_functions_sdk is "personal:anthropic" (Anthropic wins)
+    """
+    _, headers = create_random_user_with_headers(client)
+
+    # ── Phase 1: Verify initial state ────────────────────────────────────
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["default_ai_functions_sdk"] == "system"
+
+    # ── Phase 2: Submit both keys in one request ──────────────────────────
+    r = client.patch(
+        f"{settings.API_V1_STR}/users/me/ai-credentials",
+        headers=headers,
+        json={
+            "anthropic_api_key": "sk-ant-api03-both-keys-test",
+            "openai_api_key": "sk-openai-both-keys-test",
+        },
+    )
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+
+    # ── Phase 3: Anthropic preference wins ───────────────────────────────
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["default_ai_functions_sdk"] == "personal:anthropic", (
+        f"Expected 'personal:anthropic' to win when both keys submitted, "
+        f"got {data['default_ai_functions_sdk']!r}"
+    )
+
+
+def test_auto_set_openai_skipped_when_personal_preference_already_set(
+    client: TestClient,
+) -> None:
+    """
+    When the user already has a personal AI functions preference set (e.g.,
+    "personal:anthropic"), submitting an openai_api_key via onboarding should NOT
+    override the existing preference.
+
+      1. User sets SDK to "personal:anthropic" manually
+      2. Submit openai_api_key via onboarding endpoint
+      3. Verify default_ai_functions_sdk remains "personal:anthropic"
+    """
+    _, headers = create_random_user_with_headers(client)
+
+    # ── Phase 1: Set personal preference to "personal:anthropic" ─────────
+    r = client.patch(
+        f"{settings.API_V1_STR}/users/me",
+        headers=headers,
+        json={"default_ai_functions_sdk": "personal:anthropic"},
+    )
+    assert r.status_code == 200
+    assert r.json()["default_ai_functions_sdk"] == "personal:anthropic"
+
+    # ── Phase 2: Submit openai_api_key via onboarding ─────────────────────
+    r = client.patch(
+        f"{settings.API_V1_STR}/users/me/ai-credentials",
+        headers=headers,
+        json={"openai_api_key": "sk-openai-should-not-override"},
+    )
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+
+    # ── Phase 3: Personal preference unchanged ────────────────────────────
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["default_ai_functions_sdk"] == "personal:anthropic", (
+        f"Expected personal:anthropic to remain unchanged, "
+        f"got {data['default_ai_functions_sdk']!r}"
     )

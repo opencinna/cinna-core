@@ -85,33 +85,78 @@ class AIFunctionsService:
         return data.api_key
 
     @staticmethod
+    def _get_user_default_openai_key(db: Session, user_id: UUID) -> str | None:
+        """
+        Look up the user's default OpenAI AICredential and decrypt its api_key.
+
+        Args:
+            db: Database session
+            user_id: User UUID
+
+        Returns:
+            Decrypted API key string, or None if no default OpenAI credential exists
+        """
+        from app.models.credentials.ai_credential import AICredentialType
+        from app.services.credentials.ai_credentials_service import ai_credentials_service
+
+        credential = ai_credentials_service.get_default_for_type(
+            db, user_id, AICredentialType.OPENAI
+        )
+        if not credential:
+            return None
+        data = ai_credentials_service.decrypt_credential(credential)
+        return data.api_key
+
+    @staticmethod
     def _resolve_provider_kwargs(user: "User | None", db: Session | None) -> dict:
         """
         Resolve provider kwargs based on the user's AI functions SDK preference.
 
-        When user chose "anthropic":
+        When user chose "personal:anthropic":
         - If default_ai_functions_credential_id is set, uses that specific credential
         - Otherwise falls back to the default Anthropic credential
 
+        When user chose "personal:openai":
+        - If default_ai_functions_credential_id is set, uses that specific credential
+        - Otherwise falls back to the default OpenAI credential
+
         Returns:
-            - {"api_key": key} if user chose "anthropic"
+            - {"api_key": key} if user chose "personal:anthropic"
+            - {"api_key": key, "provider": "openai"} if user chose "personal:openai"
             - {} if user chose "system" or no user context provided
 
         Raises:
-            ValueError: If user chose "anthropic" but no usable credential is found,
-                        or if the selected credential is an OAuth token
+            ValueError: If user chose a personal provider but no usable credential is found,
+                        or if the selected Anthropic credential is an OAuth token
         """
         if not user or not db:
             return {}
 
         pref = getattr(user, "default_ai_functions_sdk", None) or "system"
-        if pref != "personal:anthropic":
+        if pref not in ("personal:anthropic", "personal:openai"):
             return {}
 
         credential_id = getattr(user, "default_ai_functions_credential_id", None)
 
+        if pref == "personal:openai":
+            if credential_id:
+                api_key = AIFunctionsService._get_credential_api_key(db, credential_id, user.id)
+                if not api_key:
+                    raise ValueError(
+                        "The selected AI functions credential was not found or you no longer have access. "
+                        "Please update your AI Functions settings."
+                    )
+            else:
+                api_key = AIFunctionsService._get_user_default_openai_key(db, user.id)
+                if not api_key:
+                    raise ValueError(
+                        "You selected Personal OpenAI for AI functions, but no default "
+                        "OpenAI credential is configured. Please add one in AI Credentials settings."
+                    )
+            return {"api_key": api_key, "provider": "openai"}
+
+        # personal:anthropic path
         if credential_id:
-            # Use specific credential
             api_key = AIFunctionsService._get_credential_api_key(db, credential_id, user.id)
             if not api_key:
                 raise ValueError(
@@ -119,7 +164,6 @@ class AIFunctionsService:
                     "Please update your AI Functions settings."
                 )
         else:
-            # Fall back to default for type
             api_key = AIFunctionsService._get_user_default_anthropic_key(db, user.id)
             if not api_key:
                 raise ValueError(

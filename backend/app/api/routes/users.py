@@ -130,20 +130,28 @@ def update_user_me(
         cred = session.get(AICredential, user_in.default_ai_functions_credential_id)
         if not cred or cred.owner_id != current_user.id:
             raise HTTPException(status_code=404, detail="AI credential not found")
-        if cred.type != AICredentialType.ANTHROPIC:
+        # Determine expected credential type based on the SDK being set in this request
+        # or the user's current saved preference if SDK is not being changed here
+        sdk = user_in.default_ai_functions_sdk or current_user.default_ai_functions_sdk
+        if sdk == "personal:openai":
+            expected_type = AICredentialType.OPENAI
+        else:
+            expected_type = AICredentialType.ANTHROPIC
+        if cred.type != expected_type:
             raise HTTPException(
                 status_code=400,
-                detail="Only Anthropic credentials can be used for AI functions",
+                detail=f"Only {expected_type.value} credentials can be used for AI functions when using {sdk}",
             )
-        # Check for OAuth token
-        from app.services.credentials.ai_credentials_service import ai_credentials_service
-        data = ai_credentials_service.decrypt_credential(cred)
-        if data.api_key and data.api_key.startswith("sk-ant-oat"):
-            raise HTTPException(
-                status_code=400,
-                detail="OAuth tokens cannot be used with the Anthropic API for AI functions. "
-                       "Please select a credential with an API key (sk-ant-api*).",
-            )
+        # OAuth token check — only applicable for Anthropic credentials
+        if expected_type == AICredentialType.ANTHROPIC:
+            from app.services.credentials.ai_credentials_service import ai_credentials_service
+            data = ai_credentials_service.decrypt_credential(cred)
+            if data.api_key and data.api_key.startswith("sk-ant-oat"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="OAuth tokens cannot be used with the Anthropic API for AI functions. "
+                           "Please select a credential with an API key (sk-ant-api*).",
+                )
     user_data = user_in.model_dump(exclude_unset=True)
     current_user.sqlmodel_update(user_data)
     session.add(current_user)

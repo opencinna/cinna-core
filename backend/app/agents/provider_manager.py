@@ -28,6 +28,7 @@ from .providers import (
     GeminiProvider,
     OpenAICompatibleProvider,
     AnthropicProvider,
+    OpenAIProvider,
 )
 
 
@@ -39,6 +40,7 @@ PROVIDER_REGISTRY: dict[str, type[BaseAIProvider]] = {
     "gemini": GeminiProvider,
     "openai-compatible": OpenAICompatibleProvider,
     "anthropic": AnthropicProvider,
+    "openai": OpenAIProvider,
 }
 
 
@@ -110,15 +112,16 @@ class ProviderManager:
         model: Optional[str] = None,
         preferred_provider: Optional[str] = None,
         api_key: Optional[str] = None,
+        provider: Optional[str] = None,
     ) -> ProviderResponse:
         """
         Generate content using the cascade of providers.
 
         Tries providers in order and falls back to the next one if a provider fails.
 
-        When api_key is provided, bypasses the cascade entirely and calls
-        AnthropicProvider directly with that key. No fallback occurs — if it
-        fails, the error propagates to the caller. This is used for per-user
+        When api_key is provided, bypasses the cascade entirely and calls the
+        appropriate personal provider directly with that key. No fallback occurs —
+        if it fails, the error propagates to the caller. This is used for per-user
         personal API key routing.
 
         Args:
@@ -126,7 +129,9 @@ class ProviderManager:
             model: Optional model override (provider-specific)
             preferred_provider: Optional preferred provider to try first
             api_key: Optional personal API key. When set, bypasses cascade and
-                     uses AnthropicProvider directly with no fallback.
+                     uses the specified personal provider directly with no fallback.
+            provider: Optional provider name to use with personal api_key.
+                      Supported: "openai", "anthropic" (default when not specified).
 
         Returns:
             ProviderResponse with generated text
@@ -136,9 +141,13 @@ class ProviderManager:
         """
         # Personal API key path: bypass cascade, no fallback
         if api_key:
-            logger.info("Using personal Anthropic API key for AI function call")
-            provider = AnthropicProvider(api_key=api_key)
-            return provider.generate_content(prompt, model)
+            if provider == "openai":
+                logger.info("Using personal OpenAI API key for AI function call")
+                provider_instance = OpenAIProvider(api_key=api_key)
+            else:
+                logger.info("Using personal Anthropic API key for AI function call")
+                provider_instance = AnthropicProvider(api_key=api_key)
+            return provider_instance.generate_content(prompt, model)
 
         # Build provider order with preferred provider first
         providers_to_try = []

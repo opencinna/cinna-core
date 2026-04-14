@@ -154,8 +154,8 @@ class Settings(BaseSettings):
 
     # AI Functions Provider Configuration
     # Comma-separated list of providers to try in order (cascade fallback)
-    # Supported: "gemini", "openai-compatible"
-    # Example: "openai-compatible,gemini" - try openai-compatible first, fall back to gemini
+    # Supported: "gemini", "openai-compatible", "openai"
+    # Example: "openai,gemini" - try openai first, fall back to gemini
     AI_FUNCTIONS_PROVIDERS: str = "gemini"
 
     # OpenAI-compatible provider settings (for AI functions)
@@ -163,6 +163,11 @@ class Settings(BaseSettings):
     OPENAI_COMPATIBLE_BASE_URL: str | None = None
     OPENAI_COMPATIBLE_API_KEY: str | None = None
     OPENAI_COMPATIBLE_MODEL: str = "gpt-4o-mini"
+
+    # OpenAI direct provider settings (for AI functions)
+    # Used when "openai" is in AI_FUNCTIONS_PROVIDERS
+    OPENAI_API_KEY: str | None = None
+    OPENAI_MODEL: str = "gpt-4o-mini"
 
     @computed_field  # type: ignore[prop-decorator]
     @property

@@ -279,6 +279,17 @@ class AICredentialsService:
                 session.refresh(user)
                 logger.info(f"Auto-set AI functions to personal:anthropic for user {user.id}")
 
+        # Auto-set AI functions to personal:openai when first OpenAI key is added
+        # and no personal preference is already configured (Anthropic takes priority
+        # if both keys are submitted in the same request)
+        if credentials_in.openai_api_key:
+            if not user.default_ai_functions_sdk or user.default_ai_functions_sdk == "system":
+                user.default_ai_functions_sdk = "personal:openai"
+                session.add(user)
+                session.commit()
+                session.refresh(user)
+                logger.info(f"Auto-set AI functions to personal:openai for user {user.id}")
+
     def _upsert_default_credential(
         self,
         session: Session,

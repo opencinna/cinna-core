@@ -10,7 +10,7 @@ SDK_MINIMAX = "claude-code/minimax"
 VALID_SDK_OPTIONS = [SDK_ANTHROPIC, SDK_MINIMAX]
 
 # AI Functions SDK constants
-VALID_AI_FUNCTIONS_SDK_OPTIONS = ["system", "personal:anthropic"]
+VALID_AI_FUNCTIONS_SDK_OPTIONS = ["system", "personal:anthropic", "personal:openai"]
 
 
 # Shared properties

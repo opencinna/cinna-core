@@ -20,11 +20,16 @@ AI Functions support multiple LLM providers with cascade fallback:
 
 1. **Gemini** - Google Gemini via google-genai SDK (default)
 2. **OpenAI-Compatible** - Any OpenAI-compatible endpoint via litellm (Ollama, vLLM, local deployments)
+3. **OpenAI** - Direct OpenAI API via httpx (no OpenAI SDK dependency). Supports system-level use via `OPENAI_API_KEY` or personal routing via a user's stored OpenAI credential.
+4. **Anthropic** - Direct Anthropic API via httpx. Used only for personal routing (`personal:anthropic`); not configurable as a system cascade provider.
 
 Configure provider order with `AI_FUNCTIONS_PROVIDERS` environment variable:
 ```bash
 # Try OpenAI-compatible first, fall back to Gemini
 AI_FUNCTIONS_PROVIDERS=openai-compatible,gemini
+
+# Try OpenAI first, fall back to Gemini
+AI_FUNCTIONS_PROVIDERS=openai,gemini
 
 # Only use Gemini (default)
 AI_FUNCTIONS_PROVIDERS=gemini
@@ -197,6 +202,10 @@ AI_FUNCTIONS_PROVIDERS=gemini  # Default
 # Gemini provider settings
 GOOGLE_API_KEY=your-api-key-here
 
+# OpenAI provider settings (direct OpenAI API)
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_MODEL=gpt-4o-mini  # Default; can be overridden
+
 # OpenAI-compatible provider settings (for local/custom endpoints)
 OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1  # e.g., Ollama
 OPENAI_COMPATIBLE_API_KEY=optional-api-key
@@ -209,6 +218,12 @@ OPENAI_COMPATIBLE_MODEL=llama3.2:latest
 - Get API key from: https://makersuite.google.com/app/apikey
 - Default model: `gemini-2.5-flash-lite` (fast, cheap)
 
+**OpenAI**
+- Direct HTTP calls to `https://api.openai.com/v1/chat/completions` — no OpenAI SDK dependency (uses httpx)
+- Set `OPENAI_API_KEY` in `.env`
+- Default model: `gpt-4o-mini` (fast, cheap); override with `OPENAI_MODEL`
+- Also used for per-user personal routing when a user selects "Personal OpenAI" in Settings
+
 **OpenAI-Compatible**
 - Works with: Ollama, vLLM, LM Studio, any OpenAI-compatible API
 - Set `OPENAI_COMPATIBLE_BASE_URL` to your endpoint
@@ -216,18 +231,25 @@ OPENAI_COMPATIBLE_MODEL=llama3.2:latest
 
 ### Example Configurations
 
+**Cloud-only (Gemini):**
+```bash
+AI_FUNCTIONS_PROVIDERS=gemini
+GOOGLE_API_KEY=your-api-key
+```
+
+**OpenAI primary, Gemini fallback:**
+```bash
+AI_FUNCTIONS_PROVIDERS=openai,gemini
+OPENAI_API_KEY=your-openai-key
+GOOGLE_API_KEY=your-backup-key
+```
+
 **Local development with Ollama fallback:**
 ```bash
 AI_FUNCTIONS_PROVIDERS=openai-compatible,gemini
 OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1
 OPENAI_COMPATIBLE_MODEL=llama3.2:latest
 GOOGLE_API_KEY=your-backup-key
-```
-
-**Cloud-only (Gemini):**
-```bash
-AI_FUNCTIONS_PROVIDERS=gemini
-GOOGLE_API_KEY=your-api-key
 ```
 
 ### Model Selection
@@ -323,6 +345,7 @@ from .providers import MyProvider
 PROVIDER_REGISTRY: dict[str, type[BaseAIProvider]] = {
     "gemini": GeminiProvider,
     "openai-compatible": OpenAICompatibleProvider,
+    "openai": OpenAIProvider,
     "my-provider": MyProvider,  # Add here
 }
 ```

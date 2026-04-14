@@ -759,6 +759,7 @@ export function AICredentialsSettings() {
                   <SelectContent>
                     <SelectItem value="system">System (default)</SelectItem>
                     <SelectItem value="personal:anthropic">Personal Anthropic</SelectItem>
+                    <SelectItem value="personal:openai">Personal OpenAI</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -821,6 +822,52 @@ export function AICredentialsSettings() {
                     {anthropicCreds.length === 0 && (
                       <p className="text-xs text-muted-foreground">
                         No Anthropic credentials found. Add one in the credentials panel.
+                      </p>
+                    )}
+                  </div>
+                )
+              })()}
+
+              {/* Credential picker for AI Functions — shown when personal:openai is selected */}
+              {(status?.default_ai_functions_sdk || "system") === "personal:openai" && (() => {
+                const openaiCreds = credentials.filter(c => c.type === "openai")
+                const selectedCredId = status?.default_ai_functions_credential_id || "default"
+                const defaultCred = openaiCreds.find(c => c.is_default)
+
+                return (
+                  <div className="ml-10 space-y-2">
+                    <div className="flex items-center justify-between gap-4">
+                      <Label htmlFor="ai-functions-openai-credential" className="text-xs text-muted-foreground">
+                        Credential
+                      </Label>
+                      <Select
+                        value={selectedCredId}
+                        onValueChange={(value) => {
+                          updateSdkMutation.mutate({
+                            default_ai_functions_credential_id: value === "default" ? null : value,
+                          })
+                        }}
+                        disabled={updateSdkMutation.isPending}
+                      >
+                        <SelectTrigger id="ai-functions-openai-credential" className="w-[180px]">
+                          <SelectValue placeholder="Select credential" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="default">
+                            Use Default{defaultCred ? ` (${defaultCred.name})` : ""}
+                          </SelectItem>
+                          {openaiCreds.map((cred) => (
+                            <SelectItem key={cred.id} value={cred.id}>
+                              {cred.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {openaiCreds.length === 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        No OpenAI credentials found. Add one in the credentials panel.
                       </p>
                     )}
                   </div>
