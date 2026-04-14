@@ -10,6 +10,7 @@ import {
   HelpCircle,
   Wrench,
   MessageCircle,
+  UserCircle,
 } from "lucide-react"
 import { useState } from "react"
 
@@ -38,6 +39,25 @@ import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
+
+const API_BASE = import.meta.env.VITE_API_URL || ""
+
+function getAuthHeaders() {
+  const token = localStorage.getItem("access_token")
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+}
+
+interface IdentityContact {
+  owner_id: string
+  owner_name: string
+  owner_email: string
+  is_enabled: boolean
+  agent_count: number
+  assignment_ids: string[]
+}
 
 
 
@@ -71,6 +91,47 @@ export function AppAgentRoutesCard() {
       queryClient.invalidateQueries({ queryKey: ["user", "appAgentRoutes"] })
     },
     onError: handleError.bind(showErrorToast),
+  })
+
+  // ---- Identity Contacts ----
+  const { data: identityContacts = [], isLoading: isLoadingContacts } = useQuery<
+    IdentityContact[]
+  >({
+    queryKey: ["identity-contacts"],
+    queryFn: async () => {
+      const res = await fetch(`${API_BASE}/api/v1/users/me/identity-contacts/`, {
+        headers: getAuthHeaders(),
+      })
+      if (!res.ok) throw new Error("Failed to load identity contacts")
+      return res.json()
+    },
+  })
+
+  const toggleIdentityContactMutation = useMutation({
+    mutationFn: async ({
+      ownerId,
+      isEnabled,
+    }: {
+      ownerId: string
+      isEnabled: boolean
+    }) => {
+      const res = await fetch(
+        `${API_BASE}/api/v1/users/me/identity-contacts/${ownerId}`,
+        {
+          method: "PATCH",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ is_enabled: isEnabled }),
+        }
+      )
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error((err as { detail?: string }).detail || "Failed to update identity contact")
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["identity-contacts"] })
+    },
+    onError: (error: Error) => showErrorToast(error.message),
   })
 
   const handleCopyUrl = () => {
@@ -120,7 +181,10 @@ export function AppAgentRoutesCard() {
 
         {/* MCP Shared Agents section */}
         <div className="space-y-2">
-          <p className="text-sm font-medium">MCP Shared Agents</p>
+          <div className="flex items-center gap-2">
+            <Network className="h-3.5 w-3.5 text-blue-500" />
+            <p className="text-sm font-medium">MCP Shared Agents</p>
+          </div>
           {isLoading ? (
             <p className="text-xs text-muted-foreground">Loading...</p>
           ) : sharedRoutes.length === 0 ? (
@@ -210,6 +274,54 @@ export function AppAgentRoutesCard() {
             </div>
           </div>
         )}
+
+        {/* Identity Contacts section */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <UserCircle className="h-3.5 w-3.5 text-violet-500" />
+            <p className="text-sm font-medium">Identity Contacts</p>
+          </div>
+          {isLoadingContacts ? (
+            <p className="text-xs text-muted-foreground">Loading...</p>
+          ) : identityContacts.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              No identity contacts yet. When someone shares their identity with you, they will appear here.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {identityContacts.map((contact) => (
+                <div
+                  key={contact.owner_id}
+                  className="flex items-center justify-between p-2 border rounded-md"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <UserCircle className="h-3.5 w-3.5 text-violet-500 shrink-0" />
+                      <span className="text-sm font-medium truncate">
+                        {contact.owner_name || contact.owner_email}
+                      </span>
+                      <Badge variant="outline" className="text-xs shrink-0 border-violet-300 text-violet-600">
+                        {contact.agent_count} agent{contact.agent_count !== 1 ? "s" : ""}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5 ml-[22px]">
+                      {contact.owner_email}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={contact.is_enabled}
+                    onCheckedChange={(v) =>
+                      toggleIdentityContactMutation.mutate({
+                        ownerId: contact.owner_id,
+                        isEnabled: v,
+                      })
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </CardContent>
 
       {/* Shared route detail modal */}

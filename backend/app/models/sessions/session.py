@@ -59,6 +59,19 @@ class Session(SQLModel, table=True):
     dashboard_block_id: uuid.UUID | None = Field(
         default=None, foreign_key="user_dashboard_block.id", ondelete="SET NULL", index=True
     )
+    # Identity MCP fields (only populated for integration_type = "identity_mcp")
+    # The user who initiated the request (caller, not session owner)
+    identity_caller_id: uuid.UUID | None = Field(
+        default=None, foreign_key="user.id", ondelete="SET NULL", index=True
+    )
+    # The binding selected in Stage 2 routing
+    identity_binding_id: uuid.UUID | None = Field(
+        default=None, foreign_key="identity_agent_binding.id", ondelete="SET NULL"
+    )
+    # The assignment linking binding to caller
+    identity_binding_assignment_id: uuid.UUID | None = Field(
+        default=None, foreign_key="identity_binding_assignment.id", ondelete="SET NULL"
+    )
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     last_message_at: datetime | None = None

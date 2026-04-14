@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useEffect, useState, useRef, useCallback, useMemo } from "react"
-import { ArrowLeft, EllipsisVertical, Mail, Package, Loader2, ListTodo, Plug } from "lucide-react"
+import { ArrowLeft, EllipsisVertical, Mail, Package, Loader2, ListTodo, Plug, UserCircle } from "lucide-react"
 
 import { SessionsService, MessagesService, AgentsService, EnvironmentsService, OpenAPI } from "@/client"
 import { useNavigationHistory } from "@/hooks/useNavigationHistory"
@@ -410,6 +410,17 @@ function ChatInterface() {
                   <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[10px] font-medium bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300">
                     <Plug className="h-2.5 w-2.5" />
                     A2A
+                  </span>
+                )}
+                {session.integration_type === "identity_mcp" && (
+                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[10px] font-medium bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300">
+                    <UserCircle className="h-2.5 w-2.5" />
+                    Via Identity
+                    {(session.session_metadata as Record<string, string> | null)?.identity_caller_name && (
+                      <span className="ml-0.5">
+                        — {(session.session_metadata as Record<string, string>).identity_caller_name}
+                      </span>
+                    )}
                   </span>
                 )}
               </p>

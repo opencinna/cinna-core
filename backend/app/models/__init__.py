@@ -448,6 +448,15 @@ from .app_mcp.app_mcp_auth_code import (
     AppMCPAuthCode,
     AppMCPAuthRequest,
 )
+from .identity.identity_models import (
+    IdentityAgentBinding,
+    IdentityBindingAssignment,
+    IdentityAgentBindingCreate,
+    IdentityAgentBindingUpdate,
+    IdentityBindingAssignmentPublic,
+    IdentityAgentBindingPublic,
+    IdentityContactPublic,
+)
 
 __all__ = [
     # Core
@@ -839,4 +848,12 @@ __all__ = [
     "AppMCPOAuthClientPublic",
     "AppMCPAuthCode",
     "AppMCPAuthRequest",
+    # Identity MCP Server
+    "IdentityAgentBinding",
+    "IdentityBindingAssignment",
+    "IdentityAgentBindingCreate",
+    "IdentityAgentBindingUpdate",
+    "IdentityBindingAssignmentPublic",
+    "IdentityAgentBindingPublic",
+    "IdentityContactPublic",
 ]

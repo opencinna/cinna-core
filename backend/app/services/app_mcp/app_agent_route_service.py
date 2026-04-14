@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class EffectiveRoute:
-    """Unified representation of an active route (assigned or personal)."""
+    """Unified representation of an active route (assigned, personal, or identity)."""
 
     route_id: uuid.UUID
     agent_id: uuid.UUID
@@ -44,7 +44,11 @@ class EffectiveRoute:
     session_mode: str
     trigger_prompt: str
     message_patterns: str | None
-    source: str  # "admin" | "user"
+    source: str  # "admin" | "user" | "identity"
+    # Identity-specific fields (only set when source == "identity")
+    identity_owner_id: uuid.UUID | None = None
+    identity_owner_name: str | None = None
+    identity_owner_email: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +458,51 @@ class AppAgentRouteService:
                     trigger_prompt=user_route.trigger_prompt,
                     message_patterns=user_route.message_patterns,
                     source="user",
+                )
+            )
+
+        # Identity contacts — distinct owners who have active+enabled assignments for this user
+        # One EffectiveRoute per person (not per binding). Stage 2 handles agent selection.
+        from app.models.identity.identity_models import (
+            IdentityAgentBinding,
+            IdentityBindingAssignment,
+        )
+
+        identity_stmt = (
+            select(User)
+            .join(
+                IdentityAgentBinding,
+                IdentityAgentBinding.owner_id == User.id,
+            )
+            .join(
+                IdentityBindingAssignment,
+                IdentityBindingAssignment.binding_id == IdentityAgentBinding.id,
+            )
+            .where(
+                IdentityBindingAssignment.target_user_id == user_id,
+                IdentityBindingAssignment.is_active == True,  # noqa: E712
+                IdentityBindingAssignment.is_enabled == True,  # noqa: E712
+                IdentityAgentBinding.is_active == True,  # noqa: E712
+            )
+            .distinct()
+        )
+
+        for owner in db_session.exec(identity_stmt).all():
+            results.append(
+                EffectiveRoute(
+                    route_id=uuid.UUID(int=0),  # placeholder — identity uses owner_id
+                    agent_id=uuid.UUID(int=0),  # placeholder — resolved in Stage 2
+                    agent_name=owner.full_name or owner.email or "",
+                    session_mode="conversation",  # Stage 2 overrides with binding's session_mode
+                    trigger_prompt=(
+                        f"Contact {owner.full_name or owner.email} ({owner.email}). "
+                        f"Routes to their available agents."
+                    ),
+                    message_patterns=None,
+                    source="identity",
+                    identity_owner_id=owner.id,
+                    identity_owner_name=owner.full_name or "",
+                    identity_owner_email=owner.email or "",
                 )
             )
 

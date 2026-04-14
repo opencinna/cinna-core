@@ -4,6 +4,7 @@ import { useEffect } from "react"
 import { AICredentialsSettings } from "@/components/UserSettings/AICredentials"
 import DeleteAccount from "@/components/UserSettings/DeleteAccount"
 import { AppAgentRoutesCard } from "@/components/UserSettings/AppAgentRoutesCard"
+import { IdentityServerCard } from "@/components/UserSettings/IdentityServerCard"
 import { MailServerSettings } from "@/components/UserSettings/MailServerSettings"
 import { SSHKeys } from "@/components/UserSettings/SSHKeys"
 import UserInformation from "@/components/UserSettings/UserInformation"
@@ -65,6 +66,7 @@ function UserSettings() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <MailServerSettings />
           <AppAgentRoutesCard />
+          <IdentityServerCard />
         </div>
       ),
     },

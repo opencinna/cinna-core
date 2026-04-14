@@ -29,8 +29,15 @@ class RoutingResult:
     agent_name: str
     session_mode: str
     route_id: uuid.UUID
-    route_source: str  # "admin" | "user"
+    route_source: str  # "admin" | "user" | "identity"
     match_method: str  # "pattern" | "ai" | "only_one"
+    # Identity-specific fields (only set when route_source == "identity")
+    is_identity: bool = False
+    identity_owner_id: uuid.UUID | None = None
+    identity_owner_name: str | None = None
+    identity_stage2_match_method: str | None = None
+    identity_binding_id: uuid.UUID | None = None
+    identity_binding_assignment_id: uuid.UUID | None = None
 
 
 class AppMCPRoutingService:
@@ -45,9 +52,10 @@ class AppMCPRoutingService:
     ) -> RoutingResult | None:
         """Determine which agent should handle a message.
 
-        1. Get effective routes for user.
-        2. Try pattern matching.
+        1. Get effective routes for user (includes identity contacts).
+        2. Try pattern matching (identity routes have no patterns, so won't match here).
         3. Fall back to AI classification.
+        4. If selected route is an identity contact, invoke Stage 2 routing.
 
         Returns RoutingResult or None if routing fails.
         """
@@ -64,41 +72,90 @@ class AppMCPRoutingService:
         # If only one route, use it directly (no need to classify)
         if len(effective_routes) == 1:
             route = effective_routes[0]
-            return RoutingResult(
-                agent_id=route.agent_id,
-                agent_name=route.agent_name,
-                session_mode=route.session_mode,
-                route_id=route.route_id,
-                route_source=route.source,
-                match_method="only_one",
+            selected = route
+            stage1_method = "only_one"
+        else:
+            # 1. Try pattern matching (identity routes have no patterns)
+            matched = AppMCPRoutingService._try_pattern_match(message, effective_routes)
+            if matched:
+                selected = matched
+                stage1_method = "pattern"
+            else:
+                # 2. Fall back to AI classification
+                ai_matched = AppMCPRoutingService._ai_classify(message, effective_routes)
+                if ai_matched:
+                    selected = ai_matched
+                    stage1_method = "ai"
+                else:
+                    logger.debug("No route matched for message (user=%s)", user_id)
+                    return None
+
+        # Stage 2: If the selected route is an identity contact, invoke identity routing
+        if selected.source == "identity" and selected.identity_owner_id:
+            return AppMCPRoutingService._route_identity(
+                db_session=db_session,
+                selected_route=selected,
+                caller_user_id=user_id,
+                message=message,
+                stage1_method=stage1_method,
             )
 
-        # 1. Try pattern matching
-        matched = AppMCPRoutingService._try_pattern_match(message, effective_routes)
-        if matched:
-            return RoutingResult(
-                agent_id=matched.agent_id,
-                agent_name=matched.agent_name,
-                session_mode=matched.session_mode,
-                route_id=matched.route_id,
-                route_source=matched.source,
-                match_method="pattern",
-            )
+        return RoutingResult(
+            agent_id=selected.agent_id,
+            agent_name=selected.agent_name,
+            session_mode=selected.session_mode,
+            route_id=selected.route_id,
+            route_source=selected.source,
+            match_method=stage1_method,
+        )
 
-        # 2. Fall back to AI classification
-        ai_matched = AppMCPRoutingService._ai_classify(message, effective_routes)
-        if ai_matched:
-            return RoutingResult(
-                agent_id=ai_matched.agent_id,
-                agent_name=ai_matched.agent_name,
-                session_mode=ai_matched.session_mode,
-                route_id=ai_matched.route_id,
-                route_source=ai_matched.source,
-                match_method="ai",
-            )
+    @staticmethod
+    def _route_identity(
+        db_session: DBSession,
+        selected_route: "EffectiveRoute",
+        caller_user_id: uuid.UUID,
+        message: str,
+        stage1_method: str,
+    ) -> RoutingResult | None:
+        """Invoke Stage 2 routing for an identity contact.
 
-        logger.debug("No route matched for message (user=%s)", user_id)
-        return None
+        Returns a RoutingResult with identity fields populated,
+        or None if Stage 2 cannot find an accessible agent.
+        """
+        from app.services.identity.identity_routing_service import IdentityRoutingService
+
+        owner_id = selected_route.identity_owner_id
+        owner_name = selected_route.identity_owner_name or selected_route.agent_name
+
+        stage2_result = IdentityRoutingService.route_within_identity(
+            db_session=db_session,
+            owner_id=owner_id,
+            caller_user_id=caller_user_id,
+            message=message,
+        )
+
+        if not stage2_result:
+            logger.debug(
+                "[AppMCPRouting] Stage 2 returned no result for identity owner=%s caller=%s",
+                owner_id,
+                caller_user_id,
+            )
+            return None
+
+        return RoutingResult(
+            agent_id=stage2_result.agent_id,
+            agent_name=owner_name,  # Return person's name, not internal agent name
+            session_mode=stage2_result.session_mode,
+            route_id=selected_route.route_id,
+            route_source="identity",
+            match_method=stage1_method,
+            is_identity=True,
+            identity_owner_id=owner_id,
+            identity_owner_name=owner_name,
+            identity_stage2_match_method=stage2_result.match_method,
+            identity_binding_id=stage2_result.binding_id,
+            identity_binding_assignment_id=stage2_result.binding_assignment_id,
+        )
 
     @staticmethod
     def _try_pattern_match(

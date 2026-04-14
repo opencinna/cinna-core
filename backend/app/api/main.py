@@ -15,6 +15,8 @@ from app.api.routes import (
     credential_shares,
     email_integration,
     environments,
+    identity,
+    identity_contacts,
     mcp_connectors,
     mcp_consent,
     events,
@@ -101,6 +103,8 @@ api_router.include_router(mcp_consent.router)
 api_router.include_router(agent_app_mcp_routes.router)
 api_router.include_router(app_agent_routes.router)
 api_router.include_router(user_app_agent_routes.router)
+api_router.include_router(identity.router)
+api_router.include_router(identity_contacts.router)
 api_router.include_router(cli.router)
 
 
