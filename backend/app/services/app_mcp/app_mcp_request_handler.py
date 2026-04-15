@@ -59,7 +59,7 @@ class AppMCPRequestHandler:
         """Inner handler — performs routing, session creation, and streaming."""
         # Phase 1: Resolve session (resume or create)
         with create_session() as db:
-            platform_session, agent, is_new_session = await AppMCPRequestHandler._resolve_session(
+            platform_session, agent, is_new_session, routing_result = await AppMCPRequestHandler._resolve_session(
                 db=db,
                 user_id=user_id,
                 message=message,
@@ -85,13 +85,26 @@ class AppMCPRequestHandler:
             else:
                 agent_name = agent.name if hasattr(agent, "name") else ""
 
+            # Determine effective message — use AI-transformed message when available
+            effective_message = (
+                routing_result.transformed_message if routing_result else None
+            ) or message
+
+            # Store original message in session metadata for auditability when transformation occurred
+            if routing_result and routing_result.transformed_message and is_new_session:
+                platform_session.session_metadata = {
+                    **(platform_session.session_metadata or {}),
+                    "app_mcp_original_message": message,
+                }
+                db.add(platform_session)
+
             # Create user message as "pending" — the shared streaming pipeline
             # will collect it, mark as sent, and stream (same as process_pending_messages)
             MessageService.create_message(
                 session=db,
                 session_id=session_id,
                 role="user",
-                content=message,
+                content=effective_message,
             )
 
         # Background title generation for new sessions
@@ -99,7 +112,7 @@ class AppMCPRequestHandler:
             create_task_with_error_logging(
                 SessionService.auto_generate_session_title(
                     session_id=session_id,
-                    first_message_content=message,
+                    first_message_content=effective_message,
                     get_fresh_db_session=create_session,
                 ),
                 task_name=f"app_mcp_title_{session_id}",
@@ -134,11 +147,12 @@ class AppMCPRequestHandler:
         user_id: uuid.UUID,
         message: str,
         context_id: str | None,
-    ) -> tuple[Session | None, Agent | str | None, bool]:
+    ) -> tuple[Session | None, Agent | str | None, bool, RoutingResult | None]:
         """Resolve or create a session.
 
-        Returns: (session, agent, is_new_session)
-        If routing fails, returns (None, error_message_str, False).
+        Returns: (session, agent, is_new_session, routing_result)
+        If routing fails, returns (None, error_message_str, False, None).
+        For session resumption, routing_result is None (no transformation on resume).
         """
         # Case 1: Resume existing session by context_id
         if context_id:
@@ -162,7 +176,7 @@ class AppMCPRequestHandler:
                 if result:
                     session, agent = result
                     logger.debug("[AppMCP] Resuming session %s for user %s", context_id, user_id)
-                    return session, agent, False
+                    return session, agent, False, None
 
                 # Try resuming an identity_mcp session (owned by identity owner, caller tracked separately)
                 identity_stmt = (
@@ -180,13 +194,13 @@ class AppMCPRequestHandler:
                     # Validate binding and assignment are still active
                     validity_error = AppMCPRequestHandler._check_identity_session_validity(db, session)
                     if validity_error:
-                        return None, validity_error, False
+                        return None, validity_error, False, None
                     logger.debug(
                         "[AppMCP] Resuming identity session %s for caller %s",
                         context_id,
                         user_id,
                     )
-                    return session, agent, False
+                    return session, agent, False, None
 
             logger.debug("[AppMCP] context_id %s not found or invalid, creating new session", context_id)
 
@@ -197,20 +211,21 @@ class AppMCPRequestHandler:
             message=message,
         )
         if not routing_result:
-            return None, "Could not determine which agent to use. Please be more specific, or ask your admin to configure agents for your account.", False
+            return None, "Could not determine which agent to use. Please be more specific, or ask your admin to configure agents for your account.", False, None
 
         agent = db.get(Agent, routing_result.agent_id)
         if not agent or not agent.active_environment_id:
-            return None, f"Agent '{routing_result.agent_name}' does not have an active environment.", False
+            return None, f"Agent '{routing_result.agent_name}' does not have an active environment.", False, None
 
         # Identity routing: session is created in identity owner's space
         if routing_result.is_identity and routing_result.identity_owner_id:
-            return AppMCPRequestHandler._create_identity_session(
+            session, agent_or_err, is_new = AppMCPRequestHandler._create_identity_session(
                 db=db,
                 routing_result=routing_result,
                 agent=agent,
                 caller_user_id=user_id,
             )
+            return session, agent_or_err, is_new, routing_result
 
         # Regular app_mcp session: session owned by caller
         session_data = SessionCreate(
@@ -224,7 +239,7 @@ class AppMCPRequestHandler:
             integration_type="app_mcp",
         )
         if not session:
-            return None, "Failed to create session.", False
+            return None, "Failed to create session.", False, None
 
         # Store routing metadata in session_metadata
         session.session_metadata = {
@@ -239,7 +254,7 @@ class AppMCPRequestHandler:
         db.flush()
         db.refresh(session)
 
-        return session, agent, True
+        return session, agent, True, routing_result
 
     @staticmethod
     def _create_identity_session(

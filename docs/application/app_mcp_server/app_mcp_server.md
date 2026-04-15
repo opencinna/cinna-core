@@ -85,6 +85,37 @@ Superusers retain full management capabilities via the preserved admin API endpo
 3. **AI classification** -- call LLM with the message and all available routes' trigger prompts; LLM picks the best agent or returns "NONE"
 4. **No match** -- return error asking user to be more specific
 
+### Message Transformation
+
+When the AI router classifies a message, it also **strips routing prefixes** and extracts the core task. This ensures agents receive clean, actionable messages instead of delegation phrasing.
+
+**How it works:**
+- The AI router returns both a selected agent ID and a transformed message
+- Routing prefixes like "ask cinna to...", "tell john to...", "forward to X..." are stripped automatically
+- If the message has no routing prefix (it's already a direct task), no transformation occurs
+- Pattern-match and single-route-shortcut paths deliver the original message unchanged (no AI involved)
+
+**Examples:**
+- "ask cinna to generate employee report" → agent receives "generate employee report"
+- "tell john to fix the bug" → agent receives "fix the bug"
+- "generate report" → agent receives "generate report" (no prefix, no change)
+
+**Two-level transformation (with Identity MCP):**
+- "ask cinna to ask john to generate report" → Stage 1 strips one layer → "ask john to generate report" → Stage 2 strips another → agent receives "generate report"
+- Each routing stage transforms the output of the previous stage
+
+**Cascade logic:**
+- If both stages transform, the final (Stage 2) transformation is used
+- If only Stage 1 transforms, its output is used
+- If neither transforms, the original message is used
+
+**Safety guards:**
+- Empty or whitespace-only transformations are discarded (original used)
+- Transformations identical to the original are discarded
+- Transformations exceeding 2x the original message length are discarded (prevents hallucinated expansions)
+
+**Auditability:** When a transformation occurs, the original message is stored in `session_metadata["app_mcp_original_message"]` for traceability
+
 ### Session Management
 
 - First message creates a new session with `integration_type = "app_mcp"`
@@ -128,9 +159,9 @@ App MCP Server (/mcp/app/mcp)
     |      -> If match found -> select that agent
     |
     +-- 3. AI router: call LLM with message + user's available agents
-    |      -> LLM picks the best agent
+    |      -> LLM picks the best agent + extracts core task (strips routing prefixes)
     |
-    +-- 4. Create session with selected agent, send message, stream response
+    +-- 4. Create session with selected agent, send transformed message, stream response
     |
     +-- Return { response, context_id, agent_name }
 

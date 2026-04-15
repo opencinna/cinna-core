@@ -48,6 +48,9 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | **MCP** | Model Context Protocol - exposes agents as tool servers to external LLM clients |
 | **App MCP Server** | Universal MCP endpoint that routes messages to agents via pattern matching or AI classification |
 | **App Agent Route** | Binding between an agent and users with routing rules for the App MCP Server |
+| **Identity MCP Server** | Person-level routing layer on top of the App MCP Server — users expose themselves as a named identity that other users can address by name, with two-stage routing (person resolution then agent selection) |
+| **Identity Agent Binding** | Configuration linking one of a user's agents to their identity, with a trigger prompt and per-caller access control |
+| **Identity Binding Assignment** | Per-caller access record granting a specific user access to a specific identity agent binding |
 | **MCP Connector** | Configuration that connects an agent environment to an external MCP server |
 | **Agent Webapp** | Lightweight data dashboard (HTML/CSS/JS) served from an agent's workspace via shareable URLs |
 | **Webapp Share** | Token-based public access to an agent's webapp for unauthenticated viewers |
@@ -66,6 +69,15 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | [sharing](#sharing) | Agent sharing, guest access, workspace collaboration |
 | [agentic_teams](#agentic_teams) | Visual org-chart builder for agent orchestration topology — teams, nodes, connections with AI-generated handover prompts |
 | [development](#development) | Backend/frontend patterns, AI functions, debugging |
+
+---
+
+## Wiki
+
+| Article | Description |
+|---------|-------------|
+| [Why Cinna Agents?](wiki/skills_plugins_vs_cinna_agents.md) | Skills & plugins vs. Cinna agents — point-by-point comparison for SMBs evaluating AI automation approaches |
+| [Claude Managed Agents vs. Cinna](wiki/claude_managed_agents_vs_cinna_agents.md) | Claude Managed Agents (Anthropic's hosted agent API) vs. Cinna agents — architecture, capabilities, and trade-offs |
 
 ---
 
@@ -117,7 +129,8 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | a2a_protocol | Agent-to-Agent protocol, JSON-RPC, task-based integration | [business logic](application/a2a_integration/a2a_protocol/a2a_protocol.md) \| [tech](application/a2a_integration/a2a_protocol/a2a_protocol_tech.md) \| [v1 support](application/a2a_integration/a2a_protocol/a2a_v1_support.md) |
 | a2a_access_tokens | Scoped JWT tokens for external A2A client authentication | [business logic](application/a2a_integration/a2a_access_tokens/a2a_access_tokens.md) \| [tech](application/a2a_integration/a2a_access_tokens/a2a_access_tokens_tech.md) |
 | mcp_integration | Agent exposure as MCP server, OAuth 2.1, connector setup | [architecture](application/mcp_integration/agent_mcp_architecture.md) \| [implementation](application/mcp_integration/agent_mcp_connector.md) \| [setup](application/mcp_integration/mcp_connector_setup.md) |
-| app_mcp_server | Universal MCP endpoint that routes messages to the right agent via pattern matching or AI classification; any agent owner can add their agent via the agent's Integrations tab (MCP Connectors card); Settings > Channels > MCP Server card shows shared routes with enable/disable toggles | [business logic](application/app_mcp_server/app_mcp_server.md) \| [tech](application/app_mcp_server/app_mcp_server_tech.md) |
+| app_mcp_server | Universal MCP endpoint that routes messages to the right agent via pattern matching or AI classification; automatically strips routing prefixes ("ask cinna to...") so agents receive clean task messages; any agent owner can add their agent via the agent's Integrations tab (MCP Connectors card); Settings > Channels > MCP Server card shows shared routes with enable/disable toggles | [business logic](application/app_mcp_server/app_mcp_server.md) \| [tech](application/app_mcp_server/app_mcp_server_tech.md) |
+| identity_mcp_server | Person-level abstraction on top of the App MCP Server — users expose themselves as a routable identity; callers address people by name and two-stage routing (person resolution → agent selection) handles the rest; sessions run in the identity owner's space; managed via Settings > Channels > Identity Server card and Agent > Integrations > MCP Connectors | [business logic](application/identity_mcp_server/identity_mcp_server.md) \| [tech](application/identity_mcp_server/identity_mcp_server_tech.md) |
 | realtime_events | WebSocket event bus system, frontend-backend-agentenv streaming | [event bus](application/realtime_events/event_bus_system.md) \| [streaming](application/realtime_events/frontend_backend_agentenv_streaming.md) |
 | plugin_marketplaces | Admin-managed Git-based plugin catalogs, sync, visibility control | [business logic](application/plugin_marketplaces/plugin_marketplaces.md) \| [tech](application/plugin_marketplaces/plugin_marketplaces_tech.md) |
 | agent_activities | Activity feed, event logging, session summaries, sidebar bell indicator | [business logic](application/agent_activities/agent_activities.md) \| [tech](application/agent_activities/agent_activities_tech.md) |
@@ -166,9 +179,10 @@ User ──→ Frontend (React) ──→ Backend API (FastAPI) ──→ Servic
                                       ├──→ WebSocket (Socket.IO) ──→ Real-time Events
                                       ├──→ A2A Protocol ──→ External Agents
                                       ├──→ MCP Server ──→ External LLM Clients
+                                      │       └──→ App MCP Server ──→ Stage 1 Router ──→ Stage 2 Identity Router
                                       └──→ Email (IMAP/SMTP) ──→ Email Automation
 ```
 
 ---
 
-*Last updated: 2026-04-02*
+*Last updated: 2026-04-14*

@@ -29,6 +29,8 @@ class IdentityRoutingResult:
     binding_id: uuid.UUID
     binding_assignment_id: uuid.UUID
     match_method: str  # "only_one" | "pattern" | "ai"
+    # Message transformation (only set when AI routing stripped a routing prefix)
+    transformed_message: str | None = None
 
 
 class IdentityRoutingService:
@@ -110,8 +112,9 @@ class IdentityRoutingService:
             )
 
         # Fall back to AI classification
-        ai_matched = IdentityRoutingService._ai_classify(message, bindings, db_session)
-        if ai_matched:
+        ai_result = IdentityRoutingService._ai_classify(message, bindings, db_session)
+        if ai_result:
+            ai_matched, ai_transformed_message = ai_result
             agent = db_session.get(Agent, ai_matched.agent_id)
             agent_name = agent.name if agent else ""
             assignment_id = binding_assignments.get(ai_matched.id)
@@ -124,6 +127,7 @@ class IdentityRoutingService:
                 binding_id=ai_matched.id,
                 binding_assignment_id=assignment_id,
                 match_method="ai",
+                transformed_message=ai_transformed_message,
             )
 
         logger.debug(
@@ -185,8 +189,12 @@ class IdentityRoutingService:
         message: str,
         bindings: list[IdentityAgentBinding],
         db_session: DBSession,
-    ) -> IdentityAgentBinding | None:
-        """Use AI classification to pick the best binding for the message."""
+    ) -> tuple[IdentityAgentBinding, str | None] | None:
+        """Use AI classification to pick the best binding for the message.
+
+        Returns (matched_binding, transformed_message) or None.
+        The transformed_message is None when the AI did not strip a routing prefix.
+        """
         from app.agents.app_agent_router import route_to_agent
 
         available_agents = []
@@ -199,26 +207,26 @@ class IdentityRoutingService:
                 "trigger_prompt": binding.trigger_prompt,
             })
 
-        agent_id_str = route_to_agent(
+        routing_result = route_to_agent(
             message=message,
             available_agents=available_agents,
         )
 
-        if not agent_id_str:
+        if not routing_result:
             return None
 
         try:
-            agent_id = uuid.UUID(agent_id_str)
+            agent_id = uuid.UUID(routing_result.agent_id)
         except ValueError:
-            logger.warning("[IdentityRouting] AI router returned invalid UUID: %r", agent_id_str)
+            logger.warning("[IdentityRouting] AI router returned invalid UUID: %r", routing_result.agent_id)
             return None
 
         for binding in bindings:
             if binding.agent_id == agent_id:
-                return binding
+                return binding, routing_result.transformed_message
 
         logger.warning(
             "[IdentityRouting] AI router returned agent_id %s not in accessible bindings",
-            agent_id_str,
+            routing_result.agent_id,
         )
         return None

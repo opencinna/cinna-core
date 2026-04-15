@@ -9,7 +9,7 @@ from .sql_generator import generate_sql_query
 from .prompt_refiner import refine_prompt
 from .task_refiner import refine_task
 from .email_reply_generator import generate_email_reply
-from .app_agent_router import route_to_agent
+from .app_agent_router import route_to_agent, RouteToAgentResult
 
 __all__ = [
     "generate_agent_config",
@@ -21,4 +21,5 @@ __all__ = [
     "refine_task",
     "generate_email_reply",
     "route_to_agent",
+    "RouteToAgentResult",
 ]

@@ -21,8 +21,8 @@
 ### Backend -- Services
 
 - `backend/app/services/app_mcp/app_agent_route_service.py` -- `AppAgentRouteService` (agent-scoped and admin CRUD, assignments, effective routes), `UserAppAgentRouteService` (personal/legacy CRUD, toggle, shared route listing), `get_effective_routes_for_user()`
-- `backend/app/services/app_mcp/app_mcp_routing_service.py` -- `AppMCPRoutingService` with `route_message()`, `_try_pattern_match()`, `_ai_classify()`
-- `backend/app/services/app_mcp/app_mcp_request_handler.py` -- `AppMCPRequestHandler` with `handle_send_message()`, `_resolve_session()`, session lock management
+- `backend/app/services/app_mcp/app_mcp_routing_service.py` -- `AppMCPRoutingService` with `route_message()`, `_try_pattern_match()`, `_ai_classify()`; `RoutingResult` includes `transformed_message` field; `_route_identity()` passes Stage 1 transformation to Stage 2 and applies cascade logic
+- `backend/app/services/app_mcp/app_mcp_request_handler.py` -- `AppMCPRequestHandler` with `handle_send_message()`, `_resolve_session()`, session lock management; uses `routing_result.transformed_message` as `effective_message` for message creation and title generation; stores `app_mcp_original_message` in session metadata when transformation occurs
 - `backend/app/services/app_mcp/app_mcp_oauth_service.py` -- `AppMCPOAuthService` for app-level OAuth token lifecycle
 
 ### Backend -- MCP Server
@@ -35,9 +35,9 @@
 
 ### Backend -- AI Router
 
-- `backend/app/agents/app_agent_router.py` -- `route_to_agent()` function for AI-based message classification
-- `backend/app/agents/prompts/app_agent_router_prompt.md` -- prompt template for the AI router
-- `backend/app/services/ai_functions/ai_functions_service.py` -- `route_to_agent()` method added to `AIFunctionsService`
+- `backend/app/agents/app_agent_router.py` -- `RouteToAgentResult` dataclass and `route_to_agent()` function; returns both agent ID and optional transformed message (routing prefix stripped); validates transformation: discards empty, identical-to-original, or exceeding-2x-length results
+- `backend/app/agents/prompts/app_agent_router_prompt.md` -- prompt template instructing the LLM to return JSON `{"agent_id": "...", "message": "..."}` with routing prefix stripping rules
+- `backend/app/services/ai_functions/ai_functions_service.py` -- `route_to_agent()` method returns `RouteToAgentResult | None`
 
 ### Backend -- OAuth Extensions
 
@@ -65,6 +65,7 @@
 - `backend/tests/api/app_mcp/app_agent_routes_test.py` -- admin CRUD lifecycle, assignments, user personal routes, toggle, unique constraint
 - `backend/tests/api/app_mcp/app_mcp_session_test.py` -- session creation, context_id reuse, invalid context_id, no routes, two independent sessions
 - `backend/tests/utils/app_agent_route.py` -- test utility helpers for admin and user route API calls
+- `backend/tests/unit/test_routing_message_transformation.py` -- unit tests for `RouteToAgentResult`, JSON parsing, sanity guards, `_ai_classify()` tuple propagation, cascade logic, and `AIFunctionsService` passthrough
 
 ## Database Schema
 
@@ -103,7 +104,7 @@
 
 - `session.agent_id` (UUID, FK > agent, nullable, indexed) -- added with backfill from `agent_environment.agent_id`
 - `session.integration_type = "app_mcp"` -- identifies App MCP sessions
-- Routing metadata stored in `session.session_metadata` JSON: `app_mcp_route_type`, `app_mcp_route_id`, `app_mcp_agent_name`, `app_mcp_session_mode`, `app_mcp_match_method`
+- Routing metadata stored in `session.session_metadata` JSON: `app_mcp_route_type`, `app_mcp_route_id`, `app_mcp_agent_name`, `app_mcp_session_mode`, `app_mcp_match_method`, `app_mcp_original_message` (only when message transformation occurred)
 
 ## API Endpoints
 
@@ -233,14 +234,16 @@ shared_routes: list[SharedRoutePublic]           # AppAgentRoute records assigne
 
 ### `AppMCPRoutingService`
 
-- `route_message(db, user_id, message, channel)` -- main entry: gets effective routes, tries pattern match, falls back to AI, returns `RoutingResult` or None
+- `route_message(db, user_id, message, channel)` -- main entry: gets effective routes, tries pattern match, falls back to AI, returns `RoutingResult` (with optional `transformed_message`) or None
 - `_try_pattern_match(message, routes)` -- fnmatch-based glob matching against `message_patterns`
-- `_ai_classify(message, routes)` -- calls `AIFunctionsService.route_to_agent()` with available agent descriptions
+- `_ai_classify(message, routes)` -- calls `AIFunctionsService.route_to_agent()`, returns `(EffectiveRoute, transformed_message)` tuple or None
+- `_route_identity(db, selected_route, caller_user_id, message, stage1_method, transformed_message)` -- Stage 2 delegation; passes Stage 1's transformed message to identity router; applies cascade logic (Stage 2 wins > Stage 1 fallback > None)
 
 ### `AppMCPRequestHandler`
 
-- `handle_send_message(user_id, message, context_id, mcp_ctx)` -- main tool handler: resolves session, creates message, streams response, returns JSON
-- `_resolve_session(db, user_id, message, context_id)` -- resumes existing session by `context_id` (JOIN through `Session.agent_id > Agent`) or routes to new agent and creates session
+- `handle_send_message(user_id, message, context_id, mcp_ctx)` -- main tool handler: resolves session, creates message with effective (transformed) content, streams response, returns JSON
+- `_resolve_session(db, user_id, message, context_id)` -- resumes existing session by `context_id` or routes to new agent and creates session; returns 4-tuple `(session, agent, is_new_session, routing_result)`; on session resumption `routing_result` is None (no transformation on resume)
+- Effective message: `routing_result.transformed_message or original_message`; used for `MessageService.create_message()` and title generation
 - Session lock management: per-session `asyncio.Lock` with 500-entry cap and best-effort eviction
 
 ## Frontend Components

@@ -25,6 +25,7 @@ from app.agents import (
     refine_task as refine_task_from_agents,
     generate_email_reply as generate_email_reply_from_agents,
     route_to_agent as route_to_agent_from_agents,
+    RouteToAgentResult,
 )
 from app.agents.schedule_generator import generate_agent_schedule
 from app.agents.provider_manager import get_provider_manager
@@ -648,7 +649,7 @@ class AIFunctionsService:
     def route_to_agent(
         message: str,
         available_agents: list[dict],
-    ) -> str | None:
+    ) -> RouteToAgentResult | None:
         """Classify a user message and pick the best matching agent.
 
         Args:
@@ -656,7 +657,8 @@ class AIFunctionsService:
             available_agents: List of dicts with keys: id, name, trigger_prompt.
 
         Returns:
-            Agent ID string of the best match, or None if no agent fits or on error.
+            RouteToAgentResult with agent_id and optional transformed_message,
+            or None if no agent fits or on error.
         """
         try:
             return route_to_agent_from_agents(message, available_agents)

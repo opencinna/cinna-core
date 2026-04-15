@@ -38,6 +38,8 @@ class RoutingResult:
     identity_stage2_match_method: str | None = None
     identity_binding_id: uuid.UUID | None = None
     identity_binding_assignment_id: uuid.UUID | None = None
+    # Message transformation (only set when AI routing stripped a routing prefix)
+    transformed_message: str | None = None
 
 
 class AppMCPRoutingService:
@@ -69,6 +71,8 @@ class AppMCPRoutingService:
             logger.debug("No effective routes for user %s", user_id)
             return None
 
+        stage1_transformed_message: str | None = None
+
         # If only one route, use it directly (no need to classify)
         if len(effective_routes) == 1:
             route = effective_routes[0]
@@ -82,9 +86,9 @@ class AppMCPRoutingService:
                 stage1_method = "pattern"
             else:
                 # 2. Fall back to AI classification
-                ai_matched = AppMCPRoutingService._ai_classify(message, effective_routes)
-                if ai_matched:
-                    selected = ai_matched
+                ai_result = AppMCPRoutingService._ai_classify(message, effective_routes)
+                if ai_result:
+                    selected, stage1_transformed_message = ai_result
                     stage1_method = "ai"
                 else:
                     logger.debug("No route matched for message (user=%s)", user_id)
@@ -98,6 +102,7 @@ class AppMCPRoutingService:
                 caller_user_id=user_id,
                 message=message,
                 stage1_method=stage1_method,
+                transformed_message=stage1_transformed_message,
             )
 
         return RoutingResult(
@@ -107,6 +112,7 @@ class AppMCPRoutingService:
             route_id=selected.route_id,
             route_source=selected.source,
             match_method=stage1_method,
+            transformed_message=stage1_transformed_message,
         )
 
     @staticmethod
@@ -116,22 +122,29 @@ class AppMCPRoutingService:
         caller_user_id: uuid.UUID,
         message: str,
         stage1_method: str,
+        transformed_message: str | None = None,
     ) -> RoutingResult | None:
         """Invoke Stage 2 routing for an identity contact.
 
         Returns a RoutingResult with identity fields populated,
         or None if Stage 2 cannot find an accessible agent.
+
+        The transformed_message from Stage 1 (if any) is passed as the message
+        to Stage 2, so each stage strips one layer of routing prefixes.
         """
         from app.services.identity.identity_routing_service import IdentityRoutingService
 
         owner_id = selected_route.identity_owner_id
         owner_name = selected_route.identity_owner_name or selected_route.agent_name
 
+        # Pass Stage 1's transformed message to Stage 2 if available
+        stage2_input_message = transformed_message or message
+
         stage2_result = IdentityRoutingService.route_within_identity(
             db_session=db_session,
             owner_id=owner_id,
             caller_user_id=caller_user_id,
-            message=message,
+            message=stage2_input_message,
         )
 
         if not stage2_result:
@@ -141,6 +154,9 @@ class AppMCPRoutingService:
                 caller_user_id,
             )
             return None
+
+        # Cascade: Stage 2 transformation takes precedence; fall back to Stage 1; else None
+        final_transformed = stage2_result.transformed_message or transformed_message
 
         return RoutingResult(
             agent_id=stage2_result.agent_id,
@@ -155,6 +171,7 @@ class AppMCPRoutingService:
             identity_stage2_match_method=stage2_result.match_method,
             identity_binding_id=stage2_result.binding_id,
             identity_binding_assignment_id=stage2_result.binding_assignment_id,
+            transformed_message=final_transformed,
         )
 
     @staticmethod
@@ -191,12 +208,13 @@ class AppMCPRoutingService:
     def _ai_classify(
         message: str,
         routes: list[EffectiveRoute],
-    ) -> EffectiveRoute | None:
+    ) -> tuple[EffectiveRoute, str | None] | None:
         """Call AI function to classify message against available routes.
 
         Builds a list of agent dicts with trigger_prompt descriptions
         and asks the LLM to pick the best match.
-        Returns matched route or None.
+        Returns (matched_route, transformed_message) or None.
+        The transformed_message is None when the AI did not strip a routing prefix.
         """
         from app.services.ai_functions.ai_functions_service import AIFunctionsService
 
@@ -209,24 +227,24 @@ class AppMCPRoutingService:
             for route in routes
         ]
 
-        agent_id_str = AIFunctionsService.route_to_agent(
+        routing_result = AIFunctionsService.route_to_agent(
             message=message,
             available_agents=available_agents,
         )
 
-        if not agent_id_str:
+        if not routing_result:
             return None
 
         # Find the matching route
         try:
-            agent_id = uuid.UUID(agent_id_str)
+            agent_id = uuid.UUID(routing_result.agent_id)
         except ValueError:
-            logger.warning("AI router returned invalid UUID: %r", agent_id_str)
+            logger.warning("AI router returned invalid UUID: %r", routing_result.agent_id)
             return None
 
         for route in routes:
             if route.agent_id == agent_id:
-                return route
+                return route, routing_result.transformed_message
 
-        logger.warning("AI router returned agent_id %s not in effective routes", agent_id_str)
+        logger.warning("AI router returned agent_id %s not in effective routes", routing_result.agent_id)
         return None

@@ -16,7 +16,7 @@
 ### Backend -- Services
 
 - `backend/app/services/identity/identity_service.py` -- `IdentityService` (binding CRUD, assignment management, contact listing, per-person toggle)
-- `backend/app/services/identity/identity_routing_service.py` -- `IdentityRoutingService` (Stage 2 routing: pattern match + AI classification within an identity)
+- `backend/app/services/identity/identity_routing_service.py` -- `IdentityRoutingService` (Stage 2 routing: pattern match + AI classification within an identity); `IdentityRoutingResult` includes `transformed_message` field; `_ai_classify()` returns `(binding, transformed_message)` tuple
 
 ### Backend -- Routing Integration
 
