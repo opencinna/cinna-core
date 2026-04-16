@@ -29,10 +29,11 @@ Enables external agents and A2A-compatible tools to discover and communicate wit
 
 ### 2. External Client Discovery
 
-1. Client requests AgentCard via GET to the agent's A2A URL
+1. Client requests AgentCard via GET to the agent's A2A URL (`/api/v1/a2a/{agent_id}/`)
 2. Without auth: receives public card (name, URL, auth requirements)
 3. With auth: receives extended card (name, description, skills, capabilities)
-4. Client inspects skills and capabilities to determine interaction approach
+4. Client reads `supportedInterfaces` to find the versioned URL matching its protocol version
+5. Client connects to that versioned URL for all subsequent requests
 
 ### 3. Sending a Message (Synchronous)
 
@@ -108,10 +109,15 @@ Enables external agents and A2A-compatible tools to discover and communicate wit
 
 ### Protocol Version Selection
 
-| Header | Behavior |
-|--------|----------|
-| (none) | v1.0 format (default) |
-| `X-A2A-Stable: 1` | Legacy format (v0.3.0 draft) |
+Protocol version is selected by the URL the client connects to:
+
+| URL | Protocol | Notes |
+|-----|----------|-------|
+| `/api/v1/a2a/{agent_id}/` | v1.0 (latest) | Entry point for new clients |
+| `/api/v1/a2a/v1.0/{agent_id}/` | v1.0 (explicit) | Identical behavior to base URL |
+| `/api/v1/a2a/v0.3/{agent_id}/` | v0.3.0 (legacy) | Use slash-case method names |
+
+Clients discover all supported versioned URLs via `supportedInterfaces` in the AgentCard. The `X-A2A-Stable` header is no longer supported.
 
 See [A2A v1.0 Support](./a2a_v1_support.md) for detailed specification.
 
@@ -202,4 +208,4 @@ A2A Event Mapper ---------> Centralized A2A protocol mapping logic
 
 ---
 
-*Last updated: 2026-03-02*
+*Last updated: 2026-04-16*

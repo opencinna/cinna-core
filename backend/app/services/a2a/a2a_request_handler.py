@@ -210,7 +210,7 @@ class A2ARequestHandler:
     async def handle_message_stream(
         self,
         params: dict[str, Any],
-        request_id: str,
+        request_id: Any,
     ) -> AsyncIterator[str]:
         """
         Handle message/stream request (SSE streaming).
@@ -526,7 +526,7 @@ class A2ARequestHandler:
                     text_parts.append(root["text"])
         return "\n".join(text_parts)
 
-    def _format_sse_event(self, request_id: str, result: dict) -> str:
+    def _format_sse_event(self, request_id: Any, result: dict) -> str:
         """Format JSON-RPC result as SSE event."""
         response = {
             "jsonrpc": "2.0",
@@ -535,7 +535,7 @@ class A2ARequestHandler:
         }
         return f"data: {json.dumps(response)}\n\n"
 
-    def _format_sse_error(self, request_id: str, code: int, message: str) -> str:
+    def _format_sse_error(self, request_id: Any, code: int, message: str) -> str:
         """Format JSON-RPC error as SSE event."""
         response = {
             "jsonrpc": "2.0",

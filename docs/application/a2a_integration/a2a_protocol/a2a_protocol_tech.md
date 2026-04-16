@@ -55,23 +55,33 @@
 
 **File:** `backend/app/api/routes/a2a.py`
 
-| Endpoint | Method | Auth Required | Description |
-|----------|--------|---------------|-------------|
-| `/api/v1/a2a/{agent_id}/` | GET | Optional* | Returns AgentCard (public or extended) |
-| `/api/v1/a2a/{agent_id}/.well-known/agent-card.json` | GET | Optional* | AgentCard (standard location) |
-| `/api/v1/a2a/{agent_id}/` | POST | Required | JSON-RPC router |
+Three routers each expose the same endpoint patterns. Each router is registered separately in `api/main.py`.
+
+| Endpoint | Method | Auth Required | Protocol | Description |
+|----------|--------|---------------|----------|-------------|
+| `/api/v1/a2a/{agent_id}/` | GET | Optional* | v1.0 (latest) | AgentCard in v1.0 format with versioned `supportedInterfaces` |
+| `/api/v1/a2a/{agent_id}/.well-known/agent-card.json` | GET | Optional* | v1.0 (latest) | AgentCard (standard location) |
+| `/api/v1/a2a/{agent_id}/` | POST | Required | v1.0 (latest) | JSON-RPC, PascalCase method names |
+| `/api/v1/a2a/v1.0/{agent_id}/` | GET | Optional* | v1.0 (explicit) | Identical to base URL |
+| `/api/v1/a2a/v1.0/{agent_id}/.well-known/agent-card.json` | GET | Optional* | v1.0 (explicit) | AgentCard (standard location) |
+| `/api/v1/a2a/v1.0/{agent_id}/` | POST | Required | v1.0 (explicit) | JSON-RPC, PascalCase method names |
+| `/api/v1/a2a/v0.3/{agent_id}/` | GET | Optional* | v0.3.0 (legacy) | AgentCard in v0.3 library-native format |
+| `/api/v1/a2a/v0.3/{agent_id}/.well-known/agent-card.json` | GET | Optional* | v0.3.0 (legacy) | AgentCard (standard location) |
+| `/api/v1/a2a/v0.3/{agent_id}/` | POST | Required | v0.3.0 (legacy) | JSON-RPC, slash-case method names, no transformation |
 
 \* Auth optional only when A2A is enabled - returns public card without auth, extended card with auth
 
-**JSON-RPC Methods (v1.0 / internal):**
+**JSON-RPC Methods:**
 
-| v1.0 Method | Internal Method | Description |
-|-------------|-----------------|-------------|
+| v1.0 Method (PascalCase) | v0.3 Method (slash-case) | Description |
+|--------------------------|--------------------------|-------------|
 | `SendMessage` | `message/send` | Synchronous message, returns Task |
 | `SendStreamingMessage` | `message/stream` | SSE streaming response |
 | `GetTask` | `tasks/get` | Get task status and history |
 | `CancelTask` | `tasks/cancel` | Cancel running task |
 | `ListTasks` | `tasks/list` | List tasks for agent (custom extension) |
+
+Use PascalCase methods on `/a2a/` and `/a2a/v1.0/` URLs. Use slash-case methods on `/a2a/v0.3/` URLs.
 
 ## Services & Key Methods
 
@@ -112,10 +122,13 @@
 ### A2A v1.0 Adapter
 **File:** `backend/app/services/a2a/a2a_v1_adapter.py`
 
-- `A2AV1Adapter.should_use_v1(request)` - Check header for protocol version
-- `A2AV1Adapter.transform_request_inbound(body)` - Transform v1.0 method names to internal
-- `A2AV1Adapter.transform_agent_card_outbound(card)` - Transform AgentCard to v1.0 structure
+- `A2AV1Adapter.transform_request_inbound(body)` - Transform v1.0 method names to internal (PascalCase → slash-case)
+- `A2AV1Adapter.transform_agent_card_outbound(card)` - Transform AgentCard to v1.0 structure; builds distinct versioned URLs for `supportedInterfaces` by inserting `v1.0/` or `v0.3/` after `/a2a/` in the base URL
 - `A2AV1Adapter.transform_task_outbound(task)` - Add `kind` discriminator
+- `A2AV1Adapter.transform_message_outbound(message)` - Add `kind` discriminator
+- `A2AV1Adapter.transform_sse_event_outbound(event)` - Pass-through (already formatted)
+
+The adapter is only applied for v1.0 and latest endpoints. The v0.3 endpoint bypasses the adapter entirely — the library speaks v0.3 natively.
 
 ### Skills Generator
 **File:** `backend/app/agents/skills_generator.py`
@@ -154,11 +167,129 @@
 **Agent detail page:** `frontend/src/routes/_layout/agent/$agentId.tsx`
 - Integrations tab registered between Configuration and Credentials tabs
 
+## Protocol Reference & Discovery
+
+How to inspect A2A protocol types, required fields, and card structure when doing protocol analysis or upgrading to a newer spec version.
+
+### Authoritative Sources
+
+| Source | What it tells you | How to access |
+|--------|-------------------|---------------|
+| A2A v1 spec | Normative field definitions, required/optional, semantics | https://a2a-protocol.org/latest/specification/ — sections 4.4.x cover Agent Discovery Objects |
+| `a2a-sdk` Python library | Pydantic models used at runtime; `Field(...)` = required, `Field(default=...)` = optional | Installed at `backend/.venv/lib/python3.13/site-packages/a2a/types.py` |
+| Our v1 adapter | What we actually transform and emit for v1 clients | `backend/app/services/a2a/a2a_v1_adapter.py` |
+| Live card output | The JSON a client actually receives | `curl http://localhost:8000/api/v1/a2a/{agent_id}/` (v1.0) or `curl http://localhost:8000/api/v1/a2a/v0.3/{agent_id}/` (v0.3) |
+
+### Inspecting the Library Models
+
+The `a2a-sdk` package (pinned `>=0.3.22` in `backend/pyproject.toml`) ships Pydantic v2 models in `a2a.types`. These are the source of truth for what our code can construct.
+
+**List all fields and required status for any A2A type:**
+
+```bash
+source backend/.venv/bin/activate
+python3 -c "
+from a2a.types import AgentCard  # or AgentInterface, AgentProvider, AgentSkill, etc.
+for name, field in AgentCard.model_fields.items():
+    req = field.is_required()
+    print(f'{name:40s} required={req}  default={field.default if not req else \"---\"}')
+"
+```
+
+**Read the full class source (docstrings, field descriptions):**
+
+```bash
+python3 -c "
+from a2a.types import AgentCard
+import inspect
+print(inspect.getsource(AgentCard))
+"
+```
+
+### AgentCard Required Fields (a2a-sdk 0.3.22)
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `name` | `str` | Yes | Agent display name |
+| `description` | `str` | Yes | Human-readable purpose description |
+| `url` | `str` | Yes | Preferred endpoint URL (v0.3 top-level; v1 moved to `supportedInterfaces`) |
+| `version` | `str` | Yes | Agent's own version number |
+| `capabilities` | `AgentCapabilities` | Yes | Streaming, push notifications, extensions |
+| `skills` | `list[AgentSkill]` | Yes | Agent capabilities (can be empty `[]`) |
+| `defaultInputModes` | `list[str]` | Yes | MIME types for input |
+| `defaultOutputModes` | `list[str]` | Yes | MIME types for output |
+| `provider` | `AgentProvider` | No | Organization name + URL (sub-fields `organization` and `url` are both required when present) |
+| `protocolVersion` | `str` | No | Default `"0.3.0"` |
+| `preferredTransport` | `str` | No | Default `"JSONRPC"` |
+| `securitySchemes` | `dict[str, SecurityScheme]` | No | OpenAPI 3.0 security scheme objects |
+| `security` | `list[dict]` | No | Security requirement objects |
+| `additionalInterfaces` | `list[AgentInterface]` | No | Extra transport/URL combos |
+| `supportsAuthenticatedExtendedCard` | `bool` | No | Signals extended card availability |
+| `documentationUrl` | `str` | No | Link to agent docs |
+| `iconUrl` | `str` | No | Agent icon |
+| `signatures` | `list[AgentCardSignature]` | No | Card signing (JWS) |
+
+### Key Nested Types
+
+**AgentInterface** — declares a transport + URL pair:
+- `url` (str, required) — endpoint URL
+- `transport` (str, required) — e.g. `"JSONRPC"`, `"GRPC"`, `"HTTP+JSON"`
+
+**AgentProvider** — service provider info:
+- `organization` (str, required) — provider org name
+- `url` (str, required) — provider website
+
+**AgentSkill** — agent capability:
+- `id` (str, required), `name` (str, required), `description` (str, required)
+- `tags` (list[str], optional), `examples` (list[str], optional)
+
+### v0.3 vs v1 Card Output
+
+Each protocol version has its own dedicated URL. The format is determined by the URL, not any request header.
+
+**v0.3 (legacy / library native) — GET `/api/v1/a2a/v0.3/{agent_id}/`:**
+- `protocolVersion`: `"0.3.0"` (string)
+- `url`: points to `/api/v1/a2a/v0.3/{agent_id}/` (v0.3-specific URL)
+- `supportsAuthenticatedExtendedCard`: top-level bool
+
+**v1.0 (default, via `A2AV1Adapter.transform_agent_card_outbound`) — GET `/api/v1/a2a/{agent_id}/` or `/api/v1/a2a/v1.0/{agent_id}/`:**
+- `protocolVersions`: `["1.0", "0.3.0"]` (array)
+- `supportedInterfaces`: distinct versioned URLs per protocol:
+  ```json
+  [
+    {"url": "http://host/api/v1/a2a/v1.0/{id}/", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"},
+    {"url": "http://host/api/v1/a2a/v0.3/{id}/", "protocolBinding": "JSONRPC", "protocolVersion": "0.3.0"}
+  ]
+  ```
+- `capabilities.extendedAgentCard`: `true` (replaces `supportsAuthenticatedExtendedCard`)
+
+### Quick Protocol Check Commands
+
+```bash
+# Fetch v1 card (default / latest)
+curl -s http://localhost:8000/api/v1/a2a/{agent_id}/ | python3 -m json.tool
+
+# Fetch explicit v1.0 card
+curl -s http://localhost:8000/api/v1/a2a/v1.0/{agent_id}/ | python3 -m json.tool
+
+# Fetch v0.3 card (legacy)
+curl -s http://localhost:8000/api/v1/a2a/v0.3/{agent_id}/ | python3 -m json.tool
+
+# Compare our output against spec field list
+source backend/.venv/bin/activate
+python3 -c "
+from a2a.types import AgentCard
+spec_required = {n for n, f in AgentCard.model_fields.items() if f.is_required()}
+print('Required by library:', sorted(spec_required))
+"
+```
+
 ## Configuration
 
 - **Prompt Template:** `backend/app/agents/prompts/skills_generator_prompt.md`
-- **Dependencies:** a2a-sdk (v0.3.22 in pyproject.toml)
+- **Dependencies:** a2a-sdk (`>=0.3.22` in `backend/pyproject.toml`, installed as `a2a-sdk`)
 - **Agent Card URL:** `{VITE_API_URL}/api/v1/a2a/{agent_id}/`
+- **Library types location:** `backend/.venv/lib/python3.13/site-packages/a2a/types.py`
 
 ## Security
 
@@ -180,4 +311,4 @@ Each SSE event is a JSON-RPC response containing a `TaskStatusUpdateEvent`:
 
 ---
 
-*Last updated: 2026-03-02*
+*Last updated: 2026-04-16*

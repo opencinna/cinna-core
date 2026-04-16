@@ -14,8 +14,6 @@ A2A v1.0 spec:
 """
 from typing import Any
 
-from fastapi import Request
-
 
 class A2AV1Adapter:
     """Adapter for A2A Protocol v1.0 compatibility."""
@@ -39,14 +37,6 @@ class A2AV1Adapter:
     METHOD_MAP_INTERNAL_TO_V1 = {v: k for k, v in METHOD_MAP_V1_TO_INTERNAL.items()}
 
     @staticmethod
-    def should_use_v1(request: Request) -> bool:
-        """Check if v1.0 format should be used based on headers.
-
-        Returns True (use v1.0) unless X-A2A-Stable: 1 header is present.
-        """
-        return request.headers.get("X-A2A-Stable") != "1"
-
-    @staticmethod
     def transform_request_inbound(body: dict) -> dict:
         """Transform v1.0 request to internal library format.
 
@@ -66,7 +56,8 @@ class A2AV1Adapter:
 
         Key transformations:
         - protocolVersion (string) → protocolVersions (array)
-        - url (string) → supportedInterfaces (array of {url, transport})
+        - url (string) → supportedInterfaces (array of {url, protocolBinding, protocolVersion})
+          with distinct versioned URLs per protocol (v1.0 and v0.3)
         - supportsAuthenticatedExtendedCard → capabilities.extendedAgentCard
         """
         v1_card: dict[str, Any] = {}
@@ -80,24 +71,41 @@ class A2AV1Adapter:
         v1_card["skills"] = card.get("skills", [])
 
         # protocolVersion → protocolVersions (array)
-        # Always use "1.0" for v1.0 format, regardless of what the library returns
-        v1_card["protocolVersions"] = ["1.0"]
+        # Advertise both supported versions; each has its own dedicated URL
+        v1_card["protocolVersions"] = ["1.0", "0.3.0"]
 
         # url → supportedInterfaces (array)
-        # v1.0 uses AgentInterface with {url, transport}
-        url = card.get("url", "")
+        # v1.0 spec (4.4.6): AgentInterface has url, protocolBinding, protocolVersion (all required)
+        # Derive versioned URLs from the base URL by inserting the version prefix after /a2a/
+        # Base URL: http://host/api/v1/a2a/{agent_id}/
+        # v1.0 URL: http://host/api/v1/a2a/v1.0/{agent_id}/
+        # v0.3 URL: http://host/api/v1/a2a/v0.3/{agent_id}/
+        base_url = card.get("url", "")
         preferred_transport = card.get("preferredTransport", "JSONRPC")
-        v1_card["supportedInterfaces"] = [{
-            "url": url,
-            "transport": preferred_transport
-        }]
+
+        v1_url = base_url.replace("/api/v1/a2a/", "/api/v1/a2a/v1.0/")
+        v03_url = base_url.replace("/api/v1/a2a/", "/api/v1/a2a/v0.3/")
+
+        v1_card["supportedInterfaces"] = [
+            {
+                "url": v1_url,
+                "protocolBinding": preferred_transport,
+                "protocolVersion": "1.0",
+            },
+            {
+                "url": v03_url,
+                "protocolBinding": preferred_transport,
+                "protocolVersion": "0.3.0",
+            },
+        ]
 
         # Also add additionalInterfaces if present
         additional = card.get("additionalInterfaces", [])
         for iface in additional:
             v1_card["supportedInterfaces"].append({
-                "url": iface.get("url", url),
-                "transport": iface.get("transport", "JSONRPC")
+                "url": iface.get("url", base_url),
+                "protocolBinding": iface.get("transport", "JSONRPC"),
+                "protocolVersion": "1.0",
             })
 
         # capabilities transformation

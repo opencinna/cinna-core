@@ -52,7 +52,8 @@ class A2AService:
     @staticmethod
     def build_public_agent_card(
         agent: Agent,
-        base_url: str
+        base_url: str,
+        url_override: str | None = None,
     ) -> AgentCard:
         """
         Build a minimal public A2A AgentCard with limited information.
@@ -64,6 +65,8 @@ class A2AService:
         Args:
             agent: The Agent model instance
             base_url: The base URL for the A2A endpoints
+            url_override: If provided, use this URL instead of deriving from base_url.
+                          Used by versioned endpoints (e.g. v0.3) to set their own URL.
 
         Returns:
             Minimal AgentCard with name only
@@ -78,11 +81,13 @@ class A2AService:
         # Build security schemes
         security_schemes, security = A2AService._build_security_schemes()
 
+        card_url = url_override if url_override is not None else f"{base_url}/api/v1/a2a/{agent.id}/"
+
         # Return minimal public card
         return AgentCard(
             name=agent.name,
             description="AI Agent",  # Minimal description required by schema
-            url=f"{base_url}/api/v1/a2a/{agent.id}/",
+            url=card_url,
             version="1.0.0",
             protocolVersion="0.3.0",  # Library default version for stable mode
             defaultInputModes=["text/plain"],
@@ -98,7 +103,8 @@ class A2AService:
     def build_agent_card(
         agent: Agent,
         environment: AgentEnvironment | None,
-        base_url: str
+        base_url: str,
+        url_override: str | None = None,
     ) -> AgentCard:
         """
         Build a full (extended) A2A AgentCard from internal Agent model.
@@ -110,6 +116,8 @@ class A2AService:
             agent: The Agent model instance
             environment: The agent's active environment (optional)
             base_url: The base URL for the A2A endpoints
+            url_override: If provided, use this URL instead of deriving from base_url.
+                          Used by versioned endpoints (e.g. v0.3) to set their own URL.
 
         Returns:
             Full AgentCard compliant with A2A protocol
@@ -158,11 +166,13 @@ class A2AService:
         # Build security schemes
         security_schemes, security = A2AService._build_security_schemes()
 
+        card_url = url_override if url_override is not None else f"{base_url}/api/v1/a2a/{agent.id}/"
+
         # Build and return AgentCard
         return AgentCard(
             name=agent.name,
             description=agent.description or "AI Agent",
-            url=f"{base_url}/api/v1/a2a/{agent.id}/",
+            url=card_url,
             version=version,
             protocolVersion="0.3.0",  # Library default version for stable mode
             defaultInputModes=["text/plain"],
@@ -178,7 +188,8 @@ class A2AService:
     def get_agent_card_dict(
         agent: Agent,
         environment: AgentEnvironment | None,
-        base_url: str
+        base_url: str,
+        url_override: str | None = None,
     ) -> dict:
         """
         Get full (extended) AgentCard as a dictionary for JSON serialization.
@@ -187,17 +198,19 @@ class A2AService:
             agent: The Agent model instance
             environment: The agent's active environment (optional)
             base_url: The base URL for the A2A endpoints
+            url_override: If provided, use this URL instead of deriving from base_url.
 
         Returns:
             Dictionary representation of full AgentCard
         """
-        card = A2AService.build_agent_card(agent, environment, base_url)
+        card = A2AService.build_agent_card(agent, environment, base_url, url_override=url_override)
         return card.model_dump(by_alias=True, exclude_none=True)
 
     @staticmethod
     def get_public_agent_card_dict(
         agent: Agent,
-        base_url: str
+        base_url: str,
+        url_override: str | None = None,
     ) -> dict:
         """
         Get minimal public AgentCard as a dictionary for JSON serialization.
@@ -208,9 +221,10 @@ class A2AService:
         Args:
             agent: The Agent model instance
             base_url: The base URL for the A2A endpoints
+            url_override: If provided, use this URL instead of deriving from base_url.
 
         Returns:
             Dictionary representation of minimal public AgentCard
         """
-        card = A2AService.build_public_agent_card(agent, base_url)
+        card = A2AService.build_public_agent_card(agent, base_url, url_override=url_override)
         return card.model_dump(by_alias=True, exclude_none=True)

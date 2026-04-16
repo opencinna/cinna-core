@@ -192,7 +192,7 @@ class A2AStreamEventHandler:
         self,
         task_id: str,
         context_id: str,
-        request_id: str,
+        request_id: Any,
         format_sse_event,
     ) -> None:
         self.task_id = task_id

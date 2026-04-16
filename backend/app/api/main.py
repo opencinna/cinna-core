@@ -97,7 +97,9 @@ api_router.include_router(webapp_share_public_router)
 api_router.include_router(webapp_chat.router)
 api_router.include_router(webapp_public.router)
 api_router.include_router(shared_workspace.router)
-api_router.include_router(a2a.router)
+api_router.include_router(a2a.router)        # /a2a/{agent_id}/ (latest / v1.0)
+api_router.include_router(a2a.v1_router)     # /a2a/v1.0/{agent_id}/
+api_router.include_router(a2a.v03_router)    # /a2a/v0.3/{agent_id}/
 api_router.include_router(mcp_connectors.router)
 api_router.include_router(mcp_consent.router)
 api_router.include_router(agent_app_mcp_routes.router)
