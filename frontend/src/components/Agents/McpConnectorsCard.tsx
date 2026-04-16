@@ -229,7 +229,7 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
   const { data: appMcpRoutes = [], isLoading: isLoadingRoutes } = useQuery<AppMcpRoute[]>({
     queryKey: ["app-mcp-routes", agentId],
     queryFn: async () => {
-      const res = await fetch(`${API_BASE}/api/v1/agents/${agentId}/app-mcp-routes`, {
+      const res = await fetch(`${API_BASE}/api/v1/agents/${agentId}/app-mcp-routes/`, {
         headers: getAuthHeaders(),
       })
       if (!res.ok) throw new Error("Failed to load App MCP routes")
@@ -402,7 +402,7 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
       assigned_user_ids: string[]
       activate_for_myself: boolean
     }) => {
-      const res = await fetch(`${API_BASE}/api/v1/agents/${agentId}/app-mcp-routes`, {
+      const res = await fetch(`${API_BASE}/api/v1/agents/${agentId}/app-mcp-routes/`, {
         method: "POST",
         headers: getAuthHeaders(),
         body: JSON.stringify(body),
