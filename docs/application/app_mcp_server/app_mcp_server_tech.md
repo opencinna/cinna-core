@@ -63,7 +63,7 @@
 - `backend/tests/api/app_mcp/__init__.py` -- test package
 - `backend/tests/api/app_mcp/conftest.py` -- domain fixtures (patched create_session, environment adapter, background tasks)
 - `backend/tests/api/app_mcp/app_agent_routes_test.py` -- admin CRUD lifecycle, assignments, user personal routes, toggle, unique constraint
-- `backend/tests/api/app_mcp/app_mcp_session_test.py` -- session creation, context_id reuse, invalid context_id, no routes, two independent sessions
+- `backend/tests/api/app_mcp/app_mcp_session_test.py` -- session creation, context_id reuse, invalid context_id, no routes, two independent sessions; session ownership (user_id=owner, caller_id=caller); cross-caller context_id isolation; caller_email in GET /sessions/{id} response
 - `backend/tests/api/app_mcp/prompt_examples_test.py` -- prompt_examples lifecycle and validation for both AppAgentRoute and IdentityAgentBinding
 - `backend/tests/utils/app_agent_route.py` -- test utility helpers for admin and user route API calls
 - `backend/tests/unit/test_routing_message_transformation.py` -- unit tests for `RouteToAgentResult`, JSON parsing, sanity guards, `_ai_classify()` tuple propagation, cascade logic, and `AIFunctionsService` passthrough
@@ -105,7 +105,15 @@
 
 - `session.agent_id` (UUID, FK > agent, nullable, indexed) -- added with backfill from `agent_environment.agent_id`
 - `session.integration_type = "app_mcp"` -- identifies App MCP sessions
+- `session.user_id` -- set to `agent.owner_id` (the agent owner sees and manages this session in the platform UI)
+- `session.caller_id` (UUID, FK > user, nullable, indexed, ON DELETE SET NULL) -- tracks the MCP client user who initiated the session; used for `context_id` validation and for displaying caller email in the session page header
+- `SessionPublic.caller_id` -- exposes caller UUID in session list and get responses
+- `SessionPublicExtended.caller_name` / `caller_email` -- resolved at query time from the User table via LEFT JOIN on `caller_id`; available in `GET /sessions/` and `GET /sessions/{id}`
 - Routing metadata stored in `session.session_metadata` JSON: `app_mcp_route_type`, `app_mcp_route_id`, `app_mcp_agent_name`, `app_mcp_session_mode`, `app_mcp_match_method`, `app_mcp_original_message` (only when message transformation occurred)
+
+### Migration
+
+- `2c222ba66e57_add_caller_id_to_session.py` -- adds `caller_id` column + FK + index; backfills existing `app_mcp` sessions by moving `user_id` → `caller_id` and setting `user_id` to `agent.owner_id`
 
 ## API Endpoints
 
@@ -243,7 +251,7 @@ shared_routes: list[SharedRoutePublic]           # AppAgentRoute records assigne
 ### `AppMCPRequestHandler`
 
 - `handle_send_message(user_id, message, context_id, mcp_ctx)` -- main tool handler: resolves session, creates message with effective (transformed) content, streams response, returns JSON
-- `_resolve_session(db, user_id, message, context_id)` -- resumes existing session by `context_id` or routes to new agent and creates session; returns 4-tuple `(session, agent, is_new_session, routing_result)`; on session resumption `routing_result` is None (no transformation on resume)
+- `_resolve_session(db, user_id, message, context_id)` -- resumes existing session by `context_id` (checking `session.caller_id == user_id` for app_mcp, `session.identity_caller_id == user_id` for identity_mcp) or routes to new agent and creates session; for app_mcp sessions, sets `session.user_id = agent.owner_id` and `session.caller_id = user_id`; returns 4-tuple `(session, agent, is_new_session, routing_result)`; on session resumption `routing_result` is None (no transformation on resume)
 - Effective message: `routing_result.transformed_message or original_message`; used for `MessageService.create_message()` and title generation
 - Session lock management: per-session `asyncio.Lock` with 500-entry cap and best-effort eviction
 
@@ -306,7 +314,7 @@ The "Application Agents" dropdown item has been removed. The Admin menu now only
 - **User endpoints**: `CurrentUser` guard + ownership verification on personal routes
 - **`auto_enable_for_users`**: blocked for non-superusers at the service layer (ValueError → 400)
 - **OAuth tokens**: SHA256-hashed, stored in `app_mcp_token` table; separate from per-connector tokens
-- **Session isolation**: `context_id` validated against `user_id` and `integration_type`
+- **Session isolation**: for `app_mcp` sessions, `context_id` validated against `caller_id` (not `user_id`, which is now the agent owner); for `identity_mcp` sessions, validated against `identity_caller_id`
 - **Route access security**: `get_route_for_agent()` returns None (not 403) for unauthorized access to avoid information leakage
 - **Concurrent message protection**: per-session asyncio.Lock prevents parallel processing
 

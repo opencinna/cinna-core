@@ -11506,6 +11506,18 @@ export const SessionPublicSchema = {
             ],
             title: 'Dashboard Block Id'
         },
+        caller_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Caller Id'
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -11764,6 +11776,18 @@ export const SessionPublicExtendedSchema = {
             ],
             title: 'Dashboard Block Id'
         },
+        caller_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Caller Id'
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -11863,6 +11887,28 @@ export const SessionPublicExtendedSchema = {
                 }
             ],
             title: 'Session Metadata'
+        },
+        caller_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Caller Name'
+        },
+        caller_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Caller Email'
         }
     },
     type: 'object',

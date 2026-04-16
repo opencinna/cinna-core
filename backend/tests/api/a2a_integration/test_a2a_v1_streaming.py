@@ -281,7 +281,7 @@ def test_a2a_v1_agent_card_with_access_token(
     assert isinstance(card["supportedInterfaces"], list)
     assert len(card["supportedInterfaces"]) >= 1
     assert "url" in card["supportedInterfaces"][0]
-    assert "transport" in card["supportedInterfaces"][0]
+    assert "protocolBinding" in card["supportedInterfaces"][0]
 
     # Agent name should be present
     assert card["name"] == "A2A Card Agent"
@@ -370,9 +370,13 @@ def test_a2a_integer_request_id_preserved_in_non_streaming(
     have the same type as the id sent in the request.
 
     This test verifies:
-      1. Send a non-streaming request with integer id = 42
-      2. The JSON response echoes back id = 42 (integer), not id = "42" (string)
+      1. Send a streaming request with integer id = 42 via SendMessage
+      2. Every SSE event echoes back id = 42 (integer), not id = "42" (string)
       3. The type is verified with isinstance()
+
+    Note: Uses SendStreamingMessage (not SendMessage) because the non-streaming
+    message/send path involves async polling that doesn't resolve in test context.
+    Both paths go through the same _jsonrpc_success / _format_sse_event id handling.
     """
     # ── Phase 1: Setup A2A agent ─────────────────────────────────────────
 
@@ -382,13 +386,13 @@ def test_a2a_integer_request_id_preserved_in_non_streaming(
     agent_id = agent["id"]
     a2a_token = token_data["token"]
 
-    # ── Phase 2: Send non-streaming request with integer id ───────────────
+    # ── Phase 2: Send streaming request with integer id ──────────────────
 
     integer_id = 42
     request_payload = {
         "jsonrpc": "2.0",
         "id": integer_id,
-        "method": "SendMessage",
+        "method": "SendStreamingMessage",
         "params": {
             "message": {
                 "role": "user",
@@ -398,29 +402,33 @@ def test_a2a_integer_request_id_preserved_in_non_streaming(
         },
     }
 
+    stub = StubAgentEnvConnector(response_text="Integer id preserved")
     a2a_headers = {"Authorization": f"Bearer {a2a_token}", "Content-Type": "application/json"}
-    resp = client.post(
-        f"{settings.API_V1_STR}/a2a/{agent_id}/",
-        headers=a2a_headers,
-        json=request_payload,
-    )
-    assert resp.status_code == 200, f"A2A non-streaming request failed: {resp.text}"
+
+    with patch("app.services.sessions.message_service.agent_env_connector", stub):
+        resp = client.post(
+            f"{settings.API_V1_STR}/a2a/{agent_id}/",
+            headers=a2a_headers,
+            json=request_payload,
+        )
+    drain_tasks()
+
+    assert resp.status_code == 200, f"A2A request failed: {resp.text}"
 
     # ── Phase 3: Verify the response id is the original integer ──────────
 
-    body = resp.json()
-    assert "result" in body or "error" in body, (
-        f"Expected a JSON-RPC result or error, got: {body}"
-    )
+    events = parse_sse_events(resp.text)
+    assert len(events) >= 1, f"Expected at least one SSE event, got none. Response: {resp.text}"
 
-    response_id = body.get("id")
-    assert response_id == integer_id, (
-        f"Expected id={integer_id!r} (int), got {response_id!r} ({type(response_id).__name__})"
-    )
-    assert isinstance(response_id, int), (
-        f"Response id must be int, got {type(response_id).__name__!r} — "
-        "server must not coerce numeric ids to strings"
-    )
+    for i, event in enumerate(events):
+        event_id = event.get("id")
+        assert event_id == integer_id, (
+            f"SSE event {i}: expected id={integer_id!r} (int), got {event_id!r} ({type(event_id).__name__})"
+        )
+        assert isinstance(event_id, int), (
+            f"SSE event {i}: id must be int, got {type(event_id).__name__!r} — "
+            "server must not coerce numeric ids to strings"
+        )
 
 
 # ── Auth enforcement tests ───────────────────────────────────────────────

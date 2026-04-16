@@ -2353,6 +2353,7 @@ export type SessionPublic = {
     mcp_connector_id?: (string | null);
     mcp_session_id?: (string | null);
     dashboard_block_id?: (string | null);
+    caller_id?: (string | null);
     created_at: string;
     updated_at: string;
     last_message_at: (string | null);
@@ -2386,6 +2387,7 @@ export type SessionPublicExtended = {
     mcp_connector_id?: (string | null);
     mcp_session_id?: (string | null);
     dashboard_block_id?: (string | null);
+    caller_id?: (string | null);
     created_at: string;
     updated_at: string;
     last_message_at: (string | null);
@@ -2398,6 +2400,8 @@ export type SessionPublicExtended = {
     session_metadata?: ({
     [key: string]: unknown;
 } | null);
+    caller_name?: (string | null);
+    caller_email?: (string | null);
 };
 
 export type SessionsPublic = {

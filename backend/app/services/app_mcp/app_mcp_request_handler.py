@@ -162,13 +162,13 @@ class AppMCPRequestHandler:
                 existing_session_id = None
 
             if existing_session_id:
-                # Try resuming a regular app_mcp session (owned by caller)
+                # Try resuming a regular app_mcp session (caller tracked in caller_id)
                 stmt = (
                     select(Session, Agent)
                     .join(Agent, Session.agent_id == Agent.id)
                     .where(
                         Session.id == existing_session_id,
-                        Session.user_id == user_id,
+                        Session.caller_id == user_id,
                         Session.integration_type == "app_mcp",
                     )
                 )
@@ -227,19 +227,22 @@ class AppMCPRequestHandler:
             )
             return session, agent_or_err, is_new, routing_result
 
-        # Regular app_mcp session: session owned by caller
+        # Regular app_mcp session: session owned by agent owner (not caller)
         session_data = SessionCreate(
             agent_id=routing_result.agent_id,
             mode=routing_result.session_mode,
         )
         session = SessionService.create_session(
             db_session=db,
-            user_id=user_id,
+            user_id=agent.owner_id,
             data=session_data,
             integration_type="app_mcp",
         )
         if not session:
             return None, "Failed to create session.", False, None
+
+        # Track the caller (the user who initiated via MCP)
+        session.caller_id = user_id
 
         # Store routing metadata in session_metadata
         session.session_metadata = {

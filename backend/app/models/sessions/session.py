@@ -59,6 +59,10 @@ class Session(SQLModel, table=True):
     dashboard_block_id: uuid.UUID | None = Field(
         default=None, foreign_key="user_dashboard_block.id", ondelete="SET NULL", index=True
     )
+    # Track which user initiated this session via App MCP (for app_mcp sessions)
+    caller_id: uuid.UUID | None = Field(
+        default=None, foreign_key="user.id", ondelete="SET NULL", index=True
+    )
     # Identity MCP fields (only populated for integration_type = "identity_mcp")
     # The user who initiated the request (caller, not session owner)
     identity_caller_id: uuid.UUID | None = Field(
@@ -140,6 +144,7 @@ class SessionPublic(SQLModel):
     mcp_connector_id: uuid.UUID | None = None
     mcp_session_id: str | None = None
     dashboard_block_id: uuid.UUID | None = None
+    caller_id: uuid.UUID | None = None
     created_at: datetime
     updated_at: datetime
     last_message_at: datetime | None
@@ -154,6 +159,8 @@ class SessionPublicExtended(SessionPublic):
     message_count: int | None = None
     last_message_content: str | None = None
     session_metadata: dict | None = None
+    caller_name: str | None = None
+    caller_email: str | None = None
 
 
 class SessionsPublic(SQLModel):

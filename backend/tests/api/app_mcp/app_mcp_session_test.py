@@ -3,10 +3,14 @@ App MCP session creation and context_id reuse tests.
 
 Verifies that AppMCPRequestHandler.handle_send_message() correctly:
   - Creates a new session when no context_id is provided (routing required)
+  - Sets session.user_id = agent.owner_id (agent owner sees the session)
+  - Sets session.caller_id = caller's user_id (for audit/display)
   - Reuses an existing session when a valid context_id is passed back
+  - Validates context_id against caller_id (not user_id) for app_mcp sessions
   - Creates a fresh session when an invalid/unknown context_id is given
   - Only reuses sessions with integration_type="app_mcp" (cross-isolation guard)
   - Returns the correct agent_name and context_id in the response payload
+  - Returns caller_email in session list/get responses when caller_id is set
 
 These tests call handle_send_message() directly (not through MCP protocol)
 with the routing service and agent environment stubbed.
@@ -159,7 +163,10 @@ def test_app_mcp_no_context_id_creates_new_session(
     session = app_mcp_sessions[0]
     assert session["integration_type"] == "app_mcp"
     assert session["agent_id"] == agent["id"]
+    # user_id is the agent owner (same as caller here since superuser owns the agent)
     assert session["user_id"] == str(user_id)
+    # caller_id tracks who initiated via MCP
+    assert session["caller_id"] == str(user_id)
     assert session["mode"] == "conversation"
 
     # ── Verify context_id matches session UUID ───────────────────────────
@@ -408,3 +415,152 @@ def test_app_mcp_two_calls_no_context_create_two_sessions(
     assert len(app_mcp_sessions) == 2, (
         f"Expected 2 app_mcp sessions, got {len(app_mcp_sessions)}"
     )
+
+
+def test_app_mcp_session_owned_by_agent_owner_not_caller(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db,
+) -> None:
+    """
+    App MCP sessions are owned by the agent owner (user_id = owner), with
+    the caller tracked separately (caller_id = caller):
+
+      1. Superuser creates an agent (becomes agent owner)
+      2. A second user (caller) sends a message via App MCP
+      3. Verify session.user_id == superuser.id (owner sees session)
+      4. Verify session.caller_id == caller.id (caller tracked)
+      5. Verify the caller does NOT see the session in their own session list
+      6. Verify the owner sees the session via GET /sessions/{id}
+         and caller_email is returned
+    """
+    from app.core.config import settings
+    from tests.utils.user import create_random_user_with_headers
+
+    # ── Phase 1: Superuser creates an agent ──────────────────────────────
+    agent = _setup_agent(client, superuser_token_headers, name="Ownership Test Agent")
+    agent_id = uuid.UUID(agent["id"])
+
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=superuser_token_headers)
+    assert r.status_code == 200
+    owner_id = uuid.UUID(r.json()["id"])
+
+    # ── Phase 2: Create a second user (the MCP caller) ───────────────────
+    caller_user, caller_headers = create_random_user_with_headers(client)
+    caller_id = uuid.UUID(caller_user["id"])
+    caller_email = caller_user["email"]
+
+    # ── Phase 3: Caller sends a message via App MCP ──────────────────────
+    stub = StubAgentEnvConnector(response_text="Response from owner's agent")
+    result = _run_handle_send_message(
+        user_id=caller_id,
+        message="Hello from the caller",
+        agent_id=agent_id,
+        agent_name=agent["name"],
+        agent_env_stub=stub,
+        context_id=None,
+    )
+
+    assert "error" not in result, f"Unexpected error: {result.get('error')}"
+    context_id = result["context_id"]
+    assert context_id
+
+    # ── Phase 4: Owner sees the session ──────────────────────────────────
+    owner_mcp_sessions = _find_app_mcp_sessions(client, superuser_token_headers)
+    assert len(owner_mcp_sessions) == 1, (
+        f"Owner should see 1 app_mcp session, got {len(owner_mcp_sessions)}"
+    )
+    owner_session = owner_mcp_sessions[0]
+
+    # user_id is the agent owner
+    assert owner_session["user_id"] == str(owner_id), (
+        f"session.user_id should be owner {owner_id}, got {owner_session['user_id']}"
+    )
+    # caller_id tracks who initiated via MCP
+    assert owner_session["caller_id"] == str(caller_id), (
+        f"session.caller_id should be caller {caller_id}, got {owner_session['caller_id']}"
+    )
+
+    # ── Phase 5: Caller does NOT see the session in their own list ────────
+    caller_sessions = _find_app_mcp_sessions(client, caller_headers)
+    assert len(caller_sessions) == 0, (
+        f"Caller should NOT see app_mcp sessions in their list, got {len(caller_sessions)}"
+    )
+
+    # ── Phase 6: GET /sessions/{id} returns caller_email for the owner ───
+    r = client.get(
+        f"{settings.API_V1_STR}/sessions/{context_id}",
+        headers=superuser_token_headers,
+    )
+    assert r.status_code == 200
+    session_detail = r.json()
+    assert session_detail["caller_id"] == str(caller_id)
+    assert session_detail["caller_email"] == caller_email
+
+
+def test_app_mcp_context_id_caller_isolation(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db,
+) -> None:
+    """
+    Context ID validation checks caller_id (not user_id) for app_mcp session resumption.
+    A different caller cannot resume another caller's session using their context_id:
+
+      1. Superuser creates an agent
+      2. Caller A sends a message → gets context_id A
+      3. Caller B tries to resume context_id A → gets a NEW session (not A's session)
+      4. Verify two distinct app_mcp sessions exist under the owner
+    """
+    from app.core.config import settings
+    from tests.utils.user import create_random_user_with_headers
+
+    # ── Phase 1: Superuser creates an agent ──────────────────────────────
+    agent = _setup_agent(client, superuser_token_headers, name="Isolation Test Agent")
+    agent_id = uuid.UUID(agent["id"])
+
+    # ── Phase 2: Create two callers ──────────────────────────────────────
+    caller_a_user, _ = create_random_user_with_headers(client)
+    caller_b_user, _ = create_random_user_with_headers(client)
+    caller_a_id = uuid.UUID(caller_a_user["id"])
+    caller_b_id = uuid.UUID(caller_b_user["id"])
+
+    # ── Phase 3: Caller A sends a message → gets context_id A ────────────
+    stub_a = StubAgentEnvConnector(response_text="Response to A")
+    result_a = _run_handle_send_message(
+        user_id=caller_a_id,
+        message="Hello from caller A",
+        agent_id=agent_id,
+        agent_name=agent["name"],
+        agent_env_stub=stub_a,
+        context_id=None,
+    )
+    assert "error" not in result_a, f"Caller A failed: {result_a.get('error')}"
+    context_id_a = result_a["context_id"]
+
+    # ── Phase 4: Caller B tries to resume context_id A ───────────────────
+    stub_b = StubAgentEnvConnector(response_text="Response to B with A's context")
+    result_b = _run_handle_send_message(
+        user_id=caller_b_id,
+        message="Caller B trying to resume A's session",
+        agent_id=agent_id,
+        agent_name=agent["name"],
+        agent_env_stub=stub_b,
+        context_id=context_id_a,
+    )
+    assert "error" not in result_b, f"Caller B failed: {result_b.get('error')}"
+
+    # Caller B should NOT reuse caller A's session — a new session is created
+    assert result_b["context_id"] != context_id_a, (
+        "Caller B should NOT be able to resume Caller A's session"
+    )
+
+    # ── Phase 5: Owner sees two distinct sessions ─────────────────────────
+    owner_mcp_sessions = _find_app_mcp_sessions(client, superuser_token_headers)
+    assert len(owner_mcp_sessions) == 2, (
+        f"Expected 2 app_mcp sessions (one per caller), got {len(owner_mcp_sessions)}"
+    )
+    # Each session should have a different caller_id
+    caller_ids = {s["caller_id"] for s in owner_mcp_sessions}
+    assert str(caller_a_id) in caller_ids
+    assert str(caller_b_id) in caller_ids

@@ -3,6 +3,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import aliased
 from sqlmodel import select, func
 
 from app.api.deps import CurrentUser, CurrentUserOrGuest, GuestShareContext, SessionDep
@@ -259,7 +260,8 @@ def list_sessions(
         .subquery()
     )
 
-    # Join Session with Agent to get agent name and color
+    # Join Session with Agent to get agent name and color; LEFT JOIN User for caller info
+    CallerUser = aliased(User)
     statement = (
         select(
             Session,
@@ -268,8 +270,11 @@ def list_sessions(
             Agent.ui_color_preset,
             msg_count_subq.c.message_count,
             last_msg_subq.c.last_content,
+            CallerUser.full_name.label("caller_name"),
+            CallerUser.email.label("caller_email"),
         )
         .join(Agent, Session.agent_id == Agent.id)
+        .outerjoin(CallerUser, Session.caller_id == CallerUser.id)
         .outerjoin(msg_count_subq, Session.id == msg_count_subq.c.session_id)
         .outerjoin(last_msg_subq, Session.id == last_msg_subq.c.session_id)
         .where(Session.user_id == owner_user_id)
@@ -323,8 +328,10 @@ def list_sessions(
             agent_ui_color_preset=a_color,
             message_count=msg_count or 0,
             last_message_content=(last_content[:200] if last_content else None),
+            caller_name=caller_name,
+            caller_email=caller_email,
         )
-        for s, a_id, a_name, a_color, msg_count, last_content in results
+        for s, a_id, a_name, a_color, msg_count, last_content, caller_name, caller_email in results
     ]
 
     return SessionsPublicExtended(data=data, count=total_count)
@@ -337,10 +344,19 @@ def get_session(session: SessionDep, caller: CurrentUserOrGuest, id: uuid.UUID) 
 
     Supports both authenticated users and guest share callers.
     """
-    # Join with Agent to get agent name and color
+    # Join with Agent to get agent name and color; LEFT JOIN User for caller info
+    CallerUser = aliased(User)
     statement = (
-        select(Session, Agent.id, Agent.name, Agent.ui_color_preset)
+        select(
+            Session,
+            Agent.id,
+            Agent.name,
+            Agent.ui_color_preset,
+            CallerUser.full_name.label("caller_name"),
+            CallerUser.email.label("caller_email"),
+        )
         .join(Agent, Session.agent_id == Agent.id)
+        .outerjoin(CallerUser, Session.caller_id == CallerUser.id)
         .where(Session.id == id)
     )
 
@@ -348,7 +364,7 @@ def get_session(session: SessionDep, caller: CurrentUserOrGuest, id: uuid.UUID) 
     if not result:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    chat_session, agent_id, agent_name, agent_ui_color_preset = result
+    chat_session, agent_id, agent_name, agent_ui_color_preset, caller_name, caller_email = result
 
     # Verify access
     _verify_session_access(caller, chat_session, session)
@@ -359,6 +375,8 @@ def get_session(session: SessionDep, caller: CurrentUserOrGuest, id: uuid.UUID) 
         sdk_type=SessionService.get_sdk_type(chat_session),
         agent_name=agent_name,
         agent_ui_color_preset=agent_ui_color_preset,
+        caller_name=caller_name,
+        caller_email=caller_email,
     )
 
 

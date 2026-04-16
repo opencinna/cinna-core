@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useEffect, useState, useRef, useCallback, useMemo } from "react"
-import { ArrowLeft, EllipsisVertical, Mail, Package, Loader2, ListTodo, Plug, UserCircle } from "lucide-react"
+import { ArrowLeft, EllipsisVertical, Mail, Package, Loader2, ListTodo, Plug, UserCircle, Hammer, MessageCircle, User } from "lucide-react"
 
 import { SessionsService, MessagesService, AgentsService, EnvironmentsService, OpenAPI } from "@/client"
 import { useNavigationHistory } from "@/hooks/useNavigationHistory"
@@ -396,10 +396,23 @@ function ChatInterface() {
                 {session.title ? session.title : <AnimatedPlaceholder />}
               </h1>
               <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-                <span className={`inline-block w-2 h-2 rounded-full ${
-                  isBuilding ? "bg-orange-500" : "bg-blue-500"
-                }`} />
-                {isBuilding ? "Building Mode" : "Conversation Mode"}
+                {isBuilding ? (
+                  <>
+                    <Hammer className="h-3 w-3 text-orange-500" />
+                    Building
+                  </>
+                ) : (
+                  <>
+                    <MessageCircle className="h-3 w-3 text-blue-500" />
+                    Conversation
+                  </>
+                )}
+                {session.integration_type === "app_mcp" && (
+                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[10px] font-medium bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">
+                    <Plug className="h-2.5 w-2.5" />
+                    MCP
+                  </span>
+                )}
                 {session.integration_type === "email" && (
                   <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[10px] font-medium bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300">
                     <Mail className="h-2.5 w-2.5" />
@@ -421,6 +434,12 @@ function ChatInterface() {
                         — {(session.session_metadata as Record<string, string>).identity_caller_name}
                       </span>
                     )}
+                  </span>
+                )}
+                {session.caller_email && (
+                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
+                    <User className="h-2.5 w-2.5" />
+                    {session.caller_email}
                   </span>
                 )}
               </p>
