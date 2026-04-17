@@ -37,12 +37,15 @@
 ### Environment Instances (per-environment)
 
 - `backend/data/environments/{env_id}/` - Instance root
-  - `app/core/` - Copied from template, baked into image
+  - `app/core/` - Copied from `app_core_base`; mounted read-only into container (not baked into image)
   - `app/workspace/` - User data, Docker volume mounted
   - `app/BUILDING_AGENT.md` - Instance-specific building prompt
   - `app/.env` - Application environment variables
-  - `docker-compose.yml` - Generated from template
+  - `docker-compose.template.yml` - Copied from template (overwritten during rebuild)
+  - `docker-compose.yml` - Generated from template; `${TEMPLATE_IMAGE_TAG}` substituted with the image tag returned by `TemplateImageService`
   - `.env` - Docker compose variables
+
+Note: `Dockerfile`, `pyproject.toml`, and `uv.lock` are NOT copied into per-env instance dirs. They remain exclusively in the template directory and are consumed only by `TemplateImageService` when building the shared image.
 
 ### Backend - Models
 
@@ -58,6 +61,7 @@
 
 - `backend/app/services/environments/environment_lifecycle.py` - `EnvironmentLifecycleManager` - core lifecycle operations
 - `backend/app/services/environments/environment_service.py` - `EnvironmentService` - route-level orchestration
+- `backend/app/services/environments/template_image_service.py` - `TemplateImageService` - shared per-template Docker image management (content-hash tagging, build, cache)
 - `backend/app/services/environments/environment_suspension_scheduler.py` - APScheduler background job (inactivity suspension)
 - `backend/app/services/environments/environment_status_scheduler.py` - APScheduler background job (health monitoring)
 - `backend/app/services/environments/adapters/base.py` - `EnvironmentAdapter` abstract interface, `LocalFilesAccessInterface` optional mixin
@@ -139,26 +143,47 @@ An optional mixin interface for adapters that can provide direct local filesyste
 
 ### EnvironmentLifecycleManager (`backend/app/services/environments/environment_lifecycle.py`)
 
-- `create_environment_instance()` - Copy template + shared core, generate configs, build Docker image
-- `start_environment()` - UP operation with smart container detection (new vs existing)
+- `create_environment_instance()` - Copy template (excluding `TEMPLATE_ONLY_FILES`) + shared core, call `TemplateImageService.ensure_template_image()`, generate configs with image tag, validate compose
+- `start_environment()` - UP operation with smart container detection (new vs existing); calls `ensure_template_image()` before compose regeneration
 - `stop_environment()` - STOP operation, keep container
 - `suspend_environment()` - STOP operation with `suspended` status
-- `activate_suspended_environment()` - UP operation optimized for existing containers
-- `rebuild_environment()` - DOWN → build → UP with full setup; core replaced from shared `app_core_base`
+- `activate_suspended_environment()` - UP operation optimized for existing containers; calls `ensure_template_image()` before compose regeneration
+- `rebuild_environment()` - DOWN → UP with full setup; calls `ensure_template_image()` before compose regeneration; core replaced from shared `app_core_base`; no `docker-compose build` step
 - `delete_environment_instance()` - DOWN operation with volume cleanup
 - `_container_exists()` - Check if Docker container exists (stopped or running)
 - `_sync_dynamic_data()` - Sync prompts and credentials to running environment
 - `_setup_new_container()` - Install workspace Python packages and system packages (only for new containers)
-- `_update_environment_config()` - Regenerate auth token, docker-compose.yml, .env
+- `_update_environment_config(image_tag)` - Regenerate auth token, docker-compose.yml (with `${TEMPLATE_IMAGE_TAG}` substituted), .env
+- `_generate_compose_file(image_tag)` - Produce docker-compose.yml; substitutes `${TEMPLATE_IMAGE_TAG}` with the tag from `TemplateImageService`
 - `_generate_auth_token()` - Create 10-year JWT with user ID as subject
 - `_generate_env_file()` - Generate .env with AI credential auto-detection by prefix
 
+**Constants**:
+- `REBUILD_OVERWRITE_FILES = ["docker-compose.template.yml"]` — only the compose template is overwritten during rebuild
+- `TEMPLATE_ONLY_FILES = {"Dockerfile", "pyproject.toml", "uv.lock"}` — excluded from per-env instance copy; owned by `TemplateImageService`
+
+### TemplateImageService (`backend/app/services/environments/template_image_service.py`)
+
+Manages one shared Docker image per template, tagged by a content hash of the build inputs. Exported as a module-level singleton (`template_image_service`) imported by `environment_lifecycle.py`.
+
+- `ensure_template_image(env_name) -> str` — async; acquires per-template lock, computes tag, returns immediately on cache hit, otherwise runs `docker build` from the template directory; raises `FileNotFoundError` if template dir is absent, `RuntimeError` on build failure
+- `compute_template_hash(env_name) -> str` — SHA-256 over `Dockerfile` + `pyproject.toml` + `uv.lock` (fixed order); returns first 12 hex characters; missing files contribute an empty-bytes sentinel
+- `get_image_tag(env_name) -> str` — returns `cinna-agent-{env_name}:{hash12}` without building
+
+**Tag format**: `cinna-agent-<env_name>:<sha256[:12]>` — e.g. `cinna-agent-python-env-advanced:a1b2c3d4e5f6`
+
+**Concurrency**: one `asyncio.Lock` per template name; two concurrent calls for the same template serialize; the second caller finds the image already present and returns immediately without building.
+
+**Image inspection**: uses Docker Python SDK (`docker.from_env().images.get(tag)`) via `asyncio.to_thread`; catches `docker.errors.ImageNotFound` to determine whether a build is needed.
+
+**Build execution**: `asyncio.create_subprocess_exec` with command `docker build --tag <tag> <template_dir>`; build context is the template directory only (`backend/app/env-templates/<env_name>/`).
+
 ### DockerEnvironmentAdapter (`backend/app/services/environments/adapters/docker_adapter.py`)
 
-- `initialize()` - Build Docker image (`docker-compose build`)
+- `initialize()` - Validates that `docker-compose.yml` exists in the instance directory; no longer runs `docker-compose build` (image is pre-built by `TemplateImageService`)
 - `start()` - UP operation (`docker-compose up -d`), wait for health check
 - `stop()` - STOP operation (`docker-compose stop`)
-- `rebuild()` - DOWN + build + optional UP
+- `rebuild()` - DOWN + optional UP; no `docker-compose build` step (image is pre-built by `TemplateImageService`)
 - `delete()` - DOWN with volumes (`docker-compose down -v --remove-orphans`)
 - `install_custom_packages()` - Install workspace Python dependencies from `workspace_requirements.txt`
 - `install_system_packages()` - Install OS-level packages from `workspace_system_packages.txt` via `apt-get`
@@ -268,18 +293,21 @@ Each template has its own Dockerfile and docker-compose template. Both share the
 - Installs system deps (curl, git, Node.js for Claude Code)
 - Installs uv package manager and Claude Code CLI globally
 - Copies `pyproject.toml`, installs template dependencies
-- Copies `app/core` into image (sourced from shared `app_core_base` at instance creation)
+- Does NOT copy `app/core` — core is bind-mounted read-only at container runtime
 - CMD: `fastapi run core/main.py`
 
 **docker-compose.template.yml** (`backend/app/env-templates/<template>/docker-compose.template.yml`): <!-- nocheck -->
+- No `build:` block — image is pre-built by `TemplateImageService` and referenced by tag
 - Volume mounts: `core:/app/core:ro` (read-only), `workspace:/app/workspace` (read-write)
 - Networks: `agent-bridge` (shared with backend), `agent-env-${ENV_ID}` (isolated)
-- Variables substituted: `${ENV_ID}`, `${AGENT_ID}`, `${ENV_VERSION}`, `${AGENT_PORT}`, `${AGENT_AUTH_TOKEN}`
+- Variables substituted: `${ENV_ID}`, `${AGENT_ID}`, `${AGENT_PORT}`, `${AGENT_AUTH_TOKEN}`, `${TEMPLATE_IMAGE_TAG}`
 
 ### Rebuild Overwrite Files
 
-Infrastructure files overwritten from template during rebuild (defined in `REBUILD_OVERWRITE_FILES`):
-- `uv.lock`, `pyproject.toml`, `Dockerfile`, `docker-compose.template.yml`
+Infrastructure files overwritten from template during rebuild (defined in `REBUILD_OVERWRITE_FILES` in `environment_lifecycle.py`):
+- `docker-compose.template.yml`
+
+`Dockerfile`, `pyproject.toml`, and `uv.lock` are no longer overwritten during rebuild — they are not present in per-env instance dirs. Image rebuild is triggered automatically by `TemplateImageService` when their content hash changes.
 
 ### Shared Core Directory
 

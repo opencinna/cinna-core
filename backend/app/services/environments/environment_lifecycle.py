@@ -25,14 +25,17 @@ logger = logging.getLogger(__name__)
 # Files from template root that should be overwritten during rebuild
 # These are infrastructure files that may be updated in the template
 REBUILD_OVERWRITE_FILES = [
-    "uv.lock",
-    "pyproject.toml",
-    "Dockerfile",
     "docker-compose.template.yml",
 ]
 
 # Shared app/core directory used by all environment templates
 APP_CORE_BASE_DIR_NAME = "app_core_base"
+
+# Files in the template root that are owned by TemplateImageService.
+# They must NOT be copied into per-env instance directories — the service
+# builds a shared image from the template dir directly; per-env dirs only
+# need the generated docker-compose.yml (derived from docker-compose.template.yml).
+TEMPLATE_ONLY_FILES = {"Dockerfile", "pyproject.toml", "uv.lock"}
 
 
 class EnvironmentLifecycleManager:
@@ -122,10 +125,10 @@ class EnvironmentLifecycleManager:
     ) -> bool:
         """
         Create environment instance:
-        1. Copy template files to instance directory
-        2. Generate docker-compose.yml from template
-        3. Create .env file with environment variables
-        4. Build Docker image
+        1. Copy template files to instance directory (excludes Dockerfile/pyproject/uv.lock — owned by TemplateImageService)
+        2. Ensure the shared per-template Docker image exists (builds only on hash miss)
+        3. Generate docker-compose.yml referencing the shared image tag
+        4. Create .env file with environment variables
 
         Args:
             db_session: Database session
@@ -182,32 +185,29 @@ class EnvironmentLifecycleManager:
             flag_modified(environment, "config")
             logger.debug(f"Allocated port {port} for environment {environment.id}")
 
-            # 4. Update configuration files (auth token, compose, env)
+            # 4. Build (or reuse) shared template image
+            environment.status = "building"
+            environment.status_message = "Building template image..."
+            db_session.add(environment)
+            db_session.commit()
+
+            from app.services.environments.template_image_service import template_image_service
+            image_tag = await template_image_service.ensure_template_image(environment.env_name)
+            logger.info(f"Template image ready: {image_tag}")
+
+            # 5. Update configuration files (auth token, compose, env)
+            environment.status_message = "Configuring environment..."
+            db_session.add(environment)
+            db_session.commit()
+
             self._update_environment_config(
                 db_session, instance_dir, environment, agent,
                 anthropic_api_key, minimax_api_key,
                 openai_compatible_api_key, openai_compatible_base_url, openai_compatible_model,
                 openai_api_key=openai_api_key,
                 google_api_key=google_api_key,
+                image_tag=image_tag,
             )
-
-            # 6. Build image
-            environment.status = "building"
-            environment.status_message = "Building Docker image (this may take several minutes)..."
-            db_session.add(environment)
-            db_session.commit()
-
-            logger.info(f"Building Docker image for environment {environment.id}")
-            adapter = self.get_adapter(environment)
-            await adapter.initialize(
-                EnvInitConfig(
-                    env_name=environment.env_name,
-                    env_version=environment.env_version,
-                    agent_id=agent.id,
-                    workspace_id=str(environment.id)
-                )
-            )
-            logger.info(f"Environment {environment.id} initialized successfully")
 
             # Update environment status
             environment.status = "stopped"
@@ -464,7 +464,10 @@ class EnvironmentLifecycleManager:
             db_session.add(environment)
             db_session.commit()
 
-            self._update_environment_config(db_session, instance_dir, environment, agent)
+            from app.services.environments.template_image_service import template_image_service
+            image_tag = await template_image_service.ensure_template_image(environment.env_name)
+
+            self._update_environment_config(db_session, instance_dir, environment, agent, image_tag=image_tag)
             db_session.add(environment)  # Save updated config with new auth token
             db_session.commit()
 
@@ -665,7 +668,10 @@ class EnvironmentLifecycleManager:
             db_session.add(environment)
             db_session.commit()
 
-            self._update_environment_config(db_session, instance_dir, environment, agent)
+            from app.services.environments.template_image_service import template_image_service
+            image_tag = await template_image_service.ensure_template_image(environment.env_name)
+
+            self._update_environment_config(db_session, instance_dir, environment, agent, image_tag=image_tag)
             db_session.add(environment)
             db_session.commit()
 
@@ -755,15 +761,15 @@ class EnvironmentLifecycleManager:
         """
         Rebuild environment with updated core files while preserving workspace.
 
-        Docker terminology: 'docker-compose down' + 'docker-compose build' + 'docker-compose up'
+        Docker terminology: 'docker-compose down' + 'docker-compose up'
 
         This operation:
         1. Checks if container is running
         2. Stops container if running (docker-compose stop)
         3. Deletes container (docker-compose down) - NEW container will be created
         4. Updates core files from template
-        5. Rebuilds Docker image (docker-compose build)
-        6. Starts NEW container if it was running before (docker-compose up)
+        5. Ensures the shared per-template image is up-to-date (rebuilds only if hash changed)
+        6. Starts NEW container if it was running before (docker-compose up) using the shared image
         7. Setup new container (install packages, etc.)
         8. Syncs dynamic data (prompts and credentials)
 
@@ -820,25 +826,53 @@ class EnvironmentLifecycleManager:
             # Get instance directory
             instance_dir = self.instances_dir / str(environment.id)
 
+            # Ensure shared template image is up to date (rebuilds only if hash changed)
+            environment.status_message = "Building template image..."
+            db_session.add(environment)
+            db_session.commit()
+
+            from app.services.environments.template_image_service import template_image_service
+            image_tag = await template_image_service.ensure_template_image(environment.env_name)
+            logger.info(f"Template image ready for rebuild: {image_tag}")
+
+            # Overwrite infra files from template (docker-compose.template.yml) and clean up
+            # legacy build files (Dockerfile/pyproject.toml/uv.lock) that are no longer used.
+            # This must happen BEFORE _update_environment_config so compose regeneration reads
+            # the updated template.
+            import shutil as _shutil
+            for filename in REBUILD_OVERWRITE_FILES:
+                src_file = template_dir / filename
+                dst_file = instance_dir / filename
+                if src_file.exists():
+                    await asyncio.to_thread(_shutil.copy2, src_file, dst_file)
+                    logger.debug(f"Overwrote {filename} from template")
+            for legacy_name in TEMPLATE_ONLY_FILES:
+                legacy_path = instance_dir / legacy_name
+                if legacy_path.exists():
+                    await asyncio.to_thread(legacy_path.unlink)
+                    logger.info(f"Removed legacy file {legacy_name} from instance dir (now owned by TemplateImageService)")
+
             # Update configuration files (generates new auth token, docker-compose.yml, .env)
             environment.status_message = "Updating configuration files..."
             db_session.add(environment)
             db_session.commit()
 
-            self._update_environment_config(db_session, instance_dir, environment, agent)
+            self._update_environment_config(db_session, instance_dir, environment, agent, image_tag=image_tag)
             db_session.add(environment)  # Save updated config with new auth token
             db_session.commit()
 
             # Update status
-            environment.status_message = "Updating core files and rebuilding image..."
+            environment.status_message = "Updating core files and recreating container..."
             db_session.add(environment)
             db_session.commit()
 
-            # Rebuild via adapter (does: down, update files, build, optionally up)
+            # Rebuild via adapter (does: down, update core files, optionally up)
+            # Note: image build is handled by TemplateImageService above; adapter no longer builds.
+            # Infra file overwrite is done above (before compose regeneration), so pass an empty list here.
             await adapter.rebuild(
                 template_dir=template_dir,
                 template_core_dir=template_core_dir,
-                rebuild_overwrite_files=REBUILD_OVERWRITE_FILES,
+                rebuild_overwrite_files=[],
                 was_running=was_running
             )
 
@@ -1138,6 +1172,10 @@ class EnvironmentLifecycleManager:
                     logger.debug(f"Skipping hidden file: {item.name}")
                     continue  # Skip hidden files
 
+                if item.is_file() and item.name in TEMPLATE_ONLY_FILES:
+                    logger.debug(f"Skipping template-only file (owned by TemplateImageService): {item.name}")
+                    continue
+
                 dest = instance_dir / item.name
 
                 if item.is_dir():
@@ -1186,13 +1224,14 @@ class EnvironmentLifecycleManager:
         openai_compatible_model: str | None = None,
         openai_api_key: str | None = None,
         google_api_key: str | None = None,
+        image_tag: str = "",
     ):
         """
         Update environment configuration files.
 
         This method regenerates:
         1. Auth token (JWT)
-        2. docker-compose.yml
+        2. docker-compose.yml  (substitutes ${TEMPLATE_IMAGE_TAG} with image_tag)
         3. .env file
         4. SDK-specific settings files (for MiniMax, OpenAI Compatible)
 
@@ -1213,6 +1252,7 @@ class EnvironmentLifecycleManager:
             openai_compatible_model: User's OpenAI Compatible model (optional)
             openai_api_key: OpenAI API key (for opencode/openai)
             google_api_key: Google API key (for opencode/google)
+            image_tag: Shared template image tag from TemplateImageService (substituted as ${TEMPLATE_IMAGE_TAG})
         """
         # 1. Generate new auth token
         auth_token = self._generate_auth_token(agent.owner_id)
@@ -1315,8 +1355,8 @@ class EnvironmentLifecycleManager:
         openai_api_key = bag["openai_api_key"]
         google_api_key = bag["google_api_key"]
 
-        # 4. Generate docker-compose.yml
-        self._generate_compose_file(instance_dir, environment, agent, port, auth_token)
+        # 4. Generate docker-compose.yml (injects shared template image tag)
+        self._generate_compose_file(instance_dir, environment, agent, port, auth_token, image_tag=image_tag)
 
         # 5. Generate .env file and SDK settings files
         self._generate_env_file(
@@ -1356,7 +1396,8 @@ class EnvironmentLifecycleManager:
         environment: AgentEnvironment,
         agent: Agent,
         port: int,
-        auth_token: str
+        auth_token: str,
+        image_tag: str = "",
     ):
         """Generate docker-compose.yml from template."""
         template_path = instance_dir / "docker-compose.template.yml"
@@ -1388,6 +1429,7 @@ class EnvironmentLifecycleManager:
         content = content.replace("${AGENT_PORT}", str(port))
         content = content.replace("${AGENT_AUTH_TOKEN}", auth_token)
         content = content.replace("${HOST_INSTANCE_DIR}", host_instance_dir)
+        content = content.replace("${TEMPLATE_IMAGE_TAG}", image_tag)
 
         # Write output
         with open(output_path, 'w') as f:

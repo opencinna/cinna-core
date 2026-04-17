@@ -397,9 +397,9 @@ def test_credential_propagation_through_environment_rebuild(
     assert "SDK_ADAPTER_BUILDING=claude-code/anthropic" in env_content
     assert "SDK_ADAPTER_CONVERSATION=claude-code/anthropic" in env_content
 
-    # Verify adapter received initialize + start calls
+    # Verify adapter received start call (image build is handled by TemplateImageService,
+    # not adapter.initialize, as of the shared-template-image refactor).
     adapter = lm._test_adapter
-    assert len(adapter.initialize_calls) == 1
     assert adapter.start_calls >= 1
 
     # --- Step 4: Update credential with new API key ---

@@ -62,12 +62,14 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
 
     async def initialize(self, config: EnvInitConfig) -> bool:
         """
-        Initialize environment:
-        1. Verify directory structure
-        2. Build Docker image
-        3. Create .env file
+        Validate environment directory and compose configuration.
+
+        Image build is handled by TemplateImageService before this is called.
+        This method is kept for interface compatibility but no longer builds an image —
+        all environments sharing the same template reuse a single shared image tagged
+        by the hash of the template's build inputs (Dockerfile + pyproject.toml + uv.lock).
         """
-        logger.info(f"Initializing Docker environment: env_dir={self.env_dir}, env_id={self.env_id}")
+        logger.info(f"Validating Docker environment: env_dir={self.env_dir}, env_id={self.env_id}")
 
         # Verify directory exists
         if not self.env_dir.exists():
@@ -79,11 +81,7 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
         if not compose_file.exists():
             raise FileNotFoundError(f"docker-compose.yml not found in {self.env_dir}")
 
-        # Build image using docker-compose
-        logger.info(f"Building Docker image for environment {self.env_id}")
-        await self._run_compose_command(["build"])
-        logger.info(f"Docker image built successfully for environment {self.env_id}")
-
+        logger.info(f"Environment {self.env_id} validated successfully")
         return True
 
     async def start(self) -> bool:
@@ -184,11 +182,11 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
         Process:
         1. Container should already be stopped
         2. Remove old container (docker-compose down)
-        3. Overwrite infrastructure files from template (Dockerfile, pyproject.toml, etc.)
+        3. Overwrite infrastructure files from template (docker-compose.template.yml only)
         4. Update core files from template
         5. Update knowledge files from template (add/update only, preserve user-created files)
-        6. Rebuild Docker image (includes new core files)
-        7. Start container if it was running before (creates new container from new image)
+        6. Start container if it was running before — uses the shared template image already
+           built by TemplateImageService (called from the lifecycle manager before this method)
         """
         logger.info(f"Rebuilding environment {self.env_id}")
 
@@ -254,10 +252,9 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
         else:
             logger.debug(f"No knowledge directory in template: {template_knowledge_dir}")
 
-        # Rebuild Docker image
-        logger.info(f"Rebuilding Docker image for environment {self.env_id}")
-        await self._run_compose_command(["build"])
-        logger.info(f"Docker image rebuilt successfully")
+        # Note: Docker image build is handled by TemplateImageService (called from the
+        # lifecycle manager before adapter.rebuild()). The shared per-template image is
+        # already present locally; docker-compose up will use it directly.
 
         # Start container if it was running before
         if was_running:

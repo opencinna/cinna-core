@@ -72,27 +72,33 @@ backend/app/env-templates/
 │       └── scripts/              # Helper scripts
 │
 ├── python-env-advanced/          # Template-specific files only
-│   ├── Dockerfile                # FROM python:3.11-slim
-│   ├── docker-compose.template.yml
+│   ├── Dockerfile                # FROM python:3.11-slim; no COPY app/core (ro bind-mount)
+│   ├── docker-compose.template.yml  # image: ${TEMPLATE_IMAGE_TAG}, no build: block
 │   ├── pyproject.toml
 │   ├── uv.lock
 │   └── app/
 │       └── workspace/            # Workspace template
 │
 └── general-env/                  # Template-specific files only
-    ├── Dockerfile                # FROM python:3.11-bookworm
-    ├── docker-compose.template.yml
+    ├── Dockerfile                # FROM python:3.11-bookworm; no COPY app/core (ro bind-mount)
+    ├── docker-compose.template.yml  # image: ${TEMPLATE_IMAGE_TAG}, no build: block
     ├── pyproject.toml
     ├── uv.lock
     └── app/
         └── workspace/            # Workspace template
 ```
 
-The only differences between templates are:
-1. **Dockerfile `FROM` line**: `python:3.11-slim` vs `python:3.11-bookworm`
-2. **Docker image name**: `agent-python-env-advanced` vs `agent-general-env`
+Each template produces **one shared Docker image** per unique set of build inputs (`Dockerfile` + `pyproject.toml` + `uv.lock`). The image is built and cached by `TemplateImageService` — all environments using the same template share that image as long as the inputs have not changed.
 
-All core server code (`app/core/`) is shared via `app_core_base` — changes to routes, models, adapters, or prompts apply to all templates automatically.
+Image tag format: `cinna-agent-<env_name>:<sha256[:12]>` — e.g. `cinna-agent-python-env-advanced:a1b2c3d4e5f6`.
+
+`Dockerfile`, `pyproject.toml`, and `uv.lock` are **not** copied into per-environment instance directories. They live only in the template directory and are consumed exclusively by `TemplateImageService`.
+
+The main differences between templates are:
+1. **Dockerfile `FROM` line**: `python:3.11-slim` vs `python:3.11-bookworm`
+2. **Python dependencies** (`pyproject.toml`/`uv.lock`): may differ between templates
+
+All core server code (`app/core/`) is shared via `app_core_base` — changes to routes, models, adapters, or prompts apply to all templates automatically. Core is bind-mounted read-only into each container at runtime, not baked into the image.
 
 ## Template Selection
 

@@ -10,7 +10,7 @@ Provide isolated Docker container runtimes where AI agents execute tasks, with a
 
 Each agent environment is a Docker container with two distinct layers:
 
-- **Core Layer** (`/app/core/`) - System code (FastAPI server, SDK adapters, API routes). Shared across all environment templates via `app_core_base`. Baked into the Docker image during build. Immutable at runtime. Updated only via rebuild
+- **Core Layer** (`/app/core/`) - System code (FastAPI server, SDK adapters, API routes). Shared across all environment templates via `app_core_base`. Mounted read-only into every container at runtime — not baked into the image. Immutable at runtime. Updated only via rebuild
 - **Workspace Layer** (`/app/workspace/`) - User-generated content (scripts, files, credentials, databases, logs, knowledge base). Mounted as a Docker volume. Persists across all lifecycle operations (restarts, rebuilds, suspensions)
 - **Template Files** (`/app/`) - Static configuration files copied during initialization (e.g., `BUILDING_AGENT.md`). Not updated during rebuilds
 
@@ -40,9 +40,9 @@ The platform supports multiple Docker base images for different agent use cases.
 ### 1. Environment Creation
 
 1. User creates a new agent
-2. System copies the environment template to an instance directory
-3. Instance-specific configuration files generated (docker-compose.yml, .env, auth tokens)
-4. Docker image built with core layer baked in
+2. System copies the environment template to an instance directory (excludes `Dockerfile`, `pyproject.toml`, `uv.lock` — those stay in the template directory)
+3. Shared template image built (or reused from cache) by `TemplateImageService`; tag injected into generated compose file
+4. Instance-specific configuration files generated (docker-compose.yml, .env, auth tokens)
 5. Environment is in `stopped` state, ready to start
 
 ### 2. Environment Start
@@ -61,12 +61,11 @@ The platform supports multiple Docker base images for different agent use cases.
 1. User triggers rebuild (or admin pushes system update)
 2. If running, container stopped first
 3. Old container removed completely (`docker-compose down`)
-4. Infrastructure files overwritten from template (Dockerfile, pyproject.toml, etc.)
-5. Old core directory deleted, fresh core copied from shared `app_core_base` (single source of truth for all templates)
+4. Shared template image rebuilt (or reused from cache) by `TemplateImageService`; tag injected into regenerated compose file
+5. Compose template overwritten from template dir; old core directory deleted, fresh core copied from shared `app_core_base`
 6. Knowledge base files synced from template (add/update only, no deletions)
-7. Docker image rebuilt (uses cache for speed)
-8. If was running: new container started with full setup (packages + dynamic data)
-9. Environment returns to previous state (running or stopped)
+7. If was running: new container started with full setup (packages + dynamic data)
+8. Environment returns to previous state (running or stopped)
 
 ### 4. Environment Suspension (Automatic)
 
@@ -163,9 +162,9 @@ Each agent has a configurable inactivity threshold (agent-level setting, not per
 - Environment configuration and agent prompts
 
 **Updated during rebuild**:
-- Infrastructure files (Dockerfile, pyproject.toml, uv.lock, docker-compose template)
-- Core server code (all modules)
-- Template dependencies
+- Docker compose template (overwritten from template dir)
+- Core server code (all modules, replaced from `app_core_base`)
+- Template image (rebuilt by `TemplateImageService` if build inputs changed)
 - Knowledge base files from template (add/update only, never delete)
 
 ### Docker Operations Mapping
@@ -174,7 +173,7 @@ Each agent has a configurable inactivity threshold (agent-level setting, not per
 |-----------|---------------|-----------------|
 | **Start/Activate** (UP) | `docker-compose up` | Creates new or starts existing container |
 | **Stop/Suspend** (STOP) | `docker-compose stop` | Stops container, keeps it intact |
-| **Rebuild** (DOWN → build → UP) | `docker-compose down` then build | Removes container completely, new one created |
+| **Rebuild** (DOWN → UP) | `docker-compose down` then `up` | Removes container completely, new one created; image built/reused by `TemplateImageService` before compose runs |
 | **Delete** (DOWN -v) | `docker-compose down -v` | Removes container and volumes |
 
 ### Container Setup Logic

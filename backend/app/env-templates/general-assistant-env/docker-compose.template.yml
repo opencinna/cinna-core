@@ -1,10 +1,7 @@
 services:
   agent:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ${TEMPLATE_IMAGE_TAG}
     container_name: agent-${ENV_ID}
-    image: agent-general-assistant-env:${ENV_VERSION}
 
     environment:
       - ENV_ID=${ENV_ID}

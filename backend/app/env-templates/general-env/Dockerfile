@@ -50,14 +50,12 @@ COPY pyproject.toml uv.lock* ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project
 
-# Copy core application files (system files baked into image)
-COPY app/core /app/core
-
 ENV PYTHONPATH=/app
 
-# Note: app/workspace/ directory will be mounted as a volume at runtime
-# This allows user files to persist across rebuilds
-# Core files are baked into the image for easy updates
+# Note: app/workspace/ and app/core/ directories are mounted as volumes at runtime.
+# app/core is bind-mounted read-only from the per-env instance directory — it is NOT
+# baked into the image. This allows all environments sharing the same template to use
+# a single shared image while receiving individual core updates via bind-mount.
 
 # Default port (will be overridden by AGENT_PORT environment variable at runtime)
 ENV AGENT_PORT=8000

@@ -1,10 +1,7 @@
 services:
   agent:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ${TEMPLATE_IMAGE_TAG}
     container_name: agent-${ENV_ID}
-    image: agent-python-env-advanced:${ENV_VERSION}
 
     # Environment variables
     environment:
@@ -30,7 +27,7 @@ services:
     # Backend connects via http://agent-${ENV_ID}:${AGENT_PORT}
 
     # Volume mounts (host:container) - using absolute host paths
-    # Core: system files (server, API) - baked into image, can be updated on rebuild
+    # Core: system files (server, API) - bind-mounted read-only; NOT baked into image
     # Workspace: user files (scripts, docs, credentials) - persisted across rebuilds
     # Claude sessions: SDK session data - persisted across rebuilds for session resumption
     # OpenCode sessions: SQLite DB + storage - persisted across rebuilds for session resumption
