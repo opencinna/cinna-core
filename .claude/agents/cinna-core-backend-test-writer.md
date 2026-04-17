@@ -78,13 +78,15 @@ Before finalizing any test file, verify:
 **After writing tests, you MUST spawn the `cinna-core-test-runner` agent to execute the following chain:**
 
 1. **Run the exact test file(s) you wrote** — if green, continue
-2. **Run the entire business domain test directory** (e.g., `tests/api/agents/`) — if green, continue
-3. **Run the full backend test suite** (`make test-backend`)
+2. **Run the entire business domain test directory** (e.g., `tests/api/agents/`) — this is the final step
+
+**Do NOT run the full backend test suite (`make test-backend`).** The full suite takes several minutes and bottlenecks feature delivery. The user runs it manually after your work is complete. Your responsibility ends at confirming the feature's domain directory is green.
 
 Provide the test-runner agent with:
 - The exact test file path(s) you created or modified
 - The domain test directory path
-- Instruction to run the chain: exact file → domain directory → full suite, stopping on first failure
+- Instruction to run the chain: exact file → domain directory, stopping on first failure
+- Explicit instruction NOT to run the full test suite
 
 **Example Agent call:**
 ```
@@ -92,7 +94,7 @@ Use the Agent tool with subagent_type="cinna-core-test-runner" and prompt:
 "Run the following test chain, stopping at the first failure:
 1. Run exact test: tests/api/agents/agents_new_feature_test.py
 2. If green, run domain tests: tests/api/agents/
-3. If green, run full suite: make test-backend
+Do NOT run the full backend test suite — the user runs `make test-backend` manually.
 Report a concise summary of each step."
 ```
 

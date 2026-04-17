@@ -5720,6 +5720,34 @@ export const ConsentInfoSchema = {
     description: 'Non-sensitive info displayed on the consent page.'
 } as const;
 
+export const ConsentRequestSchema = {
+    properties: {
+        request_nonce: {
+            type: 'string',
+            title: 'Request Nonce'
+        },
+        action: {
+            type: 'string',
+            title: 'Action'
+        }
+    },
+    type: 'object',
+    required: ['request_nonce', 'action'],
+    title: 'ConsentRequest'
+} as const;
+
+export const ConsentResponseSchema = {
+    properties: {
+        redirect_to: {
+            type: 'string',
+            title: 'Redirect To'
+        }
+    },
+    type: 'object',
+    required: ['redirect_to'],
+    title: 'ConsentResponse'
+} as const;
+
 export const CreateAgentTaskRequestSchema = {
     properties: {
         task_message: {
@@ -6433,6 +6461,65 @@ export const DeclineResponseSchema = {
     required: ['status'],
     title: 'DeclineResponse',
     description: 'Response for decline action.'
+} as const;
+
+export const DesktopOAuthClientPublicSchema = {
+    properties: {
+        client_id: {
+            type: 'string',
+            title: 'Client Id'
+        },
+        device_name: {
+            type: 'string',
+            title: 'Device Name'
+        },
+        platform: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Platform'
+        },
+        app_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'App Version'
+        },
+        last_used_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Used At'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        is_revoked: {
+            type: 'boolean',
+            title: 'Is Revoked'
+        }
+    },
+    type: 'object',
+    required: ['client_id', 'device_name', 'created_at', 'is_revoked'],
+    title: 'DesktopOAuthClientPublic'
 } as const;
 
 export const DiscoverableSourcePublicSchema = {
@@ -10606,6 +10693,35 @@ export const RespondToTaskRequestSchema = {
     description: 'Request to respond to a sub-task from source agent.'
 } as const;
 
+export const RevokeRequestSchema = {
+    properties: {
+        client_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Client Id'
+        },
+        refresh_token: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Refresh Token'
+        }
+    },
+    type: 'object',
+    title: 'RevokeRequest'
+} as const;
+
 export const RevokeResponseSchema = {
     properties: {
         status: {
@@ -13099,6 +13215,35 @@ export const TokenSchema = {
     title: 'Token'
 } as const;
 
+export const TokenResponseSchema = {
+    properties: {
+        access_token: {
+            type: 'string',
+            title: 'Access Token'
+        },
+        refresh_token: {
+            type: 'string',
+            title: 'Refresh Token'
+        },
+        token_type: {
+            type: 'string',
+            title: 'Token Type',
+            default: 'bearer'
+        },
+        expires_in: {
+            type: 'integer',
+            title: 'Expires In'
+        },
+        client_id: {
+            type: 'string',
+            title: 'Client Id'
+        }
+    },
+    type: 'object',
+    required: ['access_token', 'refresh_token', 'expires_in', 'client_id'],
+    title: 'TokenResponse'
+} as const;
+
 export const UpdatePasswordSchema = {
     properties: {
         current_password: {
@@ -14082,6 +14227,44 @@ export const UserDashboardUpdateSchema = {
     },
     type: 'object',
     title: 'UserDashboardUpdate'
+} as const;
+
+export const UserInfoResponseSchema = {
+    properties: {
+        sub: {
+            type: 'string',
+            title: 'Sub'
+        },
+        email: {
+            type: 'string',
+            title: 'Email'
+        },
+        full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Full Name'
+        },
+        username: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Username'
+        }
+    },
+    type: 'object',
+    required: ['sub', 'email'],
+    title: 'UserInfoResponse'
 } as const;
 
 export const UserPublicSchema = {

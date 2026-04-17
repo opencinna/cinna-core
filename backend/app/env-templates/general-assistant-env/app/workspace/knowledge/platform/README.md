@@ -69,6 +69,7 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | [sharing](#sharing) | Agent sharing, guest access, workspace collaboration |
 | [agentic_teams](#agentic_teams) | Visual org-chart builder for agent orchestration topology — teams, nodes, connections with AI-generated handover prompts |
 | [development](#development) | Backend/frontend patterns, AI functions, debugging |
+| [infrastructure](#infrastructure) | Deployment-level concerns — nginx reverse proxy, well-known URIs, origin-root routing |
 
 ---
 
@@ -139,6 +140,7 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | user_dashboards | Customizable grid-based monitoring dashboards — per-user, workspace-independent, agent blocks with webapp/session/tasks views, and hover prompt actions that execute in-place with streaming display, session reuse, and webapp action forwarding | [business logic](application/user_dashboards/user_dashboards.md) \| [tech](application/user_dashboards/user_dashboards_tech.md) |
 | general_assistant | **(Prototype Draft)** System-created building-mode agent that helps users set up, configure, and manage agentic workflows by calling the platform API via Python scripts; singleton per user, workspace-agnostic, pre-loaded with platform docs and API reference. Not yet available in the UI | [business logic](application/general_assistant/general_assistant.md) \| [tech](application/general_assistant/general_assistant_tech.md) |
 | cinna_cli_integration | Local development CLI — setup tokens, workspace sync, Docker build context, MCP knowledge proxy, credential pull for developing agents locally with AI coding tools | [business logic](application/cinna_cli_integration/cinna_cli_integration.md) \| [tech](application/cinna_cli_integration/cinna_cli_integration_tech.md) |
+| desktop_auth | Desktop App Authentication — OAuth 2.0 + PKCE flow for Cinna Desktop clients; instance discovery, authorization code issuance, access + refresh token pair, token rotation with replay detection, per-device revocation from Settings | [business logic](application/desktop_auth/desktop_auth.md) |
 
 ### knowledge
 
@@ -158,6 +160,12 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | Feature | Description | Docs |
 |---------|-------------|------|
 | agentic_teams | Visual org-chart builder — users define named agentic teams, add agent nodes, and wire directed connections with handover prompts. Owner-only access, workspace-independent, MVP Blueprint phase. Sidebar switcher + Settings card + interactive React Flow chart with edit/view mode, auto-arrange (Dagre), and bulk position persistence. Teams define a `task_prefix` (e.g., "HR") used when generating short-code IDs for team-scoped tasks; directed connections enforce subtask delegation topology. Connection Edit Dialog shows colored agent badges and supports AI-generated handover prompts via a Generate button. | [business logic](agents/agentic_teams/agentic_teams.md) \| [tech](agents/agentic_teams/agentic_teams_tech.md) |
+
+### infrastructure
+
+| Feature | Description | Docs |
+|---------|-------------|------|
+| nginx_setup | Nginx reverse-proxy location blocks required by the platform — `/api/`, `/mcp/`, `/ws/`, and origin-root `/.well-known/*` URIs (MCP OAuth, Cinna Desktop) — with feature cross-references | [reference](infrastructure/nginx_setup.md) |
 
 ### development
 

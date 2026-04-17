@@ -211,6 +211,11 @@ class Settings(BaseSettings):
     DEFAULT_AGENT_ENV_NAME: str = "python-env-advanced"
     DEFAULT_AGENT_ENV_VERSION: str = "1.0.0"
 
+    # Desktop App Authentication
+    DESKTOP_AUTH_ENABLED: bool = True
+    DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    DESKTOP_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+
     # File Upload Settings
     UPLOAD_BASE_PATH: str = "/app/data/uploads"
     UPLOAD_MAX_FILE_SIZE_MB: int = 100

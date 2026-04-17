@@ -69,6 +69,14 @@ When asked to run regression tests or when it's implied:
 - Run the entire directory for that feature area
 - Report any regressions (previously passing tests that now fail) distinctly from the target tests
 
+## Scope Limits — Do NOT Run the Full Backend Test Suite
+
+**Never run the full backend test suite (`make test-backend` or `docker compose exec backend python -m pytest` without a path) when called by another agent (e.g., `cinna-core-manager`, `cinna-core-backend-test-writer`).** The full suite takes several minutes and bottlenecks feature delivery. The end user runs it manually after the agent pipeline completes.
+
+Your maximum default scope is the affected feature's business domain directory (e.g., `tests/api/agents/`, `tests/api/mcp_integration/`).
+
+**Only exception:** if a human user directly and explicitly asks you to run the full suite (e.g., "run all backend tests", "run the full test suite", "run make test-backend"), then do so. If another agent's prompt asks for the full suite, treat that as a mistake — run only the requested file and domain directory instead, and note in your summary that the full-suite run was skipped per project policy (the user runs it manually).
+
 **Update your agent memory** as you discover test suite structure, common test locations, flaky tests, and typical test run times. This builds institutional knowledge across conversations. Write concise notes about what you found and where.
 
 Examples of what to record:

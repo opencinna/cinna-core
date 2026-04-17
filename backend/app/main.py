@@ -7,6 +7,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from app.api.main import api_router
 from app.api.routes.cli import setup_router as cli_setup_router
+from app.api.routes.desktop_auth import router as desktop_auth_router  # noqa: F401 (used below)
 from app.mcp.oauth_routes import router as mcp_oauth_router, wellknown_router as mcp_wellknown_router
 from app.mcp.upload_routes import router as mcp_upload_router
 from app.mcp.server import mcp_registry
@@ -43,6 +44,32 @@ if settings.SENTRY_DSN and settings.ENVIRONMENT != "local":
     sentry_sdk.init(dsn=str(settings.SENTRY_DSN), enable_tracing=True)
 
 
+# ── Desktop app instance discovery endpoint ────────────────────────────────
+# Registered at root level (not under /api/v1) per RFC 8615 /.well-known/
+from fastapi import APIRouter as _APIRouter
+
+_desktop_wellknown_router = _APIRouter(tags=["desktop-auth"])
+
+
+@_desktop_wellknown_router.get("/.well-known/cinna-desktop")
+def cinna_desktop_discovery() -> dict:
+    """Return instance metadata for Cinna Desktop app discovery.
+
+    Endpoint field names follow RFC 8414 (OAuth 2.0 Authorization Server
+    Metadata): ``authorization_endpoint``, ``token_endpoint``,
+    ``userinfo_endpoint``.
+    """
+    base = f"{settings.FRONTEND_HOST}{settings.API_V1_STR}/desktop-auth"
+    return {
+        "instance_name": settings.PROJECT_NAME,
+        "authorization_endpoint": f"{base}/authorize",
+        "token_endpoint": f"{base}/token",
+        "userinfo_endpoint": f"{base}/userinfo",
+        "version": "1.0",
+        "desktop_auth_enabled": settings.DESKTOP_AUTH_ENABLED,
+    }
+
+
 # Startup and shutdown imports
 from app.services.events.event_service import event_service
 from app.services.files.file_cleanup_scheduler import (
@@ -77,6 +104,10 @@ from app.services.cli.cli_setup_token_scheduler import (
     start_scheduler as start_cli_cleanup_scheduler,
     shutdown_scheduler as shutdown_cli_cleanup_scheduler
 )
+from app.services.desktop_auth.desktop_auth_scheduler import (
+    start_scheduler as start_desktop_auth_cleanup_scheduler,
+    shutdown_scheduler as shutdown_desktop_auth_cleanup_scheduler
+)
 
 
 @asynccontextmanager
@@ -91,6 +122,7 @@ async def lifespan(app: FastAPI):
     start_email_sending_scheduler()
     start_env_status_scheduler()
     start_cli_cleanup_scheduler()
+    start_desktop_auth_cleanup_scheduler()
 
     # Register backend event handlers
     from app.models.events.event import EventType
@@ -212,6 +244,7 @@ async def lifespan(app: FastAPI):
     shutdown_email_sending_scheduler()
     shutdown_env_status_scheduler()
     shutdown_cli_cleanup_scheduler()
+    shutdown_desktop_auth_cleanup_scheduler()
     event_service.shutdown()
     logger.info("Application shutdown complete")
 
@@ -242,6 +275,9 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 
 # CLI setup bootstrap endpoint (top-level, short URL for curl oneliner)
 app.include_router(cli_setup_router)
+
+# Desktop app instance discovery (RFC 8615 /.well-known/ path, no /api/v1 prefix)
+app.include_router(_desktop_wellknown_router)
 
 # RFC 9728 Protected Resource Metadata (must be at root level)
 app.include_router(mcp_wellknown_router)

@@ -53,20 +53,22 @@ When asked to develop a complete feature with a feature description:
 3. **Develop**: Invoke `cinna-core-developer` with the approved plan. The developer may coordinate with `cinna-core-code-reviewer` for code quality — let them handle that back-and-forth.
 4. **Write Tests**: Once development is complete, invoke `cinna-core-backend-test-writer` to implement tests. The test writer may coordinate with `cinna-core-test-runner` to validate tests pass.
 5. **Handle Test Failures**: If tests reveal code issues, send the developer back to fix them (with code reviewer if needed), then re-run tests.
-6. **Regression Testing**: Once all new tests pass, invoke `cinna-core-test-runner` to run the full test suite and confirm no regressions.
+6. **Domain Regression Check**: Once all new tests pass, invoke `cinna-core-test-runner` to run the tests for the **feature's business domain directory only** (e.g., `tests/api/agents/`). **Do NOT run the full backend test suite** — that is run manually by the user. Running the full suite takes several minutes and bottlenecks feature delivery.
 7. **Documentation**: Invoke `cinna-core-feature-documenter` to create comprehensive documentation for the feature.
 8. **Final Review**: Quickly verify that code, tests, and documentation are all covered.
-9. **Summary**: Provide a clear summary to the user of all completed work.
+9. **Summary**: Provide a clear summary to the user of all completed work, and explicitly note that the full regression suite has NOT been run and is expected to be run manually by the user.
 
 ## Partial Workflow Handling
 
 Not every task requires the full pipeline. Assess what's needed and coordinate only the relevant agents:
 
 - **Documentation only** → invoke `cinna-core-feature-documenter`
-- **Code improvement/refactoring** → invoke `cinna-core-code-reviewer` then `cinna-core-developer`, then `cinna-core-test-runner` to confirm tests still pass. Only invoke test-writer or documenter if the changes warrant it.
-- **Test writing only** → invoke `cinna-core-backend-test-writer` and `cinna-core-test-runner`
-- **Bug fix** → invoke `cinna-core-developer` (possibly with `cinna-core-code-reviewer`), then `cinna-core-test-runner` to verify fix and no regressions. Add tests if the bug wasn't covered.
+- **Code improvement/refactoring** → invoke `cinna-core-code-reviewer` then `cinna-core-developer`, then `cinna-core-test-runner` scoped to the affected feature's domain directory to confirm tests still pass. Only invoke test-writer or documenter if the changes warrant it.
+- **Test writing only** → invoke `cinna-core-backend-test-writer` and `cinna-core-test-runner` (domain-scoped)
+- **Bug fix** → invoke `cinna-core-developer` (possibly with `cinna-core-code-reviewer`), then `cinna-core-test-runner` scoped to the affected feature's domain directory to verify the fix and no domain regressions. Add tests if the bug wasn't covered.
 - **Code review only** → invoke `cinna-core-code-reviewer`
+
+**In every partial workflow: never ask the test-runner to run the full backend test suite (`make test-backend`). Scope to the affected domain directory only. The user runs the full suite manually.**
 
 ## Decision Framework
 
@@ -105,7 +107,8 @@ When reporting completed work to the user, structure your summary as:
 - **Implementation**: [files created/modified, key decisions]
 - **Code Review**: [review outcome, any refactoring done]
 - **Tests**: [tests written, coverage, all passing]
-- **Regression**: [full test suite status]
+- **Domain Regression**: [domain-scoped test directory result — e.g., `tests/api/agents/` all green]
+- **Full Suite**: NOT RUN — user is expected to run `make test-backend` manually
 - **Documentation**: [docs created/updated]
 - **Notes**: [any caveats, follow-ups, or recommendations]
 

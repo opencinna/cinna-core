@@ -13,6 +13,7 @@ from app.api.routes import (
     ai_credentials,
     credentials,
     credential_shares,
+    desktop_auth,
     email_integration,
     environments,
     identity,
@@ -108,6 +109,7 @@ api_router.include_router(user_app_agent_routes.router)
 api_router.include_router(identity.router)
 api_router.include_router(identity_contacts.router)
 api_router.include_router(cli.router)
+api_router.include_router(desktop_auth.router)
 
 
 if settings.ENVIRONMENT == "local":

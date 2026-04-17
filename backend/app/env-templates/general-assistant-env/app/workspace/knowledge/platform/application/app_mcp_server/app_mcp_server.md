@@ -122,9 +122,25 @@ When the AI router classifies a message, it also **strips routing prefixes** and
 - First message creates a new session with `integration_type = "app_mcp"`
 - Response includes `context_id` (the session UUID)
 - Subsequent messages with the same `context_id` reuse the existing session (no re-routing)
-- `context_id` is validated: must belong to the authenticated user and have `integration_type = "app_mcp"`
+- `context_id` is validated: session must have `integration_type = "app_mcp"` and `caller_id` matching the authenticated user
 - Invalid or missing `context_id` triggers a new routing + session creation
 - Sessions are independent of route configuration once created -- deleting a route does not affect active sessions
+
+### Session Ownership
+
+App MCP sessions are owned by the **agent owner**, not the MCP caller:
+
+| Field | Value | Description |
+|-------|-------|-------------|
+| `user_id` | `agent.owner_id` | The agent owner — they see and manage the session in the platform UI |
+| `caller_id` | caller's user ID | The MCP client user who initiated the session — tracked for audit and display |
+
+This means:
+- The **agent owner** sees all App MCP sessions in their Sessions list
+- The **caller** does not see the session in their own platform UI (they interact through their MCP client only)
+- Session page shows a "MCP" badge and a caller email badge (e.g., `user-b@example.com`) so the owner knows who initiated the session
+- `caller_id` is set to `NULL` on `ON DELETE SET NULL` if the caller's account is deleted; the session remains visible to the owner
+- The caller can still resume their session using the `context_id` returned from the first message
 
 ### OAuth / Authentication
 
@@ -139,8 +155,8 @@ When the AI router classifies a message, it also **strips routing prefixes** and
 - **Agent-scoped endpoints** (`/agents/{agent_id}/app-mcp-routes`): accessible to agent owner and superusers
 - **Admin endpoints** (`/admin/app-agent-routes`): superuser-only, provides cross-agent visibility
 - **User endpoints** (`/users/me/app-agent-routes`): regular auth, returns user's shared and personal routes
-- Session ownership enforced: session must belong to the authenticated user
-- Cross-user session hijacking prevented: `context_id` is verified against `user_id`
+- Session listing enforced: `GET /sessions/` returns sessions where `user_id = current_user.id` (owner sees all their App MCP sessions)
+- Cross-caller session isolation: `context_id` resumption verifies `caller_id = authenticated_user.id` for `app_mcp` sessions — one caller cannot resume another caller's session
 
 ## Architecture Overview
 
@@ -196,7 +212,7 @@ User Settings:   Settings > Channels tab > "MCP Server" card (read view + toggle
 | AI router can't determine agent | Error: "Could not determine which agent to use. Please be more specific." |
 | Agent environment not active | Environment auto-activates; pending until ready |
 | Agent deleted after session created | Error: "The agent for this conversation is no longer available" |
-| Cross-user `context_id` | Session not found (falls through to new routing) |
+| Cross-caller `context_id` (caller B using caller A's context_id) | `caller_id` mismatch; session not found; falls through to new routing |
 | Concurrent messages on same session | Error: "Another message is being processed. Please wait." |
 | Non-superuser sets `auto_enable_for_users=True` | 400: "Only administrators can auto-enable routes for users" |
 | Non-superuser creates route for agent they don't own | 403: "You can only create routes for your own agents" |

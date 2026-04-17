@@ -4,6 +4,7 @@ import { useEffect } from "react"
 import { AICredentialsSettings } from "@/components/UserSettings/AICredentials"
 import DeleteAccount from "@/components/UserSettings/DeleteAccount"
 import { AppAgentRoutesCard } from "@/components/UserSettings/AppAgentRoutesCard"
+import { DesktopSessionsCard } from "@/components/UserSettings/DesktopSessionsCard"
 import { IdentityServerCard } from "@/components/UserSettings/IdentityServerCard"
 import { MailServerSettings } from "@/components/UserSettings/MailServerSettings"
 import { SSHKeys } from "@/components/UserSettings/SSHKeys"
@@ -67,6 +68,7 @@ function UserSettings() {
           <MailServerSettings />
           <AppAgentRoutesCard />
           <IdentityServerCard />
+          <DesktopSessionsCard />
         </div>
       ),
     },

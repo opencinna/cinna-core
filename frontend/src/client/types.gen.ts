@@ -1164,6 +1164,15 @@ export type ConsentInfo = {
     expires_at: string;
 };
 
+export type ConsentRequest = {
+    request_nonce: string;
+    action: string;
+};
+
+export type ConsentResponse = {
+    redirect_to: string;
+};
+
 /**
  * Request to create a task (with or without target agent).
  *
@@ -1328,6 +1337,16 @@ export type DCRRequest = {
  */
 export type DeclineResponse = {
     status: string;
+};
+
+export type DesktopOAuthClientPublic = {
+    client_id: string;
+    device_name: string;
+    platform?: (string | null);
+    app_version?: (string | null);
+    last_used_at?: (string | null);
+    created_at: string;
+    is_revoked: boolean;
 };
 
 /**
@@ -2206,6 +2225,11 @@ export type RespondToTaskRequest = {
     source_session_id: string;
 };
 
+export type RevokeRequest = {
+    client_id?: (string | null);
+    refresh_token?: (string | null);
+};
+
 /**
  * Response for revoke action.
  */
@@ -2657,6 +2681,14 @@ export type Token = {
     token_type?: string;
 };
 
+export type TokenResponse = {
+    access_token: string;
+    refresh_token: string;
+    token_type?: string;
+    expires_in: number;
+    client_id: string;
+};
+
 export type UpdatePassword = {
     current_password: string;
     new_password: string;
@@ -2844,6 +2876,13 @@ export type UserDashboardUpdate = {
     name?: (string | null);
     description?: (string | null);
     sort_order?: (number | null);
+};
+
+export type UserInfoResponse = {
+    sub: string;
+    email: string;
+    full_name?: (string | null);
+    username?: (string | null);
 };
 
 export type UserPublic = {
@@ -4030,6 +4069,55 @@ export type DashboardsGetBlockEnvFileData = {
 };
 
 export type DashboardsGetBlockEnvFileResponse = (unknown);
+
+export type DesktopAuthListDesktopClientsResponse = (Array<DesktopOAuthClientPublic>);
+
+export type DesktopAuthRevokeDesktopClientData = {
+    clientId: string;
+};
+
+export type DesktopAuthRevokeDesktopClientResponse = (void);
+
+export type DesktopAuthAuthorizeData = {
+    appVersion?: (string | null);
+    clientId?: (string | null);
+    codeChallenge: string;
+    codeChallengeMethod?: string;
+    deviceName?: (string | null);
+    platform?: (string | null);
+    redirectUri: string;
+    state: string;
+};
+
+export type DesktopAuthAuthorizeResponse = (unknown);
+
+export type DesktopAuthGetAuthRequestData = {
+    nonce: string;
+};
+
+export type DesktopAuthGetAuthRequestResponse = ({
+    [key: string]: unknown;
+});
+
+export type DesktopAuthConsentData = {
+    requestBody: ConsentRequest;
+};
+
+export type DesktopAuthConsentResponse = (ConsentResponse);
+
+export type DesktopAuthTokenEndpointResponse = (TokenResponse);
+
+export type DesktopAuthUserinfoResponse = (UserInfoResponse);
+
+export type DesktopAuthRevokeData = {
+    requestBody: RevokeRequest;
+};
+
+export type DesktopAuthRevokeResponse = (void);
+
+export type DesktopAuthCinnaDesktopDiscoveryResponse = ({
+    [key: string]: unknown;
+});
 
 export type EmailIntegrationGetEmailIntegrationData = {
     agentId: string;

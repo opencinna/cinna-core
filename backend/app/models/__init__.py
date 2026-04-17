@@ -457,6 +457,14 @@ from .identity.identity_models import (
     IdentityAgentBindingPublic,
     IdentityContactPublic,
 )
+from .desktop_auth.desktop_oauth_client import (
+    DesktopOAuthClient,
+    DesktopOAuthClientCreate,
+    DesktopOAuthClientPublic,
+)
+from .desktop_auth.desktop_refresh_token import DesktopRefreshToken
+from .desktop_auth.desktop_auth_code import DesktopAuthCode
+from .desktop_auth.desktop_auth_request import DesktopAuthRequest
 
 __all__ = [
     # Core
@@ -856,4 +864,11 @@ __all__ = [
     "IdentityBindingAssignmentPublic",
     "IdentityAgentBindingPublic",
     "IdentityContactPublic",
+    # Desktop Auth
+    "DesktopOAuthClient",
+    "DesktopOAuthClientCreate",
+    "DesktopOAuthClientPublic",
+    "DesktopRefreshToken",
+    "DesktopAuthCode",
+    "DesktopAuthRequest",
 ]

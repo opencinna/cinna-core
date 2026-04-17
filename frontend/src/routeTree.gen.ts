@@ -19,6 +19,7 @@ import { Route as WebappWebappTokenRouteImport } from './routes/webapp/$webappTo
 import { Route as OauthMcpConsentRouteImport } from './routes/oauth/mcp-consent'
 import { Route as GuestFileViewerRouteImport } from './routes/guest/file-viewer'
 import { Route as GuestGuestShareTokenRouteImport } from './routes/guest/$guestShareToken'
+import { Route as DesktopAuthConsentRouteImport } from './routes/desktop-auth/consent'
 import { Route as DashboardFullscreenDashboardIdRouteImport } from './routes/dashboard-fullscreen/$dashboardId'
 import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
 import { Route as LayoutSessionsRouteImport } from './routes/_layout/sessions'
@@ -97,6 +98,11 @@ const GuestFileViewerRoute = GuestFileViewerRouteImport.update({
 const GuestGuestShareTokenRoute = GuestGuestShareTokenRouteImport.update({
   id: '/guest/$guestShareToken',
   path: '/guest/$guestShareToken',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DesktopAuthConsentRoute = DesktopAuthConsentRouteImport.update({
+  id: '/desktop-auth/consent',
+  path: '/desktop-auth/consent',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DashboardFullscreenDashboardIdRoute =
@@ -275,6 +281,7 @@ export interface FileRoutesByFullPath {
   '/sessions': typeof LayoutSessionsRouteWithChildren
   '/settings': typeof LayoutSettingsRoute
   '/dashboard-fullscreen/$dashboardId': typeof DashboardFullscreenDashboardIdRoute
+  '/desktop-auth/consent': typeof DesktopAuthConsentRoute
   '/guest/$guestShareToken': typeof GuestGuestShareTokenRoute
   '/guest/file-viewer': typeof GuestFileViewerRoute
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
@@ -315,6 +322,7 @@ export interface FileRoutesByTo {
   '/knowledge-sources': typeof LayoutKnowledgeSourcesRoute
   '/settings': typeof LayoutSettingsRoute
   '/dashboard-fullscreen/$dashboardId': typeof DashboardFullscreenDashboardIdRoute
+  '/desktop-auth/consent': typeof DesktopAuthConsentRoute
   '/guest/$guestShareToken': typeof GuestGuestShareTokenRoute
   '/guest/file-viewer': typeof GuestFileViewerRoute
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
@@ -358,6 +366,7 @@ export interface FileRoutesById {
   '/_layout/sessions': typeof LayoutSessionsRouteWithChildren
   '/_layout/settings': typeof LayoutSettingsRoute
   '/dashboard-fullscreen/$dashboardId': typeof DashboardFullscreenDashboardIdRoute
+  '/desktop-auth/consent': typeof DesktopAuthConsentRoute
   '/guest/$guestShareToken': typeof GuestGuestShareTokenRoute
   '/guest/file-viewer': typeof GuestFileViewerRoute
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
@@ -401,6 +410,7 @@ export interface FileRouteTypes {
     | '/sessions'
     | '/settings'
     | '/dashboard-fullscreen/$dashboardId'
+    | '/desktop-auth/consent'
     | '/guest/$guestShareToken'
     | '/guest/file-viewer'
     | '/oauth/mcp-consent'
@@ -441,6 +451,7 @@ export interface FileRouteTypes {
     | '/knowledge-sources'
     | '/settings'
     | '/dashboard-fullscreen/$dashboardId'
+    | '/desktop-auth/consent'
     | '/guest/$guestShareToken'
     | '/guest/file-viewer'
     | '/oauth/mcp-consent'
@@ -483,6 +494,7 @@ export interface FileRouteTypes {
     | '/_layout/sessions'
     | '/_layout/settings'
     | '/dashboard-fullscreen/$dashboardId'
+    | '/desktop-auth/consent'
     | '/guest/$guestShareToken'
     | '/guest/file-viewer'
     | '/oauth/mcp-consent'
@@ -519,6 +531,7 @@ export interface RootRouteChildren {
   ResetPasswordRoute: typeof ResetPasswordRoute
   SignupRoute: typeof SignupRoute
   DashboardFullscreenDashboardIdRoute: typeof DashboardFullscreenDashboardIdRoute
+  DesktopAuthConsentRoute: typeof DesktopAuthConsentRoute
   GuestGuestShareTokenRoute: typeof GuestGuestShareTokenRoute
   GuestFileViewerRoute: typeof GuestFileViewerRoute
   OauthMcpConsentRoute: typeof OauthMcpConsentRoute
@@ -596,6 +609,13 @@ declare module '@tanstack/react-router' {
       path: '/guest/$guestShareToken'
       fullPath: '/guest/$guestShareToken'
       preLoaderRoute: typeof GuestGuestShareTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/desktop-auth/consent': {
+      id: '/desktop-auth/consent'
+      path: '/desktop-auth/consent'
+      fullPath: '/desktop-auth/consent'
+      preLoaderRoute: typeof DesktopAuthConsentRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/dashboard-fullscreen/$dashboardId': {
@@ -906,6 +926,7 @@ const rootRouteChildren: RootRouteChildren = {
   ResetPasswordRoute: ResetPasswordRoute,
   SignupRoute: SignupRoute,
   DashboardFullscreenDashboardIdRoute: DashboardFullscreenDashboardIdRoute,
+  DesktopAuthConsentRoute: DesktopAuthConsentRoute,
   GuestGuestShareTokenRoute: GuestGuestShareTokenRoute,
   GuestFileViewerRoute: GuestFileViewerRoute,
   OauthMcpConsentRoute: OauthMcpConsentRoute,
