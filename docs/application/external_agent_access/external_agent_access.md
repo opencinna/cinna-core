@@ -93,7 +93,7 @@ A dedicated REST + A2A surface under `/api/v1/external/` that gives authenticate
 
 ### Client Attribution
 - Desktop access tokens include `client_kind="desktop"` and `external_client_id=<DesktopOAuthClient.id>` JWT claims (issued by `DesktopAuthService._create_token_pair`)
-- On new session creation, `_stamp_session_context` writes these into `session_metadata` for all three integration types if the claims are present
+- On new session creation, `ExternalA2AContextHandler._stamp_new_session` writes these into `session_metadata` for all three integration types if the claims are present
 - Non-desktop tokens (web JWTs) carry no such claims; `client_kind` and `external_client_id` remain `null` in `ExternalSessionPublic`
 - Native clients can use `client_kind` / `external_client_id` from `ExternalSessionPublic` to filter or label threads by originating device
 
@@ -114,8 +114,9 @@ GET  /api/v1/external/agents          ExternalAgentCatalogService.list_targets()
 POST /api/v1/external/a2a/agent/{id}/
 POST /api/v1/external/a2a/route/{id}/    ExternalA2ARequestHandler
 POST /api/v1/external/a2a/identity/{id}/   ├── resolves TargetContext (ownership / route / identity checks)
-                                            ├── delegates to A2ARequestHandler.*_with_context()
-                                            └── _stamp_session_context() writes caller / metadata
+                                            └── constructs ExternalA2AContextHandler(context=...)
+                                                 (subclass of A2ARequestHandler — overrides hooks:
+                                                  caller-scope, _stamp_new_session, binding re-check)
 
 GET  /api/v1/external/sessions            ExternalSessionService.list_sessions_for_external()
 GET  /api/v1/external/sessions/{id}         (OR-filter: owner | caller | identity_caller; hidden filter)
@@ -128,7 +129,11 @@ DELETE /api/v1/external/sessions/{id}     ExternalSessionService.hide_session_fo
 ## Integration Points
 
 - **[Desktop Auth](../desktop_auth/desktop_auth.md)** — issues the access tokens with `client_kind`/`external_client_id` claims that the external A2A routes extract for client attribution
-- **[A2A Protocol](../a2a_integration/a2a_protocol/a2a_protocol.md)** — the underlying JSON-RPC protocol, task/message model, and SSE streaming used by all three A2A endpoint families
+- **[A2A Protocol](../a2a_integration/a2a_protocol/a2a_protocol.md)** — the underlying JSON-RPC protocol, task/message model, and SSE streaming. `ExternalA2AContextHandler` subclasses `A2ARequestHandler` and overrides its hook methods (`_parse_session_scope`, `_stamp_new_session`, `_task_list_filter`, ...) to enforce caller-scope and stamp metadata — the message-send/stream/task dispatch bodies are shared
 - **[App MCP Server](../app_mcp_server/app_mcp_server.md)** — `AppAgentRoute` and `AppAgentRouteAssignment` models used for the shared-route target type; `ExternalA2ARequestHandler` calls `AppAgentRouteService.get_effective_routes_for_user` to re-verify access
 - **[Identity MCP Server](../identity_mcp_server/identity_mcp_server.md)** — `IdentityAgentBinding`, `IdentityBindingAssignment`, and Stage-2 routing used for the identity target type; `IdentityRoutingService.route_within_identity` picks the agent on the first message
 - **[Agent Sessions](../agent_sessions/agent_sessions.md)** — the `Session` model, `session_metadata` JSON column, `integration_type` field, and `caller_id`/`identity_caller_id` fields that the external surface stamps and reads
+
+---
+
+*Last updated: 2026-04-18*

@@ -81,15 +81,17 @@ Already properly formatted by A2AEventMapper:
 
 **File:** `backend/app/api/routes/a2a.py`
 
-Three routers share the same two underlying handler functions `_get_agent_card()` and `_handle_jsonrpc()`, which receive a `protocol_version` parameter:
+Three routers share the same two underlying handler functions `_get_agent_card()` and `_handle_jsonrpc()`, which receive a canonical `protocol: Literal["v1.0", "v0.3"]` parameter:
 
-| Router prefix | `protocol_version` passed | Adapter applied |
-|---------------|--------------------------|-----------------|
-| `/a2a` | `"latest"` (resolves to v1.0) | Yes |
+| Router prefix | `protocol` passed | Adapter applied |
+|---------------|-------------------|-----------------|
+| `/a2a` | `"v1.0"` | Yes |
 | `/a2a/v1.0` | `"v1.0"` | Yes |
 | `/a2a/v0.3` | `"v0.3"` | No — passthrough |
 
-For v1.0 endpoints: `transform_agent_card_outbound()` is called, producing `supportedInterfaces` with versioned URLs. For v0.3 endpoints: the library-native card is returned with a v0.3-specific URL set via `url_override`.
+For v1.0 endpoints the adapter is applied inside `A2AService.get_agent_card_dict(..., protocol="v1.0")` (which calls `A2AService.apply_protocol()`) and produces `supportedInterfaces` with versioned URLs. For v0.3 endpoints the library-native card is returned with a v0.3-specific URL set via `url_override`.
+
+The `/api/v1/external/a2a/` surface uses the same `protocol` parameter via its `?protocol=v1.0|v0.3` query string (resolved by `backend/app/services/a2a/jsonrpc_utils.py:resolve_protocol()`) and reuses `A2AService.apply_protocol()` for the adapter step; see [External Agent Access](../../external_agent_access/external_agent_access.md).
 
 ## Migration Notes
 
@@ -117,7 +119,7 @@ For v1.0 endpoints: `transform_agent_card_outbound()` is called, producing `supp
 ## Implementation Status
 
 - [x] `backend/app/services/a2a/a2a_v1_adapter.py` - Adapter class; versioned URLs in `supportedInterfaces`
-- [x] `backend/app/services/a2a/a2a_service.py` - `url_override` parameter for versioned card URLs
+- [x] `backend/app/services/a2a/a2a_service.py` - `url_override` + `protocol` parameters; `apply_protocol()` shared with `ExternalA2AService`
 - [x] `GET /a2a/{agent_id}/` route - latest/v1.0 AgentCard with versioned `supportedInterfaces`
 - [x] `GET /a2a/v1.0/{agent_id}/` route - explicit v1.0 AgentCard
 - [x] `GET /a2a/v0.3/{agent_id}/` route - v0.3 native card (no adapter)
@@ -129,4 +131,4 @@ For v1.0 endpoints: `transform_agent_card_outbound()` is called, producing `supp
 
 ---
 
-*Last updated: 2026-04-16*
+*Last updated: 2026-04-18*

@@ -5,6 +5,7 @@ This module provides services for generating A2A-compliant AgentCards
 from internal Agent models, enabling agent discovery via the A2A protocol.
 """
 import logging
+from typing import Literal
 from uuid import UUID
 
 from a2a.types import (
@@ -18,6 +19,7 @@ from a2a.types import (
 
 from app.models import Agent
 from app.models.environments.environment import AgentEnvironment
+from app.services.a2a.a2a_v1_adapter import A2AV1Adapter
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +192,7 @@ class A2AService:
         environment: AgentEnvironment | None,
         base_url: str,
         url_override: str | None = None,
+        protocol: Literal["v1.0", "v0.3"] = "v0.3",
     ) -> dict:
         """
         Get full (extended) AgentCard as a dictionary for JSON serialization.
@@ -199,18 +202,24 @@ class A2AService:
             environment: The agent's active environment (optional)
             base_url: The base URL for the A2A endpoints
             url_override: If provided, use this URL instead of deriving from base_url.
+            protocol: When "v1.0", applies the A2A v1.0 outbound adapter. When
+                "v0.3" (default), returns the library-native card. Callers that
+                need to overwrite ``supportedInterfaces`` for a custom URL
+                namespace (e.g. ExternalA2AService) do so after this call.
 
         Returns:
             Dictionary representation of full AgentCard
         """
         card = A2AService.build_agent_card(agent, environment, base_url, url_override=url_override)
-        return card.model_dump(by_alias=True, exclude_none=True)
+        card_dict = card.model_dump(by_alias=True, exclude_none=True)
+        return A2AService.apply_protocol(card_dict, protocol)
 
     @staticmethod
     def get_public_agent_card_dict(
         agent: Agent,
         base_url: str,
         url_override: str | None = None,
+        protocol: Literal["v1.0", "v0.3"] = "v0.3",
     ) -> dict:
         """
         Get minimal public AgentCard as a dictionary for JSON serialization.
@@ -222,9 +231,27 @@ class A2AService:
             agent: The Agent model instance
             base_url: The base URL for the A2A endpoints
             url_override: If provided, use this URL instead of deriving from base_url.
+            protocol: When "v1.0", applies the A2A v1.0 outbound adapter. When
+                "v0.3" (default), returns the library-native card.
 
         Returns:
             Dictionary representation of minimal public AgentCard
         """
         card = A2AService.build_public_agent_card(agent, base_url, url_override=url_override)
-        return card.model_dump(by_alias=True, exclude_none=True)
+        card_dict = card.model_dump(by_alias=True, exclude_none=True)
+        return A2AService.apply_protocol(card_dict, protocol)
+
+    @staticmethod
+    def apply_protocol(
+        card_dict: dict,
+        protocol: Literal["v1.0", "v0.3"],
+    ) -> dict:
+        """Apply the v1.0 outbound adapter when ``protocol == "v1.0"``.
+
+        Public helper so card builders that synthesize their own AgentCard
+        (e.g. ExternalA2AService for identity cards) can reuse the single
+        protocol-finalization step.
+        """
+        if protocol == "v1.0":
+            return A2AV1Adapter.transform_agent_card_outbound(card_dict)
+        return card_dict

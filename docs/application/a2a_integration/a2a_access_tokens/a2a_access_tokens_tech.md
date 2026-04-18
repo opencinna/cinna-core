@@ -88,9 +88,10 @@
 **File:** `backend/app/services/a2a/a2a_request_handler.py`
 
 - Constructor accepts `a2a_token_payload` and `access_token_id`
-- `_parse_and_validate_session_id()` - Stores `access_token_id` on new sessions, checks scope on existing
-- `handle_tasks_get()` - Checks scope before returning task
-- `handle_tasks_cancel()` - Checks scope before canceling
+- `_parse_session_scope()` (hook) - Default implementation checks A2A-token scope against `session.access_token_id`; raises `ValueError` on denial
+- `_authorize_existing_session()` (hook) - Default enforces A2A-token scope for tasks/get and tasks/cancel
+- `_session_access_token_id()` (hook) - Returns the A2A access token id for lineage + `CommandContext` plumbing
+- `_task_list_access_token_filter()` (hook) - Returns the access token id for `limited`-scope tokens so tasks/list only sees sessions created by this token
 
 ### SessionService (token integration)
 **File:** `backend/app/services/sessions/session_service.py`
@@ -148,4 +149,4 @@
 
 ---
 
-*Last updated: 2026-03-02*
+*Last updated: 2026-04-18*

@@ -5,9 +5,9 @@ Agents auto-create Docker environments when created, so we need the standard
 environment adapter stub and session patches — same as other agent-related
 test domains.
 
-The external_a2a route's get_fresh_db_session is patched so the A2A handler
+The external_a2a route's create_session is patched so the A2A handler
 uses the test transaction (same pattern as tests/api/a2a_integration/conftest.py
-which patches "app.api.routes.a2a.get_fresh_db_session").
+which patches "app.api.routes.a2a.create_session").
 """
 import pytest
 from tests.utils.fixtures import (
@@ -31,7 +31,7 @@ setup_default_credentials = setup_default_credentials
 def patch_create_session(db):
     """Patch create_session at all service import sites, including the external A2A route."""
     with patched_create_sessions(db, CREATE_SESSION_TARGETS_AGENT + [
-        "app.api.routes.external_a2a._get_fresh_db_session",
+        "app.api.routes.external_a2a.create_session",
     ]):
         yield
 

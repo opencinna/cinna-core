@@ -16,7 +16,7 @@ Authentication:
 import uuid
 import json
 import logging
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from dataclasses import dataclass
 
 from fastapi import APIRouter, HTTPException, Request, Depends
@@ -25,6 +25,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlmodel import Session
 
 from app.api.deps import SessionDep, get_db, get_current_user
+from app.core.db import create_session
 from app.models import Agent, User, A2ATokenPayload
 from app.models.environments.environment import AgentEnvironment
 from app.services.a2a.a2a_service import A2AService
@@ -32,14 +33,10 @@ from app.services.a2a.a2a_request_handler import A2ARequestHandler
 from app.services.a2a.a2a_task_store import DatabaseTaskStore
 from app.services.a2a.access_token_service import AccessTokenService
 from app.services.a2a.a2a_v1_adapter import A2AV1Adapter
-from app.core.db import engine
+from app.services.a2a.jsonrpc_utils import jsonrpc_error, jsonrpc_success
 from app.utils import get_base_url
 
 logger = logging.getLogger(__name__)
-
-# Protocol version constants
-LATEST_PROTOCOL_VERSION = "v1.0"
-SUPPORTED_PROTOCOL_VERSIONS = ["v1.0", "v0.3"]
 
 router = APIRouter(prefix="/a2a", tags=["a2a"])
 v1_router = APIRouter(prefix="/a2a/v1.0", tags=["a2a"])
@@ -47,18 +44,6 @@ v03_router = APIRouter(prefix="/a2a/v0.3", tags=["a2a"])
 
 # Optional bearer token auth
 optional_bearer = HTTPBearer(auto_error=False)
-
-
-def _resolve_protocol_version(protocol_version: str) -> str:
-    """Resolve 'latest' to the actual latest protocol version string."""
-    if protocol_version == "latest":
-        return LATEST_PROTOCOL_VERSION
-    return protocol_version
-
-
-def _is_v1(protocol_version: str) -> bool:
-    """Return True if the resolved protocol version is v1.0."""
-    return _resolve_protocol_version(protocol_version) == "v1.0"
 
 
 @dataclass
@@ -89,11 +74,6 @@ class A2AAuthContext:
             # A2A token - must be for this agent
             return self.a2a_token_payload.agent_id == str(agent_id)
         return False
-
-
-def get_fresh_db_session():
-    """Get a fresh database session context manager."""
-    return Session(engine)
 
 
 async def get_a2a_auth_context(
@@ -189,11 +169,11 @@ async def _get_agent_card(
     session: Session,
     request: Request,
     auth: Optional[A2AAuthContext],
-    protocol_version: str,
+    protocol: Literal["v1.0", "v0.3"],
 ) -> JSONResponse:
     """
-    Shared AgentCard handler. Protocol version determines the output format:
-    - v1.0 / latest: apply A2AV1Adapter transformation, versioned URLs in supportedInterfaces
+    Shared AgentCard handler. Protocol determines the output format:
+    - v1.0: apply A2AV1Adapter transformation, versioned URLs in supportedInterfaces
     - v0.3: return library-native format with v0.3-specific URL
     """
     agent = session.get(Agent, agent_id)
@@ -204,7 +184,7 @@ async def _get_agent_card(
     a2a_enabled = agent.a2a_config.get("enabled", False) if agent.a2a_config else False
 
     base_url = get_base_url(request)
-    use_v1 = _is_v1(protocol_version)
+    use_v1 = protocol == "v1.0"
 
     # For v0.3 endpoints, the card URL should point to the v0.3-specific endpoint
     url_override = None if use_v1 else f"{base_url}/api/v1/a2a/v0.3/{agent_id}/"
@@ -215,9 +195,9 @@ async def _get_agent_card(
         if not a2a_enabled:
             raise HTTPException(status_code=401, detail="Not authenticated")
         # Return minimal public card
-        card_dict = A2AService.get_public_agent_card_dict(agent, base_url, url_override=url_override)
-        if use_v1:
-            card_dict = A2AV1Adapter.transform_agent_card_outbound(card_dict)
+        card_dict = A2AService.get_public_agent_card_dict(
+            agent, base_url, url_override=url_override, protocol=protocol
+        )
         return JSONResponse(content=card_dict)
 
     # Authenticated - check permissions
@@ -227,9 +207,9 @@ async def _get_agent_card(
     environment = session.get(AgentEnvironment, agent.active_environment_id) if agent.active_environment_id else None
 
     # Return full extended card
-    card_dict = A2AService.get_agent_card_dict(agent, environment, base_url, url_override=url_override)
-    if use_v1:
-        card_dict = A2AV1Adapter.transform_agent_card_outbound(card_dict)
+    card_dict = A2AService.get_agent_card_dict(
+        agent, environment, base_url, url_override=url_override, protocol=protocol
+    )
     return JSONResponse(content=card_dict)
 
 
@@ -238,40 +218,40 @@ async def _handle_jsonrpc(
     request: Request,
     session: Session,
     auth: A2AAuthContext,
-    protocol_version: str,
+    protocol: Literal["v1.0", "v0.3"],
 ):
     """
-    Shared JSON-RPC handler. Protocol version determines request/response transformation:
-    - v1.0 / latest: transform inbound PascalCase method names, add 'kind' discriminator outbound
+    Shared JSON-RPC handler. Protocol determines request/response transformation:
+    - v1.0: transform inbound PascalCase method names, add 'kind' discriminator outbound
     - v0.3: passthrough (library speaks v0.3 natively)
     """
     # Validate agent access
     agent = session.get(Agent, agent_id)
     if not agent:
-        return _jsonrpc_error(None, -32001, "Agent not found")
+        return _error_response(None, -32001, "Agent not found")
     if not auth.can_access_agent(agent, agent_id):
-        return _jsonrpc_error(None, -32004, "Not enough permissions")
+        return _error_response(None, -32004, "Not enough permissions")
 
     environment = session.get(AgentEnvironment, agent.active_environment_id) if agent.active_environment_id else None
     if not environment:
-        return _jsonrpc_error(None, -32002, "Agent has no active environment")
+        return _error_response(None, -32002, "Agent has no active environment")
 
     # Parse JSON-RPC request
     try:
         body = await request.json()
     except json.JSONDecodeError:
-        return _jsonrpc_error(None, -32700, "Parse error")
+        return _error_response(None, -32700, "Parse error")
 
     # Validate JSON-RPC structure
     if not isinstance(body, dict):
-        return _jsonrpc_error(None, -32600, "Invalid Request")
+        return _error_response(None, -32600, "Invalid Request")
 
     jsonrpc = body.get("jsonrpc")
     if jsonrpc != "2.0":
-        return _jsonrpc_error(body.get("id"), -32600, "Invalid Request: jsonrpc must be '2.0'")
+        return _error_response(body.get("id"), -32600, "Invalid Request: jsonrpc must be '2.0'")
 
-    # Determine if v1.0 transformation applies based on URL-resolved protocol version
-    use_v1 = _is_v1(protocol_version)
+    # Determine if v1.0 transformation applies based on URL-resolved protocol
+    use_v1 = protocol == "v1.0"
     if use_v1:
         body = A2AV1Adapter.transform_request_inbound(body)
 
@@ -280,7 +260,7 @@ async def _handle_jsonrpc(
     params = body.get("params", {})
 
     if not method:
-        return _jsonrpc_error(request_id, -32600, "Invalid Request: method is required")
+        return _error_response(request_id, -32600, "Invalid Request: method is required")
 
     # Determine user_id for session operations
     # For A2A tokens, we use the agent owner's ID
@@ -296,7 +276,7 @@ async def _handle_jsonrpc(
         agent=agent,
         environment=environment,
         user_id=user_id,
-        get_db_session=get_fresh_db_session,
+        get_db_session=create_session,
         a2a_token_payload=auth.a2a_token_payload,
         access_token_id=auth.access_token_id,
         backend_base_url=backend_base_url,
@@ -309,7 +289,7 @@ async def _handle_jsonrpc(
                 # Default mode is conversation
                 requested_mode = params.get("configuration", {}).get("mode", "conversation")
                 if not AccessTokenService.can_use_mode(auth.a2a_token_payload, requested_mode):
-                    return _jsonrpc_error(
+                    return _error_response(
                         request_id, -32004,
                         f"Access token does not allow '{requested_mode}' mode"
                     )
@@ -330,7 +310,7 @@ async def _handle_jsonrpc(
             if auth.a2a_token_payload:
                 requested_mode = params.get("configuration", {}).get("mode", "conversation")
                 if not AccessTokenService.can_use_mode(auth.a2a_token_payload, requested_mode):
-                    return _jsonrpc_error(
+                    return _error_response(
                         request_id, -32004,
                         f"Access token does not allow '{requested_mode}' mode"
                     )
@@ -340,7 +320,7 @@ async def _handle_jsonrpc(
             result = task.model_dump(by_alias=True, exclude_none=True)
             if use_v1:
                 result = A2AV1Adapter.transform_task_outbound(result)
-            return _jsonrpc_success(request_id, result)
+            return JSONResponse(content=jsonrpc_success(request_id, result))
 
         elif method == "tasks/get":
             task = await handler.handle_tasks_get(params)
@@ -348,16 +328,16 @@ async def _handle_jsonrpc(
                 result = task.model_dump(by_alias=True, exclude_none=True)
                 if use_v1:
                     result = A2AV1Adapter.transform_task_outbound(result)
-                return _jsonrpc_success(request_id, result)
+                return JSONResponse(content=jsonrpc_success(request_id, result))
             else:
-                return _jsonrpc_error(request_id, -32001, "Task not found")
+                return _error_response(request_id, -32001, "Task not found")
 
         elif method == "tasks/cancel":
             try:
                 result = await handler.handle_tasks_cancel(params)
-                return _jsonrpc_success(request_id, result)
+                return JSONResponse(content=jsonrpc_success(request_id, result))
             except ValueError as e:
-                return _jsonrpc_error(request_id, -32001, str(e))
+                return _error_response(request_id, -32001, str(e))
 
         elif method == "tasks/list":
             # Custom extension to A2A protocol - list tasks for this agent
@@ -365,14 +345,14 @@ async def _handle_jsonrpc(
             task_results = [task.model_dump(by_alias=True, exclude_none=True) for task in tasks]
             if use_v1:
                 task_results = [A2AV1Adapter.transform_task_outbound(t) for t in task_results]
-            return _jsonrpc_success(request_id, task_results)
+            return JSONResponse(content=jsonrpc_success(request_id, task_results))
 
         else:
-            return _jsonrpc_error(request_id, -32601, f"Method not found: {method}")
+            return _error_response(request_id, -32601, f"Method not found: {method}")
 
     except Exception as e:
         logger.error(f"Error handling A2A request: {e}", exc_info=True)
-        return _jsonrpc_error(request_id, -32603, f"Internal error: {str(e)}")
+        return _error_response(request_id, -32603, f"Internal error: {str(e)}")
 
 
 # ---------------------------------------------------------------------------
@@ -396,7 +376,7 @@ async def get_agent_card(
     The AgentCard provides discovery information including agent capabilities,
     skills, and versioned endpoint URLs in supportedInterfaces.
     """
-    return await _get_agent_card(agent_id, session, request, auth, protocol_version="latest")
+    return await _get_agent_card(agent_id, session, request, auth, protocol="v1.0")
 
 
 @router.get("/{agent_id}/.well-known/agent-card.json")
@@ -411,7 +391,7 @@ async def get_agent_card_well_known(
 
     Standard A2A discovery endpoint.
     """
-    return await _get_agent_card(agent_id, session, request, auth, protocol_version="latest")
+    return await _get_agent_card(agent_id, session, request, auth, protocol="v1.0")
 
 
 @router.post("/{agent_id}/")
@@ -434,7 +414,7 @@ async def handle_jsonrpc(
     - Regular user JWT: Full access to owned agents
     - A2A access token: Scoped access based on token mode and scope
     """
-    return await _handle_jsonrpc(agent_id, request, session, auth, protocol_version="latest")
+    return await _handle_jsonrpc(agent_id, request, session, auth, protocol="v1.0")
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +429,7 @@ async def get_agent_card_v1(
     auth: Optional[A2AAuthContext] = Depends(get_optional_a2a_auth_context),
 ) -> JSONResponse:
     """Return A2A AgentCard in explicit v1.0 format."""
-    return await _get_agent_card(agent_id, session, request, auth, protocol_version="v1.0")
+    return await _get_agent_card(agent_id, session, request, auth, protocol="v1.0")
 
 
 @v1_router.get("/{agent_id}/.well-known/agent-card.json")
@@ -460,7 +440,7 @@ async def get_agent_card_well_known_v1(
     auth: Optional[A2AAuthContext] = Depends(get_optional_a2a_auth_context),
 ) -> JSONResponse:
     """Alternative well-known location for AgentCard (v1.0 format)."""
-    return await _get_agent_card(agent_id, session, request, auth, protocol_version="v1.0")
+    return await _get_agent_card(agent_id, session, request, auth, protocol="v1.0")
 
 
 @v1_router.post("/{agent_id}/")
@@ -475,7 +455,7 @@ async def handle_jsonrpc_v1(
 
     Accepts PascalCase method names: SendMessage, SendStreamingMessage, GetTask, CancelTask.
     """
-    return await _handle_jsonrpc(agent_id, request, session, auth, protocol_version="v1.0")
+    return await _handle_jsonrpc(agent_id, request, session, auth, protocol="v1.0")
 
 
 # ---------------------------------------------------------------------------
@@ -494,7 +474,7 @@ async def get_agent_card_v03(
 
     The card URL points to the v0.3-specific endpoint. No adapter transformation applied.
     """
-    return await _get_agent_card(agent_id, session, request, auth, protocol_version="v0.3")
+    return await _get_agent_card(agent_id, session, request, auth, protocol="v0.3")
 
 
 @v03_router.get("/{agent_id}/.well-known/agent-card.json")
@@ -505,7 +485,7 @@ async def get_agent_card_well_known_v03(
     auth: Optional[A2AAuthContext] = Depends(get_optional_a2a_auth_context),
 ) -> JSONResponse:
     """Alternative well-known location for AgentCard (v0.3 format)."""
-    return await _get_agent_card(agent_id, session, request, auth, protocol_version="v0.3")
+    return await _get_agent_card(agent_id, session, request, auth, protocol="v0.3")
 
 
 @v03_router.post("/{agent_id}/")
@@ -521,32 +501,13 @@ async def handle_jsonrpc_v03(
     Accepts slash-case method names: message/send, message/stream, tasks/get, tasks/cancel.
     No method name transformation applied — the library speaks v0.3 natively.
     """
-    return await _handle_jsonrpc(agent_id, request, session, auth, protocol_version="v0.3")
+    return await _handle_jsonrpc(agent_id, request, session, auth, protocol="v0.3")
 
 
 # ---------------------------------------------------------------------------
 # JSON-RPC helpers
 # ---------------------------------------------------------------------------
 
-def _jsonrpc_success(request_id: Any, result: Any) -> JSONResponse:
-    """Create a JSON-RPC success response."""
-    return JSONResponse(content={
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "result": result,
-    })
-
-
-def _jsonrpc_error(request_id: Any, code: int, message: str, data: Any = None) -> JSONResponse:
-    """Create a JSON-RPC error response."""
-    error = {"code": code, "message": message}
-    if data is not None:
-        error["data"] = data
-    return JSONResponse(
-        content={
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "error": error,
-        },
-        status_code=200,  # JSON-RPC errors are returned with HTTP 200
-    )
+def _error_response(request_id: Any, code: int, message: str) -> JSONResponse:
+    """Wrap a JSON-RPC error envelope in a JSONResponse (HTTP 200)."""
+    return JSONResponse(content=jsonrpc_error(request_id, code, message), status_code=200)

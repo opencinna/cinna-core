@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlmodel import Session as DbSession
 
 from app.api.deps import CurrentClientClaims, CurrentUser, SessionDep
-from app.core.db import engine
+from app.core.db import create_session
 from app.services.a2a.jsonrpc_utils import resolve_protocol
 from app.services.external.errors import (
     ExternalAccessError,
@@ -42,11 +42,6 @@ from app.utils import get_base_url
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/external/a2a", tags=["external-a2a"])
-
-
-def _get_fresh_db_session() -> DbSession:
-    """Return a fresh database session for the request handler factory."""
-    return DbSession(engine)
 
 
 def _card_response(
@@ -98,7 +93,7 @@ async def _jsonrpc_response(
     """Parse, dispatch, and render a JSON-RPC request for any target type."""
     client_kind, external_client_id = client_claims
     handler = ExternalA2ARequestHandler(
-        get_db_session=_get_fresh_db_session,
+        get_db_session=create_session,
         backend_base_url=get_base_url(request),
     )
     raw_body = await request.body()

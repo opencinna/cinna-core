@@ -2,7 +2,7 @@
 A2A integration test fixtures.
 
 Same infrastructure as agents/conftest.py plus an additional patch for
-get_fresh_db_session in a2a.py and shared_workspace so that the A2A request
+create_session in a2a.py and shared_workspace so that the A2A request
 handler uses the test DB session.
 """
 import pytest
@@ -24,7 +24,7 @@ def patch_create_session(db):
     """Patch create_session at all service import sites, including A2A handler."""
     with patched_create_sessions(db, CREATE_SESSION_TARGETS_AGENT + [
         "app.api.routes.shared_workspace.create_session",
-        "app.api.routes.a2a.get_fresh_db_session",
+        "app.api.routes.a2a.create_session",
     ]):
         yield
 

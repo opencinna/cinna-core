@@ -7,11 +7,12 @@
 - `backend/app/api/main.py` - Router registration
 
 ### Backend - A2A Services
-- `backend/app/services/a2a/a2a_service.py` - AgentCard generation
-- `backend/app/services/a2a/a2a_request_handler.py` - Request handling (uses service layer)
+- `backend/app/services/a2a/a2a_service.py` - AgentCard generation + `apply_protocol()` v1.0 finalizer shared with `ExternalA2AService`
+- `backend/app/services/a2a/a2a_request_handler.py` - Shared JSON-RPC dispatch + session/stream/task orchestration with hook methods for subclasses (default hooks enforce A2A access-token scope)
 - `backend/app/services/a2a/a2a_event_mapper.py` - Centralized A2A protocol mapping logic
 - `backend/app/services/a2a/a2a_task_store.py` - Task store adapter (uses service layer)
 - `backend/app/services/a2a/a2a_v1_adapter.py` - A2A Protocol v1.0 adapter
+- `backend/app/services/a2a/jsonrpc_utils.py` - Shared `resolve_protocol()`, `jsonrpc_success()`, `jsonrpc_error()` helpers used by both the `/a2a/` and `/external/a2a/` surfaces
 
 ### Backend - Core Services (used by A2A)
 - `backend/app/services/sessions/session_service.py` - Session operations
@@ -90,19 +91,34 @@ Use PascalCase methods on `/a2a/` and `/a2a/v1.0/` URLs. Use slash-case methods 
 
 - `A2AService.build_agent_card()` - Generates full (extended) AgentCard from Agent model
 - `A2AService.build_public_agent_card()` - Generates minimal public AgentCard (name only)
-- `A2AService.get_agent_card_dict()` - Returns full card as JSON-serializable dict
-- `A2AService.get_public_agent_card_dict()` - Returns public card as JSON-serializable dict
+- `A2AService.get_agent_card_dict(..., protocol="v0.3" | "v1.0")` - Returns full card as JSON-serializable dict, applying the v1.0 adapter when `protocol="v1.0"`
+- `A2AService.get_public_agent_card_dict(..., protocol="v0.3" | "v1.0")` - Public card variant
+- `A2AService.apply_protocol(card_dict, protocol)` - Public helper that runs the v1.0 outbound adapter; reused by `ExternalA2AService` for its synthesized identity card
 
 ### A2A Request Handler
 **File:** `backend/app/services/a2a/a2a_request_handler.py`
 
+Shared dispatch methods (used by both the `/a2a/` surface and, via `ExternalA2AContextHandler`, the `/external/a2a/` surface):
+
 - `A2ARequestHandler.handle_message_send()` - Non-streaming message handling (polls for completion)
-- `A2ARequestHandler.handle_message_stream()` - SSE streaming handler; delegates core streaming to `SessionStreamProcessor` with `A2AStreamEventHandler` for A2A event mapping
+- `A2ARequestHandler.handle_message_stream()` - SSE streaming handler; delegates core streaming to `SessionStreamProcessor` with `A2AStreamEventHandler`
 - `A2ARequestHandler.handle_tasks_get()` - Task query
 - `A2ARequestHandler.handle_tasks_cancel()` - Task cancellation
 - `A2ARequestHandler.handle_tasks_list()` - List tasks (custom extension)
-- `A2ARequestHandler._parse_and_validate_session_id()` - Parse task_id and validate A2A scope
-- Uses `SessionService` for session operations (no direct DB queries); streaming delegated to unified `SessionStreamProcessor`
+
+Hook methods — subclasses override to customize access control and session stamping. Default implementations enforce A2A-access-token scope (used by the core `/a2a/` route):
+
+- `_parse_session_scope(task_id)` - Parse task_id UUID and enforce scope on existing sessions
+- `_authorize_existing_session(session)` - Guard tasks/get and tasks/cancel
+- `_stamp_new_session(session_id)` - Post-create hook (no-op default; external surface writes caller_id / metadata)
+- `_integration_type_for_new_session()` - Integration type passed to `SessionService.send_session_message`
+- `_session_access_token_id()` - Threaded into `SessionService` for both session lineage and `CommandContext`
+- `_task_list_access_token_filter()` - DB-level `access_token_id` filter for tasks/list
+- `_task_list_filter(session)` - In-memory filter for tasks/list results
+- `_wrap_env_error(exc)` - Shape env-readiness errors for the caller
+- `_stream_scope_error(exc, request_id)` - Optionally surface scope violations as inline SSE errors (default: propagate)
+
+Uses `SessionService` for session operations (no direct DB queries); streaming delegated to unified `SessionStreamProcessor`.
 
 ### A2A Event Mapper
 **File:** `backend/app/services/a2a/a2a_event_mapper.py`
@@ -309,6 +325,17 @@ Each SSE event is a JSON-RPC response containing a `TaskStatusUpdateEvent`:
 - Stream ends with a final event where `final=true`
 - Format handled by `A2ARequestHandler._format_sse_event()` wrapping events in JSON-RPC response structure
 
+## Sharing the Runtime with External Agent Access
+
+`A2ARequestHandler`'s dispatch bodies (`handle_message_send`, `handle_message_stream`, `handle_tasks_*`) are reused by the first-party `/api/v1/external/a2a/` surface via the `ExternalA2AContextHandler` subclass in `backend/app/services/external/external_a2a_context_handler.py`. That subclass overrides the hook methods listed above to:
+
+- Enforce caller-scope per `TargetContext.integration_type` (`external`, `app_mcp`, `identity_mcp`) instead of A2A-token scope
+- Stamp `caller_id` / `identity_caller_id` / `session_metadata` on new sessions
+- Re-check identity-binding validity on resume
+- Raise `app.services.external.errors` domain exceptions instead of `ValueError`
+
+The two feature surfaces keep their own routes, auth contexts, card builders, and access policies; only the protocol runtime is shared. See [External Agent Access](../../external_agent_access/external_agent_access.md) for the per-target-type rules on top of this shared dispatch.
+
 ---
 
-*Last updated: 2026-04-16*
+*Last updated: 2026-04-18*

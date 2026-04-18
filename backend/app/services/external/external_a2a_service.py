@@ -27,7 +27,6 @@ from app.models.app_mcp.app_agent_route import AppAgentRoute
 from app.models.environments.environment import AgentEnvironment
 from app.models.identity.identity_models import IdentityAgentBinding
 from app.services.a2a.a2a_service import A2AService
-from app.services.a2a.a2a_v1_adapter import A2AV1Adapter
 from app.services.external.errors import InvalidExternalParamsError
 from app.services.external.external_access_policy import ExternalAccessPolicy
 
@@ -114,7 +113,8 @@ class ExternalA2AService:
 
         external_url = f"{request_base_url}/api/v1/external/a2a/agent/{agent_id}/"
         card_dict = A2AService.get_agent_card_dict(
-            agent, environment, request_base_url, url_override=external_url
+            agent, environment, request_base_url,
+            url_override=external_url, protocol=protocol,
         )
         return ExternalA2AService._finalize_card(card_dict, external_url, protocol)
 
@@ -148,7 +148,8 @@ class ExternalA2AService:
 
         external_url = f"{request_base_url}/api/v1/external/a2a/route/{route_id}/"
         card_dict = A2AService.get_agent_card_dict(
-            agent, environment, request_base_url, url_override=external_url
+            agent, environment, request_base_url,
+            url_override=external_url, protocol=protocol,
         )
 
         # Override name / description with route-specific values so the caller
@@ -203,6 +204,7 @@ class ExternalA2AService:
             supportsAuthenticatedExtendedCard=True,
         )
         card_dict = card.model_dump(by_alias=True, exclude_none=True)
+        card_dict = A2AService.apply_protocol(card_dict, protocol)
 
         return ExternalA2AService._finalize_card(card_dict, external_url, protocol)
 
@@ -244,16 +246,14 @@ class ExternalA2AService:
         external_url: str,
         protocol: Literal["v1.0", "v0.3"],
     ) -> dict:
-        """Apply protocol-specific finishing touches.
+        """Overwrite v1.0 ``supportedInterfaces`` with external URL variants.
 
-        For v1.0 we run the A2AV1Adapter then overwrite supportedInterfaces with
-        the external URL (the adapter otherwise rewrites urls by substituting
-        /api/v1/a2a/, which produces wrong paths for the external namespace).
-        For v0.3 we return as-is since url_override already points at the
-        external path.
+        The v1.0 protocol adapter is applied by ``A2AService`` (agent / route
+        paths) or explicitly by the caller (identity path). This helper only
+        replaces the adapter's default ``/api/v1/a2a/...`` interfaces with the
+        external-namespace URLs. For v0.3 it returns the card as-is.
         """
         if protocol == "v1.0":
-            card_dict = A2AV1Adapter.transform_agent_card_outbound(card_dict)
             card_dict["supportedInterfaces"] = [
                 {
                     "url": external_url,

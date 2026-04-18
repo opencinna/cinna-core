@@ -449,9 +449,7 @@ class ExternalA2ARequestHandler:
     def _make_handler(self, context: TargetContext) -> ExternalA2AContextHandler:
         """Create an ExternalA2AContextHandler pre-loaded with the resolved context."""
         return ExternalA2AContextHandler(
-            agent=context.agent,
-            environment=context.environment,
-            user_id=context.session_owner_id,
+            context=context,
             get_db_session=self.get_db_session,
             backend_base_url=self.backend_base_url,
         )
@@ -473,9 +471,7 @@ class ExternalA2ARequestHandler:
                 context.agent.id, context.integration_type,
             )
             return JSONRPCOutcome(
-                stream=handler.handle_message_stream_with_context(
-                    params, request_id, context
-                )
+                stream=handler.handle_message_stream(params, request_id)
             )
 
         if method == "message/send":
@@ -483,7 +479,7 @@ class ExternalA2ARequestHandler:
                 "[ExternalA2A] send | agent=%s integration=%s",
                 context.agent.id, context.integration_type,
             )
-            task = await handler.handle_message_send_with_context(params, context)
+            task = await handler.handle_message_send(params)
             result = task.model_dump(by_alias=True, exclude_none=True)
             if use_v1:
                 result = A2AV1Adapter.transform_task_outbound(result)
@@ -492,7 +488,7 @@ class ExternalA2ARequestHandler:
             )
 
         if method == "tasks/get":
-            task = await handler.handle_tasks_get_with_context(params, context)
+            task = await handler.handle_tasks_get(params)
             if task is None:
                 return JSONRPCOutcome(
                     result_envelope=jsonrpc_error(request_id, -32001, "Task not found")
@@ -505,13 +501,13 @@ class ExternalA2ARequestHandler:
             )
 
         if method == "tasks/cancel":
-            result = await handler.handle_tasks_cancel_with_context(params, context)
+            result = await handler.handle_tasks_cancel(params)
             return JSONRPCOutcome(
                 result_envelope=jsonrpc_success(request_id, result)
             )
 
         if method == "tasks/list":
-            tasks = await handler.handle_tasks_list_with_context(params, context)
+            tasks = await handler.handle_tasks_list(params)
             results = [t.model_dump(by_alias=True, exclude_none=True) for t in tasks]
             if use_v1:
                 results = [A2AV1Adapter.transform_task_outbound(r) for r in results]
