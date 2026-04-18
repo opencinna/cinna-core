@@ -103,6 +103,7 @@ Defined as `SDK_CREDENTIAL_COMPATIBILITY` in `backend/app/services/environments/
 - **Rebuild regeneration:** After an environment rebuild (core replacement), config files are regenerated from stored credentials for all SDK types
 - **Encrypted storage:** All AI credentials are stored per the named `AICredential` model; no migration needed for new provider types
 - **OpenCode per-mode isolation:** Building and conversation modes each run their own `opencode serve` process on separate ports with separate config directories. No shared state between concurrent sessions.
+- **Cross-SDK UI parity for ask-user-question:** OpenCode's built-in `question` tool suspends the session until a client calls `/question/{id}/reply` or `/reject`. The OpenCode adapter unifies this behaviour with Claude Code's `AskUserQuestion` tool — the transformer emits the same `askuserquestion` TOOL_USE + DONE event pair, then the adapter fires `POST /question/{id}/reject` so the user's answer can land as a fresh turn.
 
 ## Architecture Overview
 
@@ -149,3 +150,4 @@ Unified SDKEvent stream → Backend WebSocket → Frontend
 - **Agent Environment Core:** The `sdk_manager.py` and adapters live inside the environment core — see [Agent Environment Core](agent_environment_core.md)
 - **Environment Data Management:** Rebuild flow must regenerate settings files — see [Agent Environment Data Management](../agent_environment_data_management/agent_environment_data_management.md)
 - **Tools Approval:** OpenCode permission events (`permission.asked`) are forwarded to the frontend as SYSTEM events — see [Tools Approval Management](tools_approval_management.md)
+- **AskUserQuestion widget:** OpenCode's `question` tool is remapped to the unified `askuserquestion` TOOL_USE + DONE pair so the existing widget renders identically across SDKs — see [AskUserQuestion Tool Widget](../../application/chat_interface/tool_answer_questions_widget.md)

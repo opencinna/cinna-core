@@ -220,6 +220,51 @@ EVT_PERMISSION_ASKED = _evt("permission.asked", {
     "tool": {"messageID": "msg_asst_001", "callID": "call_001"},
 })
 
+# -- Question asked (LLM called the built-in `question` tool) ---------------
+
+EVT_QUESTION_ASKED = _evt("question.asked", {
+    "id": "que_001",
+    "sessionID": SESSION_ID,
+    "questions": [{
+        "question": "Which version do you want?",
+        "header": "Table type",
+        "options": [
+            {"label": "1. Every country",
+             "description": "Add capital for all listed countries"},
+            {"label": "2. Theme groups",
+             "description": "Add capital for grouped themes only"},
+        ],
+        "multiple": False,
+        "custom": True,
+    }],
+    "tool": {"messageID": "msg_asst_002", "callID": "call_q001"},
+})
+
+# The two tool-part events that bracket `question.asked` — both should be
+# suppressed in favour of the `question.asked` handler.
+EVT_QUESTION_TOOL_PENDING = _evt("message.part.updated", {
+    "part": {
+        "id": "prt_q1", "sessionID": SESSION_ID,
+        "messageID": "msg_asst_002",
+        "type": "tool", "tool": "question", "callID": "call_q001",
+        "state": {"status": "pending", "input": {}, "raw": ""},
+    }
+})
+
+EVT_QUESTION_TOOL_RUNNING = _evt("message.part.updated", {
+    "part": {
+        "id": "prt_q1", "sessionID": SESSION_ID,
+        "messageID": "msg_asst_002",
+        "type": "tool", "tool": "question", "callID": "call_q001",
+        "state": {
+            "status": "running",
+            "input": {"questions": [{"question": "X?", "header": "X",
+                                     "options": [], "multiple": False}]},
+            "time": {"start": 1000},
+        },
+    }
+})
+
 # -- Error event ------------------------------------------------------------
 
 EVT_ERROR = _evt("session.error", {
@@ -472,6 +517,115 @@ class TestPermissionEvents:
         result = transformer.translate(EVT_PERMISSION_ASKED, SESSION_ID)
         evt = result[0]
         assert evt.metadata["permission"]["id"] == "per_001"
+
+
+# ===========================================================================
+# Tests: `question` tool → unified `askuserquestion` widget
+# ===========================================================================
+
+class TestQuestionAsked:
+    """OpenCode's `question` tool must be remapped to the Claude Code
+    AskUserQuestion widget contract so the existing frontend renders it."""
+
+    def test_question_asked_emits_tool_use_and_done(self, transformer):
+        result = transformer.translate(EVT_QUESTION_ASKED, SESSION_ID)
+        types = [e.type for e in result]
+        assert SDKEventType.TOOL_USE in types
+        assert SDKEventType.DONE in types
+        # DONE must come last so the outer stream closes cleanly
+        assert result[-1].type == SDKEventType.DONE
+
+    def test_question_asked_tool_name_is_askuserquestion(self, transformer):
+        result = transformer.translate(EVT_QUESTION_ASKED, SESSION_ID)
+        tool_use = next(e for e in result if e.type == SDKEventType.TOOL_USE)
+        assert tool_use.tool_name == "askuserquestion"
+
+    def test_question_asked_tool_input_shape(self, transformer):
+        """The emitted tool_input must match the Claude Code AskUserQuestion
+        schema: {questions: [{question, header, options, multiSelect, ...}]}."""
+        result = transformer.translate(EVT_QUESTION_ASKED, SESSION_ID)
+        tool_use = next(e for e in result if e.type == SDKEventType.TOOL_USE)
+        questions = tool_use.metadata["tool_input"]["questions"]
+        assert len(questions) == 1
+        q = questions[0]
+        # Core fields preserved
+        assert q["question"] == "Which version do you want?"
+        assert q["header"] == "Table type"
+        assert len(q["options"]) == 2
+        # Normalized to frontend's preferred key while keeping original
+        assert q["multiSelect"] is False
+        assert q["multiple"] is False
+
+    def test_question_asked_preserves_multiple_true_as_multiSelect(self, transformer):
+        """`multiple: true` on OpenCode must become `multiSelect: true`."""
+        evt = _evt("question.asked", {
+            "id": "que_002", "sessionID": SESSION_ID,
+            "questions": [{
+                "question": "Pick any", "header": "Multi",
+                "options": [{"label": "A", "description": "a"}],
+                "multiple": True,
+            }],
+            "tool": {"messageID": "msg", "callID": "call_q002"},
+        })
+        result = transformer.translate(evt, SESSION_ID)
+        tool_use = next(e for e in result if e.type == SDKEventType.TOOL_USE)
+        assert tool_use.metadata["tool_input"]["questions"][0]["multiSelect"] is True
+
+    def test_question_asked_carries_request_id(self, transformer):
+        """The adapter needs `opencode_question_request_id` to call
+        `POST /question/{requestID}/reject` and unblock the suspended session."""
+        result = transformer.translate(EVT_QUESTION_ASKED, SESSION_ID)
+        tool_use = next(e for e in result if e.type == SDKEventType.TOOL_USE)
+        assert tool_use.metadata["opencode_question_request_id"] == "que_001"
+        # DONE also carries it for defensive logging / debugging
+        done = next(e for e in result if e.type == SDKEventType.DONE)
+        assert done.metadata.get("opencode_question_request_id") == "que_001"
+
+    def test_question_asked_flushes_text_buffer_before_tool_use(self, transformer):
+        """Any buffered preamble text must appear before the tool block."""
+        # Buffer a reasoning partial (no newline → stays buffered)
+        transformer.translate(
+            _evt("message.part.updated", {
+                "part": {"id": "prt_r", "sessionID": SESSION_ID,
+                         "messageID": "msg", "type": "reasoning",
+                         "text": "", "time": {"start": 1000}}
+            }),
+            SESSION_ID,
+        )
+        transformer.translate(
+            _evt("message.part.delta", {
+                "sessionID": SESSION_ID, "messageID": "msg",
+                "partID": "prt_r", "field": "text", "delta": "I should ask"
+            }),
+            SESSION_ID,
+        )
+        result = transformer.translate(EVT_QUESTION_ASKED, SESSION_ID)
+        # Thinking flush comes first, then TOOL_USE, then DONE
+        assert [e.type for e in result] == [
+            SDKEventType.THINKING,
+            SDKEventType.TOOL_USE,
+            SDKEventType.DONE,
+        ]
+        assert result[0].content == "I should ask"
+
+    def test_question_tool_part_pending_suppressed(self, transformer):
+        """`message.part.updated` for tool=question (pending) must produce
+        nothing — `question.asked` is the canonical source."""
+        result = transformer.translate(EVT_QUESTION_TOOL_PENDING, SESSION_ID)
+        assert result == []
+
+    def test_question_tool_part_running_suppressed(self, transformer):
+        """Likewise, the running state is suppressed to avoid a duplicate
+        tool block (the `question.asked` handler emits askuserquestion once)."""
+        result = transformer.translate(EVT_QUESTION_TOOL_RUNNING, SESSION_ID)
+        assert result == []
+
+    def test_question_tool_part_running_suppressed_after_asked(self, transformer):
+        """Sanity: even if question.asked fires first (typical order) and the
+        running part arrives later, the running event stays suppressed."""
+        transformer.translate(EVT_QUESTION_ASKED, SESSION_ID)
+        result = transformer.translate(EVT_QUESTION_TOOL_RUNNING, SESSION_ID)
+        assert result == []
 
 
 # ===========================================================================

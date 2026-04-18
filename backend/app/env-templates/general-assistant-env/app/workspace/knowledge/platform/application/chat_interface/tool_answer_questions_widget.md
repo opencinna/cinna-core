@@ -4,6 +4,8 @@
 
 The AskUserQuestion tool widget allows agents to ask structured questions to users mid-conversation. When an agent calls the `AskUserQuestion` tool, the message is flagged as containing unanswered questions and an interactive **Answer Questions** button appears below the message bubble. Users open a modal, answer all questions, and submit — their responses are formatted and sent as a follow-up message, resuming the conversation.
 
+The same widget is reused for OpenCode's built-in `question` tool — see [Cross-SDK Unification](#cross-sdk-unification) below.
+
 Part of the [Chat Windows](./chat_windows.md) chat interface. Related to [Agent Sessions](../agent_sessions/agent_sessions.md) session view.
 
 ## User Flow
@@ -86,3 +88,22 @@ No dedicated endpoint for the widget. It reuses the standard session message sen
 - `backend/app/api/routes/messages.py` — Message send endpoint
 - `frontend/src/hooks/useSessionStreaming.ts` — `sendMessage()` extended with `answersToMessageId` param
 - Migration: `backend/app/alembic/versions/bfbae71690bb_add_tool_questions_status_and_answers_.py`
+
+## Cross-SDK Unification
+
+Both SDK engines produce the same widget, so the chat UI behaves identically regardless of which SDK is running the agent:
+
+| SDK | Native tool | Handled in |
+|-----|-------------|-----------|
+| Claude Code | `AskUserQuestion` — structured tool call returned by the LLM; the turn ends naturally after the tool is emitted | `ClaudeCodeEventTransformer` normalises `AskUserQuestion` → `askuserquestion` tool name |
+| OpenCode | `question` — built-in tool that **suspends the session** until `POST /question/{requestID}/reply` or `/reject` is called on the local `opencode serve` endpoint | `OpenCodeEventTransformer._handle_question_asked()` maps the `question.asked` event to a unified `TOOL_USE(tool_name="askuserquestion")` + `DONE`; `OpenCodeAdapter._reject_question()` then fire-and-forget calls `POST /question/{requestID}/reject` to release the suspended turn so the session can accept the follow-up answer message |
+
+**Schema normalisation in the OpenCode transformer:**
+- `multiple: bool` → also exposed as `multiSelect: bool` (Claude-Code-compatible key) so the frontend modal renders without branching.
+- `opencode_question_request_id` is attached to the `TOOL_USE` metadata. Currently used only by the adapter for `/reject`, but reserved for a future "direct reply" path (Phase 2) that would call `POST /question/{requestID}/reply` with the user's selected labels instead of treating the answer as a fresh user turn.
+
+**Current behaviour on user answer (both SDKs):**
+1. User submits answers via the widget.
+2. A new user message is created with `answers_to_message_id` pointing at the question message.
+3. The referenced message's `tool_questions_status` flips to `"answered"`.
+4. The new user message is streamed to the agent environment as a fresh turn — for OpenCode, the previously-rejected `question` tool result + the new user text give the LLM full context to continue.

@@ -26,6 +26,7 @@ OpenCode SSE event types (observed from opencode serve 1.2.x):
     session.diff           — file change diffs
 
     permission.asked       — tool requires user approval
+    question.asked         — LLM called the `question` tool (needs user answer)
 
 Part types inside message.part.updated:
 
@@ -46,6 +47,16 @@ from .tool_name_registry import normalize_tool_name, normalize_tool_input
 from ..sdk_utils import SessionEventLogger
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Metadata key contracts — shared between this transformer and the adapter.
+# ---------------------------------------------------------------------------
+
+# Set on TOOL_USE(askuserquestion) and DONE events emitted from `question.asked`.
+# The adapter reads it from the DONE event to fire POST /question/{id}/reject
+# after the stream closes, releasing opencode's suspended tool Deferred.
+OPENCODE_QUESTION_REQUEST_ID_KEY = "opencode_question_request_id"
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +152,15 @@ class OpenCodeEventTransformer:
         if event_type == "permission.asked":
             return self._handle_permission_asked(properties, session_id)
 
+        # -- Question asked (LLM `question` tool → ask-user-question widget)
+        # Remap OpenCode's native `question` tool to the unified
+        # `askuserquestion` tool name so the frontend renders the existing
+        # AskUserQuestion widget.  DONE is emitted right after so the outer
+        # stream closes; the adapter then calls `POST /question/{id}/reject`
+        # to unblock opencode's suspended session.
+        if event_type == "question.asked":
+            return self._handle_question_asked(properties, session_id)
+
         # -- Informational events (silently skip) --------------------------
         if event_type in (
             "message.updated", "session.updated", "session.status",
@@ -229,6 +249,15 @@ class OpenCodeEventTransformer:
         tool_name = normalize_tool_name(raw_tool_name, sdk="opencode")
         call_id = part.get("callID", "")
         state = part.get("state", {})
+
+        # Special-case the `question` tool: it is handled exclusively via the
+        # out-of-band `question.asked` event (which carries the requestID
+        # needed to unblock the suspended session).  Suppress `message.part`
+        # events for this tool to avoid emitting a duplicate tool block.
+        if raw_tool_name == "question":
+            if call_id:
+                self._emitted_tool_calls.add(call_id)
+            return []
 
         # state can be a dict {"status": ..., "input": ...} or sometimes
         # a plain string in older versions — handle both.
@@ -334,6 +363,79 @@ class OpenCodeEventTransformer:
         # No newline yet — keep buffering
         self._text_buffers[part_id] = buf
         return []
+
+    def _handle_question_asked(
+        self, properties: dict, session_id: str,
+    ) -> list[SDKEvent]:
+        """
+        Translate OpenCode's `question.asked` event into a unified
+        `askuserquestion` TOOL_USE + DONE pair.
+
+        OpenCode's `question` tool suspends the session until a client calls
+        POST /question/{requestID}/reply or /reject.  We want the stream to
+        end cleanly so the frontend can show the answer widget, so we emit
+        DONE right after the TOOL_USE.  The adapter is responsible for
+        calling /reject (fire-and-forget) to unblock the server-side session.
+
+        The requestID is threaded through `metadata.opencode_question_request_id`
+        on the TOOL_USE event so the adapter can pick it up after `translate()`
+        returns.
+        """
+        request_id = properties.get("id", "")
+        questions_raw = properties.get("questions", []) or []
+        tool_info = properties.get("tool", {}) or {}
+        call_id = tool_info.get("callID", "")
+
+        # Normalize `multiple` → `multiSelect` so the frontend widget
+        # (which already consumes Claude Code's AskUserQuestion schema) can
+        # render OpenCode questions without branching on SDK origin.
+        questions_normalized: list[dict] = []
+        for q in questions_raw:
+            if not isinstance(q, dict):
+                continue
+            qn = dict(q)
+            if "multiple" in qn and "multiSelect" not in qn:
+                qn["multiSelect"] = bool(qn["multiple"])
+            questions_normalized.append(qn)
+
+        # Dedupe: if the running-state tool part arrives later it will be
+        # skipped because we already marked this callID as emitted.
+        if call_id:
+            self._emitted_tool_calls.add(call_id)
+
+        q_count = len(questions_normalized)
+        preview = f"{q_count} question" if q_count == 1 else f"{q_count} questions"
+
+        events: list[SDKEvent] = []
+        # Flush any pending text/reasoning buffers so preamble shows above
+        # the tool block.
+        events.extend(self._flush_all_buffers(session_id))
+
+        events.append(SDKEvent(
+            type=SDKEventType.TOOL_USE,
+            session_id=session_id,
+            tool_name="askuserquestion",
+            content=f"Using tool: askuserquestion\n{preview}",
+            metadata={
+                "tool_call_id": call_id,
+                "tool_input": {"questions": questions_normalized},
+                OPENCODE_QUESTION_REQUEST_ID_KEY: request_id,
+            },
+        ))
+
+        # DONE ends the stream cleanly — the adapter reads the requestID
+        # from this event's metadata and fires POST /question/{id}/reject
+        # to release opencode's suspended tool turn.
+        events.append(SDKEvent(
+            type=SDKEventType.DONE,
+            session_id=session_id,
+            content="",
+            metadata={
+                "opencode_event_type": "question.asked",
+                OPENCODE_QUESTION_REQUEST_ID_KEY: request_id,
+            },
+        ))
+        return events
 
     def _handle_permission_asked(
         self, properties: dict, session_id: str,

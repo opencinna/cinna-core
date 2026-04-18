@@ -75,7 +75,10 @@ from .base import (
     SDKConfig,
     AdapterRegistry,
 )
-from .opencode_event_transformer import OpenCodeEventTransformer
+from .opencode_event_transformer import (
+    OpenCodeEventTransformer,
+    OPENCODE_QUESTION_REQUEST_ID_KEY,
+)
 from .tool_name_registry import normalize_tool_name
 from ..prompt_generator import PromptGenerator
 from ..active_session_manager import active_session_manager
@@ -157,6 +160,12 @@ class OpenCodeAdapter(BaseSDKAdapter):
 
         # Event transformer — translates raw OpenCode SSE events to SDKEvents
         self._event_transformer = OpenCodeEventTransformer(self.workspace_dir)
+
+        # Strong references to fire-and-forget background tasks (e.g. the
+        # /question/{id}/reject call after a question.asked event).  Prevents
+        # Python GC from collecting the task reference mid-flight and raising
+        # "Task was destroyed but it is pending!" warnings.
+        self._background_tasks: set[asyncio.Task] = set()
 
     def _resolve_mode(self, mode: str) -> None:
         """
@@ -597,6 +606,11 @@ class OpenCodeAdapter(BaseSDKAdapter):
             message_posted = False
             post_task: Optional[asyncio.Task] = None
             last_progress_time = asyncio.get_running_loop().time()
+            # Track the pending question requestID so we can release the
+            # suspended session server-side via POST /question/{id}/reject
+            # once the stream closes (the `question` tool suspends opencode
+            # until either /reply or /reject is called).
+            pending_question_request_id: Optional[str] = None
             try:
                 async with aiohttp.ClientSession() as http_session:
                     async with http_session.get(
@@ -705,6 +719,22 @@ class OpenCodeAdapter(BaseSDKAdapter):
                                         for sdk_event in sdk_events:
                                             yield sdk_event
 
+                                            # Capture the question requestID
+                                            # from the transformer's DONE
+                                            # metadata (single source of
+                                            # truth for OpenCode event shape).
+                                            if sdk_event.type == SDKEventType.DONE:
+                                                req_id = (sdk_event.metadata or {}).get(
+                                                    OPENCODE_QUESTION_REQUEST_ID_KEY
+                                                )
+                                                if req_id:
+                                                    pending_question_request_id = req_id
+                                                    logger.info(
+                                                        "question.asked signalled for session %s "
+                                                        "(requestID=%s) — will reject after stream close",
+                                                        session_id, req_id,
+                                                    )
+
                                             if sdk_event.type in (
                                                 SDKEventType.DONE,
                                                 SDKEventType.ERROR,
@@ -712,6 +742,15 @@ class OpenCodeAdapter(BaseSDKAdapter):
                                             ):
                                                 return
             finally:
+                # Release any suspended `question` tool before tearing down
+                # the post task so the session can finalize gracefully.
+                # Fire-and-forget, but keep a strong reference so the task
+                # is not garbage-collected before the HTTP call completes.
+                if pending_question_request_id:
+                    self._spawn_background(
+                        self._reject_question(pending_question_request_id)
+                    )
+
                 # Ensure the POST task is awaited to catch errors
                 if post_task is not None and not post_task.done():
                     post_task.cancel()
@@ -804,6 +843,67 @@ class OpenCodeAdapter(BaseSDKAdapter):
         except Exception as exc:
             logger.error(
                 "Failed to delete OpenCode session %s: %s", session_id, exc
+            )
+            return False
+
+    def _spawn_background(self, coro) -> asyncio.Task:
+        """
+        Launch a fire-and-forget coroutine while keeping a strong reference
+        to the Task until it completes.
+
+        `asyncio.create_task` returns a weakly-referenced Task; if the caller
+        drops it, the event loop can garbage-collect the Task mid-flight
+        and cancel the underlying coroutine.  Adding the task to a set (and
+        removing it when done) guarantees the coroutine runs to completion.
+        """
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
+    async def _reject_question(self, request_id: str) -> bool:
+        """
+        POST /question/{requestID}/reject — unblock a session suspended by
+        the `question` tool.
+
+        The frontend shows the AskUserQuestion widget to the user, and their
+        answer is sent as a fresh user message on the next turn.  Calling
+        /reject here releases opencode's `Question.Service.ask()` Deferred
+        so the suspended POST /session/:id/message can return and the
+        session is ready to accept the answer message.
+
+        This endpoint is undocumented in the public OpenAPI spec but present
+        since at least OpenCode 1.4.0; 1.4.4 officially exposes the schema.
+        """
+        aiohttp = _import_aiohttp()
+        if aiohttp is None or not request_id:
+            return False
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self._base_url}/question/{request_id}/reject",
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    # 404 is acceptable — the question may already have been
+                    # answered/rejected via another client or the session
+                    # may have been torn down.
+                    success = resp.status in (200, 204, 404)
+                    if success:
+                        logger.info(
+                            "Rejected OpenCode question %s (status=%d)",
+                            request_id, resp.status,
+                        )
+                    else:
+                        text = await resp.text()
+                        logger.warning(
+                            "POST /question/%s/reject returned %d: %s",
+                            request_id, resp.status, text[:200],
+                        )
+                    return success
+        except Exception as exc:
+            logger.error(
+                "Failed to reject OpenCode question %s: %s", request_id, exc
             )
             return False
 

@@ -267,6 +267,8 @@ Stateful translator from raw OpenCode SSE events to `SDKEvent` objects. Instanti
 | `message.part.delta` (type=text) | Buffer delta, flush on newline → `ASSISTANT` |
 | `message.part.delta` (type=reasoning) | Buffer delta, flush on newline → `THINKING` |
 | `permission.asked` | `SYSTEM` with `subtype="permission_asked"` and human-readable `content` |
+| `question.asked` | `TOOL_USE` (tool_name `askuserquestion`, Claude-Code-compatible input) followed by `DONE`; `opencode_question_request_id` is attached to metadata so the adapter can call `POST /question/{requestID}/reject` to release the suspended session |
+| `message.part.updated` (type=tool, tool=`question`) | Silently suppressed — handled by `question.asked` |
 | `message.updated`, `session.updated`, `session.status`, `session.diff`, `server.connected`, `server.heartbeat`, `project.updated` | Silently skipped (no events emitted) |
 | Any event with `error` in type or `error` in properties | `ERROR` |
 
