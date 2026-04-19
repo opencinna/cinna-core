@@ -136,6 +136,25 @@ async def lifespan(app: FastAPI):
         handler=EnvironmentService.handle_stream_completed_event
     )
 
+    # Agent status service: pull STATUS.md after every backend-triggered
+    # action that touched the agent-env — session streams AND scheduler
+    # executions. One handler covers both because they all carry
+    # `environment_id` in meta. Rate-limit inside refresh_after_action
+    # dedupes when multiple events fire within 30 s (e.g.,
+    # CRON_TRIGGER_SESSION quickly followed by STREAM_COMPLETED).
+    from app.services.agents.agent_status_service import AgentStatusService
+    for _event_type in (
+        EventType.STREAM_COMPLETED,
+        EventType.STREAM_ERROR,
+        EventType.CRON_COMPLETED_OK,
+        EventType.CRON_TRIGGER_SESSION,
+        EventType.CRON_ERROR,
+    ):
+        event_service.register_handler(
+            event_type=_event_type,
+            handler=AgentStatusService.handle_post_action_event,
+        )
+
     # Activity service handlers for streaming lifecycle
     event_service.register_handler(
         event_type=EventType.STREAM_STARTED,

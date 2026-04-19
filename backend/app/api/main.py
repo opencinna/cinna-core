@@ -116,7 +116,6 @@ api_router.include_router(cli.router)
 api_router.include_router(desktop_auth.router)
 api_router.include_router(external_agents.router)
 api_router.include_router(external_a2a.router)
-api_router.include_router(agent_status.internal_router)
 
 
 if settings.ENVIRONMENT == "local":

@@ -14,8 +14,8 @@ import os
 import sys
 from datetime import datetime
 
-STATUS_FILE = "/app/workspace/STATUS.md"
-TEMP_FILE = "/app/workspace/.STATUS.md.tmp"
+STATUS_FILE = "/app/workspace/docs/STATUS.md"
+TEMP_FILE = "/app/workspace/docs/.STATUS.md.tmp"
 
 VALID_STATUSES = ("ok", "info", "warning", "error")
 

@@ -1,7 +1,8 @@
 import { Link } from "@tanstack/react-router"
 import { Bot, Share2, AlertCircle, Wrench, MessageCircle } from "lucide-react"
 
-import type { AgentPublic } from "@/client"
+import type { AgentPublic, AgentStatusPublic } from "@/client"
+import { cn } from "@/lib/utils"
 import {
   Card,
   CardContent,
@@ -10,21 +11,30 @@ import {
 } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { getColorPreset } from "@/utils/colorPresets"
+import { AgentStatusCardFooter } from "./AgentStatusCardFooter"
 
 interface AgentCardProps {
   agent: AgentPublic
+  status?: AgentStatusPublic | null
 }
 
-export function AgentCard({ agent }: AgentCardProps) {
+export function AgentCard({ agent, status }: AgentCardProps) {
   const colorPreset = getColorPreset(agent.ui_color_preset)
+  const hasStatusFooter =
+    !!status && (status.severity != null || status.raw != null)
 
   return (
-    <Link
-      to="/agent/$agentId"
-      params={{ agentId: agent.id }}
-      className="block h-full"
+    <Card
+      className={cn(
+        "relative transition-all hover:shadow-md hover:-translate-y-0.5 h-full flex flex-col gap-0 overflow-hidden",
+        hasStatusFooter && "pb-0",
+      )}
     >
-      <Card className="relative transition-all hover:shadow-md hover:-translate-y-0.5 cursor-pointer h-full flex flex-col gap-0">
+      <Link
+        to="/agent/$agentId"
+        params={{ agentId: agent.id }}
+        className="flex-1 flex flex-col cursor-pointer"
+      >
         <CardHeader className="pb-2">
           <div className="flex items-start gap-3">
             <div className={`rounded-lg p-2 ${colorPreset.iconBg}`}>
@@ -82,7 +92,8 @@ export function AgentCard({ agent }: AgentCardProps) {
             </pre>
           </CardContent>
         )}
-      </Card>
-    </Link>
+      </Link>
+      {status && <AgentStatusCardFooter agentId={agent.id} status={status} />}
+    </Card>
   )
 }

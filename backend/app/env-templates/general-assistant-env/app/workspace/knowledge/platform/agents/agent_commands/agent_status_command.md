@@ -2,11 +2,11 @@
 
 ## Purpose
 
-Returns the agent's self-reported status from `STATUS.md` in the workspace root. Provides an instant, LLM-free way for users and A2A clients to check what a complex agent is currently doing — without streaming a full session message.
+Returns the agent's self-reported status from `STATUS.md` in the workspace `docs/` folder. Provides an instant, LLM-free way for users and A2A clients to check what a complex agent is currently doing — without streaming a full session message.
 
 ## Core Concepts
 
-- **`STATUS.md`** — A convention file at `/app/workspace/STATUS.md` written by the agent or its scripts to publish current state. Content is freeform markdown; an optional YAML frontmatter header enables structured parsing.
+- **`STATUS.md`** — A convention file at `/app/workspace/docs/STATUS.md` written by the agent or its scripts to publish current state. Content is freeform markdown; an optional YAML frontmatter header enables structured parsing.
 - **Severity** — Parsed from frontmatter `status` field. One of `ok`, `warning`, `error`, `info`, or `unknown` (default when missing or unrecognized).
 - **Summary** — Short description of current state. Taken from frontmatter `summary` field, or derived from the first non-blank, non-heading line of the body if no frontmatter.
 - **Reported At** — Timestamp for the status. Taken from frontmatter `timestamp` when present; falls back to the file's last-modification time; `null` only when both are unavailable.
@@ -87,7 +87,7 @@ _Changed from 🔴 error_          ← only shown when a severity transition occ
 
 - `/agent-status` bypasses the LLM pipeline — no streaming, no agent-env activation
 - The command always tries a live fetch first; falls back to cached snapshot on any error
-- A live fetch is rate-limited: at most one per environment per 30 seconds (shared lock with the `force_refresh` REST parameter and the push-path endpoint)
+- A live fetch is rate-limited: at most one per environment per 30 seconds (shared lock with the `force_refresh` REST parameter and the post-action event handler)
 - Freeform files with no frontmatter are fully supported: severity is `unknown`, summary is the first non-blank body line, `reported_at` comes from the file mtime
 - The file is capped at 64 KB; content beyond that is stored with a `\n... (truncated)` marker appended
 - Frontmatter larger than 4 KB is ignored and the whole file is treated as body
@@ -107,7 +107,7 @@ AgentStatusCommandHandler.execute(context, args)
         │
         ├── AgentStatusService.fetch_status(env)  ← live fetch
         │       │   (rate-limited, 30 s lock)
-        │       ├── adapter.fetch_workspace_item_with_meta("STATUS.md")
+        │       ├── adapter.fetch_workspace_item_with_meta("docs/STATUS.md")
         │       ├── Consume bounded byte stream (64 KB cap)
         │       ├── parse_status_file(content)
         │       │       ├── Extract YAML frontmatter (if present, ≤ 4 KB)
@@ -131,7 +131,7 @@ AgentStatusCommandHandler.execute(context, args)
 
 - **[Agent Environments](../agent_environments/agent_environments.md)** — Status file is read from the workspace via `fetch_workspace_item_with_meta()` on the environment adapter; cached snapshot persists in the `agent_environment` table
 - **[Agent Commands](agent_commands.md)** — Registered as a standard command handler; inherits command framework routing, A2A differentiation, and system message rendering
-- **[Agent Environment Core](../agent_environment_core/agent_environment_core.md)** — `STATUS.md` lives in the workspace root (`/app/workspace/STATUS.md`) and is authored by agent scripts; the push-path watcher in the agent-env process POSTs to the backend on mtime changes
+- **[Agent Environment Core](../agent_environment_core/agent_environment_core.md)** — `STATUS.md` lives under the workspace `docs/` folder (`/app/workspace/docs/STATUS.md`) and is authored by agent scripts; the backend pulls the file on demand (REST, slash command, A2A) and after every backend-triggered action (session streams, CRON runs) via the post-action event handler
 - **[Complex Agent Design](../agent_environment_core/agent_environment_core.md)** — The `COMPLEX_AGENT_DESIGN.md` prompt doc describes the `STATUS.md` convention, recommended frontmatter format, and the `scripts/update_status.py` helper
 - **[A2A Protocol](../../application/a2a_integration/a2a_protocol/a2a_protocol.md)** — A2A callers can send the command as a message (returns markdown) or call the `agent/status` JSON-RPC method (returns structured `AgentStatusPublic` payload)
 - **[Agent Activities](../../application/agent_activities/agent_activities.md)** — Severity transitions create activity feed entries via `ActivityService`

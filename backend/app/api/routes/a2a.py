@@ -369,7 +369,7 @@ async def _handle_jsonrpc(
                 "reported_at": snapshot.reported_at.isoformat() if snapshot.reported_at else None,
                 "reported_at_source": snapshot.reported_at_source,
                 "fetched_at": snapshot.fetched_at.isoformat() if snapshot.fetched_at else None,
-                "is_stale": snapshot.is_stale,
+                "body": snapshot.body,
                 "has_structured_metadata": snapshot.has_structured_metadata,
                 "prev_severity": snapshot.prev_severity,
                 "severity_changed_at": snapshot.severity_changed_at.isoformat() if snapshot.severity_changed_at else None,

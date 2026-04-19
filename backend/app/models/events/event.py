@@ -67,6 +67,15 @@ class EventType:
     # Agent status events
     AGENT_STATUS_UPDATED = "agent_status_updated"
 
+    # CRON / schedule lifecycle events — emitted by agent_schedule_scheduler when
+    # a scheduled execution finishes (success / triggered-session / error). Meta
+    # always carries `environment_id`, `agent_id`, `schedule_id`, `schedule_type`
+    # so downstream handlers (e.g., AgentStatusService.handle_cron_event) can
+    # pull STATUS.md without extra DB lookups.
+    CRON_COMPLETED_OK = "cron_completed_ok"          # script_trigger returned "OK"; no session
+    CRON_TRIGGER_SESSION = "cron_trigger_session"    # session started by the schedule (both types)
+    CRON_ERROR = "cron_error"                        # schedule failed before or during execution
+
     # Generic notification
     NOTIFICATION = "notification"
 

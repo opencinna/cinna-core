@@ -82,17 +82,18 @@ class AgentStatusCommandHandler(CommandHandler):
                 prev_icon = SEVERITY_ICONS.get(snapshot.prev_severity, "⚪")
                 lines.append(f"_Changed from {prev_icon} {snapshot.prev_severity}_")
 
-            # Stale warning
-            if snapshot.is_stale:
-                if environment.status != "running":
-                    stale_msg = "Environment is not running — showing last cached status."
-                else:
-                    stale_msg = "Status may be outdated."
-                lines.append(f"⚠️ _{stale_msg}_")
+            # Running-state warning: a stopped env can only show cached data
+            if environment.status != "running":
+                lines.append(
+                    "⚠️ _Environment is not running — showing last cached status._"
+                )
 
             lines.append("\n---\n")
 
-            if snapshot.raw:
-                lines.append(snapshot.raw)
+            # Prefer `body` (frontmatter stripped) to avoid duplicating the
+            # status/summary/timestamp fields rendered above in the header.
+            body = snapshot.body if snapshot.body is not None else snapshot.raw
+            if body:
+                lines.append(body)
 
             return CommandResult(content="\n".join(lines))

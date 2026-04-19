@@ -70,6 +70,11 @@ export function AgentStatusDialog({ agentId, open, onOpenChange }: AgentStatusDi
     })
   }
 
+  // `body` is the raw file with the YAML frontmatter block stripped server-side,
+  // so the header strip's severity/summary/timestamp are not duplicated here.
+  // `raw` is still used for the Copy button so users get the verbatim file.
+  const bodyContent = status?.body ?? status?.raw ?? null
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col">
@@ -147,13 +152,6 @@ export function AgentStatusDialog({ agentId, open, onOpenChange }: AgentStatusDi
               </p>
             )}
 
-            {/* Stale warning */}
-            {status.is_stale && (
-              <p className="text-xs text-muted-foreground italic">
-                This snapshot may be outdated — the agent environment is not
-                currently running.
-              </p>
-            )}
           </div>
         )}
 
@@ -177,14 +175,14 @@ export function AgentStatusDialog({ agentId, open, onOpenChange }: AgentStatusDi
 
           {!isLoading && status && !hasNeverPublished && (
             <div className="px-1 py-2">
-              {status.raw ? (
+              {bodyContent && bodyContent.trim() ? (
                 <MarkdownRenderer
-                  content={status.raw}
+                  content={bodyContent}
                   className="prose prose-sm dark:prose-invert max-w-none text-sm"
                 />
               ) : (
                 <p className="text-sm text-muted-foreground italic">
-                  No content available.
+                  No additional details.
                 </p>
               )}
             </div>

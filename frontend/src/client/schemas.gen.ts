@@ -3485,10 +3485,16 @@ export const AgentStatusPublicSchema = {
             ],
             title: 'Raw'
         },
-        is_stale: {
-            type: 'boolean',
-            title: 'Is Stale',
-            default: true
+        body: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Body'
         },
         has_structured_metadata: {
             type: 'boolean',

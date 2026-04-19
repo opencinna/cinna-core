@@ -14,7 +14,7 @@ class AgentStatusPublic(SQLModel):
     reported_at_source: str | None = None        # "frontmatter" | "file_mtime" | None
     fetched_at: datetime | None = None           # when the platform last read STATUS.md
     raw: str | None = None                       # full STATUS.md body (may be truncated at 64 KB)
-    is_stale: bool = True                        # True when env not running or snapshot > 10 min old
+    body: str | None = None                      # raw minus the leading YAML frontmatter block
     has_structured_metadata: bool = False        # True when YAML frontmatter was successfully parsed
     prev_severity: str | None = None             # severity before the most recent transition
     severity_changed_at: datetime | None = None  # timestamp of the last severity transition

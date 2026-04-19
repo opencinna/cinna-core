@@ -9,19 +9,60 @@ Supports two schedule types:
 - static_prompt: Creates a session with a prompt (original behavior)
 - script_trigger: Executes a shell command in the agent environment; if output is
   exactly "OK" → logs success activity; if anything else → starts session with context
+
+Every schedule execution emits one of three lifecycle events
+(CRON_COMPLETED_OK / CRON_TRIGGER_SESSION / CRON_ERROR) so other services
+(status puller, dashboards, activity feed) can react without polling.
 """
 import asyncio
 import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlmodel import Session as DBSession, select
 
 from app.core.db import engine
 from app.models import AgentSchedule, Agent
+from app.models.events.event import EventType
 from app.services.agents.agent_scheduler_service import AgentSchedulerService
 
 logger = logging.getLogger(__name__)
+
+
+async def _emit_cron_event(
+    event_type: str,
+    schedule: AgentSchedule,
+    agent: Agent,
+    environment_id: Any | None = None,
+    **extra_meta: Any,
+) -> None:
+    """
+    Emit a CRON_* lifecycle event (best-effort, never raises).
+
+    `environment_id` is included in meta so handlers like
+    AgentStatusService.handle_post_action_event can pull STATUS.md without
+    extra DB lookups.
+    """
+    try:
+        from app.services.events.event_service import event_service
+        meta: dict[str, Any] = {
+            "schedule_id": str(schedule.id),
+            "schedule_type": schedule.schedule_type,
+            "schedule_name": schedule.name,
+            "agent_id": str(agent.id),
+        }
+        if environment_id is not None:
+            meta["environment_id"] = str(environment_id)
+        meta.update({k: v for k, v in extra_meta.items() if v is not None})
+        await event_service.emit_event(
+            event_type=event_type,
+            model_id=agent.id,
+            user_id=agent.owner_id,
+            meta=meta,
+        )
+    except Exception as exc:
+        logger.warning("Failed to emit %s event: %s", event_type, exc)
 
 scheduler = BackgroundScheduler()
 
@@ -123,6 +164,13 @@ async def _execute_static_prompt(
             prompt_used=message,
             error_message=error_msg,
         )
+        await _emit_cron_event(
+            EventType.CRON_ERROR,
+            schedule=schedule,
+            agent=agent,
+            environment_id=agent.active_environment_id,
+            error_message=error_msg,
+        )
         return  # Do NOT advance schedule on failure
 
     logger.info(
@@ -142,6 +190,13 @@ async def _execute_static_prompt(
         session=db_session,
         schedule_id=schedule.id,
         last_execution=datetime.now(UTC),
+    )
+    await _emit_cron_event(
+        EventType.CRON_TRIGGER_SESSION,
+        schedule=schedule,
+        agent=agent,
+        environment_id=agent.active_environment_id,
+        session_id=session_id,
     )
 
 
@@ -169,6 +224,13 @@ async def _execute_script_trigger(
             command_executed=schedule.command,
             error_message="No active environment found for agent",
         )
+        await _emit_cron_event(
+            EventType.CRON_ERROR,
+            schedule=schedule,
+            agent=agent,
+            environment_id=None,
+            error_message="No active environment found for agent",
+        )
         return
 
     # Ensure environment is running (auto-activate if suspended/stopped)
@@ -188,6 +250,13 @@ async def _execute_script_trigger(
             schedule_type="script_trigger",
             status="error",
             command_executed=schedule.command,
+            error_message=str(e),
+        )
+        await _emit_cron_event(
+            EventType.CRON_ERROR,
+            schedule=schedule,
+            agent=agent,
+            environment_id=environment.id,
             error_message=str(e),
         )
         return
@@ -216,6 +285,13 @@ async def _execute_script_trigger(
             schedule_type="script_trigger",
             status="error",
             command_executed=schedule.command,
+            error_message=str(e),
+        )
+        await _emit_cron_event(
+            EventType.CRON_ERROR,
+            schedule=schedule,
+            agent=agent,
+            environment_id=environment.id,
             error_message=str(e),
         )
         return
@@ -263,6 +339,13 @@ async def _execute_script_trigger(
         logger.info(
             f"Schedule {schedule.id}: script returned OK — no session created"
         )
+        await _emit_cron_event(
+            EventType.CRON_COMPLETED_OK,
+            schedule=schedule,
+            agent=agent,
+            environment_id=environment.id,
+            command_exit_code=exit_code,
+        )
 
     else:
         # Non-OK output: start session with execution context
@@ -304,6 +387,14 @@ async def _execute_script_trigger(
                 command_exit_code=exit_code,
                 error_message=error_msg,
             )
+            await _emit_cron_event(
+                EventType.CRON_ERROR,
+                schedule=schedule,
+                agent=agent,
+                environment_id=environment.id,
+                command_exit_code=exit_code,
+                error_message=error_msg,
+            )
             return
 
         AgentSchedulerService.create_log(
@@ -325,6 +416,14 @@ async def _execute_script_trigger(
         logger.info(
             f"Schedule {schedule.id}: script non-OK (exit={exit_code}), "
             f"session={session_id} created"
+        )
+        await _emit_cron_event(
+            EventType.CRON_TRIGGER_SESSION,
+            schedule=schedule,
+            agent=agent,
+            environment_id=environment.id,
+            session_id=session_id,
+            command_exit_code=exit_code,
         )
 
 

@@ -1,7 +1,7 @@
 """
 AgentStatusService — reads and caches agent self-reported status from STATUS.md.
 
-The agent (or its scripts) writes /app/workspace/STATUS.md whenever its state
+The agent (or its scripts) writes /app/workspace/docs/STATUS.md whenever its state
 changes. This service reads the file, parses the optional YAML frontmatter,
 persists the snapshot to the AgentEnvironment DB row, and emits events on
 severity transitions.
@@ -52,7 +52,7 @@ class AgentStatusSnapshot:
     reported_at_source: str | None   # "frontmatter" | "file_mtime" | None
     fetched_at: datetime | None
     raw: str | None
-    is_stale: bool
+    body: str | None                 # raw minus the leading YAML frontmatter block
     has_structured_metadata: bool
     prev_severity: str | None
     severity_changed_at: datetime | None
@@ -61,11 +61,10 @@ class AgentStatusSnapshot:
 class AgentStatusService:
     """Service for reading, parsing, and caching agent self-reported status."""
 
-    STATUS_FILE_PATH = "STATUS.md"
+    STATUS_FILE_PATH = "docs/STATUS.md"
     MAX_RAW_BYTES = 64 * 1024        # 64 KB — hard cap on stored content
     MAX_FRONTMATTER_BYTES = 4 * 1024  # 4 KB — oversized frontmatter falls through
     SEVERITY_VALUES = {"ok", "warning", "error", "info"}
-    STALENESS_TTL_SECONDS = 600      # 10 minutes
     FORCE_REFRESH_TTL_SECONDS = 30   # 30 second rate limit per environment
 
     # ------------------------------------------------------------------ #
@@ -93,7 +92,7 @@ class AgentStatusService:
         cls, environment: AgentEnvironment, db_session=None
     ) -> AgentStatusSnapshot:
         """
-        Download STATUS.md via the environment adapter, parse it, persist the
+        Download docs/STATUS.md via the environment adapter, parse it, persist the
         snapshot to the DB, and return an AgentStatusSnapshot.
 
         Raises StatusUnavailableError when the env is unreachable, the file is
@@ -206,7 +205,7 @@ class AgentStatusService:
             reported_at_source=reported_at_source,
             fetched_at=now,
             raw=raw_text,
-            is_stale=False,
+            body=parsed.raw_body,
             has_structured_metadata=parsed.has_structured_metadata,
             prev_severity=prev_severity,
             severity_changed_at=severity_changed_at,
@@ -219,6 +218,11 @@ class AgentStatusService:
             environment.status_file_severity is not None
             or environment.status_file_reported_at is not None
         )
+        body = (
+            cls.parse_status_file(environment.status_file_raw).raw_body
+            if environment.status_file_raw is not None
+            else None
+        )
         return AgentStatusSnapshot(
             agent_id=environment.agent_id,
             environment_id=environment.id,
@@ -228,35 +232,66 @@ class AgentStatusService:
             reported_at_source=environment.status_file_reported_at_source,
             fetched_at=environment.status_file_fetched_at,
             raw=environment.status_file_raw,
-            is_stale=cls.is_stale(environment),
+            body=body,
             has_structured_metadata=has_meta,
             prev_severity=environment.status_file_prev_severity,
             severity_changed_at=environment.status_file_severity_changed_at,
         )
 
-    @classmethod
-    def is_stale(cls, environment: AgentEnvironment) -> bool:
-        """True when the env is not running, or the snapshot is older than 10 minutes."""
-        if environment.status != "running":
-            return True
-        if environment.status_file_fetched_at is None:
-            return True
-        age = (datetime.now(UTC) - environment.status_file_fetched_at).total_seconds()
-        return age > cls.STALENESS_TTL_SECONDS
+    # ------------------------------------------------------------------ #
+    # Post-action refresh + event handler                                  #
+    # ------------------------------------------------------------------ #
 
     @classmethod
-    def should_refresh(cls, environment: AgentEnvironment) -> bool:
+    async def refresh_after_action(
+        cls, environment: AgentEnvironment, db_session=None
+    ) -> None:
         """
-        Background-scheduler heuristic: True when the snapshot is missing or older
-        than 5 minutes AND the per-env rate-limit window is not active.
-        Used by environment_status_scheduler to opportunistically refresh.
+        Pull STATUS.md after the backend completes an action that ran inside
+        the agent-env (session stream, CRON script trigger). Skipped when the
+        per-env rate-limit window is still active — another refresher
+        (force-refresh REST endpoint or a recent post-action event) already
+        pulled within the last 30 s.
+
+        Best-effort: never raises. Failures are logged at debug level.
         """
         if cls.is_rate_limited(environment.id):
-            return False
-        if environment.status_file_fetched_at is None:
-            return True
-        age = (datetime.now(UTC) - environment.status_file_fetched_at).total_seconds()
-        return age > 300  # 5 minutes
+            return
+        try:
+            await cls.fetch_status(environment, db_session=db_session)
+        except StatusUnavailableError:
+            pass  # env not running, STATUS.md missing, adapter error
+        except Exception as exc:
+            logger.debug(
+                "agent_status refresh_after_action failed for env %s: %s",
+                environment.id, exc,
+            )
+
+    @classmethod
+    async def handle_post_action_event(cls, event_data: dict) -> None:
+        """
+        Generic event handler: pulls STATUS.md whenever the backend finishes
+        triggering work inside the agent-env. Registered against
+        STREAM_COMPLETED / STREAM_ERROR (session streams) and
+        CRON_COMPLETED_OK / CRON_TRIGGER_SESSION / CRON_ERROR (scheduler).
+
+        The agent-env has no outbound access, so the backend is the only
+        actor that knows an action just finished — this handler turns that
+        knowledge into a fresh snapshot.
+        """
+        try:
+            meta = event_data.get("meta", {}) or {}
+            environment_id = meta.get("environment_id")
+            if not environment_id:
+                return
+            from app.core.db import create_session as _create_session
+            with _create_session() as session:
+                env = session.get(AgentEnvironment, UUID(environment_id))
+                if env is None:
+                    return
+                await cls.refresh_after_action(env, db_session=session)
+        except Exception as exc:
+            logger.debug("agent_status handle_post_action_event swallowed: %s", exc)
 
     # ------------------------------------------------------------------ #
     # Environment helpers                                                  #
@@ -294,7 +329,7 @@ class AgentStatusService:
             reported_at_source=None,
             fetched_at=None,
             raw=None,
-            is_stale=True,
+            body=None,
             has_structured_metadata=False,
             prev_severity=None,
             severity_changed_at=None,
@@ -369,6 +404,11 @@ class AgentStatusService:
         """
         Extract the YAML frontmatter block (between leading --- delimiters).
         Returns (parsed_dict, body_text). Returns (None, text) when no valid frontmatter.
+
+        Falls back to a line-based key:value parser for the known keys
+        (status/summary/timestamp) when strict YAML parsing fails — tolerates
+        common cases like `summary: [warning] text here` where the raw value
+        is not valid YAML but is still human-readable.
         """
         stripped = text.lstrip("\n")
         if not stripped.startswith("---"):
@@ -388,16 +428,49 @@ class AgentStatusService:
         if len(fm_text.encode()) > cls.MAX_FRONTMATTER_BYTES:
             return None, text
 
+        parsed: dict | None = None
         try:
-            parsed = yaml.safe_load(fm_text)
+            result = yaml.safe_load(fm_text)
+            if isinstance(result, dict):
+                parsed = result
         except Exception:
-            return None, text
+            parsed = None
 
-        if not isinstance(parsed, dict):
+        if parsed is None:
+            parsed = cls._parse_frontmatter_lenient(fm_text)
+
+        if parsed is None:
             return None, text
 
         body = rest[fm_end + 4:].lstrip("\n")
         return parsed, body
+
+    @staticmethod
+    def _parse_frontmatter_lenient(fm_text: str) -> dict | None:
+        """
+        Line-based fallback parser used when strict YAML fails.
+        Extracts `status`, `summary`, `timestamp` from plain `key: value` lines.
+        Returns None when none of the known keys are present.
+
+        First occurrence of a key wins (opposite of YAML's last-wins semantics) —
+        safer on malformed input, where a later garbled line would otherwise
+        clobber a clean earlier value.
+        """
+        known_keys = {"status", "summary", "timestamp"}
+        result: dict = {}
+        for line in fm_text.splitlines():
+            stripped = line.strip()
+            if not stripped or ":" not in stripped:
+                continue
+            key, _, value = stripped.partition(":")
+            key = key.strip().lower()
+            if key not in known_keys or key in result:
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                value = value[1:-1]
+            result[key] = value
+        return result or None
 
     @staticmethod
     def _extract_fallback_summary(body: str) -> str | None:

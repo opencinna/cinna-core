@@ -419,17 +419,17 @@ And mention the schedule in `WORKFLOW_PROMPT.md` so the conversation agent knows
 
 ## Agent Self-Reported Status
 
-Complex agents can publish a lightweight status snapshot that surfaces in the `/agent-status` command, the REST API, and the dashboard tile — without starting a session or spending any tokens. The mechanism is a single file the agent maintains in the workspace root.
+Complex agents can publish a lightweight status snapshot that surfaces in the `/agent-status` command, the REST API, and the dashboard tile — without starting a session or spending any tokens. The mechanism is a single file the agent maintains in the workspace `docs/` folder.
 
 ### File location
 
 ```
-/app/workspace/STATUS.md
+/app/workspace/docs/STATUS.md
 ```
 
 ### Purpose
 
-Write a brief description of what the agent is currently doing or how its last scheduled run went. The platform reads this file on demand (and on mtime change) and caches the result. Users and A2A clients can query the status at any time — even when the environment is stopped.
+Write a brief description of what the agent is currently doing or how its last scheduled run went. The platform reads this file on demand and after every backend-triggered action in the env (session completion, CRON run) and caches the result. Users and A2A clients can query the status at any time — even when the environment is stopped.
 
 ### Recommended format
 

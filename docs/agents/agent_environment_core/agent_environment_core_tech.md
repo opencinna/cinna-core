@@ -235,7 +235,7 @@ No dedicated frontend components - the environment core is a backend/container-s
 
 ### Agent Status File
 
-`/app/workspace/STATUS.md` — agent-maintained status snapshot. Read on demand by `AgentStatusService` via `fetch_workspace_item_with_meta()`; not loaded into system prompts. See [Agent Status Command](../agent_commands/agent_status_command.md) for parsing rules, frontmatter format, and caching behaviour.
+`/app/workspace/docs/STATUS.md` — agent-maintained status snapshot. Read on demand by `AgentStatusService` via `fetch_workspace_item_with_meta()`; not loaded into system prompts. See [Agent Status Command](../agent_commands/agent_status_command.md) for parsing rules, frontmatter format, and caching behaviour.
 
 ## Security
 

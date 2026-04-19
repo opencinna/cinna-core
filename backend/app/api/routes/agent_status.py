@@ -2,9 +2,8 @@
 Agent Status API Routes.
 
 Routes:
-  GET  /agents/status                           — list status snapshots (workspace-scoped, cache-only)
-  GET  /agents/{agent_id}/status                — fetch or return cached AgentStatusPublic
-  POST /internal/environments/{env_id}/status-updated — push notification from agent-env process
+  GET  /agents/status                  — list status snapshots (workspace-scoped, cache-only)
+  GET  /agents/{agent_id}/status       — fetch or return cached AgentStatusPublic
 """
 import logging
 import uuid
@@ -15,7 +14,6 @@ from sqlmodel import select
 
 from app.api.deps import CurrentUser, SessionDep
 from app.models import Agent, AgentStatusPublic, AgentStatusListPublic
-from app.models.environments.environment import AgentEnvironment
 from app.services.agents.agent_status_service import (
     AgentStatusService,
     AgentStatusSnapshot,
@@ -28,7 +26,6 @@ logger = logging.getLogger(__name__)
 # endpoint must be registered in main.py BEFORE agents.router to avoid FastAPI
 # treating "status" as an agent_id UUID in /agents/{id}.
 router = APIRouter(prefix="/agents", tags=["agents"])
-internal_router = APIRouter(tags=["internal"])
 
 
 def _snapshot_to_public(
@@ -44,7 +41,7 @@ def _snapshot_to_public(
         reported_at_source=snapshot.reported_at_source,
         fetched_at=snapshot.fetched_at,
         raw=snapshot.raw,
-        is_stale=snapshot.is_stale,
+        body=snapshot.body,
         has_structured_metadata=snapshot.has_structured_metadata,
         prev_severity=snapshot.prev_severity,
         severity_changed_at=snapshot.severity_changed_at,
@@ -103,7 +100,7 @@ async def get_agent_status(
 
     environment = AgentStatusService.get_primary_environment(session, agent_id, agent.active_environment_id)
     if not environment:
-        return AgentStatusPublic(agent_id=agent_id, is_stale=True)
+        return AgentStatusPublic(agent_id=agent_id)
 
     if force_refresh:
         if AgentStatusService.is_rate_limited(environment.id):
@@ -122,41 +119,3 @@ async def get_agent_status(
 
     snapshot = AgentStatusService.get_cached_status(environment)
     return _snapshot_to_public(snapshot, agent_id)
-
-
-@internal_router.post("/internal/environments/{env_id}/status-updated")
-async def environment_status_updated(
-    env_id: uuid.UUID,
-    session: SessionDep,
-    current_user: CurrentUser,
-) -> Any:
-    """
-    Push notification from the agent-env process: STATUS.md has been rewritten.
-
-    Called by the mtime watcher running inside the agent container. Uses the
-    same Bearer JWT auth as other agent-env → backend endpoints. Rate-limited
-    to one fetch per environment per 30 seconds.
-
-    Returns {"ok": true, "fetched": bool} — fetched=false when rate-limited.
-    """
-    environment = session.get(AgentEnvironment, env_id)
-    if not environment:
-        raise HTTPException(status_code=404, detail="Environment not found")
-
-    agent = session.get(Agent, environment.agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if not current_user.is_superuser and agent.owner_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-
-    if AgentStatusService.is_rate_limited(environment.id):
-        return {"ok": True, "fetched": False}
-
-    try:
-        await AgentStatusService.fetch_status(environment)
-        return {"ok": True, "fetched": True}
-    except StatusUnavailableError:
-        return {"ok": True, "fetched": False}
-    except Exception as exc:
-        logger.warning("Error fetching status for env %s: %s", env_id, exc)
-        return {"ok": True, "fetched": False}

@@ -666,7 +666,7 @@ export type AgentStatusPublic = {
     reported_at_source?: (string | null);
     fetched_at?: (string | null);
     raw?: (string | null);
-    is_stale?: boolean;
+    body?: (string | null);
     has_structured_metadata?: boolean;
     prev_severity?: (string | null);
     severity_changed_at?: (string | null);
@@ -4587,12 +4587,6 @@ export type IdentityContactsToggleIdentityContactData = {
 };
 
 export type IdentityContactsToggleIdentityContactResponse = (Message);
-
-export type InternalEnvironmentStatusUpdatedData = {
-    envId: string;
-};
-
-export type InternalEnvironmentStatusUpdatedResponse = (unknown);
 
 export type KnowledgeQueryKnowledgeData = {
     authorization?: (string | null);

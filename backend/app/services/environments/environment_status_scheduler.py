@@ -10,10 +10,6 @@ from app.models.agents.agent import Agent
 from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
 from app.services.events.event_service import event_service
 from app.models.events.event import EventType
-from app.services.agents.agent_status_service import (
-    AgentStatusService,
-    StatusUnavailableError,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -96,19 +92,6 @@ async def _check_environment_statuses():
 
                 session.add(env)
                 session.commit()
-
-                # Opportunistic STATUS.md refresh on healthy running envs.
-                # Rate-limited; silently swallows missing-file / adapter errors.
-                if env.status == "running" and AgentStatusService.should_refresh(env):
-                    try:
-                        await AgentStatusService.fetch_status(env, db_session=session)
-                    except StatusUnavailableError:
-                        pass
-                    except Exception as exc:
-                        logger.debug(
-                            "Background STATUS.md refresh failed for env %s: %s",
-                            env.id, exc,
-                        )
 
             except Exception as e:
                 logger.error(

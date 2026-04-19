@@ -53,6 +53,19 @@ function AgentsGrid() {
     },
   })
 
+  // Fetch status snapshots for all agents in one batch (cache-only, cheap).
+  const { data: statusesData } = useQuery({
+    queryKey: ["agentStatuses", activeWorkspaceId],
+    queryFn: () =>
+      AgentsService.listAgentStatuses({
+        workspaceId: activeWorkspaceId ?? undefined,
+      }),
+    staleTime: 30_000,
+  })
+  const statusByAgentId = new Map(
+    (statusesData?.items ?? []).map((s) => [s.agent_id, s]),
+  )
+
   // Fetch pending shares (new query)
   const { data: pendingSharesData, isLoading: pendingLoading } = useQuery({
     queryKey: ["pendingShares"],
@@ -161,7 +174,11 @@ function AgentsGrid() {
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 auto-rows-fr">
             {agents.map((agent) => (
-              <AgentCard key={agent.id} agent={agent} />
+              <AgentCard
+                key={agent.id}
+                agent={agent}
+                status={statusByAgentId.get(agent.id) ?? null}
+              />
             ))}
           </div>
         </div>

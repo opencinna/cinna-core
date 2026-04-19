@@ -36,7 +36,7 @@ class AgentEnvironment(SQLModel, table=True):
     building_ai_credential_id: uuid.UUID | None = Field(
         default=None, foreign_key="ai_credential.id", ondelete="SET NULL"
     )
-    # Agent self-reported status snapshot (from STATUS.md in workspace root)
+    # Agent self-reported status snapshot (from docs/STATUS.md in workspace)
     status_file_raw: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     status_file_severity: str | None = Field(default=None, sa_column=Column(sa.String(16), nullable=True))
     status_file_summary: str | None = Field(default=None, sa_column=Column(sa.String(512), nullable=True))

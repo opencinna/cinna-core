@@ -426,7 +426,7 @@ class EnvironmentAdapter(ABC):
         async iterator — do NOT raise FileNotFoundError.
 
         Args:
-            path: Relative path from workspace root (e.g., "STATUS.md")
+            path: Relative path from workspace root (e.g., "docs/STATUS.md")
 
         Returns:
             Tuple of (WorkspaceItemMeta, AsyncIterator[bytes])

@@ -5,11 +5,10 @@ Scenarios:
   1. Parser unit tests — frontmatter parsing, severity normalization, fallback summary,
      oversized frontmatter, timestamp resolution (pure service calls, no HTTP)
   2. Rate-limit helpers — is_rate_limited / _mark_rate_limit behaviour
-  3. is_stale logic for running vs stopped environments
+  3. refresh_after_action + handle_post_action_event — post-action backend pull
   4. GET /agents/status — list snapshots for current user (cache-only)
   5. GET /agents/{agent_id}/status — happy path (cached), 404, 403
   6. GET /agents/{agent_id}/status?force_refresh=true — live fetch via stub adapter
-  7. POST /internal/environments/{env_id}/status-updated — push path
 
 All HTTP tests go through TestClient; parser/service tests call methods directly
 (no DB or adapter, just pure Python logic).
@@ -82,11 +81,29 @@ class TestParseStatusFile:
         assert result.summary == "First real line."
 
     def test_malformed_yaml_falls_through(self):
-        # YAML that will fail to parse as dict
+        # YAML that will fail to parse as dict and has no recognizable key:value lines
         content = "---\n: invalid: yaml: content\n---\nBody."
         result = AgentStatusService.parse_status_file(content)
         # No structured metadata — YAML parse failure falls through
         assert result.has_structured_metadata is False
+
+    def test_yaml_unsafe_summary_recovered_by_lenient_parser(self):
+        # `summary: [warning] text here` is invalid YAML (flow sequence not closed),
+        # but the lenient line-based fallback still extracts the known keys.
+        content = (
+            "---\n"
+            "timestamp: 2026-04-19T13:34:54Z\n"
+            "status: warning\n"
+            "summary: [warning] packet loss within acceptable whimsy\n"
+            "---\n\n"
+            "## Rotation test\n"
+            "- Last cron run: 2026-04-19T13:34:54Z\n"
+        )
+        result = AgentStatusService.parse_status_file(content)
+        assert result.severity == "warning"
+        assert result.summary == "[warning] packet loss within acceptable whimsy"
+        assert result.reported_at is not None
+        assert result.has_structured_metadata is True
 
     def test_oversized_frontmatter_falls_through(self):
         # Frontmatter > 4 KB → no structured metadata
@@ -178,42 +195,129 @@ class TestRateLimit:
 
 
 # ---------------------------------------------------------------------------
-# 4. is_stale
+# 3b. refresh_after_action / handle_stream_event — post-action backend pull
 # ---------------------------------------------------------------------------
 
-class TestIsStale:
+class TestRefreshAfterAction:
+    """The backend pulls STATUS.md after every action it triggered in the
+    agent-env (session stream, CRON script trigger). This ensures the agents
+    list reflects state changes after every backend-triggered action without
+    needing a background polling tick."""
 
-    def _make_env(self, status="running", fetched_at=None):
+    def test_refresh_after_action_skipped_when_rate_limited(self):
+        """When a recent push already fetched, refresh_after_action is a no-op."""
+        import asyncio
         env = MagicMock()
-        env.status = status
-        env.status_file_fetched_at = fetched_at
-        return env
+        env.id = uuid.uuid4()
 
-    def test_stale_when_env_not_running(self):
-        env = self._make_env(status="stopped")
-        assert AgentStatusService.is_stale(env) is True
+        AgentStatusService._mark_rate_limit(env.id)
 
-    def test_stale_when_never_fetched(self):
-        env = self._make_env(status="running", fetched_at=None)
-        assert AgentStatusService.is_stale(env) is True
+        with patch.object(AgentStatusService, "fetch_status") as mock_fetch:
+            mock_fetch.return_value = None
+            asyncio.run(AgentStatusService.refresh_after_action(env))
 
-    def test_not_stale_when_recently_fetched(self):
-        env = self._make_env(
-            status="running",
-            fetched_at=datetime.now(UTC) - timedelta(seconds=60),
-        )
-        assert AgentStatusService.is_stale(env) is False
+        mock_fetch.assert_not_called()
 
-    def test_stale_when_old(self):
-        env = self._make_env(
-            status="running",
-            fetched_at=datetime.now(UTC) - timedelta(seconds=700),
-        )
-        assert AgentStatusService.is_stale(env) is True
+    def test_refresh_after_action_calls_fetch_when_not_rate_limited(self):
+        """Outside the rate-limit window, fetch_status is invoked."""
+        import asyncio
+        env = MagicMock()
+        env.id = uuid.uuid4()
+        # Ensure no rate-limit entry exists for this env
+        from app.services.agents import agent_status_service as _mod
+        _mod._rate_limit_lock.pop(env.id, None)
+
+        async def _fake_fetch(environment, db_session=None):
+            return None
+
+        with patch.object(
+            AgentStatusService, "fetch_status", side_effect=_fake_fetch
+        ) as mock_fetch:
+            asyncio.run(AgentStatusService.refresh_after_action(env))
+
+        mock_fetch.assert_called_once()
+
+    def test_refresh_after_action_swallows_unavailable(self):
+        """StatusUnavailableError (env stopped, file missing) is silently swallowed."""
+        import asyncio
+        env = MagicMock()
+        env.id = uuid.uuid4()
+        from app.services.agents import agent_status_service as _mod
+        _mod._rate_limit_lock.pop(env.id, None)
+
+        async def _raise_unavailable(environment, db_session=None):
+            raise StatusUnavailableError("file_missing")
+
+        with patch.object(
+            AgentStatusService, "fetch_status", side_effect=_raise_unavailable
+        ):
+            # Must not raise
+            asyncio.run(AgentStatusService.refresh_after_action(env))
+
+    def test_handle_post_action_event_no_environment_id_returns_cleanly(self):
+        """Handler ignores events that lack environment_id in meta."""
+        import asyncio
+        with patch.object(AgentStatusService, "refresh_after_action") as mock_refresh:
+            asyncio.run(
+                AgentStatusService.handle_post_action_event({"meta": {"agent_id": "x"}})
+            )
+        mock_refresh.assert_not_called()
+
+    def test_handle_post_action_event_resolves_env_and_refreshes(
+        self,
+        client: TestClient,
+        superuser_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """
+        Positive path: when meta carries a real environment_id, the handler
+        loads the env from DB and delegates to refresh_after_action.
+        """
+        import asyncio
+        from sqlmodel import select
+        from app.models.environments.environment import AgentEnvironment
+
+        agent = create_agent_via_api(client, superuser_token_headers)
+        # The agent-creation flow writes an AgentEnvironment row via the stub;
+        # pick any row for this agent (active_environment_id may not be set).
+        env = db.exec(
+            select(AgentEnvironment).where(AgentEnvironment.agent_id == uuid.UUID(agent["id"]))
+        ).first()
+        if env is None:
+            pytest.skip("No environment row created by stub")
+        env_id = str(env.id)
+
+        async def _noop(environment, db_session=None):
+            return None
+
+        with patch.object(
+            AgentStatusService, "refresh_after_action", side_effect=_noop
+        ) as mock_refresh:
+            asyncio.run(
+                AgentStatusService.handle_post_action_event(
+                    {"meta": {"environment_id": env_id}}
+                )
+            )
+
+        mock_refresh.assert_called_once()
+        env_arg = mock_refresh.call_args.args[0]
+        assert str(env_arg.id) == env_id
+
+    def test_handle_post_action_event_unknown_env_id_returns_cleanly(self):
+        """Handler no-ops when the environment_id in meta is not in the DB."""
+        import asyncio
+        bogus_env_id = str(uuid.uuid4())
+        with patch.object(AgentStatusService, "refresh_after_action") as mock_refresh:
+            asyncio.run(
+                AgentStatusService.handle_post_action_event(
+                    {"meta": {"environment_id": bogus_env_id}}
+                )
+            )
+        mock_refresh.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
-# 5. API tests (via TestClient)
+# 4. API tests (via TestClient)
 # ---------------------------------------------------------------------------
 
 def test_list_agent_statuses_empty(
@@ -240,7 +344,7 @@ def test_list_agent_statuses_with_agent(
 ) -> None:
     """
     GET /agents/status returns snapshot for each agent owned by the user.
-    A newly created agent with no STATUS.md data has is_stale=True and no severity.
+    A newly created agent with no STATUS.md data has null severity.
     """
     agent = create_agent_via_api(client, superuser_token_headers)
     agent_id = agent["id"]
@@ -257,7 +361,7 @@ def test_list_agent_statuses_with_agent(
     our = next((i for i in items if i["agent_id"] == agent_id), None)
     assert our is not None
     assert our["severity"] is None
-    assert our["is_stale"] is True
+    assert our["raw"] is None
 
 
 def test_get_agent_status_no_status_file(
@@ -265,7 +369,7 @@ def test_get_agent_status_no_status_file(
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
-    GET /agents/{agent_id}/status returns a stale, null-severity snapshot
+    GET /agents/{agent_id}/status returns a null-severity snapshot
     for an agent that has never published STATUS.md.
     """
     agent = create_agent_via_api(client, superuser_token_headers)
@@ -279,7 +383,6 @@ def test_get_agent_status_no_status_file(
     body = r.json()
     assert body["agent_id"] == agent_id
     assert body["severity"] is None
-    assert body["is_stale"] is True
     assert body["fetched_at"] is None
 
 
@@ -335,7 +438,7 @@ def test_get_agent_status_force_refresh_file_missing(
     assert r.status_code == 200
     body = r.json()
     assert body["severity"] is None
-    assert body["is_stale"] is True
+    assert body["raw"] is None
 
 
 def test_get_agent_status_force_refresh_with_status_file(
@@ -355,9 +458,9 @@ def test_get_agent_status_force_refresh_with_status_file(
     status_content = b"---\nstatus: ok\nsummary: All systems nominal\n---\n\n# Agent Status\n"
 
     # workspace_files is a class-level dict on the test adapter — populate it
-    # so fetch_workspace_item_with_meta returns this content for STATUS.md
+    # so fetch_workspace_item_with_meta returns this content for docs/STATUS.md
     # whenever an environment exists for the agent.
-    EnvironmentTestAdapter.workspace_files["STATUS.md"] = status_content
+    EnvironmentTestAdapter.workspace_files["docs/STATUS.md"] = status_content
     try:
         r = client.get(
             f"{settings.API_V1_STR}/agents/{agent_id}/status?force_refresh=true",
@@ -365,7 +468,7 @@ def test_get_agent_status_force_refresh_with_status_file(
         )
         assert r.status_code == 200
     finally:
-        EnvironmentTestAdapter.workspace_files.pop("STATUS.md", None)
+        EnvironmentTestAdapter.workspace_files.pop("docs/STATUS.md", None)
 
 
 def test_get_agent_status_force_refresh_rate_limited(
@@ -393,52 +496,6 @@ def test_get_agent_status_force_refresh_rate_limited(
     # At least one of them should succeed; if rate limited the second is 429
     assert r1.status_code in (200, 429)
     assert r2.status_code in (200, 429)
-
-
-def test_push_status_updated_env_not_found(
-    client: TestClient,
-    superuser_token_headers: dict[str, str],
-) -> None:
-    """POST /internal/environments/{env_id}/status-updated returns 404 for unknown env."""
-    fake_env_id = str(uuid.uuid4())
-    r = client.post(
-        f"{settings.API_V1_STR}/internal/environments/{fake_env_id}/status-updated",
-        headers=superuser_token_headers,
-    )
-    assert r.status_code == 404
-
-
-def test_push_status_updated_ok(
-    client: TestClient,
-    superuser_token_headers: dict[str, str],
-    patch_environment_adapter,
-) -> None:
-    """
-    POST /internal/environments/{env_id}/status-updated returns ok=true.
-    When file is missing (stub default), fetched=false.
-    """
-    agent = create_agent_via_api(client, superuser_token_headers)
-    agent_id = agent["id"]
-
-    # Fetch the agent to get environment id
-    r_agent = client.get(
-        f"{settings.API_V1_STR}/agents/{agent_id}",
-        headers=superuser_token_headers,
-    )
-    assert r_agent.status_code == 200
-    env_id = r_agent.json().get("active_environment_id")
-    if not env_id:
-        pytest.skip("No active environment created by stub")
-
-    r = client.post(
-        f"{settings.API_V1_STR}/internal/environments/{env_id}/status-updated",
-        headers=superuser_token_headers,
-    )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["ok"] is True
-    # File missing → fetched=False (no STATUS.md in stub)
-    assert "fetched" in body
 
 
 def test_list_agent_statuses_workspace_filter(
