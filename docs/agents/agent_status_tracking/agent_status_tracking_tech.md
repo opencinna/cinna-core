@@ -37,7 +37,7 @@
 - `frontend/src/components/Agents/AgentStatusCardFooter.tsx` — compact card-footer dot + summary + relative time, click opens the dialog
 - `frontend/src/components/Agents/AgentStatusDialog.tsx` — full markdown body + refresh + copy
 - `frontend/src/components/Agents/AgentCard.tsx` — hosts the footer below the main card link; only renders when a status snapshot is available
-- `frontend/src/routes/_layout/agents.tsx` — batch-fetches all status snapshots via `listAgentStatuses` and passes each to its `AgentCard`
+- `frontend/src/routes/_layout/agents.tsx` — batch-fetches all status snapshots via `listAgentStatuses`, passes each to its `AgentCard`, and subscribes to `EventTypes.AGENT_STATUS_UPDATED` to invalidate the `["agentStatuses"]` query so card footers refresh in real time when the backend publishes a new snapshot
 
 **Hooks & Services**
 - `frontend/src/hooks/useAgentStatus.ts` — `useAgentStatus(agentId, dialogOpen)` React Query hook + `severityDotClass` / `severityLabel` / `isRecentTransition` helpers
@@ -104,6 +104,7 @@ Migration: `backend/app/alembic/versions/34322f866173_add_agent_environment_stat
 - `frontend/src/components/Agents/AgentStatusCardFooter.tsx` — clickable footer strip inside `AgentCard`. Accepts an `AgentStatusPublic` snapshot as a prop (no per-card fetch), hides itself when severity and raw are both null, opens the dialog on click. Displays severity dot + summary + the agent's own `reported_at` (tooltip shows absolute timestamp). No staleness styling — update cadence is agent-specific.
 - `frontend/src/components/Agents/AgentStatusDialog.tsx` — shadcn/ui `Dialog` rendering the parsed body (server-side frontmatter stripped) via `MarkdownRenderer`. Footer Refresh button mutates with `force_refresh=true` (swallows `429`); Copy button uses `useCustomToast` and copies the verbatim `raw`. Header strip shows severity label, summary, reported-at (with file-mtime note), fetched-at, and the "Changed from `prev_severity`" line on recent transitions.
 - `frontend/src/hooks/useAgentStatus.ts` — `useAgentStatus(agentId, dialogOpen=false)` React Query hook. Query key `["agentStatus", agentId]`; `refetchInterval: 60_000` only when `dialogOpen`; subscribes to `EventTypes.AGENT_STATUS_UPDATED` and invalidates the query on receipt; force-refresh mutation swallows `429`.
+- `frontend/src/routes/_layout/agents.tsx` — hosts the batched `["agentStatuses", workspaceId]` query used by `AgentStatusCardFooter`. Subscribes to `EventTypes.AGENT_STATUS_UPDATED` at the page level and invalidates the broad `["agentStatuses"]` key so all visible card footers refresh whenever the backend publishes a new snapshot. Complements the per-agent subscription in `useAgentStatus.ts`, which only covers open dialogs.
 
 ## Configuration
 

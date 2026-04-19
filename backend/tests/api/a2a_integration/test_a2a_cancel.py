@@ -17,20 +17,22 @@ Scenarios:
 """
 from __future__ import annotations
 
-import asyncio
 import uuid
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
-from app.services.sessions.active_streaming_manager import active_streaming_manager
 from tests.utils.a2a import (
     post_a2a_jsonrpc,
     send_a2a_streaming_message,
     setup_a2a_agent,
 )
-from tests.utils.session import get_agent_session
+from tests.utils.session import (
+    get_agent_session,
+    register_active_stream,
+    unregister_active_stream,
+)
 
 
 def _cancel_request(task_id: str, req_id: str = "cancel-1") -> dict:
@@ -82,17 +84,11 @@ def test_a2a_cancel_forwards_interrupt_to_agent_env(
 
     # ── Arrange: register an active stream with a known external id ──────
     # The real stream completed synchronously during the test call, so we
-    # simulate "still streaming" by re-registering.
+    # simulate "still streaming" by re-registering via the test utility.
     session_uuid = uuid.UUID(task_id)
     external_session_id = "ext-session-abc-123"
 
-    async def _register() -> None:
-        await active_streaming_manager.register_stream(
-            session_id=session_uuid,
-            external_session_id=external_session_id,
-        )
-
-    asyncio.run(_register())
+    register_active_stream(session_uuid, external_session_id)
 
     try:
         # ── Act: send CancelTask, with the env forward call mocked ──────
@@ -125,10 +121,7 @@ def test_a2a_cancel_forwards_interrupt_to_agent_env(
         assert call_kwargs.get("base_url")
     finally:
         # Clean up — even on assertion failure, don't leak streams across tests.
-        async def _unregister() -> None:
-            await active_streaming_manager.unregister_stream(session_uuid)
-
-        asyncio.run(_unregister())
+        unregister_active_stream(session_uuid)
 
 
 # ---------------------------------------------------------------------------

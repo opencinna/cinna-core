@@ -30,6 +30,7 @@ from tests.utils.identity import (
     toggle_identity_contact,
 )
 from tests.utils.user import create_random_user_with_headers
+from tests.utils.utils import random_lower_string
 
 _EXT_BASE = f"{settings.API_V1_STR}/external"
 _WORKSPACES_BASE = f"{settings.API_V1_STR}/user-workspaces"
@@ -437,7 +438,6 @@ def _create_agent_in_workspace(
     name: str | None = None,
 ) -> dict:
     """Create an agent assigned to a workspace via direct API call."""
-    from tests.utils.utils import random_lower_string
     data = {
         "name": name or f"ws-agent-{random_lower_string()[:8]}",
         "user_workspace_id": workspace_id,

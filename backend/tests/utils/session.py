@@ -1,4 +1,7 @@
 """Helpers to query sessions via API for tests."""
+import asyncio
+import uuid
+
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
@@ -73,3 +76,39 @@ def create_session_with_block(
     )
     assert r.status_code == 200, f"Create session with block failed: {r.text}"
     return r.json()
+
+
+# ---------------------------------------------------------------------------
+# Active-streaming-manager helpers
+#
+# ActiveStreamingManager is internal state with no public API surface —
+# there is no HTTP endpoint to register or unregister an active stream.
+# These helpers isolate the app.services import to this utility module
+# so individual test files remain free of app.services imports.
+# ---------------------------------------------------------------------------
+
+def register_active_stream(session_id: uuid.UUID, external_session_id: str) -> None:
+    """Register a session as actively streaming in the in-process manager.
+
+    Used by A2A cancel tests to simulate a still-running stream after the
+    synchronous test call has completed.
+    """
+    from app.services.sessions.active_streaming_manager import active_streaming_manager
+
+    asyncio.run(
+        active_streaming_manager.register_stream(
+            session_id=session_id,
+            external_session_id=external_session_id,
+        )
+    )
+
+
+def unregister_active_stream(session_id: uuid.UUID) -> None:
+    """Unregister a session from the active-streaming manager.
+
+    Call this in a ``finally`` block after ``register_active_stream`` to
+    prevent leaking state across tests.
+    """
+    from app.services.sessions.active_streaming_manager import active_streaming_manager
+
+    asyncio.run(active_streaming_manager.unregister_stream(session_id))

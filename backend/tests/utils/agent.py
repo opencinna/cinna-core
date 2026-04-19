@@ -123,3 +123,36 @@ def enable_email_integration(
     body = r.json()
     assert body["enabled"] is True
     return body
+
+
+# ---------------------------------------------------------------------------
+# Agent-status rate-limit helpers
+#
+# AgentStatusService._rate_limit_lock is module-level internal state with
+# no public API surface. These helpers isolate the app.services import to
+# this utility module so individual test files stay free of app.services
+# imports (same pattern as tests/utils/session.py for active_streaming_manager).
+# ---------------------------------------------------------------------------
+
+def set_agent_status_rate_limit(env_id: "uuid.UUID") -> None:
+    """Pre-populate the force-refresh rate-limit lock for an environment.
+
+    Sets the lock timestamp to now so the very next force_refresh API call
+    sees the limit as active and returns 429.
+    """
+    import uuid  # noqa: F401 — needed for the type annotation at runtime
+    from datetime import datetime, UTC
+    from app.services.agents import agent_status_service as _mod
+
+    _mod._rate_limit_lock[env_id] = datetime.now(UTC)
+
+
+def clear_agent_status_rate_limit(env_id: "uuid.UUID") -> None:
+    """Remove the force-refresh rate-limit lock for an environment.
+
+    Call this in a ``finally`` block after ``set_agent_status_rate_limit``
+    to prevent leaking state across tests.
+    """
+    from app.services.agents import agent_status_service as _mod
+
+    _mod._rate_limit_lock.pop(env_id, None)

@@ -13,6 +13,7 @@ import PendingItems from "@/components/Pending/PendingItems"
 import useWorkspace from "@/hooks/useWorkspace"
 import { usePageHeader } from "@/routes/_layout"
 import useCustomToast from "@/hooks/useCustomToast"
+import { eventService, EventTypes } from "@/services/eventService"
 import { APP_NAME } from "@/utils"
 
 export const Route = createFileRoute("/_layout/agents")({
@@ -65,6 +66,17 @@ function AgentsGrid() {
   const statusByAgentId = new Map(
     (statusesData?.items ?? []).map((s) => [s.agent_id, s]),
   )
+
+  // Keep the batched statuses fresh by invalidating on AGENT_STATUS_UPDATED events.
+  // The backend emits this whenever it refreshes an agent's STATUS.md snapshot.
+  useEffect(() => {
+    const subId = eventService.subscribe(EventTypes.AGENT_STATUS_UPDATED, () => {
+      queryClient.invalidateQueries({ queryKey: ["agentStatuses"] })
+    })
+    return () => {
+      eventService.unsubscribe(subId)
+    }
+  }, [queryClient])
 
   // Fetch pending shares (new query)
   const { data: pendingSharesData, isLoading: pendingLoading } = useQuery({
