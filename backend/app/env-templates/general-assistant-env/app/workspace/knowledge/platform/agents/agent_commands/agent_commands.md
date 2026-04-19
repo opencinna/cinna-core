@@ -78,6 +78,7 @@ Caller handles "command_executed":
 | `/session-reset` | Clear SDK session metadata for a clean-slate restart with no recovery context | [session_reset_command.md](session_reset_command.md) |
 | `/webapp` | Return the shareable webapp URL for the agent (first active share link) | [webapp_command.md](webapp_command.md) |
 | `/rebuild-env` | Rebuild the active environment (fails if any session is streaming) | [rebuild_env_command.md](rebuild_env_command.md) |
+| `/agent-status` | Show the agent's self-reported status from `STATUS.md` — severity, summary, timestamp, and full body | [agent_status_command.md](agent_status_command.md) |
 
 ## Integration Points
 
@@ -85,3 +86,4 @@ Caller handles "command_executed":
 - **[Agent Environments](../agent_environments/agent_environments.md)** — `/files` and `/files-all` require a running environment to query workspace files
 - **[Agent File Management](../agent_file_management/agent_file_management.md)** — File listing reuses existing workspace tree API; workspace view tokens gate public file access
 - **[A2A Protocol](../../application/a2a_integration/a2a_protocol/a2a_protocol.md)** — A2A callers send commands as regular messages and receive completed tasks in response
+- **[Agent Status Tracking](agent_status_command.md)** — `/agent-status` reads `STATUS.md` from the workspace; the feature also exposes a REST endpoint and a real-time WebSocket event

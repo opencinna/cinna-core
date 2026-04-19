@@ -897,6 +897,10 @@ Bad: "Generate a report" (missing: report type, time period, breakdown)
 
 If the user asks you to build, update, or modify a web app / dashboard / status page, read `/app/core/prompts/WEBAPP_BUILDING.md` for conventions and instructions before proceeding.
 
+## Complex Agent Design
+
+If the user asks you to build something beyond a single-script workflow — an agent with multiple distinct capabilities (local skills), large cached datasets, user-tunable config, preserved derived results, or scheduled health checks that only create a session when something needs attention — read `/app/core/prompts/COMPLEX_AGENT_DESIGN.md` for the workspace layout, local-skill structure, cache / config / data conventions, and the scheduled script-trigger "OK" pattern before proceeding.
+
 ## Remember
 
 - **Always use `uv`** for package installation and management

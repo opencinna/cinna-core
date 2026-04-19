@@ -10,6 +10,7 @@ from app.services.agents.commands.session_recover_command import SessionRecoverC
 from app.services.agents.commands.session_reset_command import SessionResetCommandHandler
 from app.services.agents.commands.webapp_command import WebappCommandHandler
 from app.services.agents.commands.rebuild_env_command import RebuildEnvCommandHandler
+from app.services.agents.commands.agent_status_command import AgentStatusCommandHandler
 
 # Register all command handlers
 CommandService.register(FilesCommandHandler())
@@ -18,3 +19,4 @@ CommandService.register(SessionRecoverCommandHandler())
 CommandService.register(SessionResetCommandHandler())
 CommandService.register(WebappCommandHandler())
 CommandService.register(RebuildEnvCommandHandler())
+CommandService.register(AgentStatusCommandHandler())

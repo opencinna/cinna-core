@@ -233,6 +233,10 @@ No dedicated frontend components - the environment core is a backend/container-s
 | `ENTRYPOINT_PROMPT.md` | `/app/workspace/docs/ENTRYPOINT_PROMPT.md` | `prompt_generator.py` (per request) |
 | `scripts/README.md` | `/app/workspace/scripts/README.md` | `prompt_generator.py` (per request) |
 
+### Agent Status File
+
+`/app/workspace/STATUS.md` — agent-maintained status snapshot. Read on demand by `AgentStatusService` via `fetch_workspace_item_with_meta()`; not loaded into system prompts. See [Agent Status Command](../agent_commands/agent_status_command.md) for parsing rules, frontmatter format, and caching behaviour.
+
 ## Security
 
 ### JWT Authentication

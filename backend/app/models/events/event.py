@@ -64,6 +64,9 @@ class EventType:
     SUBTASK_COMPLETED = "subtask_completed"
     TASK_SUBTASK_CREATED = "task_subtask_created"
 
+    # Agent status events
+    AGENT_STATUS_UPDATED = "agent_status_updated"
+
     # Generic notification
     NOTIFICATION = "notification"
 

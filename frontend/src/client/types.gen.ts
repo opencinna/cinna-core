@@ -648,6 +648,31 @@ export type AgentsPublic = {
 };
 
 /**
+ * Paginated list of agent status snapshots.
+ */
+export type AgentStatusListPublic = {
+    items: Array<AgentStatusPublic>;
+};
+
+/**
+ * Public representation of an agent's self-reported status snapshot.
+ */
+export type AgentStatusPublic = {
+    agent_id: string;
+    environment_id?: (string | null);
+    severity?: (string | null);
+    summary?: (string | null);
+    reported_at?: (string | null);
+    reported_at_source?: (string | null);
+    fetched_at?: (string | null);
+    raw?: (string | null);
+    is_stale?: boolean;
+    has_structured_metadata?: boolean;
+    prev_severity?: (string | null);
+    severity_changed_at?: (string | null);
+};
+
+/**
  * Agent request to create a subtask (team context required)
  */
 export type AgentSubtaskCreate = {
@@ -3382,6 +3407,19 @@ export type AgenticTeamsGenerateConnectionPromptData = {
 
 export type AgenticTeamsGenerateConnectionPromptResponse = (GenerateConnectionPromptResponse);
 
+export type AgentsListAgentStatusesData = {
+    workspaceId?: (string | null);
+};
+
+export type AgentsListAgentStatusesResponse = (AgentStatusListPublic);
+
+export type AgentsGetAgentStatusData = {
+    agentId: string;
+    forceRefresh?: boolean;
+};
+
+export type AgentsGetAgentStatusResponse = (AgentStatusPublic);
+
 export type AgentsReadAgentsData = {
     limit?: number;
     skip?: number;
@@ -4353,6 +4391,9 @@ export type ExternalA2aGetExternalAgentCardResponse = (unknown);
 
 export type ExternalA2aHandleExternalAgentJsonrpcData = {
     agentId: string;
+    /**
+     * Protocol version: 'v1.0' (default) or 'v0.3'
+     */
     protocol?: (string | null);
 };
 
@@ -4360,6 +4401,9 @@ export type ExternalA2aHandleExternalAgentJsonrpcResponse = (unknown);
 
 export type ExternalA2aGetExternalAgentCardWellKnownData = {
     agentId: string;
+    /**
+     * Protocol version: 'v1.0' (default) or 'v0.3'
+     */
     protocol?: (string | null);
 };
 
@@ -4376,6 +4420,9 @@ export type ExternalA2aGetExternalRouteCardData = {
 export type ExternalA2aGetExternalRouteCardResponse = (unknown);
 
 export type ExternalA2aHandleExternalRouteJsonrpcData = {
+    /**
+     * Protocol version: 'v1.0' (default) or 'v0.3'
+     */
     protocol?: (string | null);
     routeId: string;
 };
@@ -4383,6 +4430,9 @@ export type ExternalA2aHandleExternalRouteJsonrpcData = {
 export type ExternalA2aHandleExternalRouteJsonrpcResponse = (unknown);
 
 export type ExternalA2aGetExternalRouteCardWellKnownData = {
+    /**
+     * Protocol version: 'v1.0' (default) or 'v0.3'
+     */
     protocol?: (string | null);
     routeId: string;
 };
@@ -4401,6 +4451,9 @@ export type ExternalA2aGetExternalIdentityCardResponse = (unknown);
 
 export type ExternalA2aHandleExternalIdentityJsonrpcData = {
     ownerId: string;
+    /**
+     * Protocol version: 'v1.0' (default) or 'v0.3'
+     */
     protocol?: (string | null);
 };
 
@@ -4408,6 +4461,9 @@ export type ExternalA2aHandleExternalIdentityJsonrpcResponse = (unknown);
 
 export type ExternalA2aGetExternalIdentityCardWellKnownData = {
     ownerId: string;
+    /**
+     * Protocol version: 'v1.0' (default) or 'v0.3'
+     */
     protocol?: (string | null);
 };
 
@@ -4531,6 +4587,12 @@ export type IdentityContactsToggleIdentityContactData = {
 };
 
 export type IdentityContactsToggleIdentityContactResponse = (Message);
+
+export type InternalEnvironmentStatusUpdatedData = {
+    envId: string;
+};
+
+export type InternalEnvironmentStatusUpdatedResponse = (unknown);
 
 export type KnowledgeQueryKnowledgeData = {
     authorization?: (string | null);

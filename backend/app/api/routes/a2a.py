@@ -347,6 +347,35 @@ async def _handle_jsonrpc(
                 task_results = [A2AV1Adapter.transform_task_outbound(t) for t in task_results]
             return JSONResponse(content=jsonrpc_success(request_id, task_results))
 
+        elif method == "agent/status":
+            # Custom extension: return the agent's self-reported STATUS.md snapshot.
+            # Params: { "force_refresh": bool } (optional)
+            from app.services.agents.agent_status_service import AgentStatusService, StatusUnavailableError
+            force_refresh = params.get("force_refresh", False)
+            if force_refresh:
+                if AgentStatusService.is_rate_limited(environment.id):
+                    return _error_response(request_id, -32029, "Rate limited — try again in 30 seconds")
+                try:
+                    snapshot = await AgentStatusService.fetch_status(environment)
+                except StatusUnavailableError:
+                    snapshot = AgentStatusService.get_cached_status(environment)
+            else:
+                snapshot = AgentStatusService.get_cached_status(environment)
+            result = {
+                "agent_id": str(agent.id),
+                "environment_id": str(snapshot.environment_id) if snapshot.environment_id else None,
+                "severity": snapshot.severity,
+                "summary": snapshot.summary,
+                "reported_at": snapshot.reported_at.isoformat() if snapshot.reported_at else None,
+                "reported_at_source": snapshot.reported_at_source,
+                "fetched_at": snapshot.fetched_at.isoformat() if snapshot.fetched_at else None,
+                "is_stale": snapshot.is_stale,
+                "has_structured_metadata": snapshot.has_structured_metadata,
+                "prev_severity": snapshot.prev_severity,
+                "severity_changed_at": snapshot.severity_changed_at.isoformat() if snapshot.severity_changed_at else None,
+            }
+            return JSONResponse(content=jsonrpc_success(request_id, result))
+
         else:
             return _error_response(request_id, -32601, f"Method not found: {method}")
 

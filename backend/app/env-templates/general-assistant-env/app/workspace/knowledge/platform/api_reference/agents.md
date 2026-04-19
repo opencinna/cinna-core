@@ -2,6 +2,29 @@
 
 Auto-generated from OpenAPI spec. Tag: `agents`
 
+## GET `/api/v1/agents/status`
+**List Agent Statuses**
+
+**Query parameters:**
+- `workspace_id`: string | null
+
+**Response:** `AgentStatusListPublic`
+
+---
+
+## GET `/api/v1/agents/{agent_id}/status`
+**Get Agent Status**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Query parameters:**
+- `force_refresh`: boolean, default: `False`
+
+**Response:** `AgentStatusPublic`
+
+---
+
 ## GET `/api/v1/agents/`
 **Read Agents**
 

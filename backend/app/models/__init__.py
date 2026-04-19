@@ -103,6 +103,10 @@ from .environments.environment import (
     AgentEnvironmentPublic,
     AgentEnvironmentsPublic,
 )
+from .agents.agent_status import (
+    AgentStatusPublic,
+    AgentStatusListPublic,
+)
 from .sessions.session import (
     Session,
     SessionCreate,

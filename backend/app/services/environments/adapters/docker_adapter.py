@@ -14,6 +14,7 @@ from .base import (
     LocalFilesAccessInterface,
     EnvInitConfig,
     File,
+    WorkspaceItemMeta,
     MessageRequest,
     MessageResponse,
     HealthResponse,
@@ -726,11 +727,96 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
             logger.error(f"Failed to get workspace tree: {e}")
             raise Exception(f"Failed to get workspace tree: {e}")
 
+    async def fetch_workspace_item_with_meta(self, path: str) -> tuple[WorkspaceItemMeta, AsyncIterator[bytes]]:
+        """
+        Fetch workspace item with metadata via a single HTTP request.
+
+        Parses Last-Modified, Content-Length, Content-Type headers before streaming.
+        Returns (WorkspaceItemMeta, async_bytes_iterator).
+        On 404, returns meta.exists=False with an empty iterator (does not raise).
+        """
+        import urllib.parse
+        from email.utils import parsedate_to_datetime
+        from datetime import timezone
+
+        encoded_path = urllib.parse.quote(path, safe='/')
+        url = f"{self.base_url}/workspace/download/{encoded_path}"
+        headers = self._get_headers()
+
+        async def _empty_stream() -> AsyncIterator[bytes]:
+            return
+            yield b""  # makes it an async generator
+
+        try:
+            client = httpx.AsyncClient(timeout=120.0)
+            response = await client.send(
+                client.build_request("GET", url, headers=headers),
+                stream=True,
+            )
+
+            if response.status_code == 404:
+                await response.aclose()
+                await client.aclose()
+                return WorkspaceItemMeta(exists=False), _empty_stream()
+
+            if response.status_code == 400:
+                await response.aclose()
+                await client.aclose()
+                raise ValueError(f"Invalid path: {path}")
+
+            response.raise_for_status()
+
+            # Parse metadata from response headers
+            modified_at = None
+            last_modified_hdr = response.headers.get("last-modified")
+            if last_modified_hdr:
+                try:
+                    modified_at = parsedate_to_datetime(last_modified_hdr)
+                    if modified_at.tzinfo is None:
+                        modified_at = modified_at.replace(tzinfo=timezone.utc)
+                except Exception:
+                    modified_at = None
+
+            size_hdr = response.headers.get("content-length")
+            size = int(size_hdr) if size_hdr and size_hdr.isdigit() else None
+            content_type = response.headers.get("content-type")
+
+            meta = WorkspaceItemMeta(
+                exists=True,
+                size=size,
+                modified_at=modified_at,
+                content_type=content_type,
+            )
+
+            async def _stream() -> AsyncIterator[bytes]:
+                try:
+                    async for chunk in response.aiter_bytes(chunk_size=65536):
+                        yield chunk
+                finally:
+                    await response.aclose()
+                    await client.aclose()
+
+            return meta, _stream()
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return WorkspaceItemMeta(exists=False), _empty_stream()
+            elif e.response.status_code == 400:
+                raise ValueError(f"Invalid path: {path}")
+            else:
+                logger.error(f"Failed to fetch workspace item with meta: {e}")
+                raise Exception(f"Failed to fetch workspace item with meta: {e}")
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to fetch workspace item with meta: {e}")
+            raise Exception(f"Failed to fetch workspace item with meta: {e}")
+
     async def download_workspace_item(self, path: str) -> AsyncIterator[bytes]:
         """
         Download file or folder via HTTP proxy to agent-env.
 
-        Streams response to avoid loading entire file/zip into memory.
+        Wraps fetch_workspace_item_with_meta. Raises FileNotFoundError when
+        the path does not exist. Streams response to avoid loading entire
+        file/zip into memory.
 
         Args:
             path: Relative path from workspace root
@@ -738,35 +824,11 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
         Yields:
             Bytes chunks
         """
-        # URL-encode path to handle special characters
-        import urllib.parse
-        encoded_path = urllib.parse.quote(path, safe='/')
-
-        try:
-            async with httpx.AsyncClient() as client:
-                async with client.stream(
-                    "GET",
-                    f"{self.base_url}/workspace/download/{encoded_path}",
-                    headers=self._get_headers(),
-                    timeout=120.0  # Allow time for large zips
-                ) as response:
-                    response.raise_for_status()
-
-                    # Stream response chunks
-                    async for chunk in response.aiter_bytes(chunk_size=65536):
-                        yield chunk
-
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                raise FileNotFoundError(f"Path not found: {path}")
-            elif e.response.status_code == 400:
-                raise ValueError(f"Invalid path: {path}")
-            else:
-                logger.error(f"Failed to download workspace item: {e}")
-                raise Exception(f"Failed to download workspace item: {e}")
-        except httpx.HTTPError as e:
-            logger.error(f"Failed to download workspace item: {e}")
-            raise Exception(f"Failed to download workspace item: {e}")
+        meta, stream = await self.fetch_workspace_item_with_meta(path)
+        if not meta.exists:
+            raise FileNotFoundError(f"Path not found: {path}")
+        async for chunk in stream:
+            yield chunk
 
     async def install_custom_packages(self) -> bool:
         """

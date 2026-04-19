@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime, UTC
 from sqlmodel import SQLModel, Field, Column
-from sqlalchemy import JSON
+from sqlalchemy import JSON, Text, DateTime
+import sqlalchemy as sa
 
 
 class AgentEnvironment(SQLModel, table=True):
@@ -35,6 +36,15 @@ class AgentEnvironment(SQLModel, table=True):
     building_ai_credential_id: uuid.UUID | None = Field(
         default=None, foreign_key="ai_credential.id", ondelete="SET NULL"
     )
+    # Agent self-reported status snapshot (from STATUS.md in workspace root)
+    status_file_raw: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    status_file_severity: str | None = Field(default=None, sa_column=Column(sa.String(16), nullable=True))
+    status_file_summary: str | None = Field(default=None, sa_column=Column(sa.String(512), nullable=True))
+    status_file_reported_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    status_file_reported_at_source: str | None = Field(default=None, sa_column=Column(sa.String(16), nullable=True))
+    status_file_fetched_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    status_file_prev_severity: str | None = Field(default=None, sa_column=Column(sa.String(16), nullable=True))
+    status_file_severity_changed_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
 
 
 # Pydantic Schemas

@@ -3382,6 +3382,149 @@ export const AgentSharesPublicSchema = {
     description: 'List response for agent shares'
 } as const;
 
+export const AgentStatusListPublicSchema = {
+    properties: {
+        items: {
+            items: {
+                '$ref': '#/components/schemas/AgentStatusPublic'
+            },
+            type: 'array',
+            title: 'Items'
+        }
+    },
+    type: 'object',
+    required: ['items'],
+    title: 'AgentStatusListPublic',
+    description: 'Paginated list of agent status snapshots.'
+} as const;
+
+export const AgentStatusPublicSchema = {
+    properties: {
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        environment_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Environment Id'
+        },
+        severity: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Severity'
+        },
+        summary: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Summary'
+        },
+        reported_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Reported At'
+        },
+        reported_at_source: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Reported At Source'
+        },
+        fetched_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Fetched At'
+        },
+        raw: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Raw'
+        },
+        is_stale: {
+            type: 'boolean',
+            title: 'Is Stale',
+            default: true
+        },
+        has_structured_metadata: {
+            type: 'boolean',
+            title: 'Has Structured Metadata',
+            default: false
+        },
+        prev_severity: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Prev Severity'
+        },
+        severity_changed_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Severity Changed At'
+        }
+    },
+    type: 'object',
+    required: ['agent_id'],
+    title: 'AgentStatusPublic',
+    description: "Public representation of an agent's self-reported status snapshot."
+} as const;
+
 export const AgentSubtaskCreateSchema = {
     properties: {
         title: {

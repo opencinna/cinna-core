@@ -4,6 +4,7 @@ from app.api.routes import (
     a2a,
     access_tokens,
     agent_app_mcp_routes,
+    agent_status,
     app_agent_routes,
     cli,
     activities,
@@ -63,6 +64,7 @@ api_router.include_router(login.router)
 api_router.include_router(oauth.router)
 api_router.include_router(users.router)
 api_router.include_router(utils.router)
+api_router.include_router(agent_status.router)   # Must be before agents.router — /agents/status vs /agents/{id}
 api_router.include_router(agents.router)
 api_router.include_router(agentic_teams.router)
 api_router.include_router(agent_shares.router)
@@ -114,6 +116,7 @@ api_router.include_router(cli.router)
 api_router.include_router(desktop_auth.router)
 api_router.include_router(external_agents.router)
 api_router.include_router(external_a2a.router)
+api_router.include_router(agent_status.internal_router)
 
 
 if settings.ENVIRONMENT == "local":

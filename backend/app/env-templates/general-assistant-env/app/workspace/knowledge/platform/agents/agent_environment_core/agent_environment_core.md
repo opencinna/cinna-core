@@ -303,6 +303,7 @@ When a session is created for a task, the system prompt includes a task context 
 │   └── scripts/
 │       └── get_session_context.py # Stdlib-only helper for agent scripts
 └── workspace/                     # User workspace (volume-mounted, persists across rebuilds)
+    ├── STATUS.md                  # Optional self-reported status (see below)
     ├── scripts/                   # Python scripts created by agent
     │   └── README.md              # Scripts catalog (auto-maintained)
     ├── docs/                      # Agent prompts
@@ -317,4 +318,6 @@ When a session is created for a task, the system prompt includes a task context 
 ```
 
 **Source of truth**: All `app/core/` files live in `backend/app/env-templates/app_core_base/core/` and are shared across all environment templates. Individual templates (`general-env`, `python-env-advanced`) only contain template-specific files (Dockerfile, docker-compose template, workspace structure).
+
+**Agent self-reported status**: Agents may publish a `STATUS.md` at the workspace root to broadcast current state (severity, summary, freeform detail). This file is surfaced via the `/agent-status` command and the dashboard status tile without requiring an active session. See [Agent Status Command](../agent_commands/agent_status_command.md) for the full specification.
 

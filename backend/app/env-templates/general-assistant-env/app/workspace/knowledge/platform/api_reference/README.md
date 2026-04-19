@@ -13,7 +13,7 @@ Each file below documents one API domain.
 | Agent Shares | [agent_shares.md](./agent_shares.md) | 14 |
 | Agent Tasks | [agent_tasks.md](./agent_tasks.md) | 11 |
 | Agentic Teams | [agentic_teams.md](./agentic_teams.md) | 18 |
-| Agents | [agents.md](./agents.md) | 32 |
+| Agents | [agents.md](./agents.md) | 34 |
 | Ai Credentials | [ai_credentials.md](./ai_credentials.md) | 8 |
 | App Agent Routes | [app_agent_routes.md](./app_agent_routes.md) | 7 |
 | Cli | [cli.md](./cli.md) | 11 |
@@ -29,6 +29,7 @@ Each file below documents one API domain.
 | Guest Shares | [guest_shares.md](./guest_shares.md) | 5 |
 | Identity | [identity.md](./identity.md) | 7 |
 | Identity Contacts | [identity_contacts.md](./identity_contacts.md) | 2 |
+| Internal | [internal.md](./internal.md) | 1 |
 | Knowledge | [knowledge.md](./knowledge.md) | 1 |
 | Knowledge Sources | [knowledge_sources.md](./knowledge_sources.md) | 11 |
 | Llm Plugins | [llm_plugins.md](./llm_plugins.md) | 13 |

@@ -155,6 +155,28 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
     async def download_workspace_item(self, path: str) -> AsyncIterator[bytes]:
         yield b""
 
+    # Content keyed by path; set in tests to simulate STATUS.md presence.
+    workspace_files: dict[str, bytes] = {}
+
+    async def fetch_workspace_item_with_meta(self, path: str):
+        from app.services.environments.adapters.base import WorkspaceItemMeta
+        content = self.workspace_files.get(path)
+        if content is None:
+            async def _empty():
+                return
+                yield  # pragma: no cover
+            return WorkspaceItemMeta(exists=False), _empty()
+
+        async def _stream(data: bytes):
+            yield data
+
+        from datetime import datetime, UTC
+        return WorkspaceItemMeta(
+            exists=True,
+            size=len(content),
+            modified_at=datetime.now(UTC),
+        ), _stream(content)
+
     # --- Messages ---
 
     async def send_message(self, request: MessageRequest) -> MessageResponse:

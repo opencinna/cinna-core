@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from "react"
 import { ArrowLeft, EllipsisVertical, Mail, Package, Loader2, ListTodo, Plug, UserCircle, Hammer, MessageCircle, User } from "lucide-react"
 
 import { SessionsService, MessagesService, AgentsService, EnvironmentsService, OpenAPI } from "@/client"
+import { AgentStatusBadge } from "@/components/Agents/AgentStatusBadge"
 import { useNavigationHistory } from "@/hooks/useNavigationHistory"
 import { SubTasksPanel } from "@/components/Chat/SubTasksPanel"
 import { MessageList } from "@/components/Chat/MessageList"
@@ -492,6 +493,9 @@ function ChatInterface() {
                   )}
                 </div>
               </Button>
+            )}
+            {session.agent_id && (
+              <AgentStatusBadge agentId={session.agent_id} />
             )}
             {isEnvActivating ? (
               <Button

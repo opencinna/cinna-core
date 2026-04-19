@@ -70,6 +70,14 @@ class File(BaseModel):
     metadata: dict = {}
 
 
+class WorkspaceItemMeta(BaseModel):
+    """Metadata for a workspace item returned alongside the byte stream."""
+    exists: bool
+    size: int | None = None
+    modified_at: datetime | None = None   # tz-aware UTC
+    content_type: str | None = None
+
+
 class EnvInitConfig(BaseModel):
     """Configuration for environment initialization"""
     env_name: str  # e.g., "python-env-basic"
@@ -405,6 +413,23 @@ class EnvironmentAdapter(ABC):
             FileNotFoundError: Path doesn't exist
             ValueError: Invalid path (directory traversal attempt)
             Exception: Download failed
+        """
+        pass
+
+    @abstractmethod
+    async def fetch_workspace_item_with_meta(self, path: str) -> tuple["WorkspaceItemMeta", AsyncIterator[bytes]]:
+        """
+        Fetch a workspace item together with its file metadata in one round-trip.
+
+        Returns (WorkspaceItemMeta, async_bytes_iterator).
+        When the file does not exist, return meta with exists=False and an empty
+        async iterator — do NOT raise FileNotFoundError.
+
+        Args:
+            path: Relative path from workspace root (e.g., "STATUS.md")
+
+        Returns:
+            Tuple of (WorkspaceItemMeta, AsyncIterator[bytes])
         """
         pass
 
