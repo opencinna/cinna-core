@@ -1358,7 +1358,7 @@ class MessageService:
     async def interrupt_stream(
         db_session: Session,
         session_id: UUID,
-        environment_id: UUID,
+        environment_id: UUID | None,
     ) -> dict:
         """
         Interrupt an active streaming message.
@@ -1374,13 +1374,20 @@ class MessageService:
         ``A2ARequestHandler.handle_tasks_cancel`` (A2A scope via
         ``_authorize_existing_session``). Any new caller must follow suit.
 
+        Detached sessions (environment_id is None, e.g. after the environment
+        was deleted) have nothing to forward to — treated as "no active stream"
+        so callers convert to 400 via their existing ValueError handling.
+
         Returns:
             dict with status, message, session_id, and queued flag.
 
         Raises:
-            ValueError: If no active stream to interrupt.
+            ValueError: If no active stream to interrupt, or session is detached.
             Exception: If environment not found or communication fails.
         """
+        if environment_id is None:
+            raise ValueError("No active stream to interrupt")
+
         interrupt_info = await active_streaming_manager.request_interrupt(session_id)
 
         if not interrupt_info["found"]:
