@@ -10,7 +10,10 @@ class Session(SQLModel, table=True):
     __tablename__ = "session"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    environment_id: uuid.UUID = Field(foreign_key="agent_environment.id", ondelete="CASCADE")
+    # Detached (NULL) when the environment is deleted; rebinds to the agent's active environment on next message
+    environment_id: uuid.UUID | None = Field(
+        default=None, foreign_key="agent_environment.id", ondelete="SET NULL"
+    )
     agent_id: uuid.UUID | None = Field(
         default=None, foreign_key="agent.id", ondelete="SET NULL", index=True
     )
@@ -121,7 +124,7 @@ class SessionUpdate(SQLModel):
 
 class SessionPublic(SQLModel):
     id: uuid.UUID
-    environment_id: uuid.UUID
+    environment_id: uuid.UUID | None = None
     agent_id: uuid.UUID | None = None
     user_id: uuid.UUID
     user_workspace_id: uuid.UUID | None

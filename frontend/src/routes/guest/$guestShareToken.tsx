@@ -877,7 +877,7 @@ function GuestChatArea({
         {allowEnvPanel && (
           <EnvironmentPanel
             isOpen={envPanelOpen}
-            environmentId={session.environment_id}
+            environmentId={session.environment_id ?? undefined}
             agentId={agentId ?? undefined}
           />
         )}

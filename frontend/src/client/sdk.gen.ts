@@ -6825,12 +6825,13 @@ export class MessagesService {
      * List Session Commands
      * List available slash commands for a session.
      *
-     * Returns all registered slash commands with name, description, and availability status.
-     * The /rebuild-env command is marked unavailable if any session on the same environment
-     * is actively streaming.
+     * Returns all registered slash commands with name, description, and availability
+     * status. Display rules (hiding /run, conditional /run-list, /rebuild-env
+     * availability, dynamic /run:<name> entries) are applied by
+     * ``CommandService.list_for_session``.
      *
-     * Authenticated users only; no guest access (command autocomplete is a UX aid for
-     * the main chat session page which requires authentication).
+     * Authenticated users only; no guest access (command autocomplete is a UX aid
+     * for the main chat session page which requires authentication).
      * @param data The data for the request.
      * @param data.sessionId
      * @returns SessionCommandsPublic Successful Response

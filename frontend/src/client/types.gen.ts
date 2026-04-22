@@ -2447,7 +2447,7 @@ export type SessionCreate = {
 
 export type SessionPublic = {
     id: string;
-    environment_id: string;
+    environment_id?: (string | null);
     agent_id?: (string | null);
     user_id: string;
     user_workspace_id: (string | null);
@@ -2481,7 +2481,7 @@ export type SessionPublic = {
  */
 export type SessionPublicExtended = {
     id: string;
-    environment_id: string;
+    environment_id?: (string | null);
     agent_id?: (string | null);
     user_id: string;
     user_workspace_id: (string | null);

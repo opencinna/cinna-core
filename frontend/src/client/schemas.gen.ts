@@ -11861,8 +11861,15 @@ export const SessionPublicSchema = {
             title: 'Id'
         },
         environment_id: {
-            type: 'string',
-            format: 'uuid',
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Environment Id'
         },
         agent_id: {
@@ -12119,7 +12126,7 @@ export const SessionPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'environment_id', 'user_id', 'user_workspace_id', 'access_token_id', 'source_task_id', 'title', 'mode', 'status', 'interaction_status', 'pending_messages_count', 'created_at', 'updated_at', 'last_message_at'],
+    required: ['id', 'user_id', 'user_workspace_id', 'access_token_id', 'source_task_id', 'title', 'mode', 'status', 'interaction_status', 'pending_messages_count', 'created_at', 'updated_at', 'last_message_at'],
     title: 'SessionPublic'
 } as const;
 
@@ -12131,8 +12138,15 @@ export const SessionPublicExtendedSchema = {
             title: 'Id'
         },
         environment_id: {
-            type: 'string',
-            format: 'uuid',
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Environment Id'
         },
         agent_id: {
@@ -12489,7 +12503,7 @@ export const SessionPublicExtendedSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'environment_id', 'user_id', 'user_workspace_id', 'access_token_id', 'source_task_id', 'title', 'mode', 'status', 'interaction_status', 'pending_messages_count', 'created_at', 'updated_at', 'last_message_at'],
+    required: ['id', 'user_id', 'user_workspace_id', 'access_token_id', 'source_task_id', 'title', 'mode', 'status', 'interaction_status', 'pending_messages_count', 'created_at', 'updated_at', 'last_message_at'],
     title: 'SessionPublicExtended',
     description: 'Session with external session metadata'
 } as const;

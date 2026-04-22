@@ -372,10 +372,13 @@ class AgentService:
 
         Steps:
         1. Handle clone relationships (detach clones or update share records)
-        2. Get all environments for the agent
-        3. Delete each environment (stops containers, cleans up Docker resources)
+        2. Delete all of the agent's sessions (env->session FK is SET NULL, so
+           sessions would otherwise linger orphaned after their environments
+           are cascade-deleted). Messages cascade from sessions.
+        3. Get all environments for the agent
+        4. Delete each environment (stops containers, cleans up Docker resources)
            - EnvironmentService.delete_environment handles clearing active_environment_id
-        4. Delete agent (DB cascades will handle sessions/messages)
+        5. Delete agent
         """
         from app.models import AgentShare
 
@@ -412,6 +415,18 @@ class AgentService:
                 logger.info(f"Detached clone {clone.id} from deleted parent {agent_id}")
             if clones:
                 session.commit()
+
+        # Delete sessions tied to this agent before deleting its environments.
+        # env->session FK is ON DELETE SET NULL (so individual env deletion
+        # detaches sessions rather than wiping them); when the whole agent
+        # goes away we still want its sessions gone.
+        session_stmt = select(ChatSession).where(ChatSession.agent_id == agent_id)
+        agent_sessions = session.exec(session_stmt).all()
+        for chat_session in agent_sessions:
+            session.delete(chat_session)
+        if agent_sessions:
+            session.commit()
+            logger.info(f"Deleted {len(agent_sessions)} sessions for agent {agent_id}")
 
         # Get all environments for this agent
         environments = EnvironmentService.list_agent_environments(session, agent_id)

@@ -176,6 +176,8 @@ Each agent has a configurable inactivity threshold (agent-level setting, not per
 | **Rebuild** (DOWN → UP) | `docker-compose down` then `up` | Removes container completely, new one created; image built/reused by `TemplateImageService` before compose runs |
 | **Delete** (DOWN -v) | `docker-compose down -v` | Removes container and volumes |
 
+Deleting an environment **detaches** its sessions (sets `session.environment_id = NULL`) rather than deleting them. On the next message the session auto-rebinds to the agent's current active environment — see [Detaching and Rebinding](../../application/agent_sessions/agent_sessions.md#detaching-and-rebinding) in the Agent Sessions docs.
+
 ### Container Setup Logic
 
 - **New container** (first start or after rebuild): Install workspace Python packages + system packages + sync dynamic data

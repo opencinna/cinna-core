@@ -83,6 +83,53 @@ class SessionService:
         return session
 
     @staticmethod
+    def resolve_and_rebind_session_environment(
+        db: DBSession, chat_session: Session
+    ) -> AgentEnvironment | None:
+        """
+        Rebind the session to the agent's active environment (writes + commits) and return it.
+
+        A session's environment_id can be stale — detached (NULL) after the old
+        environment was deleted, or pointing at a non-active environment after
+        the user activated a different one. In either case we want the session
+        to follow the agent's current active environment so the next message
+        lands in the right container.
+
+        Side effect: when the session's environment_id needs to change, this
+        method writes to ``chat_session`` and calls ``db.commit()`` — which
+        will also flush any other pending changes on the same ``db``.
+
+        Returns None if no usable environment exists (agent missing, or agent
+        has no active_environment_id and the session's current env_id is stale).
+        """
+        agent = db.get(Agent, chat_session.agent_id) if chat_session.agent_id else None
+        current_env = (
+            db.get(AgentEnvironment, chat_session.environment_id)
+            if chat_session.environment_id
+            else None
+        )
+        active_env_id = agent.active_environment_id if agent else None
+
+        # Already on the active env — nothing to do
+        if current_env and active_env_id and current_env.id == active_env_id:
+            return current_env
+
+        if active_env_id:
+            active_env = db.get(AgentEnvironment, active_env_id)
+            if active_env and chat_session.environment_id != active_env.id:
+                logger.info(
+                    f"Rebinding session {chat_session.id}: environment_id "
+                    f"{chat_session.environment_id} -> {active_env.id} "
+                    f"(status={active_env.status})"
+                )
+                chat_session.environment_id = active_env.id
+                db.add(chat_session)
+                db.commit()
+                return active_env
+
+        return current_env
+
+    @staticmethod
     def get_recent_block_session(
         db_session: DBSession,
         block_id: UUID,
@@ -1178,10 +1225,10 @@ class SessionService:
             if chat_session.user_id != user_id:
                 return {"action": "error", "message": "Not enough permissions"}
 
-            # Get environment info
-            environment = db.get(AgentEnvironment, chat_session.environment_id)
+            # Get environment info — rebinds detached/stale sessions to the agent's active env
+            environment = SessionService.resolve_and_rebind_session_environment(db, chat_session)
             if not environment:
-                return {"action": "error", "message": "Environment not found"}
+                return {"action": "error", "message": "Agent has no active environment"}
 
             environment_id = environment.id
             environment_status = environment.status
@@ -1483,24 +1530,10 @@ class SessionService:
             if not agent:
                 return {"action": "error", "message": "Agent not found"}
 
-            # Get environment
-            environment = db.get(AgentEnvironment, session.environment_id)
+            # Resolve environment — rebinds detached/stale sessions to the agent's active env
+            environment = SessionService.resolve_and_rebind_session_environment(db, session)
             if not environment:
-                return {"action": "error", "message": "Environment not found"}
-
-            # If session points to a non-active environment, resolve to the agent's active one
-            if agent.active_environment_id and agent.active_environment_id != environment.id:
-                active_env = db.get(AgentEnvironment, agent.active_environment_id)
-                if active_env:
-                    logger.info(
-                        f"Session {session_id} points to non-active environment {environment.id} "
-                        f"(status={environment.status}), switching to active environment {active_env.id} "
-                        f"(status={active_env.status})"
-                    )
-                    session.environment_id = active_env.id
-                    db.add(session)
-                    db.commit()
-                    environment = active_env
+                return {"action": "error", "message": "Agent has no active environment"}
 
             # Check if there are pending messages
             concatenated_content, pending_messages = MessageService.collect_pending_messages(db, session_id)
@@ -1908,9 +1941,9 @@ class SessionService:
             if not agent:
                 raise ValueError("Agent not found")
 
-            environment = db.get(AgentEnvironment, session.environment_id)
+            environment = SessionService.resolve_and_rebind_session_environment(db, session)
             if not environment:
-                raise ValueError("Environment not found")
+                raise ValueError("Agent has no active environment")
 
             initial_status = environment.status
             environment_id = environment.id

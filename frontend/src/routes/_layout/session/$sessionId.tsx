@@ -570,7 +570,7 @@ function ChatInterface() {
           integrationTyp={session?.integration_type}
           sessionId={sessionId}
         />
-        <EnvironmentPanel isOpen={envPanelOpen} environmentId={effectiveEnvId} agentId={session?.agent_id ?? undefined} />
+        <EnvironmentPanel isOpen={envPanelOpen} environmentId={effectiveEnvId ?? undefined} agentId={session?.agent_id ?? undefined} />
         {showSubTasks && (
           <SubTasksPanel
             sessionId={sessionId}
