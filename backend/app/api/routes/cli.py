@@ -75,7 +75,7 @@ async def get_bootstrap_script(
     return f'''\
 #!/usr/bin/env python3
 """Cinna CLI bootstrap script."""
-import shutil, subprocess, sys
+import shutil, signal, subprocess, sys
 
 SETUP_URL = "{setup_url}"
 
@@ -83,7 +83,17 @@ def main():
     cinna = shutil.which("cinna")
     if cinna:
         print("Found cinna CLI, running setup...")
-        sys.exit(subprocess.call([cinna, "setup", SETUP_URL]))
+        # Ctrl+C is delivered to the whole foreground process group. Ignore it
+        # in this wrapper so Python's default handler doesn't raise
+        # KeyboardInterrupt inside wait() — cinna handles its own cleanup
+        # (stops the container, etc.). Reset the handler in the child via
+        # preexec_fn so cinna still receives SIGINT normally.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        proc = subprocess.Popen(
+            [cinna, "setup", SETUP_URL],
+            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
+        )
+        sys.exit(proc.wait())
 
     print("cinna CLI is not installed.")
     print()
