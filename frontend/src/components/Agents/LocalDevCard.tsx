@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Copy, Check, MonitorDot, RefreshCw } from "lucide-react"
+import { Copy, Check, Key, MonitorDot, RefreshCw, Unplug } from "lucide-react"
 import { useState, useEffect } from "react"
 
 import type { CLISetupTokenCreated, CLITokenPublic } from "@/client"
@@ -26,18 +26,13 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { LocalDevSyncStatus } from "@/components/Agents/LocalDevSyncStatus"
-
-function formatLastUsed(dateStr: string | null): string {
-  if (!dateStr) return "never"
-  const diffMs = Date.now() - new Date(dateStr).getTime()
-  const mins = Math.floor(diffMs / 60000)
-  if (mins < 1) return "just now"
-  if (mins < 60) return `${mins}m ago`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  return `${Math.floor(hours / 24)}d ago`
-}
 
 function formatCountdown(seconds: number): string {
   if (seconds >= 60) {
@@ -179,6 +174,19 @@ export function LocalDevCard({ agentId }: LocalDevCardProps) {
                 <Button
                   variant="outline"
                   size="icon"
+                  className="rounded-none border-r-0"
+                  onClick={() => handleCopy(setupToken.token, "token")}
+                  title="Copy token"
+                >
+                  {copiedId === "token" ? (
+                    <Check className="h-4 w-4 text-green-500" />
+                  ) : (
+                    <Key className="h-4 w-4" />
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
                   className="rounded-l-none"
                   onClick={() => handleCopy(setupToken.setup_command, "cmd")}
                   title="Copy command"
@@ -191,11 +199,11 @@ export function LocalDevCard({ agentId }: LocalDevCardProps) {
                 </Button>
               </div>
             </div>
-            <p className="text-xs text-muted-foreground">
-              {secondsLeft > 0
-                ? `Expires in ${formatCountdown(secondsLeft)}`
-                : "Expired"}
-            </p>
+            {secondsLeft > 0 && (
+              <p className="text-xs text-muted-foreground">
+                Expires in {formatCountdown(secondsLeft)}
+              </p>
+            )}
           </div>
         )}
 
@@ -221,24 +229,33 @@ export function LocalDevCard({ agentId }: LocalDevCardProps) {
                       {token.name || token.prefix}
                     </p>
                     <div className="flex items-center gap-2 mt-0.5">
-                      <p className="text-xs text-muted-foreground">
-                        last used {formatLastUsed(token.last_used_at)}
-                      </p>
                       <LocalDevSyncStatus lastSyncConnectedAt={token.last_sync_connected_at} />
                     </div>
                   </div>
                   <div className="shrink-0 ml-2">
                     <AlertDialog>
-                      <AlertDialogTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 px-2 text-xs text-destructive hover:text-destructive"
-                        >
-                          Disconnect
-                        </Button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                aria-label="Disconnect session"
+                                className="h-7 w-7 text-destructive hover:text-destructive"
+                              >
+                                <Unplug className="h-4 w-4" />
+                              </Button>
+                            </AlertDialogTrigger>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="text-xs">
+                            Disconnect
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      <AlertDialogContent
+                        onOpenAutoFocus={(e) => e.preventDefault()}
+                      >
                         <AlertDialogHeader>
                           <AlertDialogTitle>Disconnect Session</AlertDialogTitle>
                           <AlertDialogDescription>
@@ -250,6 +267,7 @@ export function LocalDevCard({ agentId }: LocalDevCardProps) {
                         <AlertDialogFooter>
                           <AlertDialogCancel>Cancel</AlertDialogCancel>
                           <AlertDialogAction
+                            autoFocus
                             onClick={() =>
                               revokeCliTokenMutation.mutate(token.id)
                             }

@@ -31,7 +31,7 @@
 
 ### Frontend — Components
 
-- `frontend/src/components/Agents/LocalDevCard.tsx` — Setup command display, copy button, expiry countdown, active sessions list with per-row sync status indicator, disconnect dialog
+- `frontend/src/components/Agents/LocalDevCard.tsx` — Setup command display with Regenerate / Copy-token / Copy-command icon buttons, expiry countdown (hidden once expired), active sessions list with per-row sync status indicator, icon-only Disconnect button with Enter-to-confirm dialog
 - `frontend/src/components/Agents/LocalDevSyncStatus.tsx` — Small status subcomponent embedded in LocalDevCard rows; shows "Synced" / "Idle" based on `last_sync_connected_at`
 - `frontend/src/components/Agents/AgentIntegrationsTab.tsx` — LocalDevCard added to integrations grid
 
@@ -234,10 +234,10 @@ Entries are upserted on every `cinna setup` (refreshing the token) and removed b
 ### LocalDevCard (`frontend/src/components/Agents/LocalDevCard.tsx`)
 
 - **Setup button** — Triggers `CliService.createSetupToken`, displays curl command
-- **Command display** — Readonly input with Copy (clipboard icon, 2s feedback) and Regenerate (refresh icon) inline buttons
-- **Expiry countdown** — `useEffect` + `setInterval`, shows "Expires in Xm Ys" or "Expired"
-- **Active sessions list** — `useQuery` with key `["cli-tokens", agentId]`, shows machine_info/name/prefix + sync status indicator (via `LocalDevSyncStatus`) + relative last-used time
-- **Disconnect dialog** — AlertDialog confirmation, calls `revokeCliToken`, invalidates query on success
+- **Command display** — Readonly input with three inline icon buttons: Regenerate (refresh), Copy Token (key icon — copies raw `setupToken.token`), Copy Command (clipboard — copies the full `setup_command`); each copy shows a 2s green-check confirmation via `copiedId` state
+- **Expiry countdown** — `useEffect` + `setInterval`, renders "Expires in Xm Ys" while `secondsLeft > 0`; hidden once expired
+- **Active sessions list** — `useQuery` with key `["cli-tokens", agentId]`, shows machine_info/name/prefix + sync status indicator (via `LocalDevSyncStatus`)
+- **Disconnect control** — Icon-only destructive button (`Unplug` lucide icon) with tooltip "Disconnect"; opens an AlertDialog that uses `onOpenAutoFocus={(e) => e.preventDefault()}` plus `autoFocus` on the destructive `AlertDialogAction` so Enter triggers disconnect (Escape cancels); calls `revokeCliToken` and invalidates the query on success
 
 ### LocalDevSyncStatus (`frontend/src/components/Agents/LocalDevSyncStatus.tsx`)
 
