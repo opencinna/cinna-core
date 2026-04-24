@@ -3,10 +3,10 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, SessionDep
 from app.models import (
-    Agent,
     AgentEnvironment,
     AgentEnvironmentUpdate,
     AgentEnvironmentPublic,
@@ -314,6 +314,51 @@ async def get_environment_logs(
 _EnvFromAgentAuth = Annotated[AgentEnvironment, Depends(_verify_env_agent_auth)]
 
 
+class WorkspaceFilesChangedRequest(BaseModel):
+    """Optional body for the workspace-files-changed callback.
+
+    ``changed_files`` is informational — currently used for logging only;
+    downstream handlers refresh all caches regardless.
+    """
+    changed_files: list[str] | None = None
+
+
+@router.post("/{id}/workspace-files-changed")
+async def workspace_files_changed(
+    id: uuid.UUID,
+    session: SessionDep,
+    env: _EnvFromAgentAuth,
+    body: WorkspaceFilesChangedRequest | None = None,
+) -> Message:
+    """
+    Callback from an agent environment when watched workspace files stabilise
+    after a change — typically after a Mutagen sync from the CLI.
+
+    Emits ``WORKSPACE_FILES_CHANGED``; downstream handlers refresh the agent's
+    prompts, CLI commands cache, and status snapshot.
+
+    Auth: AGENT_AUTH_TOKEN bearer + X-Agent-Env-Id environment header (internal only).
+    """
+    if env.id != id:
+        raise HTTPException(status_code=403, detail="Environment ID mismatch")
+
+    changed_files = body.changed_files if body else None
+    try:
+        await EnvironmentService.emit_workspace_files_changed(
+            session=session,
+            environment=env,
+            changed_files=changed_files,
+        )
+    except AgentEnvironmentError as e:
+        _handle_service_error(e)
+
+    logger.info(
+        f"workspace-files-changed: emitted event for env {env.id} "
+        f"(changed_files={changed_files or 'n/a'})"
+    )
+    return Message(message="Workspace files change event emitted")
+
+
 @router.post("/{id}/prompt-file-changed")
 async def prompt_file_changed(
     id: uuid.UUID,
@@ -321,31 +366,19 @@ async def prompt_file_changed(
     env: _EnvFromAgentAuth,
 ) -> Message:
     """
-    Callback from an agent environment when prompt files stabilise after a change.
-
-    Called by the env-core file-watcher (polling docs/WORKFLOW_PROMPT.md,
-    docs/ENTRYPOINT_PROMPT.md, docs/REFINER_PROMPT.md) after a 5-second stable
-    window. Fires sync_agent_prompts_from_environment, which updates the agent
-    model and triggers A2A skill regeneration + background description update.
+    Legacy alias — emits ``WORKSPACE_FILES_CHANGED`` with no ``changed_files``
+    list. Kept so agent environments built before the generic watcher shipped
+    keep working without a rebuild.
 
     Auth: AGENT_AUTH_TOKEN bearer + X-Agent-Env-Id environment header (internal only).
     """
     if env.id != id:
         raise HTTPException(status_code=403, detail="Environment ID mismatch")
 
-    agent = session.get(Agent, env.agent_id)
-    if not agent:
-        logger.warning(f"prompt-file-changed: agent {env.agent_id} not found for env {env.id}")
-        raise HTTPException(status_code=404, detail="Agent not found")
-
     try:
-        await EnvironmentService.sync_agent_prompts_from_environment(
-            session=session,
-            environment=env,
-            agent=agent,
-        )
-        logger.info(f"prompt-file-changed: synced prompts for agent {agent.id} from env {env.id}")
-        return Message(message="Prompts synced successfully")
-    except Exception as e:
-        logger.error(f"prompt-file-changed: failed to sync prompts for env {env.id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to sync prompts: {str(e)}")
+        await EnvironmentService.emit_workspace_files_changed(session=session, environment=env)
+    except AgentEnvironmentError as e:
+        _handle_service_error(e)
+
+    logger.info(f"prompt-file-changed: emitted event for env {env.id}")
+    return Message(message="Workspace files change event emitted")

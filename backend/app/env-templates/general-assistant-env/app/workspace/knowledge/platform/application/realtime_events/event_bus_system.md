@@ -189,9 +189,10 @@ def on_startup():
 
 When chat streaming occurs, `MessageService` emits events at each stage:
 - `STREAM_STARTED` → `ActivityService` creates "session_running" activity
-- `STREAM_COMPLETED` → `ActivityService` manages completion, `EnvironmentService` syncs prompts (building mode)
-- `STREAM_ERROR` → `ActivityService` creates error activity
+- `STREAM_COMPLETED` → `ActivityService` manages completion, `EnvironmentService` syncs prompts (building mode), `CLICommandsService` refreshes CLI commands cache, `AgentStatusService` pulls STATUS.md
+- `STREAM_ERROR` → `ActivityService` creates error activity; post-action handlers refresh caches
 - `STREAM_INTERRUPTED` → `ActivityService` cleans up running activity
+- `WORKSPACE_FILES_CHANGED` → env-core fires when watched workspace docs (prompts, `CLI_COMMANDS.yaml`, `STATUS.md`) stabilise after a Mutagen sync; the same three post-action handlers (`EnvironmentService.handle_workspace_files_changed_event`, `CLICommandsService.handle_post_action_event`, `AgentStatusService.handle_post_action_event`) run
 
 **Example Use Case**: Todo Progress Tracking
 

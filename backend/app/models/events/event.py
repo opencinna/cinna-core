@@ -70,6 +70,14 @@ class EventType:
     # CLI commands cache events
     CLI_COMMANDS_UPDATED = "cli_commands_updated"
 
+    # Workspace file change event — fired by env-core when workspace files
+    # that the backend caches (prompts, CLI_COMMANDS.yaml, STATUS.md) change
+    # and stabilise. Typically triggered by a Mutagen sync from the CLI, but
+    # also fires for any other workspace mutation. Meta always carries
+    # `environment_id` and `agent_id`; `changed_files` optionally lists the
+    # relative paths that tripped the watcher.
+    WORKSPACE_FILES_CHANGED = "workspace_files_changed"
+
     # CRON / schedule lifecycle events — emitted by agent_schedule_scheduler when
     # a scheduled execution finishes (success / triggered-session / error). Meta
     # always carries `environment_id`, `agent_id`, `schedule_id`, `schedule_type`

@@ -87,10 +87,10 @@ Server-verified metadata injected into system prompts for integration-aware beha
 5. Prompts available in UI and for other environments
 
 **Environment to Backend** (CLI live sync):
-1. `WORKFLOW_PROMPT.md` or `ENTRYPOINT_PROMPT.md` are modified in the workspace (e.g., via a synced local edit)
-2. Env-core's lightweight file watcher detects the change and waits for the file to stabilise (debounce)
-3. Env-core POSTs to `POST /api/v1/environments/{id}/prompt-file-changed` on the backend
-4. Backend fires `sync_agent_prompts_from_environment()` with the same downstream effects as a post-building-session resync
+1. A watched workspace doc (`WORKFLOW_PROMPT.md`, `ENTRYPOINT_PROMPT.md`, `REFINER_PROMPT.md`, `CLI_COMMANDS.yaml`, or `STATUS.md`) is modified in the workspace (e.g., via a synced local edit)
+2. Env-core's lightweight mtime-poll watcher detects the change and waits for the file to stabilise (debounce)
+3. Env-core POSTs to `POST /api/v1/environments/{id}/workspace-files-changed` with the list of changed paths (the legacy `prompt-file-changed` endpoint is kept as an alias for environments built before the generic watcher shipped)
+4. Backend emits `WORKSPACE_FILES_CHANGED`; handlers run `sync_agent_prompts_from_environment()`, refresh the CLI commands cache, and pull the STATUS.md snapshot — same downstream effects as a post-building-session resync
 
 ## Business Rules
 

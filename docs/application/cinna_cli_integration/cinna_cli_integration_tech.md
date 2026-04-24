@@ -129,7 +129,8 @@ Index: `ix_agent_environment_sync_active` (partial, `WHERE sync_active = true`)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/environments/{id}/prompt-file-changed` | Env-core signals that a prompt file changed; backend fires `sync_agent_prompts_from_environment()` |
+| POST | `/api/v1/environments/{id}/workspace-files-changed` | Env-core signals one or more watched workspace files (prompts, `CLI_COMMANDS.yaml`, `STATUS.md`) changed. Body: `{"changed_files": [...]}` (optional, informational). Backend emits `WORKSPACE_FILES_CHANGED`; handlers refresh prompts, CLI commands cache, and agent status snapshot. |
+| POST | `/api/v1/environments/{id}/prompt-file-changed` | Legacy alias for `workspace-files-changed` — kept so agent environments built before the generic watcher shipped keep working. Emits the same event with no `changed_files` list. |
 
 **Removed endpoints** (were present in previous model, now deleted):
 
@@ -219,10 +220,14 @@ Entries are upserted on every `cinna setup` (refreshing the token) and removed b
 - `building_prompt_parts` — individual raw parts (BUILDING_AGENT.md body, scripts README, workflow prompt, entrypoint prompt, refiner prompt, credentials README, knowledge topics, handover config) used for diffing in future tooling
 - `prompt_files` — dict `{filename: content}` for every `.md` file under `/app/core/prompts/` except `BUILDING_AGENT.md` itself. Shipped inline so the CLI can write them next to `BUILDING_AGENT.md` at the workspace root — this replaces the legacy behaviour of extracting them from the Docker build context tarball (no longer produced in live-sync mode)
 
-### Prompt file watcher
+### Workspace files watcher
 
-- Lightweight watcher in `core/main.py` monitors `workspace/docs/WORKFLOW_PROMPT.md` and `ENTRYPOINT_PROMPT.md`
-- When a file is stable for a debounce window after a change, POSTs to `POST /api/v1/environments/{id}/prompt-file-changed` on the backend (bearer auth + `X-Agent-Env-Id` header)
+- Lightweight mtime-poll watcher in `core/main.py` (`_workspace_files_watcher`) monitors `docs/WORKFLOW_PROMPT.md`, `docs/ENTRYPOINT_PROMPT.md`, `docs/REFINER_PROMPT.md`, `docs/CLI_COMMANDS.yaml`, `docs/STATUS.md` under `WORKSPACE_ROOT` <!-- nocheck -->
+- Polls every 5 s; fires when a file is stable for at least one polling interval after a change (debounces Mutagen transfer bursts)
+- POSTs the list of changed paths to `POST /api/v1/environments/{id}/workspace-files-changed` (bearer auth + `X-Agent-Env-Id` header)
+- Route (`backend/app/api/routes/environments.py`) parses the optional `WorkspaceFilesChangedRequest` body and delegates to `EnvironmentService.emit_workspace_files_changed()`; the legacy `prompt-file-changed` endpoint is a thin alias that calls the same service method with `changed_files=None`
+- `EnvironmentService.emit_workspace_files_changed()` (`backend/app/services/environments/environment_service.py`) looks up the agent (raises `AgentNotFoundError` if missing) and emits `EventType.WORKSPACE_FILES_CHANGED` with `environment_id`, `agent_id`, and optional `changed_files` in meta
+- Event subscribers (registered in `backend/app/main.py`): `EnvironmentService.handle_workspace_files_changed_event` (prompt resync), `CLICommandsService.handle_post_action_event` (CLI_COMMANDS.yaml cache), `AgentStatusService.handle_post_action_event` (STATUS.md snapshot)
 
 ### Docker image
 

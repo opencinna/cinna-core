@@ -1024,6 +1024,82 @@ class EnvironmentService:
             logger.error(f"Error in handle_stream_completed_event: {e}", exc_info=True)
 
     @staticmethod
+    async def emit_workspace_files_changed(
+        session: Session,
+        environment: AgentEnvironment,
+        changed_files: list[str] | None = None,
+    ) -> None:
+        """
+        Emit ``WORKSPACE_FILES_CHANGED`` for this environment.
+
+        Looks up the environment's agent (for the event's target ``user_id``)
+        and publishes the event. Subscribers live in the main app lifespan
+        registration: prompt resync (this service), CLI commands cache refresh,
+        and agent status pull.
+
+        Raises ``AgentNotFoundError`` when the environment's agent row is
+        missing — the caller (typically a route) should map that to 404.
+        """
+        agent = session.get(Agent, environment.agent_id)
+        if not agent:
+            raise AgentNotFoundError()
+
+        from app.services.events.event_service import event_service
+        from app.models.events.event import EventType
+
+        meta: dict[str, Any] = {
+            "environment_id": str(environment.id),
+            "agent_id": str(environment.agent_id),
+        }
+        if changed_files:
+            meta["changed_files"] = changed_files
+
+        await event_service.emit_event(
+            event_type=EventType.WORKSPACE_FILES_CHANGED,
+            model_id=environment.agent_id,
+            user_id=agent.owner_id,
+            meta=meta,
+        )
+
+    @staticmethod
+    async def handle_workspace_files_changed_event(event_data: dict[str, Any]):
+        """
+        Event handler for WORKSPACE_FILES_CHANGED events.
+
+        Fired by env-core when prompt files (or other watched workspace docs)
+        change and stabilise — typically after a Mutagen sync from the CLI.
+        Unconditionally resyncs agent prompts from the environment; CLI
+        commands and agent status are refreshed by their own post-action
+        handlers registered on the same event.
+        """
+        try:
+            meta = event_data.get("meta") or {}
+            environment_id = meta.get("environment_id")
+            agent_id = meta.get("agent_id")
+
+            if not environment_id or not agent_id:
+                logger.warning("workspace_files_changed event missing environment_id or agent_id in meta")
+                return
+
+            with create_session() as session:
+                environment = session.get(AgentEnvironment, UUID(environment_id))
+                agent = session.get(Agent, UUID(agent_id))
+
+                if not environment or not agent:
+                    logger.warning(
+                        f"workspace_files_changed: env {environment_id} or agent {agent_id} not found"
+                    )
+                    return
+
+                await EnvironmentService.sync_agent_prompts_from_environment(
+                    session=session,
+                    environment=environment,
+                    agent=agent,
+                )
+        except Exception as e:
+            logger.error(f"Error in handle_workspace_files_changed_event: {e}", exc_info=True)
+
+    @staticmethod
     def get_environments_for_credential(
         session: Session,
         credential: AICredential,

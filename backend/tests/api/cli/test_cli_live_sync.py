@@ -8,8 +8,10 @@ Covers:
 - sync-stream WebSocket: handshake rejects on missing/invalid bearer,
   scope mismatch → 1008 close; on successful handshake SyncActivityTracker.register
   is called, unregister called on disconnect
-- prompt-file-changed callback: env-core auth via X-Agent-Env-Id + bearer,
-  wrong credentials return 401, happy path triggers sync_agent_prompts_from_environment
+- workspace-files-changed callback (+ legacy prompt-file-changed alias): env-core
+  auth via X-Agent-Env-Id + bearer, wrong credentials return 401, happy path
+  emits WORKSPACE_FILES_CHANGED which runs sync_agent_prompts_from_environment via
+  the registered handler
 - Suspension scheduler gate: is_sync_warm=True causes scheduler to skip the env
 
 Notes:
@@ -427,22 +429,72 @@ def test_sync_stream_ws_valid_auth_connects_and_closes(
         )
 
 
-# ── Scenario 4: prompt-file-changed callback ─────────────────────────────────
+# ── Scenario 4: workspace-files-changed callback ─────────────────────────────
 
-def test_prompt_file_changed_auth_and_sync(
+def _emit_event_calls_for(event_type: str) -> tuple[AsyncMock, object]:
+    """Build a patcher for ``event_service.emit_event`` that records all calls.
+
+    Returns the mock and the patch object (caller uses it as a context manager).
+    Emitted events are recorded on ``mock.call_args_list`` — the test then
+    filters to the event_type it cares about.
+    """
+    mock_emit = AsyncMock()
+    patcher = patch(
+        "app.services.events.event_service.event_service.emit_event",
+        mock_emit,
+    )
+    return mock_emit, patcher
+
+
+def _assert_workspace_files_changed_emitted(
+    mock_emit: AsyncMock,
+    expected_env_id: str,
+    expected_agent_id: str,
+    expected_changed_files: list[str] | None,
+) -> None:
+    """Verify at least one emit_event call matches WORKSPACE_FILES_CHANGED with the expected meta."""
+    matches = [
+        call for call in mock_emit.call_args_list
+        if call.kwargs.get("event_type") == "workspace_files_changed"
+    ]
+    assert matches, (
+        f"Expected a WORKSPACE_FILES_CHANGED emit; got: "
+        f"{[c.kwargs.get('event_type') for c in mock_emit.call_args_list]}"
+    )
+    # Take the last match (most recent emission)
+    meta = matches[-1].kwargs.get("meta") or {}
+    assert meta.get("environment_id") == expected_env_id, (
+        f"Expected environment_id={expected_env_id}, got {meta.get('environment_id')}"
+    )
+    assert meta.get("agent_id") == expected_agent_id, (
+        f"Expected agent_id={expected_agent_id}, got {meta.get('agent_id')}"
+    )
+    if expected_changed_files is None:
+        assert "changed_files" not in meta, (
+            f"Expected no changed_files key when body omitted, got {meta.get('changed_files')!r}"
+        )
+    else:
+        assert meta.get("changed_files") == expected_changed_files, (
+            f"Expected changed_files={expected_changed_files}, got {meta.get('changed_files')!r}"
+        )
+
+
+def test_workspace_files_changed_auth_and_event(
     client: TestClient,
     superuser_token_headers: dict[str, str],
     db: Session,
 ) -> None:
     """
-    POST /environments/{id}/prompt-file-changed:
+    POST /environments/{id}/workspace-files-changed (and legacy prompt-file-changed alias):
       1. Bootstrap agent with active env; set auth_token in env config
       2. Missing Authorization header → 401
       3. Missing X-Agent-Env-Id header → 401
       4. Wrong bearer token → 401
       5. Env ID in path doesn't match X-Agent-Env-Id header → 401 or 403
-      6. Happy path: correct bearer + env ID header → 200 and
-         sync_agent_prompts_from_environment is triggered (mocked)
+      6. Happy path on workspace-files-changed with changed_files body → 200 +
+         WORKSPACE_FILES_CHANGED event emitted with the changed_files list in meta
+      7. Happy path on legacy prompt-file-changed → 200 + the same event without
+         changed_files in meta
     """
     # ── Phase 1: Bootstrap agent with running env ─────────────────────────
     agent = create_agent_via_api(client, superuser_token_headers)
@@ -460,27 +512,28 @@ def test_prompt_file_changed_auth_and_sync(
     db.add(env)
     db.flush()
 
-    callback_url = f"{_ENV_BASE}/{env_id}/prompt-file-changed"
+    new_url = f"{_ENV_BASE}/{env_id}/workspace-files-changed"
+    legacy_url = f"{_ENV_BASE}/{env_id}/prompt-file-changed"
     auth_bearer = f"Bearer {auth_token}"
     env_id_header = str(env_id)
 
     # ── Phase 2: Missing Authorization → 401 ─────────────────────────────
     r = client.post(
-        callback_url,
+        new_url,
         headers={"X-Agent-Env-Id": env_id_header},
     )
     assert r.status_code == 401, f"Expected 401 without Authorization, got {r.status_code}"
 
     # ── Phase 3: Missing X-Agent-Env-Id → 401 ────────────────────────────
     r = client.post(
-        callback_url,
+        new_url,
         headers={"Authorization": auth_bearer},
     )
     assert r.status_code == 401, f"Expected 401 without X-Agent-Env-Id, got {r.status_code}"
 
     # ── Phase 4: Wrong bearer token → 401 ────────────────────────────────
     r = client.post(
-        callback_url,
+        new_url,
         headers={
             "Authorization": "Bearer wrong-token",
             "X-Agent-Env-Id": env_id_header,
@@ -492,7 +545,7 @@ def test_prompt_file_changed_auth_and_sync(
     # Use a different env UUID in the header — the route verifies env.id == id
     other_env_id = str(uuid.uuid4())
     r = client.post(
-        callback_url,
+        new_url,
         headers={
             "Authorization": auth_bearer,
             "X-Agent-Env-Id": other_env_id,
@@ -503,36 +556,46 @@ def test_prompt_file_changed_auth_and_sync(
         f"Expected 401/403 for mismatched env ID, got {r.status_code}"
     )
 
-    # ── Phase 6: Happy path → 200, sync_agent_prompts triggered ──────────
-    sync_calls: list[dict] = []
-
-    async def _mock_sync(session, environment, agent):
-        sync_calls.append({"env_id": environment.id, "agent_id": agent.id})
-
-    with patch(
-        "app.api.routes.environments.EnvironmentService.sync_agent_prompts_from_environment",
-        side_effect=_mock_sync,
-    ):
+    # ── Phase 6: Happy path on new endpoint with changed_files body ──────
+    mock_emit, patcher = _emit_event_calls_for("workspace_files_changed")
+    with patcher:
         r = client.post(
-            callback_url,
+            new_url,
+            headers={
+                "Authorization": auth_bearer,
+                "X-Agent-Env-Id": env_id_header,
+            },
+            json={"changed_files": ["docs/WORKFLOW_PROMPT.md", "docs/CLI_COMMANDS.yaml"]},
+        )
+
+    assert r.status_code == 200, f"Expected 200 for valid callback, got {r.status_code}: {r.text}"
+    body = r.json()
+    assert "message" in body
+    _assert_workspace_files_changed_emitted(
+        mock_emit,
+        expected_env_id=env_id,
+        expected_agent_id=agent_id,
+        expected_changed_files=["docs/WORKFLOW_PROMPT.md", "docs/CLI_COMMANDS.yaml"],
+    )
+
+    # ── Phase 7: Happy path on legacy prompt-file-changed alias ──────────
+    mock_emit, patcher = _emit_event_calls_for("workspace_files_changed")
+    with patcher:
+        r = client.post(
+            legacy_url,
             headers={
                 "Authorization": auth_bearer,
                 "X-Agent-Env-Id": env_id_header,
             },
         )
 
-    assert r.status_code == 200, f"Expected 200 for valid callback, got {r.status_code}: {r.text}"
-    body = r.json()
-    assert "message" in body
-    assert "synced" in body["message"].lower() or "success" in body["message"].lower(), (
-        f"Expected success message in response, got: {body}"
+    assert r.status_code == 200, f"Expected 200 for valid legacy callback, got {r.status_code}: {r.text}"
+    _assert_workspace_files_changed_emitted(
+        mock_emit,
+        expected_env_id=env_id,
+        expected_agent_id=agent_id,
+        expected_changed_files=None,
     )
-
-    assert len(sync_calls) == 1, (
-        f"Expected sync_agent_prompts_from_environment called once, got {len(sync_calls)}"
-    )
-    assert str(sync_calls[0]["env_id"]) == env_id
-    assert str(sync_calls[0]["agent_id"]) == agent_id
 
 
 # ── Scenario 5: Suspension scheduler gate ────────────────────────────────────

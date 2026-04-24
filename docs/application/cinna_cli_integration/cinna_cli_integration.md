@@ -39,7 +39,7 @@ Enables local development of remote agents using the `cinna` CLI tool. Users dev
 4. `cinna exec <command>` runs the command in the remote environment (from another terminal while `cinna dev` is live, or standalone — it does not require an active dev session) and streams stdout/stderr back
 5. Local AI tools (Claude Code, Cursor) read `CLAUDE.md` and `BUILDING_AGENT.md` for agent context; companion guides (`WEBAPP_BUILDING.md`, `COMPLEX_AGENT_DESIGN.md`, …) sit next to `BUILDING_AGENT.md` so the on-demand `./<NAME>.md` references in the building prompt resolve locally — letting the local assistant follow the same webapp-build and complex-agent-design workflows the platform's building agent does
 6. MCP proxy provides `knowledge_query` tool for searching the agent's knowledge base
-7. When prompt files (`WORKFLOW_PROMPT.md`, `ENTRYPOINT_PROMPT.md`) change and stabilise in the workspace, the platform automatically resyncs agent prompts from the environment to the database — the same resync that runs at the end of a building session
+7. When any watched workspace file (`docs/WORKFLOW_PROMPT.md`, `ENTRYPOINT_PROMPT.md`, `REFINER_PROMPT.md`, `CLI_COMMANDS.yaml`, `STATUS.md`) changes and stabilises — e.g., after a Mutagen sync completes — env-core fires a single callback and the backend emits `WORKSPACE_FILES_CHANGED`; downstream handlers resync agent prompts, refresh the CLI commands cache, and pull the STATUS.md snapshot. This is the same post-action refresh that runs after stream completion <!-- nocheck -->
 
 ### 3. Managing Active Sessions (UI)
 
@@ -95,11 +95,15 @@ Enables local development of remote agents using the `cinna` CLI tool. Users dev
 - After the last sync WebSocket disconnects, a grace period (default 5 minutes) starts; if no new sync or session activity arrives before it elapses, the environment follows its normal auto-suspend path
 - Mutagen version is pinned per platform release. `cinna setup` and `cinna sync start` verify the local Mutagen version matches; a version mismatch fails fast with an install command
 
-### Prompt Resync
+### Workspace Files Resync
 
-- When `WORKFLOW_PROMPT.md` or `ENTRYPOINT_PROMPT.md` change inside the environment and are stable for a debounce window, env-core emits a workspace-file-changed event
-- The backend subscribes to this event and fires `EnvironmentService.sync_agent_prompts_from_environment()`, which has the same downstream effects as a post-building-session resync (A2A skills regen, background description update)
-- This replaces the old side effect that was attached to the now-removed `POST /workspace` push endpoint
+- Env-core runs a lightweight mtime-poll watcher over `docs/WORKFLOW_PROMPT.md`, `ENTRYPOINT_PROMPT.md`, `REFINER_PROMPT.md`, `CLI_COMMANDS.yaml`, and `STATUS.md`. When any of them stabilises after a change (5-second stable window), env-core POSTs `workspace-files-changed` to the backend with the list of changed paths <!-- nocheck -->
+- The backend emits `WORKSPACE_FILES_CHANGED`; three handlers are registered on it:
+  - `EnvironmentService.handle_workspace_files_changed_event` — `sync_agent_prompts_from_environment()` (A2A skills regen + background description update when `workflow_prompt` actually changes)
+  - `CLICommandsService.handle_post_action_event` — refreshes the cached `CLI_COMMANDS.yaml` (rate-limited per-env to 30s)
+  - `AgentStatusService.handle_post_action_event` — pulls the latest `STATUS.md` snapshot
+- The same three handlers already subscribe to `STREAM_COMPLETED` / `STREAM_ERROR` / `CRON_*`, so a Mutagen-sync resync is now indistinguishable from an end-of-session resync
+- `POST /workspace` push is gone — continuous Mutagen sync is the only path. The legacy `prompt-file-changed` callback is retained as an alias so agent environments built before the generic watcher shipped keep working without a rebuild
 
 ### Credentials
 

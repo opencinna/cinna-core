@@ -135,6 +135,11 @@ async def lifespan(app: FastAPI):
         event_type=EventType.STREAM_COMPLETED,
         handler=EnvironmentService.handle_stream_completed_event
     )
+    # Prompt resync after a watched-file change (e.g., Mutagen sync from the CLI)
+    event_service.register_handler(
+        event_type=EventType.WORKSPACE_FILES_CHANGED,
+        handler=EnvironmentService.handle_workspace_files_changed_event
+    )
 
     # Agent status service: pull STATUS.md after every backend-triggered
     # action that touched the agent-env — session streams AND scheduler
@@ -149,6 +154,7 @@ async def lifespan(app: FastAPI):
         EventType.CRON_COMPLETED_OK,
         EventType.CRON_TRIGGER_SESSION,
         EventType.CRON_ERROR,
+        EventType.WORKSPACE_FILES_CHANGED,
     ):
         event_service.register_handler(
             event_type=_event_type,
@@ -157,7 +163,8 @@ async def lifespan(app: FastAPI):
 
     # CLI commands service: pull CLI_COMMANDS.yaml after every backend-triggered action
     # (env activation, session streams, scheduler executions). Same 5 post-action events
-    # as AgentStatusService, plus ENVIRONMENT_ACTIVATED for initial fetch on env start.
+    # as AgentStatusService, plus ENVIRONMENT_ACTIVATED for initial fetch on env start
+    # and WORKSPACE_FILES_CHANGED for Mutagen-sync-triggered refreshes.
     from app.services.agents.cli_commands_service import CLICommandsService
     event_service.register_handler(
         event_type=EventType.ENVIRONMENT_ACTIVATED,
@@ -169,6 +176,7 @@ async def lifespan(app: FastAPI):
         EventType.CRON_COMPLETED_OK,
         EventType.CRON_TRIGGER_SESSION,
         EventType.CRON_ERROR,
+        EventType.WORKSPACE_FILES_CHANGED,
     ):
         event_service.register_handler(
             event_type=_event_type,
