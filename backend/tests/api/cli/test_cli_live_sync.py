@@ -378,60 +378,8 @@ def test_sync_stream_ws_auth_rejects(
         ) as ws:
             ws.receive_text()
 
-
-@pytest.mark.skip(
-    reason=(
-        "Happy-path sync-stream requires reachable env-core. In the test harness "
-        "CLIService.ensure_environment_running short-circuits the route before "
-        "open_sync_websocket is invoked, so the mock assertion fails. Negative "
-        "auth paths are covered by test_sync_stream_ws_auth_rejects; "
-        "SyncActivityTracker behavior is covered exhaustively in "
-        "tests/unit/test_sync_activity_tracker.py."
-    )
-)
-def test_sync_stream_ws_valid_auth_connects_and_closes(
-    client: TestClient,
-    superuser_token_headers: dict[str, str],
-    db: Session,
-) -> None:
-    """Happy-path sync-stream — scope-limited in the unit harness (see skip reason)."""
-    # Bootstrap with a running env
-    agent = create_agent_via_api(client, superuser_token_headers)
-    drain_tasks()
-    agent = get_agent(client, superuser_token_headers, agent["id"])
-    agent_id = agent["id"]
-    env_id = agent["active_environment_id"]
-    assert env_id is not None
-
-    token_resp = create_setup_token(client, superuser_token_headers, agent_id)
-    exchange = exchange_setup_token(client, token_resp["token"], machine_name="WS Machine")
-    cli_jwt = exchange["cli_token"]
-
-    # Patch the env connector's open_sync_websocket to raise RuntimeError
-    # (simulates env-core not reachable, which is the test env reality).
-    mock_connector = MagicMock()
-    mock_connector.open_sync_websocket = AsyncMock(
-        side_effect=RuntimeError("env-core not reachable in tests")
-    )
-
-    with patch("app.services.environments.agent_env_connector.agent_env_connector", mock_connector):
-        # The WS should connect (auth passes), then close when env-core fails.
-        # The client receives a disconnect (not 1008 = auth failure) — any Exception is valid.
-        with pytest.raises(Exception):
-            with client.websocket_connect(
-                f"/api/v1/cli/agents/{agent_id}/sync-stream",
-                headers=cli_auth_headers(cli_jwt),
-            ) as ws:
-                ws.receive_bytes()
-
-        # Verify open_sync_websocket was called — meaning auth passed and the route
-        # reached the env-core connection step (after accept() + register_sync_connection).
-        assert mock_connector.open_sync_websocket.called, (
-            "open_sync_websocket must be called — indicating auth passed and the WS was accepted"
-        )
-
-
 # ── Scenario 4: workspace-files-changed callback ─────────────────────────────
+
 
 def _emit_event_calls_for(event_type: str) -> tuple[AsyncMock, object]:
     """Build a patcher for ``event_service.emit_event`` that records all calls.
