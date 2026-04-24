@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { Key, Mail, Database, AtSign, Users } from "lucide-react"
+import { Key, KeyRound, Mail, Database, AtSign, Users } from "lucide-react"
 
 import { CredentialsService } from "@/client"
 import type { SharedCredentialPublic } from "@/client"
@@ -35,6 +35,8 @@ function getCredentialIcon(type: string) {
       return <AtSign className="h-5 w-5" />
     case "api_token":
       return <Key className="h-5 w-5" />
+    case "ssh_key":
+      return <KeyRound className="h-5 w-5" />
     default:
       return <Key className="h-5 w-5" />
   }
@@ -62,6 +64,8 @@ function getCredentialTypeLabel(type: string): string {
       return "Google Calendar OAuth (Read-Only)"
     case "api_token":
       return "API Token"
+    case "ssh_key":
+      return "SSH Key"
     default:
       return type
   }

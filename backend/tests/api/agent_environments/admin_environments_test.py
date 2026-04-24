@@ -29,6 +29,12 @@ _BASE = f"{settings.API_V1_STR}/admin/agent-environments"
 _SEC_EVENTS_BASE = f"{settings.API_V1_STR}/security-events"
 
 
+def _patch_create_task():
+    # Close the coroutine so it isn't flagged as "never awaited" by GC,
+    # while still letting tests assert the background task was scheduled.
+    return patch("asyncio.create_task", side_effect=lambda coro: coro.close())
+
+
 # ---------------------------------------------------------------------------
 # Setup helpers
 # ---------------------------------------------------------------------------
@@ -582,7 +588,7 @@ def test_admin_single_rebuild(
     env_id = result["data"][0]["id"]
 
     # Patch asyncio.create_task to prevent actual Docker rebuild from running
-    with patch("asyncio.create_task") as mock_create_task:
+    with _patch_create_task() as mock_create_task:
         r = _admin_rebuild_single(client, superuser_token_headers, env_id)
         assert r.status_code == 200
         body = r.json()
@@ -628,7 +634,7 @@ def test_admin_bulk_rebuild(
     # ── Phase 1: Valid env → queued ───────────────────────────────────────
     ghost_id = str(uuid.uuid4())
 
-    with patch("asyncio.create_task"):
+    with _patch_create_task():
         r = _admin_bulk_rebuild(client, superuser_token_headers, [env_id, ghost_id])
     assert r.status_code == 200
     body = r.json()
@@ -739,7 +745,7 @@ def test_admin_bulk_rebuild_real_transitional_skip(
     ghost_id = str(uuid.uuid4())
 
     # ── Phase 3: Bulk rebuild with one valid env and one ghost ────────────
-    with patch("asyncio.create_task"):
+    with _patch_create_task():
         r = _admin_bulk_rebuild(client, superuser_token_headers, [env_id, ghost_id])
 
     assert r.status_code == 200
@@ -777,7 +783,7 @@ def test_admin_bulk_rebuild_cap_enforcement(
     # ── Phase 2: Exactly 200 IDs → accepted at schema level (400 from route
     #    if settings cap is lower, or no error if they're the same) ─────────
     exactly_200_ids = [str(uuid.uuid4()) for _ in range(200)]
-    with patch("asyncio.create_task"):
+    with _patch_create_task():
         r = _admin_bulk_rebuild(client, superuser_token_headers, exactly_200_ids)
     # 200 valid UUIDs that don't exist → 200 HTTP with all skipped as not_found
     # (or 400 if ADMIN_ENV_MAX_BULK_SIZE < 200)
@@ -824,7 +830,7 @@ def test_admin_bulk_rebuild_emits_security_events_per_env(
     env2_id = list_environments(client, superuser_token_headers, agent2["id"])["data"][0]["id"]
 
     # ── Phase 2: Bulk rebuild ──────────────────────────────────────────────
-    with patch("asyncio.create_task"):
+    with _patch_create_task():
         r = _admin_bulk_rebuild(
             client, superuser_token_headers, [env1_id, env2_id]
         )

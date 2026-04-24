@@ -22,6 +22,7 @@ Agents access user-provided credentials (email, APIs, databases, OAuth services)
 6. **gcalendar_oauth / gcalendar_oauth_readonly** - Google Calendar OAuth
 7. **google_service_account** - Google Service Account (private key JSON)
 8. **api_token** - Generic API Token (Bearer or Custom template)
+9. **ssh_key** - SSH key pair (generated or imported) materialized into `~/.ssh/` inside the agent container for `git clone git@…`, `ssh …`, etc. See [SSH Key Credentials](ssh_key_credentials.md).
 
 ## User Stories / Flows
 
@@ -155,6 +156,7 @@ workspace/
 - [Credentials Whitelist](credentials_whitelist.md) - Three-layer security model, per-type allowed fields, whitelist vs blacklist rationale
 - [Google Service Account](google_service_account.md) - SA JSON key files, standalone file sync, file-path references in credentials.json
 - [Credential Sharing](credential_sharing.md) - User-to-user credential sharing with read-only access for recipients
+- [SSH Key Credentials](ssh_key_credentials.md) - SSH key pair credentials: generate/import, ~/.ssh/ materialization, known_hosts seeding, security model
 - [Agent Prompts](../agent_prompts/agent_prompts.md) - Credentials README included in building mode prompt <!-- TODO: create agent_prompts docs -->
 
 ## Best Practices

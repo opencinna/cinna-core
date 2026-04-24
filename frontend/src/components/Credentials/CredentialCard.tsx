@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router"
-import { Key, Mail, Database, AtSign, Share2, Users, AlertTriangle, FileJson } from "lucide-react"
+import { Key, KeyRound, Mail, Database, AtSign, Share2, Users, AlertTriangle, FileJson } from "lucide-react"
 
 import type { CredentialPublic } from "@/client"
 import {
@@ -39,6 +39,8 @@ function getCredentialIcon(type: string) {
       return <FileJson className="h-5 w-5" />
     case "api_token":
       return <Key className="h-5 w-5" />
+    case "ssh_key":
+      return <KeyRound className="h-5 w-5" />
     default:
       return <Key className="h-5 w-5" />
   }
@@ -68,6 +70,8 @@ function getCredentialTypeLabel(type: string): string {
       return "Google Service Account"
     case "api_token":
       return "API Token"
+    case "ssh_key":
+      return "SSH Key"
     default:
       return type
   }

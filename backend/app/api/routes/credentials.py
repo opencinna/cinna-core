@@ -210,6 +210,18 @@ def create_credential(
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
 
+    # SSH key credentials: generate or validate the pair server-side before persist.
+    # On success, credential_data is replaced with the normalised blob so the
+    # standard create path simply Fernet-encrypts and stores.
+    if credential_in.type == CredentialType.SSH_KEY:
+        try:
+            credential_in.credential_data = CredentialsService.process_ssh_key_credential_input(
+                credential_in.credential_data or {},
+                credential_name=credential_in.name,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
     credential = CredentialsService.create_credential(
         session=session,
         credential_in=credential_in,
@@ -233,12 +245,26 @@ async def update_credential(
     that have this credential linked.
     """
     try:
-        # Validate service account JSON on update
+        # Type-specific validation on update (only if credential_data is supplied).
+        # Each branch normalises `credential_in.credential_data` in place; the
+        # standard update path then Fernet-encrypts and persists.
         if credential_in.credential_data:
             credential = session.get(Credential, id)
             if credential and credential.type == CredentialType.GOOGLE_SERVICE_ACCOUNT:
                 try:
                     CredentialsService.validate_service_account_json(credential_in.credential_data)
+                except ValueError as e:
+                    raise HTTPException(status_code=422, detail=str(e))
+            elif credential and credential.type == CredentialType.SSH_KEY:
+                # Delegate to the service — handles both key rotation (mode
+                # present) and metadata-only updates (host_aliases).
+                try:
+                    credential_in.credential_data = CredentialsService.prepare_ssh_key_update_data(
+                        session=session,
+                        credential=credential,
+                        raw_data=credential_in.credential_data,
+                        credential_name=credential_in.name,
+                    )
                 except ValueError as e:
                     raise HTTPException(status_code=422, detail=str(e))
 

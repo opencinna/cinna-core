@@ -44,6 +44,7 @@ const credentialTypeLabels: Record<string, string> = {
   gcalendar_oauth_readonly: "Google Calendar OAuth (Read-Only)",
   google_service_account: "Google Service Account",
   api_token: "API Token",
+  ssh_key: "SSH Key",
 }
 
 export const columns: ColumnDef<CredentialPublic>[] = [

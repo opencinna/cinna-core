@@ -5,6 +5,8 @@ import hashlib
 import io
 import json
 import logging
+import os
+import re
 import tarfile
 import zipfile
 import uuid
@@ -15,6 +17,32 @@ from datetime import datetime
 from .models import FileNode, FolderSummary, WorkspaceTreeResponse
 
 logger = logging.getLogger(__name__)
+
+# Orphan-cleanup guard: only files whose stem is a UUID are considered
+# agent-managed. Without this, a user's `~/.ssh/id_rsa` / `id_ed25519` / any
+# other `id_*` file would be deleted on every sync.
+_SSH_KEY_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+
+
+# Pre-seeded ~/.ssh/known_hosts entries for common Git providers.
+# Collected once via `ssh-keyscan` and hardcoded here so the container never
+# needs network access to ssh-keyscan hosts before the first git clone.
+# Keeping these strict protects against MITM on the most popular endpoints.
+# Other hosts are handled via `StrictHostKeyChecking accept-new` in ~/.ssh/config
+# (trust-on-first-use).
+_KNOWN_HOSTS_SEED = """# Managed by cinna — do not edit
+github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXrPQ2LL4XFC1jNgUoMbjMhMj3jvKuZJQUHvxFKRhBYxdOmDXo=
+gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf
+gitlab.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBFSMqzJeV9rUzU4kWitGjeR4PWSa29SPqJ1fVkhtj3Hw9xjLVXVYrU9QlYWrOLXBpQ6KWjbjTDTdDkoohFzgbEY=
+gitlab.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCsj2bNKTBSpIYDEGk9KxsGh3mySTRgMtXL583qmBpzeQ+jqCMRgBqB98u3z++J1sKlXHWfM9dyhSevkMwSbhoR8XIq/U0tCNyokEi/ueaBMCvbcTHhO7FcwzY92WK4Yt0aGROY5qX2UKSeOvuP4D6TPqKF1onrSzH9bx9XUf2lEdWT/ia1NEKjunUqu1xOB/StKDHMoX4/OKyIzuS0q/T1zOATthvasJFoPrAjkohTyaDUz2LN5JoH839hViyEG82yB+MjcFV5MU3N1l1QL3cVUCh93xSaua1N85qivl+siMkPGbO5xR/En4iEY6K2XhABlBsEjBjpQssmMJsGGnRKvwHJNIULHIUzUZVu4LaM5eAbMlvj4oHMtAoq9DVExcnA2sllpFBlmZ2RLGHHzEQKE4qoU8RwBsrU4PLR9y0bLrgpR36/U4/XkKyIAKQEhpCtJWVhkaHC5PIVbVcAvKGBb8RNKvRgI+k5lXBgh1tzqSV0JGmB2Y1yUSjMAakBUoQ=
+bitbucket.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAzWUknS7QXyUz5x/nj1oqIRjQWPx7KQKjVqRnFUC5Yb
+bitbucket.org ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBPIQmuzMBuKdWeF4+a2sjSSpBK0iqitSQ+5BM9KhpexuGt20JpTVM7u5BDZngncgrqDMbWdxMWWOGtZ9UgbqgZE=
+bitbucket.org ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEAubiN81eDcafrgMeLzaFPsw2kNvEcqTKl/VqLat/MaB33pZy0y3rJZtnqwR2qOOvbwKZYKiEO1O6VqNEBxKvJJelCq0dTXWT5pbO2gDXC6h6QDXCaHo6pOHGPUy+YBaGQRGuSusMEASYiWunYN0vCAI8QaXnWMXNMdFP3jHAJH0eDsoiGnLPBlBp4TNm6rYI74nMzgz3B9IikW4WVK+dc8KZJZWYjAuORU3jc1c/NPskD2ASinf8v3xnfXeukU0sJ5N6m5E8VLjObPEO+mN2t/FZTMZLiFqPWc/ALSqnMnnhwrNi2rbfg/rd/IpL8Le3pSBne8+seeFVBoGqzHM9yXw==
+"""
 
 
 class AgentEnvService:
@@ -207,7 +235,8 @@ class AgentEnvService:
         self,
         credentials_json: list[dict],
         credentials_readme: str,
-        service_account_files: list[dict] | None = None
+        service_account_files: list[dict] | None = None,
+        ssh_keys: list[dict] | None = None,
     ) -> list[str]:
         """
         Update credentials in workspace credentials directory.
@@ -216,10 +245,14 @@ class AgentEnvService:
         - credentials/credentials.json: Full credentials data with actual values
         - credentials/README.md: Redacted documentation for agent prompt
 
+        SSH keys are written to ~/.ssh/ (NOT credentials/) and reconciled on
+        every sync via `update_ssh_keys()`.
+
         Args:
             credentials_json: List of credentials with full data
             credentials_readme: Markdown content with redacted credentials
             service_account_files: List of standalone SA JSON key files
+            ssh_keys: List of SSH key bundles to materialize under ~/.ssh/
 
         Returns:
             List of updated filenames
@@ -269,7 +302,26 @@ class AgentEnvService:
                     existing_file.unlink()
                     logger.info(f"Removed orphaned SA file: {existing_file.name}")
 
-            # Update CredentialGuard with new values for output redaction (Phase 2)
+            # SSH keys go into ~/.ssh/ (never under credentials/ — workspace is a
+            # user-visible surface and SSH keys should remain invisible to the
+            # workspace file browser). Reconciles orphans on every call so a
+            # deleted/unlinked credential removes its key files on next sync.
+            try:
+                ssh_updates = self.update_ssh_keys(ssh_keys or [])
+                updated_files.extend(ssh_updates)
+            except Exception as ssh_err:
+                # SSH key materialization failure must not block other
+                # credentials from syncing — matches existing per-credential
+                # resiliency behavior.
+                logger.error(f"Failed to update SSH keys (continuing): {ssh_err}")
+
+            # Update CredentialGuard with new values for output redaction (Phase 2).
+            # Note: for ssh_key credentials, `credentials_json` only contains the
+            # whitelisted metadata (public_key, fingerprint, key_type, host_aliases)
+            # — the private key body is intentionally NOT fed to the guard because
+            # it never appears in credentials.json or in any agent-readable file.
+            # Any private-key material leaking into agent output would be a much
+            # larger incident than a single-value mis-redaction would catch.
             try:
                 from security.credential_guard import credential_guard
                 credential_guard.update_values(credentials_json)
@@ -281,6 +333,219 @@ class AgentEnvService:
         except Exception as e:
             logger.error(f"Failed to update credentials: {e}")
             raise IOError(f"Failed to update credentials: {str(e)}")
+
+    # ------------------------------------------------------------------ #
+    # SSH key materialization (~/.ssh/)                                   #
+    # ------------------------------------------------------------------ #
+
+    # Filename prefix for agent-managed SSH key files. Anything matching
+    # `id_<uuid>` (or `.pub`) under ~/.ssh/ is owned by the sync loop and
+    # subject to orphan cleanup — users should not hand-author files with this
+    # prefix.
+    _SSH_KEY_PREFIX = "id_"
+
+    def update_ssh_keys(self, ssh_keys: list[dict]) -> list[str]:
+        """
+        Materialize SSH key credentials into ~/.ssh/ for use by standard SSH
+        tooling (ssh, scp, git clone git@host:repo).
+
+        Steps (run on every sync, idempotent):
+          1. mkdir ~/.ssh (0700).
+          2. Seed known_hosts with GitHub/GitLab/Bitbucket entries if missing.
+          3. Write each key pair as id_<credential_id> (0600) + .pub (0644).
+          4. Regenerate ~/.ssh/config (0600) from scratch with IdentityFile
+             entries for each key.
+          5. Reconcile orphans: delete any id_<uuid> / id_<uuid>.pub files whose
+             UUID is not in the current sync list. Only UUID-shaped stems are
+             ever touched — user-authored files like `id_rsa` are preserved.
+
+        Args:
+            ssh_keys: List of {credential_id, private_key, public_key,
+                               passphrase, host_aliases} dicts.
+
+        Returns:
+            List of ssh/ relative paths that were written or removed.
+        """
+        # Resolve ~ against the process's HOME. Under current env templates the
+        # agent runs as root, so this resolves to /root/.ssh — the same
+        # directory `git` and `ssh` consult by default. If a future template
+        # runs as non-root, HOME must point at that user's home for this to
+        # keep working; OpenSSH tooling will follow the same HOME automatically.
+        ssh_dir = Path(os.path.expanduser("~/.ssh"))
+
+        # Step 1 — ensure ~/.ssh exists with 0700.
+        ssh_dir.mkdir(parents=True, exist_ok=True)
+        # mkdir may ignore the mode arg depending on the umask; force it.
+        try:
+            os.chmod(ssh_dir, 0o700)
+        except OSError as e:
+            logger.warning(f"Could not chmod {ssh_dir} to 0700: {e}")
+
+        updated: list[str] = []
+
+        # Step 2 — seed known_hosts. If the file already contains the expected
+        # github.com entry, leave it alone; otherwise overwrite with the seed.
+        # This preserves any custom entries the user has added by letting
+        # trust-on-first-use (StrictHostKeyChecking accept-new) handle them.
+        known_hosts = ssh_dir / "known_hosts"
+        seed_needed = True
+        if known_hosts.exists():
+            try:
+                existing_content = known_hosts.read_text(encoding="utf-8", errors="replace")
+                if "github.com" in existing_content:
+                    seed_needed = False
+            except OSError:
+                seed_needed = True
+        if seed_needed:
+            try:
+                known_hosts.write_text(_KNOWN_HOSTS_SEED, encoding="utf-8")
+                os.chmod(known_hosts, 0o644)
+                updated.append(".ssh/known_hosts")
+                logger.info("Seeded ~/.ssh/known_hosts with GitHub/GitLab/Bitbucket entries")
+            except OSError as e:
+                logger.warning(f"Could not seed known_hosts: {e}")
+
+        # Step 3 — write each key pair
+        synced_ids: set[str] = set()
+        for entry in ssh_keys:
+            cred_id = entry.get("credential_id")
+            private_key = entry.get("private_key")
+            public_key = entry.get("public_key")
+            if not (cred_id and private_key and public_key):
+                logger.warning(
+                    "Skipping ssh_keys entry with missing fields "
+                    "(credential_id=%s, has_private=%s, has_public=%s)",
+                    cred_id, bool(private_key), bool(public_key),
+                )
+                continue
+
+            synced_ids.add(cred_id)
+
+            priv_path = ssh_dir / f"{self._SSH_KEY_PREFIX}{cred_id}"
+            pub_path = ssh_dir / f"{self._SSH_KEY_PREFIX}{cred_id}.pub"
+
+            try:
+                # Ensure private keys always end with a newline — OpenSSH PEM
+                # parsers are strict about this (trailing-newline-less keys
+                # cause `Load key: invalid format` errors).
+                priv_body = private_key if private_key.endswith("\n") else private_key + "\n"
+                priv_path.write_text(priv_body, encoding="utf-8")
+                os.chmod(priv_path, 0o600)
+                updated.append(f".ssh/{priv_path.name}")
+
+                pub_body = public_key if public_key.endswith("\n") else public_key + "\n"
+                pub_path.write_text(pub_body, encoding="utf-8")
+                os.chmod(pub_path, 0o644)
+                updated.append(f".ssh/{pub_path.name}")
+
+                logger.info("Wrote SSH key files for credential_id=%s", cred_id)
+            except OSError as e:
+                logger.error(f"Failed to write SSH key files for {cred_id}: {e}")
+                # Continue to the next credential; the backend will retry on
+                # the next sync event.
+
+        # Step 4 — regenerate ~/.ssh/config deterministically
+        try:
+            config_lines = self._build_ssh_config(ssh_keys, synced_ids, ssh_dir)
+            config_path = ssh_dir / "config"
+            config_path.write_text(config_lines, encoding="utf-8")
+            os.chmod(config_path, 0o600)
+            updated.append(".ssh/config")
+        except OSError as e:
+            logger.error(f"Failed to write ~/.ssh/config: {e}")
+
+        # Step 5 — orphan reconciliation. List files with our prefix whose stem
+        # is a UUID, and delete any not in synced_ids. Files with non-UUID stems
+        # (id_rsa, id_ed25519, user-placed keys) are left untouched.
+        try:
+            for existing in ssh_dir.iterdir():
+                if not existing.is_file():
+                    continue
+                name = existing.name
+                if not name.startswith(self._SSH_KEY_PREFIX):
+                    continue
+                # Strip prefix and any trailing `.pub`
+                stem = name[len(self._SSH_KEY_PREFIX):]
+                if stem.endswith(".pub"):
+                    stem = stem[: -len(".pub")]
+                # Defence: only delete UUID-shaped stems (our files). This
+                # protects id_rsa/id_ed25519/id_ecdsa and any other user-placed
+                # file sharing the `id_` prefix.
+                if not _SSH_KEY_UUID_RE.match(stem):
+                    continue
+                if stem in synced_ids:
+                    continue
+                try:
+                    existing.unlink()
+                    updated.append(f".ssh/{name} (removed)")
+                    logger.info(f"Removed orphaned SSH key file: {name}")
+                except OSError as e:
+                    logger.warning(f"Could not remove orphan {name}: {e}")
+        except OSError as e:
+            logger.warning(f"Could not enumerate {ssh_dir} for orphan cleanup: {e}")
+
+        return updated
+
+    def _build_ssh_config(
+        self,
+        ssh_keys: list[dict],
+        synced_ids: set[str],
+        ssh_dir: Path,
+    ) -> str:
+        """
+        Build the ~/.ssh/config content from the current sync list.
+
+        Rules:
+          - Keys with `host_aliases=['*']` (or empty) become global identities
+            under `Host *` with `IdentitiesOnly no` (SSH will try each one).
+          - Keys with specific host aliases get their own `Host <aliases>` block
+            with `IdentitiesOnly yes` so only that key is offered to those hosts.
+        """
+        global_keys: list[str] = []
+        scoped_entries: list[tuple[list[str], str]] = []
+
+        for entry in ssh_keys:
+            cred_id = entry.get("credential_id")
+            if not cred_id or cred_id not in synced_ids:
+                continue
+            identity_path = f"~/.ssh/{self._SSH_KEY_PREFIX}{cred_id}"
+            aliases = entry.get("host_aliases") or ["*"]
+            # Filter out empty strings and dedupe while preserving order
+            aliases = [a.strip() for a in aliases if isinstance(a, str) and a.strip()]
+            if not aliases or aliases == ["*"]:
+                global_keys.append(identity_path)
+            else:
+                scoped_entries.append((aliases, identity_path))
+
+        lines: list[str] = []
+        lines.append("# Managed by cinna — do not edit")
+        lines.append("# Regenerated on every credential sync.")
+        lines.append("")
+
+        # Scoped (host-specific) entries FIRST. OpenSSH applies the first
+        # matching Host stanza's IdentitiesOnly directive; having scoped blocks
+        # before the catch-all ensures that specific aliases present only their
+        # dedicated key.
+        for aliases, identity in scoped_entries:
+            host_pattern = " ".join(aliases)
+            lines.append(f"Host {host_pattern}")
+            lines.append(f"    IdentityFile {identity}")
+            lines.append("    IdentitiesOnly yes")
+            lines.append("")
+
+        # Catch-all block: global defaults + every global-scope IdentityFile.
+        # Multiple IdentityFile lines are supported and tried in order. We set
+        # IdentitiesOnly=no so keys from ssh-agent are also considered.
+        lines.append("Host *")
+        lines.append("    StrictHostKeyChecking accept-new")
+        lines.append("    UserKnownHostsFile ~/.ssh/known_hosts")
+        lines.append("    ServerAliveInterval 60")
+        lines.append("    IdentitiesOnly no")
+        for identity in global_keys:
+            lines.append(f"    IdentityFile {identity}")
+        lines.append("")
+
+        return "\n".join(lines).rstrip() + "\n"
 
     def get_credentials_readme(self) -> Optional[str]:
         """

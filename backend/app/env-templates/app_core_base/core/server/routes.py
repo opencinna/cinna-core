@@ -796,7 +796,8 @@ async def update_credentials(credentials: CredentialsUpdate):
         updated_files = agent_env_service.update_credentials(
             credentials_json=credentials.credentials_json,
             credentials_readme=credentials.credentials_readme,
-            service_account_files=credentials.service_account_files
+            service_account_files=credentials.service_account_files,
+            ssh_keys=credentials.ssh_keys,
         )
 
         return {

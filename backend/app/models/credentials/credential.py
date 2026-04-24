@@ -24,6 +24,7 @@ class CredentialType(str, Enum):
     GCALENDAR_OAUTH_READONLY = "gcalendar_oauth_readonly"
     GOOGLE_SERVICE_ACCOUNT = "google_service_account"
     API_TOKEN = "api_token"
+    SSH_KEY = "ssh_key"
 
 
 # Shared properties for credentials
@@ -86,6 +87,22 @@ class GoogleServiceAccountData(SQLModel):
     auth_provider_x509_cert_url: str | None = None
     client_x509_cert_url: str | None = None
     universe_domain: str | None = None
+
+
+class SSHKeyCredentialData(SQLModel):
+    """
+    Normalised shape of an ssh_key credential's encrypted blob.
+
+    Only `public_key`, `private_key`, `fingerprint`, and `key_type` are required.
+    `passphrase` is optional (MVP: rejected on import — see error-handling docs).
+    `host_aliases` is optional (defaults to all hosts via `*`).
+    """
+    public_key: str
+    private_key: str
+    fingerprint: str
+    key_type: str  # "rsa" | "ed25519" | "ecdsa" | "dss"
+    passphrase: str | None = None
+    host_aliases: list[str] | None = None
 
 
 # Properties to receive on credential creation

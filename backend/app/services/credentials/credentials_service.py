@@ -5,11 +5,28 @@ import uuid
 import json
 import copy
 import logging
+import re
 from sqlmodel import Session, select
 from app.core.security import encrypt_field, decrypt_field
+from app.core.ssh_key_utils import (
+    calculate_fingerprint,
+    detect_key_type,
+    generate_ed25519_key_pair,
+    generate_rsa_key_pair,
+    is_private_key_encrypted,
+    validate_key_pair,
+)
 from app.models import Credential, Agent, AgentEnvironment, AgentCredentialLink, CredentialCreate, CredentialUpdate
 
 logger = logging.getLogger(__name__)
+
+# Legal characters in an SSH `Host` pattern. Matches OpenSSH host pattern syntax
+# (alnum, dot, hyphen, underscore, wildcards `*` / `?`, bracket groups). Rejects
+# whitespace, newlines, and control chars — a defence-in-depth layer that
+# prevents a malicious `host_aliases` value from injecting arbitrary SSH config
+# directives into the generated `~/.ssh/config` (e.g., an alias containing a
+# newline could add an `IdentityFile /etc/shadow` line).
+_SSH_HOST_ALIAS_RE = re.compile(r"^[A-Za-z0-9_.\-*?\[\]]+$")
 
 
 class CredentialsService:
@@ -35,6 +52,10 @@ class CredentialsService:
         "gcalendar_oauth_readonly": ["access_token", "refresh_token"],
         "api_token": ["http_header_value"],
         "google_service_account": ["private_key", "private_key_id"],
+        # ssh_key: belt-and-suspenders — these fields are already stripped by the
+        # AGENT_ENV_ALLOWED_FIELDS whitelist below, but redaction protects us if a
+        # future change accidentally leaks them into the README render.
+        "ssh_key": ["private_key", "passphrase"],
     }
 
     # WHITELIST: Fields that ARE allowed to be exposed to agent environment
@@ -98,6 +119,11 @@ class CredentialsService:
             "granted_user_email",
             "granted_user_name"
         ],
+
+        # ssh_key: Only public metadata reaches credentials.json. The private key
+        # and passphrase travel on the sibling `ssh_keys` bundle (written directly
+        # into ~/.ssh/ inside the container) and MUST NEVER be whitelisted here.
+        "ssh_key": ["public_key", "fingerprint", "key_type", "host_aliases"],
     }
 
     @staticmethod
@@ -234,6 +260,262 @@ class CredentialsService:
             raise ValueError(
                 f"Invalid service account JSON: missing required fields: {', '.join(missing)}"
             )
+
+    # ------------------------------------------------------------------ #
+    # SSH Key credential helpers                                          #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def process_ssh_key_credential_input(
+        raw_data: dict,
+        credential_name: str | None = None,
+    ) -> dict:
+        """
+        Process an ssh_key credential's create/update payload into the normalized
+        blob stored (Fernet-encrypted) in `Credential.encrypted_data`.
+
+        Accepts two modes:
+          - `mode=generate`: server generates the key pair. `key_type` defaults to
+            `rsa` (4096-bit). `ed25519` also supported.
+          - `mode=import`: client supplies `public_key` + `private_key`, plus
+            optional `passphrase` and `host_aliases`.
+
+        Args:
+            raw_data: The `credential_data` dict from the API request.
+            credential_name: Optional label used as the public key comment when
+                generating.
+
+        Returns:
+            Normalized blob: {
+                "public_key": str,
+                "private_key": str,
+                "passphrase": str | None,
+                "fingerprint": str,
+                "key_type": str,
+                "host_aliases": list[str] | None,
+            }
+
+        Raises:
+            ValueError: On malformed input. Message starts with the offending field
+                name so the route can surface inline errors.
+        """
+        if not raw_data or not isinstance(raw_data, dict):
+            raise ValueError("credential_data is required for ssh_key credentials")
+
+        mode = raw_data.get("mode")
+        if mode not in ("generate", "import"):
+            raise ValueError(
+                "credential_data.mode must be 'generate' or 'import' for ssh_key credentials"
+            )
+
+        host_aliases = raw_data.get("host_aliases") or None
+        if host_aliases is not None:
+            if not isinstance(host_aliases, list) or not all(
+                isinstance(a, str) and a.strip() for a in host_aliases
+            ):
+                raise ValueError(
+                    "credential_data.host_aliases must be a list of non-empty strings"
+                )
+            # Normalise — trim, validate against SSH-host-pattern regex (defence
+            # in depth against ssh_config injection), and deduplicate while
+            # preserving order.
+            seen = set()
+            deduped = []
+            for alias in host_aliases:
+                trimmed = alias.strip()
+                if not trimmed:
+                    continue
+                if not _SSH_HOST_ALIAS_RE.match(trimmed):
+                    raise ValueError(
+                        f"Invalid host alias {trimmed!r}: only alphanumerics, "
+                        "'.', '-', '_', and wildcards '*?[]' are allowed."
+                    )
+                if trimmed not in seen:
+                    seen.add(trimmed)
+                    deduped.append(trimmed)
+            host_aliases = deduped or None
+
+        if mode == "generate":
+            return CredentialsService._generate_ssh_key_pair(
+                key_type=(raw_data.get("key_type") or "rsa").lower(),
+                name=credential_name or "cinna-agent-key",
+                host_aliases=host_aliases,
+            )
+
+        return CredentialsService._import_ssh_key_pair(
+            public_key=raw_data.get("public_key", ""),
+            private_key=raw_data.get("private_key", ""),
+            passphrase=raw_data.get("passphrase"),
+            host_aliases=host_aliases,
+        )
+
+    @staticmethod
+    def _generate_ssh_key_pair(
+        key_type: str,
+        name: str,
+        host_aliases: list[str] | None,
+    ) -> dict:
+        """Generate a fresh SSH key pair and return the normalized credential blob."""
+        if key_type == "ed25519":
+            public_key, private_key = generate_ed25519_key_pair(name)
+        elif key_type == "rsa":
+            public_key, private_key = generate_rsa_key_pair(name)
+        else:
+            raise ValueError(
+                "credential_data.key_type must be 'rsa' or 'ed25519' for generate mode"
+            )
+
+        fingerprint = calculate_fingerprint(public_key)
+        return {
+            "public_key": public_key,
+            "private_key": private_key,
+            "passphrase": None,
+            "fingerprint": fingerprint,
+            "key_type": detect_key_type(public_key),
+            "host_aliases": host_aliases,
+        }
+
+    @staticmethod
+    def _import_ssh_key_pair(
+        public_key: str,
+        private_key: str,
+        passphrase: str | None,
+        host_aliases: list[str] | None,
+    ) -> dict:
+        """Validate and normalise an imported SSH key pair."""
+        public_key = (public_key or "").strip()
+        private_key = (private_key or "").strip()
+
+        if not public_key:
+            raise ValueError("public_key is required when mode='import'")
+        if not private_key:
+            raise ValueError("private_key is required when mode='import'")
+
+        # Structural validation (prefix + PEM markers). Raises ValueError with a
+        # field-specific message that the route surfaces as 422 detail.
+        validate_key_pair(public_key, private_key)
+
+        # MVP: reject passphrase-encrypted private keys. Plan's Error Handling
+        # table: "Encrypted private keys are not yet supported — please export
+        # without passphrase or generate a new key."
+        if passphrase or is_private_key_encrypted(private_key):
+            raise ValueError(
+                "Encrypted private keys are not yet supported — please export "
+                "without passphrase or generate a new key."
+            )
+
+        fingerprint = calculate_fingerprint(public_key)
+        return {
+            "public_key": public_key,
+            "private_key": private_key,
+            "passphrase": None,  # MVP: never persist a passphrase
+            "fingerprint": fingerprint,
+            "key_type": detect_key_type(public_key),
+            "host_aliases": host_aliases,
+        }
+
+    @staticmethod
+    def prepare_ssh_key_update_data(
+        session: Session,
+        credential: Credential,
+        raw_data: dict,
+        credential_name: str | None,
+    ) -> dict:
+        """
+        Normalise `credential_data` for an ssh_key credential update.
+
+        Two update paths are supported:
+          1. Key rotation / re-import — `mode` is present in `raw_data`; delegates
+             to `process_ssh_key_credential_input` (same path used on create).
+          2. Metadata-only update — `mode` absent; the only editable field is
+             `host_aliases`. Other keys (e.g., `public_key`, `private_key`) are
+             rejected with 422 so callers can't sneak in key material without
+             the rotation flow.
+
+        The existing blob is decrypted and merged with the allowed metadata
+        updates so immutable fields (public_key, private_key, fingerprint,
+        key_type) are preserved verbatim.
+
+        Args:
+            session: Database session (used only for decryption of the existing
+                blob).
+            credential: The Credential row being updated.
+            raw_data: `credential_data` dict from the API request.
+            credential_name: Name on the CredentialUpdate, or falls back to the
+                existing credential's name when generating a fresh key.
+
+        Returns:
+            A dict ready to be Fernet-encrypted and stored.
+
+        Raises:
+            ValueError: On malformed input or disallowed fields. The route maps
+                these to HTTP 422.
+        """
+        if "mode" in raw_data:
+            return CredentialsService.process_ssh_key_credential_input(
+                raw_data,
+                credential_name=credential_name or credential.name,
+            )
+
+        allowed = {"host_aliases"}
+        unknown = set(raw_data.keys()) - allowed
+        if unknown:
+            raise ValueError(
+                "credential_data may only update host_aliases for ssh_key "
+                f"credentials (got: {sorted(unknown)}). To rotate or re-import "
+                "the key, include `mode='generate'` or `mode='import'`."
+            )
+
+        # Reuse the input processor's host_aliases validation + normalisation by
+        # routing through a minimal stub. We cannot call
+        # process_ssh_key_credential_input directly (it requires `mode`), so
+        # inline the normalisation here — kept in lockstep with the create path.
+        aliases = raw_data.get("host_aliases")
+        normalised_aliases: list[str] | None = None
+        if aliases is not None:
+            if not isinstance(aliases, list) or not all(
+                isinstance(a, str) and a.strip() for a in aliases
+            ):
+                raise ValueError(
+                    "host_aliases must be a list of non-empty strings"
+                )
+            seen: set[str] = set()
+            for alias in aliases:
+                trimmed = alias.strip()
+                if not trimmed:
+                    continue
+                if not _SSH_HOST_ALIAS_RE.match(trimmed):
+                    raise ValueError(
+                        f"Invalid host alias {trimmed!r}: only alphanumerics, "
+                        "'.', '-', '_', and wildcards '*?[]' are allowed."
+                    )
+                if trimmed not in seen:
+                    seen.add(trimmed)
+                    normalised_aliases = normalised_aliases or []
+                    normalised_aliases.append(trimmed)
+
+        existing = CredentialsService.decrypt_credential_data(
+            session=session, credential=credential
+        )
+        if "host_aliases" in raw_data:
+            existing["host_aliases"] = normalised_aliases
+        return existing
+
+    @staticmethod
+    def _process_ssh_key_for_env(credential_data: dict) -> dict:
+        """
+        Convert the full SSH key blob into the metadata that is safe to expose
+        inside `credentials.json`.
+
+        NEVER includes `private_key` or `passphrase` — those live only on the
+        sibling `ssh_keys` bundle written directly into `~/.ssh/` by the agent env.
+        """
+        return {
+            "public_key": credential_data.get("public_key", ""),
+            "fingerprint": credential_data.get("fingerprint", ""),
+            "key_type": credential_data.get("key_type", ""),
+            "host_aliases": credential_data.get("host_aliases") or ["*"],
+        }
 
     @staticmethod
     def _process_service_account_credential(credential_data: dict, credential_id: str) -> dict:
@@ -689,6 +971,27 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 lines.append("        break")
                 lines.append("```")
                 lines.append("")
+            elif cred_type == "ssh_key":
+                lines.append(f"### SSH Key Credential: {cred_name}")
+                lines.append(f"**ID**: `{cred_id}`")
+                lines.append("")
+                lines.append(
+                    "**Note**: The private key is materialized inside the container at "
+                    "`~/.ssh/id_<credential_id>` (0600) and wired into `~/.ssh/config` "
+                    "automatically. `git clone git@host:repo` and `ssh host` work "
+                    "without further setup. The key body is NOT available to scripts — "
+                    "only public metadata (`public_key`, `fingerprint`, `key_type`, "
+                    "`host_aliases`) appears in credentials.json."
+                )
+                lines.append("")
+                lines.append("```bash")
+                lines.append("# Example: clone a private repo using the key")
+                lines.append("git clone git@github.com:your-org/your-repo.git ./files/repositories/your-repo")
+                lines.append("")
+                lines.append("# Example: inspect which key is loaded")
+                lines.append("ls -la ~/.ssh/")
+                lines.append("```")
+                lines.append("")
             elif cred_type == "google_service_account":
                 lines.append(f"### Google Service Account Credential: {cred_name}")
                 lines.append(f"**ID**: `{cred_id}`")
@@ -768,6 +1071,32 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                     cred["credential_data"], cred["id"]
                 )
 
+        # Collect SSH key bundles before whitelisting.
+        # `ssh_keys` is the SIBLING payload to `service_account_files`. It carries
+        # the private key material out-of-band so it never appears in
+        # credentials.json or the prompt README. The env-core writes these keys
+        # into `~/.ssh/` (0600) and reconciles orphans on every sync.
+        ssh_keys: list[dict] = []
+        for cred in credentials:
+            if cred["type"] == "ssh_key" and cred.get("credential_data"):
+                blob = cred["credential_data"]
+                ssh_keys.append({
+                    "credential_id": cred["id"],
+                    "private_key": blob.get("private_key", ""),
+                    "public_key": blob.get("public_key", ""),
+                    "passphrase": blob.get("passphrase"),
+                    "host_aliases": blob.get("host_aliases") or ["*"],
+                })
+                # Replace credential_data with the whitelisted metadata shape so
+                # the downstream filter sees the safe surface.
+                cred["credential_data"] = CredentialsService._process_ssh_key_for_env(blob)
+                logger.info(
+                    "Prepared SSH key credential %s (fingerprint=%s, key_type=%s) for env sync",
+                    cred["id"],
+                    blob.get("fingerprint", ""),
+                    blob.get("key_type", ""),
+                )
+
         # Filter out sensitive fields that should never be exposed to agent environment
         # (e.g., refresh tokens, client secrets for OAuth credentials)
         filtered_credentials = []
@@ -787,7 +1116,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         return {
             "credentials_json": filtered_credentials,
             "credentials_readme": readme_content,
-            "service_account_files": service_account_files
+            "service_account_files": service_account_files,
+            "ssh_keys": ssh_keys,
         }
 
     @staticmethod
@@ -1295,6 +1625,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         "gcalendar_oauth_readonly": ["access_token"],
         "api_token": ["api_token"],  # Base requirement; api_token_template required only for custom type
         "google_service_account": ["type", "project_id", "private_key", "client_email"],
+        "ssh_key": ["public_key", "private_key", "fingerprint", "key_type"],
     }
 
     @staticmethod

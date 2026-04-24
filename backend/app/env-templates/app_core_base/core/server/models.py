@@ -52,6 +52,11 @@ class CredentialsUpdate(BaseModel):
     credentials_json: list[dict]  # Full credentials data
     credentials_readme: str  # Redacted README for agent prompt
     service_account_files: list[dict] | None = None  # Standalone SA JSON key files
+    # SSH key bundles written directly into ~/.ssh/ (never into workspace/credentials/).
+    # Each entry: {credential_id, private_key, public_key, passphrase, host_aliases}.
+    # The private key and passphrase are NOT exposed to scripts via credentials.json —
+    # they only live as on-disk files for standard SSH tools to consume.
+    ssh_keys: list[dict] | None = None
 
 
 class FileNode(BaseModel):

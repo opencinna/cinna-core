@@ -70,6 +70,8 @@ function getCredentialTypeLabel(type: string): string {
       return "Google Service Account"
     case "api_token":
       return "API Token"
+    case "ssh_key":
+      return "SSH Key"
     default:
       return type
   }

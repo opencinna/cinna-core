@@ -27,6 +27,7 @@ import {
   OAuthCredentialForm,
   GenericCredentialForm,
   ServiceAccountCredentialForm,
+  SSHKeyEditView,
 } from "@/components/Credentials/CredentialForms"
 
 const formSchema = z.object({
@@ -107,6 +108,29 @@ const EditCredential = ({ credential, onSuccess }: EditCredentialProps) => {
           <div className="flex items-center justify-center py-8">
             <div className="text-muted-foreground">Loading...</div>
           </div>
+        ) : credential.type === "ssh_key" && credentialWithData ? (
+          // ssh_key manages its own saves (metadata + rotate-key) via
+          // SSHKeyEditView's internal mutations. The outer edit form/submit
+          // path would clobber the key material if we routed it through the
+          // shared handler, so we render the dedicated view directly and
+          // expose a single "Close" action in the footer.
+          <>
+            <DialogHeader>
+              <DialogTitle>Edit SSH Key Credential</DialogTitle>
+              <DialogDescription>
+                Update metadata or rotate the key. The private key is encrypted
+                and cannot be viewed or exported.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="py-4">
+              <SSHKeyEditView credential={credentialWithData} />
+            </div>
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button variant="outline">Close</Button>
+              </DialogClose>
+            </DialogFooter>
+          </>
         ) : (
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)}>

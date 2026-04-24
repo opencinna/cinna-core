@@ -6738,7 +6738,7 @@ export const CredentialSharesPublicSchema = {
 
 export const CredentialTypeSchema = {
     type: 'string',
-    enum: ['email_imap', 'email_smtp', 'odoo', 'gmail_oauth', 'gmail_oauth_readonly', 'gdrive_oauth', 'gdrive_oauth_readonly', 'gcalendar_oauth', 'gcalendar_oauth_readonly', 'google_service_account', 'api_token'],
+    enum: ['email_imap', 'email_smtp', 'odoo', 'gmail_oauth', 'gmail_oauth_readonly', 'gdrive_oauth', 'gdrive_oauth_readonly', 'gcalendar_oauth', 'gcalendar_oauth_readonly', 'google_service_account', 'api_token', 'ssh_key'],
     title: 'CredentialType'
 } as const;
 

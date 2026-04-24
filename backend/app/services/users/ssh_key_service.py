@@ -2,16 +2,17 @@
 SSH Key Service - Business logic for SSH key operations.
 """
 import uuid
-import hashlib
 import logging
 from datetime import datetime, UTC
 from sqlmodel import Session, select
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.backends import default_backend
 
 from app.models import UserSSHKey, SSHKeyGenerate, SSHKeyImport, SSHKeyUpdate
 from app.core.security import encrypt_field, decrypt_field
+from app.core.ssh_key_utils import (
+    calculate_fingerprint,
+    generate_rsa_key_pair,
+    validate_key_pair,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,64 +31,20 @@ class SSHKeyService:
 
     @staticmethod
     def _calculate_fingerprint(public_key_str: str) -> str:
-        """
-        Calculate SHA256 fingerprint of SSH public key.
-
-        Args:
-            public_key_str: SSH public key in OpenSSH format
-
-        Returns:
-            Fingerprint string in format "SHA256:..."
-        """
-        try:
-            # Parse the public key (format: "ssh-rsa AAAAB3... comment")
-            parts = public_key_str.strip().split()
-            if len(parts) < 2:
-                raise ValueError("Invalid public key format")
-
-            # Decode the base64 key data
-            import base64
-            key_data = base64.b64decode(parts[1])
-
-            # Calculate SHA256 hash
-            digest = hashlib.sha256(key_data).digest()
-
-            # Encode as base64 (no padding)
-            fingerprint = base64.b64encode(digest).decode().rstrip('=')
-
-            return f"SHA256:{fingerprint}"
-        except Exception as e:
-            logger.error(f"Failed to calculate fingerprint: {e}")
-            # Fallback: use hash of entire public key string
-            digest = hashlib.sha256(public_key_str.encode()).hexdigest()
-            return f"SHA256:{digest[:43]}"
+        """Calculate SHA256 fingerprint of an SSH public key (delegates to shared util)."""
+        return calculate_fingerprint(public_key_str)
 
     @staticmethod
     def _validate_ssh_key_format(public_key: str, private_key: str) -> bool:
         """
         Validate SSH key format.
 
-        Args:
-            public_key: SSH public key string
-            private_key: SSH private key string
-
-        Returns:
-            True if valid, False otherwise
+        Returns True if valid, False otherwise (preserves legacy boolean API).
         """
         try:
-            # Check public key format (should start with ssh-rsa, ssh-ed25519, etc.)
-            public_key = public_key.strip()
-            valid_prefixes = ['ssh-rsa', 'ssh-ed25519', 'ssh-dss', 'ecdsa-sha2-']
-            if not any(public_key.startswith(prefix) for prefix in valid_prefixes):
-                return False
-
-            # Check private key format (should contain BEGIN markers)
-            private_key = private_key.strip()
-            if 'BEGIN' not in private_key or 'PRIVATE KEY' not in private_key:
-                return False
-
+            validate_key_pair(public_key, private_key)
             return True
-        except Exception as e:
+        except ValueError as e:
             logger.error(f"SSH key validation error: {e}")
             return False
 
@@ -108,34 +65,11 @@ class SSHKeyService:
         Returns:
             Created SSH key record
         """
-        # Generate RSA 4096-bit key
-        private_key = rsa.generate_private_key(
-            public_exponent=65537,
-            key_size=4096,
-            backend=default_backend()
-        )
-
-        # Serialize private key (PEM format, no passphrase)
-        private_key_pem = private_key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.TraditionalOpenSSL,
-            encryption_algorithm=serialization.NoEncryption()
-        ).decode()
-
-        # Get public key
-        public_key_obj = private_key.public_key()
-
-        # Serialize public key (OpenSSH format)
-        public_key_openssh = public_key_obj.public_bytes(
-            encoding=serialization.Encoding.OpenSSH,
-            format=serialization.PublicFormat.OpenSSH
-        ).decode()
-
-        # Add comment to public key
-        public_key_with_comment = f"{public_key_openssh} {data.name.replace(' ', '_')}"
+        # Generate via shared util (RSA 4096, OpenSSH public + traditional OpenSSL private PEM)
+        public_key_with_comment, private_key_pem = generate_rsa_key_pair(data.name)
 
         # Calculate fingerprint
-        fingerprint = SSHKeyService._calculate_fingerprint(public_key_with_comment)
+        fingerprint = calculate_fingerprint(public_key_with_comment)
 
         # Encrypt private key
         encrypted_private_key = encrypt_field(private_key_pem)
@@ -190,12 +124,19 @@ class SSHKeyService:
         Raises:
             ValueError: If key format is invalid or duplicate exists
         """
-        # Validate key format
-        if not SSHKeyService._validate_ssh_key_format(data.public_key, data.private_key):
+        # Validate key format.
+        # NOTE: the shared `validate_key_pair` produces field-specific messages
+        # (e.g., "Invalid public_key: must start with ..."), but we deliberately
+        # swallow them and re-raise with the legacy generic "Invalid SSH key
+        # format" wording to preserve the existing /api/v1/ssh-keys error
+        # contract. Do not "fix" this without auditing callers/tests.
+        try:
+            validate_key_pair(data.public_key, data.private_key)
+        except ValueError:
             raise ValueError("Invalid SSH key format")
 
         # Calculate fingerprint
-        fingerprint = SSHKeyService._calculate_fingerprint(data.public_key)
+        fingerprint = calculate_fingerprint(data.public_key)
 
         # Check for duplicate fingerprint
         existing = session.exec(

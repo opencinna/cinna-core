@@ -44,6 +44,7 @@ from .credentials.credential import (
     OdooData,
     GmailOAuthData,
     ApiTokenData,
+    SSHKeyCredentialData,
     CredentialWithData,
 )
 from .credentials.ai_credential import (
@@ -528,6 +529,7 @@ __all__ = [
     "OdooData",
     "GmailOAuthData",
     "ApiTokenData",
+    "SSHKeyCredentialData",
     "CredentialWithData",
     # AI Credentials
     "AICredential",

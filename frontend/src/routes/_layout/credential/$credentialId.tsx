@@ -46,6 +46,7 @@ import {
   OAuthCredentialForm,
   GenericCredentialForm,
   ServiceAccountCredentialForm,
+  SSHKeyEditView,
 } from "@/components/Credentials/CredentialForms"
 import { CredentialSharing } from "@/components/Credentials/CredentialSharing"
 
@@ -81,6 +82,8 @@ function getCredentialTypeLabel(type: string): string {
       return "Google Service Account"
     case "api_token":
       return "API Token"
+    case "ssh_key":
+      return "SSH Key"
     default:
       return type
   }
@@ -200,6 +203,31 @@ function OwnedCredentialView({ credential }: { credential: CredentialWithData })
     "gcalendar_oauth",
     "gcalendar_oauth_readonly",
   ].includes(credential.type)
+
+  // ssh_key has its own dedicated edit surface: public key + fingerprint are
+  // read-only with copy buttons, host_aliases / name / notes are editable, and
+  // the only way to change the key material is via "Rotate key" (which posts
+  // mode=generate to the update endpoint).
+  if (credential.type === "ssh_key") {
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Credential Details</CardTitle>
+            <CardDescription>
+              Update metadata or rotate the key. The private key is encrypted
+              and cannot be viewed or exported.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <SSHKeyEditView credential={credential} />
+          </CardContent>
+        </Card>
+
+        <CredentialSharing credential={credential} />
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">

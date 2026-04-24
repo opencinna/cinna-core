@@ -6,10 +6,14 @@ LABEL env.version="1.0.0"
 
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies
+# Install system dependencies.
+# `openssh-client` provides `ssh`, `ssh-keyscan`, and `scp` — required by the
+# ssh_key credential feature so agents can `git clone git@host:repo` and talk
+# to any SSH endpoint using keys materialized into ~/.ssh/.
 RUN apt-get update && apt-get install -y \
     curl \
     git \
+    openssh-client \
     sqlite3 \
     build-essential \
     && rm -rf /var/lib/apt/lists/*

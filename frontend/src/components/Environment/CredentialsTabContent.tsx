@@ -34,6 +34,8 @@ function getCredentialTypeLabel(type: string): string {
       return "Google Calendar OAuth (Read-Only)"
     case "api_token":
       return "API Token"
+    case "ssh_key":
+      return "SSH Key"
     default:
       return type
   }
