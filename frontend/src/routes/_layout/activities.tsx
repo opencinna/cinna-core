@@ -600,7 +600,7 @@ function ActivitiesList() {
     if (unread.length === 0) return
     const timer = setTimeout(() => {
       markAsReadMutation.mutate(unread)
-    }, 4000)
+    }, 2000)
     return () => clearTimeout(timer)
   }, [visibleActivities, activitiesData?.data])
 
