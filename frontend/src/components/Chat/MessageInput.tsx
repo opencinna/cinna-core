@@ -75,8 +75,11 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
 
     const filteredCommands = useMemo<SessionCommandPublic[]>(() => {
       if (!commandsData?.commands || !message.startsWith("/")) return []
-      const query = message.toLowerCase()
-      return commandsData.commands.filter((cmd) => cmd.name.startsWith(query))
+      const query = message.slice(1).toLowerCase()
+      if (!query) return commandsData.commands
+      return commandsData.commands.filter((cmd) =>
+        cmd.name.toLowerCase().includes(query),
+      )
     }, [commandsData, message])
 
     // Clamp selectedCommandIndex when filteredCommands length changes
