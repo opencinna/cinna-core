@@ -26,6 +26,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import { LocalDevSyncStatus } from "@/components/Agents/LocalDevSyncStatus"
 
 function formatLastUsed(dateStr: string | null): string {
   if (!dateStr) return "never"
@@ -138,7 +139,7 @@ export function LocalDevCard({ agentId }: LocalDevCardProps) {
               Local Development
             </CardTitle>
             <CardDescription>
-              Develop this agent locally with your own editor and AI tools
+              Develop this agent locally with live file sync to the remote environment
             </CardDescription>
           </div>
           <Button
@@ -205,7 +206,7 @@ export function LocalDevCard({ agentId }: LocalDevCardProps) {
           ) : tokens.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               {setupToken
-                ? "No active sessions yet. Run the setup command above in your terminal to get started."
+                ? "No active sessions yet. Run the setup command above to get started. Files sync live with the remote environment."
                 : "No active sessions. Click Setup to generate an install command."}
             </p>
           ) : (
@@ -219,9 +220,12 @@ export function LocalDevCard({ agentId }: LocalDevCardProps) {
                     <p className="font-medium text-sm truncate">
                       {token.name || token.prefix}
                     </p>
-                    <p className="text-xs text-muted-foreground">
-                      last used {formatLastUsed(token.last_used_at)}
-                    </p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <p className="text-xs text-muted-foreground">
+                        last used {formatLastUsed(token.last_used_at)}
+                      </p>
+                      <LocalDevSyncStatus lastSyncConnectedAt={token.last_sync_connected_at} />
+                    </div>
                   </div>
                   <div className="shrink-0 ml-2">
                     <AlertDialog>

@@ -69,6 +69,12 @@ async def _check_and_suspend_environments():
                     logger.warning(f"Agent {env.agent_id} not found for environment {env.id}")
                     continue
 
+                # Skip environments with active CLI sync connections
+                from app.services.cli.sync_activity_tracker import sync_activity_tracker
+                if sync_activity_tracker.is_sync_warm(env.id):
+                    logger.debug(f"Skipping environment {env.id}: CLI sync is active")
+                    continue
+
                 # Resolve per-agent inactivity limit
                 inactivity_limit = INACTIVITY_LIMITS.get(
                     agent.inactivity_period_limit, timedelta(minutes=INACTIVITY_THRESHOLD_MINUTES)

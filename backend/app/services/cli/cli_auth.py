@@ -89,3 +89,35 @@ class CLIAuthService:
             Hex-encoded SHA-256 hash
         """
         return hashlib.sha256(token_str.encode()).hexdigest()
+
+    @staticmethod
+    def decode_cli_jwt_from_websocket(websocket) -> str:
+        """
+        Extract the raw CLI JWT string from a WebSocket connection.
+
+        Priority order:
+        1. Authorization header: "Bearer <token>"
+        2. Query parameter: ?token=<token>
+
+        Args:
+            websocket: FastAPI WebSocket connection object
+
+        Returns:
+            Raw JWT string
+
+        Raises:
+            ValueError: If no token is found in the connection
+        """
+        # 1. Check Authorization header
+        auth_header = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
+        if auth_header:
+            parts = auth_header.split(" ", 1)
+            if len(parts) == 2 and parts[0].lower() == "bearer":
+                return parts[1].strip()
+
+        # 2. Fall back to query parameter
+        token_param = websocket.query_params.get("token")
+        if token_param:
+            return token_param.strip()
+
+        raise ValueError("No CLI token found in WebSocket connection (checked Authorization header and ?token= query param)")

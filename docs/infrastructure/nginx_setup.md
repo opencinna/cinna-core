@@ -31,6 +31,18 @@ Present only in the production reverse proxy. In local dev the SPA calls the bac
 **Special requirements:** WebSocket upgrade (`proxy_http_version 1.1`, `Upgrade`/`Connection` headers).
 **Upstream:** backend.
 
+### `/api/v1/cli/`
+
+**Feature:** Cinna CLI agent-scoped traffic — see [Cinna CLI Integration](../application/cinna_cli_integration/cinna_cli_integration.md).
+**Why a dedicated block:** two endpoints under this prefix need transport that the plain `/api/` block doesn't provide:
+
+- `WS /api/v1/cli/agents/{agent_id}/sync-stream` — long-lived Mutagen tunnel over WebSocket.
+- `POST /api/v1/cli/agents/{agent_id}/exec` — Server-Sent Events stream.
+
+**Special requirements:** WebSocket upgrade (`proxy_http_version 1.1`, `Upgrade`/`Connection` headers), `proxy_buffering off`, `proxy_cache off`, and a long `proxy_read_timeout`/`proxy_send_timeout` (3600s) so idle sync sessions and SSE streams aren't cut mid-flight. Must be declared before the generic `/api/` block (nginx matches longest-prefix, but ordering it first keeps intent clear).
+
+**Upstream:** backend.
+
 ### `/.well-known/oauth-protected-resource`
 
 **Feature:** RFC 9728 Protected Resource Metadata for MCP OAuth — see [MCP Integration](../application/mcp_integration/agent_mcp_architecture.md) and [MCP Connector Setup](../application/mcp_integration/mcp_connector_setup.md).
@@ -75,3 +87,4 @@ When a new feature introduces a `/.well-known/*` endpoint:
 - [App MCP Server](../application/app_mcp_server/app_mcp_server.md) — shares the `/mcp/` routing with per-agent MCP servers
 - [Desktop App Authentication](../application/desktop_auth/desktop_auth.md) — uses `/.well-known/cinna-desktop`
 - [Realtime Events](../application/realtime_events/event_bus_system.md) — uses `/ws/`
+- [Cinna CLI Integration](../application/cinna_cli_integration/cinna_cli_integration.md) — uses `/api/v1/cli/` (WebSocket sync tunnel + SSE exec stream)

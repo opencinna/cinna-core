@@ -50,6 +50,9 @@ class AgentEnvironment(SQLModel, table=True):
     cli_commands_parsed: list | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     cli_commands_fetched_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     cli_commands_error: str | None = Field(default=None, sa_column=Column(sa.String(256), nullable=True))
+    # CLI live sync tracking
+    last_sync_activity_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    sync_active: bool = Field(default=False)
 
 
 # Pydantic Schemas

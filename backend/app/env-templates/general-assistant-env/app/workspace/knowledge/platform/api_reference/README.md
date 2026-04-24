@@ -16,7 +16,7 @@ Each file below documents one API domain.
 | Agents | [agents.md](./agents.md) | 34 |
 | Ai Credentials | [ai_credentials.md](./ai_credentials.md) | 8 |
 | App Agent Routes | [app_agent_routes.md](./app_agent_routes.md) | 7 |
-| Cli | [cli.md](./cli.md) | 11 |
+| Cli | [cli.md](./cli.md) | 10 |
 | Credentials | [credentials.md](./credentials.md) | 16 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
 | Email Integration | [email_integration.md](./email_integration.md) | 6 |

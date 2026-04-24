@@ -86,6 +86,12 @@ Server-verified metadata injected into system prompts for integration-aware beha
 4. Updates Agent model with new prompts
 5. Prompts available in UI and for other environments
 
+**Environment to Backend** (CLI live sync):
+1. `WORKFLOW_PROMPT.md` or `ENTRYPOINT_PROMPT.md` are modified in the workspace (e.g., via a synced local edit)
+2. Env-core's lightweight file watcher detects the change and waits for the file to stabilise (debounce)
+3. Env-core POSTs to `POST /api/v1/environments/{id}/prompt-file-changed` on the backend
+4. Backend fires `sync_agent_prompts_from_environment()` with the same downstream effects as a post-building-session resync
+
 ## Business Rules
 
 ### Adapter Selection
@@ -158,6 +164,7 @@ Backend ──HTTP POST──→ Environment Container (FastAPI)
 - **Input Tasks** - Six `mcp__agent_task__*` tools let agents report findings as comments, attach files, manage status, and delegate subtasks. See [Input Tasks](../../application/input_tasks/input_tasks.md)
 - **Tools Approval** - Plugin-provided tools require explicit user approval before autonomous use; approval state synced to environments. See [Tools Approval Management](tools_approval_management.md)
 - **Agent Webapp** - Three dedicated endpoints serve static files, execute Python data scripts, and report webapp metadata from `/app/workspace/webapp/`. See [Agent Webapp](../agent_webapp/agent_webapp.md)
+- **Cinna CLI Integration** - `WS /sync/exec` endpoint enables bidirectional Mutagen-based workspace sync tunnelled through the backend; a file watcher triggers prompt resync when prompt files change. See [Cinna CLI Integration](../../application/cinna_cli_integration/cinna_cli_integration.md)
 
 ## Agent Task MCP Tools
 
@@ -223,6 +230,10 @@ When a session is created for a task, the system prompt includes a task context 
 
 - `POST /chat/stream` - Streaming chat (SSE). Accepts message, mode, agent_sdk, session_id. Returns server-sent events: session_created, assistant, tool, done, error
 - `POST /chat` - Synchronous chat (non-streaming). Same request model, returns complete response text
+
+### CLI Sync
+
+- `WS /sync/exec` - Internal-only WebSocket (reachable only from the backend's internal Docker network). Spawns `mutagen-agent` inside the container with `cwd = WORKSPACE_ROOT`, pipes its stdio bidirectionally over the WebSocket. Used by the backend sync-stream tunnel for live CLI workspace sync. See [Cinna CLI Integration](../../application/cinna_cli_integration/cinna_cli_integration.md)
 
 ### Configuration
 

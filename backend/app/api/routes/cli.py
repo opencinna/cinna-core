@@ -4,14 +4,21 @@ CLI API Routes.
 Provides two routers:
 - setup_router: /api/cli-setup/{token} (no auth, short URL for curl oneliner)
 - router: /cli prefix under /api/v1 (user auth + CLI token auth)
+
+Live sync model (replaces tarball push/pull and local container):
+- WSS /agents/{id}/sync-stream — Mutagen transport tunnel
+- POST /agents/{id}/exec — remote command execution with streaming output
+- GET  /agents/{id}/sync-runtime — pinned Mutagen version info for CLI setup
 """
+import asyncio
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, HTTPException, Request, WebSocket, status
 from fastapi.responses import PlainTextResponse, StreamingResponse
+from pydantic import BaseModel
 
-from app.api.deps import CLIContext, CLIContextDep, CurrentUser, SessionDep
+from app.api.deps import CLIContext, CLIContextDep, CLIContextWSDep, CurrentUser, SessionDep
 from app.models import Message
 from app.models.cli.cli_setup_token import CLISetupTokenCreate, CLISetupTokenCreated
 from app.models.cli.cli_token import CLITokensPublic, CLITokenPublic
@@ -24,7 +31,7 @@ def _verify_cli_agent_scope(cli_ctx: CLIContext, agent_id: uuid.UUID) -> None:
         raise HTTPException(status_code=403, detail="Token is not scoped to this agent")
 
 
-async def _ensure_environment_running(cli_ctx: CLIContext, db: "Session") -> None:
+async def _ensure_environment_running(cli_ctx: CLIContext, db: Any) -> None:
     """
     Thin route-layer wrapper: delegates to CLIService.ensure_environment_running()
     and converts service exceptions to HTTP responses.
@@ -42,13 +49,11 @@ async def _ensure_environment_running(cli_ctx: CLIContext, db: "Session") -> Non
     if cli_ctx.environment:
         db.refresh(cli_ctx.environment)
 
+
 # ── Setup Bootstrap Router ───────────────────────────────────────────────────
 # Registered directly on the FastAPI app at top level (short URL for curl oneliner)
 
 setup_router = APIRouter(prefix="/api/cli-setup", tags=["cli"])
-
-
-from pydantic import BaseModel
 
 
 class ExchangeSetupTokenBody(BaseModel):
@@ -75,14 +80,35 @@ async def get_bootstrap_script(
     return f'''\
 #!/usr/bin/env python3
 """Cinna CLI bootstrap script."""
-import shutil, signal, subprocess, sys
+import os, shutil, signal, subprocess, sys
 
 SETUP_URL = "{setup_url}"
+
+
+def _reattach_stdin_to_tty():
+    """When invoked via `curl … | python3 -`, Python's stdin is the curl pipe,
+    not the terminal. A child process inheriting this fd sees stdin as a closed
+    pipe, not a tty — which breaks interactive UIs (Textual can't enter raw
+    mode, terminal echoes mouse-tracking escapes as literal text, etc.).
+
+    Re-open ``/dev/tty`` onto fd 0 so the spawned `cinna setup` gets the real
+    terminal. Falls back silently if no tty is available (non-interactive CI).
+    """
+    try:
+        tty_fd = os.open("/dev/tty", os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.dup2(tty_fd, 0)
+    finally:
+        os.close(tty_fd)
+
 
 def main():
     cinna = shutil.which("cinna")
     if cinna:
         print("Found cinna CLI, running setup...")
+        _reattach_stdin_to_tty()
         # Ctrl+C is delivered to the whole foreground process group. Ignore it
         # in this wrapper so Python's default handler doesn't raise
         # KeyboardInterrupt inside wait() — cinna handles its own cleanup
@@ -226,29 +252,6 @@ def revoke_cli_token(
 
 # ── Agent-scoped CLI Routes (CLI token auth) ─────────────────────────────────
 
-@router.get("/agents/{agent_id}/build-context")
-def get_build_context(
-    agent_id: uuid.UUID,
-    db: SessionDep,
-    cli_ctx: CLIContextDep,
-) -> StreamingResponse:
-    """
-    Download the Docker build context tarball for local development.
-
-    Returns a .tar.gz containing:
-    - Dockerfile, pyproject.toml, uv.lock from the environment template
-    - app/core/ from app_core_base
-    - A generated docker-compose.yml for local use (no server, just runtime)
-    """
-    _verify_cli_agent_scope(cli_ctx, agent_id)
-
-    return CLIService.get_build_context(
-        db=db,
-        agent=cli_ctx.agent,
-        environment=cli_ctx.environment,
-    )
-
-
 @router.get("/agents/{agent_id}/building-context")
 async def get_building_context(
     agent_id: uuid.UUID,
@@ -288,73 +291,14 @@ async def get_workspace(
     """
     Download the remote workspace as a tarball.
 
-    Used for initial clone (cinna setup) and subsequent pulls (cinna pull).
-    Auto-activates suspended environments.
+    Used for initial clone during `cinna setup`. After first run, Mutagen
+    takes over as the sync path. Auto-activates suspended environments.
     """
     _verify_cli_agent_scope(cli_ctx, agent_id)
     await _ensure_environment_running(cli_ctx, db)
 
     try:
         return await CLIService.get_workspace_tarball(
-            db=db,
-            agent=cli_ctx.agent,
-            environment=cli_ctx.environment,
-        )
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(e),
-        )
-
-
-@router.post("/agents/{agent_id}/workspace", response_model=Message)
-async def upload_workspace(
-    agent_id: uuid.UUID,
-    db: SessionDep,
-    cli_ctx: CLIContextDep,
-    file: UploadFile = File(...),
-) -> Any:
-    """
-    Upload local workspace to the remote environment.
-
-    Used by cinna push to sync local changes to production.
-    Auto-activates suspended environments.
-    """
-    _verify_cli_agent_scope(cli_ctx, agent_id)
-    await _ensure_environment_running(cli_ctx, db)
-
-    try:
-        await CLIService.upload_workspace(
-            db=db,
-            agent=cli_ctx.agent,
-            environment=cli_ctx.environment,
-            file=file,
-        )
-        return Message(message="Workspace uploaded successfully")
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(e),
-        )
-
-
-@router.get("/agents/{agent_id}/workspace/manifest")
-async def get_workspace_manifest(
-    agent_id: uuid.UUID,
-    db: SessionDep,
-    cli_ctx: CLIContextDep,
-) -> Any:
-    """
-    Get the remote workspace file manifest for diffing during push/pull.
-
-    Returns a dict of relative paths → {sha256, size, mtime}.
-    Auto-activates suspended environments.
-    """
-    _verify_cli_agent_scope(cli_ctx, agent_id)
-    await _ensure_environment_running(cli_ctx, db)
-
-    try:
-        return await CLIService.get_workspace_manifest(
             db=db,
             agent=cli_ctx.agent,
             environment=cli_ctx.environment,
@@ -394,3 +338,212 @@ async def search_knowledge(
         topic=body.topic,
     )
     return {"results": results}
+
+
+# ── Live Sync Routes (CLI token auth) ────────────────────────────────────────
+
+@router.get("/agents/{agent_id}/sync-runtime")
+async def get_sync_runtime(
+    agent_id: uuid.UUID,
+    db: SessionDep,
+    cli_ctx: CLIContextDep,
+) -> Any:
+    """
+    Return the pinned Mutagen version and agent binary hash.
+
+    Called by the CLI during `cinna setup` and `cinna sync start` to verify
+    that the locally installed Mutagen version matches what the platform expects.
+    The CLI should fail fast with a clear install message if versions mismatch.
+    """
+    _verify_cli_agent_scope(cli_ctx, agent_id)
+    return CLIService.get_sync_runtime_info()
+
+
+class ExecBody(BaseModel):
+    command: str
+
+
+@router.post("/agents/{agent_id}/exec")
+async def exec_command(
+    agent_id: uuid.UUID,
+    body: ExecBody,
+    db: SessionDep,
+    cli_ctx: CLIContextDep,
+) -> StreamingResponse:
+    """
+    Execute a command in the remote agent environment and stream output.
+
+    Used by `cinna exec <command>` to run commands in the remote agent env
+    instead of a local container. Streams stdout/stderr/exit-code events as
+    chunked SSE from the env-core /command/stream endpoint.
+
+    The first SSE event is always {"type": "exec_id", "exec_id": "<uuid>"} so
+    the CLI can route interrupts to /command/interrupt/{exec_id}.
+    """
+    _verify_cli_agent_scope(cli_ctx, agent_id)
+    await _ensure_environment_running(cli_ctx, db)
+
+    if not cli_ctx.environment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No active environment for this agent",
+        )
+
+    return StreamingResponse(
+        CLIService.stream_exec(
+            environment=cli_ctx.environment,
+            command=body.command,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.websocket("/agents/{agent_id}/sync-stream")
+async def sync_stream_ws(
+    websocket: WebSocket,
+    agent_id: uuid.UUID,
+    db: SessionDep,
+    cli_ctx: CLIContextWSDep,
+) -> None:
+    """
+    WebSocket tunnel for Mutagen sync transport.
+
+    The cinna-sync-ssh shim connects here. The route:
+    1. Authenticates via CLIContextWSDep (CLI JWT, rolling-window refresh).
+    2. Verifies agent scope.
+    3. Ensures the environment is running (auto-activates if suspended).
+    4. Registers with SyncActivityTracker (keeps env warm, updates timestamps).
+    5. Opens a second WebSocket to env-core /sync/exec.
+    6. Bidirectionally pumps bytes until either side closes (FIRST_COMPLETED).
+    7. On disconnect: cancels remaining tasks, unregisters from tracker, closes both WS.
+
+    A heartbeat coroutine runs alongside (every 30s) to keep last_sync_activity_at
+    fresh and check for mid-session token revocation.
+    """
+    import logging
+    from starlette.websockets import WebSocketState
+
+    from app.services.cli.sync_activity_tracker import (
+        sync_activity_tracker,
+        SYNC_HEARTBEAT_INTERVAL_SECONDS,
+    )
+    from app.services.sessions.message_service import MessageService
+    from app.services.environments.agent_env_connector import agent_env_connector
+
+    logger = logging.getLogger(__name__)
+
+    agent = cli_ctx.agent
+    cli_token = cli_ctx.cli_token
+    environment = cli_ctx.environment
+
+    # ── 1. Verify agent scope ────────────────────────────────────────────────
+    if agent.id != agent_id:
+        await websocket.close(code=1008)
+        return
+
+    if not environment:
+        await websocket.close(code=1013)
+        return
+
+    # ── 2. Ensure env is running ─────────────────────────────────────────────
+    try:
+        await CLIService.ensure_environment_running(environment, agent)
+        db.refresh(environment)
+    except (ValueError, RuntimeError) as e:
+        logger.warning(f"sync-stream: environment not ready for agent {agent_id}: {e}")
+        await websocket.close(code=1013)
+        return
+
+    # ── 3. Accept WS and register with tracker ──────────────────────────────
+    await websocket.accept()
+
+    connection_id = str(uuid.uuid4())
+    sync_activity_tracker.register_sync_connection(
+        db=db,
+        environment_id=environment.id,
+        token_id=cli_token.id,
+        connection_id=connection_id,
+    )
+
+    # ── 4. Open env-core WS ──────────────────────────────────────────────────
+    base_url = MessageService.get_environment_url(environment)
+    auth_headers = MessageService.get_auth_headers(environment)
+
+    try:
+        env_ws = await agent_env_connector.open_sync_websocket(base_url, auth_headers)
+    except RuntimeError as e:
+        logger.error(f"sync-stream: cannot reach env-core for env {environment.id}: {e}")
+        sync_activity_tracker.unregister_sync_connection(db, environment.id, connection_id)
+        await websocket.close(code=1013)
+        return
+
+    # ── 5. Bidirectional byte pump + heartbeat ───────────────────────────────
+    async def client_to_env():
+        try:
+            while True:
+                data = await websocket.receive_bytes()
+                await env_ws.send(data)
+        except Exception:
+            pass
+
+    async def env_to_client():
+        try:
+            while True:
+                data = await env_ws.recv()
+                if isinstance(data, str):
+                    await websocket.send_text(data)
+                else:
+                    await websocket.send_bytes(data)
+        except Exception:
+            pass
+
+    async def heartbeat_loop():
+        try:
+            while True:
+                await asyncio.sleep(SYNC_HEARTBEAT_INTERVAL_SECONDS)
+                # Mid-session revocation check (S8)
+                db.refresh(cli_token)
+                if cli_token.is_revoked:
+                    logger.info(
+                        f"sync-stream: token {cli_token.id} revoked mid-session, closing"
+                    )
+                    return
+                sync_activity_tracker.heartbeat(db, environment.id)
+        except asyncio.CancelledError:
+            pass
+
+    # Use FIRST_COMPLETED so a disconnect on either side tears down the other (B4).
+    pump_a = asyncio.create_task(client_to_env())
+    pump_b = asyncio.create_task(env_to_client())
+    hb_task = asyncio.create_task(heartbeat_loop())
+
+    try:
+        await asyncio.wait(
+            [pump_a, pump_b, hb_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    except Exception as e:
+        logger.debug(f"sync-stream pump ended: {e}")
+    finally:
+        # Cancel remaining tasks
+        for task in [pump_a, pump_b, hb_task]:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(pump_a, pump_b, hb_task, return_exceptions=True)
+
+        # ── 6. Cleanup ───────────────────────────────────────────────────────
+        try:
+            await env_ws.close()
+        except Exception:
+            pass
+
+        sync_activity_tracker.unregister_sync_connection(db, environment.id, connection_id)
+
+        try:
+            if websocket.client_state != WebSocketState.DISCONNECTED:
+                await websocket.close()
+        except Exception:
+            pass
+
+        logger.info(f"sync-stream: connection closed for env {environment.id}, token {cli_token.id}")

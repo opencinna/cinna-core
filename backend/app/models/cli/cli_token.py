@@ -7,6 +7,7 @@ Created by exchanging a setup token. Supports revocation from the UI.
 import uuid
 from datetime import datetime, UTC
 from sqlmodel import Field, SQLModel
+from sqlalchemy import DateTime, Column
 
 
 class CLITokenBase(SQLModel):
@@ -31,6 +32,10 @@ class CLIToken(CLITokenBase, table=True):
     # Renewed on each use; expires after 7 days of inactivity
     expires_at: datetime
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    # CLI live sync: last time a sync WebSocket connected from this token
+    last_sync_connected_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
 
 
 class CLITokenCreate(SQLModel):
@@ -49,6 +54,7 @@ class CLITokenPublic(CLITokenBase):
     machine_info: str | None
     expires_at: datetime
     created_at: datetime
+    last_sync_connected_at: datetime | None
 
 
 class CLITokenCreated(CLITokenPublic):

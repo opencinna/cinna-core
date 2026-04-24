@@ -32,14 +32,6 @@ Auto-generated from OpenAPI spec. Tag: `cli`
 
 ---
 
-## GET `/api/v1/cli/agents/{agent_id}/build-context`
-**Get Build Context**
-
-**Path parameters:**
-- `agent_id`: uuid
-
----
-
 ## GET `/api/v1/cli/agents/{agent_id}/building-context`
 **Get Building Context**
 
@@ -56,27 +48,6 @@ Auto-generated from OpenAPI spec. Tag: `cli`
 
 ---
 
-## POST `/api/v1/cli/agents/{agent_id}/workspace`
-**Upload Workspace**
-
-**Path parameters:**
-- `agent_id`: uuid
-
-**Request body** (`Body_cli-upload_workspace`):
-  - `file`: binary (required)
-
-**Response:** `Message`
-
----
-
-## GET `/api/v1/cli/agents/{agent_id}/workspace/manifest`
-**Get Workspace Manifest**
-
-**Path parameters:**
-- `agent_id`: uuid
-
----
-
 ## POST `/api/v1/cli/agents/{agent_id}/knowledge/search`
 **Search Knowledge**
 
@@ -86,6 +57,26 @@ Auto-generated from OpenAPI spec. Tag: `cli`
 **Request body** (`KnowledgeSearchBody`):
   - `query`: string (required)
   - `topic`: string | null
+
+---
+
+## GET `/api/v1/cli/agents/{agent_id}/sync-runtime`
+**Get Sync Runtime**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+---
+
+## POST `/api/v1/cli/agents/{agent_id}/exec`
+**Exec Command**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Request body** (`ExecBody`):
+  - `command`: string (required)
+  - `cwd`: string | null
 
 ---
 

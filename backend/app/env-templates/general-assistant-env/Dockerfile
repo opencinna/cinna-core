@@ -28,6 +28,27 @@ RUN npm install -g @anthropic-ai/claude-code
 # Install OpenCode binary (multi-provider AI agent)
 RUN curl -fsSL https://opencode.ai/install | bash
 
+# Install mutagen-agent (used by cinna-cli live sync — /sync/exec spawns this binary)
+ARG MUTAGEN_VERSION=0.18.1
+RUN set -eux; \
+    arch="$(uname -m)"; \
+    case "$arch" in \
+      x86_64)           mutarch=linux_amd64 ;; \
+      aarch64|arm64)    mutarch=linux_arm64 ;; \
+      *) echo "Unsupported arch for mutagen-agent: $arch" >&2; exit 1 ;; \
+    esac; \
+    tmpdir="$(mktemp -d)"; \
+    curl -fsSL -o "$tmpdir/m.tgz" \
+      "https://github.com/mutagen-io/mutagen/releases/download/v${MUTAGEN_VERSION}/mutagen_${mutarch}_v${MUTAGEN_VERSION}.tar.gz"; \
+    tar -xzf "$tmpdir/m.tgz" -C "$tmpdir" mutagen-agents.tar.gz; \
+    tar -xzf "$tmpdir/mutagen-agents.tar.gz" -C "$tmpdir"; \
+    mv "$tmpdir/${mutarch}" /usr/local/bin/mutagen-agent; \
+    chmod +x /usr/local/bin/mutagen-agent; \
+    sha256sum /usr/local/bin/mutagen-agent | awk '{print $1}' > /etc/mutagen-agent.sha256; \
+    echo "$MUTAGEN_VERSION" > /etc/mutagen-agent.version; \
+    rm -rf "$tmpdir"; \
+    /usr/local/bin/mutagen-agent version
+
 # Set working directory
 WORKDIR /app
 

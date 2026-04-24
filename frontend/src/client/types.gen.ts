@@ -1050,10 +1050,6 @@ export type BlockLayoutUpdate = {
     grid_h: number;
 };
 
-export type Body_cli_upload_workspace = {
-    file: (Blob | File);
-};
-
 export type Body_credentials_update_credential_sharing = {
     allow_sharing: boolean;
 };
@@ -1141,6 +1137,7 @@ export type CLITokenPublic = {
     machine_info: (string | null);
     expires_at: string;
     created_at: string;
+    last_sync_connected_at: (string | null);
 };
 
 export type CLITokensPublic = {
@@ -1440,6 +1437,11 @@ export type EventBroadcast = {
 export type ExchangeSetupTokenBody = {
     machine_name?: string;
     machine_info?: (string | null);
+};
+
+export type ExecBody = {
+    command: string;
+    cwd?: (string | null);
 };
 
 /**
@@ -3897,12 +3899,6 @@ export type CliRevokeCliTokenData = {
 
 export type CliRevokeCliTokenResponse = (Message);
 
-export type CliGetBuildContextData = {
-    agentId: string;
-};
-
-export type CliGetBuildContextResponse = (unknown);
-
 export type CliGetBuildingContextData = {
     agentId: string;
 };
@@ -3915,25 +3911,25 @@ export type CliGetWorkspaceData = {
 
 export type CliGetWorkspaceResponse = (unknown);
 
-export type CliUploadWorkspaceData = {
-    agentId: string;
-    formData: Body_cli_upload_workspace;
-};
-
-export type CliUploadWorkspaceResponse = (Message);
-
-export type CliGetWorkspaceManifestData = {
-    agentId: string;
-};
-
-export type CliGetWorkspaceManifestResponse = (unknown);
-
 export type CliSearchKnowledgeData = {
     agentId: string;
     requestBody: KnowledgeSearchBody;
 };
 
 export type CliSearchKnowledgeResponse = (unknown);
+
+export type CliGetSyncRuntimeData = {
+    agentId: string;
+};
+
+export type CliGetSyncRuntimeResponse = (unknown);
+
+export type CliExecCommandData = {
+    agentId: string;
+    requestBody: ExecBody;
+};
+
+export type CliExecCommandResponse = (unknown);
 
 export type CliGetBootstrapScriptData = {
     token: string;

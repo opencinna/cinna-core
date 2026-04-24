@@ -5323,19 +5323,6 @@ export const BlockLayoutUpdateSchema = {
     title: 'BlockLayoutUpdate'
 } as const;
 
-export const Body_cli_upload_workspaceSchema = {
-    properties: {
-        file: {
-            type: 'string',
-            format: 'binary',
-            title: 'File'
-        }
-    },
-    type: 'object',
-    required: ['file'],
-    title: 'Body_cli-upload_workspace'
-} as const;
-
 export const Body_credentials_update_credential_sharingSchema = {
     properties: {
         allow_sharing: {
@@ -5670,10 +5657,22 @@ export const CLITokenPublicSchema = {
             type: 'string',
             format: 'date-time',
             title: 'Created At'
+        },
+        last_sync_connected_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Sync Connected At'
         }
     },
     type: 'object',
-    required: ['name', 'id', 'agent_id', 'owner_id', 'prefix', 'is_revoked', 'last_used_at', 'machine_info', 'expires_at', 'created_at'],
+    required: ['name', 'id', 'agent_id', 'owner_id', 'prefix', 'is_revoked', 'last_used_at', 'machine_info', 'expires_at', 'created_at', 'last_sync_connected_at'],
     title: 'CLITokenPublic'
 } as const;
 
@@ -6879,6 +6878,29 @@ export const ExchangeSetupTokenBodySchema = {
     },
     type: 'object',
     title: 'ExchangeSetupTokenBody'
+} as const;
+
+export const ExecBodySchema = {
+    properties: {
+        command: {
+            type: 'string',
+            title: 'Command'
+        },
+        cwd: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Cwd'
+        }
+    },
+    type: 'object',
+    required: ['command'],
+    title: 'ExecBody'
 } as const;
 
 export const ExecuteHandoverRequestSchema = {

@@ -240,6 +240,41 @@ class AgentEnvConnector:
                 "error_type": type(e).__name__,
             }
 
+    async def open_sync_websocket(self, base_url: str, auth_headers: dict):
+        """
+        Open a WebSocket connection to the env-core /sync/exec endpoint.
+
+        Returns a websockets.WebSocketClientProtocol (or compatible) object
+        connected to the internal env-core sync endpoint.
+
+        Args:
+            base_url: Internal base URL of the env-core HTTP server (e.g., http://container:8080)
+            auth_headers: Auth headers dict (used for HTTP, not for WS connection itself
+                          since this is an internal-only endpoint)
+
+        Returns:
+            An open websockets connection object
+
+        Raises:
+            RuntimeError: If the connection cannot be established
+        """
+        import websockets
+
+        # Convert http:// → ws://, https:// → wss://
+        ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://")
+        ws_url = f"{ws_url.rstrip('/')}/sync/exec"
+
+        try:
+            connection = await websockets.connect(
+                ws_url,
+                additional_headers=auth_headers,
+                open_timeout=15.0,
+            )
+            logger.info(f"Opened sync WebSocket to env-core at {ws_url}")
+            return connection
+        except Exception as e:
+            raise RuntimeError(f"Failed to connect to env-core sync endpoint at {ws_url}: {e}") from e
+
     async def interrupt_command(
         self,
         base_url: str,

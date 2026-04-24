@@ -182,14 +182,11 @@ def test_cli_authenticated_endpoints(
     """
     CLI-authenticated endpoint access:
       1. Create agent, setup token, exchange → obtain CLI JWT
-      2. GET build-context → 200, tar+gzip bytes returned
-      3. GET building-context → 200, has "building_prompt" (minimal fallback)
-      4. GET workspace → 404 (no active environment in test)
-      5. GET workspace/manifest → 404 (no active environment in test)
-      6. POST knowledge/search → 200, has "results" key
-      7. Scoping guard: access different agent's endpoints with the token → 403
-      8. Auth guard: plain user JWT rejected by CLI endpoints → 401
-      9. Revoke token, then use it → 401
+      2. GET building-context → 200, has "building_prompt" (minimal fallback)
+      3. POST knowledge/search → 200, has "results" key
+      4. Scoping guard: access different agent's endpoints with the token → 403
+      5. Auth guard: plain user JWT rejected by CLI endpoints → 401
+      6. Revoke token, then use it → 401
     """
     # ── Phase 1: Bootstrap CLI token ─────────────────────────────────────
     agent = create_agent_via_api(client, superuser_token_headers)
@@ -205,16 +202,7 @@ def test_cli_authenticated_endpoints(
     assert len(tokens) == 1
     cli_token_id = tokens[0]["id"]
 
-    # ── Phase 2: GET build-context → 200 ──────────────────────────────────
-    r = client.get(f"{_BASE}/agents/{agent_id}/build-context", headers=cli_headers)
-    assert r.status_code == 200
-    # Should be a tar.gz stream — at minimum non-empty bytes
-    assert len(r.content) > 0
-    # Content-Disposition should reference the agent name
-    content_disposition = r.headers.get("content-disposition", "")
-    assert "build-context.tar.gz" in content_disposition
-
-    # ── Phase 3: GET building-context → 200 (minimal fallback) ───────────
+    # ── Phase 2: GET building-context → 200 (minimal fallback) ───────────
     r = client.get(f"{_BASE}/agents/{agent_id}/building-context", headers=cli_headers)
     assert r.status_code == 200
     body = r.json()
@@ -222,15 +210,7 @@ def test_cli_authenticated_endpoints(
     assert "building_prompt" in body
     assert "settings" in body
 
-    # ── Phase 4: GET workspace → 404 (no active environment) ─────────────
-    r = client.get(f"{_BASE}/agents/{agent_id}/workspace", headers=cli_headers)
-    assert r.status_code == 404
-
-    # ── Phase 5: GET workspace/manifest → 404 (no active environment) ─────
-    r = client.get(f"{_BASE}/agents/{agent_id}/workspace/manifest", headers=cli_headers)
-    assert r.status_code == 404
-
-    # ── Phase 6: POST knowledge/search → 200 ─────────────────────────────
+    # ── Phase 3: POST knowledge/search → 200 ─────────────────────────────
     r = client.post(
         f"{_BASE}/agents/{agent_id}/knowledge/search",
         headers=cli_headers,
@@ -243,37 +223,31 @@ def test_cli_authenticated_endpoints(
     # No knowledge sources configured in test → empty results expected
     assert body["results"] == []
 
-    # ── Phase 7: Scoping guard — wrong agent_id → 403 ────────────────────
+    # ── Phase 4: Scoping guard — wrong agent_id → 403 ────────────────────
     other_agent = create_agent_via_api(client, superuser_token_headers)
     other_agent_id = other_agent["id"]
 
     # CLI token is scoped to `agent_id`, so accessing `other_agent_id` → 403
-    r = client.get(
-        f"{_BASE}/agents/{other_agent_id}/build-context",
-        headers=cli_headers,
-    )
-    assert r.status_code == 403
-
     r = client.get(
         f"{_BASE}/agents/{other_agent_id}/building-context",
         headers=cli_headers,
     )
     assert r.status_code == 403
 
-    # ── Phase 8: Plain user JWT rejected by CLI dep → 401 ────────────────
+    # ── Phase 5: Plain user JWT rejected by CLI dep → 401 ────────────────
     # The CLIContextDep decodes the token and checks token_type == "cli"
     # A regular user JWT has no token_type claim → 401
     r = client.get(
-        f"{_BASE}/agents/{agent_id}/build-context",
+        f"{_BASE}/agents/{agent_id}/building-context",
         headers=superuser_token_headers,
     )
     assert r.status_code == 401
 
-    # ── Phase 9: Revoke token, then use it → 401 ─────────────────────────
+    # ── Phase 6: Revoke token, then use it → 401 ─────────────────────────
     revoke_cli_token(client, superuser_token_headers, cli_token_id)
 
     r = client.get(
-        f"{_BASE}/agents/{agent_id}/build-context",
+        f"{_BASE}/agents/{agent_id}/building-context",
         headers=cli_headers,
     )
     assert r.status_code == 401
@@ -291,9 +265,9 @@ def test_cli_environment_keep_alive_and_auto_activation(
     CLI environment keep-alive and auto-activation:
       1. Create agent, setup token, exchange → obtain CLI JWT
       2. Keep-alive: set env to running, make a CLI call, verify last_activity_at updated
-      3. Auto-activation: set env to suspended, call workspace/manifest → succeeds
+      3. Auto-activation: set env to suspended, call workspace → succeeds
          (not 404/409), proving the auto-activation path ran
-      4. Error state: set env to error, call workspace/manifest → 409
+      4. Error state: set env to error, call workspace → 409
       5. No environment: deactivate env (is_active=False), call workspace → 404
     """
     from app.models import AgentEnvironment
@@ -356,7 +330,7 @@ def test_cli_environment_keep_alive_and_auto_activation(
     # the auto-activation path was skipped or rejected.
     # A 502 is acceptable: it means activation succeeded but the workspace download
     # failed because there is no real Docker container in tests.
-    r = client.get(f"{_BASE}/agents/{agent_id}/workspace/manifest", headers=cli_headers)
+    r = client.get(f"{_BASE}/agents/{agent_id}/workspace", headers=cli_headers)
     assert r.status_code not in (404, 409), (
         f"Expected auto-activation to proceed (not 404/409), got {r.status_code}: {r.text}"
     )
@@ -370,7 +344,7 @@ def test_cli_environment_keep_alive_and_auto_activation(
     db.add(env)
     db.flush()
 
-    r = client.get(f"{_BASE}/agents/{agent_id}/workspace/manifest", headers=cli_headers)
+    r = client.get(f"{_BASE}/agents/{agent_id}/workspace", headers=cli_headers)
     assert r.status_code == 409, (
         f"Expected 409 for non-recoverable env state, got {r.status_code}: {r.text}"
     )

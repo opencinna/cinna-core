@@ -1,28 +1,25 @@
 """
 CLI Service.
 
-Handles setup token lifecycle, CLI token management, build context assembly,
-workspace sync, credentials, building context, and knowledge search for local development.
+Handles setup token lifecycle, CLI token management, workspace sync (initial tarball clone),
+building context, knowledge search, remote exec streaming, and sync-runtime info for
+the cinna-cli live sync model.
 """
-import io
 import logging
-import os
 import secrets
-import tarfile
 import uuid
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from typing import Any
+from typing import AsyncIterator
 
 import httpx
-from fastapi import Request, UploadFile
+from fastapi import Request
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models import Agent, AgentEnvironment
 from app.models.cli.cli_setup_token import CLISetupToken, CLISetupTokenCreated
-from app.models.cli.cli_token import CLIToken, CLITokenCreated, CLITokenPublic
+from app.models.cli.cli_token import CLIToken, CLITokenPublic
 from app.services.cli.cli_auth import CLIAuthService
 
 logger = logging.getLogger(__name__)
@@ -40,9 +37,6 @@ def _ensure_utc(dt: datetime) -> datetime:
 CLI_TOKEN_EXPIRY_DAYS = 7
 # Short-lived setup token expiry
 SETUP_TOKEN_EXPIRY_MINUTES = 15
-
-# Base directory for environment templates
-_TEMPLATES_BASE = Path(__file__).parent.parent.parent / "env-templates"
 
 
 def _get_platform_url(request: Request) -> str:
@@ -354,6 +348,11 @@ class CLIService:
         db.commit()
 
         platform_url = _get_platform_url(request)
+        # frontend_url is the user-facing web UI — always ``settings.FRONTEND_HOST``,
+        # which is distinct from ``platform_url`` (the API base) in local dev
+        # (FRONTEND_HOST=http://localhost:5173 vs platform_url=http://localhost:8000)
+        # and identical in production.
+        frontend_url = settings.FRONTEND_HOST.rstrip("/")
 
         return {
             "cli_token": jwt_value,
@@ -364,89 +363,11 @@ class CLIService:
                 "template": environment.env_name if environment else None,
             },
             "platform_url": platform_url,
+            "frontend_url": frontend_url,
             # Credentials and knowledge_sources are fetched separately by the CLI
             "credentials": [],
             "knowledge_sources": [],
         }
-
-    # ── Build Context ────────────────────────────────────────────────────
-
-    @staticmethod
-    def get_build_context(
-        db: Session,
-        agent: Agent,
-        environment: AgentEnvironment | None,
-    ) -> StreamingResponse:
-        """
-        Assemble and stream the Docker build context tarball for local development.
-
-        Includes:
-        - Dockerfile, pyproject.toml, uv.lock from the environment template
-        - app/core/ from app_core_base template
-        - A generated docker-compose.yml for local use
-        """
-        template_name = environment.env_name if environment else "general-env"
-        template_dir = _TEMPLATES_BASE / template_name
-
-        if not template_dir.exists():
-            logger.warning(f"Template dir not found: {template_dir}, falling back to general-env")
-            template_dir = _TEMPLATES_BASE / "general-env"
-
-        app_core_dir = _TEMPLATES_BASE / "app_core_base"
-
-        agent_name = agent.name.lower().replace(" ", "-")
-
-        # Generate local docker-compose.yml content
-        compose_content = f"""services:
-  agent-dev:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: agent-dev-{agent_name}
-    volumes:
-      - ./workspace:/app/workspace
-    working_dir: /app/workspace
-    stdin_open: true
-    tty: true
-    restart: unless-stopped
-"""
-
-        def generate_tarball():
-            buf = io.BytesIO()
-            with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-                # Add files from environment template
-                for filename in ["Dockerfile", "pyproject.toml", "uv.lock"]:
-                    filepath = template_dir / filename
-                    if filepath.exists():
-                        tar.add(str(filepath), arcname=filename)
-                    else:
-                        logger.debug(f"Template file not found, skipping: {filepath}")
-
-                # Add app/core from app_core_base
-                app_core_path = app_core_dir / "app" / "core"
-                if app_core_path.exists():
-                    tar.add(str(app_core_path), arcname="app/core")
-                else:
-                    # Try the root of app_core_base
-                    if app_core_dir.exists():
-                        tar.add(str(app_core_dir), arcname="app")
-
-                # Add generated docker-compose.yml
-                compose_bytes = compose_content.encode("utf-8")
-                info = tarfile.TarInfo(name="docker-compose.yml")
-                info.size = len(compose_bytes)
-                tar.addfile(info, io.BytesIO(compose_bytes))
-
-            buf.seek(0)
-            yield from buf
-
-        return StreamingResponse(
-            generate_tarball(),
-            media_type="application/tar+gzip",
-            headers={
-                "Content-Disposition": f'attachment; filename="{agent_name}-build-context.tar.gz"'
-            },
-        )
 
     # ── Workspace Sync ───────────────────────────────────────────────────
 
@@ -487,78 +408,6 @@ class CLIService:
             media_type="application/tar+gzip",
             headers={"Content-Disposition": 'attachment; filename="workspace.tar.gz"'},
         )
-
-    @staticmethod
-    async def upload_workspace(
-        db: Session,
-        agent: Agent,
-        environment: AgentEnvironment,
-        file: UploadFile,
-    ) -> None:
-        """
-        Upload workspace tarball to the remote environment.
-
-        Proxies the upload to the env core HTTP API.
-        """
-        from app.services.sessions.message_service import MessageService
-
-        base_url = MessageService.get_environment_url(environment)
-        auth_headers = MessageService.get_auth_headers(environment)
-
-        content = await file.read()
-
-        try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(
-                    f"{base_url}/workspace/upload",
-                    content=content,
-                    headers={
-                        **auth_headers,
-                        "Content-Type": "application/tar+gzip",
-                    },
-                )
-                response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise ValueError(f"Failed to upload workspace to environment: {e.response.status_code}")
-        except httpx.RequestError as e:
-            raise ValueError(f"Cannot connect to environment: {e}")
-
-        logger.info("Syncing agent prompts after CLI push")
-        try:
-            from app.services.environments.environment_service import EnvironmentService
-
-            await EnvironmentService.sync_agent_prompts_from_environment(db, environment, agent)
-        except Exception as e:
-            logger.warning("Failed to sync agent prompts after CLI push: %s", e)
-
-    @staticmethod
-    async def get_workspace_manifest(
-        db: Session,
-        agent: Agent,
-        environment: AgentEnvironment,
-    ) -> dict:
-        """
-        Get the workspace file manifest from the remote environment.
-
-        Returns a dict of relative paths → {sha256, size, mtime}.
-        """
-        from app.services.sessions.message_service import MessageService
-
-        base_url = MessageService.get_environment_url(environment)
-        auth_headers = MessageService.get_auth_headers(environment)
-
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(
-                    f"{base_url}/workspace/manifest",
-                    headers=auth_headers,
-                )
-                response.raise_for_status()
-                return response.json()
-        except httpx.HTTPStatusError as e:
-            raise ValueError(f"Failed to get workspace manifest from environment: {e.response.status_code}")
-        except httpx.RequestError as e:
-            raise ValueError(f"Cannot connect to environment: {e}")
 
     # ── Building Context ─────────────────────────────────────────────────
 
@@ -679,6 +528,70 @@ class CLIService:
             return []
 
 
+    # ── Live Sync ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def get_sync_runtime_info() -> dict:
+        """
+        Return the pinned Mutagen version and agent binary hash for CLI version verification.
+
+        The CLI calls this endpoint during `cinna setup` and `cinna sync start` to verify
+        that the installed Mutagen version matches what the platform expects.
+        """
+        return {
+            "mutagen_version": "0.18.1",
+            "mutagen_agent_sha256": "",  # Populated from env image metadata when available
+            "platform_api_version": "1.0",
+        }
+
+    @staticmethod
+    async def stream_exec(
+        environment: AgentEnvironment,
+        command: str,
+    ) -> AsyncIterator[bytes]:
+        """
+        Stream command execution output from the env-core /command/stream endpoint.
+
+        Routes through AgentEnvConnector.stream_command() — the same helper used
+        by in-session /run:* commands. The first SSE event emits the exec_id so
+        the CLI can later interrupt the command via /command/interrupt/{exec_id}.
+
+        Yields SSE-framed bytes (data: ...\\n\\n) for each event received from the
+        env-core, forwarding them verbatim to the CLI's stdout/stderr in real time.
+
+        Args:
+            environment: The agent environment to execute the command in
+            command: Shell command string to execute
+
+        Yields:
+            SSE-framed bytes for each event
+        """
+        import json as _json
+        from app.services.sessions.message_service import MessageService
+        from app.services.environments.agent_env_connector import agent_env_connector
+
+        exec_id = str(uuid.uuid4())
+        base_url = MessageService.get_environment_url(environment)
+        auth_headers = MessageService.get_auth_headers(environment)
+
+        # Emit exec_id as the first event so the CLI can route interrupts
+        exec_id_event = _json.dumps({"type": "exec_id", "exec_id": exec_id})
+        yield f"data: {exec_id_event}\n\n".encode("utf-8")
+
+        try:
+            async for event in agent_env_connector.stream_command(
+                base_url=base_url,
+                auth_headers=auth_headers,
+                exec_id=exec_id,
+                resolved_command=command,
+            ):
+                yield f"data: {_json.dumps(event)}\n\n".encode("utf-8")
+        except Exception as e:
+            error_event = _json.dumps({"type": "error", "content": f"Stream error: {e}"})
+            yield f"data: {error_event}\n\n".encode("utf-8")
+
+
+
 def _minimal_building_context(
     agent: Agent,
     environment: AgentEnvironment | None = None,
@@ -687,6 +600,7 @@ def _minimal_building_context(
     return {
         "building_prompt": f"You are a building agent for '{agent.name}'. Configure and develop this agent.",
         "building_prompt_parts": {},
+        "prompt_files": {},
         "settings": {
             "agent_name": agent.name,
             "template": environment.env_name if environment else None,

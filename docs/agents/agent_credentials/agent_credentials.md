@@ -147,6 +147,7 @@ workspace/
 
 ## Integration Points
 
+- [Cinna CLI Integration](../../application/cinna_cli_integration/cinna_cli_integration.md) - Credentials are **not** sent to the CLI user's machine. The remote agent environment holds all credentials; `cinna exec` runs commands inside that environment where credentials are already available. There is no `/credentials` CLI endpoint.
 - [Agent Environments](../agent_environments/agent_environments.md) - Credentials synced during environment lifecycle events
 - [Agent Environment Data Management](../agent_environment_data_management/agent_environment_data_management.md) - Credential sync as part of data management operations
 - [Agent Environment Core](../agent_environment_core/agent_environment_core.md) - Agent-env server receives and stores credential files

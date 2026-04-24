@@ -143,6 +143,7 @@ Each agent has a configurable inactivity threshold (agent-level setting, not per
 2. Agent's `inactivity_period_limit` is not `"always_on"`
 3. Last activity exceeds the agent's configured threshold
 4. EITHER: user is offline (no active WebSocket) OR environment is not the active one for its agent
+5. `sync_active` is `false` — an active CLI sync WebSocket keeps the environment warm. When the last sync WebSocket disconnects, a grace period (default 5 minutes) starts; only after that elapses without a new connection or session does the environment become a suspension candidate. See [Cinna CLI Integration](../../application/cinna_cli_integration/cinna_cli_integration.md)
 
 ### Activity Tracking
 

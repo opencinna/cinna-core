@@ -6,7 +6,7 @@ import asyncio
 import mimetypes
 import subprocess
 from email.utils import formatdate
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status, File, UploadFile, Form
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket, status, File, UploadFile, Form
 from fastapi.responses import StreamingResponse, Response, FileResponse
 from datetime import datetime
 from typing import Annotated, Any
@@ -620,24 +620,20 @@ async def get_building_prompt():
     Response:
     {
         "building_prompt": "...",
-        "building_prompt_parts": {
-            "building_agent_md": "...",
-            "scripts_readme": "...",
-            "workflow_prompt": "...",
-            "entrypoint_prompt": "...",
-            "refiner_prompt": "...",
-            "credentials_readme": "...",
-            "knowledge_topics": [...],
-            "handover_config": "...",
-            "plugin_instructions": null
+        "building_prompt_parts": { ... },
+        "prompt_files": {
+            "WEBAPP_BUILDING.md": "...",
+            "COMPLEX_AGENT_DESIGN.md": "..."
         },
-        "settings": {
-            "agent_name": "...",
-            "template": null,
-            "sdk_adapter_building": "...",
-            "model_override_building": null
-        }
+        "settings": { ... }
     }
+
+    ``prompt_files`` ships the contents of the companion guides in
+    ``/app/core/prompts/`` (everything except ``BUILDING_AGENT.md`` itself)
+    so the CLI can mirror them next to ``BUILDING_AGENT.md`` in the local
+    workspace. Without this, ``./WEBAPP_BUILDING.md`` and
+    ``./COMPLEX_AGENT_DESIGN.md`` references in the building prompt won't
+    resolve in live-sync mode.
     """
     try:
         prompt_gen = PromptGenerator(WORKSPACE_DIR)
@@ -668,6 +664,19 @@ async def get_building_prompt():
             "plugin_instructions": None,
         }
 
+        prompt_files: dict[str, str] = {}
+        prompts_dir = Path("/app/core/prompts")
+        if prompts_dir.is_dir():
+            for entry in prompts_dir.iterdir():
+                if not entry.is_file() or entry.suffix != ".md":
+                    continue
+                if entry.name == "BUILDING_AGENT.md":
+                    continue
+                try:
+                    prompt_files[entry.name] = entry.read_text(encoding="utf-8")
+                except OSError as e:
+                    logger.warning("Could not read companion prompt %s: %s", entry.name, e)
+
         settings = {
             "agent_name": ENV_NAME,
             "template": None,
@@ -678,6 +687,7 @@ async def get_building_prompt():
         return {
             "building_prompt": building_prompt,
             "building_prompt_parts": building_prompt_parts,
+            "prompt_files": prompt_files,
             "settings": settings,
         }
 
@@ -1695,6 +1705,187 @@ async def stream_command(request: CommandStreamRequest):
                 yield f"data: {json.dumps(done_event)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.websocket("/sync/exec")
+async def sync_exec_ws(websocket: WebSocket) -> None:
+    """
+    Internal WebSocket endpoint for Mutagen agent stdio tunneling.
+
+    This endpoint is internal-only — reachable only from the platform backend
+    over the internal Docker network. It spawns the mutagen-agent subprocess
+    and pipes its stdin/stdout bidirectionally to the WebSocket connection.
+
+    Protocol:
+    1. Verify Authorization header matches AGENT_AUTH_TOKEN (same as HTTP routes).
+    2. Accept connection.
+    3. Read preamble frame: JSON {"remote_command": ["mutagen-agent", ...args]}.
+    4. Spawn subprocess: mutagen-agent <args> with cwd=WORKSPACE_ROOT.
+    5. Run concurrently:
+       - Receive WS bytes → write to subprocess stdin
+       - Read subprocess stdout → send as WS bytes
+       - Subprocess stderr → logged (not sent to client)
+    6. On WS close or process exit: kill subprocess (SIGTERM, then SIGKILL after 2s), close WS cleanly.
+    """
+    import json as _json
+
+    WORKSPACE_ROOT = os.environ.get("WORKSPACE_ROOT", "/app/workspace")
+
+    # ── Auth: verify AGENT_AUTH_TOKEN before accepting ───────────────────────
+    if AGENT_AUTH_TOKEN:
+        auth_header = websocket.headers.get("authorization", "")
+        token = ""
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header.split(" ", 1)[1]
+        if token != AGENT_AUTH_TOKEN:
+            await websocket.close(code=1008)
+            return
+
+    await websocket.accept()
+    logger.info("sync/exec: WebSocket accepted")
+
+    # ── Read preamble ────────────────────────────────────────────────────────
+    try:
+        preamble_raw = await asyncio.wait_for(websocket.receive_bytes(), timeout=10.0)
+        preamble = _json.loads(preamble_raw)
+        remote_command = preamble.get("remote_command", [])
+    except asyncio.TimeoutError:
+        logger.warning("sync/exec: timed out waiting for preamble")
+        await websocket.close(code=1008)
+        return
+    except Exception as e:
+        logger.error(f"sync/exec: error reading preamble: {e}")
+        await websocket.close(code=1008)
+        return
+
+    # Mutagen's OpenSSH transport passes the remote command as a single
+    # shell-escaped string (e.g. ".mutagen/agents/0.18.1/mutagen-agent synchronizer ...").
+    # Other ssh variants may pass it pre-split. Handle both.
+    import shlex as _shlex
+    if isinstance(remote_command, str):
+        tokens = _shlex.split(remote_command)
+    elif len(remote_command) == 1 and " " in remote_command[0]:
+        tokens = _shlex.split(remote_command[0])
+    else:
+        tokens = list(remote_command)
+
+    if not tokens:
+        logger.warning("sync/exec: empty remote_command")
+        await websocket.close(code=1008)
+        return
+
+    # Mutagen references the agent by a versioned path (.mutagen/agents/<ver>/mutagen-agent).
+    # We always resolve to the PATH-installed binary and ignore the caller's path prefix.
+    if not os.path.basename(tokens[0]).startswith("mutagen-agent"):
+        logger.warning(f"sync/exec: unexpected preamble remote_command: {remote_command}")
+        await websocket.close(code=1008)
+        return
+
+    args = tokens[1:]
+    logger.info(f"sync/exec: spawning mutagen-agent with args={args}, cwd={WORKSPACE_ROOT}")
+
+    # ── Spawn subprocess ─────────────────────────────────────────────────────
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "mutagen-agent",
+            *args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=WORKSPACE_ROOT,
+        )
+    except FileNotFoundError:
+        logger.error("sync/exec: mutagen-agent binary not found. Is it installed in the env image?")
+        await websocket.close(code=1011)
+        return
+    except Exception as e:
+        logger.error(f"sync/exec: failed to spawn mutagen-agent: {e}")
+        await websocket.close(code=1011)
+        return
+
+    logger.info(f"sync/exec: mutagen-agent spawned (pid={proc.pid})")
+
+    # ── Concurrent pump tasks ────────────────────────────────────────────────
+
+    async def ws_to_stdin():
+        """WebSocket → mutagen-agent stdin."""
+        try:
+            while True:
+                data = await websocket.receive_bytes()
+                proc.stdin.write(data)
+                await proc.stdin.drain()
+        except Exception:
+            pass
+        finally:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
+
+    async def stdout_to_ws():
+        """mutagen-agent stdout → WebSocket."""
+        try:
+            while True:
+                chunk = await proc.stdout.read(65536)
+                if not chunk:
+                    break
+                await websocket.send_bytes(chunk)
+        except Exception:
+            pass
+
+    async def log_stderr():
+        """mutagen-agent stderr → env-core log."""
+        try:
+            while True:
+                line = await proc.stderr.readline()
+                if not line:
+                    break
+                logger.debug(f"mutagen-agent stderr: {line.decode(errors='replace').rstrip()}")
+        except Exception:
+            pass
+
+    async def kill_proc_on_timeout(timeout: float = 2.0):
+        """SIGTERM then SIGKILL with grace period."""
+        try:
+            proc.terminate()
+            await asyncio.sleep(timeout)
+            if proc.returncode is None:
+                proc.kill()
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            logger.debug(f"sync/exec: error killing mutagen-agent: {e}")
+
+    # Run all pumps concurrently; finish when any of them exits (proc exited or WS closed).
+    # Each pump must be wrapped in its own Task — asyncio.gather() returns a _GatheringFuture,
+    # and asyncio.create_task requires a coroutine, not a future.
+    pump_tasks = [
+        asyncio.create_task(ws_to_stdin()),
+        asyncio.create_task(stdout_to_ws()),
+        asyncio.create_task(log_stderr()),
+    ]
+    proc_wait_task = asyncio.create_task(proc.wait())
+
+    try:
+        done, pending = await asyncio.wait(
+            [*pump_tasks, proc_wait_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    except Exception as e:
+        logger.debug(f"sync/exec: pump error: {e}")
+    finally:
+        for task in pump_tasks:
+            if not task.done():
+                task.cancel()
+        if not proc_wait_task.done():
+            proc_wait_task.cancel()
+        if proc.returncode is None:
+            await kill_proc_on_timeout()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        logger.info(f"sync/exec: session ended (pid={proc.pid}, returncode={proc.returncode})")
 
 
 @router.post("/command/interrupt/{exec_id}", dependencies=[Depends(verify_auth_token)])

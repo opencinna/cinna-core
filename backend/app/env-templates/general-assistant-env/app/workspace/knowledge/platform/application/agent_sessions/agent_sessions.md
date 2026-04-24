@@ -127,9 +127,19 @@ idle ("") → running → idle ("")
 ### Cascade Delete
 
 - Deleting a session removes all its messages
-- Deleting an agent cascades to all its environments and sessions
+- Deleting an **environment** detaches its sessions (`environment_id` is SET NULL); on the next message the session auto-rebinds to the agent's current active environment (see [Detaching and Rebinding](#detaching-and-rebinding) below). Messages on detached sessions are preserved.
+- Deleting an **agent** removes all of that agent's sessions explicitly before its environments are cascade-deleted (preserves the "delete agent → delete everything" business rule)
 - `source_task_id` is SET NULL on session delete; task status is recomputed from remaining sessions
 - `guest_share_id` is SET NULL on guest share delete; sessions are preserved
+
+### Detaching and Rebinding
+
+A session is considered **detached** when `environment_id IS NULL` — typically because the environment it was originally created against has been deleted (e.g., an old non-active env was cleaned up). On the next message send, `SessionService.resolve_session_environment` rebinds the session to the agent's current `active_environment_id`:
+
+- If the agent has an active environment → `environment_id` is updated, the message proceeds as normal.
+- If the agent has no active environment → the send fails with `"Agent has no active environment"`.
+
+The same helper also handles the stale-but-not-detached case: a session pointing at a non-active environment is switched to the active one so the user doesn't accidentally chat with an older replica.
 
 ### Authorization
 

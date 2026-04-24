@@ -5,7 +5,7 @@ import logging
 import uuid
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, WebSocket, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt.exceptions import InvalidTokenError
 from pydantic import ValidationError
@@ -351,6 +351,105 @@ async def get_cli_context(
 
 
 CLIContextDep = Annotated[CLIContext, Depends(get_cli_context)]
+
+
+async def get_cli_context_ws(websocket: WebSocket, db: SessionDep) -> CLIContext:
+    """
+    WebSocket variant of get_cli_context.
+
+    Extracts the CLI JWT from the WebSocket connection (Authorization header
+    or ?token= query param), then performs the same validation as get_cli_context.
+    On authentication or authorization failure, closes the WebSocket (code 1008)
+    and raises WebSocketDisconnect rather than HTTPException.
+    """
+    from datetime import timedelta
+
+    from starlette.websockets import WebSocketState
+    from sqlmodel import select
+
+    from app.models import Agent, AgentEnvironment
+    from app.models.cli.cli_token import CLIToken
+    from app.services.cli.cli_auth import CLIAuthService
+
+    async def _close_and_raise(code: int, reason: str) -> None:
+        try:
+            if websocket.client_state != WebSocketState.DISCONNECTED:
+                await websocket.close(code=code)
+        except Exception:
+            pass
+        from starlette.websockets import WebSocketDisconnect
+        raise WebSocketDisconnect(code=code, reason=reason)
+
+    # 1. Extract raw JWT from connection
+    try:
+        raw_token = CLIAuthService.decode_cli_jwt_from_websocket(websocket)
+    except ValueError as e:
+        await _close_and_raise(1008, str(e))
+
+    # 2. Decode and validate JWT
+    try:
+        payload = CLIAuthService.decode_cli_jwt(raw_token)
+    except ValueError as e:
+        await _close_and_raise(1008, str(e))
+
+    # 3. DB lookup by token id
+    try:
+        token_id = uuid.UUID(payload["sub"])
+    except (KeyError, ValueError):
+        await _close_and_raise(1008, "Invalid CLI token payload")
+
+    cli_token = db.get(CLIToken, token_id)
+    if not cli_token:
+        await _close_and_raise(1008, "CLI token not found")
+
+    # 4. Check revocation and expiry
+    if cli_token.is_revoked:
+        await _close_and_raise(1008, "CLI token has been revoked")
+
+    now = datetime.now(UTC)
+    if _ensure_utc(cli_token.expires_at) < now:
+        await _close_and_raise(1008, "CLI token has expired")
+
+    # 5. Load agent and verify ownership
+    agent = db.get(Agent, cli_token.agent_id)
+    if not agent:
+        await _close_and_raise(1008, "Agent not found")
+    if agent.owner_id != cli_token.owner_id:
+        await _close_and_raise(1008, "Token ownership mismatch")
+
+    # 6. Load user
+    user = db.get(User, cli_token.owner_id)
+    if not user or not user.is_active:
+        await _close_and_raise(1008, "User not found or inactive")
+
+    # 7. Load environment
+    env_stmt = select(AgentEnvironment).where(
+        AgentEnvironment.agent_id == agent.id,
+        AgentEnvironment.is_active == True,  # noqa: E712
+    )
+    environment = db.exec(env_stmt).first()
+
+    # 8. Update last_used_at and renew rolling expiry
+    cli_token.last_used_at = now
+    cli_token.expires_at = now + timedelta(days=7)
+    db.add(cli_token)
+
+    if environment:
+        environment.last_activity_at = now
+        db.add(environment)
+
+    db.commit()
+    db.refresh(cli_token)
+
+    return CLIContext(
+        user=user,
+        agent=agent,
+        environment=environment,
+        cli_token=cli_token,
+    )
+
+
+CLIContextWSDep = Annotated[CLIContext, Depends(get_cli_context_ws)]
 
 
 # ── External client attribution ────────────────────────────────────────
