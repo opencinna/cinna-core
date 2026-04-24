@@ -1060,6 +1060,10 @@ class EnvironmentService:
             user_id=agent.owner_id,
             meta=meta,
         )
+        logger.info(
+            f"workspace-files-changed: emitted event for env {environment.id} "
+            f"(changed_files={changed_files or 'n/a'})"
+        )
 
     @staticmethod
     async def handle_workspace_files_changed_event(event_data: dict[str, Any]):

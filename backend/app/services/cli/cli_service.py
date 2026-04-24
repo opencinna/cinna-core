@@ -5,22 +5,37 @@ Handles setup token lifecycle, CLI token management, workspace sync (initial tar
 building context, knowledge search, remote exec streaming, and sync-runtime info for
 the cinna-cli live sync model.
 """
+import asyncio
+import json as _json
 import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import AsyncIterator
+from typing import TYPE_CHECKING, AsyncIterator
 
 import httpx
-from fastapi import Request
+from fastapi import Request, WebSocket
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
+from starlette.websockets import WebSocketState
 
 from app.core.config import settings
+from app.core.db import engine
 from app.models import Agent, AgentEnvironment
 from app.models.cli.cli_setup_token import CLISetupToken, CLISetupTokenCreated
 from app.models.cli.cli_token import CLIToken, CLITokenPublic
-from app.services.cli.cli_auth import CLIAuthService
+from app.services.cli.cli_auth import CLI_TOKEN_EXPIRY_DAYS, CLIAuthService
+from app.services.cli.sync_activity_tracker import (
+    SYNC_HEARTBEAT_INTERVAL_SECONDS,
+    sync_activity_tracker,
+)
+# Import as module so test patches of ``agent_env_connector.agent_env_connector``
+# (at the connector module's source) are visible here.
+from app.services.environments import agent_env_connector as _aec_module
+
+if TYPE_CHECKING:
+    # Imported lazily to avoid a module-load cycle with app.api.deps.
+    from app.api.deps import CLIContext
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +48,6 @@ def _ensure_utc(dt: datetime) -> datetime:
     return dt
 
 
-# Rolling expiry window for CLI tokens
-CLI_TOKEN_EXPIRY_DAYS = 7
 # Short-lived setup token expiry
 SETUP_TOKEN_EXPIRY_MINUTES = 15
 
@@ -528,6 +541,88 @@ class CLIService:
             return []
 
 
+    # ── Bootstrap Script ─────────────────────────────────────────────────
+
+    @staticmethod
+    def render_bootstrap_script(token: str, request: Request) -> str:
+        """
+        Render the Python bootstrap script served by ``GET /api/cli-setup/{token}``.
+
+        The generated script is piped into ``python3 -`` via the curl one-liner;
+        it delegates to an installed ``cinna`` CLI when present or prints install
+        instructions otherwise. Keeping the generator in the service layer keeps
+        the route a thin controller and avoids the route importing private
+        helpers from the service module.
+        """
+        platform_url = _get_platform_url(request)
+        setup_url = f"{platform_url}/api/cli-setup/{token}"
+
+        return f'''\
+#!/usr/bin/env python3
+"""Cinna CLI bootstrap script."""
+import os, shutil, signal, subprocess, sys
+
+SETUP_URL = "{setup_url}"
+
+
+def _reattach_stdin_to_tty():
+    """When invoked via `curl … | python3 -`, Python's stdin is the curl pipe,
+    not the terminal. A child process inheriting this fd sees stdin as a closed
+    pipe, not a tty — which breaks interactive UIs (Textual can't enter raw
+    mode, terminal echoes mouse-tracking escapes as literal text, etc.).
+
+    Re-open ``/dev/tty`` onto fd 0 so the spawned `cinna setup` gets the real
+    terminal. Falls back silently if no tty is available (non-interactive CI).
+    """
+    try:
+        tty_fd = os.open("/dev/tty", os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.dup2(tty_fd, 0)
+    finally:
+        os.close(tty_fd)
+
+
+def main():
+    cinna = shutil.which("cinna")
+    if cinna:
+        print("Found cinna CLI, running setup...")
+        _reattach_stdin_to_tty()
+        # Ctrl+C is delivered to the whole foreground process group. Ignore it
+        # in this wrapper so Python's default handler doesn't raise
+        # KeyboardInterrupt inside wait() — cinna handles its own cleanup
+        # (stops the container, etc.). Reset the handler in the child via
+        # preexec_fn so cinna still receives SIGINT normally.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        proc = subprocess.Popen(
+            [cinna, "setup", SETUP_URL],
+            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
+        )
+        sys.exit(proc.wait())
+
+    print("cinna CLI is not installed.")
+    print()
+    print("Install it with one of:")
+    print()
+    if shutil.which("uv"):
+        print("  uv tool install cinna-cli")
+    else:
+        print("  uv tool install cinna-cli    (recommended, install uv: https://docs.astral.sh/uv/)")
+    print("  pip install cinna-cli")
+    print()
+    print("For local development from source:")
+    print("  uv tool install -e /path/to/cinna-cli")
+    print("  pip install -e /path/to/cinna-cli")
+    print()
+    print("Then re-run this command:")
+    print(f"  curl -sL {{SETUP_URL}} | python3 -")
+    sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+'''
+
     # ── Live Sync ────────────────────────────────────────────────────────
 
     @staticmethod
@@ -536,12 +631,14 @@ class CLIService:
         Return the pinned Mutagen version and agent binary hash for CLI version verification.
 
         The CLI calls this endpoint during `cinna setup` and `cinna sync start` to verify
-        that the installed Mutagen version matches what the platform expects.
+        that the installed Mutagen version matches what the platform expects. The
+        version strings live in ``settings`` so they stay in lockstep with the
+        ``MUTAGEN_VERSION`` build arg in the env-template Dockerfiles.
         """
         return {
-            "mutagen_version": "0.18.1",
+            "mutagen_version": settings.MUTAGEN_VERSION,
             "mutagen_agent_sha256": "",  # Populated from env image metadata when available
-            "platform_api_version": "1.0",
+            "platform_api_version": settings.PLATFORM_API_VERSION,
         }
 
     @staticmethod
@@ -566,9 +663,10 @@ class CLIService:
         Yields:
             SSE-framed bytes for each event
         """
-        import json as _json
+        # MessageService pulls in heavy imports (agent_service, session_service,
+        # …). Keep this lazy to avoid a startup-time cycle through the sessions
+        # domain just because cli_service is imported.
         from app.services.sessions.message_service import MessageService
-        from app.services.environments.agent_env_connector import agent_env_connector
 
         exec_id = str(uuid.uuid4())
         base_url = MessageService.get_environment_url(environment)
@@ -579,7 +677,7 @@ class CLIService:
         yield f"data: {exec_id_event}\n\n".encode("utf-8")
 
         try:
-            async for event in agent_env_connector.stream_command(
+            async for event in _aec_module.agent_env_connector.stream_command(
                 base_url=base_url,
                 auth_headers=auth_headers,
                 exec_id=exec_id,
@@ -589,6 +687,142 @@ class CLIService:
         except Exception as e:
             error_event = _json.dumps({"type": "error", "content": f"Stream error: {e}"})
             yield f"data: {error_event}\n\n".encode("utf-8")
+
+    @staticmethod
+    async def run_sync_tunnel(
+        websocket: WebSocket,
+        cli_ctx: "CLIContext",
+    ) -> None:
+        """
+        End-to-end lifecycle of a cinna-cli live-sync WebSocket tunnel.
+
+        Called by the ``/cli/agents/{agent_id}/sync-stream`` route after it has
+        performed the agent-scope check. Responsibilities:
+
+        1. Ensure the agent environment is running (auto-activates if suspended).
+        2. Accept the client WebSocket and register with ``SyncActivityTracker``.
+        3. Open a second WebSocket to env-core ``/sync/exec``.
+        4. Pump bytes bidirectionally plus a heartbeat that keeps
+           ``last_sync_activity_at`` fresh and aborts on mid-session token
+           revocation. Heartbeat uses its own fresh ``Session(engine)`` per tick
+           rather than holding the request-scoped dep session for the whole WS
+           lifetime.
+        5. On teardown (either side disconnects or token revoked): cancel
+           remaining tasks, close env-core WS, unregister from tracker, close
+           the client WS.
+        """
+        agent = cli_ctx.agent
+        cli_token = cli_ctx.cli_token
+        environment = cli_ctx.environment
+
+        if not environment:
+            await websocket.close(code=1013)
+            return
+
+        # 1. Ensure env is running
+        try:
+            await CLIService.ensure_environment_running(environment, agent)
+        except (ValueError, RuntimeError) as e:
+            logger.warning(f"sync-stream: environment not ready for agent {agent.id}: {e}")
+            await websocket.close(code=1013)
+            return
+
+        # 2. Accept WS + register with tracker
+        await websocket.accept()
+        connection_id = str(uuid.uuid4())
+        sync_activity_tracker.register_sync_connection(
+            environment_id=environment.id,
+            token_id=cli_token.id,
+            connection_id=connection_id,
+        )
+
+        # 3. Open env-core WS
+        #    MessageService is imported lazily — see stream_exec note.
+        from app.services.sessions.message_service import MessageService
+
+        base_url = MessageService.get_environment_url(environment)
+        auth_headers = MessageService.get_auth_headers(environment)
+
+        try:
+            env_ws = await _aec_module.agent_env_connector.open_sync_websocket(base_url, auth_headers)
+        except RuntimeError as e:
+            logger.error(f"sync-stream: cannot reach env-core for env {environment.id}: {e}")
+            sync_activity_tracker.unregister_sync_connection(environment.id, connection_id)
+            await websocket.close(code=1013)
+            return
+
+        # 4. Bidirectional byte pump + heartbeat
+        async def client_to_env() -> None:
+            try:
+                while True:
+                    data = await websocket.receive_bytes()
+                    await env_ws.send(data)
+            except Exception as e:
+                logger.debug(f"sync-stream client→env pump ended: {e}")
+
+        async def env_to_client() -> None:
+            try:
+                while True:
+                    data = await env_ws.recv()
+                    if isinstance(data, str):
+                        await websocket.send_text(data)
+                    else:
+                        await websocket.send_bytes(data)
+            except Exception as e:
+                logger.debug(f"sync-stream env→client pump ended: {e}")
+
+        async def heartbeat_loop() -> None:
+            try:
+                while True:
+                    await asyncio.sleep(SYNC_HEARTBEAT_INTERVAL_SECONDS)
+                    # Check mid-session token revocation with a fresh session
+                    # rather than the dep-owned one — we don't want to hold
+                    # that session open for the whole WS lifetime.
+                    with Session(engine) as hb_db:
+                        current = hb_db.get(CLIToken, cli_token.id)
+                        if current is None or current.is_revoked:
+                            logger.info(
+                                f"sync-stream: token {cli_token.id} revoked mid-session, closing"
+                            )
+                            return
+                    sync_activity_tracker.heartbeat(environment.id)
+            except asyncio.CancelledError:
+                pass
+
+        pump_a = asyncio.create_task(client_to_env())
+        pump_b = asyncio.create_task(env_to_client())
+        hb_task = asyncio.create_task(heartbeat_loop())
+
+        try:
+            # FIRST_COMPLETED so a disconnect on either side tears down the other.
+            await asyncio.wait(
+                [pump_a, pump_b, hb_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except Exception as e:
+            logger.debug(f"sync-stream pump ended: {e}")
+        finally:
+            for task in (pump_a, pump_b, hb_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(pump_a, pump_b, hb_task, return_exceptions=True)
+
+            try:
+                await env_ws.close()
+            except Exception:
+                pass
+
+            sync_activity_tracker.unregister_sync_connection(environment.id, connection_id)
+
+            try:
+                if websocket.client_state != WebSocketState.DISCONNECTED:
+                    await websocket.close()
+            except Exception:
+                pass
+
+            logger.info(
+                f"sync-stream: connection closed for env {environment.id}, token {cli_token.id}"
+            )
 
 
 

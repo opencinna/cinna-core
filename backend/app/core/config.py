@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     MCP_SERVER_BASE_URL: str = ""
     ENVIRONMENT: Literal["local", "staging", "production"] = "local"
 
+    # Mutagen agent version pinned in env-template Dockerfiles. Exposed via
+    # the /cli/agents/{id}/sync-runtime endpoint so the CLI can refuse to
+    # start when the locally-installed Mutagen disagrees with the platform.
+    MUTAGEN_VERSION: str = "0.18.1"
+    # Platform API version advertised to the CLI alongside the Mutagen pin.
+    PLATFORM_API_VERSION: str = "1.0"
+
     BACKEND_CORS_ORIGINS: Annotated[
         list[AnyUrl] | str, BeforeValidator(parse_cors)
     ] = []

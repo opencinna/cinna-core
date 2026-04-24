@@ -84,7 +84,7 @@ def test_sync_runtime_auth_and_response_shape(
       3. Regular user JWT (not a CLI token) → 401
       4. CLI token for a different agent → 403
       5. Happy path: returns {mutagen_version, mutagen_agent_sha256, platform_api_version}
-      6. Known version pinned to "0.18.3"
+      6. Pinned version matches the value configured via ``settings.MUTAGEN_VERSION``
     """
     # ── Phase 1: Bootstrap ────────────────────────────────────────────────
     agent_id, cli_jwt, _ = _bootstrap_cli(client, superuser_token_headers)
@@ -113,8 +113,10 @@ def test_sync_runtime_auth_and_response_shape(
     assert "platform_api_version" in body, f"Missing platform_api_version in {body}"
 
     # ── Phase 6: Pinned version ───────────────────────────────────────────
-    assert body["mutagen_version"] == "0.18.3", (
-        f"Expected pinned Mutagen version 0.18.3, got {body['mutagen_version']!r}"
+    # Source of truth is ``settings.MUTAGEN_VERSION`` (the same value baked into
+    # the env-template Dockerfiles as the MUTAGEN_VERSION build arg).
+    assert body["mutagen_version"] == settings.MUTAGEN_VERSION, (
+        f"Expected pinned Mutagen version {settings.MUTAGEN_VERSION!r}, got {body['mutagen_version']!r}"
     )
     assert isinstance(body["platform_api_version"], str) and body["platform_api_version"], (
         "platform_api_version must be a non-empty string"

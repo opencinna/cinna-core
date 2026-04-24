@@ -4,6 +4,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
+from sqlmodel import Session
 
 from app.api.deps import CurrentUser, SessionDep
 from app.models import (
@@ -323,6 +324,32 @@ class WorkspaceFilesChangedRequest(BaseModel):
     changed_files: list[str] | None = None
 
 
+async def _emit_workspace_files_changed_callback(
+    session: Session,
+    env: AgentEnvironment,
+    path_id: uuid.UUID,
+    changed_files: list[str] | None,
+) -> Message:
+    """
+    Shared handler for the two env→backend file-change callbacks.
+
+    Guards against environment-id mismatch, delegates to the service layer,
+    and translates ``AgentEnvironmentError`` to HTTPException. Keeps the two
+    route handlers below as one-liners.
+    """
+    if env.id != path_id:
+        raise HTTPException(status_code=403, detail="Environment ID mismatch")
+    try:
+        await EnvironmentService.emit_workspace_files_changed(
+            session=session,
+            environment=env,
+            changed_files=changed_files,
+        )
+    except AgentEnvironmentError as e:
+        _handle_service_error(e)
+    return Message(message="Workspace files change event emitted")
+
+
 @router.post("/{id}/workspace-files-changed")
 async def workspace_files_changed(
     id: uuid.UUID,
@@ -339,24 +366,12 @@ async def workspace_files_changed(
 
     Auth: AGENT_AUTH_TOKEN bearer + X-Agent-Env-Id environment header (internal only).
     """
-    if env.id != id:
-        raise HTTPException(status_code=403, detail="Environment ID mismatch")
-
-    changed_files = body.changed_files if body else None
-    try:
-        await EnvironmentService.emit_workspace_files_changed(
-            session=session,
-            environment=env,
-            changed_files=changed_files,
-        )
-    except AgentEnvironmentError as e:
-        _handle_service_error(e)
-
-    logger.info(
-        f"workspace-files-changed: emitted event for env {env.id} "
-        f"(changed_files={changed_files or 'n/a'})"
+    return await _emit_workspace_files_changed_callback(
+        session=session,
+        env=env,
+        path_id=id,
+        changed_files=body.changed_files if body else None,
     )
-    return Message(message="Workspace files change event emitted")
 
 
 @router.post("/{id}/prompt-file-changed")
@@ -372,13 +387,9 @@ async def prompt_file_changed(
 
     Auth: AGENT_AUTH_TOKEN bearer + X-Agent-Env-Id environment header (internal only).
     """
-    if env.id != id:
-        raise HTTPException(status_code=403, detail="Environment ID mismatch")
-
-    try:
-        await EnvironmentService.emit_workspace_files_changed(session=session, environment=env)
-    except AgentEnvironmentError as e:
-        _handle_service_error(e)
-
-    logger.info(f"prompt-file-changed: emitted event for env {env.id}")
-    return Message(message="Workspace files change event emitted")
+    return await _emit_workspace_files_changed_callback(
+        session=session,
+        env=env,
+        path_id=id,
+        changed_files=None,
+    )

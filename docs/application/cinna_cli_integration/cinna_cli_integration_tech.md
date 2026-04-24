@@ -11,18 +11,19 @@
 
 ### Backend — Routes
 
-- `backend/app/api/routes/cli.py` — Two routers: `setup_router` (`/api/cli-setup`) and `router` (under `/api/v1/cli`). Contains `_verify_cli_agent_scope()` helper, `get_bootstrap_script()` endpoint, and all agent-scoped CLI endpoints including the sync WebSocket and exec stream
+- `backend/app/api/routes/cli.py` — Thin controllers only. Two routers: `setup_router` (`/api/cli-setup`) and `router` (under `/api/v1/cli`). Contains `_verify_cli_agent_scope()` helper and `_ensure_environment_running()` HTTP adapter; bootstrap script rendering and sync-WebSocket orchestration are delegated to `CLIService`
+- `backend/app/api/routes/environments.py` — `_emit_workspace_files_changed_callback()` shared helper used by `POST /{id}/workspace-files-changed` and the legacy `POST /{id}/prompt-file-changed` alias
 
 ### Backend — Services
 
-- `backend/app/services/cli/cli_service.py` — CLIService: setup token lifecycle, CLI token management, workspace initial clone, building context, knowledge search, sync runtime info, exec streaming, sync WebSocket proxy
-- `backend/app/services/cli/cli_auth.py` — CLIAuthService: JWT create/decode, token hashing, WS token extraction
-- `backend/app/services/cli/sync_activity_tracker.py` — SyncActivityTracker: register/unregister sync WebSocket connections, heartbeat, grace-period suspend handoff, `is_sync_warm()` gate for the auto-suspend scheduler
+- `backend/app/services/cli/cli_service.py` — CLIService: setup token lifecycle, CLI token management, workspace initial clone, building context, knowledge search, sync runtime info, exec streaming, `render_bootstrap_script()` (Python bootstrap generation), `run_sync_tunnel()` (full WebSocket lifecycle: env readiness, tracker register, env-core WS, bidirectional pumps, heartbeat, teardown)
+- `backend/app/services/cli/cli_auth.py` — CLIAuthService: JWT create/decode, token hashing, WS token extraction, `refresh_token_usage()` (rolling-expiry + env `last_activity_at` bump shared by both deps). Also defines `CLIAuthError` (reason + message) used by the context resolver
+- `backend/app/services/cli/sync_activity_tracker.py` — SyncActivityTracker: register/unregister sync WebSocket connections, heartbeat, grace-period suspend handoff, `is_sync_warm()` gate for the auto-suspend scheduler. All public methods open their own short-lived `Session(engine)` for DB writes — they do not take a DB session parameter
 - `backend/app/services/cli/cli_setup_token_scheduler.py` — Background scheduler for expired token cleanup (hourly)
 
 ### Backend — Dependencies
 
-- `backend/app/api/deps.py` — `CLIContext`, `CLIContextDep`, `get_cli_context()`, `CLIContextWSDep`, `get_cli_context_ws()` (WebSocket variant with rolling-window refresh)
+- `backend/app/api/deps.py` — `CLIContext`, `CLIContextDep`, `CLIContextWSDep`, plus a shared `_resolve_cli_context(db, raw_token)` that both `get_cli_context()` (HTTP) and `get_cli_context_ws()` (WebSocket) call; each dep only translates `CLIAuthError` to its own channel (HTTPException vs WS close 1008)
 
 ### Backend — App Registration
 
@@ -121,7 +122,7 @@ Index: `ix_agent_environment_sync_active` (partial, `WHERE sync_active = true`)
 | GET | `/api/v1/cli/agents/{agent_id}/workspace` | Download initial workspace tarball (one-shot clone during `cinna setup`) |
 | GET | `/api/v1/cli/agents/{agent_id}/building-context` | Get assembled building-mode prompt + settings + inline `prompt_files` dict (contents of `/app/core/prompts/*.md` companions — `WEBAPP_BUILDING.md`, `COMPLEX_AGENT_DESIGN.md`, …) so the CLI can mirror them next to `BUILDING_AGENT.md` |
 | POST | `/api/v1/cli/agents/{agent_id}/knowledge/search` | Search agent's knowledge sources |
-| WS | `/api/v1/cli/agents/{agent_id}/sync-stream` | Mutagen tunnel WebSocket — proxies raw bytes to env-core `/sync/exec`; registers with SyncActivityTracker; runs 30s heartbeat loop |
+| WS | `/api/v1/cli/agents/{agent_id}/sync-stream` | Mutagen tunnel WebSocket. Route is a thin controller: scope check + `CLIService.run_sync_tunnel(websocket, cli_ctx)` which owns env readiness, tracker register/unregister, env-core `/sync/exec` proxy, and the 30 s heartbeat loop |
 | POST | `/api/v1/cli/agents/{agent_id}/exec` | Streaming SSE — body `{command, cwd?}`; first event emits `exec_id`; delegates to env-core `/command/stream` |
 | GET | `/api/v1/cli/agents/{agent_id}/sync-runtime` | Returns pinned `{mutagen_version, mutagen_agent_sha256, platform_api_version}` for version verification |
 
@@ -150,35 +151,43 @@ Index: `ix_agent_environment_sync_active` (partial, `WHERE sync_active = true`)
 - `cleanup_expired_setup_tokens()` — Deletes used tokens >24h old and expired unused tokens
 - `list_tokens()` — Returns active (non-revoked, non-expired) tokens for a user, optionally filtered by agent
 - `revoke_token()` — Soft-revokes a token (sets `is_revoked=True`), verified by ownership
+- `ensure_environment_running()` — Shared readiness check for both HTTP and WebSocket endpoints; auto-activates suspended environments and polls until `status == "running"`
+- `render_bootstrap_script(token, request)` — Renders the Python script served by `GET /api/cli-setup/{token}` (checks for `cinna`, delegates or prints install hints)
 - `get_workspace_tarball()` — Proxies to env-core HTTP API to download workspace (initial clone only)
 - `get_building_context()` — Proxies to env-core prompt generator; falls back to minimal context if env unavailable. The env-core response includes a `prompt_files: {filename: content}` dict with every `.md` under `/app/core/prompts/` except `BUILDING_AGENT.md` (currently `WEBAPP_BUILDING.md`, `COMPLEX_AGENT_DESIGN.md`); the CLI mirrors them next to `BUILDING_AGENT.md` so the on-demand `./<NAME>.md` references in the building prompt resolve locally without a Docker build context
 - `search_knowledge()` — Generates query embedding, searches accessible knowledge sources via vector search
-- `get_sync_runtime_info()` — Returns pinned Mutagen version + agent binary SHA-256 from `/etc/mutagen-agent.version` inside the env image
-- `stream_exec()` — Wraps env-core `/command/stream` via `AgentEnvConnector.stream_command()`; yields chunks as an async generator
-- `proxy_sync_stream()` — Accepts client WebSocket, opens env-core `/sync/exec` WebSocket, pumps bytes bidirectionally; handles close/error propagation
+- `get_sync_runtime_info()` — Returns `{mutagen_version, mutagen_agent_sha256, platform_api_version}` from `settings.MUTAGEN_VERSION` / `settings.PLATFORM_API_VERSION` (kept in lockstep with the Dockerfile `MUTAGEN_VERSION` build arg)
+- `stream_exec()` — Wraps env-core `/command/stream` via `AgentEnvConnector.stream_command()`; yields SSE-framed bytes and emits the `exec_id` event first
+- `run_sync_tunnel(websocket, cli_ctx)` — End-to-end sync-stream lifecycle: ensures env is running, accepts WS, registers with `SyncActivityTracker`, opens env-core `/sync/exec` WebSocket, runs client↔env byte pumps + 30 s heartbeat (fresh `Session(engine)` per tick — does not hold the request-scoped dep session for the WS lifetime), cancels pumps and unregisters on teardown
 
 ### SyncActivityTracker (`backend/app/services/cli/sync_activity_tracker.py`)
 
-- `register_sync_connection(environment_id, token_id)` — Sets `sync_active=true`, `last_sync_activity_at=now`, `last_sync_connected_at=now` on the token; cancels any pending grace-period suspend
-- `unregister_sync_connection(environment_id, token_id)` — Decrements in-memory connection count; when it reaches zero sets `sync_active=false` and schedules the grace-period suspend task (default 5 minutes)
+- `register_sync_connection(environment_id, token_id, connection_id)` — Sets `sync_active=true`, `last_sync_activity_at=now`, `last_sync_connected_at=now` on the token; cancels any pending grace-period suspend. Opens its own `Session(engine)` for DB writes
+- `unregister_sync_connection(environment_id, connection_id)` — Decrements in-memory connection count; when it reaches zero sets `sync_active=false` and schedules the grace-period suspend task (default 5 minutes)
 - `heartbeat(environment_id)` — Updates `last_sync_activity_at`; called every 30s from an active sync WS
-- `is_sync_warm(environment_id)` — Returns `True` when `sync_active=true`; used by the auto-suspend scheduler as a skip gate
+- `is_sync_warm(environment_id)` — Returns `True` when at least one sync WebSocket is tracked; used by the auto-suspend scheduler as a skip gate
 
 ### CLIAuthService (`backend/app/services/cli/cli_auth.py`)
 
 - `create_cli_jwt()` — Creates JWT with `sub=token_id`, `agent_id`, `owner_id`, `token_type="cli"`
 - `decode_cli_jwt()` — Decodes and validates JWT, checks `token_type=="cli"`
-- `decode_cli_jwt_from_ws(websocket)` — Pulls bearer token from `Authorization` header, subprotocol, or `?token=` query (in priority order) for WebSocket routes
+- `decode_cli_jwt_from_websocket(websocket)` — Pulls bearer token from `Authorization` header then `?token=` query (in priority order) for WebSocket routes
 - `hash_token()` — SHA-256 hash for secure storage
+- `refresh_token_usage(db, cli_token, environment)` — Rolls `expires_at` and `last_used_at`; bumps `environment.last_activity_at` so the suspension scheduler holds off while the CLI is active. Shared by both `_resolve_cli_context` paths
+- `CLIAuthError(reason, message)` — Raised by `_resolve_cli_context` on any auth failure. `reason` is one of `invalid_token | not_found | revoked | expired | agent_missing | ownership_mismatch | user_inactive`; callers map it to an HTTP status code or WS close code
 
 ### get_cli_context / get_cli_context_ws (`backend/app/api/deps.py`)
+
+Both deps delegate to a single shared resolver `_resolve_cli_context(db, raw_token)` which:
 
 - Decodes CLI JWT and verifies `token_type`
 - Looks up CLIToken by ID, checks revocation and expiry
 - Loads agent, verifies ownership match
 - Loads active environment for the agent
-- Updates `last_used_at` and renews `expires_at` (rolling 7-day window)
-- `get_cli_context_ws` additionally handles WebSocket token extraction and rolling-window refresh on the WS handshake
+- Calls `CLIAuthService.refresh_token_usage()` (rolling 7-day window + env keep-alive)
+- Raises `CLIAuthError` on any failure
+
+Each dep only differs in how it surfaces the error: HTTP → `HTTPException(401/403/404)`, WebSocket → close with code 1008 and `WebSocketDisconnect`. `get_cli_context_ws` additionally extracts the raw JWT from the WS handshake (Authorization header or `?token=` query) before calling the resolver.
 
 ## CLI-side Layout
 
@@ -225,14 +234,26 @@ Entries are upserted on every `cinna setup` (refreshing the token) and removed b
 - Lightweight mtime-poll watcher in `core/main.py` (`_workspace_files_watcher`) monitors `docs/WORKFLOW_PROMPT.md`, `docs/ENTRYPOINT_PROMPT.md`, `docs/REFINER_PROMPT.md`, `docs/CLI_COMMANDS.yaml`, `docs/STATUS.md` under `WORKSPACE_ROOT` <!-- nocheck -->
 - Polls every 5 s; fires when a file is stable for at least one polling interval after a change (debounces Mutagen transfer bursts)
 - POSTs the list of changed paths to `POST /api/v1/environments/{id}/workspace-files-changed` (bearer auth + `X-Agent-Env-Id` header)
-- Route (`backend/app/api/routes/environments.py`) parses the optional `WorkspaceFilesChangedRequest` body and delegates to `EnvironmentService.emit_workspace_files_changed()`; the legacy `prompt-file-changed` endpoint is a thin alias that calls the same service method with `changed_files=None`
-- `EnvironmentService.emit_workspace_files_changed()` (`backend/app/services/environments/environment_service.py`) looks up the agent (raises `AgentNotFoundError` if missing) and emits `EventType.WORKSPACE_FILES_CHANGED` with `environment_id`, `agent_id`, and optional `changed_files` in meta
+- Route (`backend/app/api/routes/environments.py`) shares a `_emit_workspace_files_changed_callback()` helper that handles the env-id mismatch guard and service delegation; both `POST /{id}/workspace-files-changed` and the legacy `POST /{id}/prompt-file-changed` alias call it as one-liners (the alias passes `changed_files=None`)
+- `EnvironmentService.emit_workspace_files_changed()` (`backend/app/services/environments/environment_service.py`) looks up the agent (raises `AgentNotFoundError` if missing), emits `EventType.WORKSPACE_FILES_CHANGED` with `environment_id`, `agent_id`, and optional `changed_files` in meta, and logs the emission
 - Event subscribers (registered in `backend/app/main.py`): `EnvironmentService.handle_workspace_files_changed_event` (prompt resync), `CLICommandsService.handle_post_action_event` (CLI_COMMANDS.yaml cache), `AgentStatusService.handle_post_action_event` (STATUS.md snapshot)
 
 ### Docker image
 
-- `mutagen-agent` binary baked into the agent env Dockerfile at the pinned `CLI_MUTAGEN_VERSION` build arg
-- Installed at `/usr/local/bin/mutagen-agent`; version + SHA-256 recorded at `/etc/mutagen-agent.version`
+- `mutagen-agent` binary baked into the agent env Dockerfile at the pinned `MUTAGEN_VERSION` build arg (see `backend/app/env-templates/general-env/Dockerfile`, `general-assistant-env/Dockerfile`, `python-env-advanced/Dockerfile`)
+- Installed at `/usr/local/bin/mutagen-agent`; version recorded at `/etc/mutagen-agent.version`
+- The Dockerfile build arg and `settings.MUTAGEN_VERSION` must stay in lockstep — the CLI fails fast when `GET /sync-runtime` reports a version the local Mutagen can't speak
+
+## Configuration
+
+| Setting | File | Default | Purpose |
+|---------|------|---------|---------|
+| `MUTAGEN_VERSION` | `backend/app/core/config.py` | `"0.18.1"` | Pinned Mutagen version served by `/sync-runtime`; must match the Dockerfile `MUTAGEN_VERSION` build arg |
+| `PLATFORM_API_VERSION` | `backend/app/core/config.py` | `"1.0"` | Platform API version advertised alongside the Mutagen pin |
+| `CLI_TOKEN_EXPIRY_DAYS` | `backend/app/services/cli/cli_auth.py` | `7` | Rolling-expiry window applied by `CLIAuthService.refresh_token_usage()` on every CLI call and WS connect |
+| `SETUP_TOKEN_EXPIRY_MINUTES` | `backend/app/services/cli/cli_service.py` | `15` | Short-lived setup-token TTL |
+| `SYNC_GRACE_PERIOD_SECONDS` | `backend/app/services/cli/sync_activity_tracker.py` | `300` | Time between the last WS disconnect and auto-suspend |
+| `SYNC_HEARTBEAT_INTERVAL_SECONDS` | `backend/app/services/cli/sync_activity_tracker.py` | `30` | Sync WS keep-alive cadence |
 
 ## Frontend Components
 

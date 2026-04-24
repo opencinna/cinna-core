@@ -237,110 +237,59 @@ def _ensure_utc(dt: datetime) -> datetime:
     return dt
 
 
-async def get_cli_context(
-    token: TokenDep,
-    db: SessionDep,
-) -> CLIContext:
+def _resolve_cli_context(db: Session, raw_token: str) -> CLIContext:
     """
-    Validate a CLI JWT token and return the CLI context.
+    Shared CLI JWT → CLIContext resolution used by both the HTTP and
+    WebSocket deps.
 
-    Steps:
-    1. Decode JWT, verify token_type == "cli"
-    2. DB lookup CLIToken by id (sub claim)
-    3. Check is_revoked and expiry
-    4. Load agent, verify ownership
-    5. Load environment (nullable)
-    6. Update last_used_at and renew expires_at (rolling 7-day window)
-    7. Return CLIContext
+    Decodes and validates the token, loads the agent/user/environment,
+    bumps the rolling expiry, and returns the context. Raises
+    ``CLIAuthError`` on any failure so each dep can translate to its
+    own error channel (HTTPException vs WS close code).
     """
-    from datetime import timedelta
-
     from sqlmodel import select
 
     from app.models import Agent, AgentEnvironment
     from app.models.cli.cli_token import CLIToken
-    from app.services.cli.cli_auth import CLIAuthService
+    from app.services.cli.cli_auth import CLIAuthError, CLIAuthService
 
-    # 1. Decode JWT
+    # Decode JWT
     try:
-        payload = CLIAuthService.decode_cli_jwt(token)
+        payload = CLIAuthService.decode_cli_jwt(raw_token)
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(e),
-        )
+        raise CLIAuthError("invalid_token", str(e))
 
-    # 2. DB lookup by token id (sub claim)
     try:
         token_id = uuid.UUID(payload["sub"])
     except (KeyError, ValueError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid CLI token payload",
-        )
+        raise CLIAuthError("invalid_token", "Invalid CLI token payload")
 
     cli_token = db.get(CLIToken, token_id)
     if not cli_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="CLI token not found",
-        )
-
-    # 3. Check revocation and expiry
+        raise CLIAuthError("not_found", "CLI token not found")
     if cli_token.is_revoked:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="CLI token has been revoked",
-        )
+        raise CLIAuthError("revoked", "CLI token has been revoked")
+    if _ensure_utc(cli_token.expires_at) < datetime.now(UTC):
+        raise CLIAuthError("expired", "CLI token has expired")
 
-    now = datetime.now(UTC)
-    if _ensure_utc(cli_token.expires_at) < now:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="CLI token has expired",
-        )
-
-    # 4. Load agent and verify ownership
     agent = db.get(Agent, cli_token.agent_id)
     if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Agent not found",
-        )
+        raise CLIAuthError("agent_missing", "Agent not found")
     if agent.owner_id != cli_token.owner_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Token ownership mismatch",
-        )
+        raise CLIAuthError("ownership_mismatch", "Token ownership mismatch")
 
-    # Load user
     user = db.get(User, cli_token.owner_id)
     if not user or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found or inactive",
-        )
+        raise CLIAuthError("user_inactive", "User not found or inactive")
 
-    # 5. Load environment (nullable — find active env for this agent)
     env_stmt = select(AgentEnvironment).where(
         AgentEnvironment.agent_id == agent.id,
         AgentEnvironment.is_active == True,  # noqa: E712
     )
     environment = db.exec(env_stmt).first()
 
-    # 6. Update last_used_at and renew expires_at (rolling window)
-    cli_token.last_used_at = now
-    cli_token.expires_at = now + timedelta(days=7)
-    db.add(cli_token)
-
-    # 7. Keep environment alive — update last_activity_at so the
-    #    suspension scheduler doesn't suspend while CLI is actively working
-    if environment:
-        environment.last_activity_at = now
-        db.add(environment)
-
-    db.commit()
-    db.refresh(cli_token)
+    # Roll expiry + mark env activity so the suspension scheduler holds off
+    CLIAuthService.refresh_token_usage(db, cli_token, environment)
 
     return CLIContext(
         user=user,
@@ -348,6 +297,27 @@ async def get_cli_context(
         environment=environment,
         cli_token=cli_token,
     )
+
+
+def get_cli_context(token: TokenDep, db: SessionDep) -> CLIContext:
+    """
+    Validate a CLI JWT (HTTP) and return the CLI context.
+
+    CLI-auth errors are surfaced as 401/403/404 HTTPExceptions depending
+    on the failure reason.
+    """
+    from app.services.cli.cli_auth import CLIAuthError
+
+    try:
+        return _resolve_cli_context(db, token)
+    except CLIAuthError as e:
+        if e.reason == "agent_missing":
+            code = status.HTTP_404_NOT_FOUND
+        elif e.reason == "ownership_mismatch":
+            code = status.HTTP_403_FORBIDDEN
+        else:
+            code = status.HTTP_401_UNAUTHORIZED
+        raise HTTPException(status_code=code, detail=e.message)
 
 
 CLIContextDep = Annotated[CLIContext, Depends(get_cli_context)]
@@ -355,98 +325,33 @@ CLIContextDep = Annotated[CLIContext, Depends(get_cli_context)]
 
 async def get_cli_context_ws(websocket: WebSocket, db: SessionDep) -> CLIContext:
     """
-    WebSocket variant of get_cli_context.
+    WebSocket variant of ``get_cli_context``.
 
-    Extracts the CLI JWT from the WebSocket connection (Authorization header
-    or ?token= query param), then performs the same validation as get_cli_context.
-    On authentication or authorization failure, closes the WebSocket (code 1008)
-    and raises WebSocketDisconnect rather than HTTPException.
+    Extracts the CLI JWT from the WS handshake (Authorization header or
+    ``?token=`` query param). On auth failure closes the WebSocket with
+    code 1008 and raises ``WebSocketDisconnect``.
     """
-    from datetime import timedelta
+    from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-    from starlette.websockets import WebSocketState
-    from sqlmodel import select
+    from app.services.cli.cli_auth import CLIAuthError, CLIAuthService
 
-    from app.models import Agent, AgentEnvironment
-    from app.models.cli.cli_token import CLIToken
-    from app.services.cli.cli_auth import CLIAuthService
-
-    async def _close_and_raise(code: int, reason: str) -> None:
+    async def _close_and_raise(reason: str) -> None:
         try:
             if websocket.client_state != WebSocketState.DISCONNECTED:
-                await websocket.close(code=code)
+                await websocket.close(code=1008)
         except Exception:
             pass
-        from starlette.websockets import WebSocketDisconnect
-        raise WebSocketDisconnect(code=code, reason=reason)
+        raise WebSocketDisconnect(code=1008, reason=reason)
 
-    # 1. Extract raw JWT from connection
     try:
         raw_token = CLIAuthService.decode_cli_jwt_from_websocket(websocket)
     except ValueError as e:
-        await _close_and_raise(1008, str(e))
+        await _close_and_raise(str(e))
 
-    # 2. Decode and validate JWT
     try:
-        payload = CLIAuthService.decode_cli_jwt(raw_token)
-    except ValueError as e:
-        await _close_and_raise(1008, str(e))
-
-    # 3. DB lookup by token id
-    try:
-        token_id = uuid.UUID(payload["sub"])
-    except (KeyError, ValueError):
-        await _close_and_raise(1008, "Invalid CLI token payload")
-
-    cli_token = db.get(CLIToken, token_id)
-    if not cli_token:
-        await _close_and_raise(1008, "CLI token not found")
-
-    # 4. Check revocation and expiry
-    if cli_token.is_revoked:
-        await _close_and_raise(1008, "CLI token has been revoked")
-
-    now = datetime.now(UTC)
-    if _ensure_utc(cli_token.expires_at) < now:
-        await _close_and_raise(1008, "CLI token has expired")
-
-    # 5. Load agent and verify ownership
-    agent = db.get(Agent, cli_token.agent_id)
-    if not agent:
-        await _close_and_raise(1008, "Agent not found")
-    if agent.owner_id != cli_token.owner_id:
-        await _close_and_raise(1008, "Token ownership mismatch")
-
-    # 6. Load user
-    user = db.get(User, cli_token.owner_id)
-    if not user or not user.is_active:
-        await _close_and_raise(1008, "User not found or inactive")
-
-    # 7. Load environment
-    env_stmt = select(AgentEnvironment).where(
-        AgentEnvironment.agent_id == agent.id,
-        AgentEnvironment.is_active == True,  # noqa: E712
-    )
-    environment = db.exec(env_stmt).first()
-
-    # 8. Update last_used_at and renew rolling expiry
-    cli_token.last_used_at = now
-    cli_token.expires_at = now + timedelta(days=7)
-    db.add(cli_token)
-
-    if environment:
-        environment.last_activity_at = now
-        db.add(environment)
-
-    db.commit()
-    db.refresh(cli_token)
-
-    return CLIContext(
-        user=user,
-        agent=agent,
-        environment=environment,
-        cli_token=cli_token,
-    )
+        return _resolve_cli_context(db, raw_token)
+    except CLIAuthError as e:
+        await _close_and_raise(e.message)
 
 
 CLIContextWSDep = Annotated[CLIContext, Depends(get_cli_context_ws)]

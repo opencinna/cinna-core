@@ -44,7 +44,6 @@ class SyncActivityTracker:
 
     def register_sync_connection(
         self,
-        db,
         environment_id: uuid.UUID,
         token_id: uuid.UUID,
         connection_id: str,
@@ -55,6 +54,10 @@ class SyncActivityTracker:
         Sets sync_active=True on the environment, updates last_sync_activity_at
         and last_sync_connected_at on the token. Cancels any pending grace-period
         suspend task for this environment.
+
+        DB writes open their own short-lived ``Session(engine)`` so this method
+        is safe to call from a long-lived WebSocket context without holding the
+        request-scoped session.
         """
         if environment_id not in self._active_connections:
             self._active_connections[environment_id] = set()
@@ -64,8 +67,8 @@ class SyncActivityTracker:
         self._cancel_grace_task(environment_id)
 
         now = datetime.now(UTC)
-        self._update_env_sync_state(db, environment_id, sync_active=True, activity_at=now)
-        self._update_token_sync_ts(db, token_id, last_sync_connected_at=now)
+        self._update_env_sync_state(environment_id, sync_active=True, activity_at=now)
+        self._update_token_sync_ts(token_id, last_sync_connected_at=now)
 
         logger.info(
             f"SyncActivityTracker: connection {connection_id} registered for env {environment_id}. "
@@ -74,7 +77,6 @@ class SyncActivityTracker:
 
     def unregister_sync_connection(
         self,
-        db,
         environment_id: uuid.UUID,
         connection_id: str,
     ) -> None:
@@ -100,10 +102,10 @@ class SyncActivityTracker:
 
         if remaining == 0:
             # Last connection gone — clear sync_active and schedule grace-period suspend
-            self._update_env_sync_state(db, environment_id, sync_active=False)
+            self._update_env_sync_state(environment_id, sync_active=False)
             self._schedule_grace_period_suspend(environment_id)
 
-    def heartbeat(self, db, environment_id: uuid.UUID) -> None:
+    def heartbeat(self, environment_id: uuid.UUID) -> None:
         """
         Update last_sync_activity_at for an environment with an active sync session.
 
@@ -113,7 +115,7 @@ class SyncActivityTracker:
         """
         if not self.is_sync_warm(environment_id):
             return
-        self._update_env_sync_activity_ts(db, environment_id, activity_at=datetime.now(UTC))
+        self._update_env_sync_activity_ts(environment_id, activity_at=datetime.now(UTC))
 
     def is_sync_warm(self, environment_id: uuid.UUID) -> bool:
         """
@@ -210,7 +212,6 @@ class SyncActivityTracker:
 
     @staticmethod
     def _update_env_sync_state(
-        db,
         environment_id: uuid.UUID,
         sync_active: bool,
         activity_at: datetime | None = None,
@@ -236,7 +237,6 @@ class SyncActivityTracker:
 
     @staticmethod
     def _update_env_sync_activity_ts(
-        db,
         environment_id: uuid.UUID,
         activity_at: datetime,
     ) -> None:
@@ -261,7 +261,6 @@ class SyncActivityTracker:
 
     @staticmethod
     def _update_token_sync_ts(
-        db,
         token_id: uuid.UUID,
         last_sync_connected_at: datetime,
     ) -> None:

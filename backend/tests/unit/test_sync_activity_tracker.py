@@ -31,11 +31,6 @@ def _make_tracker():
     return tracker
 
 
-def _fake_db():
-    """Return a MagicMock that passes for a DB session argument."""
-    return MagicMock()
-
-
 # ── Tests ──────────────────────────────────────────────────────────────────
 
 
@@ -51,7 +46,6 @@ class TestReferenceCountingAndWarmGate:
         env_id = uuid.uuid4()
         token_id = uuid.uuid4()
         conn_id = "conn-1"
-        db = _fake_db()
 
         with (
             patch.object(tracker, "_update_env_sync_state") as mock_env_state,
@@ -62,25 +56,26 @@ class TestReferenceCountingAndWarmGate:
             assert tracker.is_sync_warm(env_id) is False
 
             # Register
-            tracker.register_sync_connection(db, env_id, token_id, conn_id)
+            tracker.register_sync_connection(env_id, token_id, conn_id)
             assert tracker.is_sync_warm(env_id) is True
 
             mock_env_state.assert_called_once()
             args, kwargs = mock_env_state.call_args
-            # Called with sync_active=True
-            assert kwargs.get("sync_active", args[2] if len(args) > 2 else None) is True
+            # Called with sync_active=True (positional arg 1 is environment_id,
+            # positional arg 2 would be sync_active when passed positionally).
+            assert kwargs.get("sync_active", args[1] if len(args) > 1 else None) is True
 
             mock_token_ts.assert_called_once()
 
             # Unregister
-            tracker.unregister_sync_connection(db, env_id, conn_id)
+            tracker.unregister_sync_connection(env_id, conn_id)
             assert tracker.is_sync_warm(env_id) is False
 
             # sync_active=False was written
             assert mock_env_state.call_count == 2
             second_call_args, second_call_kwargs = mock_env_state.call_args_list[1]
             assert (
-                second_call_kwargs.get("sync_active", second_call_args[2] if len(second_call_args) > 2 else None)
+                second_call_kwargs.get("sync_active", second_call_args[1] if len(second_call_args) > 1 else None)
                 is False
             )
 
@@ -95,7 +90,6 @@ class TestReferenceCountingAndWarmGate:
         tracker = _make_tracker()
         env_id = uuid.uuid4()
         token_id = uuid.uuid4()
-        db = _fake_db()
 
         with (
             patch.object(tracker, "_update_env_sync_state") as mock_env_state,
@@ -103,17 +97,17 @@ class TestReferenceCountingAndWarmGate:
             patch.object(tracker, "_schedule_grace_period_suspend") as mock_schedule,
         ):
             # Register two connections
-            tracker.register_sync_connection(db, env_id, token_id, "conn-A")
-            tracker.register_sync_connection(db, env_id, token_id, "conn-B")
+            tracker.register_sync_connection(env_id, token_id, "conn-A")
+            tracker.register_sync_connection(env_id, token_id, "conn-B")
             assert tracker.is_sync_warm(env_id) is True
 
             # First unregister — still warm
-            tracker.unregister_sync_connection(db, env_id, "conn-A")
+            tracker.unregister_sync_connection(env_id, "conn-A")
             assert tracker.is_sync_warm(env_id) is True
             mock_schedule.assert_not_called()
 
             # Second unregister — now cold
-            tracker.unregister_sync_connection(db, env_id, "conn-B")
+            tracker.unregister_sync_connection(env_id, "conn-B")
             assert tracker.is_sync_warm(env_id) is False
             mock_schedule.assert_called_once_with(env_id)
 
@@ -125,21 +119,20 @@ class TestReferenceCountingAndWarmGate:
         tracker = _make_tracker()
         env_a = uuid.uuid4()
         env_b = uuid.uuid4()
-        db = _fake_db()
 
         with (
             patch.object(tracker, "_update_env_sync_state"),
             patch.object(tracker, "_update_token_sync_ts"),
             patch.object(tracker, "_schedule_grace_period_suspend"),
         ):
-            tracker.register_sync_connection(db, env_a, uuid.uuid4(), "conn-A")
-            tracker.register_sync_connection(db, env_b, uuid.uuid4(), "conn-B")
+            tracker.register_sync_connection(env_a, uuid.uuid4(), "conn-A")
+            tracker.register_sync_connection(env_b, uuid.uuid4(), "conn-B")
 
             assert tracker.is_sync_warm(env_a) is True
             assert tracker.is_sync_warm(env_b) is True
 
             # Disconnect env_a
-            tracker.unregister_sync_connection(db, env_a, "conn-A")
+            tracker.unregister_sync_connection(env_a, "conn-A")
 
             assert tracker.is_sync_warm(env_a) is False
             assert tracker.is_sync_warm(env_b) is True, "env_b must remain warm"
@@ -152,7 +145,6 @@ class TestHeartbeat:
         """heartbeat() calls _update_env_sync_activity_ts when env is warm."""
         tracker = _make_tracker()
         env_id = uuid.uuid4()
-        db = _fake_db()
 
         with (
             patch.object(tracker, "_update_env_sync_state"),
@@ -160,26 +152,20 @@ class TestHeartbeat:
             patch.object(tracker, "_schedule_grace_period_suspend"),
             patch.object(tracker, "_update_env_sync_activity_ts") as mock_ts,
         ):
-            tracker.register_sync_connection(db, env_id, uuid.uuid4(), "conn-1")
+            tracker.register_sync_connection(env_id, uuid.uuid4(), "conn-1")
             assert tracker.is_sync_warm(env_id) is True
 
-            tracker.heartbeat(db, env_id)
+            tracker.heartbeat(env_id)
             mock_ts.assert_called_once()
-
-            # sync_active flag must NOT be touched during heartbeat —
-            # _update_env_sync_state is only called during register/unregister
-            # (we already called it during register above)
-            # Re-check with fresh call count tracking:
 
     def test_heartbeat_no_op_when_not_warm(self):
         """heartbeat() is a no-op (does not write to DB) if no active connection."""
         tracker = _make_tracker()
         env_id = uuid.uuid4()
-        db = _fake_db()
 
         with patch.object(tracker, "_update_env_sync_activity_ts") as mock_ts:
             # env_id has never been registered → not warm
-            tracker.heartbeat(db, env_id)
+            tracker.heartbeat(env_id)
             mock_ts.assert_not_called()
 
     def test_heartbeat_does_not_change_sync_active(self):
@@ -189,7 +175,6 @@ class TestHeartbeat:
         """
         tracker = _make_tracker()
         env_id = uuid.uuid4()
-        db = _fake_db()
 
         with (
             patch.object(tracker, "_update_env_sync_state") as mock_env_state,
@@ -198,12 +183,12 @@ class TestHeartbeat:
             patch.object(tracker, "_update_env_sync_activity_ts"),
         ):
             # Register (this calls _update_env_sync_state once)
-            tracker.register_sync_connection(db, env_id, uuid.uuid4(), "conn-1")
+            tracker.register_sync_connection(env_id, uuid.uuid4(), "conn-1")
             call_count_after_register = mock_env_state.call_count
             assert call_count_after_register == 1
 
             # Heartbeat must NOT call _update_env_sync_state
-            tracker.heartbeat(db, env_id)
+            tracker.heartbeat(env_id)
             assert mock_env_state.call_count == call_count_after_register, (
                 "heartbeat() must not call _update_env_sync_state (sync_active flag)"
             )
@@ -219,7 +204,6 @@ class TestGracePeriodScheduling:
         """
         tracker = _make_tracker()
         env_id = uuid.uuid4()
-        db = _fake_db()
 
         cancelled_tasks: list = []
 
@@ -246,14 +230,14 @@ class TestGracePeriodScheduling:
             patch.object(tracker, "_schedule_grace_period_suspend", side_effect=_schedule_grace),
         ):
             # Connect then disconnect (triggers grace scheduling)
-            tracker.register_sync_connection(db, env_id, uuid.uuid4(), "conn-1")
-            tracker.unregister_sync_connection(db, env_id, "conn-1")
+            tracker.register_sync_connection(env_id, uuid.uuid4(), "conn-1")
+            tracker.unregister_sync_connection(env_id, "conn-1")
 
             # Task should be scheduled
             assert env_id in tracker._grace_tasks
 
             # Reconnect — should cancel the pending grace task
-            tracker.register_sync_connection(db, env_id, uuid.uuid4(), "conn-2")
+            tracker.register_sync_connection(env_id, uuid.uuid4(), "conn-2")
             assert len(cancelled_tasks) == 1, (
                 "Grace task must be cancelled when a new connection arrives"
             )

@@ -6,14 +6,31 @@ Handles JWT creation/decoding and token hashing for CLI tokens.
 import hashlib
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 import jwt
+from sqlmodel import Session
 
 from app.core.config import settings
 from app.core.security import ALGORITHM
+from app.models import AgentEnvironment
+from app.models.cli.cli_token import CLIToken
 
 logger = logging.getLogger(__name__)
+
+
+# Rolling expiry window for CLI tokens — shared by create + refresh paths
+CLI_TOKEN_EXPIRY_DAYS = 7
+
+
+class CLIAuthError(Exception):
+    """Raised when CLI token auth fails. Carries a reason enum so callers
+    can translate to HTTPException or WS close codes uniformly."""
+
+    def __init__(self, reason: str, message: str):
+        self.reason = reason  # e.g. "invalid_token", "expired", "not_found", "revoked", "ownership_mismatch", "agent_missing", "user_inactive"
+        self.message = message
+        super().__init__(message)
 
 
 class CLIAuthService:
@@ -121,3 +138,28 @@ class CLIAuthService:
             return token_param.strip()
 
         raise ValueError("No CLI token found in WebSocket connection (checked Authorization header and ?token= query param)")
+
+    @staticmethod
+    def refresh_token_usage(
+        db: Session,
+        cli_token: CLIToken,
+        environment: AgentEnvironment | None,
+    ) -> None:
+        """
+        Roll the CLI token expiry, bump `last_used_at`, and keep the agent's
+        environment from being auto-suspended while the CLI is actively talking
+        to it.
+
+        Shared by both the HTTP and WebSocket CLI context deps.
+        """
+        now = datetime.now(UTC)
+        cli_token.last_used_at = now
+        cli_token.expires_at = now + timedelta(days=CLI_TOKEN_EXPIRY_DAYS)
+        db.add(cli_token)
+
+        if environment:
+            environment.last_activity_at = now
+            db.add(environment)
+
+        db.commit()
+        db.refresh(cli_token)
