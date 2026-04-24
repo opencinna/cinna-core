@@ -49,8 +49,11 @@ Excluded (backend-only): `refresh_token`, `client_secret`, `granted_at`
 - **odoo** - Allowed: `url`, `database_name`, `login`, `api_token`
 - **api_token** - Allowed: `http_header_name`, `http_header_value` (pre-processed from raw token + template)
 - **google_service_account** - Allowed: `file_path`, `project_id`, `client_email`
+- **ssh_key** - Allowed: `public_key`, `fingerprint`, `key_type`, `host_aliases`
 
 For API tokens, raw fields like `api_token_type`, `api_token_template`, and `api_token` are NOT included — they are pre-processed into ready-to-use HTTP header pairs before whitelisting.
+
+For SSH keys, `private_key` and `passphrase` are NEVER whitelisted. They travel on a sibling transport — the `ssh_keys` array in the `/config/credentials` payload — and are written directly into `~/.ssh/` (0600) inside the container, so they never appear in `credentials.json` or any agent-readable workspace file. See [SSH Key Credentials](ssh_key_credentials.md) for the full security model and delivery path.
 
 ## Why Whitelist Over Blacklist
 
@@ -88,3 +91,5 @@ When adding a new credential type, the whitelist must be explicitly updated:
 - [Agent Credentials](agent_credentials.md) - Parent feature: credential lifecycle, sync rules, redaction
 - [Agent Credentials Tech](agent_credentials_tech.md) - File locations, services, methods
 - [OAuth Credentials](oauth_credentials.md) - OAuth flow, token refresh lifecycle, CSRF protection
+- [SSH Key Credentials](ssh_key_credentials.md) - Full security model for the ssh_key type: private key delivery path, orphan reconciliation, known_hosts seeding
+- [SSH Key Credentials Tech](ssh_key_credentials_tech.md) - Service layer methods, agent-env implementation, frontend components

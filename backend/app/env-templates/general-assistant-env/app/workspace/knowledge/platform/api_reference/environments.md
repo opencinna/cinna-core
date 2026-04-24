@@ -118,3 +118,24 @@ Auto-generated from OpenAPI spec. Tag: `environments`
 **Response:** `object`
 
 ---
+
+## POST `/api/v1/environments/{id}/workspace-files-changed`
+**Workspace Files Changed**
+
+**Path parameters:**
+- `id`: uuid
+
+
+**Response:** `Message`
+
+---
+
+## POST `/api/v1/environments/{id}/prompt-file-changed`
+**Prompt File Changed**
+
+**Path parameters:**
+- `id`: uuid
+
+**Response:** `Message`
+
+---

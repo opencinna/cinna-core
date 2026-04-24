@@ -52,6 +52,7 @@ import { handleError } from "@/utils"
 
 interface SSHKeyEditViewProps {
   credential: CredentialWithData
+  focusNameField?: boolean
 }
 
 const metadataSchema = z.object({
@@ -74,7 +75,10 @@ function parseHostAliases(text: string | undefined): string[] | undefined {
   return parts.length > 0 ? parts : undefined
 }
 
-export function SSHKeyEditView({ credential }: SSHKeyEditViewProps) {
+export function SSHKeyEditView({
+  credential,
+  focusNameField = false,
+}: SSHKeyEditViewProps) {
   const data = credential.credential_data ?? {}
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -100,6 +104,12 @@ export function SSHKeyEditView({ credential }: SSHKeyEditViewProps) {
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [credential])
+
+  useEffect(() => {
+    if (focusNameField) {
+      form.setFocus("name", { shouldSelect: true })
+    }
+  }, [focusNameField, form])
 
   const metadataMutation = useMutation({
     mutationFn: (values: MetadataFormData) => {

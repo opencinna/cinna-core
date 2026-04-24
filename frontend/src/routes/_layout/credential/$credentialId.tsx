@@ -89,8 +89,17 @@ function getCredentialTypeLabel(type: string): string {
   }
 }
 
+type CredentialDetailSearch = {
+  new?: number
+}
+
 export const Route = createFileRoute("/_layout/credential/$credentialId")({
   component: CredentialDetail,
+  validateSearch: (search: Record<string, unknown>): CredentialDetailSearch => {
+    const raw = search.new
+    const parsed = typeof raw === "string" ? Number(raw) : raw
+    return { new: parsed === 1 ? 1 : undefined }
+  },
 })
 
 // Read-only view for shared credentials
@@ -153,7 +162,13 @@ function SharedCredentialView({ credential }: { credential: CredentialPublic }) 
 }
 
 // Full edit view for owned credentials
-function OwnedCredentialView({ credential }: { credential: CredentialWithData }) {
+function OwnedCredentialView({
+  credential,
+  focusNameField,
+}: {
+  credential: CredentialWithData
+  focusNameField: boolean
+}) {
   const { credentialId } = Route.useParams()
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -176,6 +191,12 @@ function OwnedCredentialView({ credential }: { credential: CredentialWithData })
       credential_data: credential.credential_data ?? {},
     })
   }, [credential, form])
+
+  useEffect(() => {
+    if (focusNameField && credential.type !== "ssh_key") {
+      form.setFocus("name", { shouldSelect: true })
+    }
+  }, [focusNameField, form, credential.type])
 
   const mutation = useMutation({
     mutationFn: (data: FormData) =>
@@ -220,7 +241,10 @@ function OwnedCredentialView({ credential }: { credential: CredentialWithData })
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <SSHKeyEditView credential={credential} />
+            <SSHKeyEditView
+              credential={credential}
+              focusNameField={focusNameField}
+            />
           </CardContent>
         </Card>
 
@@ -379,9 +403,26 @@ function OwnedCredentialView({ credential }: { credential: CredentialWithData })
 
 function CredentialDetail() {
   const { credentialId } = Route.useParams()
+  const search = Route.useSearch()
   const navigate = useNavigate()
   const { setHeaderContent } = usePageHeader()
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
+
+  // `?new=1` is set by AddCredential after auto-creating a default-named
+  // credential so the detail view can focus + select the name field. We latch
+  // it once on mount and then strip it from the URL so a refresh doesn't
+  // re-trigger the focus (and doesn't leave the marker in shared links).
+  const [focusNameField] = useState(() => search.new === 1)
+  useEffect(() => {
+    if (search.new === 1) {
+      navigate({
+        to: "/credential/$credentialId",
+        params: { credentialId },
+        search: {},
+        replace: true,
+      })
+    }
+  }, [search.new, credentialId, navigate])
 
   // First, fetch credential metadata to check if it's shared
   const { data: credentialMeta, isLoading: metaLoading, error: metaError } = useQuery({
@@ -488,7 +529,10 @@ function CredentialDetail() {
   return (
     <div className="p-6 md:p-8 overflow-y-auto">
       <div className="mx-auto max-w-7xl">
-        <OwnedCredentialView credential={credentialWithData} />
+        <OwnedCredentialView
+          credential={credentialWithData}
+          focusNameField={focusNameField}
+        />
       </div>
     </div>
   )

@@ -9,6 +9,7 @@ Each file below documents one API domain.
 | A2A | [a2a.md](./a2a.md) | 9 |
 | Access Tokens | [access_tokens.md](./access_tokens.md) | 5 |
 | Activities | [activities.md](./activities.md) | 8 |
+| Admin Environments | [admin_environments.md](./admin_environments.md) | 3 |
 | Agent App Mcp Routes | [agent_app_mcp_routes.md](./agent_app_mcp_routes.md) | 6 |
 | Agent Shares | [agent_shares.md](./agent_shares.md) | 14 |
 | Agent Tasks | [agent_tasks.md](./agent_tasks.md) | 11 |
@@ -20,7 +21,7 @@ Each file below documents one API domain.
 | Credentials | [credentials.md](./credentials.md) | 16 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
 | Email Integration | [email_integration.md](./email_integration.md) | 6 |
-| Environments | [environments.md](./environments.md) | 11 |
+| Environments | [environments.md](./environments.md) | 13 |
 | Events | [events.md](./events.md) | 3 |
 | External | [external.md](./external.md) | 5 |
 | External A2A | [external_a2a.md](./external_a2a.md) | 9 |
