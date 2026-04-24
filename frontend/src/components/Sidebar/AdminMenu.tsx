@@ -1,5 +1,5 @@
 import { Link as RouterLink, useRouterState } from "@tanstack/react-router"
-import { Shield, Users, Store, BookOpen } from "lucide-react"
+import { Shield, Users, Store, BookOpen, Server } from "lucide-react"
 
 import {
   SidebarMenu,
@@ -48,6 +48,12 @@ export function AdminMenu() {
               <RouterLink to="/admin/users" onClick={handleMenuClick}>
                 <Users className="mr-2 h-4 w-4" />
                 Users
+              </RouterLink>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <RouterLink to="/admin/agent-envs" onClick={handleMenuClick}>
+                <Server className="mr-2 h-4 w-4" />
+                Agent Environments
               </RouterLink>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>

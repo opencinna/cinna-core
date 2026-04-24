@@ -1,7 +1,7 @@
 ---
 name: cinna-core-developer
 description: "Use this agent when you need to implement a specific phase or section from an implementation plan document. This agent follows project best practices, writes clean code, and iterates based on code review feedback.\\n\\nExamples:\\n\\n- user: \"Implement phase 2 from the implementation plan in docs/plans/feature-x.md\"\\n  assistant: \"I'll use the cinna-core-developer agent to implement phase 2 from the implementation plan.\"\\n  <launches cinna-core-developer agent>\\n\\n- user: \"Pick up where we left off on the authentication feature, phase 3 is next\"\\n  assistant: \"Let me launch the cinna-core-developer agent to continue with phase 3 of the authentication feature implementation.\"\\n  <launches cinna-core-developer agent>\\n\\n- user: \"Develop the backend API endpoints described in step 4 of our plan\"\\n  assistant: \"I'll use the cinna-core-developer agent to implement the backend API endpoints from step 4.\"\\n  <launches cinna-core-developer agent>"
-model: sonnet
+model: opus
 color: green
 ---
 

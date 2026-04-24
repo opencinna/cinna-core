@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, UTC
 from sqlmodel import SQLModel, Field, Column
-from sqlalchemy import JSON, Text, DateTime
+from sqlalchemy import JSON, Text, DateTime, String
 import sqlalchemy as sa
 
 
@@ -53,6 +53,9 @@ class AgentEnvironment(SQLModel, table=True):
     # CLI live sync tracking
     last_sync_activity_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     sync_active: bool = Field(default=False)
+    # Admin-managed build tracking (system-managed, not user-settable)
+    last_build_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    current_image_tag: str | None = Field(default=None, sa_column=Column(String(255), nullable=True, index=True))
 
 
 # Pydantic Schemas
@@ -106,3 +109,68 @@ class AgentEnvironmentPublic(SQLModel):
 class AgentEnvironmentsPublic(SQLModel):
     data: list[AgentEnvironmentPublic]
     count: int
+
+
+# ---------------------------------------------------------------------------
+# Admin-only response schemas (no database tables)
+# ---------------------------------------------------------------------------
+
+class AdminAgentEnvironmentPublic(AgentEnvironmentPublic):
+    """Enriched environment row for the admin console.
+
+    Inherits every field of ``AgentEnvironmentPublic`` and adds admin-only
+    enrichment derived from joins (owner, agent) and live computation
+    (expected tag, staleness, in-use flag).
+    """
+    # Admin-specific enrichment
+    agent_name: str
+    owner_id: uuid.UUID
+    owner_email: str
+    owner_username: str | None
+    owner_workspace_id: uuid.UUID | None
+    current_image_tag: str | None
+    expected_image_tag: str | None  # None when template directory is missing
+    template_hash_current: str | None  # 12-char hash extracted from current_image_tag
+    template_hash_expected: str | None  # 12-char hash from TemplateImageService
+    is_stale: bool
+    in_use: bool
+    active_sessions_count: int
+    last_build_at: datetime | None
+    sync_active: bool
+
+
+class AdminTemplateInfoPublic(SQLModel):
+    """Per-template summary for the admin console."""
+    env_name: str
+    expected_image_tag: str | None
+    expected_hash: str | None
+    total_envs: int
+    stale_envs: int
+
+
+class AdminAgentEnvironmentsPublic(SQLModel):
+    """Paginated list response for the admin environments console."""
+    data: list[AdminAgentEnvironmentPublic]
+    count: int
+    stale_count: int
+    in_use_count: int
+    templates: list[AdminTemplateInfoPublic]
+
+
+class AdminBulkSkipped(SQLModel):
+    """A single environment that was skipped during a bulk rebuild."""
+    environment_id: uuid.UUID
+    reason: str  # "not_found" | "status_not_allowed"
+
+
+class AdminBulkRebuildRequest(SQLModel):
+    """Request body for bulk rebuild endpoint."""
+    # Schema-level cap on batch size is defense-in-depth; the route also enforces
+    # settings.ADMIN_ENV_MAX_BULK_SIZE at runtime (which may be lower).
+    environment_ids: list[uuid.UUID] = Field(..., min_length=1, max_length=200)
+
+
+class AdminBulkRebuildResponse(SQLModel):
+    """Response from the bulk rebuild endpoint."""
+    queued_environment_ids: list[uuid.UUID]
+    skipped: list[AdminBulkSkipped]

@@ -86,6 +86,95 @@ export type ActivityUpdate = {
 };
 
 /**
+ * Enriched environment row for the admin console.
+ *
+ * Inherits every field of ``AgentEnvironmentPublic`` and adds admin-only
+ * enrichment derived from joins (owner, agent) and live computation
+ * (expected tag, staleness, in-use flag).
+ */
+export type AdminAgentEnvironmentPublic = {
+    id: string;
+    agent_id: string;
+    env_name: string;
+    env_version: string;
+    instance_name: string;
+    type: string;
+    status: string;
+    status_message: (string | null);
+    is_active: boolean;
+    created_at: string;
+    updated_at: string;
+    last_health_check: (string | null);
+    last_activity_at: (string | null);
+    agent_sdk_conversation: (string | null);
+    agent_sdk_building: (string | null);
+    model_override_conversation: (string | null);
+    model_override_building: (string | null);
+    use_default_ai_credentials: boolean;
+    conversation_ai_credential_id: (string | null);
+    building_ai_credential_id: (string | null);
+    agent_name: string;
+    owner_id: string;
+    owner_email: string;
+    owner_username: (string | null);
+    owner_workspace_id: (string | null);
+    current_image_tag: (string | null);
+    expected_image_tag: (string | null);
+    template_hash_current: (string | null);
+    template_hash_expected: (string | null);
+    is_stale: boolean;
+    in_use: boolean;
+    active_sessions_count: number;
+    last_build_at: (string | null);
+    sync_active: boolean;
+};
+
+/**
+ * Paginated list response for the admin environments console.
+ */
+export type AdminAgentEnvironmentsPublic = {
+    data: Array<AdminAgentEnvironmentPublic>;
+    count: number;
+    stale_count: number;
+    in_use_count: number;
+    templates: Array<AdminTemplateInfoPublic>;
+};
+
+/**
+ * Request body for bulk rebuild endpoint.
+ */
+export type AdminBulkRebuildRequest = {
+    environment_ids: Array<(string)>;
+};
+
+/**
+ * Response from the bulk rebuild endpoint.
+ */
+export type AdminBulkRebuildResponse = {
+    queued_environment_ids: Array<(string)>;
+    skipped: Array<AdminBulkSkipped>;
+};
+
+/**
+ * A single environment that was skipped during a bulk rebuild.
+ */
+export type AdminBulkSkipped = {
+    environment_id: string;
+    reason: string;
+};
+
+/**
+ * Per-template summary for the admin console.
+ */
+export type AdminTemplateInfoPublic = {
+    env_name: string;
+    expected_image_tag: (string | null);
+    expected_hash: (string | null);
+    total_envs: number;
+    stale_envs: number;
+};
+
+/**
  * Information about an environment affected by credential change
  */
 export type AffectedEnvironmentPublic = {
@@ -1441,7 +1530,6 @@ export type ExchangeSetupTokenBody = {
 
 export type ExecBody = {
     command: string;
-    cwd?: (string | null);
 };
 
 /**
@@ -3109,6 +3197,16 @@ export type WebappShareAuthRequest = {
  */
 export type WorkspaceAccessType = 'all' | 'specific';
 
+/**
+ * Optional body for the workspace-files-changed callback.
+ *
+ * ``changed_files`` is informational — currently used for logging only;
+ * downstream handlers refresh all caches regardless.
+ */
+export type WorkspaceFilesChangedRequest = {
+    changed_files?: (Array<(string)> | null);
+};
+
 export type A2aGetAgentCardData = {
     agentId: string;
 };
@@ -3243,6 +3341,49 @@ export type ActivitiesMarkActivitiesAsReadData = {
 export type ActivitiesMarkActivitiesAsReadResponse = ({
     [key: string]: unknown;
 });
+
+export type AdminEnvironmentsListAdminEnvironmentsData = {
+    /**
+     * Filter by in-use flag
+     */
+    inUse?: (boolean | null);
+    /**
+     * Filter by staleness (current_image_tag != expected)
+     */
+    isStale?: (boolean | null);
+    limit?: number;
+    /**
+     * Filter by agent owner user ID
+     */
+    ownerId?: (string | null);
+    /**
+     * Search agent name, instance name, owner email/username
+     */
+    search?: (string | null);
+    skip?: number;
+    /**
+     * Filter by environment status
+     */
+    status?: (string | null);
+    /**
+     * Filter by template name (env_name)
+     */
+    template?: (string | null);
+};
+
+export type AdminEnvironmentsListAdminEnvironmentsResponse = (AdminAgentEnvironmentsPublic);
+
+export type AdminEnvironmentsBulkRebuildEnvironmentsData = {
+    requestBody: AdminBulkRebuildRequest;
+};
+
+export type AdminEnvironmentsBulkRebuildEnvironmentsResponse = (AdminBulkRebuildResponse);
+
+export type AdminEnvironmentsRebuildSingleEnvironmentData = {
+    envId: string;
+};
+
+export type AdminEnvironmentsRebuildSingleEnvironmentResponse = (Message);
 
 export type AgentAppMcpRoutesListAgentAppMcpRoutesData = {
     agentId: string;
@@ -4331,6 +4472,23 @@ export type EnvironmentsGetEnvironmentLogsData = {
 export type EnvironmentsGetEnvironmentLogsResponse = ({
     [key: string]: unknown;
 });
+
+export type EnvironmentsWorkspaceFilesChangedData = {
+    authorization?: (string | null);
+    id: string;
+    requestBody?: (WorkspaceFilesChangedRequest | null);
+    xAgentEnvId?: (string | null);
+};
+
+export type EnvironmentsWorkspaceFilesChangedResponse = (Message);
+
+export type EnvironmentsPromptFileChangedData = {
+    authorization?: (string | null);
+    id: string;
+    xAgentEnvId?: (string | null);
+};
+
+export type EnvironmentsPromptFileChangedResponse = (Message);
 
 export type EventsBroadcastEventData = {
     requestBody: EventBroadcast;

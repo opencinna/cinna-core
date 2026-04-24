@@ -1151,6 +1151,417 @@ export const ActivityUpdateSchema = {
     title: 'ActivityUpdate'
 } as const;
 
+export const AdminAgentEnvironmentPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        env_name: {
+            type: 'string',
+            title: 'Env Name'
+        },
+        env_version: {
+            type: 'string',
+            title: 'Env Version'
+        },
+        instance_name: {
+            type: 'string',
+            title: 'Instance Name'
+        },
+        type: {
+            type: 'string',
+            title: 'Type'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        status_message: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status Message'
+        },
+        is_active: {
+            type: 'boolean',
+            title: 'Is Active'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        last_health_check: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Health Check'
+        },
+        last_activity_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Activity At'
+        },
+        agent_sdk_conversation: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Sdk Conversation'
+        },
+        agent_sdk_building: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Sdk Building'
+        },
+        model_override_conversation: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Conversation'
+        },
+        model_override_building: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Building'
+        },
+        use_default_ai_credentials: {
+            type: 'boolean',
+            title: 'Use Default Ai Credentials'
+        },
+        conversation_ai_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Conversation Ai Credential Id'
+        },
+        building_ai_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Building Ai Credential Id'
+        },
+        agent_name: {
+            type: 'string',
+            title: 'Agent Name'
+        },
+        owner_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Owner Id'
+        },
+        owner_email: {
+            type: 'string',
+            title: 'Owner Email'
+        },
+        owner_username: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Username'
+        },
+        owner_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Workspace Id'
+        },
+        current_image_tag: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Current Image Tag'
+        },
+        expected_image_tag: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expected Image Tag'
+        },
+        template_hash_current: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Template Hash Current'
+        },
+        template_hash_expected: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Template Hash Expected'
+        },
+        is_stale: {
+            type: 'boolean',
+            title: 'Is Stale'
+        },
+        in_use: {
+            type: 'boolean',
+            title: 'In Use'
+        },
+        active_sessions_count: {
+            type: 'integer',
+            title: 'Active Sessions Count'
+        },
+        last_build_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Build At'
+        },
+        sync_active: {
+            type: 'boolean',
+            title: 'Sync Active'
+        }
+    },
+    type: 'object',
+    required: ['id', 'agent_id', 'env_name', 'env_version', 'instance_name', 'type', 'status', 'status_message', 'is_active', 'created_at', 'updated_at', 'last_health_check', 'last_activity_at', 'agent_sdk_conversation', 'agent_sdk_building', 'model_override_conversation', 'model_override_building', 'use_default_ai_credentials', 'conversation_ai_credential_id', 'building_ai_credential_id', 'agent_name', 'owner_id', 'owner_email', 'owner_username', 'owner_workspace_id', 'current_image_tag', 'expected_image_tag', 'template_hash_current', 'template_hash_expected', 'is_stale', 'in_use', 'active_sessions_count', 'last_build_at', 'sync_active'],
+    title: 'AdminAgentEnvironmentPublic',
+    description: `Enriched environment row for the admin console.
+
+Inherits every field of \`\`AgentEnvironmentPublic\`\` and adds admin-only
+enrichment derived from joins (owner, agent) and live computation
+(expected tag, staleness, in-use flag).`
+} as const;
+
+export const AdminAgentEnvironmentsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AdminAgentEnvironmentPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        },
+        stale_count: {
+            type: 'integer',
+            title: 'Stale Count'
+        },
+        in_use_count: {
+            type: 'integer',
+            title: 'In Use Count'
+        },
+        templates: {
+            items: {
+                '$ref': '#/components/schemas/AdminTemplateInfoPublic'
+            },
+            type: 'array',
+            title: 'Templates'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count', 'stale_count', 'in_use_count', 'templates'],
+    title: 'AdminAgentEnvironmentsPublic',
+    description: 'Paginated list response for the admin environments console.'
+} as const;
+
+export const AdminBulkRebuildRequestSchema = {
+    properties: {
+        environment_ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            maxItems: 200,
+            minItems: 1,
+            title: 'Environment Ids'
+        }
+    },
+    type: 'object',
+    required: ['environment_ids'],
+    title: 'AdminBulkRebuildRequest',
+    description: 'Request body for bulk rebuild endpoint.'
+} as const;
+
+export const AdminBulkRebuildResponseSchema = {
+    properties: {
+        queued_environment_ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            title: 'Queued Environment Ids'
+        },
+        skipped: {
+            items: {
+                '$ref': '#/components/schemas/AdminBulkSkipped'
+            },
+            type: 'array',
+            title: 'Skipped'
+        }
+    },
+    type: 'object',
+    required: ['queued_environment_ids', 'skipped'],
+    title: 'AdminBulkRebuildResponse',
+    description: 'Response from the bulk rebuild endpoint.'
+} as const;
+
+export const AdminBulkSkippedSchema = {
+    properties: {
+        environment_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Environment Id'
+        },
+        reason: {
+            type: 'string',
+            title: 'Reason'
+        }
+    },
+    type: 'object',
+    required: ['environment_id', 'reason'],
+    title: 'AdminBulkSkipped',
+    description: 'A single environment that was skipped during a bulk rebuild.'
+} as const;
+
+export const AdminTemplateInfoPublicSchema = {
+    properties: {
+        env_name: {
+            type: 'string',
+            title: 'Env Name'
+        },
+        expected_image_tag: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expected Image Tag'
+        },
+        expected_hash: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expected Hash'
+        },
+        total_envs: {
+            type: 'integer',
+            title: 'Total Envs'
+        },
+        stale_envs: {
+            type: 'integer',
+            title: 'Stale Envs'
+        }
+    },
+    type: 'object',
+    required: ['env_name', 'expected_image_tag', 'expected_hash', 'total_envs', 'stale_envs'],
+    title: 'AdminTemplateInfoPublic',
+    description: 'Per-template summary for the admin console.'
+} as const;
+
 export const AffectedEnvironmentPublicSchema = {
     properties: {
         environment_id: {
@@ -6885,17 +7296,6 @@ export const ExecBodySchema = {
         command: {
             type: 'string',
             title: 'Command'
-        },
-        cwd: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Cwd'
         }
     },
     type: 'object',
@@ -15577,4 +15977,29 @@ export const WorkspaceAccessTypeSchema = {
     enum: ['all', 'specific'],
     title: 'WorkspaceAccessType',
     description: 'Type of workspace access for a knowledge source.'
+} as const;
+
+export const WorkspaceFilesChangedRequestSchema = {
+    properties: {
+        changed_files: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Changed Files'
+        }
+    },
+    type: 'object',
+    title: 'WorkspaceFilesChangedRequest',
+    description: `Optional body for the workspace-files-changed callback.
+
+\`\`changed_files\`\` is informational — currently used for logging only;
+downstream handlers refresh all caches regardless.`
 } as const;

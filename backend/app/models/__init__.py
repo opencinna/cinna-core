@@ -102,6 +102,12 @@ from .environments.environment import (
     AgentEnvironmentUpdate,
     AgentEnvironmentPublic,
     AgentEnvironmentsPublic,
+    AdminAgentEnvironmentPublic,
+    AdminAgentEnvironmentsPublic,
+    AdminTemplateInfoPublic,
+    AdminBulkSkipped,
+    AdminBulkRebuildRequest,
+    AdminBulkRebuildResponse,
 )
 from .agents.agent_status import (
     AgentStatusPublic,
@@ -574,6 +580,13 @@ __all__ = [
     "AgentEnvironmentUpdate",
     "AgentEnvironmentPublic",
     "AgentEnvironmentsPublic",
+    # Admin Environments (admin-only schemas)
+    "AdminAgentEnvironmentPublic",
+    "AdminAgentEnvironmentsPublic",
+    "AdminTemplateInfoPublic",
+    "AdminBulkSkipped",
+    "AdminBulkRebuildRequest",
+    "AdminBulkRebuildResponse",
     # Sessions
     "Session",
     "SessionCreate",

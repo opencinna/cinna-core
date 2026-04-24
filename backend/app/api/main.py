@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.routes import (
     a2a,
     access_tokens,
+    admin_environments,
     agent_app_mcp_routes,
     agent_status,
     app_agent_routes,
@@ -87,6 +88,7 @@ api_router.include_router(security_events.router)
 api_router.include_router(events.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(knowledge_sources.router)
+api_router.include_router(admin_environments.router)
 api_router.include_router(files.router)
 api_router.include_router(llm_plugins.router)
 api_router.include_router(input_tasks.router)

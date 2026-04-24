@@ -44,6 +44,7 @@ import { Route as LayoutAgentCreatingRouteImport } from './routes/_layout/agent/
 import { Route as LayoutAgentAgentIdRouteImport } from './routes/_layout/agent/$agentId'
 import { Route as LayoutAdminUsersRouteImport } from './routes/_layout/admin/users'
 import { Route as LayoutAdminMarketplacesRouteImport } from './routes/_layout/admin/marketplaces'
+import { Route as LayoutAdminAgentEnvsRouteImport } from './routes/_layout/admin/agent-envs'
 import { Route as LayoutSessionsAgentAgentIdRouteImport } from './routes/_layout/sessions/agent/$agentId'
 import { Route as LayoutEnvironmentEnvIdFileRouteImport } from './routes/_layout/environment/$envId/file'
 import { Route as LayoutEnvironmentEnvIdDatabaseRouteImport } from './routes/_layout/environment/$envId/database'
@@ -231,6 +232,11 @@ const LayoutAdminMarketplacesRoute = LayoutAdminMarketplacesRouteImport.update({
   path: '/admin/marketplaces',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutAdminAgentEnvsRoute = LayoutAdminAgentEnvsRouteImport.update({
+  id: '/admin/agent-envs',
+  path: '/admin/agent-envs',
+  getParentRoute: () => LayoutRoute,
+} as any)
 const LayoutSessionsAgentAgentIdRoute =
   LayoutSessionsAgentAgentIdRouteImport.update({
     id: '/agent/$agentId',
@@ -287,6 +293,7 @@ export interface FileRoutesByFullPath {
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
   '/webapp/$webappToken': typeof WebappWebappTokenRoute
   '/': typeof LayoutIndexRoute
+  '/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/admin/users': typeof LayoutAdminUsersRoute
   '/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
@@ -328,6 +335,7 @@ export interface FileRoutesByTo {
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
   '/webapp/$webappToken': typeof WebappWebappTokenRoute
   '/': typeof LayoutIndexRoute
+  '/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/admin/users': typeof LayoutAdminUsersRoute
   '/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
@@ -372,6 +380,7 @@ export interface FileRoutesById {
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
   '/webapp/$webappToken': typeof WebappWebappTokenRoute
   '/_layout/': typeof LayoutIndexRoute
+  '/_layout/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
   '/_layout/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/_layout/admin/users': typeof LayoutAdminUsersRoute
   '/_layout/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
@@ -416,6 +425,7 @@ export interface FileRouteTypes {
     | '/oauth/mcp-consent'
     | '/webapp/$webappToken'
     | '/'
+    | '/admin/agent-envs'
     | '/admin/marketplaces'
     | '/admin/users'
     | '/agent/$agentId'
@@ -457,6 +467,7 @@ export interface FileRouteTypes {
     | '/oauth/mcp-consent'
     | '/webapp/$webappToken'
     | '/'
+    | '/admin/agent-envs'
     | '/admin/marketplaces'
     | '/admin/users'
     | '/agent/$agentId'
@@ -500,6 +511,7 @@ export interface FileRouteTypes {
     | '/oauth/mcp-consent'
     | '/webapp/$webappToken'
     | '/_layout/'
+    | '/_layout/admin/agent-envs'
     | '/_layout/admin/marketplaces'
     | '/_layout/admin/users'
     | '/_layout/agent/$agentId'
@@ -786,6 +798,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAdminMarketplacesRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/admin/agent-envs': {
+      id: '/_layout/admin/agent-envs'
+      path: '/admin/agent-envs'
+      fullPath: '/admin/agent-envs'
+      preLoaderRoute: typeof LayoutAdminAgentEnvsRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/sessions/agent/$agentId': {
       id: '/_layout/sessions/agent/$agentId'
       path: '/agent/$agentId'
@@ -865,6 +884,7 @@ interface LayoutRouteChildren {
   LayoutSessionsRoute: typeof LayoutSessionsRouteWithChildren
   LayoutSettingsRoute: typeof LayoutSettingsRoute
   LayoutIndexRoute: typeof LayoutIndexRoute
+  LayoutAdminAgentEnvsRoute: typeof LayoutAdminAgentEnvsRoute
   LayoutAdminMarketplacesRoute: typeof LayoutAdminMarketplacesRoute
   LayoutAdminUsersRoute: typeof LayoutAdminUsersRoute
   LayoutAgentAgentIdRoute: typeof LayoutAgentAgentIdRouteWithChildren
@@ -894,6 +914,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutSessionsRoute: LayoutSessionsRouteWithChildren,
   LayoutSettingsRoute: LayoutSettingsRoute,
   LayoutIndexRoute: LayoutIndexRoute,
+  LayoutAdminAgentEnvsRoute: LayoutAdminAgentEnvsRoute,
   LayoutAdminMarketplacesRoute: LayoutAdminMarketplacesRoute,
   LayoutAdminUsersRoute: LayoutAdminUsersRoute,
   LayoutAgentAgentIdRoute: LayoutAgentAgentIdRouteWithChildren,

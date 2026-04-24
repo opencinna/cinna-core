@@ -218,6 +218,10 @@ class Settings(BaseSettings):
     DEFAULT_AGENT_ENV_NAME: str = "python-env-advanced"
     DEFAULT_AGENT_ENV_VERSION: str = "1.0.0"
 
+    # Admin Environment Management
+    ADMIN_BULK_REBUILD_CONCURRENCY: int = 4  # Max parallel env rebuilds during bulk operation
+    ADMIN_ENV_MAX_BULK_SIZE: int = 200  # Max environment IDs per bulk rebuild request
+
     # Desktop App Authentication
     DESKTOP_AUTH_ENABLED: bool = True
     DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15

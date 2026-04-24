@@ -1,7 +1,7 @@
 ---
 name: cinna-core-feature-planner
 description: "Use this agent when the user wants to plan a new feature, create an implementation draft, or needs a structured approach to designing and scoping work before coding begins. This includes feature requests, architectural planning, and implementation roadmaps.\\n\\nExamples:\\n\\n- User: \"I want to add a notification system to the app\"\\n  Assistant: \"Let me use the cinna-core-feature-planner agent to create a structured feature plan and implementation draft for the notification system.\"\\n  (Use the Agent tool to launch cinna-core-feature-planner)\\n\\n- User: \"We need to plan out how to add team workspaces\"\\n  Assistant: \"I'll launch the cinna-core-feature-planner agent to analyze the codebase and create a comprehensive feature plan for team workspaces.\"\\n  (Use the Agent tool to launch cinna-core-feature-planner)\\n\\n- User: \"Can you draft an implementation plan for adding webhook support?\"\\n  Assistant: \"I'll use the cinna-core-feature-planner agent to plan the webhook support feature with a detailed implementation draft.\"\\n  (Use the Agent tool to launch cinna-core-feature-planner)"
-model: sonnet
+model: opus
 color: cyan
 ---
 

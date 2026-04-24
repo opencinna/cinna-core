@@ -1000,6 +1000,9 @@ class EnvironmentLifecycleManager:
                     )
                     logger.info(f"Regenerated OpenCode config files after rebuild for environment {environment.id}")
 
+            # Record successful rebuild timestamp (used by admin console)
+            environment.last_build_at = datetime.now(UTC)
+
             # If container was restarted, setup new container and sync data
             if was_running:
                 # Setup new container (install packages, etc.)
@@ -1259,6 +1262,12 @@ class EnvironmentLifecycleManager:
         environment.config["auth_token"] = auth_token
         flag_modified(environment, "config")
         logger.debug(f"Generated new auth token for environment {environment.id}")
+
+        # Persist the image tag so the admin console can detect stale environments.
+        # Set here (before config files are written) so it's always in sync with
+        # the docker-compose.yml that references the same tag.
+        if image_tag:
+            environment.current_image_tag = image_tag
 
         # 2. Get port from config (should already be set)
         port = environment.config.get("port")
