@@ -44,6 +44,13 @@ class AgentBundleRevision(SQLModel, table=True):
     # Monotonically increasing per bundle. Allocated by ``PublishService``.
     revision_number: int = Field(nullable=False)
 
+    # Human-friendly version label entered by the publisher at publish
+    # time (e.g. "1.0", "1.1", "2.0"). Independent from ``revision_number``,
+    # which stays as the internal monotonic identifier used for snapshot
+    # paths and ordering. Optional for backward compatibility with
+    # revisions created before the field was introduced.
+    version: str | None = Field(default=None, max_length=64)
+
     # Manifest mirrors what's written to ``manifest.json`` on disk so the
     # API can answer "what's in this revision" without reading the file.
     manifest: dict = Field(default_factory=dict, sa_column=Column(JSON))
@@ -87,6 +94,7 @@ class AgentBundleRevisionPublic(SQLModel):
     id: uuid.UUID
     bundle_id: uuid.UUID
     revision_number: int
+    version: str | None = None
     manifest: dict | None = None
     content_hash: str
     workflow_prompt: str | None = None
@@ -109,7 +117,19 @@ class AgentBundleRevisionsPublic(SQLModel):
 
 
 class PublishRequest(SQLModel):
-    """Body of ``POST /agents/{agent_id}/publish``."""
+    """Body of ``POST /agents/{agent_id}/publish``.
+
+    ``bundle_id`` is only honoured on the first publish (the moment the
+    bundle is defined). For subsequent publishes it is ignored — the
+    bundle ID is locked once the bundle row exists.
+
+    ``version`` is the human-friendly version label entered by the
+    publisher (e.g. "1.0"). The frontend defaults it to ``"1.0"`` on the
+    first publish and suggests a minor bump from the previous revision
+    afterwards.
+    """
     release_notes: str | None = None
     display_name: str | None = None
     description: str | None = None
+    bundle_id: str | None = None
+    version: str | None = None

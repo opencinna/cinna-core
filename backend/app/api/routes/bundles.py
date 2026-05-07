@@ -4,6 +4,12 @@ Phase 3 — every mutating endpoint here is gated on the
 ``require_developer`` dependency.  Read endpoints (``GET /bundles/...``)
 keep visibility-aware checks inline so granted catalog viewers can see
 bundles they have access to without needing the developer role.
+
+Routes are thin wrappers around ``BundleService``: they extract request
+parameters, call the service, translate ``BundleError`` subclasses to
+HTTP exceptions via ``_handle_bundle_error``, and return response models.
+Ownership / 403 enforcement lives in ``BundleService.get_for_publisher``,
+not here.
 """
 import logging
 import uuid
@@ -12,7 +18,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import select
 
 from app.api.deps import CurrentUser, SessionDep, require_developer
-from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import (
     AgentBundle,
     AgentBundlePublic,
@@ -32,10 +37,17 @@ from app.models.bundles.bundle_access_grant import (
 )
 from app.models.users.user import User
 from app.services.bundles.bundle_service import BundleService
+from app.services.bundles.catalog_service import CatalogService
+from app.services.bundles.exceptions import BundleError
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/bundles", tags=["bundles"])
+
+
+def _handle_bundle_error(e: BundleError) -> HTTPException:
+    """Translate a domain exception to its HTTP equivalent."""
+    return HTTPException(status_code=e.http_status, detail=str(e))
 
 
 def _bundle_to_public(session, bundle: AgentBundle) -> AgentBundlePublic:
@@ -68,20 +80,13 @@ def _bundle_to_public(session, bundle: AgentBundle) -> AgentBundlePublic:
 
 
 def _revision_to_public(
-    session, revision: AgentBundleRevision
+    revision: AgentBundleRevision, install_count: int
 ) -> AgentBundleRevisionPublic:
-    from sqlalchemy import func
-
-    install_count_stmt = (
-        select(func.count())
-        .select_from(Agent)
-        .where(Agent.installed_revision_id == revision.id)
-    )
-    install_count = session.exec(install_count_stmt).one() or 0
     return AgentBundleRevisionPublic(
         id=revision.id,
         bundle_id=revision.bundle_id,
         revision_number=revision.revision_number,
+        version=revision.version,
         manifest=revision.manifest,
         content_hash=revision.content_hash,
         workflow_prompt=revision.workflow_prompt,
@@ -109,20 +114,6 @@ def _grant_to_public(session, grant: BundleAccessGrant) -> BundleAccessGrantPubl
         granted_by_user_id=grant.granted_by_user_id,
         created_at=grant.created_at,
     )
-
-
-def _resolve_bundle_for_publisher(
-    session, bundle_uuid: uuid.UUID, current_user: User
-) -> AgentBundle:
-    bundle = BundleService.get_bundle_by_uuid(session, bundle_uuid)
-    if bundle is None:
-        raise HTTPException(status_code=404, detail="Bundle not found")
-    if (
-        bundle.publisher_user_id != current_user.id
-        and not current_user.is_superuser
-    ):
-        raise HTTPException(status_code=403, detail="Not your bundle")
-    return bundle
 
 
 # ── Bundle CRUD ─────────────────────────────────────────────────
@@ -155,8 +146,6 @@ def get_bundle(
     current_user: CurrentUser,
 ) -> AgentBundlePublic:
     """Bundle detail (publisher only for unlisted; visibility-aware otherwise)."""
-    from app.services.bundles.catalog_service import CatalogService
-
     bundle = BundleService.get_bundle_by_uuid(session, bundle_uuid)
     if bundle is None:
         raise HTTPException(status_code=404, detail="Bundle not found")
@@ -178,11 +167,11 @@ def update_bundle(
     current_user: CurrentUser,
 ) -> AgentBundlePublic:
     """Phase 3 — developer-only."""
-    bundle = _resolve_bundle_for_publisher(session, bundle_uuid, current_user)
     try:
+        bundle = BundleService.get_for_publisher(session, bundle_uuid, current_user)
         bundle = BundleService.update_bundle(session, bundle, data)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except BundleError as e:
+        raise _handle_bundle_error(e)
     return _bundle_to_public(session, bundle)
 
 
@@ -193,11 +182,11 @@ def delete_bundle(
     current_user: CurrentUser,
 ) -> dict:
     """Phase 3 — developer-only."""
-    bundle = _resolve_bundle_for_publisher(session, bundle_uuid, current_user)
     try:
+        bundle = BundleService.get_for_publisher(session, bundle_uuid, current_user)
         BundleService.delete_bundle(session, bundle)
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+    except BundleError as e:
+        raise _handle_bundle_error(e)
     return {"status": "deleted"}
 
 
@@ -214,17 +203,40 @@ def list_revisions(
     session: SessionDep,
     current_user: CurrentUser,
 ) -> AgentBundleRevisionsPublic:
-    bundle = _resolve_bundle_for_publisher(session, bundle_uuid, current_user)
-    stmt = (
-        select(AgentBundleRevision)
-        .where(AgentBundleRevision.bundle_id == bundle.id)
-        .order_by(AgentBundleRevision.revision_number.desc())
-    )
-    revisions = list(session.exec(stmt).all())
+    try:
+        bundle = BundleService.get_for_publisher(session, bundle_uuid, current_user)
+    except BundleError as e:
+        raise _handle_bundle_error(e)
+    pairs = BundleService.list_revisions_with_install_counts(session, bundle)
     return AgentBundleRevisionsPublic(
-        data=[_revision_to_public(session, r) for r in revisions],
-        count=len(revisions),
+        data=[_revision_to_public(rev, count) for rev, count in pairs],
+        count=len(pairs),
     )
+
+
+@router.delete(
+    "/{bundle_uuid}/revisions/{revision_id}",
+    dependencies=[Depends(require_developer)],
+)
+def delete_revision(
+    bundle_uuid: uuid.UUID,
+    revision_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> dict:
+    """Delete one revision.
+
+    Allowed only when no foreign install references the revision. The
+    publisher's own working install is automatically detached and the
+    bundle's ``latest_revision_id`` is rewired to the previous revision when
+    needed. The on-disk snapshot tree is cleaned up best-effort.
+    """
+    try:
+        bundle = BundleService.get_for_publisher(session, bundle_uuid, current_user)
+        BundleService.delete_revision(session, bundle, revision_id)
+    except BundleError as e:
+        raise _handle_bundle_error(e)
+    return {"status": "deleted"}
 
 
 # ── Grants ──────────────────────────────────────────────────────
@@ -240,7 +252,10 @@ def list_grants(
     session: SessionDep,
     current_user: CurrentUser,
 ) -> BundleAccessGrantsPublic:
-    bundle = _resolve_bundle_for_publisher(session, bundle_uuid, current_user)
+    try:
+        bundle = BundleService.get_for_publisher(session, bundle_uuid, current_user)
+    except BundleError as e:
+        raise _handle_bundle_error(e)
     grants = BundleService.list_grants(session, bundle)
     return BundleAccessGrantsPublic(
         data=[_grant_to_public(session, g) for g in grants],
@@ -260,7 +275,10 @@ def add_grant(
     current_user: CurrentUser,
 ) -> BundleAccessGrantPublic:
     """Phase 3 — developer-only."""
-    bundle = _resolve_bundle_for_publisher(session, bundle_uuid, current_user)
+    try:
+        bundle = BundleService.get_for_publisher(session, bundle_uuid, current_user)
+    except BundleError as e:
+        raise _handle_bundle_error(e)
     target_stmt = select(User).where(User.email == data.email.strip().lower())
     target = session.exec(target_stmt).first()
     if not target:
@@ -293,9 +311,9 @@ def revoke_grant(
     current_user: CurrentUser,
 ) -> dict:
     """Phase 3 — developer-only."""
-    bundle = _resolve_bundle_for_publisher(session, bundle_uuid, current_user)
     try:
+        bundle = BundleService.get_for_publisher(session, bundle_uuid, current_user)
         BundleService.revoke_grant(session, bundle, grant_id)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except BundleError as e:
+        raise _handle_bundle_error(e)
     return {"status": "revoked"}

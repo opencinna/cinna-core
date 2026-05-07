@@ -69,11 +69,15 @@ export function WizardStepConfirm({
           <p className="text-xs text-muted-foreground mb-1">Bundle</p>
           <p className="font-medium">
             {entry.display_name}{" "}
-            {entry.latest_revision_number !== null && (
+            {entry.latest_version ? (
               <span className="text-muted-foreground">
-                v{entry.latest_revision_number}
+                v{entry.latest_version}
               </span>
-            )}
+            ) : entry.latest_revision_number !== null ? (
+              <span className="text-muted-foreground">
+                rev {entry.latest_revision_number}
+              </span>
+            ) : null}
           </p>
         </div>
 

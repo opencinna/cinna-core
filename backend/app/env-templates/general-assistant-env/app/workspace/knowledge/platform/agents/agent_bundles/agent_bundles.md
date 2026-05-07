@@ -7,11 +7,12 @@ Replace the clone-based sharing model with a desktop-app-style **bundle / instal
 ## Core Concepts
 
 - **Bundle** (`AgentBundle`) — canonical metadata record owned by a publisher. Uniquely identified by a reverse-DNS `bundle_id` (e.g. `io.opencinna.cinna.a1b2c3d4`). One bundle per published agent on this instance
-- **Bundle Revision** (`AgentBundleRevision`) — immutable snapshot of a bundle's content taken at publish time. Contains workspace folder copies, prompts, SDK selection, and `required_credential_specs`. Revisions are append-only; the latest is pointed to by `AgentBundle.latest_revision_id`
+- **Bundle Revision** (`AgentBundleRevision`) — immutable snapshot of a bundle's content taken at publish time. Contains workspace folder copies, prompts, SDK selection, `required_credential_specs`, and an optional human-friendly `version` label entered by the publisher. Revisions are append-only; the latest is pointed to by `AgentBundle.latest_revision_id`
 - **Install** — every `Agent` row is an install in the new model. The publisher's working copy (`is_publisher_install=True`) and every foreign user's copy are all `Agent` rows, distinguished by `is_publisher_install` and `bundle_uuid`
 - **Publisher Install** — the `Agent` row owned by the bundle publisher. This is the source of truth for the next publish snapshot. The publisher develops the agent here as normal; clicking "Publish" snapshots its current workspace state
 - **App Data** — a per-user, per-bundle persistent volume mounted at `/app/workspace/app-data` inside the container. Keyed by `(user_id, bundle_id)`. Survives uninstall; reattaches on reinstall. See [Agent App Data](../agent_app_data/agent_app_data.md)
-- **Bundle ID** — reverse-DNS string, auto-generated on agent creation. Format: `<reversed-host>.<8-hex-chars-of-agent-uuid>` (e.g. `io.opencinna.cinna.a1b2c3d4`). Editable by the developer before first publish; immutable after publish
+- **Bundle ID** — reverse-DNS string, auto-generated on agent creation. Format: `<reversed-host>.<8-hex-chars-of-agent-uuid>` (e.g. `io.opencinna.cinna.a1b2c3d4`). The publisher can override the auto-generated value inside the **first** publish dialog (it's the moment the bundle is defined); after the first revision is recorded, the bundle ID is locked
+- **Version label** — optional, user-supplied string captured per revision (e.g. `1.0`, `1.1`, `2.0`). Independent from the internal monotonic `revision_number` — `revision_number` continues to drive snapshot paths and ordering. The publish dialog defaults the field to `1.0` on the first publish and suggests a minor bump from the previous revision afterwards
 - **Visibility** — controls catalog access: `private` (publisher only), `users` (explicit allowlist via `BundleAccessGrant`), `public` (all users on this instance)
 - **Update Mode** — per-install setting controlling how revisions are applied: `manual` (user applies explicitly) or `automatic` (applied by the suspension scheduler while the environment is idle)
 
@@ -20,12 +21,14 @@ Replace the clone-based sharing model with a desktop-app-style **bundle / instal
 ### Publishing a Bundle (agent-developer)
 
 1. Developer opens an agent they own and navigates to the **Bundle tab**
-2. Optionally edits the bundle ID before the first publish (immutable afterwards)
-3. Clicks "Publish" — the `PublishDialog` prompts for optional release notes and warns that the current workspace state will be snapshotted
-4. On submit: workspace folders (`scripts/`, `docs/`, `knowledge/`, `files/`, `workspace_requirements.txt`, `workspace_system_packages.txt`) are copied to `<BUNDLE_STORAGE_DIR>/<bundle_id>/<revision>/`; a new `AgentBundleRevision` row is created; `BUNDLE_PUBLISHED` WebSocket event fires
-5. On first publish the `AgentBundle` row is also created; subsequent publishes append a new revision
-6. All existing foreign installs receive `INSTALL_UPDATE_AVAILABLE` events (manual mode) or are marked for next-idle-cycle update (automatic mode)
-7. The revision appears in the revisions list on the Bundle tab with a "current" badge
+2. Clicks "Publish" — the `PublishDialog` opens with three fields:
+   - **Bundle ID** — only on the first publish; prefilled with the auto-generated value, editable. Locked once the first revision exists
+   - **Version** — required; defaults to `1.0` on the first publish, otherwise suggests a minor bump from the previous revision (e.g. `1.0` → `1.1`). Manually editable for major releases
+   - **Release notes** (optional)
+3. On submit: workspace folders (`scripts/`, `docs/`, `knowledge/`, `files/`, `workspace_requirements.txt`, `workspace_system_packages.txt`) are copied to `<BUNDLE_STORAGE_DIR>/<bundle_id>/<revision>/`; a new `AgentBundleRevision` row is created with the user-entered `version`; `BUNDLE_PUBLISHED` WebSocket event fires
+4. On first publish the `AgentBundle` row is also created; the `bundle_id` value submitted in the publish form is applied to the agent before the snapshot. Subsequent publishes append a new revision
+5. All existing foreign installs receive `INSTALL_UPDATE_AVAILABLE` events (manual mode) or are marked for next-idle-cycle update (automatic mode)
+6. The revision appears in the revisions list on the Bundle tab with a "current" badge — labeled `v<version>` when present, falling back to `rev <revision_number>` for legacy revisions
 
 ### Installing a Bundle (any user)
 
@@ -67,13 +70,21 @@ The install wizard is re-entered; when `InstallService` calls `AppDataService.ge
 3. The `BundleAccessGrant` row is created; the target user now sees the bundle in the catalog
 4. Publisher can revoke individual grants; revoking all grants leaves the bundle in `users` visibility but invisible to everyone except the publisher
 
+### Deleting a Revision (publisher)
+
+1. Publisher opens the Bundle tab; each row in the Revisions list shows a delete button. The button is disabled and shows a tooltip ("Cannot delete — N installs reference it") whenever any non-publisher install is on that revision; the publisher's own working install does not block deletion
+2. Clicking it opens a confirmation dialog explaining what happens (snapshot tree removed, `bundle.latest_revision_id` rewired to the previous revision when needed, publisher install detached)
+3. On confirm: the `AgentBundleRevision` row is deleted, the on-disk snapshot tree at `<BUNDLE_STORAGE_DIR>/<bundle_id>/<revision_number>/` is removed best-effort, any publisher install pointing at the revision has its `installed_revision_id` cleared, and — if the deleted revision was the bundle's current revision — `latest_revision_id` is moved to the most-recent remaining revision (or `NULL` when none remain)
+4. **When the last revision is removed, the bundle row is auto-deleted** — grants are cascaded, and the publisher install's `bundle_uuid` is cleared by the FK `ON DELETE SET NULL`. The agent reverts to "unpublished" (Bundle ID becomes editable again, catalog settings are gone, the next publish creates a fresh `AgentBundle`)
+5. Foreign installs are never affected because the API refuses the call while any are still on the revision
+
 ### Deleting a Bundle
 
 The API rejects deletion when any foreign install (non-publisher) references the bundle (409). The publisher must have those users uninstall first. On successful deletion, all `AgentBundleRevision` rows and `BundleAccessGrant` rows are cascade-deleted; the publisher's `Agent` row has `bundle_uuid` set to `NULL` by the FK `ON DELETE SET NULL`.
 
 ## Business Rules
 
-- **Bundle ID is immutable after first publish** — changing it would silently orphan installed app-data volumes on all foreign installs (app-data keyed on the string `bundle_id`, not the `AgentBundle` UUID)
+- **Bundle ID is set inside the first publish dialog and immutable afterwards** — there is no separate edit modal; the publisher enters the final ID alongside the version label and release notes when publishing the very first revision. Changing it post-publish would silently orphan installed app-data volumes on all foreign installs (app-data keyed on the string `bundle_id`, not the `AgentBundle` UUID), so the API rejects post-publish overrides with 409
 - **Publisher install cannot be uninstalled** — use the bundle management UI (delete agent + delete bundle) instead
 - **One publisher install per bundle** — enforced by partial unique index on `bundle_uuid WHERE is_publisher_install = true`
 - **One install per user per bundle** — `install_bundle` is idempotent; returns the existing install if already present
@@ -83,6 +94,8 @@ The API rejects deletion when any foreign install (non-publisher) references the
 - **Publish failures leave a `.tmp` directory** — the bundle's `latest_revision_id` is unchanged on failure; the partial snapshot at `<snapshot_path>.tmp` is available for debugging
 - **Per-bundle publish lock** — an in-process `asyncio.Lock` serialises concurrent publishes for the same bundle ID; the DB unique constraint on `(bundle_id, revision_number)` catches the cross-process race
 - **Credential specs carry metadata only** — `required_credential_specs` in a revision contains `{name, type, allow_sharing}` pairs from the publisher's linked credentials at publish time. No secret values are ever stored in a revision
+- **Revision delete blocked by foreign installs** — `DELETE /bundles/{uuid}/revisions/{revision_id}` rejects (409) when any non-publisher install still has `installed_revision_id` pointing at the revision. Only the publisher's own working install is auto-detached. Deleting the bundle's current revision rewires `latest_revision_id` to the previous remaining revision (or `NULL`); the on-disk snapshot directory is removed best-effort and a leftover failure is logged but does not block the DB delete
+- **Last revision auto-unpublishes the bundle** — when revision delete leaves a bundle with zero revisions, the empty `AgentBundle` row is deleted in the same transaction. Cascades remove `BundleAccessGrant` rows; the publisher install's `bundle_uuid` is cleared via FK. This re-enables the "Bundle ID is immutable after first publish" gate (it becomes editable again because the publisher install is no longer linked to a bundle row)
 
 ## Architecture Overview
 

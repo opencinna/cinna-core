@@ -78,13 +78,17 @@ async def publish_agent(
             release_notes=request.release_notes if request else None,
             display_name=request.display_name if request else None,
             description=request.description if request else None,
+            bundle_id_override=request.bundle_id if request else None,
+            version=request.version if request else None,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     # Wire response with install_count (just-published revision = 0+ installs).
     from app.api.routes.bundles import _revision_to_public
+    from app.services.bundles.bundle_service import BundleService
 
-    return _revision_to_public(session, revision)
+    install_count = BundleService.revision_install_count(session, revision.id)
+    return _revision_to_public(revision, install_count)
 
 
 # ── Uninstall ─────────────────────────────────────────────────

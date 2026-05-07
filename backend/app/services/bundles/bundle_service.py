@@ -10,8 +10,10 @@ A future "force delete" admin path will orphan all installs, but Phase 2
 ships with the safe behaviour.
 """
 import logging
+import shutil
 import uuid
 from datetime import datetime, UTC
+from pathlib import Path
 
 from sqlmodel import Session, select
 from sqlalchemy import func
@@ -26,6 +28,15 @@ from app.models.bundles.agent_bundle import (
 from app.models.bundles.agent_bundle_revision import AgentBundleRevision
 from app.models.bundles.bundle_access_grant import BundleAccessGrant
 from app.models.users.user import User
+from app.services.bundles.exceptions import (
+    BundleAccessDeniedError,
+    BundleConflictError,
+    BundleNotFoundError,
+    BundleValidationError,
+    GrantNotFoundError,
+    RevisionInUseError,
+    RevisionNotFoundError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +62,24 @@ class BundleService:
     def get_bundle_by_id(session: Session, bundle_id: str) -> AgentBundle | None:
         stmt = select(AgentBundle).where(AgentBundle.bundle_id == bundle_id)
         return session.exec(stmt).first()
+
+    @staticmethod
+    def get_for_publisher(
+        session: Session, bundle_uuid: uuid.UUID, user: User
+    ) -> AgentBundle:
+        """Resolve a bundle for the given publisher (or any superuser).
+
+        Raises:
+            BundleNotFoundError: bundle does not exist.
+            BundleAccessDeniedError: caller is neither the publisher nor a
+                superuser.
+        """
+        bundle = BundleService.get_bundle_by_uuid(session, bundle_uuid)
+        if bundle is None:
+            raise BundleNotFoundError("Bundle not found")
+        if bundle.publisher_user_id != user.id and not user.is_superuser:
+            raise BundleAccessDeniedError("Not your bundle")
+        return bundle
 
     @staticmethod
     def list_publisher_bundles(
@@ -94,6 +123,46 @@ class BundleService:
             return None
         return session.get(AgentBundleRevision, bundle.latest_revision_id)
 
+    @staticmethod
+    def revision_install_count(
+        session: Session, revision_id: uuid.UUID
+    ) -> int:
+        """Count installs whose ``installed_revision_id`` is this revision."""
+        stmt = (
+            select(func.count())
+            .select_from(Agent)
+            .where(Agent.installed_revision_id == revision_id)
+        )
+        return session.exec(stmt).one()
+
+    @staticmethod
+    def list_revisions_with_install_counts(
+        session: Session, bundle: AgentBundle
+    ) -> list[tuple[AgentBundleRevision, int]]:
+        """Return ``(revision, install_count)`` pairs ordered newest-first.
+
+        Single aggregated query — replaces the per-revision count loop.
+        """
+        revisions_stmt = (
+            select(AgentBundleRevision)
+            .where(AgentBundleRevision.bundle_id == bundle.id)
+            .order_by(AgentBundleRevision.revision_number.desc())
+        )
+        revisions = list(session.exec(revisions_stmt).all())
+        if not revisions:
+            return []
+        counts_stmt = (
+            select(Agent.installed_revision_id, func.count())
+            .where(
+                Agent.installed_revision_id.in_(  # type: ignore[union-attr]
+                    [r.id for r in revisions]
+                )
+            )
+            .group_by(Agent.installed_revision_id)
+        )
+        counts: dict = dict(session.exec(counts_stmt).all())
+        return [(r, counts.get(r.id, 0)) for r in revisions]
+
     # ── Write ──────────────────────────────────────────────────────
 
     @staticmethod
@@ -133,10 +202,12 @@ class BundleService:
 
         if "visibility" in update_dict and update_dict["visibility"] is not None:
             if update_dict["visibility"] not in _VALID_VISIBILITIES:
-                raise ValueError(f"Invalid visibility: {update_dict['visibility']}")
+                raise BundleValidationError(
+                    f"Invalid visibility: {update_dict['visibility']}"
+                )
         if "default_install_mode" in update_dict and update_dict["default_install_mode"] is not None:
             if update_dict["default_install_mode"] not in _VALID_INSTALL_MODES:
-                raise ValueError(
+                raise BundleValidationError(
                     f"Invalid default_install_mode: {update_dict['default_install_mode']}"
                 )
 
@@ -150,6 +221,128 @@ class BundleService:
         return bundle
 
     @staticmethod
+    def delete_revision(
+        session: Session,
+        bundle: AgentBundle,
+        revision_id: uuid.UUID,
+    ) -> None:
+        """Delete a single revision when no foreign install references it.
+
+        Refuses if any non-publisher install has ``installed_revision_id``
+        pointing at this revision. The publisher's working install is allowed
+        to be on the revision: its ``installed_revision_id`` is set to NULL
+        (it can be re-snapshotted on the next publish). The on-disk snapshot
+        tree at ``revision.snapshot_path`` is removed best-effort after the
+        DB transaction commits.
+
+        When the last revision is removed, the empty ``AgentBundle`` row is
+        also deleted in the same transaction. The publisher install's
+        ``bundle_uuid`` reverts to NULL via the FK ``ON DELETE SET NULL``
+        cascade — re-publishing creates a fresh bundle, and (until a new
+        revision is published) the bundle ID is editable again.
+
+        Raises:
+            RevisionNotFoundError: revision missing or not on this bundle.
+            RevisionInUseError: at least one foreign install still references
+                the revision.
+        """
+        revision = session.get(AgentBundleRevision, revision_id)
+        if revision is None or revision.bundle_id != bundle.id:
+            raise RevisionNotFoundError("Revision not found for this bundle")
+
+        foreign_stmt = (
+            select(func.count())
+            .select_from(Agent)
+            .where(
+                Agent.installed_revision_id == revision.id,
+                Agent.is_publisher_install == False,  # noqa: E712
+            )
+        )
+        foreign_count = session.exec(foreign_stmt).one()
+        if foreign_count > 0:
+            raise RevisionInUseError(
+                f"Cannot delete revision {revision.revision_number}: "
+                f"{foreign_count} foreign install(s) still reference it."
+            )
+
+        # Snapshot identifying fields before the ORM row is invalidated by
+        # the commit below — we use them for filesystem cleanup and logging.
+        snapshot_path = revision.snapshot_path
+        revision_number = revision.revision_number
+        bundle_id_str = bundle.bundle_id
+        bundle_uuid = bundle.id
+
+        # Detach any publisher install(s) sitting on this revision.
+        publisher_installs_stmt = select(Agent).where(
+            Agent.installed_revision_id == revision.id
+        )
+        for install in session.exec(publisher_installs_stmt).all():
+            install.installed_revision_id = None
+            session.add(install)
+
+        # Re-point bundle.latest_revision_id only when there is a replacement.
+        # When there isn't, the FK ``ON DELETE SET NULL`` on
+        # ``agent_bundle.latest_revision_id`` will clear the pointer — and the
+        # bundle row is about to be deleted below anyway.
+        if bundle.latest_revision_id == revision.id:
+            replacement_stmt = (
+                select(AgentBundleRevision)
+                .where(
+                    AgentBundleRevision.bundle_id == bundle.id,
+                    AgentBundleRevision.id != revision.id,
+                )
+                .order_by(AgentBundleRevision.revision_number.desc())
+                .limit(1)
+            )
+            replacement = session.exec(replacement_stmt).first()
+            if replacement is not None:
+                bundle.latest_revision_id = replacement.id
+                bundle.updated_at = datetime.now(UTC)
+                session.add(bundle)
+
+        session.delete(revision)
+
+        # Auto-unpublish: when this is the last revision, drop the bundle row
+        # in the same transaction. ``session.flush()`` lets the revision
+        # delete clear ``bundle.latest_revision_id`` via the FK first, so the
+        # bundle delete doesn't trip integrity errors.
+        session.flush()
+        remaining = session.exec(
+            select(func.count())
+            .select_from(AgentBundleRevision)
+            .where(AgentBundleRevision.bundle_id == bundle_uuid)
+        ).one()
+        bundle_was_unpublished = remaining == 0
+        if bundle_was_unpublished:
+            session.delete(bundle)
+
+        session.commit()
+
+        # Best-effort filesystem cleanup; failure is logged but not raised so
+        # the DB delete still wins.
+        if snapshot_path:
+            try:
+                shutil.rmtree(Path(snapshot_path), ignore_errors=True)
+            except Exception as e:  # pragma: no cover — defensive
+                logger.warning(
+                    "Failed to clean up snapshot dir %s: %s", snapshot_path, e
+                )
+
+        logger.info(
+            "Deleted AgentBundleRevision id=%s number=%s bundle_id=%s",
+            revision_id,
+            revision_number,
+            bundle_id_str,
+        )
+        if bundle_was_unpublished:
+            logger.info(
+                "Auto-deleted empty AgentBundle id=%s bundle_id=%s "
+                "(last revision removed)",
+                bundle_uuid,
+                bundle_id_str,
+            )
+
+    @staticmethod
     def delete_bundle(session: Session, bundle: AgentBundle) -> None:
         """Delete the bundle (cascades revisions + grants).
 
@@ -159,7 +352,7 @@ class BundleService:
         """
         foreign = BundleService.foreign_install_count(session, bundle)
         if foreign > 0:
-            raise ValueError(
+            raise BundleConflictError(
                 f"Cannot delete bundle with {foreign} dependent install(s). "
                 "Have those users uninstall first."
             )
@@ -209,7 +402,7 @@ class BundleService:
     ) -> None:
         grant = session.get(BundleAccessGrant, grant_id)
         if not grant or grant.bundle_id != bundle.id:
-            raise ValueError("Grant not found for this bundle")
+            raise GrantNotFoundError("Grant not found for this bundle")
         session.delete(grant)
         session.commit()
 

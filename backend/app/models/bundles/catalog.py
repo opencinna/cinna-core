@@ -19,9 +19,12 @@ class CatalogEntryPublic(SQLModel):
     display_name: str
     description: str | None
     publisher_handle: str | None  # Truncated identifier — never email/UUID
+    publisher_name: str | None = None
+    publisher_email: str | None = None
     visibility: str
     latest_revision_id: uuid.UUID | None
     latest_revision_number: int | None
+    latest_version: str | None = None
     latest_published_at: datetime | None
     install_count: int
     is_installed: bool

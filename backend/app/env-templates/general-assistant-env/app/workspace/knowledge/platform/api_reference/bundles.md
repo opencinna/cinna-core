@@ -56,6 +56,17 @@ Auto-generated from OpenAPI spec. Tag: `bundles`
 
 ---
 
+## DELETE `/api/v1/bundles/{bundle_uuid}/revisions/{revision_id}`
+**Delete Revision**
+
+**Path parameters:**
+- `bundle_uuid`: uuid
+- `revision_id`: uuid
+
+**Response:** `object`
+
+---
+
 ## GET `/api/v1/bundles/{bundle_uuid}/grants`
 **List Grants**
 

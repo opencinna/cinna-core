@@ -59,11 +59,15 @@ export function WizardStepOverview({ entry }: WizardStepOverviewProps) {
             {VISIBILITY_ICONS[entry.visibility]}
             {entry.visibility}
           </Badge>
-          {entry.latest_revision_number !== null && (
+          {entry.latest_version ? (
             <Badge variant="outline" className="font-normal">
-              v{entry.latest_revision_number}
+              v{entry.latest_version}
             </Badge>
-          )}
+          ) : entry.latest_revision_number !== null ? (
+            <Badge variant="outline" className="font-normal">
+              rev {entry.latest_revision_number}
+            </Badge>
+          ) : null}
           {entry.visibility === "public" && (
             <Badge variant="outline" className="font-normal">
               {entry.install_count} install{entry.install_count === 1 ? "" : "s"}

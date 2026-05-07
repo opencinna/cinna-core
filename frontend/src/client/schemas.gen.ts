@@ -1952,6 +1952,17 @@ export const AgentBundleRevisionPublicSchema = {
             type: 'integer',
             title: 'Revision Number'
         },
+        version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Version'
+        },
         manifest: {
             anyOf: [
                 {
@@ -7280,6 +7291,28 @@ export const CatalogEntryPublicSchema = {
             ],
             title: 'Publisher Handle'
         },
+        publisher_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Name'
+        },
+        publisher_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Email'
+        },
         visibility: {
             type: 'string',
             title: 'Visibility'
@@ -7306,6 +7339,17 @@ export const CatalogEntryPublicSchema = {
                 }
             ],
             title: 'Latest Revision Number'
+        },
+        latest_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Version'
         },
         latest_published_at: {
             anyOf: [
@@ -12481,11 +12525,42 @@ export const PublishRequestSchema = {
                 }
             ],
             title: 'Description'
+        },
+        bundle_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Bundle Id'
+        },
+        version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Version'
         }
     },
     type: 'object',
     title: 'PublishRequest',
-    description: 'Body of ``POST /agents/{agent_id}/publish``.'
+    description: `Body of \`\`POST /agents/{agent_id}/publish\`\`.
+
+\`\`bundle_id\`\` is only honoured on the first publish (the moment the
+bundle is defined). For subsequent publishes it is ignored — the
+bundle ID is locked once the bundle row exists.
+
+\`\`version\`\` is the human-friendly version label entered by the
+publisher (e.g. "1.0"). The frontend defaults it to \`\`"1.0"\`\` on the
+first publish and suggests a minor bump from the previous revision
+afterwards.`
 } as const;
 
 export const RefinePromptRequestSchema = {

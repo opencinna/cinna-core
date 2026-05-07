@@ -272,6 +272,7 @@ Handles both direct MCP connector management and App MCP Server route management
 - User search/select fetches from `GET /api/v1/users` (enabled only when App MCP form step is open); current user is excluded from the dropdown (use "Activate for Myself" instead)
 - "Make Active for Users" (`auto_enable_for_users`): rendered for all users but `disabled={!isAdmin}`; non-admins see a disabled toggle with a tooltip explanation
 - Assigned users displayed as removable pills
+- The route **edit** dialog uses the shared `UserAllowlistPicker` (`frontend/src/components/Common/UserAllowlistPicker.tsx`) for the "Shared with Users" section — same pill + search-dropdown UX, with `["users-list"]` React Query cache shared with bundle access grants
 
 **Card body unified list:**
 - Direct connectors section (existing)

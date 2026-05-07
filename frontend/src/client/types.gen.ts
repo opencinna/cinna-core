@@ -274,6 +274,7 @@ export type AgentBundleRevisionPublic = {
     id: string;
     bundle_id: string;
     revision_number: number;
+    version?: (string | null);
     manifest?: ({
     [key: string]: unknown;
 } | null);
@@ -1405,9 +1406,12 @@ export type CatalogEntryPublic = {
     display_name: string;
     description: (string | null);
     publisher_handle: (string | null);
+    publisher_name?: (string | null);
+    publisher_email?: (string | null);
     visibility: string;
     latest_revision_id: (string | null);
     latest_revision_number: (number | null);
+    latest_version?: (string | null);
     latest_published_at: (string | null);
     install_count: number;
     is_installed: boolean;
@@ -2535,11 +2539,22 @@ export type ProcessEmailsResult = {
 
 /**
  * Body of ``POST /agents/{agent_id}/publish``.
+ *
+ * ``bundle_id`` is only honoured on the first publish (the moment the
+ * bundle is defined). For subsequent publishes it is ignored — the
+ * bundle ID is locked once the bundle row exists.
+ *
+ * ``version`` is the human-friendly version label entered by the
+ * publisher (e.g. "1.0"). The frontend defaults it to ``"1.0"`` on the
+ * first publish and suggests a minor bump from the previous revision
+ * afterwards.
  */
 export type PublishRequest = {
     release_notes?: (string | null);
     display_name?: (string | null);
     description?: (string | null);
+    bundle_id?: (string | null);
+    version?: (string | null);
 };
 
 /**
@@ -4236,6 +4251,15 @@ export type BundlesListRevisionsData = {
 };
 
 export type BundlesListRevisionsResponse = (AgentBundleRevisionsPublic);
+
+export type BundlesDeleteRevisionData = {
+    bundleUuid: string;
+    revisionId: string;
+};
+
+export type BundlesDeleteRevisionResponse = ({
+    [key: string]: unknown;
+});
 
 export type BundlesListGrantsData = {
     bundleUuid: string;

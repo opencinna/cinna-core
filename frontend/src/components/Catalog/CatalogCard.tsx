@@ -1,9 +1,9 @@
 /**
  * CatalogCard — single bundle in the catalog grid.
  *
- * Surfaces display_name, description, publisher handle, install count,
- * latest revision number, and either an "Install" button or an "Open"
- * link when the user already has an install.
+ * Surfaces display_name, description, publisher (name + email, falling
+ * back to the truncated handle), latest version, and either an "Install"
+ * button or an "Open" link when the user already has an install.
  */
 import { Link } from "@tanstack/react-router"
 import { Bot, Download, ExternalLink, Lock, Users, Globe } from "lucide-react"
@@ -46,8 +46,17 @@ export function CatalogCard({ entry }: CatalogCardProps) {
               {entry.display_name}
             </CardTitle>
             <p className="text-xs text-muted-foreground mt-1 truncate">
-              by {entry.publisher_handle ?? "unknown publisher"}
+              by{" "}
+              {entry.publisher_name ||
+                entry.publisher_email ||
+                entry.publisher_handle ||
+                "unknown publisher"}
             </p>
+            {entry.publisher_name && entry.publisher_email && (
+              <p className="text-xs text-muted-foreground truncate">
+                {entry.publisher_email}
+              </p>
+            )}
           </div>
         </div>
       </CardHeader>
@@ -62,16 +71,15 @@ export function CatalogCard({ entry }: CatalogCardProps) {
             {visibilityIcon}
             {entry.visibility}
           </Badge>
-          {entry.latest_revision_number !== null && (
+          {entry.latest_version ? (
             <Badge variant="outline" className="font-normal">
-              v{entry.latest_revision_number}
+              v{entry.latest_version}
             </Badge>
-          )}
-          {entry.visibility === "public" && (
+          ) : entry.latest_revision_number !== null ? (
             <Badge variant="outline" className="font-normal">
-              {entry.install_count} install{entry.install_count === 1 ? "" : "s"}
+              rev {entry.latest_revision_number}
             </Badge>
-          )}
+          ) : null}
         </div>
         <code
           className="block font-mono text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded truncate"

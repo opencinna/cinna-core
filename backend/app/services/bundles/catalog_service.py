@@ -116,12 +116,14 @@ class CatalogService:
         session: Session, bundle: AgentBundle, user: User
     ) -> CatalogEntryPublic:
         latest_rev_number: int | None = None
+        latest_version: str | None = None
         latest_published_at: datetime | None = None
         cred_specs: list = []
         if bundle.latest_revision_id:
             rev = session.get(AgentBundleRevision, bundle.latest_revision_id)
             if rev:
                 latest_rev_number = rev.revision_number
+                latest_version = rev.version
                 latest_published_at = rev.published_at
                 cred_specs = rev.required_credential_specs or []
 
@@ -145,6 +147,17 @@ class CatalogService:
             f"{str(bundle.publisher_user_id)[:8]}…"
             if bundle.publisher_user_id else None
         )
+        # Author display fields — surfaced on catalog cards alongside the
+        # publisher handle. Catalog access is auth-gated, so exposing the
+        # publisher's name/email to viewers who can already see the bundle
+        # row matches the trust model of an internal instance catalog.
+        publisher_name: str | None = None
+        publisher_email: str | None = None
+        if bundle.publisher_user_id:
+            publisher = session.get(User, bundle.publisher_user_id)
+            if publisher:
+                publisher_name = publisher.full_name or None
+                publisher_email = publisher.email or None
 
         return CatalogEntryPublic(
             bundle_id=bundle.bundle_id,
@@ -152,9 +165,12 @@ class CatalogService:
             display_name=bundle.display_name,
             description=bundle.description,
             publisher_handle=publisher_handle,
+            publisher_name=publisher_name,
+            publisher_email=publisher_email,
             visibility=bundle.visibility,
             latest_revision_id=bundle.latest_revision_id,
             latest_revision_number=latest_rev_number,
+            latest_version=latest_version,
             latest_published_at=latest_published_at,
             install_count=install_count,
             is_installed=user_install is not None,

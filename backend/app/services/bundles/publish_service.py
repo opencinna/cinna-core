@@ -85,6 +85,8 @@ class PublishService:
         release_notes: str | None = None,
         display_name: str | None = None,
         description: str | None = None,
+        bundle_id_override: str | None = None,
+        version: str | None = None,
     ) -> AgentBundleRevision:
         """Snapshot the publisher install workspace + create a new revision.
 
@@ -92,6 +94,14 @@ class PublishService:
         marked ``is_publisher_install=True``, and ``bundle_uuid`` is linked.
         Subsequent publishes only require the install row to be the
         publisher install of an existing bundle.
+
+        ``bundle_id_override`` is honoured only on the first publish — it
+        lets the publisher pick the final bundle ID inside the publish
+        form instead of a separate edit modal. After publish the bundle
+        ID is locked.
+
+        ``version`` is the user-entered human-friendly version label
+        stored on the revision (independent from ``revision_number``).
         """
         if install.owner_id != publisher_user_id:
             raise ValueError("Only the install owner may publish")
@@ -99,6 +109,21 @@ class PublishService:
             raise ValueError("Install has no bundle_id (data integrity error)")
         if install.is_general_assistant:
             raise ValueError("The General Assistant cannot be published as a bundle")
+
+        # Apply the bundle_id override on first publish.
+        if bundle_id_override is not None:
+            from app.services.bundles.install_service import InstallService
+
+            override = bundle_id_override.strip()
+            if override and override != install.bundle_id:
+                # ``edit_bundle_id`` rejects with 409 when the agent is
+                # already published, validates format/reserved prefixes,
+                # and enforces uniqueness.
+                install = InstallService.edit_bundle_id(
+                    session=session,
+                    install=install,
+                    new_bundle_id=override,
+                )
 
         async with _lock_for(install.bundle_id):
             return await PublishService._publish_locked(
@@ -108,6 +133,7 @@ class PublishService:
                 release_notes=release_notes,
                 display_name=display_name,
                 description=description,
+                version=version,
             )
 
     @staticmethod
@@ -119,6 +145,7 @@ class PublishService:
         release_notes: str | None,
         display_name: str | None,
         description: str | None,
+        version: str | None,
     ) -> AgentBundleRevision:
         # 1. Resolve / create bundle row.
         bundle = BundleService.get_bundle_by_id(session, install.bundle_id)
@@ -190,6 +217,7 @@ class PublishService:
                 "schema_version": 1,
                 "bundle_id": install.bundle_id,
                 "revision_number": revision_number,
+                "version": version,
                 "published_at": datetime.now(UTC).isoformat(),
                 "prompts": {
                     "workflow": install.workflow_prompt,
@@ -236,6 +264,7 @@ class PublishService:
         revision = AgentBundleRevision(
             bundle_id=bundle.id,
             revision_number=revision_number,
+            version=version,
             manifest=manifest,
             workflow_prompt=install.workflow_prompt,
             entrypoint_prompt=install.entrypoint_prompt,

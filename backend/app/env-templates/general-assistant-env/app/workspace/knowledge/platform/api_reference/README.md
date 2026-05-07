@@ -19,7 +19,7 @@ Each file below documents one API domain.
 | Ai Credentials | [ai_credentials.md](./ai_credentials.md) | 8 |
 | App Agent Routes | [app_agent_routes.md](./app_agent_routes.md) | 7 |
 | App Data | [app_data.md](./app_data.md) | 3 |
-| Bundles | [bundles.md](./bundles.md) | 8 |
+| Bundles | [bundles.md](./bundles.md) | 9 |
 | Catalog | [catalog.md](./catalog.md) | 4 |
 | Cli | [cli.md](./cli.md) | 10 |
 | Credentials | [credentials.md](./credentials.md) | 16 |
