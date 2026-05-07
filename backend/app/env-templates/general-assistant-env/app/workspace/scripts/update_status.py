@@ -14,8 +14,8 @@ import os
 import sys
 from datetime import datetime
 
-STATUS_FILE = "/app/workspace/docs/STATUS.md"
-TEMP_FILE = "/app/workspace/docs/.STATUS.md.tmp"
+STATUS_FILE = "/app/workspace/app-data/storage/STATUS.md"
+TEMP_FILE = "/app/workspace/app-data/storage/.STATUS.md.tmp"
 
 VALID_STATUSES = ("ok", "info", "warning", "error")
 
@@ -46,6 +46,7 @@ def build_content(status: str, summary: str | None, details: str | None) -> str:
 
 def write_atomic(content: str, target: str, tmp: str) -> None:
     """Write content to tmp file then rename to target (atomic on POSIX)."""
+    os.makedirs(os.path.dirname(target), exist_ok=True)
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(content)
     os.rename(tmp, target)

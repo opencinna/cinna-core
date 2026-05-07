@@ -39,7 +39,7 @@ Enables local development of remote agents using the `cinna` CLI tool. Users dev
 4. `cinna exec <command>` runs the command in the remote environment (from another terminal while `cinna dev` is live, or standalone — it does not require an active dev session) and streams stdout/stderr back
 5. Local AI tools (Claude Code, Cursor) read `CLAUDE.md` and `BUILDING_AGENT.md` for agent context; companion guides (`WEBAPP_BUILDING.md`, `COMPLEX_AGENT_DESIGN.md`, …) sit next to `BUILDING_AGENT.md` so the on-demand `./<NAME>.md` references in the building prompt resolve locally — letting the local assistant follow the same webapp-build and complex-agent-design workflows the platform's building agent does
 6. MCP proxy provides `knowledge_query` tool for searching the agent's knowledge base
-7. When any watched workspace file (`docs/WORKFLOW_PROMPT.md`, `ENTRYPOINT_PROMPT.md`, `REFINER_PROMPT.md`, `CLI_COMMANDS.yaml`, `STATUS.md`) changes and stabilises — e.g., after a Mutagen sync completes — env-core fires a single callback and the backend emits `WORKSPACE_FILES_CHANGED`; downstream handlers resync agent prompts, refresh the CLI commands cache, and pull the STATUS.md snapshot. This is the same post-action refresh that runs after stream completion <!-- nocheck -->
+7. When any watched workspace file (`docs/WORKFLOW_PROMPT.md`, `docs/ENTRYPOINT_PROMPT.md`, `docs/REFINER_PROMPT.md`, `docs/CLI_COMMANDS.yaml`, `app-data/storage/STATUS.md`) changes and stabilises — e.g., after a Mutagen sync completes — env-core fires a single callback and the backend emits `WORKSPACE_FILES_CHANGED`; downstream handlers resync agent prompts, refresh the CLI commands cache, and pull the STATUS.md snapshot. This is the same post-action refresh that runs after stream completion <!-- nocheck -->
 
 ### 3. Managing Active Sessions (UI)
 
@@ -97,7 +97,7 @@ Enables local development of remote agents using the `cinna` CLI tool. Users dev
 
 ### Workspace Files Resync
 
-- Env-core runs a lightweight mtime-poll watcher over `docs/WORKFLOW_PROMPT.md`, `ENTRYPOINT_PROMPT.md`, `REFINER_PROMPT.md`, `CLI_COMMANDS.yaml`, and `STATUS.md`. When any of them stabilises after a change (5-second stable window), env-core POSTs `workspace-files-changed` to the backend with the list of changed paths <!-- nocheck -->
+- Env-core runs a lightweight mtime-poll watcher over `docs/WORKFLOW_PROMPT.md`, `docs/ENTRYPOINT_PROMPT.md`, `docs/REFINER_PROMPT.md`, `docs/CLI_COMMANDS.yaml`, and `app-data/storage/STATUS.md`. When any of them stabilises after a change (5-second stable window), env-core POSTs `workspace-files-changed` to the backend with the list of changed paths <!-- nocheck -->
 - The backend emits `WORKSPACE_FILES_CHANGED`; three handlers are registered on it:
   - `EnvironmentService.handle_workspace_files_changed_event` — `sync_agent_prompts_from_environment()` (A2A skills regen + background description update when `workflow_prompt` actually changes)
   - `CLICommandsService.handle_post_action_event` — refreshes the cached `CLI_COMMANDS.yaml` (rate-limited per-env to 30s)

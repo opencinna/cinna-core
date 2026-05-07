@@ -14,7 +14,8 @@
 
 - `backend/app/services/environments/environment_lifecycle.py` - `EnvironmentLifecycleManager` - core lifecycle and sync operations
 - `backend/app/services/environments/environment_service.py` - `EnvironmentService` - route-level orchestration, activation, workspace copy coordination
-- `backend/app/services/sharing/agent_clone_service.py` - `AgentCloneService` - clone creation, workspace copy, push updates
+- `backend/app/services/environments/workspace_copy.py` - `copy_env_to_env`, `seed_workspace_from_bundle_snapshot`, `replace_bundle_content` helpers (extracted from the retired `AgentCloneService`)
+- `backend/app/services/bundles/install_service.py` - `InstallService` - bundle install / apply-update flows that drive the snapshot-based copies
 - `backend/app/services/credentials/credentials_service.py` - `CredentialsService` - credential preparation for environments
 - `backend/app/services/plugins/llm_plugin_service.py` - `LLMPluginService` - plugin preparation for environments
 - `backend/app/services/environments/adapters/docker_adapter.py` - `DockerEnvironmentAdapter` - HTTP proxy to agent-env config endpoints
@@ -76,20 +77,16 @@ Data management fields:
 ### EnvironmentService (`backend/app/services/environments/environment_service.py`)
 
 - `create_environment()` - Entry point for environment creation
-- `activate_environment()` - Activate environment for agent, orchestrate workspace copy
+- `activate_environment()` - Activate environment for agent. Resolves the workspace copy source synchronously here (before flipping `agent.active_environment_id`) and passes `source_env_id` to the background task to avoid the race
 - `rebuild_environment()` - Entry point for rebuild
-- `_activate_environment_background()` - Background task for activation with workspace copy
-- `_find_source_environment_for_workspace_copy()` - Find best source environment by priority (active → recent suspended → recent session)
+- `_activate_environment_background()` - Background task for activation; receives `source_env_id` from the caller and uses it directly
+- `_find_source_environment_for_workspace_copy()` - Pick best source env by priority: (1) current active env if `!= target`, (2) most-recent non-target env in `running`/`suspended`/`stopped`, (3) most-recent session env
 
-### AgentCloneService (`backend/app/services/sharing/agent_clone_service.py`)
+### Workspace Copy Helpers (`backend/app/services/environments/workspace_copy.py`)
 
-- `create_clone()` - Create clone agent record and environment
-- `copy_workspace()` - Copy workspace files from original to clone (scripts, docs, knowledge, files, uploads, workspace_requirements.txt)
-- `setup_clone_credentials()` - Link shared credentials or create placeholders
-- `push_updates()` - Push updates to all clones of an agent
-- `_apply_update_internal()` - Apply update to a single clone
-- `apply_update()` - Manual update apply from UI
-- `sync_workspace_from_parent()` - Sync workspace files from parent agent
+- `copy_env_to_env(source_env_id, dest_env_id, *, include_files_folder=True)` - Used by `EnvironmentService._create_environment_background` when a `source_environment_id` is supplied (blue-green / "duplicate environment" flows). Copies bundle-style folders + the two workspace requirements files.
+- `seed_workspace_from_bundle_snapshot(snapshot_path, env_id)` - Used by `InstallService.install_bundle` to drop a bundle revision snapshot into a fresh install workspace.
+- `replace_bundle_content(snapshot_path, env_id)` - Used by `InstallService.apply_update` to swap bundle-owned folders with a new revision. Preserves `credentials/` and `app-data/`.
 
 ### Supporting Services
 
@@ -106,36 +103,36 @@ Data management fields:
 
 ### Environment Switch Copy
 
-Folders copied by `copy_workspace_between_environments()`:
+Folders copied by `copy_workspace_between_environments()` (in `environment_lifecycle.py`):
 - `app/workspace/scripts/`
 - `app/workspace/docs/`
 - `app/workspace/knowledge/`
 - `app/workspace/files/`
-- `app/workspace/uploads/`
+- `app/workspace/uploads/` (legacy bundle-owned folder; new uploads land in `app-data/uploads/` instead — see [Agent App Data](../agent_app_data/agent_app_data.md))
 - `app/workspace/credentials/`
 - `app/workspace/plugins/`
+- `app/workspace/webapp/`
 - `app/workspace/workspace_requirements.txt`
+- `app/workspace/workspace_system_packages.txt`
 
-Excluded: `app/workspace/logs/`, `app/workspace/databases/`
+Excluded: `app/workspace/logs/`, `app/workspace/databases/`, `app/workspace/app-data/` (`app-data` is preserved automatically — for bundle agents the bind-mount source is `(user × bundle)` and shared across envs of the same install; for legacy fallback agents it lives outside the env instance dir)
 
-### Clone Creation Copy
+### New Env From Source (`copy_env_to_env`)
 
-Folders copied by `copy_workspace()`:
-- `app/workspace/scripts/`
-- `app/workspace/docs/`
-- `app/workspace/knowledge/`
-- `app/workspace/files/`
-- `app/workspace/uploads/`
-- `app/workspace/workspace_requirements.txt`
+Used by `EnvironmentService._create_environment_background` when a `source_environment_id` is supplied:
+- Always: `app/workspace/scripts/`, `app/workspace/docs/`, `app/workspace/knowledge/`, `app/workspace/webapp/`
+- Optional (`include_files_folder=True`, default): `app/workspace/files/`, `app/workspace/uploads/`
+- Files: `app/workspace/workspace_requirements.txt`, `app/workspace/workspace_system_packages.txt`
 
-Excluded: `logs/`, `databases/` (runtime), `credentials/` (handled via dynamic sync separately)
+Excluded: `credentials/` (handled via dynamic sync separately), `app-data/`, `logs/`, `databases/`
 
-### Clone Push Update Copy
+### Bundle Snapshot Seed / Apply-Update (`seed_workspace_from_bundle_snapshot` / `replace_bundle_content`)
 
-Folders synced by `_apply_update_internal()`:
-- `scripts/`, `docs/`, `knowledge/`, `files/`, `uploads/`, `workspace_requirements.txt`
+Used by `InstallService.install_bundle` (initial seed) and `InstallService.apply_update` (revision push). Copies bundle-owned folders from the snapshot into the install env workspace:
+- `scripts/`, `docs/`, `knowledge/`, `files/`
+- `workspace_requirements.txt`, `workspace_system_packages.txt`
 
-Excluded: Integration credentials, runtime data
+Excluded (preserved): `credentials/` (dynamic sync), `app-data/` (per-user persistent), `logs/`, `databases/`
 
 ## Dynamic Sync Implementation
 

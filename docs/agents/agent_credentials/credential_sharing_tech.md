@@ -80,6 +80,7 @@
 - "Share" button opens dialog with email input form
 - List of current shares with revoke buttons
 - Confirmation dialog when disabling sharing with active shares
+- Early-returns `null` when `useRole().isAgentUser` is true, so the entire card is hidden from `agent-user` accounts in both render sites (SSH-key edit view and the standard credential edit view in `frontend/src/routes/_layout/credential/$credentialId.tsx`)
 
 ### SharedWithMeCredentials (`frontend/src/components/Credentials/SharedWithMeCredentials.tsx`)
 - Displays credentials shared with current user

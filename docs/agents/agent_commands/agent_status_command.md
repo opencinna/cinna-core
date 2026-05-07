@@ -2,11 +2,11 @@
 
 ## Purpose
 
-Returns the agent's self-reported status from `STATUS.md` in the workspace `docs/` folder. Provides an instant, LLM-free way for users and A2A clients to check what a complex agent is currently doing — without streaming a full session message.
+Returns the agent's self-reported status from `STATUS.md` in the per-install **App Data** storage area. Provides an instant, LLM-free way for users and A2A clients to check what a complex agent is currently doing — without streaming a full session message.
 
 ## Core Concepts
 
-- **`STATUS.md`** — A convention file at `/app/workspace/docs/STATUS.md` written by the agent or its scripts to publish current state. Content is freeform markdown; an optional YAML frontmatter header enables structured parsing.
+- **`STATUS.md`** — A convention file at `/app/workspace/app-data/storage/STATUS.md` written by the agent or its scripts to publish current state. Content is freeform markdown; an optional YAML frontmatter header enables structured parsing. The file lives under App Data (per-user, per-bundle persistent volume) rather than the bundle-owned `docs/` tree, because status describes the runtime health of a specific install — not something the publisher ships in the bundle.
 - **Severity** — Parsed from frontmatter `status` field. One of `ok`, `warning`, `error`, `info`, or `unknown` (default when missing or unrecognized).
 - **Summary** — Short description of current state. Taken from frontmatter `summary` field, or derived from the first non-blank, non-heading line of the body if no frontmatter.
 - **Reported At** — Timestamp for the status. Taken from frontmatter `timestamp` when present; falls back to the file's last-modification time; `null` only when both are unavailable.
@@ -107,7 +107,7 @@ AgentStatusCommandHandler.execute(context, args)
         │
         ├── AgentStatusService.fetch_status(env)  ← live fetch
         │       │   (rate-limited, 30 s lock)
-        │       ├── adapter.fetch_workspace_item_with_meta("docs/STATUS.md")
+        │       ├── adapter.fetch_workspace_item_with_meta("app-data/storage/STATUS.md")
         │       ├── Consume bounded byte stream (64 KB cap)
         │       ├── parse_status_file(content)
         │       │       ├── Extract YAML frontmatter (if present, ≤ 4 KB)
@@ -131,7 +131,8 @@ AgentStatusCommandHandler.execute(context, args)
 
 - **[Agent Environments](../agent_environments/agent_environments.md)** — Status file is read from the workspace via `fetch_workspace_item_with_meta()` on the environment adapter; cached snapshot persists in the `agent_environment` table
 - **[Agent Commands](agent_commands.md)** — Registered as a standard command handler; inherits command framework routing, A2A differentiation, and system message rendering
-- **[Agent Environment Core](../agent_environment_core/agent_environment_core.md)** — `STATUS.md` lives under the workspace `docs/` folder (`/app/workspace/docs/STATUS.md`) and is authored by agent scripts; the backend pulls the file on demand (REST, slash command, A2A) and after every backend-triggered action (session streams, CRON runs) via the post-action event handler
+- **[Agent Environment Core](../agent_environment_core/agent_environment_core.md)** — `STATUS.md` lives under the per-install App Data storage area (`/app/workspace/app-data/storage/STATUS.md`) and is authored by agent scripts; the backend pulls the file on demand (REST, slash command, A2A) and after every backend-triggered action (session streams, CRON runs) via the post-action event handler
+- **[Agent App Data](../agent_app_data/agent_app_data.md)** — the `app-data/storage/` directory hosting `STATUS.md` is a bind-mounted persistent volume keyed by `(user_id, bundle_id)`. It survives uninstall/reinstall and is never overwritten by `apply_update`
 - **[Complex Agent Design](../agent_environment_core/agent_environment_core.md)** — The `COMPLEX_AGENT_DESIGN.md` prompt doc describes the `STATUS.md` convention, recommended frontmatter format, and the `scripts/update_status.py` helper
 - **[A2A Protocol](../../application/a2a_integration/a2a_protocol/a2a_protocol.md)** — A2A callers can send the command as a message (returns markdown) or call the `agent/status` JSON-RPC method (returns structured `AgentStatusPublic` payload)
 - **[Agent Activities](../../application/agent_activities/agent_activities.md)** — Severity transitions create activity feed entries via `ActivityService`

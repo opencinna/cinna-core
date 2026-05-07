@@ -10,7 +10,7 @@ Provide each user with a persistent, private storage area for every bundle they 
 - **Lifecycle independence** — the volume row and its on-disk data outlive the `Agent` (Install) row; uninstall marks it orphaned, not deleted
 - **Orphaned volume** — `is_orphaned = true`; no install currently references it. User can wipe orphaned volumes from Settings; non-orphaned volumes are protected
 - **Reattachment** — when the same bundle is reinstalled, `AppDataService.get_or_create_volume` finds the orphaned row, clears `is_orphaned`, and links the new install
-- **Container mount point** — `/app/workspace/app-data` inside the agent's Docker environment, with three sub-directories: `storage/`, `uploads/`, `cache/`
+- **Container mount point** — `/app/workspace/app-data` inside the agent's Docker environment, with three sub-directories: `storage/`, `uploads/` (the destination for all user file uploads — chat attachments, task attachments, MCP `get_file_upload_url`), `cache/`
 
 ## User Stories / Flows
 

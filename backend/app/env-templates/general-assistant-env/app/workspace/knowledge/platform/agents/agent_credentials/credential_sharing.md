@@ -54,6 +54,10 @@ Enables users to share their credentials with other users, allowing recipients t
 - Credential values (`encrypted_data`) are never exposed to share recipients
 - Revoking a share immediately removes the recipient's access
 
+### Role Gating
+
+- The Sharing card on the credential detail page (sharing toggle, share dialog, shares list) is hidden for `agent-user` accounts — they don't share their credentials with anyone. The card is rendered only for `agent-developer` and `admin` owners. See [User Roles](../../application/user_roles/user_roles.md) for the role model.
+
 ## Architecture Overview
 
 ```

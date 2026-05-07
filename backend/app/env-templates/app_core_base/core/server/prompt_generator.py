@@ -490,7 +490,7 @@ class PromptGenerator:
         return (
             f"\n\n---\n\n## Environment Context\n\n"
             f"**WORKING_DIRECTORY**: `/app/workspace` (all relative paths are from here)\n\n"
-            f"**Uploaded files location**: `./uploads/` (user-uploaded files are here, access them with relative path `./uploads/filename`)\n"
+            f"**Uploaded files location**: `./app-data/uploads/` (user-uploaded files are here, access them with relative path `./app-data/uploads/filename`)\n"
         )
 
     def generate_building_mode_prompt(self, session_context: Optional[dict] = None) -> Optional[Dict[str, Any]]:

@@ -1,4 +1,4 @@
-import { FileText, FileCode, ScrollText, BookOpen, Upload, ChevronDown, Maximize2, Minimize2, KeyRound, Globe, ExternalLink } from "lucide-react"
+import { FileText, FileCode, ScrollText, BookOpen, Database, ChevronDown, Maximize2, Minimize2, KeyRound, Globe, ExternalLink } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -23,7 +23,7 @@ const TAB_LABELS: Record<string, string> = {
   scripts: "Scripts",
   logs: "Logs",
   docs: "Docs",
-  uploads: "Uploads",
+  app_data: "Application Data",
   credentials: "Credentials",
   webapp: "Web App",
 }
@@ -62,9 +62,9 @@ export function TabHeader({ activeTab, onTabChange, isWidePanelMode, onToggleWid
               <BookOpen className="h-4 w-4 mr-2" />
               Docs
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => onTabChange("uploads")}>
-              <Upload className="h-4 w-4 mr-2" />
-              Uploads
+            <DropdownMenuItem onClick={() => onTabChange("app_data")}>
+              <Database className="h-4 w-4 mr-2" />
+              Application Data
             </DropdownMenuItem>
             {!hideCredentials && (
               <>

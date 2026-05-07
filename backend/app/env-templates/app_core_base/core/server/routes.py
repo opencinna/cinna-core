@@ -901,7 +901,7 @@ async def get_plugins_settings() -> PluginsSettingsResponse:
 @router.get("/workspace/tree", dependencies=[Depends(verify_auth_token)])
 async def get_workspace_tree() -> WorkspaceTreeResponse:
     """
-    Get complete workspace tree structure for files, logs, scripts, docs, uploads.
+    Get complete workspace tree structure for files, logs, scripts, docs, app-data.
 
     Returns:
         JSON tree with all folders/files and folder summaries
@@ -917,7 +917,7 @@ async def get_workspace_tree() -> WorkspaceTreeResponse:
       "logs": {...},
       "scripts": {...},
       "docs": {...},
-      "uploads": {...},
+      "app_data": {...},
       "summaries": {
         "files": {"fileCount": 42, "totalSize": 1048576},
         "logs": {"fileCount": 10, "totalSize": 204800},
@@ -1103,17 +1103,20 @@ async def upload_file_to_workspace(
     subfolder: str = Form(""),
 ) -> FileUploadResponse:
     """
-    Receive file from backend and store to workspace/uploads/ directory.
+    Receive file from backend and store to workspace/app-data/uploads/.
+
+    Persisted on the per-user app-data volume so uploads survive bundle
+    updates and uninstall/reinstall (see Agent App Data feature).
 
     Request:
     - file: Binary file content (multipart/form-data)
     - filename: Suggested filename (will be sanitized)
-    - subfolder: Optional subfolder within uploads/ (e.g., "task_TASK-1")
+    - subfolder: Optional subfolder within app-data/uploads/ (e.g., "task_TASK-1")
     - auth_token: Bearer token for authentication
 
     Response:
     {
-        "path": "./uploads/document.pdf",
+        "path": "./app-data/uploads/document.pdf",
         "filename": "document.pdf",
         "size": 1234567,
         "message": "File uploaded successfully"
@@ -1127,8 +1130,9 @@ async def upload_file_to_workspace(
     # Sanitize filename
     safe_filename = AgentEnvService.sanitize_filename(filename)
 
-    # Determine uploads directory (with optional subfolder)
-    uploads_dir = Path("/app/workspace/uploads")
+    # Determine uploads directory (with optional subfolder) — under the
+    # per-user app-data volume rather than the bundle-owned workspace.
+    uploads_dir = Path("/app/workspace/app-data/uploads")
     safe_subfolder = ""
     if subfolder:
         # Sanitize subfolder to prevent directory traversal
@@ -1148,7 +1152,9 @@ async def upload_file_to_workspace(
     target_path.write_bytes(content)
 
     # Return relative path (what agent will see)
-    relative_prefix = f"./uploads/{safe_subfolder}" if safe_subfolder else "./uploads"
+    relative_prefix = (
+        f"./app-data/uploads/{safe_subfolder}" if safe_subfolder else "./app-data/uploads"
+    )
     return FileUploadResponse(
         path=f"{relative_prefix}/{final_filename}",
         filename=final_filename,

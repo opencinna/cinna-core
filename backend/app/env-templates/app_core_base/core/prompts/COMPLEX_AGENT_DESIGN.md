@@ -419,13 +419,15 @@ And mention the schedule in `WORKFLOW_PROMPT.md` so the conversation agent knows
 
 ## Agent Self-Reported Status
 
-Complex agents can publish a lightweight status snapshot that surfaces in the `/agent-status` command, the REST API, and the dashboard tile — without starting a session or spending any tokens. The mechanism is a single file the agent maintains in the workspace `docs/` folder.
+Complex agents can publish a lightweight status snapshot that surfaces in the `/agent-status` command, the REST API, and the dashboard tile — without starting a session or spending any tokens. The mechanism is a single file the agent maintains under the per-install **App Data** storage area.
 
 ### File location
 
 ```
-/app/workspace/docs/STATUS.md
+/app/workspace/app-data/storage/STATUS.md
 ```
+
+This lives under `app-data/`, **not** the bundle-owned `docs/` folder. Status reflects the current health of *this specific install* — it depends on the user's data, credentials, and runtime state — so it must persist across bundle updates and never be overwritten when the publisher pushes a new revision. App Data is the per-user, per-bundle persistent volume that survives apply-update and uninstall/reinstall; bundle folders (`docs/`, `scripts/`, `knowledge/`, `files/`) are replaced wholesale on update.
 
 ### Purpose
 

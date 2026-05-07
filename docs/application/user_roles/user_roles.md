@@ -94,6 +94,7 @@ The following are available to all authenticated users (any role):
 - **Workspace switcher visibility**: gated by the per-user `workspacesEnabled` toggle (Settings → Interface → Workspaces card), not by role
 - **Dashboard differences**: no "+ New Agent" badge, no Conversation/Building mode toggle; if the user has zero agents the page does not auto-fall-back into the New Agent flow
 - **Agent detail page**: conversation mode only; Update Available banner; credential linking; Uninstall button; no prompts editor, no schedulers UI, no integrations tab, no Bundle tab; the bundle-id chip + copy button are not shown in the page header (the bundle ID is still editable inside the Bundle tab itself)
+- **Credential detail page**: the Sharing card (allow-sharing toggle, share dialog, shares list) is hidden — agent-users don't share their credentials with anyone. See [Credential Sharing](../../agents/agent_credentials/credential_sharing.md)
 - **Settings**: Profile, SSH Keys, App Data, Interface (Workspaces toggle, Agentic Teams, Dashboards) — no developer-specific tabs
 - **Admin**: not accessible
 

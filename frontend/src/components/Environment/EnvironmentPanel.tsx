@@ -20,7 +20,7 @@ interface WorkspaceTreeResponse {
   scripts?: FileNode
   logs?: FileNode
   docs?: FileNode
-  uploads?: FileNode
+  app_data?: FileNode
   webapp?: FileNode | null
 }
 
@@ -267,7 +267,7 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
   const scriptsData: TreeItem[] = workspaceData?.scripts ? [convertFileNodeToTreeItem(workspaceData.scripts)] : []
   const logsData: TreeItem[] = workspaceData?.logs ? [convertFileNodeToTreeItem(workspaceData.logs)] : []
   const docsData: TreeItem[] = workspaceData?.docs ? [convertFileNodeToTreeItem(workspaceData.docs)] : []
-  const uploadsData: TreeItem[] = workspaceData?.uploads ? [convertFileNodeToTreeItem(workspaceData.uploads)] : []
+  const appDataData: TreeItem[] = workspaceData?.app_data ? [convertFileNodeToTreeItem(workspaceData.app_data)] : []
   const webappData: TreeItem[] = workspaceData?.webapp ? [convertFileNodeToTreeItem(workspaceData.webapp)] : []
 
   return (
@@ -355,12 +355,12 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
                 isGuest={isGuest}
               />
               <WorkspaceTabContent
-                value="uploads"
-                data={uploadsData}
+                value="app_data"
+                data={appDataData}
                 expandedFolders={expandedFolders}
                 onToggleFolder={handleToggleFolder}
                 onDownload={handleDownload}
-                pathPrefix="uploads"
+                pathPrefix="app-data"
                 envId={environmentId}
                 databaseTables={databaseTables}
                 onFetchDatabaseTables={handleFetchDatabaseTables}

@@ -193,9 +193,9 @@ def test_get_agent_status_force_refresh_with_status_file(
     status_content = b"---\nstatus: ok\nsummary: All systems nominal\n---\n\n# Agent Status\n"
 
     # workspace_files is a class-level dict on the test adapter — populate it
-    # so fetch_workspace_item_with_meta returns this content for docs/STATUS.md
+    # so fetch_workspace_item_with_meta returns this content for app-data/storage/STATUS.md
     # whenever an environment exists for the agent.
-    EnvironmentTestAdapter.workspace_files["docs/STATUS.md"] = status_content
+    EnvironmentTestAdapter.workspace_files["app-data/storage/STATUS.md"] = status_content
     try:
         r = client.get(
             f"{settings.API_V1_STR}/agents/{agent_id}/status?force_refresh=true",
@@ -203,7 +203,7 @@ def test_get_agent_status_force_refresh_with_status_file(
         )
         assert r.status_code == 200
     finally:
-        EnvironmentTestAdapter.workspace_files.pop("docs/STATUS.md", None)
+        EnvironmentTestAdapter.workspace_files.pop("app-data/storage/STATUS.md", None)
 
 
 def test_get_agent_status_force_refresh_rate_limited(

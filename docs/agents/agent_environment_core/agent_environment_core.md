@@ -87,7 +87,7 @@ Server-verified metadata injected into system prompts for integration-aware beha
 5. Prompts available in UI and for other environments
 
 **Environment to Backend** (CLI live sync):
-1. A watched workspace doc (`WORKFLOW_PROMPT.md`, `ENTRYPOINT_PROMPT.md`, `REFINER_PROMPT.md`, `CLI_COMMANDS.yaml`, or `STATUS.md`) is modified in the workspace (e.g., via a synced local edit)
+1. A watched workspace file (`docs/WORKFLOW_PROMPT.md`, `docs/ENTRYPOINT_PROMPT.md`, `docs/REFINER_PROMPT.md`, `docs/CLI_COMMANDS.yaml`, or `app-data/storage/STATUS.md`) is modified in the workspace (e.g., via a synced local edit)
 2. Env-core's lightweight mtime-poll watcher detects the change and waits for the file to stabilise (debounce)
 3. Env-core POSTs to `POST /api/v1/environments/{id}/workspace-files-changed` with the list of changed paths (the legacy `prompt-file-changed` endpoint is kept as an alias for environments built before the generic watcher shipped)
 4. Backend emits `WORKSPACE_FILES_CHANGED`; handlers run `sync_agent_prompts_from_environment()`, refresh the CLI commands cache, and pull the STATUS.md snapshot — same downstream effects as a post-building-session resync
@@ -316,10 +316,12 @@ When a session is created for a task, the system prompt includes a task context 
 └── workspace/                     # User workspace (volume-mounted, persists across rebuilds)
     ├── scripts/                   # Python scripts created by agent
     │   └── README.md              # Scripts catalog (auto-maintained)
-    ├── docs/                      # Agent prompts and status
-    │   ├── STATUS.md              # Optional self-reported status (see below)
+    ├── docs/                      # Agent prompts (bundle-owned)
     │   ├── WORKFLOW_PROMPT.md      # Workflow system prompt
     │   └── ENTRYPOINT_PROMPT.md   # Trigger message definition
+    ├── app-data/                  # Per-install persistent volume (NOT part of bundle)
+    │   └── storage/
+    │       └── STATUS.md          # Optional self-reported status (see below)
     ├── credentials/               # API keys and service accounts
     ├── logs/                      # Session logs (when enabled)
     └── webapp/                    # Web app files (HTML/CSS/JS + Python data scripts)
@@ -330,5 +332,5 @@ When a session is created for a task, the system prompt includes a task context 
 
 **Source of truth**: All `app/core/` files live in `backend/app/env-templates/app_core_base/core/` and are shared across all environment templates. Individual templates (`general-env`, `python-env-advanced`) only contain template-specific files (Dockerfile, docker-compose template, workspace structure).
 
-**Agent self-reported status**: Agents may publish a `STATUS.md` under the workspace `docs/` folder (`/app/workspace/docs/STATUS.md`) to broadcast current state (severity, summary, freeform detail). This file is surfaced via the `/agent-status` command and the dashboard status tile without requiring an active session. See [Agent Status Command](../agent_commands/agent_status_command.md) for the full specification.
+**Agent self-reported status**: Agents may publish a `STATUS.md` under the per-install App Data storage area (`/app/workspace/app-data/storage/STATUS.md`) to broadcast current state (severity, summary, freeform detail). This file is surfaced via the `/agent-status` command and the dashboard status tile without requiring an active session. It lives in App Data — not in `docs/` — because status reflects the runtime health of a specific install rather than bundle-shipped content. See [Agent Status Command](../agent_commands/agent_status_command.md) for the full specification.
 

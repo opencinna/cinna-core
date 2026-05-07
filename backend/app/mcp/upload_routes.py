@@ -122,7 +122,7 @@ async def upload_file_to_mcp(
 
     return {
         "status": "uploaded",
-        "workspace_path": result.get("path", f"./uploads/{filename}"),
+        "workspace_path": result.get("path", f"./app-data/uploads/{filename}"),
         "filename": result.get("filename", filename),
         "size": len(content),
     }

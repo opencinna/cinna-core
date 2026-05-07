@@ -84,7 +84,7 @@ updated_at: datetime
 
 ### Path Translation (Docker-in-Docker)
 
-When `HOST_APP_DATA_DIR` is set, the backend container sees app-data at `APP_DATA_STORAGE_DIR/<rel>` while the docker-compose side uses `HOST_APP_DATA_DIR/<rel>`. `_container_path_from_volume` translates the stored `host_path` back to the container-visible path for I/O operations (size walk, wipe). For plain dev setups without `HOST_APP_DATA_DIR`, host and container paths are identical.
+When the backend runs inside a container and shells out to Docker on the host (the standard dev/prod setup), `HOST_APP_DATA_DIR` **must** be set so `host_path_for()` produces a path the host can bind-mount. The backend container sees app-data at `APP_DATA_STORAGE_DIR/<rel>`; the docker-compose side uses `HOST_APP_DATA_DIR/<rel>`. `_container_path_from_volume` translates the stored `host_path` back to the container-visible path for I/O operations (size walk, wipe). Only when the backend runs directly on the host (no container, no docker socket) are host and container paths identical and `HOST_APP_DATA_DIR` can be left empty.
 
 ### Directory Creation
 
@@ -130,8 +130,18 @@ Non-alphanumeric/dash/dot characters in `bundle_id` are replaced with `_`. Examp
 
 | Setting | Default | Notes |
 |---------|---------|-------|
-| `APP_DATA_STORAGE_DIR` | `<DATA_DIR>/app-data/` | Container-side root |
-| `HOST_APP_DATA_DIR` | `""` | Host-side root (Docker-in-Docker only) |
+| `APP_DATA_STORAGE_DIR` | `/app/data/app-data` | Container-side root |
+| `HOST_APP_DATA_DIR` | `""` (plain) / `./backend/data/agents/app-data` (compose) | Host-side root used when generating the agent compose's `${APP_DATA_HOST_PATH}` bind-mount source. Required whenever the backend runs in a container; the project `docker-compose.yml` provides the default. The override file pins it to an absolute `${PWD}/backend/data/agents/app-data` so the rendered agent compose has a path Docker can resolve regardless of CWD |
+
+### docker-compose Wiring
+
+The backend service in the project `docker-compose.yml` must bind-mount the host app-data root at `/app/data/app-data` so the same directory is visible from both sides:
+
+- **Backend env** — `HOST_APP_DATA_DIR=${HOST_APP_DATA_DIR:-./backend/data/agents/app-data}`
+- **Backend volume** — `${HOST_APP_DATA_DIR:-./backend/data/agents/app-data}:/app/data/app-data`
+- **Override** — `docker-compose.override.yml` sets `HOST_APP_DATA_DIR: "${PWD}/backend/data/agents/app-data"` (absolute path so the agent-side compose, run from a different CWD on the host, resolves correctly)
+
+Without these, `AppDataService.host_path_for()` falls back to the container-side path, which Docker on the host then refuses to bind-mount with `Mounts denied: ... is not shared from the host`.
 
 ## Security
 

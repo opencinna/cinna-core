@@ -94,8 +94,12 @@ function ChatInterface() {
     enabled: !!session?.agent_id,
   })
 
-  // Use resolved environment ID (from agent_usage_intent) or fall back to session's environment_id
-  const effectiveEnvId = resolvedEnvId || session?.environment_id
+  // Panel must always follow the agent's active environment. The session's
+  // environment_id is just the env this session was last bound to and can be
+  // stale (NULL if that env was deleted, or pointing at a non-active env if
+  // the user activated a new one). Prefer agent.active_environment_id; fall
+  // back to session.environment_id only if the agent has no active env.
+  const effectiveEnvId = resolvedEnvId || agent?.active_environment_id || session?.environment_id
 
   const {
     data: environment,
@@ -269,21 +273,22 @@ function ChatInterface() {
     }
   }, [environment])
 
-  // Send agent usage intent when session loads
+  // Send agent usage intent once we know which env to target. Prefer the
+  // agent's active env (current truth) over session.environment_id (which may
+  // be stale or NULL after the prior env was replaced/deleted).
+  const intentTargetEnvId = agent?.active_environment_id || session?.environment_id
   useEffect(() => {
-    if (session && session.environment_id && !usageIntentSent.current) {
+    if (intentTargetEnvId && !usageIntentSent.current) {
       usageIntentSent.current = true
-      // Send usage intent to potentially activate suspended environment
-      eventService.sendAgentUsageIntent(session.environment_id).then((response) => {
-        // If backend resolved to a different (active) environment, track it
-        if (response?.environment_id && response.environment_id !== session.environment_id) {
+      eventService.sendAgentUsageIntent(intentTargetEnvId).then((response) => {
+        if (response?.environment_id && response.environment_id !== intentTargetEnvId) {
           setResolvedEnvId(response.environment_id)
         }
       }).catch((error) => {
         console.error("Failed to send agent usage intent:", error)
       })
     }
-  }, [session])
+  }, [intentTargetEnvId])
 
   // Listen for environment activation events
   useEffect(() => {

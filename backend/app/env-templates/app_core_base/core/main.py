@@ -21,15 +21,15 @@ logger = logging.getLogger(__name__)
 # When any of these stabilise after a change (e.g., a Mutagen sync completes),
 # env-core fires a single workspace-files-changed callback; the backend emits
 # WORKSPACE_FILES_CHANGED and downstream handlers refresh:
-#   - prompt files         → agent.workflow_prompt / entrypoint_prompt / refiner_prompt
-#   - docs/CLI_COMMANDS.yaml → CLICommandsService cached list
-#   - docs/STATUS.md        → AgentStatusService cached snapshot
+#   - prompt files                       → agent.workflow_prompt / entrypoint_prompt / refiner_prompt
+#   - docs/CLI_COMMANDS.yaml             → CLICommandsService cached list
+#   - app-data/storage/STATUS.md         → AgentStatusService cached snapshot
 _WATCHED_FILES = [
     "docs/WORKFLOW_PROMPT.md",
     "docs/ENTRYPOINT_PROMPT.md",
     "docs/REFINER_PROMPT.md",
     "docs/CLI_COMMANDS.yaml",
-    "docs/STATUS.md",
+    "app-data/storage/STATUS.md",
 ]
 # How often to poll for mtime changes (seconds)
 _POLL_INTERVAL = 5

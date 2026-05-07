@@ -2,7 +2,7 @@
 /files and /files-all commands - list workspace files with clickable links.
 
 /files     - shows only the "files" folder (user-facing data files)
-/files-all - shows all workspace folders (files, scripts, logs, docs, uploads)
+/files-all - shows all workspace folders (files, scripts, logs, docs, app-data)
 
 Link generation varies by context:
 - UI users: links to frontend file viewer route
@@ -20,7 +20,7 @@ from app.core.db import create_session
 logger = logging.getLogger(__name__)
 
 # All sections in the workspace tree
-ALL_SECTIONS = ["files", "scripts", "logs", "docs", "uploads"]
+ALL_SECTIONS = ["files", "scripts", "logs", "docs", "app_data"]
 
 # Section display labels
 SECTION_LABELS = {
@@ -28,7 +28,7 @@ SECTION_LABELS = {
     "scripts": "Scripts",
     "logs": "Logs",
     "docs": "Docs",
-    "uploads": "Uploads",
+    "app_data": "Application Data",
 }
 
 
@@ -172,7 +172,7 @@ class FilesAllCommandHandler(CommandHandler):
 
     @property
     def description(self) -> str:
-        return "List all workspace files (files, scripts, logs, docs, uploads)"
+        return "List all workspace files (files, scripts, logs, docs, app-data)"
 
     async def execute(self, context: CommandContext, args: str) -> CommandResult:
         return await _execute_files_listing(context, sections=ALL_SECTIONS)

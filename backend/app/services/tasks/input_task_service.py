@@ -3017,7 +3017,8 @@ class InputTaskService:
         Upload task files to the calling agent's environment workspace.
 
         Resolves the agent environment from the source session, then uploads all
-        task files to /app/workspace/uploads/task_{SHORT_CODE}/ in the container.
+        task files to /app/workspace/app-data/uploads/task_{SHORT_CODE}/ in the
+        container.
         Adds 'uploaded_files' list with local paths to the task_details dict.
         Always strips the internal 'files' key before returning.
 
@@ -3101,7 +3102,7 @@ class InputTaskService:
 
                     uploaded_files.append({
                         "file_name": filename,
-                        "path": result.get("path", f"./uploads/{subfolder}/{filename}"),
+                        "path": result.get("path", f"./app-data/uploads/{subfolder}/{filename}"),
                         "size": file_info.get("file_size"),
                     })
                 except Exception as e:

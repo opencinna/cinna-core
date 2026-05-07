@@ -703,13 +703,16 @@ class AgentEnvService:
         if not self.workspace_dir.is_dir():
             raise IOError(f"Workspace path is not a directory: {self.workspace_dir}")
 
-        # Define the main folders to scan
-        folders = ["files", "logs", "scripts", "docs", "uploads"]
-        tree_nodes = {}
-        summaries = {}
+        # Define the main folders to scan. The bundle-owned `uploads/` folder
+        # was removed: user file uploads now land in `app-data/uploads/`, which
+        # survives bundle updates and uninstall/reinstall.
+        folders = ["files", "logs", "scripts", "docs", "app-data"]
+        tree_nodes: dict[str, FileNode] = {}
+        summaries: dict[str, FolderSummary] = {}
 
         for folder_name in folders:
             folder_path = self.workspace_dir / folder_name
+            summary_key = folder_name.replace("-", "_")
 
             if not folder_path.exists():
                 # Create empty folder node if directory doesn't exist
@@ -722,7 +725,7 @@ class AgentEnvService:
                     modified=None,
                     children=[]
                 )
-                summaries[folder_name] = FolderSummary(fileCount=0, totalSize=0)
+                summaries[summary_key] = FolderSummary(fileCount=0, totalSize=0)
             else:
                 # Build tree for existing folder
                 logger.debug(f"Building tree for {folder_name}")
@@ -731,7 +734,7 @@ class AgentEnvService:
 
                 # Calculate summary
                 summary = self._calculate_folder_summary(node)
-                summaries[folder_name] = summary
+                summaries[summary_key] = summary
                 logger.info(f"{folder_name}: {summary.fileCount} files, {summary.totalSize} bytes")
 
         # Include webapp folder if it exists
@@ -748,7 +751,7 @@ class AgentEnvService:
             logs=tree_nodes["logs"],
             scripts=tree_nodes["scripts"],
             docs=tree_nodes["docs"],
-            uploads=tree_nodes["uploads"],
+            app_data=tree_nodes["app-data"],
             webapp=webapp_node,
             summaries=summaries
         )

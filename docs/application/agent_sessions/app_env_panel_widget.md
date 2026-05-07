@@ -2,7 +2,7 @@
 
 ## Widget Purpose
 
-The Environment Panel is a collapsible right-side panel in the session view that gives users access to the agent's workspace artifacts — files, scripts, logs, docs, and uploads generated during agent execution. It also provides quick access to credential management without leaving the session.
+The Environment Panel is a collapsible right-side panel in the session view that gives users access to the agent's workspace artifacts — files, scripts, logs, docs, and the per-user Application Data volume (uploads, storage, cache). It also provides quick access to credential management without leaving the session.
 
 Triggered by the **"App" button** in the session header. The panel overlays the message list but never covers the message input footer, so conversations can continue while the panel is open.
 
@@ -71,7 +71,7 @@ The dropdown menu at the top of the panel selects the active section:
 | **Scripts** | Python/executable scripts created by agent | |
 | **Logs** | Agent execution and debug logs | |
 | **Docs** | Generated documentation (Markdown) | |
-| **Uploads** | User-uploaded files | |
+| **Application Data** | Per-user persistent volume (`app-data/`) — `uploads/` (user-provided files), `storage/` (structured data), `cache/`. Survives bundle updates and uninstall/reinstall | |
 | **Credentials** | Agent credential sharing (hidden for guests) | |
 
 **Layout:** Dropdown selector (flex-1) + Expand/Shrink button (Maximize2/Minimize2 icons). No visual separator between menu and content list.
@@ -96,7 +96,7 @@ State lives in `EnvironmentPanel.tsx`:
 
 | State | Type | Purpose |
 |-------|------|---------|
-| `activeTab` | string | Current section: `files / scripts / logs / docs / uploads / credentials` |
+| `activeTab` | string | Current section: `files / scripts / logs / docs / app_data / credentials` |
 | `expandedFolders` | `Set<string>` | Expanded folder paths (also used for expanded SQLite files); path-based keys prevent conflicts |
 | `isWidePanelMode` | boolean | Panel width toggle: `false` = 384px, `true` = 768px |
 | `databaseTables` | `Record<string, {tables, loading, error}>` | SQLite file path → fetched table list |
@@ -111,7 +111,7 @@ All endpoints use the environment ID resolved from the session's active environm
 
 | Endpoint | Auth | Purpose |
 |----------|------|---------|
-| `GET /api/v1/environments/{env_id}/workspace/tree` | `CurrentUserOrGuest` | Fetch full workspace tree (files, scripts, logs, docs, uploads sections) |
+| `GET /api/v1/environments/{env_id}/workspace/tree` | `CurrentUserOrGuest` | Fetch full workspace tree (files, scripts, logs, docs, app_data sections) |
 | `GET /api/v1/environments/{env_id}/workspace/download/{path}` | `CurrentUserOrGuest` | Download file or folder (ZIP for folders) |
 | `GET /api/v1/environments/{env_id}/workspace/view-file/{path}` | `CurrentUserOrGuest` | Stream file content for viewer |
 | `GET /api/v1/environments/{env_id}/workspace/database/{path}/tables` | `CurrentUser` (owner-only) | Fetch SQLite table/view list |
@@ -126,7 +126,7 @@ Workspace directory structure (`/app/workspace/`):
 - `scripts/` — Scripts section
 - `logs/` — Logs section
 - `docs/` — Docs section
-- `uploads/` — Uploads section
+- `app-data/` — Application Data section (bind-mounted per-user volume; user uploads land in `app-data/uploads/`)
 
 This maps directly to the workspace layout defined in [Agent Environment Data Management](../../agents/agent_environment_data_management/agent_environment_data_management.md#workspace-directory-structure).
 

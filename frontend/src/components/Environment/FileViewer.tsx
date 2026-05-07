@@ -1,13 +1,14 @@
-import { useQuery } from "@tanstack/react-query"
-import { Download } from "lucide-react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { Download, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { WorkspaceService, OpenAPI } from "@/client"
+import { WorkspaceService, EnvironmentsService, OpenAPI } from "@/client"
 import { CSVViewer } from "./CSVViewer"
 import { MarkdownViewer } from "./MarkdownViewer"
 import { JSONViewer } from "./JSONViewer"
 import { TextViewer } from "./TextViewer"
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 import { usePageHeader } from "@/routes/_layout"
+import { eventService, EventTypes } from "@/services/eventService"
 import type { AxiosRequestConfig } from "axios"
 
 interface FileViewerProps {
@@ -17,10 +18,46 @@ interface FileViewerProps {
 
 export function FileViewer({ envId, filePath }: FileViewerProps) {
   const { setHeaderContent } = usePageHeader()
+  const queryClient = useQueryClient()
+  const usageIntentSent = useRef(false)
 
   // Extract filename from path
   const filename = filePath.split("/").pop() || "file"
   const fileExtension = filename.split(".").pop()?.toLowerCase()
+
+  // Workspace endpoints require the env to be running. Watch the env status
+  // and (if needed) wake a suspended env via agent_usage_intent so the file
+  // viewer works on a fresh tab without first opening the session.
+  const { data: environment } = useQuery({
+    queryKey: ["environment", envId],
+    queryFn: () => EnvironmentsService.getEnvironment({ id: envId }),
+    enabled: !!envId,
+  })
+  const envStatus = environment?.status
+  const isEnvRunning = envStatus === "running"
+
+  useEffect(() => {
+    if (!envId || usageIntentSent.current) return
+    if (envStatus && isEnvRunning) return
+    usageIntentSent.current = true
+    eventService.sendAgentUsageIntent(envId).catch((error) => {
+      console.error("Failed to send agent usage intent:", error)
+    })
+  }, [envId, envStatus, isEnvRunning])
+
+  useEffect(() => {
+    if (!envId) return
+    const subs: string[] = []
+    const refresh = (event: { model_id?: string }) => {
+      if (event.model_id === envId) {
+        queryClient.invalidateQueries({ queryKey: ["environment", envId] })
+      }
+    }
+    subs.push(eventService.subscribe(EventTypes.ENVIRONMENT_ACTIVATED, refresh))
+    subs.push(eventService.subscribe(EventTypes.ENVIRONMENT_ACTIVATING, refresh))
+    subs.push(eventService.subscribe(EventTypes.ENVIRONMENT_STATUS_CHANGED, refresh))
+    return () => { subs.forEach((s) => eventService.unsubscribe(s)) }
+  }, [envId, queryClient])
 
   // Set up request interceptor for blob downloads
   useEffect(() => {
@@ -41,7 +78,8 @@ export function FileViewer({ envId, filePath }: FileViewerProps) {
     }
   }, [])
 
-  // Fetch file content
+  // Fetch file content — only once the env is running, since the workspace
+  // endpoints reject requests against suspended/stopped envs with HTTP 400.
   const {
     data: fileContent,
     isLoading,
@@ -55,7 +93,7 @@ export function FileViewer({ envId, filePath }: FileViewerProps) {
       })
       return response as unknown as string
     },
-    enabled: !!envId && !!filePath,
+    enabled: !!envId && !!filePath && isEnvRunning,
   })
 
   const handleDownload = async () => {
@@ -96,6 +134,15 @@ export function FileViewer({ envId, filePath }: FileViewerProps) {
     )
     return () => setHeaderContent(null)
   }, [filename, filePath, setHeaderContent])
+
+  if (envStatus && !isEnvRunning) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
+        <Loader2 className="h-6 w-6 animate-spin" />
+        <p className="text-sm">Activating environment ({envStatus})…</p>
+      </div>
+    )
+  }
 
   if (isLoading) {
     return (

@@ -7,12 +7,13 @@ and resources/read protocol operations.
 
 URI scheme:
     workspace://files/{path}            — files in files/ folder
-    workspace://uploads/{path}          — files in uploads/ folder
     workspace://docs/{path}             — files in docs/ folder
     workspace://scripts/{path}          — files in scripts/ folder
 
 Only a safe subset of workspace folders is exposed. Sensitive folders
-(credentials/, databases/, knowledge/, logs/) are excluded.
+(credentials/, databases/, knowledge/, logs/, app-data/) are excluded.
+The per-user app-data/ volume (including uploaded files) is intentionally
+private to the agent runtime and not surfaced via MCP resources.
 
 The key design challenge: Claude Desktop (and most MCP clients) only display
 concrete resources from `resources/list`, not templates from
@@ -38,7 +39,7 @@ from app.mcp.server import mcp_connector_id_var
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_FOLDERS: set[str] = {"files", "uploads", "scripts"}
+ALLOWED_FOLDERS: set[str] = {"files", "scripts"}
 
 MAX_RESOURCE_SIZE_BYTES: int = 10 * 1024 * 1024  # 10 MB
 

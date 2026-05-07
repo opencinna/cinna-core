@@ -30,6 +30,9 @@ services:
       ENV_INSTANCES_DIR: "/agent-environments"
       # Host path for agent environments (used by docker-compose volume mounts)
       HOST_AGENT_ENVIRONMENTS_DIR: "${PWD}/backend/agent-environments"
+      # Host path for per-(user, bundle) App Data — substituted into the agent
+      # docker-compose as ${APP_DATA_HOST_PATH} for the bind-mount source
+      HOST_APP_DATA_DIR: "${PWD}/backend/data/agents/app-data"
       # Test database connection (separate DB for pytest)
       TEST_DB_SERVER: "db"
       TEST_DB_PORT: "5432"

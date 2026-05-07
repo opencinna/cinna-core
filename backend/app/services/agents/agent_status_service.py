@@ -1,10 +1,13 @@
 """
 AgentStatusService — reads and caches agent self-reported status from STATUS.md.
 
-The agent (or its scripts) writes /app/workspace/docs/STATUS.md whenever its state
-changes. This service reads the file, parses the optional YAML frontmatter,
-persists the snapshot to the AgentEnvironment DB row, and emits events on
-severity transitions.
+The agent (or its scripts) writes /app/workspace/app-data/storage/STATUS.md whenever
+its state changes. The file lives in App Data (per-user, per-bundle persistent
+storage) rather than in the bundle-owned ``docs/`` tree because status is a
+property of the running install instance, not part of the published bundle. This
+service reads the file, parses the optional YAML frontmatter, persists the
+snapshot to the AgentEnvironment DB row, and emits events on severity
+transitions.
 """
 import logging
 import asyncio
@@ -61,7 +64,7 @@ class AgentStatusSnapshot:
 class AgentStatusService:
     """Service for reading, parsing, and caching agent self-reported status."""
 
-    STATUS_FILE_PATH = "docs/STATUS.md"
+    STATUS_FILE_PATH = "app-data/storage/STATUS.md"
     MAX_RAW_BYTES = 64 * 1024        # 64 KB — hard cap on stored content
     MAX_FRONTMATTER_BYTES = 4 * 1024  # 4 KB — oversized frontmatter falls through
     SEVERITY_VALUES = {"ok", "warning", "error", "info"}
@@ -92,7 +95,7 @@ class AgentStatusService:
         cls, environment: AgentEnvironment, db_session=None
     ) -> AgentStatusSnapshot:
         """
-        Download docs/STATUS.md via the environment adapter, parse it, persist the
+        Download app-data/storage/STATUS.md via the environment adapter, parse it, persist the
         snapshot to the DB, and return an AgentStatusSnapshot.
 
         Raises StatusUnavailableError when the env is unreachable, the file is

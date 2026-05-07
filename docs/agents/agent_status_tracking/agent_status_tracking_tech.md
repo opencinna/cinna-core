@@ -50,8 +50,7 @@
 
 - `backend/app/env-templates/app_core_base/core/prompts/COMPLEX_AGENT_DESIGN.md` — "Agent Self-Reported Status" section + cross-link from "Rules for OK-pattern scripts"
 - `backend/app/env-templates/app_core_base/core/main.py` — agent-env FastAPI startup (no status-related wiring — the backend pulls STATUS.md on demand)
-- `backend/app/env-templates/general-assistant-env/app/workspace/docs/STATUS.md` — placeholder seed file
-- `backend/app/env-templates/general-assistant-env/app/workspace/scripts/update_status.py` — helper CLI (`--status`, `--summary`, `--details-file`); atomic writes via `os.replace`
+- `backend/app/env-templates/general-assistant-env/app/workspace/scripts/update_status.py` — helper CLI (`--status`, `--summary`, `--details-file`); writes to `/app/workspace/app-data/storage/STATUS.md` with atomic temp-file + rename. No placeholder file is shipped: `STATUS.md` is per-install state, not bundle content, and the platform creates `app-data/storage/` at install time
 - `backend/app/env-templates/general-assistant-env/app/workspace/knowledge/platform/agents/agent_commands/agent_status_command.md` — synced from `docs/agents/agent_commands/agent_status_command.md`
 
 ## Database Schema
@@ -108,7 +107,7 @@ Migration: `backend/app/alembic/versions/34322f866173_add_agent_environment_stat
 
 ## Configuration
 
-- `AgentStatusService.STATUS_FILE_PATH = "docs/STATUS.md"` — relative to workspace root
+- `AgentStatusService.STATUS_FILE_PATH = "app-data/storage/STATUS.md"` — relative to workspace root; lives under the per-install App Data volume so status survives bundle apply-update and is never part of a published bundle revision
 - `AgentStatusService.MAX_RAW_BYTES = 65536` — 64 KB body cap
 - `AgentStatusService.MAX_FRONTMATTER_BYTES = 4096` — 4 KB frontmatter cap
 - `AgentStatusService.FORCE_REFRESH_TTL_SECONDS = 30` — per-env rate-limit window

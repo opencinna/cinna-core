@@ -239,8 +239,11 @@ class EnvironmentService:
 
         Priority:
         1. Current active environment (if set and different from target)
-        2. Most recently used suspended environment
-        3. Environment from the most recent session for this agent
+        2. Most recently updated non-target env in a workspace-bearing status
+           (``running`` / ``suspended`` / ``stopped``). Defense-in-depth so an
+           activate flow still finds a source even if priority 1 was lost to a
+           race that flipped ``agent.active_environment_id`` to the target.
+        3. Environment from the most recent session for this agent.
 
         Args:
             session: Database session
@@ -264,16 +267,21 @@ class EnvironmentService:
                 logger.info(f"Using active environment {active_env.id} as workspace source")
                 return active_env
 
-        # 2. Look for suspended environments (most recently updated)
-        suspended_envs = [
+        # 2. Most recently updated non-target env that has a usable workspace.
+        #    Excludes ``creating`` / ``building`` / ``error`` / ``deprecated``
+        #    since their on-disk workspace may be partial or invalid.
+        copyable_statuses = {"running", "suspended", "stopped"}
+        candidate_envs = [
             env for env in all_envs
-            if env.status == "suspended" and env.id != target_env_id
+            if env.id != target_env_id and env.status in copyable_statuses
         ]
-        if suspended_envs:
-            # Sort by updated_at descending to get most recent
-            suspended_envs.sort(key=lambda e: e.updated_at or e.created_at, reverse=True)
-            source_env = suspended_envs[0]
-            logger.info(f"Using most recent suspended environment {source_env.id} as workspace source")
+        if candidate_envs:
+            candidate_envs.sort(key=lambda e: e.updated_at or e.created_at, reverse=True)
+            source_env = candidate_envs[0]
+            logger.info(
+                f"Using most recent {source_env.status} environment {source_env.id} "
+                "as workspace source"
+            )
             return source_env
 
         # 3. Find the most recent session for this agent and use its environment
@@ -302,22 +310,27 @@ class EnvironmentService:
     @staticmethod
     async def _activate_environment_background(
         agent_id: UUID,
-        env_id: UUID
+        env_id: UUID,
+        source_env_id: UUID | None = None,
     ):
         """
         Background task to activate environment.
         Uses its own database session to avoid conflicts.
 
         Steps:
-        1. Find best source environment for workspace copy
-        2. Copy workspace from source to target (if found)
-        3. Stop all other running environments
-        4. Start target environment
-        5. Update is_active flags
+        1. Copy workspace from pre-resolved source env (if provided)
+        2. Stop all other running environments
+        3. Start target environment
+        4. Update is_active flags
 
         Args:
             agent_id: Agent ID
             env_id: Environment ID to activate
+            source_env_id: Pre-resolved source env to copy workspace from. The
+                caller resolves this synchronously before mutating
+                ``agent.active_environment_id``, otherwise the lookup races
+                against the route handler that flips active_environment_id to
+                ``env_id`` and the source can no longer be found.
         """
         # Create new database session for background task
         with create_session() as session:
@@ -333,9 +346,10 @@ class EnvironmentService:
                 all_envs = EnvironmentService.list_agent_environments(session, agent_id)
                 lifecycle_manager = EnvironmentService.get_lifecycle_manager()
 
-                # Find best source environment for workspace copy
-                source_env = EnvironmentService._find_source_environment_for_workspace_copy(
-                    session, agent_id, env_id, all_envs
+                source_env = (
+                    session.get(AgentEnvironment, source_env_id)
+                    if source_env_id
+                    else None
                 )
 
                 # Copy workspace from source to target (if found)
@@ -705,6 +719,16 @@ class EnvironmentService:
         if not target_env or target_env.agent_id != agent_id:
             raise EnvironmentNotFoundError("Environment not found for this agent")
 
+        # Resolve the workspace copy source NOW, while we still hold a clean
+        # view of the agent. The HTTP handler flips ``agent.active_environment_id``
+        # to ``env_id`` immediately after we return, which would race the
+        # background task's lookup and lose the previous env as a copy source.
+        all_envs = EnvironmentService.list_agent_environments(session, agent_id)
+        source_env = EnvironmentService._find_source_environment_for_workspace_copy(
+            session, agent_id, env_id, all_envs
+        )
+        source_env_id = source_env.id if source_env else None
+
         # Update target environment status immediately
         target_env.status = "starting"
         target_env.status_message = "Preparing to activate environment..."
@@ -715,7 +739,9 @@ class EnvironmentService:
         # Spawn background task to activate environment
         # This allows the API to return immediately while activation happens asynchronously
         create_task_with_error_logging(
-            EnvironmentService._activate_environment_background(agent_id, env_id),
+            EnvironmentService._activate_environment_background(
+                agent_id, env_id, source_env_id
+            ),
             "activate_environment",
         )
 

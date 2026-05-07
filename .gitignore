@@ -10,4 +10,5 @@ node_modules/
 src_example/
 a2a-samples-main/
 backend/data/uploads/
+backend/data/agents/
 notes.txt

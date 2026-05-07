@@ -231,7 +231,7 @@ Entries are upserted on every `cinna setup` (refreshing the token) and removed b
 
 ### Workspace files watcher
 
-- Lightweight mtime-poll watcher in `core/main.py` (`_workspace_files_watcher`) monitors `docs/WORKFLOW_PROMPT.md`, `docs/ENTRYPOINT_PROMPT.md`, `docs/REFINER_PROMPT.md`, `docs/CLI_COMMANDS.yaml`, `docs/STATUS.md` under `WORKSPACE_ROOT` <!-- nocheck -->
+- Lightweight mtime-poll watcher in `core/main.py` (`_workspace_files_watcher`) monitors `docs/WORKFLOW_PROMPT.md`, `docs/ENTRYPOINT_PROMPT.md`, `docs/REFINER_PROMPT.md`, `docs/CLI_COMMANDS.yaml`, `app-data/storage/STATUS.md` under `WORKSPACE_ROOT` <!-- nocheck -->
 - Polls every 5 s; fires when a file is stable for at least one polling interval after a change (debounces Mutagen transfer bursts)
 - POSTs the list of changed paths to `POST /api/v1/environments/{id}/workspace-files-changed` (bearer auth + `X-Agent-Env-Id` header)
 - Route (`backend/app/api/routes/environments.py`) shares a `_emit_workspace_files_changed_callback()` helper that handles the env-id mismatch guard and service delegation; both `POST /{id}/workspace-files-changed` and the legacy `POST /{id}/prompt-file-changed` alias call it as one-liners (the alias passes `changed_files=None`)

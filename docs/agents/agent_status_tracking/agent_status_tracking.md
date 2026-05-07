@@ -2,11 +2,13 @@
 
 ## Purpose
 
-Lightweight, self-published heartbeat for every agent: the agent (or its scripts) writes a `STATUS.md` file under the workspace `docs/` folder, and the platform surfaces its contents through a slash command, REST endpoint, agent-card footer in the agents list, and A2A method. Lets users and external monitors see "what's this agent currently doing / is it healthy" without invoking the LLM.
+Lightweight, self-published heartbeat for every agent: the agent (or its scripts) writes a `STATUS.md` file under the per-install **App Data** storage area, and the platform surfaces its contents through a slash command, REST endpoint, agent-card footer in the agents list, and A2A method. Lets users and external monitors see "what's this agent currently doing / is it healthy" without invoking the LLM.
+
+The file lives in `app-data/storage/`, **not** in the bundle-owned `docs/` folder, because status reflects the runtime health of a specific install (its credentials, data, scheduled checks) rather than something the publisher ships in the bundle. App Data is the per-user, per-bundle persistent volume that survives apply-update and uninstall/reinstall, so an install's status history is never wiped by a bundle revision push.
 
 ## Core Concepts
 
-- **STATUS.md** — a markdown file at `/app/workspace/docs/STATUS.md` inside the agent environment. Always reflects the *current* state; agents overwrite it in place rather than appending.
+- **STATUS.md** — a markdown file at `/app/workspace/app-data/storage/STATUS.md` inside the agent environment. Always reflects the *current* state; agents overwrite it in place rather than appending.
 - **Frontmatter (optional)** — YAML block with `timestamp`, `status`, `summary` keys. When present, the platform extracts structured metadata; otherwise the file is treated as freeform.
 - **Severity** — one of `ok`, `warning`, `error`, `info`, or `unknown` (anything unrecognized normalizes to `unknown`).
 - **Snapshot** — the cached parsed result stored on the `agent_environment` row, so status remains visible even when the environment is stopped.
@@ -48,7 +50,7 @@ Lightweight, self-published heartbeat for every agent: the agent (or its scripts
 
 ## Business Rules
 
-- **File location is fixed** — only `/app/workspace/docs/STATUS.md` is read. No per-skill or nested status files in MVP.
+- **File location is fixed** — only `/app/workspace/app-data/storage/STATUS.md` is read. No per-skill or nested status files in MVP.
 - **Frontmatter is optional** — agents may publish freeform markdown; severity will normalize to `unknown` and the summary falls back to the first non-blank, non-heading body line.
 - **Severity vocabulary is closed** — only `ok`, `warning`, `error`, `info` are recognized. Other values become `unknown`.
 - **Size cap** — body truncated at 64 KB with a `... (truncated)` marker; frontmatter rejected if > 4 KB.
@@ -62,7 +64,7 @@ Lightweight, self-published heartbeat for every agent: the agent (or its scripts
 ## Architecture Overview
 
 ```
-Agent script ──writes──▶ /app/workspace/docs/STATUS.md
+Agent script ──writes──▶ /app/workspace/app-data/storage/STATUS.md
                               │
                               ▼ (pulled only when a backend-triggered
                                  action completes, or on REST/A2A/cmd)
@@ -105,5 +107,6 @@ Agent script ──writes──▶ /app/workspace/docs/STATUS.md
 - **Activity feed** — severity transitions create an entry visible in the agent's activity timeline.
 - **Event bus (outbound)** — emits `agent_status_updated` events consumed by the WebSocket bridge and frontend React Query invalidation.
 - **Event bus (inbound)** — subscribes `handle_post_action_event` to `STREAM_COMPLETED`, `STREAM_ERROR`, `CRON_COMPLETED_OK`, `CRON_TRIGGER_SESSION`, `CRON_ERROR`. The CRON events are emitted by `agent_schedule_scheduler._emit_cron_event` at every schedule-execution exit point.
-- **App-core env template** — ships `workspace/docs/STATUS.md` (placeholder) and `workspace/scripts/update_status.py` (helper). No in-container watcher — the backend is the sole reader.
+- **App-core env template** — ships `workspace/scripts/update_status.py` (helper) which writes to `app-data/storage/STATUS.md`. No placeholder file is shipped with the bundle: the file is per-install state and the platform creates the `app-data/storage/` directory on install. No in-container watcher — the backend is the sole reader.
+- **[Agent App Data](../agent_app_data/agent_app_data.md)** — `app-data/storage/` is created by `AppDataService.get_or_create_volume` at install time and bind-mounted into the container. It survives uninstall/reinstall and is never overwritten by `apply_update`.
 - **COMPLEX_AGENT_DESIGN.md** — documents the convention for agent authors and cross-links from the OK-pattern scheduled-script section.

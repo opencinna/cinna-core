@@ -91,13 +91,14 @@ App Data is **never** touched by `replace_bundle_content`, rebuild, or apply-upd
 ### 2. Environment Switch (Same Agent)
 
 1. User activates a different environment for the same agent
-2. System finds the best source environment (priority order):
+2. **Source env is resolved synchronously** in the activate handler — *before* `agent.active_environment_id` is flipped to the target — using this priority order (see _Source Environment Selection Priority_ below):
    - Current active environment (if set and different from target)
-   - Most recently updated suspended environment
+   - Most recently updated non-target env in `running`/`suspended`/`stopped` status
    - Environment from most recent session for this agent
-3. Workspace data copied from source to target
-4. Old environments stopped, target started
-5. Dynamic data synced to target
+3. The resolved source env id is passed to the background activation task
+4. Workspace data copied from source to target
+5. Old environments stopped, target started
+6. Dynamic data synced to target
 
 **Copied during switch**: `scripts/`, `docs/`, `knowledge/`, `files/`, `uploads/`, `credentials/`, `plugins/`, `webapp/`, `workspace_requirements.txt`
 
@@ -156,10 +157,13 @@ AI credentials are resolved during environment start/rebuild:
 
 ### Source Environment Selection Priority
 
-When copying workspace between environments:
+When copying workspace between environments (`_find_source_environment_for_workspace_copy` in `backend/app/services/environments/environment_service.py`):
+
 1. Current active environment (if set and different from target)
-2. Most recently updated suspended environment
+2. Most recently updated non-target env whose status is `running`, `suspended`, or `stopped` (defense-in-depth so the activate flow still finds a source even if the active-env flip races priority 1). Excludes `creating`/`building`/`error`/`deprecated` — those workspaces may be partial or invalid.
 3. Environment from most recent session for this agent (via `Session.updated_at`)
+
+The activate handler resolves the source env synchronously before spawning the activation background task, then passes `source_env_id` through to it. Resolving inside the background task would race the route's `set_active_environment(...)` call, which flips `agent.active_environment_id` to the target and would otherwise hide the previous env from priority 1.
 
 ### Extending the Framework
 

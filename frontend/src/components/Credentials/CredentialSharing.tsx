@@ -42,6 +42,7 @@ import {
   AlertTitle,
 } from "@/components/ui/alert"
 import useCustomToast from "@/hooks/useCustomToast"
+import useRole from "@/hooks/useRole"
 import { handleError } from "@/utils"
 
 interface CredentialSharingProps {
@@ -128,6 +129,7 @@ function SharesList({
 export function CredentialSharing({ credential }: CredentialSharingProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
+  const { isAgentUser } = useRole()
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false)
   const [isDisableDialogOpen, setIsDisableDialogOpen] = useState(false)
   const [allowSharing, setAllowSharing] = useState(credential.allow_sharing ?? false)
@@ -190,6 +192,10 @@ export function CredentialSharing({ credential }: CredentialSharingProps) {
 
   const shares = sharesData?.data ?? []
   const shareCount = credential.share_count ?? 0
+
+  if (isAgentUser) {
+    return null
+  }
 
   const handleToggleSharing = (checked: boolean) => {
     if (!checked && shareCount > 0) {

@@ -81,7 +81,7 @@ class WorkspaceTreeResponse(BaseModel):
     logs: FileNode
     scripts: FileNode
     docs: FileNode
-    uploads: FileNode
+    app_data: FileNode
     webapp: FileNode | None = None
     summaries: dict[str, FolderSummary]
 
