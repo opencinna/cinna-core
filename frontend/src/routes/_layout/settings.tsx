@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router"
 import { useEffect } from "react"
 
 import { AICredentialsSettings } from "@/components/UserSettings/AICredentials"
+import { AppDataTab } from "@/components/UserSettings/AppData/AppDataTab"
 import DeleteAccount from "@/components/UserSettings/DeleteAccount"
 import { AppAgentRoutesCard } from "@/components/UserSettings/AppAgentRoutesCard"
 import { DesktopSessionsCard } from "@/components/UserSettings/DesktopSessionsCard"
@@ -73,6 +74,7 @@ function UserSettings() {
       ),
     },
     { value: "keys", title: "SSH Keys", content: <SSHKeys /> },
+    { value: "app-data", title: "App Data", content: <AppDataTab /> },
     { value: "danger-zone", title: "Danger zone", content: <DeleteAccount /> },
   ]
 

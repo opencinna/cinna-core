@@ -70,11 +70,15 @@ class EmailSendingService:
             logger.warning(f"Session agent {chat_session.agent_id} not found")
             return None
 
-        # Determine if this is owner mode or clone mode
-        is_owner_mode = session_agent.parent_agent_id is None and chat_session.sender_email is not None
+        # Determine if this is owner mode or install mode.
+        # In the bundle world the "parent" of a foreign install is the
+        # publisher install, located by ``bundle_uuid`` + ``is_publisher_install``.
+        is_owner_mode = (
+            session_agent.is_publisher_install or session_agent.bundle_uuid is None
+        ) and chat_session.sender_email is not None
 
         if is_owner_mode:
-            # Owner mode: session is on the parent agent itself
+            # Owner mode: session is on the publisher install itself
             parent_agent_id = session_agent.id
             clone_agent_id_for_queue = None
 
@@ -84,17 +88,29 @@ class EmailSendingService:
                 logger.warning(f"Owner-mode session {session_id} has no sender_email")
                 return None
         else:
-            # Clone mode: session is on a clone, parent owns the email integration
-            if not session_agent.parent_agent_id:
-                logger.warning(f"Agent {session_agent.id} has no parent agent")
+            # Install mode: session is on a foreign install. Find the
+            # publisher install of the same bundle to source the email
+            # integration config from.
+            if not session_agent.bundle_uuid:
+                logger.warning(f"Agent {session_agent.id} has no bundle_uuid")
                 return None
-            parent_agent_id = session_agent.parent_agent_id
+            parent_stmt = select(Agent).where(
+                Agent.bundle_uuid == session_agent.bundle_uuid,
+                Agent.is_publisher_install == True,  # noqa: E712
+            )
+            publisher_install = db_session.exec(parent_stmt).first()
+            if not publisher_install:
+                logger.warning(
+                    f"No publisher install found for bundle {session_agent.bundle_uuid}"
+                )
+                return None
+            parent_agent_id = publisher_install.id
             clone_agent_id_for_queue = session_agent.id
 
-            # Recipient is the clone owner (= email sender's user account)
+            # Recipient is the install owner (= email sender's user account)
             recipient_user = db_session.get(User, session_agent.owner_id)
             if not recipient_user:
-                logger.warning(f"Clone owner {session_agent.owner_id} not found")
+                logger.warning(f"Install owner {session_agent.owner_id} not found")
                 return None
             recipient = recipient_user.email
 

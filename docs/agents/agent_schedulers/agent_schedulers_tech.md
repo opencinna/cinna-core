@@ -12,8 +12,9 @@
 - `backend/app/api/routes/agents.py` — Schedule CRUD, AI generation, and logs endpoints (nested under agent routes)
 
 **Services:**
-- `backend/app/services/agents/agent_scheduler_service.py` — Schedule CRUD, CRON conversion, next execution calculation, log creation/retrieval, environment resolution helpers
+- `backend/app/services/agents/agent_scheduler_service.py` — Schedule CRUD, CRON conversion, next execution calculation, log creation/retrieval, environment resolution shims (delegate to `environment_resolver.py`)
 - `backend/app/services/agents/agent_schedule_scheduler.py` — Background scheduler (APScheduler) that polls and executes due schedules with branching logic for schedule types
+- `backend/app/services/agents/environment_resolver.py` — Shared helpers `get_active_environment` and `ensure_environment_running`, extracted here so that [Agent Webhooks](../agent_webhooks/agent_webhooks.md) can reuse them without cross-service coupling. `AgentSchedulerService` delegates to these functions via thin wrapper methods.
 
 **Agent-Env Endpoint:**
 - `backend/app/env-templates/app_core_base/core/server/routes.py` — `POST /exec` endpoint for executing shell commands inside the agent container
@@ -141,8 +142,8 @@ Create endpoint validates schedule type + command combination:
 | `get_schedule_for_agent(session, schedule_id, agent_id)` | Validates schedule belongs to agent |
 | `create_log(session, schedule_id, agent_id, ...)` | Creates immutable AgentScheduleLog entry |
 | `get_schedule_logs(session, schedule_id, limit=50)` | Returns recent logs ordered by executed_at DESC |
-| `get_active_environment(session, agent_id)` | Returns agent's active environment or None |
-| `ensure_environment_running(environment, agent, get_fresh_db_session)` | Auto-activates suspended/stopped environments; raises on error/timeout |
+| `get_active_environment(session, agent_id)` | Thin shim; delegates to `environment_resolver.get_active_environment()` |
+| `ensure_environment_running(environment, agent, get_fresh_db_session)` | Thin shim; delegates to `environment_resolver.ensure_environment_running()`. Auto-activates suspended/stopped environments; raises on error/timeout. |
 
 ### Background Scheduler — `backend/app/services/agents/agent_schedule_scheduler.py`
 

@@ -39,7 +39,7 @@ export function CreateTaskDialog({
   defaultTeamId,
 }: CreateTaskDialogProps) {
   const queryClient = useQueryClient()
-  const { activeWorkspaceId } = useWorkspace()
+  const { workspaceFilter } = useWorkspace()
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
   const [selectedAgentId, setSelectedAgentId] = useState<string>("")
@@ -61,13 +61,13 @@ export function CreateTaskDialog({
   }, [open, defaultTeamId])
 
   const { data: agentsData } = useQuery({
-    queryKey: ["agents", activeWorkspaceId],
+    queryKey: ["agents", workspaceFilter],
     queryFn: ({ queryKey }) => {
       const [, workspaceId] = queryKey
       return AgentsService.readAgents({
         skip: 0,
         limit: 100,
-        userWorkspaceId: (workspaceId as string) ?? "",
+        userWorkspaceId: workspaceId as string | undefined,
       })
     },
     enabled: open,
@@ -145,7 +145,7 @@ export function CreateTaskDialog({
       original_message: description.trim() || title.trim(),
       title: title.trim(),
       auto_execute: autoExecute,
-      user_workspace_id: activeWorkspaceId || undefined,
+      user_workspace_id: workspaceFilter || undefined,
     }
 
     if (selectedTeamId) {

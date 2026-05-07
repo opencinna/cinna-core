@@ -406,7 +406,7 @@ function TaskDetailPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { setHeaderContent } = usePageHeader()
-  const { activeWorkspaceId } = useWorkspace()
+  const { workspaceFilter } = useWorkspace()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const { goBack } = useNavigationHistory()
   const isByUUID = isUUID(taskId)
@@ -438,8 +438,8 @@ function TaskDetailPage() {
   })
 
   const { data: agentsData } = useQuery({
-    queryKey: ["agents", activeWorkspaceId],
-    queryFn: ({ queryKey }) => AgentsService.readAgents({ skip: 0, limit: 100, userWorkspaceId: (queryKey[1] as string) ?? "" }),
+    queryKey: ["agents", workspaceFilter],
+    queryFn: ({ queryKey }) => AgentsService.readAgents({ skip: 0, limit: 100, userWorkspaceId: queryKey[1] as string | undefined }),
   })
 
   const { data: sessionsData } = useQuery({
@@ -1120,7 +1120,7 @@ function TaskDetailPage() {
         onOpenChange={setAgentSelectorOpen}
         onSelect={handleAgentSelect}
         selectedAgentId={task.selected_agent_id}
-        workspaceId={activeWorkspaceId}
+        workspaceId={workspaceFilter ?? null}
       />
 
       <Dialog open={teamSelectorOpen} onOpenChange={setTeamSelectorOpen}>

@@ -9,6 +9,9 @@ from .users.user import (
     UserUpdateMe,
     UserPublic,
     UsersPublic,
+    UserRole,
+    UserRolePublic,
+    UserRoleUpdate,
     UpdatePassword,
     Message,
     NewPassword,
@@ -30,7 +33,6 @@ from .agents.agent import (
     AgentSdkConfig,
     AllowedToolsUpdate,
     PendingToolsResponse,
-    CloneMode,
     UpdateMode,
 )
 from .credentials.credential import (
@@ -74,28 +76,36 @@ from .credentials.credential_share import (
     SharedCredentialPublic,
     SharedCredentialsPublic,
 )
-from .sharing.agent_share import (
-    AgentShare,
-    AgentShareBase,
-    AgentSharePublic,
-    AgentShareCreate,
-    AgentShareUpdate,
-    AgentSharesPublic,
-    PendingSharePublic,
-    PendingSharesPublic,
-    CredentialRequirement,
-    AICredentialRequirement,
-    ShareStatus,
-    ShareMode,
-    ShareSource,
+from .bundles.agent_bundle import (
+    AgentBundle,
+    AgentBundleBase,
+    AgentBundlePublic,
+    AgentBundlesPublic,
+    AgentBundleUpdate,
+    BundleVisibility,
+    BundleInstallMode,
 )
-from .sharing.clone_update_request import (
-    CloneUpdateRequest,
-    CloneUpdateRequestBase,
-    CloneUpdateRequestPublic,
-    CloneUpdateRequestsPublic,
-    PushUpdateActionsRequest,
-    UpdateRequestStatus,
+from .bundles.agent_bundle_revision import (
+    AgentBundleRevision,
+    AgentBundleRevisionPublic,
+    AgentBundleRevisionsPublic,
+    PublishRequest,
+)
+from .bundles.bundle_access_grant import (
+    BundleAccessGrant,
+    BundleAccessGrantPublic,
+    BundleAccessGrantsPublic,
+    BundleAccessGrantCreate,
+)
+from .bundles.catalog import (
+    CatalogEntryPublic,
+    CatalogPublic,
+    AICredentialSelections,
+    InstallRequest,
+    AdminInstallRequest,
+    SetUpdateModeRequest,
+    EditBundleIdRequest,
+    CheckUpdatesResponse,
 )
 from .environments.environment import (
     AgentEnvironment,
@@ -159,6 +169,21 @@ from .agents.agent_schedule_log import (
     AgentScheduleLog,
     AgentScheduleLogPublic,
     AgentScheduleLogsPublic,
+)
+from .agents.agent_webhook import (
+    AgentWebhook,
+    AgentWebhookType,
+    AgentWebhookCreateSession,
+    AgentWebhookCreateScript,
+    AgentWebhookUpdate,
+    AgentWebhookPublic,
+    AgentWebhookPublicWithToken,
+    AgentWebhooksPublic,
+)
+from .agents.agent_webhook_log import (
+    AgentWebhookLog,
+    AgentWebhookLogPublic,
+    AgentWebhookLogsPublic,
 )
 from .agents.agent_handover import (
     AgentHandoverConfig,
@@ -481,6 +506,11 @@ from .external.external_agents import (
     ExternalAgentListResponse,
     ExternalSessionPublic,
 )
+from .bundles.app_data_volume import (
+    AppDataVolume,
+    AppDataVolumePublic,
+    AppDataVolumesPublic,
+)
 
 __all__ = [
     # Core
@@ -516,7 +546,6 @@ __all__ = [
     "AgentSdkConfig",
     "AllowedToolsUpdate",
     "PendingToolsResponse",
-    "CloneMode",
     "UpdateMode",
     # Credentials
     "Credential",
@@ -555,27 +584,33 @@ __all__ = [
     "CredentialSharesPublic",
     "SharedCredentialPublic",
     "SharedCredentialsPublic",
-    # Agent Shares
-    "AgentShare",
-    "AgentShareBase",
-    "AgentSharePublic",
-    "AgentShareCreate",
-    "AgentShareUpdate",
-    "AgentSharesPublic",
-    "PendingSharePublic",
-    "PendingSharesPublic",
-    "CredentialRequirement",
-    "AICredentialRequirement",
-    "ShareStatus",
-    "ShareMode",
-    "ShareSource",
-    # Clone Update Requests
-    "CloneUpdateRequest",
-    "CloneUpdateRequestBase",
-    "CloneUpdateRequestPublic",
-    "CloneUpdateRequestsPublic",
-    "PushUpdateActionsRequest",
-    "UpdateRequestStatus",
+    # Agent Bundles (Phase 2)
+    "AgentBundle",
+    "AgentBundleBase",
+    "AgentBundlePublic",
+    "AgentBundlesPublic",
+    "AgentBundleUpdate",
+    "BundleVisibility",
+    "BundleInstallMode",
+    # Agent Bundle Revisions
+    "AgentBundleRevision",
+    "AgentBundleRevisionPublic",
+    "AgentBundleRevisionsPublic",
+    "PublishRequest",
+    # Bundle Access Grants
+    "BundleAccessGrant",
+    "BundleAccessGrantPublic",
+    "BundleAccessGrantsPublic",
+    "BundleAccessGrantCreate",
+    # Catalog & install schemas
+    "CatalogEntryPublic",
+    "CatalogPublic",
+    "AICredentialSelections",
+    "InstallRequest",
+    "AdminInstallRequest",
+    "SetUpdateModeRequest",
+    "EditBundleIdRequest",
+    "CheckUpdatesResponse",
     # Environments
     "AgentEnvironment",
     "AgentEnvironmentCreate",
@@ -631,6 +666,19 @@ __all__ = [
     "AgentScheduleLog",
     "AgentScheduleLogPublic",
     "AgentScheduleLogsPublic",
+    # Agent Webhooks
+    "AgentWebhook",
+    "AgentWebhookType",
+    "AgentWebhookCreateSession",
+    "AgentWebhookCreateScript",
+    "AgentWebhookUpdate",
+    "AgentWebhookPublic",
+    "AgentWebhookPublicWithToken",
+    "AgentWebhooksPublic",
+    # Agent Webhook Logs
+    "AgentWebhookLog",
+    "AgentWebhookLogPublic",
+    "AgentWebhookLogsPublic",
     # Agent Handovers / Task Creation
     "AgentHandoverConfig",
     "HandoverConfigCreate",
@@ -899,4 +947,8 @@ __all__ = [
     "ExternalTargetPublic",
     "ExternalAgentListResponse",
     "ExternalSessionPublic",
+    # App Data Volumes (Phase 1: agent bundles & installs)
+    "AppDataVolume",
+    "AppDataVolumePublic",
+    "AppDataVolumesPublic",
 ]

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define how data flows between agents, environments, and clones, ensuring consistent behavior across lifecycle operations (create, activate, rebuild, clone, sync updates, environment switch).
+Define how data flows between agents, environments, and installs, ensuring consistent behavior across lifecycle operations (create, activate, rebuild, install, apply-update, environment switch).
 
 ## Core Concepts
 
@@ -15,43 +15,52 @@ Define how data flows between agents, environments, and clones, ensuring consist
 
 | Ownership Level | Description | Examples |
 |-----------------|-------------|----------|
-| **Original Agent** | Data defined by parent agent; clones receive copies and updates | Workflow prompt, scripts, docs, knowledge, files, plugins |
-| **Clone/Instance Agent** | Data owned independently by each agent instance | Integration credential links, agent-specific settings |
-| **User** | Data owned by user, shared across their agents | AI credentials, user workspace files |
+| **Bundle-owned** | Snapshotted into the bundle revision at publish time; replaced on apply-update | Workflow prompt, scripts, docs, knowledge, files, workspace_requirements.txt |
+| **App Data (persistent)** | Per-user, per-bundle persistent volume; survives uninstall/reinstall; never overwritten by updates | `/app/workspace/app-data/storage/`, `uploads/`, `cache/` |
+| **Credentials (synced)** | Linked to the install via `AgentCredentialLink`; synced into `workspace/credentials/` on every start | Integration credentials, service API keys |
+| **User** | Data owned by user, shared across their agents | AI credentials |
 | **Environment Runtime** | Data generated during execution, never synced | Logs, databases |
 
 ### Sync Timing Categories
 
 - **Dynamic** - Synced on every container start (prompts, credentials, plugins)
-- **On-Demand** - Synced during clone creation, push updates, or environment switch (workspace files)
-- **Static (Clone)** - Copied during clone creation only, not updated afterwards (SDK config, A2A config)
+- **On-Demand** - Synced during install creation, apply-update, or environment switch (bundle workspace files)
+- **Persistent (App Data)** - Per-user volume reattached on install/reinstall; never overwritten
 - **Never** - Runtime data that stays local to the environment (logs, databases)
 
 ## Data Classification Matrix
 
-### Agent Definition Data (Original Agent Ownership)
+### Bundle-Owned Data (Replaced on apply-update)
 
 | Data | Storage | Sync Timing | Notes |
 |------|---------|-------------|-------|
-| `workflow_prompt` | agent_config | Dynamic | Synced to `/app/workspace/docs/WORKFLOW_PROMPT.md` |
-| `entrypoint_prompt` | agent_config | Dynamic | Synced to `/app/workspace/docs/ENTRYPOINT_PROMPT.md` |
-| `scripts/` folder | environment | On-Demand | Agent-created Python scripts |
-| `docs/` folder | environment | On-Demand | Prompt files and workflow docs |
-| `knowledge/` folder | environment | On-Demand | Integration docs, API guides |
-| `files/` folder | environment | On-Demand | Reports, CSV files, SQLite DBs, caches |
-| `uploads/` folder | environment | On-Demand | User-uploaded files |
-| `webapp/` folder | environment | On-Demand | Web app static files, data endpoints, actions registry |
-| `workspace_requirements.txt` | environment | On-Demand | Agent-installed Python packages |
+| `workflow_prompt` | agent_config + environment | Dynamic | Synced to `/app/workspace/docs/WORKFLOW_PROMPT.md`; snapshotted into bundle revision at publish |
+| `entrypoint_prompt` | agent_config + environment | Dynamic | Snapshotted into bundle revision at publish |
+| `scripts/` folder | environment | On-Demand (install/update) | Replaced from bundle snapshot on install or apply-update |
+| `docs/` folder | environment | On-Demand (install/update) | Replaced from bundle snapshot |
+| `knowledge/` folder | environment | On-Demand (install/update) | Replaced from bundle snapshot |
+| `files/` folder | environment | On-Demand (install/update) | Replaced from bundle snapshot (static assets only) |
+| `webapp/` folder | environment | On-Demand (install/update) | Web app static files, data endpoints, actions registry |
+| `workspace_requirements.txt` | environment | On-Demand (install/update) | Replaced from bundle snapshot |
+| `workspace_system_packages.txt` | environment | On-Demand (install/update) | Replaced from bundle snapshot |
 | Plugins (LLM tools) | agent_config | Dynamic | Synced via plugin sync operation |
 
-### Agent Instance Data (Clone/Instance Ownership)
+### App Data (Persistent per user × bundle)
+
+| Data | Storage | Sync Timing | Notes |
+|------|---------|-------------|-------|
+| `app-data/storage/` | AppDataVolume host path | Persistent | For structured user data (DBs, JSON, CSVs produced at runtime) |
+| `app-data/uploads/` | AppDataVolume host path | Persistent | For files the user provides at runtime |
+| `app-data/cache/` | AppDataVolume host path | Persistent | For cached downloads and processed files |
+
+App Data is **never** touched by `replace_bundle_content`, rebuild, or apply-update. It survives uninstall and reattaches on reinstall of the same bundle.
+
+### Install-Specific Data (Credential Ownership)
 
 | Data | Storage | Sync Timing | Notes |
 |------|---------|-------------|-------|
 | Integration credentials | agent_config | Dynamic | Links via `AgentCredentialLink`, synced to `/app/workspace/credentials/` |
 | AI credentials | environment | On Start | Resolved from environment or user profile |
-| Agent SDK config | agent_config | Static (Clone) | Copied during clone, not updated |
-| A2A config | agent_config | Static (Clone) | Agent-to-agent communication settings |
 
 ### Environment Runtime Data (Never Synced)
 
@@ -94,26 +103,34 @@ Define how data flows between agents, environments, and clones, ensuring consist
 
 **NOT copied**: `logs/`, `databases/` (runtime data)
 
-### 3. Clone Creation
+### 3. Install Creation
 
-1. Clone agent record created with clone fields
-2. Environment created for clone
-3. Workspace files copied from original agent's environment
-4. Credentials linked: shared credentials linked directly, others created as placeholders
+1. User installs a bundle via the catalog
+2. New `Agent` (Install) row created from latest revision (prompts, SDK settings)
+3. `AgentEnvironment` created; workspace seeded from bundle revision snapshot (`seed_workspace_from_bundle_snapshot`)
+4. `AppDataVolume` created (or reattached if orphaned from previous install)
+5. Credentials: for each `required_credential_spec`, either link an existing user credential or create a placeholder
+6. App-data volume bind-mounted at `/app/workspace/app-data` in the generated docker-compose
 
-**Copied to clone**: `scripts/`, `docs/`, `knowledge/`, `files/`, `uploads/`, `webapp/`, `workspace_requirements.txt`
+**Seeded from bundle snapshot**: `scripts/`, `docs/`, `knowledge/`, `files/`, `workspace_requirements.txt`, `workspace_system_packages.txt`
 
-**NOT copied**: `logs/`, `databases/` (runtime), `credentials/` (handled separately via dynamic sync)
+**Persistent (from app-data volume)**: `app-data/storage/`, `app-data/uploads/`, `app-data/cache/`
 
-### 4. Clone Update (Push Updates)
+**NOT copied from snapshot**: `logs/`, `databases/` (runtime), `credentials/` (handled separately via dynamic sync)
 
-1. Original agent owner pushes updates to all clones
-2. For each clone: workspace files synced from parent
-3. Dynamic data sync runs on next start
+### 4. Apply Update (Bundle Revision Push)
 
-**Applied during update**: `scripts/`, `docs/`, `knowledge/`, `files/`, `uploads/`, `webapp/`, `workspace_requirements.txt`
+1. Publisher publishes new revision; all foreign installs receive `INSTALL_UPDATE_AVAILABLE`
+2. User reviews release notes and clicks "Apply update" (or automatic mode triggers on next idle)
+3. Environment stopped
+4. `replace_bundle_content` overwrites bundle-owned folders from the new revision snapshot
+5. Install's `workflow_prompt`, `entrypoint_prompt`, `refiner_prompt` synced from revision
+6. `installed_revision_id` updated; `pending_update` cleared
+7. Environment restarted; `INSTALL_UPDATE_APPLIED` event emitted
 
-**Not applied**: Integration credentials, runtime data
+**Replaced**: `scripts/`, `docs/`, `knowledge/`, `files/`, `workspace_requirements.txt`, `workspace_system_packages.txt`
+
+**Preserved**: `app-data/` (AppDataVolume), `credentials/`, `logs/`, `databases/`
 
 ### 5. Environment Rebuild
 
@@ -166,28 +183,32 @@ Agent Model (DB) → Environment Lifecycle Manager → Docker Adapter → Docker
 
 ```
 /app/workspace/
-├── scripts/                     # Agent scripts (Original Agent)
-├── docs/                        # Documentation (Original Agent)
+├── scripts/                     # Bundle-owned (replaced on update)
+├── docs/                        # Bundle-owned
 │   ├── WORKFLOW_PROMPT.md
 │   └── ENTRYPOINT_PROMPT.md
-├── knowledge/                   # Integration docs (Original Agent)
-├── files/                       # Reports & caches (Original Agent)
-├── uploads/                     # User-uploaded files (Original Agent)
-├── credentials/                 # Integration credentials (Clone/Instance)
-├── plugins/                     # LLM plugins (Original Agent)
-├── webapp/                      # Web app files, data endpoints, actions registry (Original Agent)
+├── knowledge/                   # Bundle-owned
+├── files/                       # Bundle-owned (static assets shipped with bundle)
+├── app-data/                    # App Data — persistent per (user × bundle)
+│   ├── storage/                 #   for structured runtime data (DBs, JSON, CSVs)
+│   ├── uploads/                 #   for user-provided files at runtime
+│   └── cache/                   #   for cached downloads, processed output
+├── credentials/                 # Credentials (synced from platform on every start)
+├── plugins/                     # LLM plugins (synced dynamically)
+├── webapp/                      # Web app files, data endpoints, actions registry (Bundle-owned)
 │   ├── index.html
 │   ├── api/                     # Python data endpoint scripts
 │   └── WEB_APP_ACTIONS.md       # Actions registry for chat integration
 ├── logs/                        # Session logs (Runtime - never synced)
 ├── databases/                   # Runtime databases (Runtime - never synced)
-└── workspace_requirements.txt   # Python packages (Original Agent)
+└── workspace_requirements.txt   # Bundle-owned (replaced on update)
 ```
 
 ## Integration Points
 
 - **[Agent Environments](../agent_environments/agent_environments.md)** - Lifecycle operations (start, rebuild, suspend/activate) trigger data sync; two-layer architecture separates system code from workspace data
-- **[Agent Sharing](../agent_sharing/agent_sharing.md)** - Clone creation copies workspace data; push updates sync changes to all clones
+- **[Agent Bundles & Installs](../agent_bundles/agent_bundles.md)** - Install creation seeds workspace from bundle revision snapshot; apply-update replaces bundle-owned folders while preserving App Data and credentials
+- **[Agent App Data](../agent_app_data/agent_app_data.md)** - The persistent `app-data/` volume; lifecycle managed by `AppDataService`
 - **[Credential Management](../agent_credentials/agent_credentials.md)** - Integration credentials synced dynamically to `workspace/credentials/` on every start
 - **[AI Credentials](../../application/ai_credentials/ai_credentials.md)** - AI provider keys resolved and injected as environment variables during start
 - **[Agent Plugins](../agent_plugins/agent_plugins.md)** - Plugins synced dynamically to `workspace/plugins/` on every start

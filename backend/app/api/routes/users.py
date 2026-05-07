@@ -8,6 +8,7 @@ from app.api.deps import (
     CurrentUser,
     SessionDep,
     get_current_active_superuser,
+    require_developer,
 )
 from app.core.config import settings
 from app.services.users.user_service import UserService
@@ -19,6 +20,8 @@ from app.models import (
     UserCreate,
     UserPublic,
     UserRegister,
+    UserRolePublic,
+    UserRoleUpdate,
     UsersPublic,
     UserUpdate,
     UserUpdateMe,
@@ -30,7 +33,9 @@ from app.models.users.user import (
     UserPublicWithAICredentials,
     VALID_SDK_OPTIONS,
     VALID_AI_FUNCTIONS_SDK_OPTIONS,
+    VALID_USER_ROLES,
 )
+from app.services.users.role_service import RoleService
 from app.services.environments.sdk_constants import is_valid_sdk
 from app.models.credentials.ai_credential import AICredentialType
 from app.services.credentials.ai_credentials_service import ai_credentials_service
@@ -44,15 +49,34 @@ router = APIRouter(prefix="/users", tags=["users"])
     dependencies=[Depends(get_current_active_superuser)],
     response_model=UsersPublic,
 )
-def read_users(session: SessionDep, skip: int = 0, limit: int = 100) -> Any:
+def read_users(
+    session: SessionDep,
+    skip: int = 0,
+    limit: int = 100,
+    role: str | None = None,
+) -> Any:
     """
-    Retrieve users.
+    Retrieve users. Admin only.
+
+    Optional ``role`` query parameter filters by ``UserRole`` value
+    (``agent-user`` | ``agent-developer`` | ``admin``).  Used by the
+    Phase 3 admin Roles tab to show counts per role and drive the
+    promote / demote UI.
     """
+    if role is not None and role not in VALID_USER_ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid role filter. Must be one of: {VALID_USER_ROLES}",
+        )
 
     count_statement = select(func.count()).select_from(User)
-    count = session.exec(count_statement).one()
+    statement = select(User)
+    if role is not None:
+        count_statement = count_statement.where(User.role == role)
+        statement = statement.where(User.role == role)
 
-    statement = select(User).offset(skip).limit(limit)
+    count = session.exec(count_statement).one()
+    statement = statement.offset(skip).limit(limit)
     users = session.exec(statement).all()
 
     return UsersPublic(data=users, count=count)
@@ -195,12 +219,20 @@ def set_password_me(
     return Message(message="Password set successfully")
 
 
-@router.post("/me/general-assistant", response_model=AgentPublic)
+@router.post(
+    "/me/general-assistant",
+    response_model=AgentPublic,
+    dependencies=[Depends(require_developer)],
+)
 async def generate_general_assistant(
     *, session: SessionDep, current_user: CurrentUser
 ) -> Any:
     """
     Create the General Assistant agent for the current user.
+
+    Phase 3 — restricted to ``agent-developer`` and ``admin`` roles.
+    The General Assistant creates a real ``Agent`` row, so the same
+    role gate applied to ``POST /agents/`` applies here.
 
     Returns HTTP 409 if a General Assistant already exists for this user.
     Returns HTTP 400 if the General Assistant feature is not enabled on the account.
@@ -227,6 +259,56 @@ def read_user_me(current_user: CurrentUser) -> Any:
         **current_user.model_dump(),
         has_google_account=bool(current_user.google_id),
         has_password=bool(current_user.hashed_password),
+    )
+
+
+@router.get("/me/role", response_model=UserRolePublic)
+def read_my_role(current_user: CurrentUser) -> UserRolePublic:
+    """Return the current user's role.
+
+    Lightweight endpoint for the Phase 3 frontend shell so that boot
+    code can branch the layout (``AgentUserLayout`` vs the existing
+    developer layout) without pulling the full ``UserPublic`` payload.
+    The role is also included in ``GET /users/me`` for parity.
+    """
+    return UserRolePublic(role=current_user.role)
+
+
+@router.patch(
+    "/{user_id}/role",
+    dependencies=[Depends(get_current_active_superuser)],
+    response_model=UserPublic,
+)
+async def update_user_role(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    user_id: uuid.UUID,
+    body: UserRoleUpdate,
+) -> Any:
+    """Change a user's role between ``agent-user`` and ``agent-developer``.
+
+    Admin (superuser) only.  Cannot promote or demote into ``admin`` —
+    that tier is bound to ``is_superuser`` and managed elsewhere.
+    Cannot change one's own role.
+    """
+    target = session.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    try:
+        target = await RoleService.set_role(
+            session=session,
+            target_user=target,
+            new_role=body.role,
+            changed_by=current_user,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return UserPublic(
+        **target.model_dump(),
+        has_google_account=bool(target.google_id),
+        has_password=bool(target.hashed_password),
     )
 
 
@@ -288,9 +370,10 @@ def read_user_by_id(
     dependencies=[Depends(get_current_active_superuser)],
     response_model=UserPublic,
 )
-def update_user(
+async def update_user(
     *,
     session: SessionDep,
+    current_user: CurrentUser,
     user_id: uuid.UUID,
     user_in: UserUpdate,
 ) -> Any:
@@ -311,7 +394,24 @@ def update_user(
                 status_code=409, detail="User with this email already exists"
             )
 
+    role_provided = "role" in user_in.model_dump(exclude_unset=True)
+    if role_provided and user_in.role not in VALID_USER_ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid role. Must be one of: {VALID_USER_ROLES}",
+        )
+
+    previous_role = db_user.role
     db_user = UserService.update_user(session=session, db_user=db_user, user_in=user_in)
+
+    if role_provided and db_user.role != previous_role:
+        await RoleService._emit_role_changed(
+            user_id=db_user.id,
+            new_role=db_user.role,
+            previous_role=previous_role,
+            changed_by_user_id=current_user.id,
+        )
+
     return db_user
 
 

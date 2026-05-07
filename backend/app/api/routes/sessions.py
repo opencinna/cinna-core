@@ -22,6 +22,7 @@ from app.models import (
 )
 from app.services.sessions.session_service import SessionService
 from app.services.sharing.agent_guest_share_service import AgentGuestShareService
+from app.services.users.role_service import RoleService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -134,6 +135,19 @@ def create_session(
             if not current_user.is_superuser and (agent.owner_id != current_user.id):
                 raise HTTPException(status_code=400, detail="Not enough permissions")
             user_id = current_user.id
+
+            # Phase 3 — building-mode sessions are developer-only.
+            # ``agent-user`` accounts cannot start a building session
+            # even on agents they own (e.g., a publisher who got
+            # demoted keeps their installs but loses the build flow).
+            if session_in.mode == "building" and not RoleService.is_developer(current_user):
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "Building-mode sessions require the agent-developer role. "
+                        "Switch to conversation mode or ask an admin to promote your account."
+                    ),
+                )
 
     if not agent.active_environment_id:
         raise HTTPException(
@@ -432,6 +446,18 @@ def switch_session_mode(
     # Validate mode
     if new_mode not in ["building", "conversation"]:
         raise HTTPException(status_code=400, detail="Invalid mode. Must be 'building' or 'conversation'")
+
+    # Phase 3 — switching INTO building mode is developer-only.  A
+    # demoted user can still switch back to conversation to resume
+    # using existing sessions.
+    if new_mode == "building" and not RoleService.is_developer(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Building-mode sessions require the agent-developer role. "
+                "Ask an admin to promote your account."
+            ),
+        )
 
     updated_session = SessionService.update_session_mode(
         db=session,

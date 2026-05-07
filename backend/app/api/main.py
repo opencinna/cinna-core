@@ -6,11 +6,14 @@ from app.api.routes import (
     admin_environments,
     agent_app_mcp_routes,
     agent_status,
+    agent_webhooks,
     app_agent_routes,
+    app_data,
+    bundles,
+    catalog,
     cli,
     activities,
     agents,
-    agent_shares,
     agentic_teams,
     ai_credentials,
     credentials,
@@ -22,6 +25,7 @@ from app.api.routes import (
     external_agents,
     identity,
     identity_contacts,
+    installs,
     mcp_connectors,
     mcp_consent,
     events,
@@ -64,11 +68,15 @@ api_router = APIRouter()
 api_router.include_router(login.router)
 api_router.include_router(oauth.router)
 api_router.include_router(users.router)
+api_router.include_router(app_data.router)  # Must be after users.router (shares /users/me/* prefix space)
 api_router.include_router(utils.router)
 api_router.include_router(agent_status.router)   # Must be before agents.router — /agents/status vs /agents/{id}
 api_router.include_router(agents.router)
+api_router.include_router(installs.router)  # Bundle install actions on /agents/{id}
+api_router.include_router(bundles.router)
+api_router.include_router(catalog.router)
+api_router.include_router(agent_webhooks.router)
 api_router.include_router(agentic_teams.router)
-api_router.include_router(agent_shares.router)
 api_router.include_router(access_tokens.router)
 api_router.include_router(guest_shares.router)
 api_router.include_router(guest_share_auth_router)

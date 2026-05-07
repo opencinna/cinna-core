@@ -1,11 +1,11 @@
 from uuid import UUID
+import uuid
 import asyncio
 import logging
 from datetime import UTC, datetime
 from sqlalchemy.orm.attributes import flag_modified
 from sqlmodel import Session, select
 from app.models import Agent, AgentCreate, AgentPublic, AgentUpdate, User, SessionCreate, AgentHandoverConfig, AgentEnvironment, Session as ChatSession, AgentSdkConfig, InputTaskCreate
-from app.models.sharing.agent_share import AgentShare
 from app.models.environments.environment import AgentEnvironmentCreate
 from app.services.environments.environment_service import EnvironmentService
 from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
@@ -89,23 +89,19 @@ def _increment_version(version: str) -> str:
 class AgentService:
     @staticmethod
     def to_public_with_clone_info(session: Session, agent: Agent) -> AgentPublic:
-        """Convert Agent to AgentPublic with resolved clone information."""
-        parent_agent_name = None
-        shared_by_email = None
+        """Convert Agent to AgentPublic with resolved bundle information.
 
-        if agent.is_clone and agent.parent_agent_id:
-            parent = session.get(Agent, agent.parent_agent_id)
-            if parent:
-                parent_agent_name = parent.name
+        The legacy method name is kept temporarily for callers; the body now
+        resolves the new ``installed_revision_number`` for installs of
+        published bundles.
+        """
+        from app.models.bundles.agent_bundle_revision import AgentBundleRevision
 
-                stmt = select(AgentShare).where(
-                    AgentShare.cloned_agent_id == agent.id
-                )
-                share = session.exec(stmt).first()
-                if share:
-                    shared_by_user = session.get(User, share.shared_by_user_id)
-                    if shared_by_user:
-                        shared_by_email = shared_by_user.email
+        installed_revision_number: int | None = None
+        if agent.installed_revision_id:
+            rev = session.get(AgentBundleRevision, agent.installed_revision_id)
+            if rev:
+                installed_revision_number = rev.revision_number
 
         return AgentPublic(
             id=agent.id,
@@ -128,13 +124,16 @@ class AgentService:
             updated_at=agent.updated_at,
             owner_id=agent.owner_id,
             user_workspace_id=agent.user_workspace_id,
-            is_clone=agent.is_clone,
-            clone_mode=agent.clone_mode,
+            bundle_id=agent.bundle_id,
+            bundle_uuid=agent.bundle_uuid,
+            installed_revision_id=agent.installed_revision_id,
+            installed_revision_number=installed_revision_number,
+            is_publisher_install=agent.is_publisher_install,
             update_mode=agent.update_mode,
             pending_update=agent.pending_update,
-            parent_agent_id=agent.parent_agent_id,
-            parent_agent_name=parent_agent_name,
-            shared_by_email=shared_by_email,
+            pending_update_at=agent.pending_update_at,
+            last_sync_at=agent.last_sync_at,
+            last_update_status=agent.last_update_status,
             is_general_assistant=agent.is_general_assistant,
         )
 
@@ -163,7 +162,7 @@ class AgentService:
         Returns:
             Tuple of (list of agents, total count)
         """
-        from sqlalchemy import func, or_
+        from sqlalchemy import and_, func, or_
 
         count_statement = (
             select(func.count())
@@ -176,10 +175,19 @@ class AgentService:
         )
 
         if apply_workspace_filter:
-            # Include agents matching workspace OR clones (clones have user_workspace_id=None)
+            # Include agents in the requested workspace, plus foreign-bundle
+            # installs (workspace-agnostic — they have user_workspace_id=None
+            # and bundle_uuid set, but is_publisher_install is False) and the
+            # General Assistant. Plain default-workspace agents are NOT shown
+            # in non-default views.
+            foreign_install_condition = and_(
+                Agent.bundle_uuid.is_not(None),
+                Agent.is_publisher_install == False,
+                Agent.user_workspace_id.is_(None),
+            )
             workspace_condition = or_(
                 Agent.user_workspace_id == workspace_filter,
-                Agent.is_clone == True,
+                foreign_install_condition,
                 Agent.is_general_assistant == True,
             )
             count_statement = count_statement.where(workspace_condition)
@@ -193,7 +201,16 @@ class AgentService:
     @staticmethod
     async def create_agent(session: Session, user_id: UUID, data: AgentCreate, user: User) -> Agent:
         """Create new agent with default environment"""
-        agent = Agent.model_validate(data, update={"owner_id": user_id})
+        from app.services.bundles.bundle_id_service import BundleIdService
+
+        # Generate the agent UUID up front so the auto-generated bundle_id can
+        # be derived from it before the row is inserted (the column is NOT NULL).
+        agent_id = uuid.uuid4()
+        bundle_id = BundleIdService.generate_bundle_id(agent_id)
+        agent = Agent.model_validate(
+            data,
+            update={"owner_id": user_id, "id": agent_id, "bundle_id": bundle_id},
+        )
         session.add(agent)
         session.commit()
         session.refresh(agent)
@@ -371,7 +388,8 @@ class AgentService:
         Delete agent and cleanup all associated resources.
 
         Steps:
-        1. Handle clone relationships (detach clones or update share records)
+        1. Mark the user's app-data volume orphaned (Phase 2 — preserves
+           per-user data across uninstall/reinstall cycles).
         2. Delete all of the agent's sessions (env->session FK is SET NULL, so
            sessions would otherwise linger orphaned after their environments
            are cascade-deleted). Messages cascade from sessions.
@@ -380,7 +398,7 @@ class AgentService:
            - EnvironmentService.delete_environment handles clearing active_environment_id
         5. Delete agent
         """
-        from app.models import AgentShare
+        from app.services.bundles.app_data_service import AppDataService
 
         agent = session.get(Agent, agent_id)
         if not agent:
@@ -390,31 +408,20 @@ class AgentService:
         if agent.is_general_assistant:
             raise ValueError("The General Assistant cannot be deleted")
 
-        # If this agent is a clone, update the share record status to 'deleted'
-        if agent.is_clone:
-            stmt = select(AgentShare).where(AgentShare.cloned_agent_id == agent_id)
-            share = session.exec(stmt).first()
-            if share:
-                share.status = "deleted"
-                share.cloned_agent_id = None
-                session.add(share)
-                logger.info(f"Updated share {share.id} status to 'deleted' for deleted clone {agent_id}")
-                session.commit()
-
-        # If this agent has clones (is a parent), detach them first
-        if not agent.is_clone:
-            stmt = select(Agent).where(Agent.parent_agent_id == agent_id)
-            clones = session.exec(stmt).all()
-            for clone in clones:
-                clone.is_clone = False
-                clone.parent_agent_id = None
-                clone.clone_mode = None
-                clone.pending_update = False
-                clone.pending_update_at = None
-                session.add(clone)
-                logger.info(f"Detached clone {clone.id} from deleted parent {agent_id}")
-            if clones:
-                session.commit()
+        # Mark the per-user app-data volume orphaned BEFORE deleting the row.
+        # ``AppDataService.wipe_volume`` requires ``is_orphaned=true``, and
+        # the volume is keyed on (user_id, bundle_id) so a future reinstall
+        # of the same bundle reattaches automatically.
+        try:
+            volume = AppDataService.get_by_user_bundle(
+                session, agent.owner_id, agent.bundle_id
+            )
+            if volume and not volume.is_orphaned:
+                AppDataService.mark_orphaned(session, volume)
+        except Exception as e:
+            logger.warning(
+                f"Failed to mark app-data volume orphaned for agent {agent_id}: {e}"
+            )
 
         # Delete sessions tied to this agent before deleting its environments.
         # env->session FK is ON DELETE SET NULL (so individual env deletion
@@ -506,7 +513,13 @@ class AgentService:
                 user_workspace_id=user_workspace_id,
             )
 
-            agent = Agent.model_validate(agent_data, update={"owner_id": user.id})
+            from app.services.bundles.bundle_id_service import BundleIdService
+            agent_id = uuid.uuid4()
+            bundle_id = BundleIdService.generate_bundle_id(agent_id)
+            agent = Agent.model_validate(
+                agent_data,
+                update={"owner_id": user.id, "id": agent_id, "bundle_id": bundle_id},
+            )
             session.add(agent)
             session.commit()
             session.refresh(agent)

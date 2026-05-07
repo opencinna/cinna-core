@@ -77,6 +77,29 @@ def _disable_general_assistant(
     assert r.status_code == 200, f"Failed to disable GA: {r.text}"
 
 
+def _promote_user_to_developer(
+    client: TestClient,
+    superuser_headers: dict[str, str],
+    target_email: str,
+) -> None:
+    """Promote a user (looked up by email) to ``agent-developer``.
+
+    Phase 3 — ``POST /users/me/general-assistant`` is gated on the
+    developer role because it creates a real ``Agent`` row.  Test
+    fixtures that exercise the GA flow as a freshly-signed-up user
+    must promote that user first.
+    """
+    r = client.get(f"{API}/users/", headers=superuser_headers)
+    assert r.status_code == 200, r.text
+    target = next(u for u in r.json()["data"] if u["email"] == target_email)
+    r = client.patch(
+        f"{API}/users/{target['id']}/role",
+        headers=superuser_headers,
+        json={"role": "agent-developer"},
+    )
+    assert r.status_code == 200, r.text
+
+
 def _setup_user_for_ga(
     client: TestClient,
     token_headers: dict[str, str],
@@ -86,6 +109,10 @@ def _setup_user_for_ga(
     Required before calling POST /users/me/general-assistant because:
     - general_assistant_enabled is False for existing users (migration server_default=false)
     - GA creation calls EnvironmentService.create_environment which validates an AI credential
+
+    Note: the *developer-role* prerequisite (Phase 3) is enforced
+    separately by tests via ``_promote_user_to_developer`` because
+    promotion needs superuser headers, not the target's headers.
     """
     _enable_general_assistant(client, token_headers)
     create_random_ai_credential(
@@ -238,8 +265,11 @@ def test_general_assistant_creation_for_new_user(
     assert r_me.status_code == 200
     assert r_me.json()["general_assistant_enabled"] is False
 
-    # ── Phase 3: Enable GA and create AI credential ───────────────────────
+    # ── Phase 3: Enable GA, create AI credential, promote to developer ────
+    # GA creation creates an Agent row; Phase 3 gates that on the
+    # agent-developer role.  Promote first.
     _setup_user_for_ga(client, new_user_headers)
+    _promote_user_to_developer(client, superuser_token_headers, email)
 
     # ── Phase 4: Create GA → success ──────────────────────────────────────
     ga = _create_general_assistant(client, new_user_headers)
@@ -293,21 +323,19 @@ def test_general_assistant_cannot_be_deleted(
     assert r_get.json()["is_general_assistant"] is True
 
 
-# ── C. GA Share Protection ────────────────────────────────────────────────────
+# ── C. GA Publish Protection ──────────────────────────────────────────────────
 
 
-def test_general_assistant_cannot_be_shared(
+def test_general_assistant_cannot_be_published(
     client: TestClient,
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
-    Attempting to share a GA agent returns 403.
-    A normal agent can be shared normally.
+    Attempting to publish a GA agent as a bundle returns 400.
 
-      1. Setup user and create GA
-      2. Create a second user (the share target)
-      3. POST /agents/{ga_id}/shares → 403
-      4. Create a regular agent and share it → 200
+    Phase 2 — sharing-by-clone is gone; the moral equivalent is the publish
+    flow that turns an agent into a bundle. The GA is workspace-agnostic
+    and singleton-per-user, so it cannot be packaged.
     """
     # ── Phase 1: Setup and create GA ──────────────────────────────────────
     _setup_user_for_ga(client, superuser_token_headers)
@@ -315,36 +343,17 @@ def test_general_assistant_cannot_be_shared(
     ga_id = ga["id"]
     drain_tasks()
 
-    # ── Phase 2: Create target user ───────────────────────────────────────
-    target_user, _ = create_random_user_with_headers(client)
-    target_email = target_user["email"]
-
-    # ── Phase 3: Share GA → 403 ───────────────────────────────────────────
+    # ── Phase 2: Publish GA → 400 ─────────────────────────────────────────
     r = client.post(
-        f"{API}/agents/{ga_id}/shares",
+        f"{API}/agents/{ga_id}/publish",
         headers=superuser_token_headers,
-        json={
-            "shared_with_email": target_email,
-            "share_mode": "user",
-        },
+        json={"release_notes": "should not work"},
     )
-    assert r.status_code == 403, f"Expected 403 when sharing GA, got {r.status_code}"
+    assert r.status_code == 400, (
+        f"Expected 400 when publishing GA, got {r.status_code}: {r.text}"
+    )
     detail = r.json()["detail"]
-    assert "General Assistant" in detail or "cannot be shared" in detail.lower()
-
-    # ── Phase 4: Regular agent can be shared ──────────────────────────────
-    regular_agent = create_agent_via_api(client, superuser_token_headers, name="Shareable Agent")
-    drain_tasks()
-    r_share = client.post(
-        f"{API}/agents/{regular_agent['id']}/shares",
-        headers=superuser_token_headers,
-        json={
-            "shared_with_email": target_email,
-            "share_mode": "user",
-        },
-    )
-    assert r_share.status_code == 200, f"Expected 200 when sharing regular agent, got {r_share.text}"
-    assert r_share.json()["status"] == "pending"
+    assert "General Assistant" in detail or "cannot be published" in detail.lower()
 
 
 # ── D. GA Session Mode ────────────────────────────────────────────────────────
@@ -649,14 +658,17 @@ def test_general_assistant_isolation_between_users(
       4. User B listing agents sees only their own GA
     """
     # ── Phase 1: User A ────────────────────────────────────────────────────
-    _user_a, headers_a = create_random_user_with_headers(client)
+    user_a, headers_a = create_random_user_with_headers(client)
     _setup_user_for_ga(client, headers_a)
+    # Phase 3 — GA creation is developer-only.
+    _promote_user_to_developer(client, superuser_token_headers, user_a["email"])
     ga_a = _create_general_assistant(client, headers_a)
     drain_tasks()
 
     # ── Phase 2: User B ────────────────────────────────────────────────────
-    _user_b, headers_b = create_random_user_with_headers(client)
+    user_b, headers_b = create_random_user_with_headers(client)
     _setup_user_for_ga(client, headers_b)
+    _promote_user_to_developer(client, superuser_token_headers, user_b["email"])
     ga_b = _create_general_assistant(client, headers_b)
     drain_tasks()
 

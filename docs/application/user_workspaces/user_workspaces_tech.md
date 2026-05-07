@@ -5,17 +5,21 @@
 ### Backend
 
 - **Model**: `backend/app/models/users/user_workspace.py` - `UserWorkspace`, `UserWorkspaceBase`, `UserWorkspaceCreate`, `UserWorkspaceUpdate`, `UserWorkspacePublic`, `UserWorkspacesPublic`
+- **User model**: `backend/app/models/users/user.py` - `User.workspaces_enabled` (boolean, default `false`); also exposed on `UserPublic` and accepted on `UserUpdateMe`
 - **Service**: `backend/app/services/users/user_workspace_service.py` - `UserWorkspaceService`
-- **Routes**: `backend/app/api/routes/user_workspaces.py` - CRUD endpoints
+- **Routes**: `backend/app/api/routes/user_workspaces.py` - CRUD endpoints; `backend/app/api/routes/users.py` `PATCH /users/me` accepts `workspaces_enabled`
 - **Migrations**:
   - `backend/app/alembic/versions/3a154fd039f5_add_user_workspaces_support.py` - initial table + FK columns on 4 tables
   - `backend/app/alembic/versions/88ff71b370a1_add_icon_field_to_user_workspace.py` - icon column
   - `backend/app/alembic/versions/8b77ba42b38d_change_credential_workspace_fk_to_set_.py` - credential FK behavior
+  - `backend/app/alembic/versions/h6d7e8f9a0b1_add_user_workspaces_enabled.py` - `user.workspaces_enabled` boolean column, default `false`
 
 ### Frontend
 
-- **Hook**: `frontend/src/hooks/useWorkspace.tsx` - `useWorkspace()` hook, `WorkspaceProvider` context, `getActiveWorkspaceId()`, `setActiveWorkspaceId()`
+- **Hook**: `frontend/src/hooks/useWorkspace.tsx` - `useWorkspace()` hook, `WorkspaceProvider` context, `getActiveWorkspaceId()`, `setActiveWorkspaceId()`. Reads `workspaces_enabled` from the cached `["currentUser"]` query and persists changes via `PATCH /users/me`
 - **Switcher**: `frontend/src/components/Common/WorkspaceSwitcher.tsx` - `SidebarWorkspaceSwitcher`
+- **Sidebar host**: `frontend/src/components/Sidebar/AppSidebar.tsx` - reads `workspacesEnabled` to render or hide the switcher
+- **Settings card**: `frontend/src/components/UserSettings/WorkspaceSettings.tsx` - hosts the Workspaces Enabled toggle in the card header (corner switch pattern), disables "New Workspace" when off
 - **Create Modal**: `frontend/src/components/Common/CreateWorkspaceModal.tsx` - `CreateWorkspaceModal`
 - **Icon Config**: `frontend/src/config/workspaceIcons.ts` - `WORKSPACE_ICONS` array, `getWorkspaceIcon()` helper
 
@@ -123,6 +127,9 @@ Central workspace state management. Returns:
 - `workspaces` - list of user workspaces (from `useQuery`)
 - `activeWorkspace` - current workspace object or `"default"`
 - `activeWorkspaceId` - current workspace ID or `null`
+- `workspaceFilter` - derived value to pass into list queries as `userWorkspaceId`. `undefined` when the toggle is off (no filter), `""` for Default, the workspace UUID otherwise
+- `workspacesEnabled` - boolean reflecting the user's toggle state. Read from the cached `["currentUser"]` query (`UserPublic.workspaces_enabled`)
+- `setWorkspacesEnabled(enabled)` - calls `PATCH /users/me` with `{workspaces_enabled: enabled}`, optimistically updates the cached `["currentUser"]` so dependent UI flips immediately, and invalidates the query on settle. Errors are toasted and the optimistic update is rolled back
 - `switchWorkspace()` - updates localStorage and state
 - `createWorkspaceMutation` - creates workspace and auto-switches to it
 - `deleteWorkspaceMutation` - deletes workspace, switches to default if was active
@@ -171,6 +178,38 @@ List page components use `key={activeWorkspaceId ?? 'default'}`:
 - `undefined` → no filter (returns all entities)
 - `""` (empty string) → normalized to `null` by `getActiveWorkspaceId()`
 - Frontend sends `null` for default, UUID for specific workspace
+
+### `workspaceFilter` Helper
+
+All list-query call sites now read `workspaceFilter` from `useWorkspace()` instead of `activeWorkspaceId`, so the toggle and the active workspace are funneled through a single value.
+
+Resolution table:
+
+| Toggle | activeWorkspaceId | `workspaceFilter` | What is sent on the wire |
+|--------|-------------------|-------------------|--------------------------|
+| off | any | `undefined` | parameter omitted → backend `None` → no filter |
+| on | `null` | `""` | empty string → backend filters for `user_workspace_id IS NULL` |
+| on | `<uuid>` | `<uuid>` | UUID string → backend filters for that workspace |
+
+Create operations follow the same pattern but normalize `""` to `undefined` so default-workspace creates persist `user_workspace_id = null`: `user_workspace_id: workspaceFilter || undefined`.
+
+### `workspacesEnabled` Persistence
+
+The toggle state is stored on `User.workspaces_enabled` (boolean column, default `false`). The hook reads it via the cached `["currentUser"]` query and writes it through `PATCH /users/me`. There is no localStorage fallback — the column default makes the experience consistent across browsers and devices, and existing users see the toggle off until they opt in.
+
+Database schema reference: `backend/app/models/users/user.py` (`User` table model), migration `backend/app/alembic/versions/h6d7e8f9a0b1_add_user_workspaces_enabled.py`.
+
+### Agent List Foreign-Install Handling
+
+`AgentService.list_agents` (`backend/app/services/agents/agent_service.py`) builds the workspace `WHERE` clause as:
+
+```
+user_workspace_id == workspace_filter
+OR (bundle_uuid IS NOT NULL AND is_publisher_install = false AND user_workspace_id IS NULL)
+OR is_general_assistant = true
+```
+
+Foreign-bundle installs are workspace-agnostic — they have `user_workspace_id IS NULL` because they were created from another publisher's bundle and never assigned to a workspace. Including them in every workspace view keeps installed bundles reachable regardless of which workspace the user is currently viewing. Plain default-workspace agents (NULL workspace, no bundle linkage) are NOT included by this OR — they only appear when the active filter itself targets the Default workspace.
 
 ## Security
 

@@ -9,7 +9,7 @@ An **Agent** is the logical definition layer of the platform — a persistent co
 - **Agent** — a named, owned entity with prompts, SDK selection, credentials, and integration settings; workspace-scoped
 - **Active Environment** — the environment the agent currently routes sessions to (`active_environment_id`); can be swapped for blue-green deployment
 - **Agent Config** — the union of the core agent record plus its linked sub-entities (schedules, handover configs, plugins, email settings, MCP connectors)
-- **Clone** — a copy of an agent shared with another user; clones sync from the parent agent based on `update_mode` (automatic or manual)
+- **Install** — a user's running copy of a published bundle; seeded from the latest bundle revision and linked to a persistent per-user App Data volume
 
 ## Agent Configuration Areas
 
@@ -77,10 +77,15 @@ Agents can be exposed as remote MCP tool servers via named connectors, each with
 
 See [MCP Integration](../../application/mcp_integration/agent_mcp_architecture.md)
 
-### Sharing & Cloning
-An agent can be shared with other users as a read-only clone ("user" mode) or an editable clone ("builder" mode). Guest tokens provide time-limited unauthenticated access. Update propagation from parent to clone follows the `update_mode` setting.
+### Webhooks
+Per-agent HTTP webhook endpoints let external systems trigger the agent on demand. Each webhook is owner-only (not visible to shared or guest users) and carries its own bearer token. Two trigger types: session (starts a new agent session seeded with the incoming payload) and script (runs a shell command in the agent's Docker environment). Managed via the **Integrations tab > Webhooks card**.
 
-See [Agent Sharing](../../agents/agent_sharing/agent_sharing.md)
+See [Agent Webhooks](../../agents/agent_webhooks/agent_webhooks.md)
+
+### Bundles & Installs
+An agent developer can **publish** their agent as a versioned bundle. Other users **install** the bundle, each getting their own running copy plus a persistent per-user App Data area. The publisher can push updates to all installs; users choose manual or automatic update mode. Guest tokens continue to provide time-limited unauthenticated access to a user's install.
+
+See [Agent Bundles & Installs](../../agents/agent_bundles/agent_bundles.md) · [Agent App Data](../../agents/agent_app_data/agent_app_data.md) · [Guest Sharing](../../agents/guest_sharing/guest_sharing.md)
 
 ## Architecture Overview
 
@@ -94,13 +99,14 @@ Agent (config entity)
   ├── Plugins (per mode) ────────────→ Loaded into container
   │
   ├── Schedulers ─────────────────────→ Trigger sessions automatically (CRON)
+  ├── Webhooks ───────────────────────→ Trigger sessions/scripts from external HTTP calls
   ├── Handover Configs ───────────────→ Delegate tasks to other agents
   │
   ├── Email Integration ──────────────→ Receive emails → create sessions/tasks
   ├── A2A Config (skills) ────────────→ Expose agent to external A2A clients
   ├── MCP Connectors ─────────────────→ Expose agent as MCP tool server
   │
-  └── Sharing (clones / guests) ──────→ Other users / unauthenticated access
+  └── Bundles & Installs ──────────────→ Published to catalog; other users install
 ```
 
 ## Agent Creation Wizard
@@ -119,3 +125,6 @@ See [New Agent Creation Wizard](./new_agent_wizard.md)
 | [User Workspaces](../../application/user_workspaces/user_workspaces.md) | Agents are isolated per workspace via `user_workspace_id` |
 | [Knowledge Sources](../../application/knowledge_sources/knowledge_sources.md) | Knowledge retrieval is available to agents via a tool injected in the environment |
 | [Input Tasks](../../application/input_tasks/input_tasks.md) | Agents create and receive tasks; `refiner_prompt` drives task refinement |
+| [Agent Bundles & Installs](../../agents/agent_bundles/agent_bundles.md) | Agent developers publish agents as versioned bundles from the Bundle tab; the agent record IS the install record |
+| [Guest Sharing](../../agents/guest_sharing/guest_sharing.md) | Guest Share Links card on Integrations tab — owner creates disposable URLs for unauthenticated chat access |
+| [User Roles](../../application/user_roles/user_roles.md) | Agent create/update/delete and building-mode sessions require `agent-developer` role |

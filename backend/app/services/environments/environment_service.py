@@ -195,14 +195,16 @@ class EnvironmentService:
                     google_api_key=credential_bag.get("google_api_key"),
                 )
 
-                # Copy workspace from source environment if provided (for clones)
+                # Copy workspace from source environment if provided. The
+                # source-env path is still used for blue-green rebuild flows
+                # and admin "duplicate environment" paths; bundle-driven
+                # installs use ``InstallService`` which seeds from the
+                # revision snapshot directly (not via this method).
                 if source_environment_id:
-                    from app.services.sharing.agent_clone_service import AgentCloneService
+                    from app.services.environments.workspace_copy import copy_env_to_env
+
                     logger.info(f"Copying workspace from {source_environment_id} to {env_id}")
-                    await AgentCloneService.copy_workspace(
-                        original_env_id=source_environment_id,
-                        clone_env_id=env_id
-                    )
+                    copy_env_to_env(source_environment_id, env_id)
 
                 # Auto-start if requested (typically for default agent environments)
                 if auto_start and environment.status == "stopped":

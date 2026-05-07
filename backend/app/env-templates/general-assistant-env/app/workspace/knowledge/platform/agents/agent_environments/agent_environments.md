@@ -156,11 +156,15 @@ Each agent has a configurable inactivity threshold (agent-level setting, not per
 
 **Always preserved** (across all operations including rebuild):
 - All workspace data (scripts, files, docs, credentials, databases, logs)
+- App Data (`app-data/storage/`, `app-data/uploads/`, `app-data/cache/`) — persistent per-user, per-bundle volume; survives uninstall
 - User-created knowledge files (not in template)
 - Workspace dependencies (`workspace_requirements.txt`)
 - System packages (`workspace_system_packages.txt`)
 - Docker volumes
 - Environment configuration and agent prompts
+
+**Replaced on apply-update** (bundle-owned folders):
+- `scripts/`, `docs/`, `knowledge/`, `files/`, `workspace_requirements.txt`, `workspace_system_packages.txt` — replaced from the new bundle revision snapshot; `app-data/` and `credentials/` are never touched
 
 **Updated during rebuild**:
 - Docker compose template (overwritten from template dir)

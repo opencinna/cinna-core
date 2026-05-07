@@ -3,6 +3,7 @@ import { AgentsService } from "@/client"
 import { EnvironmentCard } from "@/components/Environments/EnvironmentCard"
 import { AddEnvironment } from "@/components/Environments/AddEnvironment"
 import useCustomToast from "@/hooks/useCustomToast"
+import useRole from "@/hooks/useRole"
 import {
   Select,
   SelectContent,
@@ -26,6 +27,11 @@ interface AgentEnvironmentsTabProps {
 export function AgentEnvironmentsTab({ agentId }: AgentEnvironmentsTabProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
+  // Phase 3 — agent-user view of this tab is read-only.  Activate /
+  // add / inactivity-edit are developer-only controls; the EnvironmentCard
+  // still surfaces sessions and start-conversation links so the install→
+  // chat flow works.
+  const { isDeveloper } = useRole()
 
   const { data: agentData } = useQuery({
     queryKey: ["agent", agentId],
@@ -119,44 +125,47 @@ export function AgentEnvironmentsTab({ agentId }: AgentEnvironmentsTabProps) {
         <div>
           <h2 className="text-2xl font-bold">Environments</h2>
           <p className="text-muted-foreground">
-            Manage runtime environments for your agent. One environment must be active and running
-            to create new sessions.
+            {isDeveloper
+              ? "Manage runtime environments for your agent. One environment must be active and running to create new sessions."
+              : "Active environment for this agent. Use it to start conversations."}
           </p>
         </div>
-        <AddEnvironment agentId={agentId} />
+        {isDeveloper && <AddEnvironment agentId={agentId} />}
       </div>
 
-      <div className="flex items-center gap-6 flex-wrap">
-        <div className="flex items-center gap-3">
-          <label
-            htmlFor="inactivity-period"
-            className="text-sm font-medium text-muted-foreground whitespace-nowrap"
-          >
-            Auto-suspend after inactivity
-          </label>
-          <Select
-            value={agentData?.inactivity_period_limit ?? "default"}
-            onValueChange={(value) => updateInactivityMutation.mutate(value)}
-            disabled={updateInactivityMutation.isPending}
-          >
-            <SelectTrigger id="inactivity-period" className="w-[200px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {INACTIVITY_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+      {isDeveloper && (
+        <div className="flex items-center gap-6 flex-wrap">
+          <div className="flex items-center gap-3">
+            <label
+              htmlFor="inactivity-period"
+              className="text-sm font-medium text-muted-foreground whitespace-nowrap"
+            >
+              Auto-suspend after inactivity
+            </label>
+            <Select
+              value={agentData?.inactivity_period_limit ?? "default"}
+              onValueChange={(value) => updateInactivityMutation.mutate(value)}
+              disabled={updateInactivityMutation.isPending}
+            >
+              <SelectTrigger id="inactivity-period" className="w-[200px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {INACTIVITY_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
-      </div>
+      )}
 
       {environments.length === 0 ? (
         <div className="text-center py-12 border-2 border-dashed rounded-lg">
           <p className="text-muted-foreground mb-4">No environments yet</p>
-          <AddEnvironment agentId={agentId} />
+          {isDeveloper && <AddEnvironment agentId={agentId} />}
         </div>
       ) : (
         <div className="space-y-4">
@@ -168,12 +177,15 @@ export function AgentEnvironmentsTab({ agentId }: AgentEnvironmentsTabProps) {
               <EnvironmentCard
                 environment={activeEnvironment}
                 agentId={agentId}
-                onActivate={() => handleActivate(activeEnvironment.id)}
+                onActivate={
+                  isDeveloper ? () => handleActivate(activeEnvironment.id) : undefined
+                }
+                readOnly={!isDeveloper}
               />
             </div>
           )}
 
-          {inactiveEnvironments.length > 0 && (
+          {isDeveloper && inactiveEnvironments.length > 0 && (
             <div>
               <h3 className="text-sm font-semibold text-muted-foreground mb-2">
                 OTHER ENVIRONMENTS

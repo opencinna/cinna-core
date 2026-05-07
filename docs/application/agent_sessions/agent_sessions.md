@@ -220,7 +220,7 @@ Message Flow:
 - **[Email Integration / Email Sessions](../email_integration/email_sessions.md)** — Email-initiated sessions with threading, auto-reply, and session context injection
 - **[A2A Protocol](../a2a_integration/a2a_protocol/a2a_protocol.md)** — External A2A clients create and manage sessions via JSON-RPC; session maps 1:1 to A2A Task concept
 - **[MCP Integration](../mcp_integration/agent_mcp_connector.md)** — MCP connector calls create platform sessions; `MCPSessionMeta` tracks authenticated MCP user identity
-- **[Guest Sharing](../../agents/agent_sharing/guest_sharing.md)** — Guest sessions use owner's environment with `guest_share_id` scoping; conversation mode only
+- **[Guest Sharing](../../agents/guest_sharing/guest_sharing.md)** — Guest sessions use owner's environment with `guest_share_id` scoping; conversation mode only; token-based unauthenticated access to an agent install
 - **[Agent Handover](../../agents/agent_handover/agent_handover.md)** — Agent's `create_agent_task` tool creates sub-tasks that spawn child sessions; visible in Sub-tasks panel
 - **[Agent Activities](../agent_activities/agent_activities.md)** — Session state changes (streaming completed, result state set) generate activity feed entries
 - **[Agent Environment Data Management](../../agents/agent_environment_data_management/agent_environment_data_management.md)** — Prompt sync happens after building mode sessions complete

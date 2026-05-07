@@ -231,6 +231,21 @@ class Settings(BaseSettings):
     RUN_COMMAND_TIMEOUT_SECONDS: int = 300
     RUN_COMMAND_MAX_OUTPUT_BYTES: int = 262144  # 256 KB
 
+    # Bundle / App Data Storage (Phase 1 — agent bundles & installs)
+    # ``BUNDLE_STORAGE_DIR`` holds bundle revision snapshots:
+    #   <BUNDLE_STORAGE_DIR>/<bundle_id>/<revision_number>/
+    # ``APP_DATA_STORAGE_DIR`` holds per-(user, bundle) persistent volumes:
+    #   <APP_DATA_STORAGE_DIR>/<user_id>/<bundle_id>/{storage,uploads,cache}
+    # Both are created lazily by the services with mode 0o755.
+    BUNDLE_STORAGE_DIR: str = "/app/data/bundles"
+    APP_DATA_STORAGE_DIR: str = "/app/data/app-data"
+
+    # Host-side path to ``APP_DATA_STORAGE_DIR`` for docker-compose volume
+    # mounts. Mirrors ``HOST_AGENT_ENVIRONMENTS_DIR`` for Docker-in-Docker
+    # setups; falls back to ``APP_DATA_STORAGE_DIR`` when None (local dev,
+    # backend running on the host directly).
+    HOST_APP_DATA_DIR: str | None = None
+
     # File Upload Settings
     UPLOAD_BASE_PATH: str = "/app/data/uploads"
     UPLOAD_MAX_FILE_SIZE_MB: int = 100

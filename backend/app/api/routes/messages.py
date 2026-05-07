@@ -17,6 +17,7 @@ from app.services.sessions.message_service import MessageService
 from app.services.sessions.active_streaming_manager import active_streaming_manager
 from app.services.sharing.agent_guest_share_service import AgentGuestShareService
 from app.services.agents.command_service import CommandService
+from app.services.users.role_service import RoleService
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,25 @@ async def send_message_stream(
         user_id = caller.owner_id
     else:
         user_id = caller.id
+
+    # Phase 3 — building-mode message sends are developer-only.  This
+    # mirrors the gate in ``POST /sessions/`` and ``PATCH /sessions/{id}/mode``:
+    # a demoted developer's existing building session must not continue
+    # accepting new messages.  Guest callers never reach building mode
+    # (forced to conversation), so the check is scoped to authenticated
+    # users.
+    if (
+        not isinstance(caller, GuestShareContext)
+        and chat_session.mode == "building"
+        and not RoleService.is_developer(caller)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Building-mode messages require the agent-developer role. "
+                "Switch to conversation mode or ask an admin to promote your account."
+            ),
+        )
 
     # Truncate page_context to protect against oversized payloads.
     # Mirrors the same limit applied in webapp_chat.py.

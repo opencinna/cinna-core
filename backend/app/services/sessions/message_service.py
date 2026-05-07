@@ -247,8 +247,9 @@ def _build_session_context(
     context = {
         "integration_type": session_db.integration_type,
         "agent_id": str(env.agent_id) if env and env.agent_id else None,
-        "is_clone": agent.is_clone if agent else False,
-        "parent_agent_id": str(agent.parent_agent_id) if agent and agent.parent_agent_id else None,
+        "bundle_id": agent.bundle_id if agent else None,
+        "bundle_uuid": str(agent.bundle_uuid) if agent and agent.bundle_uuid else None,
+        "is_publisher_install": agent.is_publisher_install if agent else False,
         "sender_email": session_db.sender_email,
         "email_thread_id": session_db.email_thread_id,
         "backend_session_id": str(session_db.id),

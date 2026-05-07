@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
+  UsersService,
   UserWorkspacesService,
+  type UserPublic,
   type UserWorkspaceCreate,
   type UserWorkspacePublic,
 } from "@/client"
@@ -42,7 +44,13 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
   const previousWorkspaceId = useRef<string | null>(initialId)
 
   return (
-    <WorkspaceContext.Provider value={{ activeWorkspaceId, setActiveWorkspaceIdState, previousWorkspaceId }}>
+    <WorkspaceContext.Provider
+      value={{
+        activeWorkspaceId,
+        setActiveWorkspaceIdState,
+        previousWorkspaceId,
+      }}
+    >
       {children}
     </WorkspaceContext.Provider>
   )
@@ -58,7 +66,29 @@ const useWorkspace = () => {
     throw new Error('useWorkspace must be used within WorkspaceProvider')
   }
 
-  const { activeWorkspaceId, setActiveWorkspaceIdState, previousWorkspaceId } = context
+  const {
+    activeWorkspaceId,
+    setActiveWorkspaceIdState,
+    previousWorkspaceId,
+  } = context
+
+  // Workspaces-enabled preference is stored on the user profile so the
+  // setting follows the user across browsers and devices. Subscribe to
+  // the cached `["currentUser"]` query (populated by useAuth) so this
+  // hook re-renders when the toggle flips.
+  const { data: currentUser } = useQuery<UserPublic | null, Error>({
+    queryKey: ["currentUser"],
+    enabled: false, // useAuth owns the fetch; we just observe the cache
+  })
+  const workspacesEnabled = currentUser?.workspaces_enabled ?? false
+
+  // The value to send as `userWorkspaceId` on read queries:
+  //   - undefined → no filter (workspaces feature disabled)
+  //   - ""        → default workspace (NULL on backend)
+  //   - <uuid>    → specific workspace
+  const workspaceFilter: string | undefined = workspacesEnabled
+    ? (activeWorkspaceId ?? "")
+    : undefined
 
   // Load active workspace ID from localStorage on mount
   useEffect(() => {
@@ -111,6 +141,40 @@ const useWorkspace = () => {
     setActiveWorkspaceIdState(workspaceId)
   }
 
+  // Toggle whether workspace filtering is applied to UI queries.
+  // Persisted on the user profile via PATCH /users/me; the cached
+  // `["currentUser"]` query is updated optimistically so dependent UI
+  // (sidebar switcher, workspaceFilter consumers) reflects the change
+  // immediately, then invalidated once the server confirms.
+  const setWorkspacesEnabledMutation = useMutation({
+    mutationFn: (enabled: boolean) =>
+      UsersService.updateUserMe({ requestBody: { workspaces_enabled: enabled } }),
+    onMutate: async (enabled) => {
+      await queryClient.cancelQueries({ queryKey: ["currentUser"] })
+      const previous = queryClient.getQueryData<UserPublic | null>(["currentUser"])
+      if (previous) {
+        queryClient.setQueryData<UserPublic>(["currentUser"], {
+          ...previous,
+          workspaces_enabled: enabled,
+        })
+      }
+      return { previous }
+    },
+    onError: (_err, _enabled, ctx) => {
+      if (ctx?.previous) {
+        queryClient.setQueryData(["currentUser"], ctx.previous)
+      }
+      showErrorToast("Failed to update workspaces preference")
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["currentUser"] })
+    },
+  })
+
+  const setWorkspacesEnabled = (enabled: boolean) => {
+    setWorkspacesEnabledMutation.mutate(enabled)
+  }
+
   // Create new workspace
   const createWorkspaceMutation = useMutation({
     mutationFn: (data: UserWorkspaceCreate) =>
@@ -160,6 +224,9 @@ const useWorkspace = () => {
     workspaces,
     activeWorkspace,
     activeWorkspaceId,
+    workspaceFilter,
+    workspacesEnabled,
+    setWorkspacesEnabled,
     switchWorkspace,
     createWorkspaceMutation,
     deleteWorkspaceMutation,

@@ -95,5 +95,5 @@ Session creation
 - [agent_sessions](../agent_sessions/agent_sessions.md) — building mode enforcement happens inside `SessionService.create_session()` by inspecting `is_general_assistant`
 - [agent_environments](../../agents/agent_environments/agent_environments.md) — GA uses the `general-assistant-env` environment template, which extends `python-env-advanced` with `BACKEND_URL` pre-configured
 - [user_workspaces](../user_workspaces/user_workspaces.md) — GA is workspace-agnostic; workspace filtering always includes it via the `OR is_general_assistant = true` clause
-- [agent_sharing](../../agents/agent_sharing/agent_sharing.md) — sharing is explicitly blocked for GA agents in `AgentShareService.share_agent()`
+- [agent_bundles](../../agents/agent_bundles/agent_bundles.md) — publishing is explicitly blocked for GA agents (`is_general_assistant` check in `PublishService.publish()`)
 - [getting_started](../getting_started/getting_started.md) — the GA is a companion to the onboarding flow, accessible once an API key is configured

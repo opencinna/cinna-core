@@ -203,7 +203,7 @@ When a shared webapp URL is accessed and the environment is suspended:
 - **[Agent Environment Data Management](../agent_environment_data_management/agent_environment_data_management.md)** - `webapp/` included in environment cloning/syncing alongside files, scripts, docs
 - **[Agent Environment Core](../agent_environment_core/agent_environment_core.md)** - three new endpoints in agent-env FastAPI server for static files, data API, and status
 - **[Agent Prompts](../agent_prompts/agent_prompts.md)** - `WEBAPP_BUILDING.md` prompt template referenced from `BUILDING_AGENT.md`; agent reads it when user asks to build a webapp
-- **[Agent Sharing / Guest Sharing](../agent_sharing/guest_sharing.md)** - webapp shares are independent from guest shares; both can coexist on the same agent
+- **[Guest Sharing](../guest_sharing/guest_sharing.md)** - webapp shares are independent from agent guest shares; both can coexist on the same agent install
 - **[Agent Schedulers](../agent_schedulers/agent_schedulers.md)** - scheduled tasks can refresh webapp data (SQLite DB or JSON files); no new scheduler feature needed
 - **[Agent Commands](../agent_commands/agent_commands.md)** - `/webapp` command returns the first active share URL directly in chat
 

@@ -15,18 +15,18 @@ export const Route = createFileRoute("/_layout/sessions/")({
 
 function SessionsList() {
   const { setHeaderContent } = usePageHeader()
-  const { activeWorkspaceId } = useWorkspace()
+  const { activeWorkspaceId, workspaceFilter } = useWorkspace()
 
   const {
     data: sessionsData,
     isLoading: sessionsLoading,
     error: sessionsError,
   } = useQuery({
-    queryKey: ["sessions", activeWorkspaceId],
+    queryKey: ["sessions", workspaceFilter],
     queryFn: ({ queryKey }) => {
       const [, workspaceId] = queryKey
       return SessionsService.listSessions({
-        userWorkspaceId: workspaceId ?? "",
+        userWorkspaceId: workspaceId as string | undefined,
       })
     },
   })

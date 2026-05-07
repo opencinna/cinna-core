@@ -38,7 +38,7 @@ type Step = {
 function AgentCreating() {
   const navigate = useNavigate()
   const { description, mode, sdkConversation, sdkBuilding, fileIds, fileObjects } = Route.useSearch()
-  const { activeWorkspaceId } = useWorkspace()
+  const { workspaceFilter } = useWorkspace()
   const [steps, setSteps] = useState<Step[]>([
     { id: "create_agent", label: "Creating agent", status: "pending" },
     { id: "start_environment", label: "Starting default environment", status: "pending" },
@@ -56,13 +56,13 @@ function AgentCreating() {
 
   // Fetch user's credentials
   const { data: credentialsData } = useQuery({
-    queryKey: ["credentials", activeWorkspaceId],
+    queryKey: ["credentials", workspaceFilter],
     queryFn: async ({ queryKey }) => {
       const [, workspaceId] = queryKey
       const response = await CredentialsService.readCredentials({
         skip: 0,
         limit: 100,
-        userWorkspaceId: workspaceId ?? "",
+        userWorkspaceId: workspaceId as string | undefined,
       })
       return response
     },
@@ -112,7 +112,7 @@ function AgentCreating() {
             description,
             mode,
             auto_create_session: false,  // We'll create session after credential sharing
-            user_workspace_id: activeWorkspaceId || undefined,
+            user_workspace_id: workspaceFilter || undefined,
             agent_sdk_conversation: sdkConversation || undefined,
             agent_sdk_building: sdkBuilding || undefined,
           }),

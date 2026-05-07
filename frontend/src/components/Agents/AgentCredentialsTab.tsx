@@ -80,7 +80,7 @@ function getCredentialTypeLabel(type: string): string {
 export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
-  const { activeWorkspaceId } = useWorkspace()
+  const { workspaceFilter } = useWorkspace()
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [selectedCredentialId, setSelectedCredentialId] = useState<
     string | undefined
@@ -98,13 +98,13 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
 
   // Fetch user's own credentials for the add dialog
   const { data: ownedCredentialsData } = useQuery({
-    queryKey: ["credentials", activeWorkspaceId],
+    queryKey: ["credentials", workspaceFilter],
     queryFn: ({ queryKey }) => {
       const [, workspaceId] = queryKey
       return CredentialsService.readCredentials({
         skip: 0,
         limit: 100,
-        userWorkspaceId: workspaceId ?? "",
+        userWorkspaceId: workspaceId as string | undefined,
       })
     },
     enabled: isAddDialogOpen,

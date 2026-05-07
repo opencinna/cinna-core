@@ -42,7 +42,7 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
 
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
-  const { activeWorkspaceId } = useWorkspace()
+  const { workspaceFilter } = useWorkspace()
   const { isGuest } = useGuestShare()
 
   // Fetch agent credentials
@@ -60,11 +60,11 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
     data: allCredentialsData,
     isLoading: isLoadingAllCredentials,
   } = useQuery({
-    queryKey: ["credentials", activeWorkspaceId],
+    queryKey: ["credentials", workspaceFilter],
     queryFn: () => CredentialsService.readCredentials({
       skip: 0,
       limit: 100,
-      userWorkspaceId: activeWorkspaceId ?? "",
+      userWorkspaceId: workspaceFilter,
     }),
     enabled: !isGuest && activeTab === "credentials",
   })

@@ -246,6 +246,6 @@ L = Logs, E = Edit, T = Toggle enabled/disabled, D = Delete with confirmation
 - **[Agent Sessions](../../application/agent_sessions/agent_sessions.md)** — Schedule execution creates new sessions via SessionService (always for static_prompt, conditionally for script_trigger)
 - **[Agent Environments](../agent_environments/agent_environments.md)** — Script trigger executes commands inside the agent's Docker container via `/exec` endpoint; both types auto-activate environments
 - **[Agent Prompts](../agent_prompts/agent_prompts.md)** — Falls back to agent's `entrypoint_prompt` when static_prompt schedule has no custom prompt
-- **[Agent Sharing](../agent_sharing/agent_sharing.md)** — Clone agents have independent scheduler configs; schedules are not copied or synced
+- **[Agent Bundles & Installs](../agent_bundles/agent_bundles.md)** — Installed agents have independent scheduler configs; schedules are not included in bundle revision snapshots and are not synced on apply-update
 - **[Task Triggers](../../application/input_tasks/task_triggers.md)** — Separate but related feature: task-level CRON/webhook/date triggers use similar AI schedule generation
 - **[AI Functions](../../development/backend/ai_functions_development.md)** — Schedule generation uses the AI function framework with multi-provider cascade

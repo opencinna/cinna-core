@@ -110,7 +110,7 @@ Agent (conversation mode) uses create_agent_task tool
 - **Agent Environment Core** — `create_agent_task` MCP tool registered in conversation mode; handles prompt injection of available handovers. See [create_agent_task tool](../agent_environment_core/create_agent_task_tool.md)
 - **Input Tasks** — handover creates `InputTask` with `agent_initiated=true`; inbox tasks use `auto_execute=false`. See [Input Tasks](../../application/input_tasks/input_tasks.md)
 - **Agent Sessions** — direct handover creates a new session for the target agent linked to the source task. See [Agent Environment Core](../agent_environment_core/agent_environment_core.md)
-- **Agent Sharing** — clones start with empty handover configs; push updates from the parent never overwrite clone handover configuration. See [Agent Sharing](../agent_sharing/agent_sharing.md)
+- **Agent Bundles & Installs** — installed agents start with empty handover configs (not included in bundle revision snapshots); apply-update never overwrites handover configuration. See [Agent Bundles & Installs](../agent_bundles/agent_bundles.md)
 - **AI Functions** — prompt generation and task refinement use `AIFunctionsService`. See [AI Functions development guide](../../development/backend/ai_functions_development.md)
 - **Agent Activities** — Sessions created by direct handovers generate activities (running/completed/error) that notify the target agent's owner via the sidebar bell indicator. See [Agent Activities](../../application/agent_activities/agent_activities.md)
 

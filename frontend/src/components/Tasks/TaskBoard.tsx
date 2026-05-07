@@ -174,16 +174,16 @@ function BoardColumn({
 }
 
 export function TaskBoard({ teamId }: TaskBoardProps) {
-  const { activeWorkspaceId } = useWorkspace()
+  const { workspaceFilter } = useWorkspace()
   const queryClient = useQueryClient()
 
   const { data, isLoading } = useQuery({
-    queryKey: ["tasks", "board", activeWorkspaceId, teamId],
+    queryKey: ["tasks", "board", workspaceFilter, teamId],
     queryFn: ({ queryKey }) => {
       const [, , workspaceId, tid] = queryKey
       return TasksService.listTasks({
         rootOnly: true,
-        userWorkspaceId: (workspaceId as string) ?? "",
+        userWorkspaceId: workspaceId as string | undefined,
         teamId: (tid as string) || undefined,
         limit: 200,
       })

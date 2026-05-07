@@ -13,7 +13,7 @@ This feature is only active on the authenticated session page (`/session/:sessio
 1. User opens a chat session page.
 2. User types `/` in the message input.
 3. A popup appears above the input row listing all registered commands with names and descriptions.
-4. As the user types more (e.g. `/fi`), the popup filters to matching commands only.
+4. As the user types more (e.g. `/fi`), the popup filters to commands whose name contains the typed text (substring match) — e.g. `/list` matches `/run-list`.
 5. Commands that are currently unavailable (e.g. `/rebuild-env` during an active stream) appear grayed out with an "Unavailable" badge.
 6. The user can:
    - Press **ArrowDown / ArrowUp** to move through available commands (unavailable commands are skipped).
@@ -133,7 +133,12 @@ The query is only enabled when the popup is showing, reducing unnecessary API ca
 
 **Derived state**:
 ```typescript
-filteredCommands = commandsData.commands.filter(cmd => cmd.name.startsWith(message.toLowerCase()))
+// Substring match against the command name after the leading '/'.
+// Typing `/list` matches `/run-list`; typing `/` alone shows everything.
+const query = message.slice(1).toLowerCase()
+filteredCommands = query
+  ? commandsData.commands.filter(cmd => cmd.name.toLowerCase().includes(query))
+  : commandsData.commands
 ```
 
 **Keyboard bindings** (only when popup is open and filteredCommands is non-empty):

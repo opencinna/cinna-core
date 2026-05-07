@@ -57,7 +57,7 @@ function AdminUsers() {
       <>
         <div className="min-w-0">
           <h1 className="text-lg font-semibold truncate">Users</h1>
-          <p className="text-xs text-muted-foreground">Manage user accounts and permissions</p>
+          <p className="text-xs text-muted-foreground">Manage user accounts, roles, and permissions</p>
         </div>
         <AddUser />
       </>

@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router"
-import { Bot, Share2, AlertCircle, Wrench, MessageCircle } from "lucide-react"
+import { Bot, Share2, AlertCircle } from "lucide-react"
 
 import type { AgentPublic, AgentStatusPublic } from "@/client"
 import { cn } from "@/lib/utils"
@@ -45,9 +45,9 @@ export function AgentCard({ agent, status }: AgentCardProps) {
                 <CardTitle className="text-lg break-words">
                   {agent.name}
                 </CardTitle>
-                {/* Clone and update indicators */}
+                {/* Bundle and update indicators */}
                 <div className="flex gap-1 shrink-0">
-                  {agent.is_clone && (
+                  {agent.bundle_uuid && !agent.is_publisher_install && (
                     <Share2 className="h-3.5 w-3.5 text-muted-foreground" />
                   )}
                   {agent.pending_update && (
@@ -58,30 +58,6 @@ export function AgentCard({ agent, status }: AgentCardProps) {
                   )}
                 </div>
               </div>
-
-              {/* Clone mode badge */}
-              {agent.is_clone && agent.clone_mode && (
-                <Badge
-                  variant="secondary"
-                  className={`text-xs mt-1.5 ${
-                    agent.clone_mode === "builder"
-                      ? "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200"
-                      : "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
-                  }`}
-                >
-                  {agent.clone_mode === "builder" ? (
-                    <>
-                      <Wrench className="h-3 w-3 mr-1" />
-                      Builder Access
-                    </>
-                  ) : (
-                    <>
-                      <MessageCircle className="h-3 w-3 mr-1" />
-                      Conversation Access
-                    </>
-                  )}
-                </Badge>
-              )}
             </div>
           </div>
         </CardHeader>

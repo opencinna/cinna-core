@@ -71,5 +71,5 @@ Owner revokes share → CredentialShare record deleted → Immediate access remo
 ## Integration Points
 
 - [Agent Credentials](agent_credentials.md) - Shared credentials link to agents and sync to environments identically to owned credentials
-- [Agent Sharing](../agent_sharing/agent_sharing.md) - Credential sharing is Phase 1 of the Shared Agents implementation; shared agents use owner's shared credentials
+- [Agent Bundles & Installs](../agent_bundles/agent_bundles.md) - `required_credential_specs` in a bundle revision describes the credentials an install needs; the install wizard creates placeholders or links existing credentials at install time using the same `allow_sharing` mechanism
 - [User Workspaces](../../application/user_workspaces/user_workspaces.md) - Credentials exist within workspace context

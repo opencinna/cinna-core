@@ -42,9 +42,22 @@ interface EnvironmentCardProps {
   environment: AgentEnvironmentPublic
   agentId: string
   onActivate?: () => void
+  /**
+   * When true, the card hides developer-only mutation controls
+   * (Activate, Suspend, Rebuild, Delete).  Used by the agent-user
+   * view of the environments tab so users can see the active env
+   * without being shown CRUD affordances they can't use.
+   * Defaults to false.
+   */
+  readOnly?: boolean
 }
 
-export function EnvironmentCard({ environment, agentId, onActivate }: EnvironmentCardProps) {
+export function EnvironmentCard({
+  environment,
+  agentId,
+  onActivate,
+  readOnly = false,
+}: EnvironmentCardProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
@@ -170,67 +183,69 @@ export function EnvironmentCard({ environment, agentId, onActivate }: Environmen
           </div>
         </div>
 
-        <div className="flex flex-col gap-2">
-          {(!environment.is_active || (environment.is_active && environment.status !== "running")) && (
-            <Button
-              size="sm"
-              onClick={onActivate}
-              className="gap-1"
-              disabled={isTransitioning}
-            >
-              {isTransitioning ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Activating...
-                </>
-              ) : (
-                <>
-                  <Play className="h-4 w-4" />
-                  Activate
-                </>
-              )}
-            </Button>
-          )}
-          {environment.is_active && environment.status === "running" && (
+        {!readOnly && (
+          <div className="flex flex-col gap-2">
+            {(!environment.is_active || (environment.is_active && environment.status !== "running")) && (
+              <Button
+                size="sm"
+                onClick={onActivate}
+                className="gap-1"
+                disabled={isTransitioning}
+              >
+                {isTransitioning ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Activating...
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-4 w-4" />
+                    Activate
+                  </>
+                )}
+              </Button>
+            )}
+            {environment.is_active && environment.status === "running" && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleSuspend}
+                disabled={suspendMutation.isPending}
+                className="gap-1"
+              >
+                <Pause className="h-4 w-4" />
+                Suspend
+              </Button>
+            )}
             <Button
               size="sm"
               variant="outline"
-              onClick={handleSuspend}
-              disabled={suspendMutation.isPending}
+              onClick={handleRebuild}
+              disabled={
+                rebuildMutation.isPending ||
+                environment.status === "creating" ||
+                environment.status === "building" ||
+                environment.status === "rebuilding"
+              }
               className="gap-1"
             >
-              <Pause className="h-4 w-4" />
-              Suspend
+              <RefreshCw className={`h-4 w-4 ${rebuildMutation.isPending ? "animate-spin" : ""}`} />
+              Rebuild
             </Button>
-          )}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleRebuild}
-            disabled={
-              rebuildMutation.isPending ||
-              environment.status === "creating" ||
-              environment.status === "building" ||
-              environment.status === "rebuilding"
-            }
-            className="gap-1"
-          >
-            <RefreshCw className={`h-4 w-4 ${rebuildMutation.isPending ? "animate-spin" : ""}`} />
-            Rebuild
-          </Button>
-          {!environment.is_active && (
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={handleDelete}
-              disabled={deleteMutation.isPending}
-              className="gap-1"
-            >
-              <Trash2 className="h-4 w-4" />
-              Delete
-            </Button>
-          )}
-        </div>
+            {!environment.is_active && (
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={handleDelete}
+                disabled={deleteMutation.isPending}
+                className="gap-1"
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete
+              </Button>
+            )}
+          </div>
+        )}
       </div>
     </Card>
   )

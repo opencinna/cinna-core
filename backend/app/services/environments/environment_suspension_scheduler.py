@@ -10,7 +10,7 @@ from app.models.agents.agent import Agent
 from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
 from app.services.events.event_service import event_service
 from app.models.events.event import EventType
-from app.services.sharing.agent_clone_service import AgentCloneService
+from app.services.bundles.install_service import InstallService
 
 logger = logging.getLogger(__name__)
 
@@ -126,8 +126,25 @@ async def _check_and_suspend_environments():
                         f"is_active: {env.is_active})"
                     )
 
-                    # Apply automatic updates before suspension if this is a clone with pending updates
-                    await AgentCloneService.check_and_apply_automatic_updates(session, agent)
+                    # Apply automatic updates before suspension if this is a
+                    # bundle install with pending updates and update_mode=automatic.
+                    if (
+                        agent.bundle_uuid is not None
+                        and agent.update_mode == "automatic"
+                        and agent.pending_update
+                        and not agent.is_publisher_install
+                    ):
+                        try:
+                            await InstallService.apply_update(session, agent)
+                            logger.info(
+                                "Auto-applied bundle update for install %s before suspension",
+                                agent.id,
+                            )
+                        except Exception as e:
+                            logger.error(
+                                "Auto-apply bundle update failed for install %s: %s",
+                                agent.id, e, exc_info=True,
+                            )
 
                     # Suspend environment
                     await lifecycle_manager.suspend_environment(session, env)

@@ -26,7 +26,7 @@ interface AgentHandoversProps {
 
 export function AgentHandovers({ agent, readOnly = false }: AgentHandoversProps) {
   const { showSuccessToast, showErrorToast } = useCustomToast()
-  const { activeWorkspaceId } = useWorkspace()
+  const { workspaceFilter } = useWorkspace()
 
   // State for dialog
   const [isDialogOpen, setIsDialogOpen] = useState(false)
@@ -37,11 +37,11 @@ export function AgentHandovers({ agent, readOnly = false }: AgentHandoversProps)
 
   // Fetch all agents for selection
   const { data: agentsData } = useQuery({
-    queryKey: ["agents", activeWorkspaceId],
+    queryKey: ["agents", workspaceFilter],
     queryFn: ({ queryKey }) => {
       const [, workspaceId] = queryKey
       return AgentsService.readAgents({
-        userWorkspaceId: workspaceId ?? "",
+        userWorkspaceId: workspaceId as string | undefined,
       })
     },
   })

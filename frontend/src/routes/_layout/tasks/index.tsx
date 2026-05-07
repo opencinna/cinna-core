@@ -88,7 +88,7 @@ function TasksList() {
   const { setHeaderContent } = usePageHeader()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { activeWorkspaceId } = useWorkspace()
+  const { activeWorkspaceId, workspaceFilter } = useWorkspace()
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("open")
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>("board")
@@ -115,11 +115,11 @@ function TasksList() {
     isFetching: isFetchingAll,
     error: errorAll,
   } = useQuery({
-    queryKey: ["tasks", "all", activeWorkspaceId],
+    queryKey: ["tasks", "all", workspaceFilter],
     queryFn: () =>
       TasksService.listTasks({
         status: "all",
-        userWorkspaceId: activeWorkspaceId ?? "",
+        userWorkspaceId: workspaceFilter,
       }),
   })
 
@@ -130,11 +130,11 @@ function TasksList() {
     isFetching: isFetchingArchived,
     error: errorArchived,
   } = useQuery({
-    queryKey: ["tasks", "archived", activeWorkspaceId],
+    queryKey: ["tasks", "archived", workspaceFilter],
     queryFn: () =>
       TasksService.listTasks({
         status: "archived",
-        userWorkspaceId: activeWorkspaceId ?? "",
+        userWorkspaceId: workspaceFilter,
       }),
     enabled: statusFilter === "archived",
   })
@@ -162,12 +162,12 @@ function TasksList() {
   const error = errorAll || errorArchived
 
   const { data: agentsData } = useQuery({
-    queryKey: ["agents", activeWorkspaceId],
+    queryKey: ["agents", workspaceFilter],
     queryFn: () =>
       AgentsService.readAgents({
         skip: 0,
         limit: 100,
-        userWorkspaceId: activeWorkspaceId ?? "",
+        userWorkspaceId: workspaceFilter,
       }),
   })
 

@@ -1,18 +1,15 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 import { Bot } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useEffect } from "react"
 
-import { AgentsService, AgentSharesService } from "@/client"
-import type { PendingSharePublic } from "@/client"
+import { AgentsService } from "@/client"
 import AddAgent from "@/components/Agents/AddAgent"
 import { AgentCard } from "@/components/Agents/AgentCard"
-import { PendingAgentCard } from "@/components/Agents/PendingAgentCard"
-import { AcceptShareWizard } from "@/components/Agents/AcceptShareWizard"
 import PendingItems from "@/components/Pending/PendingItems"
+import useRole from "@/hooks/useRole"
 import useWorkspace from "@/hooks/useWorkspace"
 import { usePageHeader } from "@/routes/_layout"
-import useCustomToast from "@/hooks/useCustomToast"
 import { eventService, EventTypes } from "@/services/eventService"
 import { APP_NAME } from "@/utils"
 
@@ -28,27 +25,22 @@ export const Route = createFileRoute("/_layout/agents")({
 })
 
 function AgentsGrid() {
-  const { activeWorkspaceId } = useWorkspace()
+  const { workspaceFilter } = useWorkspace()
   const queryClient = useQueryClient()
-  const { showSuccessToast, showErrorToast } = useCustomToast()
-  const [selectedShare, setSelectedShare] = useState<PendingSharePublic | null>(
-    null
-  )
-  const [wizardOpen, setWizardOpen] = useState(false)
 
-  // Fetch owned agents (existing query)
+  // Fetch owned agents
   const {
     data,
     isLoading: agentsLoading,
     error: agentsError,
   } = useQuery({
-    queryKey: ["agents", activeWorkspaceId],
+    queryKey: ["agents", workspaceFilter],
     queryFn: async ({ queryKey }) => {
       const [, workspaceId] = queryKey
       const response = await AgentsService.readAgents({
         skip: 0,
         limit: 100,
-        userWorkspaceId: workspaceId ?? "",
+        userWorkspaceId: workspaceId as string | undefined,
       })
       return response
     },
@@ -56,10 +48,10 @@ function AgentsGrid() {
 
   // Fetch status snapshots for all agents in one batch (cache-only, cheap).
   const { data: statusesData } = useQuery({
-    queryKey: ["agentStatuses", activeWorkspaceId],
+    queryKey: ["agentStatuses", workspaceFilter],
     queryFn: () =>
       AgentsService.listAgentStatuses({
-        workspaceId: activeWorkspaceId ?? undefined,
+        workspaceId: workspaceFilter || undefined,
       }),
     staleTime: 30_000,
   })
@@ -68,7 +60,6 @@ function AgentsGrid() {
   )
 
   // Keep the batched statuses fresh by invalidating on AGENT_STATUS_UPDATED events.
-  // The backend emits this whenever it refreshes an agent's STATUS.md snapshot.
   useEffect(() => {
     const subId = eventService.subscribe(EventTypes.AGENT_STATUS_UPDATED, () => {
       queryClient.invalidateQueries({ queryKey: ["agentStatuses"] })
@@ -78,47 +69,7 @@ function AgentsGrid() {
     }
   }, [queryClient])
 
-  // Fetch pending shares (new query)
-  const { data: pendingSharesData, isLoading: pendingLoading } = useQuery({
-    queryKey: ["pendingShares"],
-    queryFn: () => AgentSharesService.getPendingShares(),
-  })
-
-  // Decline mutation
-  const declineMutation = useMutation({
-    mutationFn: (shareId: string) =>
-      AgentSharesService.declineShare({ shareId }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["pendingShares"] })
-      showSuccessToast("Share declined")
-    },
-    onError: (error) => {
-      showErrorToast(
-        error instanceof Error ? error.message : "Failed to decline share"
-      )
-    },
-  })
-
-  const handleAcceptClick = (share: PendingSharePublic) => {
-    setSelectedShare(share)
-    setWizardOpen(true)
-  }
-
-  const handleDeclineClick = (shareId: string) => {
-    if (confirm("Are you sure you want to decline this share?")) {
-      declineMutation.mutate(shareId)
-    }
-  }
-
-  const handleWizardComplete = () => {
-    setWizardOpen(false)
-    setSelectedShare(null)
-    queryClient.invalidateQueries({ queryKey: ["agents"] })
-    queryClient.invalidateQueries({ queryKey: ["pendingShares"] })
-    showSuccessToast("Agent accepted successfully")
-  }
-
-  if (agentsLoading || pendingLoading) {
+  if (agentsLoading) {
     return <PendingItems />
   }
 
@@ -133,11 +84,8 @@ function AgentsGrid() {
   }
 
   const agents = data?.data || []
-  const pendingShares = pendingSharesData?.data || []
 
-  const hasNoContent = agents.length === 0 && pendingShares.length === 0
-
-  if (hasNoContent) {
+  if (agents.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center text-center py-12">
         <div className="rounded-full bg-muted p-4 mb-4">
@@ -152,79 +100,44 @@ function AgentsGrid() {
   }
 
   return (
-    <>
-      {/* Pending Shares Section */}
-      {pendingShares.length > 0 && (
-        <div className="mb-8">
-          <h2 className="text-lg font-semibold mb-4 text-muted-foreground flex items-center gap-2">
-            Pending Shared Agents
-            <span className="inline-flex items-center justify-center w-6 h-6 text-xs font-medium rounded-full bg-muted text-muted-foreground">
-              {pendingShares.length}
-            </span>
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 auto-rows-fr">
-            {pendingShares.map((share) => (
-              <PendingAgentCard
-                key={share.id}
-                share={share}
-                onAccept={() => handleAcceptClick(share)}
-                onDecline={() => handleDeclineClick(share.id)}
-                isLoading={declineMutation.isPending}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Owned Agents Section */}
-      {agents.length > 0 && (
-        <div>
-          {pendingShares.length > 0 && (
-            <h2 className="text-lg font-semibold mb-4">
-              Your Agents ({agents.length})
-            </h2>
-          )}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 auto-rows-fr">
-            {agents.map((agent) => (
-              <AgentCard
-                key={agent.id}
-                agent={agent}
-                status={statusByAgentId.get(agent.id) ?? null}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Accept Wizard Dialog */}
-      {selectedShare && (
-        <AcceptShareWizard
-          open={wizardOpen}
-          onOpenChange={setWizardOpen}
-          share={selectedShare}
-          onComplete={handleWizardComplete}
+    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 auto-rows-fr">
+      {agents.map((agent) => (
+        <AgentCard
+          key={agent.id}
+          agent={agent}
+          status={statusByAgentId.get(agent.id) ?? null}
         />
-      )}
-    </>
+      ))}
+    </div>
   )
 }
 
 function Agents() {
   const { setHeaderContent } = usePageHeader()
   const { activeWorkspaceId } = useWorkspace()
+  const { isDeveloper, isAgentUser } = useRole()
 
+  // Phase 3 — agent-user view: same grid, but the page is "Installed
+  // agents" rather than "Create and manage", and the AddAgent CTA is
+  // hidden (creation is developer-only).
   useEffect(() => {
     setHeaderContent(
       <>
         <div className="min-w-0">
-          <h1 className="text-lg font-semibold truncate">Agents</h1>
-          <p className="text-xs text-muted-foreground">Create and manage your agents</p>
+          <h1 className="text-lg font-semibold truncate">
+            {isAgentUser ? "Installed Agents" : "Agents"}
+          </h1>
+          <p className="text-xs text-muted-foreground">
+            {isAgentUser
+              ? "Agents you have installed from the catalog"
+              : "Create and manage your agents"}
+          </p>
         </div>
-        <AddAgent />
+        {isDeveloper && <AddAgent />}
       </>
     )
     return () => setHeaderContent(null)
-  }, [setHeaderContent])
+  }, [setHeaderContent, isAgentUser, isDeveloper])
 
   return (
     <div className="p-6 md:p-8 overflow-y-auto">

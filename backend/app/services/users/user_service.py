@@ -8,6 +8,7 @@ from sqlmodel import Session, select
 
 from app.core.security import get_password_hash, verify_password
 from app.models import User, UserCreate, UserUpdate
+from app.models.users.user import UserRole
 from app.services.users.auth_service import AuthService
 from app.utils import (
     generate_password_reset_token,
@@ -27,10 +28,30 @@ class UserService:
 
     @staticmethod
     def create_user(*, session: Session, user_create: UserCreate) -> User:
-        """Create a new user with hashed password."""
+        """Create a new user with hashed password.
+
+        New users default to ``agent-user``; superusers are upgraded to
+        ``admin`` so the ``role ⇔ is_superuser`` invariant holds for
+        freshly created rows the same way the Phase 3 migration does
+        for existing rows.
+        """
+        # Honour caller-provided role if present (e.g., admin creating
+        # a developer); otherwise derive from is_superuser.
+        provided = user_create.model_dump(exclude_unset=True)
+        if "role" not in provided:
+            provided_role = (
+                UserRole.ADMIN.value if user_create.is_superuser
+                else UserRole.USER.value
+            )
+        else:
+            provided_role = user_create.role
+
         db_obj = User.model_validate(
             user_create,
-            update={"hashed_password": get_password_hash(user_create.password)},
+            update={
+                "hashed_password": get_password_hash(user_create.password),
+                "role": provided_role,
+            },
         )
         session.add(db_obj)
         session.commit()

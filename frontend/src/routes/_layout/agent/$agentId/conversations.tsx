@@ -14,7 +14,7 @@ export const Route = createFileRoute("/_layout/agent/$agentId/conversations")({
 function AgentConversationsPage() {
   const { agentId } = Route.useParams()
   const { setHeaderContent } = usePageHeader()
-  const { activeWorkspaceId } = useWorkspace()
+  const { workspaceFilter } = useWorkspace()
 
   const {
     data: agentData,
@@ -29,11 +29,11 @@ function AgentConversationsPage() {
     isLoading: sessionsLoading,
     error: sessionsError,
   } = useQuery({
-    queryKey: ["sessions", activeWorkspaceId],
+    queryKey: ["sessions", workspaceFilter],
     queryFn: ({ queryKey }) => {
       const [, workspaceId] = queryKey
       return SessionsService.listSessions({
-        userWorkspaceId: workspaceId ?? "",
+        userWorkspaceId: workspaceId as string | undefined,
       })
     },
   })

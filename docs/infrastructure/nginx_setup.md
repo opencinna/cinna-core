@@ -61,6 +61,14 @@ Present only in the production reverse proxy. In local dev the SPA calls the bac
 **Why at origin root:** The Cinna Desktop app fetches `https://{instance}/.well-known/cinna-desktop` before the user logs in to verify the instance and learn its OAuth URLs. It has no knowledge of API prefixes yet.
 **Upstream:** backend.
 
+### `/agent-hooks/`
+
+**Feature:** Agent Webhooks public execution endpoint — see [Agent Webhooks](../agents/agent_webhooks/agent_webhooks.md).
+**Why not under `/api/`:** Mounted at the app root (no `/api/v1` prefix) to match the task-trigger `/hooks/` convention and produce short, shareable URLs (`{host}/agent-hooks/{webhook_id}`).
+**Upstream:** backend.
+
+Note: `/hooks/` (task triggers) carries the same requirement. Both paths must appear in the production reverse proxy config. In local docker-compose mode requests reach the backend directly via `VITE_API_URL`, so no `frontend/nginx.conf` block is needed.
+
 ### `/`
 
 **Feature:** frontend SPA. `try_files $uri $uri/ /index.html` to support client-side routing.
@@ -88,3 +96,5 @@ When a new feature introduces a `/.well-known/*` endpoint:
 - [Desktop App Authentication](../application/desktop_auth/desktop_auth.md) — uses `/.well-known/cinna-desktop`
 - [Realtime Events](../application/realtime_events/event_bus_system.md) — uses `/ws/`
 - [Cinna CLI Integration](../application/cinna_cli_integration/cinna_cli_integration.md) — uses `/api/v1/cli/` (WebSocket sync tunnel + SSE exec stream)
+- [Agent Webhooks](../agents/agent_webhooks/agent_webhooks.md) — uses `/agent-hooks/` (public webhook execution, no JWT)
+- [Task Triggers](../application/input_tasks/task_triggers.md) — uses `/hooks/` (same pattern as agent webhooks, public webhook execution, no JWT)

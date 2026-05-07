@@ -39,6 +39,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import useCustomToast from "@/hooks/useCustomToast"
+import useWorkspace from "@/hooks/useWorkspace"
 import { WORKSPACE_ICONS, getWorkspaceIcon } from "@/config/workspaceIcons"
 import { cn } from "@/lib/utils"
 import { Pencil, Plus, Trash2 } from "lucide-react"
@@ -159,6 +160,7 @@ function WorkspaceFormDialog({
 export function WorkspaceSettings() {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
+  const { workspacesEnabled, setWorkspacesEnabled } = useWorkspace()
   const [createOpen, setCreateOpen] = useState(false)
   const [editWorkspace, setEditWorkspace] = useState<UserWorkspacePublic | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
@@ -214,13 +216,43 @@ export function WorkspaceSettings() {
     <>
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle>Workspaces</CardTitle>
-          <CardDescription>
-            Organize agents, credentials, and sessions into workspaces.
-          </CardDescription>
+          <div className="flex items-start justify-between">
+            <div className="space-y-1.5">
+              <CardTitle>Workspaces</CardTitle>
+              <CardDescription>
+                Organize agents, credentials, and sessions into workspaces.
+              </CardDescription>
+            </div>
+            <label className="flex cursor-pointer select-none items-center ml-4 mt-1">
+              <div className="relative">
+                <input
+                  type="checkbox"
+                  checked={workspacesEnabled}
+                  onChange={(e) => setWorkspacesEnabled(e.target.checked)}
+                  className="sr-only"
+                />
+                <div
+                  className={`block h-6 w-11 rounded-full transition-colors ${
+                    workspacesEnabled ? "bg-emerald-500" : "bg-gray-300 dark:bg-gray-600"
+                  }`}
+                ></div>
+                <div
+                  className={`dot absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
+                    workspacesEnabled ? "translate-x-5" : ""
+                  }`}
+                ></div>
+              </div>
+            </label>
+          </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
+          {!workspacesEnabled && (
+            <p className="text-sm text-muted-foreground">
+              Workspace filtering is disabled. Re-enable to scope your agents,
+              sessions, tasks, and credentials by workspace.
+            </p>
+          )}
+          <Button size="sm" onClick={() => setCreateOpen(true)} disabled={!workspacesEnabled}>
             <Plus className="h-4 w-4 mr-1.5" />
             New Workspace
           </Button>

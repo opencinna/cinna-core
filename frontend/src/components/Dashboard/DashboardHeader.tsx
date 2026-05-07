@@ -7,30 +7,30 @@ import useWorkspace from "@/hooks/useWorkspace"
 import { getColorPreset } from "@/utils/colorPresets"
 
 export function DashboardHeader() {
-  const { activeWorkspace, activeWorkspaceId } = useWorkspace()
+  const { activeWorkspace, activeWorkspaceId, workspaceFilter } = useWorkspace()
 
   // Fetch agents for badge display
   const { data: agentsData } = useQuery({
-    queryKey: ["agents", activeWorkspaceId],
+    queryKey: ["agents", workspaceFilter],
     queryFn: ({ queryKey }) => {
       const [, workspaceId] = queryKey
       return AgentsService.readAgents({
         skip: 0,
         limit: 100,
-        userWorkspaceId: workspaceId ?? "",
+        userWorkspaceId: workspaceId as string | undefined,
       })
     },
   })
 
   // Fetch credentials for badge display
   const { data: credentialsData } = useQuery({
-    queryKey: ["credentials", activeWorkspaceId],
+    queryKey: ["credentials", workspaceFilter],
     queryFn: ({ queryKey }) => {
       const [, workspaceId] = queryKey
       return CredentialsService.readCredentials({
         skip: 0,
         limit: 100,
-        userWorkspaceId: workspaceId ?? "",
+        userWorkspaceId: workspaceId as string | undefined,
       })
     },
   })

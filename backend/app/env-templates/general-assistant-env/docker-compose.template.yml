@@ -22,11 +22,13 @@ services:
       - SDK_ADAPTER_CONVERSATION=${SDK_ADAPTER_CONVERSATION:-claude-code/anthropic}
       - BACKEND_URL=http://backend:8000
 
+    # App-data: per-(user, bundle) persistent volume - survives uninstall, reattaches on reinstall
     # Claude sessions: SDK session data - persisted across rebuilds for session resumption
     # OpenCode sessions: SQLite DB + storage - persisted across rebuilds for session resumption
     volumes:
       - ${HOST_INSTANCE_DIR}/app/core:/app/core:ro
       - ${HOST_INSTANCE_DIR}/app/workspace:/app/workspace
+      - ${APP_DATA_HOST_PATH}:/app/workspace/app-data:rw
       - ${HOST_INSTANCE_DIR}/claude_sessions:/root/.claude
       - ${HOST_INSTANCE_DIR}/opencode_sessions:/root/.local/share/opencode
 

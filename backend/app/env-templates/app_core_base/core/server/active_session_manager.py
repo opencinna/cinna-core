@@ -213,7 +213,7 @@ class ActiveSessionManager:
         Also stores into per-session context if backend_session_id is present.
 
         Args:
-            context: Session context dict with integration_type, agent_id, is_clone, etc.
+            context: Session context dict with integration_type, agent_id, bundle_id, etc.
         """
         async with self._lock:
             self._current_context = context

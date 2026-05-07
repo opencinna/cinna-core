@@ -153,10 +153,9 @@ class ExternalAgentCatalogService:
     def _agent_metadata(agent: Agent) -> dict[str, Any]:
         return {
             "agent_id": str(agent.id),
-            "is_clone": agent.is_clone,
-            "parent_agent_id": (
-                str(agent.parent_agent_id) if agent.parent_agent_id else None
-            ),
+            "bundle_id": agent.bundle_id,
+            "bundle_uuid": str(agent.bundle_uuid) if agent.bundle_uuid else None,
+            "is_publisher_install": agent.is_publisher_install,
             "active_environment_id": (
                 str(agent.active_environment_id)
                 if agent.active_environment_id

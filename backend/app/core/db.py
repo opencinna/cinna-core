@@ -36,3 +36,13 @@ def init_db(session: Session) -> None:
             is_superuser=True,
         )
         user = UserService.create_user(session=session, user_create=user_in)
+    else:
+        # Phase 3 — enforce the ``role ⇔ is_superuser`` invariant on the
+        # bootstrapped superuser.  This catches DBs seeded before the
+        # ``user.role`` column existed (Phase 3 migration backfilled
+        # historical rows; this re-asserts the rule on first-boot).
+        from app.models.users.user import UserRole
+        if user.is_superuser and user.role != UserRole.ADMIN.value:
+            user.role = UserRole.ADMIN.value
+            session.add(user)
+            session.commit()

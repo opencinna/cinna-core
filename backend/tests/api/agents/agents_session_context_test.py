@@ -154,8 +154,10 @@ def test_non_email_session_context_and_hmac(
     # Field values for non-email session
     assert ctx["integration_type"] is None
     assert ctx["agent_id"] == agent_id
-    assert ctx["is_clone"] is False
-    assert ctx["parent_agent_id"] is None
+    # Phase 2 — bundle-aware session context (no more is_clone/parent_agent_id).
+    assert ctx["bundle_id"] is not None
+    assert ctx["bundle_uuid"] is None
+    assert ctx["is_publisher_install"] is False
     assert ctx["sender_email"] is None
     assert ctx["email_thread_id"] is None
     assert ctx["backend_session_id"] == session_id
@@ -214,7 +216,7 @@ def test_email_session_context_full_fields(
     assert ctx["sender_email"] == "customer@example.com"
     assert ctx["email_subject"] == "Order Status Request"
     assert ctx["agent_id"] == agent_id
-    assert ctx["is_clone"] is False
+    assert ctx["is_publisher_install"] is False
     assert ctx["email_thread_id"] is not None
 
     # backend_session_id matches the session created for this email

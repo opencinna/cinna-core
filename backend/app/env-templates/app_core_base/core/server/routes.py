@@ -560,7 +560,7 @@ async def get_session_context(session_id: str | None = Query(default=None)):
                     If omitted, falls back to legacy current-session context.
 
     Returns:
-        Session context dict with integration_type, agent_id, is_clone, parent_agent_id, etc.
+        Session context dict with integration_type, agent_id, bundle_id, etc.
         Returns 404 if session_id is provided but not found.
         Returns empty context if no session is currently active (legacy mode).
     """
@@ -580,8 +580,9 @@ async def get_session_context(session_id: str | None = Query(default=None)):
         "backend_session_id": None,
         "integration_type": None,
         "agent_id": None,
-        "is_clone": False,
-        "parent_agent_id": None,
+        "bundle_id": None,
+        "bundle_uuid": None,
+        "is_publisher_install": False,
         "mode": None,
     }
 
@@ -1456,6 +1457,14 @@ class _ExecRequest(_BaseModel):
     """Request body for /exec endpoint."""
     command: str
     timeout: int = 120
+    # Optional extra env vars merged with os.environ before the subprocess
+    # runs. Callers (e.g. the agent webhook service) use this to inject
+    # WEBHOOK_PAYLOAD / WEBHOOK_HEADERS_JSON so scripts read from env vars
+    # rather than string-interpolating untrusted payload bytes into the
+    # command line.
+    env: dict[str, str] | None = None
+    # Optional text piped to the subprocess's stdin.
+    stdin: str | None = None
 
 
 class _ExecResponse(_BaseModel):
@@ -1465,13 +1474,25 @@ class _ExecResponse(_BaseModel):
     stderr: str
 
 
+# Per-value size cap for extra env vars (100 KB). Prevents callers from
+# abusing the subprocess environment to smuggle huge payloads.
+_EXEC_ENV_VALUE_MAX_BYTES = 100 * 1024
+
+
 @router.post("/exec", dependencies=[Depends(verify_auth_token)])
 async def exec_command(request: _ExecRequest) -> _ExecResponse:
     """
     Execute a shell command inside the agent environment workspace.
 
-    Used by the backend scheduler for script_trigger schedule type.
-    The command runs in /app/workspace/ with the same permissions as the agent.
+    Used by the backend scheduler (script_trigger) and by agent webhook
+    script triggers. The command runs in /app/workspace/ with the same
+    permissions as the agent.
+
+    Optional fields:
+    - ``env``: extra env vars merged with ``os.environ.copy()`` (callers can
+      still rely on PATH / HOME / etc. being present). Each value is capped
+      at 100 KB.
+    - ``stdin``: text piped to the subprocess's stdin.
 
     Returns exit_code, stdout, and stderr. Output is truncated to 10,000 chars each.
     Timeout defaults to 120 seconds (max 300 seconds).
@@ -1479,17 +1500,37 @@ async def exec_command(request: _ExecRequest) -> _ExecResponse:
     _MAX_OUTPUT = 10_000
     timeout = min(request.timeout, 300)
 
+    # Build subprocess env: start from current process env so PATH/HOME are
+    # preserved, then overlay the caller-supplied values.
+    proc_env: dict[str, str] | None = None
+    if request.env is not None:
+        proc_env = os.environ.copy()
+        for key, value in request.env.items():
+            if value is None:
+                continue
+            value_str = str(value)
+            # Cap per-value size to avoid abuse
+            if len(value_str.encode("utf-8", errors="replace")) > _EXEC_ENV_VALUE_MAX_BYTES:
+                value_str = value_str.encode("utf-8", errors="replace")[:_EXEC_ENV_VALUE_MAX_BYTES].decode("utf-8", errors="replace")
+            proc_env[str(key)] = value_str
+
     try:
         proc = await asyncio.create_subprocess_shell(
             request.command,
+            stdin=asyncio.subprocess.PIPE if request.stdin is not None else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd="/app/workspace",
+            env=proc_env,
         )
+
+        stdin_bytes: bytes | None = None
+        if request.stdin is not None:
+            stdin_bytes = request.stdin.encode("utf-8", errors="replace")
 
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
+                proc.communicate(input=stdin_bytes), timeout=timeout
             )
         except asyncio.TimeoutError:
             try:

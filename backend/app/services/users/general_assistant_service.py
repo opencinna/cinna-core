@@ -103,10 +103,16 @@ class GeneralAssistantService:
         """
         from app.models.environments.environment import AgentEnvironmentCreate
         from app.services.environments.environment_service import EnvironmentService
+        from app.services.bundles.bundle_id_service import BundleIdService
         from app.core.config import settings
+        import uuid as _uuid
 
-        # Create the agent record
+        # Create the agent record. Generate the UUID + bundle_id in advance so
+        # the NOT NULL ``bundle_id`` column is populated on first insert.
+        agent_id = _uuid.uuid4()
         agent = Agent(
+            id=agent_id,
+            bundle_id=BundleIdService.generate_bundle_id(agent_id),
             name=GA_AGENT_NAME,
             owner_id=user.id,
             user_workspace_id=None,  # GA is workspace-agnostic

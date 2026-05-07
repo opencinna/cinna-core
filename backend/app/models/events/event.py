@@ -87,6 +87,18 @@ class EventType:
     CRON_TRIGGER_SESSION = "cron_trigger_session"    # session started by the schedule (both types)
     CRON_ERROR = "cron_error"                        # schedule failed before or during execution
 
+    # Bundle / install events (Phase 2 — Agent Bundles & Installs)
+    BUNDLE_PUBLISHED = "bundle_published"               # New revision published
+    INSTALL_UPDATE_AVAILABLE = "install_update_available"  # Pending update on install
+    INSTALL_UPDATE_APPLIED = "install_update_applied"    # Apply succeeded
+    INSTALL_UPDATE_FAILED = "install_update_failed"      # Apply errored
+
+    # Role events (Phase 3 — Roles & agent-user UX)
+    # Targeted at the user whose role changed; payload carries
+    # ``new_role``, ``previous_role``, and ``changed_by_user_id`` so the
+    # frontend can refetch ``["currentUser"]`` and re-route on demote.
+    USER_ROLE_CHANGED = "user_role_changed"
+
     # Generic notification
     NOTIFICATION = "notification"
 

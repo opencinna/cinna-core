@@ -198,7 +198,7 @@ const AddCredential = () => {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { showSuccessToast, showErrorToast } = useCustomToast()
-  const { activeWorkspaceId } = useWorkspace()
+  const { workspaceFilter } = useWorkspace()
 
   const filteredGroups = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -240,7 +240,7 @@ const AddCredential = () => {
     const payload: CredentialCreate = {
       name: option.defaultName,
       type: option.type,
-      user_workspace_id: activeWorkspaceId || undefined,
+      user_workspace_id: workspaceFilter || undefined,
     }
     // ssh_key requires credential_data at creation — default to a generated
     // ed25519 key. The user sees the resulting public key on the detail page

@@ -111,4 +111,4 @@ All core server code (`app/core/`) is shared via `app_core_base` — changes to 
 
 - **[Agent Environments](./agent_environments.md)** — Parent feature: lifecycle, two-layer architecture, data preservation
 - **[Agent Environment Data Management](../agent_environment_data_management/agent_environment_data_management.md)** — Cloning and syncing include `workspace_system_packages.txt`
-- **[Agent Sharing](../agent_sharing/agent_sharing.md)** — Cloned agents include system packages file
+- **[Agent Bundles & Installs](../agent_bundles/agent_bundles.md)** — Bundle revision snapshots include `workspace_system_packages.txt`; installs receive the file and apply it at container startup

@@ -159,7 +159,7 @@ On page reload: GET /webapp/{token}/chat/sessions
 
 - **[Agent Webapp](agent_webapp.md)** — chat widget is part of the webapp viewer experience; shares the same token auth and environment keep-alive mechanism
 - **[Agent Sessions](../../application/agent_sessions/agent_sessions.md)** — chat sessions reuse the full session infrastructure with `webapp_share_id` scoping
-- **[Guest Sharing](../agent_sharing/guest_sharing.md)** — parallel pattern for `webapp_share_id` on sessions (mirrors `guest_share_id`)
+- **[Guest Sharing](../guest_sharing/guest_sharing.md)** — parallel pattern for `webapp_share_id` on sessions (mirrors `guest_share_id`); token-based unauthenticated access to an agent install
 - **[Streaming Architecture](../../application/realtime_events/frontend_backend_agentenv_streaming.md)** — WebSocket streaming for real-time chat responses
 - **[Agent Prompts](../agent_prompts/agent_prompts.md)** — building mode chat uses the building prompt; conversation mode uses conversation prompt; `WEBAPP_BUILDING.md` contains schema.org markup and context bridge script instructions for the building agent
 

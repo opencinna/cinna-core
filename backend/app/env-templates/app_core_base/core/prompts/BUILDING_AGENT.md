@@ -115,14 +115,17 @@ Follow this systematic approach when building a new workflow:
      - Print to stdout and capture in conversation mode
 
    - **For large data** (lists, records, parsed results):
-     - **Use CSV/JSON files in `./files/` folder** as intermediate storage
-     - Script 1 outputs to file: `./files/parsed_data.csv`
-     - Script 2 reads from file: `./files/parsed_data.csv`
+     - **Use CSV/JSON files in `./app-data/storage/`** as intermediate storage
+       (runtime output — survives updates and uninstall/reinstall).
+     - Script 1 outputs to file: `./app-data/storage/parsed_data.csv`
+     - Script 2 reads from file: `./app-data/storage/parsed_data.csv`
      - **Example workflow**:
        ```
-       1. parse_invoices.py → Saves results to ./files/invoices.csv
-       2. process_invoices.py --input=./files/invoices.csv → Processes the CSV
+       1. parse_invoices.py → Saves results to ./app-data/storage/invoices.csv
+       2. process_invoices.py --input=./app-data/storage/invoices.csv → Processes the CSV
        ```
+     - Use `./files/` only for **static publisher-shipped assets** (lookup tables,
+       fixture CSVs); these are replaced when the publisher pushes an update.
 
    - **Benefits of file-based data passing**:
      - ✅ Handles large datasets efficiently
@@ -162,7 +165,13 @@ Follow this systematic approach when building a new workflow:
 
 ## Workspace Structure
 
-Your workspace is organized as follows:
+Your workspace has two persistence tiers: **bundle-owned** folders that ship with the agent
+and are replaced whenever the publisher pushes an update, and **per-user persistent** folders
+under `./app-data/` that survive every update and uninstall/reinstall cycle. Pick the right
+tier when you create files — choosing wrong means either lost user state or stale shipped
+content.
+
+### Bundle-owned folders (replaced on publisher updates)
 
 - **`./scripts/`** - All Python scripts you create MUST be placed here
   - This is the primary location for all executable scripts
@@ -170,17 +179,33 @@ Your workspace is organized as follows:
   - Use clear, descriptive filenames (e.g., `process_data.py`, `generate_report.py`)
   - **IMPORTANT**: Maintain `./scripts/README.md` with documentation for all scripts
 
-- **`./files/`** - All output files produced by scripts MUST be stored here
-  - Data files (CSV, JSON, XML, etc.)
-  - Generated reports
-  - Processed outputs
-  - Any artifacts created by your scripts
-
 - **`./docs/`** - Documentation and agent configuration
   - **`WORKFLOW_PROMPT.md`** - Describes the workflow's purpose, capabilities, and execution guidelines
   - **`ENTRYPOINT_PROMPT.md`** - Defines how this workflow should be invoked (trigger messages for scheduled/interactive modes)
   - **`REFINER_PROMPT.md`** - Instructions for refining incoming task descriptions (default values, mandatory fields, enhancement guidelines)
   - **IMPORTANT**: Update these files as you develop the workflow to reflect its actual capabilities
+
+- **`./knowledge/`** - Static integration documentation included in the bundle (read-only at runtime).
+
+- **`./files/`** - **Static, publisher-shipped assets** (lookup tables, fixture CSVs, sample data
+  shipped with the agent). These get replaced when the publisher publishes a new revision.
+  - **DO NOT** write runtime output here — it will be lost on update.
+  - For runtime output, use `./app-data/storage/` instead (see below).
+
+### Per-user persistent folders (survive updates and reinstall)
+
+- **`./app-data/storage/`** - Long-lived runtime data your scripts produce
+  - Generated reports, parsed records, derived datasets, persisted state
+  - Per-user — every install of this bundle gets its own private `storage/`
+  - **Survives `apply_update`, env rebuild, uninstall + reinstall**
+
+- **`./app-data/uploads/`** - User-uploaded files attached to messages or tasks
+  - Same per-user persistence semantics as `storage/`
+
+- **`./app-data/cache/`** - Disposable caches your scripts may rebuild on demand
+  - Treat as flushable; nothing here is guaranteed to survive a wipe
+
+### Synced from the platform
 
 - **`./credentials/`** - Credentials and API keys shared with this agent
   - **`credentials.json`** - Full credentials data (NEVER read this directly in building mode)
@@ -188,6 +213,17 @@ Your workspace is organized as follows:
   - **SECURITY**: NEVER read credentials.json directly - only access credentials programmatically in your scripts
   - **SECURITY**: NEVER log or output credential values in messages or files
   - See the credentials documentation below for details on what credentials are available
+
+### Persistence Rules (CRITICAL)
+
+- **Conversation-mode runs** SHOULD only write to `/tmp` or `./app-data/`. Anything written to
+  `./scripts/`, `./docs/`, `./knowledge/`, or `./files/` during a conversation will be lost the
+  next time the publisher pushes an update.
+- **Building-mode runs** MAY write anywhere. The publisher's working install is what gets
+  snapshotted on `Publish`, so changes you make to bundle-owned folders during building become
+  the new shipped content.
+- When migrating an existing agent: move runtime output from `./files/` to `./app-data/storage/`
+  and update scripts that write there. Existing static fixtures may stay in `./files/`.
 
 ## Development Guidelines
 

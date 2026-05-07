@@ -28,13 +28,27 @@ import {
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
 import { LoadingButton } from "@/components/ui/loading-button"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
+
+const ROLE_OPTIONS = [
+  { value: "agent-user", label: "Agent User" },
+  { value: "agent-developer", label: "Agent Developer" },
+  { value: "admin", label: "Admin" },
+] as const
 
 const formSchema = z
   .object({
     email: z.email({ message: "Invalid email address" }),
     full_name: z.string().optional(),
+    role: z.enum(["agent-user", "agent-developer", "admin"]),
     password: z
       .string()
       .min(8, { message: "Password must be at least 8 characters" })
@@ -61,6 +75,8 @@ const EditUser = ({ user, onSuccess }: EditUserProps) => {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
+  const initialRole = (user.role ?? "agent-user") as FormData["role"]
+
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
     mode: "onBlur",
@@ -68,6 +84,7 @@ const EditUser = ({ user, onSuccess }: EditUserProps) => {
     defaultValues: {
       email: user.email,
       full_name: user.full_name ?? undefined,
+      role: initialRole,
       is_superuser: user.is_superuser,
       is_active: user.is_active,
     },
@@ -145,6 +162,34 @@ const EditUser = ({ user, onSuccess }: EditUserProps) => {
                     <FormControl>
                       <Input placeholder="Full name" type="text" {...field} />
                     </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="role"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Role</FormLabel>
+                    <Select
+                      onValueChange={field.onChange}
+                      value={field.value}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {ROLE_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                     <FormMessage />
                   </FormItem>
                 )}

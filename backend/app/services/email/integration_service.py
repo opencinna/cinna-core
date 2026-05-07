@@ -13,7 +13,6 @@ from app.models.email.agent_email_integration import (
     AgentEmailIntegrationPublic,
     ProcessEmailsResult,
 )
-from app.models.sharing.agent_share import AgentShare
 from app.models.email.mail_server_config import MailServerConfig, MailServerType
 
 logger = logging.getLogger(__name__)
@@ -49,12 +48,12 @@ class EmailIntegrationService:
         user_id: uuid.UUID,
         data: AgentEmailIntegrationCreate,
     ) -> AgentEmailIntegration:
-        # Validate agent is not a clone
+        # Phase 2 — clones are gone. Email integration can only live on the
+        # publisher's working install (or any agent before its first publish);
+        # we no longer block on a "clone" flag because it does not exist.
         agent = session.get(Agent, agent_id)
         if not agent:
             raise ValueError("Agent not found")
-        if agent.is_clone:
-            raise ValueError("Cannot create email integration on a clone agent")
         if agent.owner_id != user_id:
             raise ValueError("Not authorized")
 
@@ -122,8 +121,6 @@ class EmailIntegrationService:
         agent = session.get(Agent, agent_id)
         if not agent or agent.owner_id != user_id:
             raise ValueError("Not authorized")
-        if agent.is_clone:
-            raise ValueError("Cannot enable email integration on a clone agent")
 
         # Validate required fields are configured
         EmailIntegrationService._validate_for_enable(session, integration, user_id)
@@ -253,15 +250,26 @@ class EmailIntegrationService:
         session: Session,
         agent_id: uuid.UUID,
     ) -> int:
-        """Count clones created via email integration for this agent."""
-        from app.models.sharing.agent_share import ShareSource, ShareStatus
+        """Count auto-created email installs for this agent's bundle.
+
+        Phase 2 — clones are gone. The "email clone count" is the number of
+        foreign installs (``Agent`` rows with the same ``bundle_uuid`` but a
+        different ``owner_id``) created by the email auto-install flow. We
+        currently can't distinguish "from email" from "from catalog" without
+        an additional column; for now count every foreign install of the
+        publisher's bundle, which matches today's behaviour for email-only
+        publishers and is the right denominator for ``max_clones`` rate
+        limiting.
+        """
+        agent = session.get(Agent, agent_id)
+        if not agent or not agent.bundle_uuid:
+            return 0
         statement = (
             select(func.count())
-            .select_from(AgentShare)
+            .select_from(Agent)
             .where(
-                AgentShare.original_agent_id == agent_id,
-                AgentShare.source == ShareSource.EMAIL_INTEGRATION,
-                AgentShare.status == ShareStatus.ACCEPTED,
+                Agent.bundle_uuid == agent.bundle_uuid,
+                Agent.owner_id != agent.owner_id,
             )
         )
         return session.exec(statement).one()

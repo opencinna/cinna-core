@@ -32,7 +32,7 @@ def get_session_context(session_id: str) -> dict:
 
     Returns:
         Session context dict with keys like integration_type, sender_email,
-        email_subject, agent_id, is_clone, parent_agent_id, etc.
+        email_subject, agent_id, bundle_id, bundle_uuid, is_publisher_install, etc.
 
     Raises:
         urllib.error.HTTPError: If session_id not found (404) or server error

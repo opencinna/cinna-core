@@ -1,4 +1,5 @@
 import uuid
+from enum import Enum
 from typing import List
 from pydantic import EmailStr
 from sqlmodel import Field, Relationship, SQLModel, Column, Text
@@ -13,6 +14,23 @@ VALID_SDK_OPTIONS = [SDK_ANTHROPIC, SDK_MINIMAX]
 VALID_AI_FUNCTIONS_SDK_OPTIONS = ["system", "personal:anthropic", "personal:openai"]
 
 
+# ── Role enum ──────────────────────────────────────────────────────────
+#
+# Phase 3 of the Agent Bundles & Installs plan introduces a three-value
+# role on every user.  ``is_superuser`` continues to drive ``admin``
+# privileges (and stays in sync with ``role == ADMIN``), while the
+# ``USER`` vs ``DEVELOPER`` distinction gates building-mode and
+# agent-CRUD access for everyone else.
+class UserRole(str, Enum):
+    USER = "agent-user"
+    DEVELOPER = "agent-developer"
+    ADMIN = "admin"
+
+
+VALID_USER_ROLES = [r.value for r in UserRole]
+DEVELOPER_OR_ADMIN_ROLES = {UserRole.DEVELOPER.value, UserRole.ADMIN.value}
+
+
 # Shared properties
 class UserBase(SQLModel):
     email: EmailStr = Field(unique=True, index=True, max_length=255)
@@ -20,6 +38,9 @@ class UserBase(SQLModel):
     is_superuser: bool = False
     full_name: str | None = Field(default=None, max_length=255)
     username: str | None = Field(default=None, max_length=50, index=True, regex=r"^[a-zA-Z0-9_]*$")
+    # Phase 3 — role-based permissions.  Default for new users is
+    # ``agent-user``; superusers are upgraded to ``admin`` on creation.
+    role: str = Field(default=UserRole.USER.value, max_length=32)
 
 
 # Properties to receive via API on creation
@@ -48,6 +69,7 @@ class UserUpdateMe(SQLModel):
     default_ai_functions_sdk: str | None = Field(default=None, max_length=50)
     default_ai_functions_credential_id: uuid.UUID | None = None
     general_assistant_enabled: bool | None = None
+    workspaces_enabled: bool | None = None
     # Default credential and model override per mode
     default_ai_credential_conversation_id: uuid.UUID | None = None
     default_ai_credential_building_id: uuid.UUID | None = None
@@ -90,6 +112,10 @@ class User(UserBase, table=True):
     default_model_override_building: str | None = Field(default=None, max_length=255)
     # General Assistant feature flag
     general_assistant_enabled: bool = Field(default=False)
+    # Whether the UI applies workspace filters to list queries. When False,
+    # the sidebar workspace switcher is hidden and queries return every
+    # owned entity regardless of `user_workspace_id`.
+    workspaces_enabled: bool = Field(default=False)
     # Per-user monotonic counter for short-code generation (TASK-1, TASK-2, ...)
     task_sequence_counter: int = Field(default=0)
     agents: List["app.models.agents.agent.Agent"] = Relationship(back_populates="owner", cascade_delete=True)
@@ -106,6 +132,7 @@ class UserPublic(UserBase):
     default_ai_functions_sdk: str | None = "system"
     default_ai_functions_credential_id: uuid.UUID | None = None
     general_assistant_enabled: bool = False
+    workspaces_enabled: bool = False
     # Default credential and model override per mode
     default_ai_credential_conversation_id: uuid.UUID | None = None
     default_ai_credential_building_id: uuid.UUID | None = None
@@ -116,6 +143,16 @@ class UserPublic(UserBase):
 class UsersPublic(SQLModel):
     data: list[UserPublic]
     count: int
+
+
+class UserRolePublic(SQLModel):
+    """Response for ``GET /users/me/role``."""
+    role: str
+
+
+class UserRoleUpdate(SQLModel):
+    """Request body for ``PATCH /users/{user_id}/role`` — admin only."""
+    role: str
 
 
 # Generic message

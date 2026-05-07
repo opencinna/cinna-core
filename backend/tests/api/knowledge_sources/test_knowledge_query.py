@@ -119,7 +119,12 @@ def test_knowledge_query_two_step_flow(
     user_id = uuid.UUID(me_r.json()["id"])
 
     # auth_token is stored in config — not exposed via any API endpoint.
-    agent = Agent(name="Knowledge Query Test Agent", owner_id=user_id)
+    # bundle_id is NOT NULL on agent — pick a deterministic value for the test.
+    agent = Agent(
+        name="Knowledge Query Test Agent",
+        owner_id=user_id,
+        bundle_id="localhost.test.knowledge",
+    )
     db.add(agent)
     db.flush()
 

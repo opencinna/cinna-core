@@ -3,11 +3,11 @@ import { useEffect, useState, useMemo, Fragment, KeyboardEvent, DragEvent } from
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 
-import { AgentsService, SessionsService, FilesService, UsersService, UtilsService, AgentSharesService } from "@/client"
+import { AgentsService, SessionsService, FilesService, UsersService, UtilsService } from "@/client"
 import type { SessionCreate, FileUploadPublic } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { Send, Bot, Paperclip, Plus, Sparkles, Settings, MessageCircle, Wrench, AlertCircle, Gift } from "lucide-react"
+import { Send, Bot, Paperclip, Plus, Sparkles, Settings, MessageCircle, Wrench, AlertCircle } from "lucide-react"
 import {
   Select,
   SelectContent,
@@ -29,6 +29,7 @@ import {
 import { usePageHeader } from "@/routes/_layout"
 import useCustomToast from "@/hooks/useCustomToast"
 import useWorkspace from "@/hooks/useWorkspace"
+import useRole from "@/hooks/useRole"
 import PendingItems from "@/components/Pending/PendingItems"
 import { getColorPreset } from "@/utils/colorPresets"
 import { RotatingHints } from "@/components/Common/RotatingHints"
@@ -80,7 +81,8 @@ function Dashboard() {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { showErrorToast } = useCustomToast()
-  const { activeWorkspaceId } = useWorkspace()
+  const { activeWorkspaceId, workspaceFilter } = useWorkspace()
+  const { isAgentUser } = useRole()
 
   // Check if user has AI credentials configured
   const {
@@ -105,29 +107,24 @@ function Dashboard() {
     data: agentsData,
     isLoading: agentsLoading,
   } = useQuery({
-    queryKey: ["agents", activeWorkspaceId],
+    queryKey: ["agents", workspaceFilter],
     queryFn: ({ queryKey }) => {
-      const [, workspaceId] = queryKey
+      const [, workspaceId] = queryKey as [string, string | undefined]
       return AgentsService.readAgents({
         skip: 0,
         limit: 100,
-        userWorkspaceId: workspaceId ?? "",
+        userWorkspaceId: workspaceId,
       })
     },
   })
 
-  // Fetch pending shares to show indicator
-  const { data: pendingSharesData } = useQuery({
-    queryKey: ["pendingShares"],
-    queryFn: () => AgentSharesService.getPendingShares(),
-  })
-
-  const pendingSharesCount = pendingSharesData?.data?.length ?? 0
+  // Phase 2 — pending shares are gone (replaced by Catalog). The catalog
+  // surface lands as a separate route in the next frontend pass.
 
   const {
     data: sessionsData,
   } = useQuery({
-    queryKey: ["sessions", "latest", 8, activeWorkspaceId],
+    queryKey: ["sessions", "latest", 8, workspaceFilter],
     queryFn: ({ queryKey }) => {
       const [, , , workspaceId] = queryKey as [string, string, number, string | undefined]
       return SessionsService.listSessions({
@@ -135,7 +132,7 @@ function Dashboard() {
         limit: 8,
         orderBy: "last_message_at",
         orderDesc: true,
-        userWorkspaceId: workspaceId ?? "",
+        userWorkspaceId: workspaceId,
       })
     },
   })
@@ -205,7 +202,7 @@ function Dashboard() {
 
   const agents = useMemo(() => agentsData?.data || [], [agentsData?.data])
   const agentsWithActiveEnv = useMemo(
-    () => agents.filter((a) => a.active_environment_id && (a.show_on_dashboard || a.is_clone)),
+    () => agents.filter((a) => a.active_environment_id && (a.show_on_dashboard || a.bundle_uuid)),
     [agents]
   )
 
@@ -235,14 +232,14 @@ function Dashboard() {
         // When agents with active environments exist, select the first one in conversation mode
         setSelectedAgentId(agentsWithActiveEnv[0].id)
         setMode("conversation")
-      } else if (agents.length === 0) {
+      } else if (agents.length === 0 && !isAgentUser) {
         // When no agents exist at all, default to "New Agent" mode in building mode
         setSelectedAgentId(NEW_AGENT_ID)
         setMode("building")
       }
       // If agents exist but none have active environments, don't auto-select anything
     }
-  }, [agentsWithActiveEnv, agents.length, selectedAgentId, agentsLoading])
+  }, [agentsWithActiveEnv, agents.length, selectedAgentId, agentsLoading, isAgentUser])
 
   // Auto-insert entrypoint prompt when agent changes (only in automatic mode)
   useEffect(() => {
@@ -514,28 +511,18 @@ function Dashboard() {
                 )
               })}
               {/* New Agent Badge */}
-              <button
-                className={`
-                  cursor-pointer px-4 py-2 text-sm rounded-md transition-all
-                  bg-gradient-to-r from-blue-500 to-purple-600
-                  text-white
-                  hover:from-blue-600 hover:to-purple-700
-                  ${selectedAgentId === NEW_AGENT_ID ? "ring-2 ring-blue-400 ring-offset-2" : ""}
-                `}
-                onClick={() => handleAgentClick(NEW_AGENT_ID)}
-              >
-                + New Agent
-              </button>
-              {/* Pending Agents Indicator */}
-              {pendingSharesCount > 0 && (
+              {!isAgentUser && (
                 <button
-                  className="cursor-pointer px-4 py-2 text-sm rounded-md transition-all border-2 border-dashed border-muted-foreground/40 bg-muted/30 text-muted-foreground hover:bg-muted/50 hover:border-muted-foreground/60 flex items-center gap-2"
-                  onClick={() => navigate({ to: "/agents" })}
+                  className={`
+                    cursor-pointer px-4 py-2 text-sm rounded-md transition-all
+                    bg-gradient-to-r from-blue-500 to-purple-600
+                    text-white
+                    hover:from-blue-600 hover:to-purple-700
+                    ${selectedAgentId === NEW_AGENT_ID ? "ring-2 ring-blue-400 ring-offset-2" : ""}
+                  `}
+                  onClick={() => handleAgentClick(NEW_AGENT_ID)}
                 >
-                  <Gift className="h-4 w-4" />
-                  {pendingSharesCount === 1
-                    ? "1 Agent Pending"
-                    : `${pendingSharesCount} Agents Pending`}
+                  + New Agent
                 </button>
               )}
             </div>
@@ -710,7 +697,7 @@ function Dashboard() {
                 ) : (() => {
                   const selectedAgent = agentsWithActiveEnv.find((a) => a.id === selectedAgentId)
                   const isGASelected = selectedAgent?.is_general_assistant ?? false
-                  if (isGASelected) {
+                  if (isGASelected || isAgentUser) {
                     return null
                   }
                   return (

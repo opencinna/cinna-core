@@ -39,16 +39,16 @@ export function CreateSession({ variant = "default", size = "default", className
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { showErrorToast } = useCustomToast()
-  const { activeWorkspaceId } = useWorkspace()
+  const { workspaceFilter } = useWorkspace()
 
   const { data: agentsData } = useQuery({
-    queryKey: ["agents", activeWorkspaceId],
+    queryKey: ["agents", workspaceFilter],
     queryFn: ({ queryKey }) => {
       const [, workspaceId] = queryKey
       return AgentsService.readAgents({
         skip: 0,
         limit: 100,
-        userWorkspaceId: workspaceId ?? "",
+        userWorkspaceId: workspaceId as string | undefined,
       })
     },
     enabled: open,

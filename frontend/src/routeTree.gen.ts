@@ -25,6 +25,7 @@ import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
 import { Route as LayoutSessionsRouteImport } from './routes/_layout/sessions'
 import { Route as LayoutKnowledgeSourcesRouteImport } from './routes/_layout/knowledge-sources'
 import { Route as LayoutCredentialsRouteImport } from './routes/_layout/credentials'
+import { Route as LayoutCatalogRouteImport } from './routes/_layout/catalog'
 import { Route as LayoutAgentsRouteImport } from './routes/_layout/agents'
 import { Route as LayoutActivitiesAllRouteImport } from './routes/_layout/activities-all'
 import { Route as LayoutActivitiesRouteImport } from './routes/_layout/activities'
@@ -37,6 +38,7 @@ import { Route as LayoutTasksShortCodeRouteImport } from './routes/_layout/tasks
 import { Route as LayoutTaskTaskIdRouteImport } from './routes/_layout/task/$taskId'
 import { Route as LayoutSessionSessionIdRouteImport } from './routes/_layout/session/$sessionId'
 import { Route as LayoutKnowledgeSourceSourceIdRouteImport } from './routes/_layout/knowledge-source/$sourceId'
+import { Route as LayoutInstallBundleIdRouteImport } from './routes/_layout/install/$bundleId'
 import { Route as LayoutDashboardsDashboardIdRouteImport } from './routes/_layout/dashboards/$dashboardId'
 import { Route as LayoutCredentialCredentialIdRouteImport } from './routes/_layout/credential/$credentialId'
 import { Route as LayoutAgenticTeamsTeamIdRouteImport } from './routes/_layout/agentic-teams/$teamId'
@@ -132,6 +134,11 @@ const LayoutCredentialsRoute = LayoutCredentialsRouteImport.update({
   path: '/credentials',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutCatalogRoute = LayoutCatalogRouteImport.update({
+  id: '/catalog',
+  path: '/catalog',
+  getParentRoute: () => LayoutRoute,
+} as any)
 const LayoutAgentsRoute = LayoutAgentsRouteImport.update({
   id: '/agents',
   path: '/agents',
@@ -194,6 +201,11 @@ const LayoutKnowledgeSourceSourceIdRoute =
     path: '/knowledge-source/$sourceId',
     getParentRoute: () => LayoutRoute,
   } as any)
+const LayoutInstallBundleIdRoute = LayoutInstallBundleIdRouteImport.update({
+  id: '/install/$bundleId',
+  path: '/install/$bundleId',
+  getParentRoute: () => LayoutRoute,
+} as any)
 const LayoutDashboardsDashboardIdRoute =
   LayoutDashboardsDashboardIdRouteImport.update({
     id: '/dashboards/$dashboardId',
@@ -282,6 +294,7 @@ export interface FileRoutesByFullPath {
   '/activities': typeof LayoutActivitiesRoute
   '/activities-all': typeof LayoutActivitiesAllRoute
   '/agents': typeof LayoutAgentsRoute
+  '/catalog': typeof LayoutCatalogRoute
   '/credentials': typeof LayoutCredentialsRoute
   '/knowledge-sources': typeof LayoutKnowledgeSourcesRoute
   '/sessions': typeof LayoutSessionsRouteWithChildren
@@ -301,6 +314,7 @@ export interface FileRoutesByFullPath {
   '/agentic-teams/$teamId': typeof LayoutAgenticTeamsTeamIdRoute
   '/credential/$credentialId': typeof LayoutCredentialCredentialIdRoute
   '/dashboards/$dashboardId': typeof LayoutDashboardsDashboardIdRoute
+  '/install/$bundleId': typeof LayoutInstallBundleIdRoute
   '/knowledge-source/$sourceId': typeof LayoutKnowledgeSourceSourceIdRoute
   '/session/$sessionId': typeof LayoutSessionSessionIdRoute
   '/task/$taskId': typeof LayoutTaskTaskIdRoute
@@ -325,6 +339,7 @@ export interface FileRoutesByTo {
   '/activities': typeof LayoutActivitiesRoute
   '/activities-all': typeof LayoutActivitiesAllRoute
   '/agents': typeof LayoutAgentsRoute
+  '/catalog': typeof LayoutCatalogRoute
   '/credentials': typeof LayoutCredentialsRoute
   '/knowledge-sources': typeof LayoutKnowledgeSourcesRoute
   '/settings': typeof LayoutSettingsRoute
@@ -343,6 +358,7 @@ export interface FileRoutesByTo {
   '/agentic-teams/$teamId': typeof LayoutAgenticTeamsTeamIdRoute
   '/credential/$credentialId': typeof LayoutCredentialCredentialIdRoute
   '/dashboards/$dashboardId': typeof LayoutDashboardsDashboardIdRoute
+  '/install/$bundleId': typeof LayoutInstallBundleIdRoute
   '/knowledge-source/$sourceId': typeof LayoutKnowledgeSourceSourceIdRoute
   '/session/$sessionId': typeof LayoutSessionSessionIdRoute
   '/task/$taskId': typeof LayoutTaskTaskIdRoute
@@ -369,6 +385,7 @@ export interface FileRoutesById {
   '/_layout/activities': typeof LayoutActivitiesRoute
   '/_layout/activities-all': typeof LayoutActivitiesAllRoute
   '/_layout/agents': typeof LayoutAgentsRoute
+  '/_layout/catalog': typeof LayoutCatalogRoute
   '/_layout/credentials': typeof LayoutCredentialsRoute
   '/_layout/knowledge-sources': typeof LayoutKnowledgeSourcesRoute
   '/_layout/sessions': typeof LayoutSessionsRouteWithChildren
@@ -388,6 +405,7 @@ export interface FileRoutesById {
   '/_layout/agentic-teams/$teamId': typeof LayoutAgenticTeamsTeamIdRoute
   '/_layout/credential/$credentialId': typeof LayoutCredentialCredentialIdRoute
   '/_layout/dashboards/$dashboardId': typeof LayoutDashboardsDashboardIdRoute
+  '/_layout/install/$bundleId': typeof LayoutInstallBundleIdRoute
   '/_layout/knowledge-source/$sourceId': typeof LayoutKnowledgeSourceSourceIdRoute
   '/_layout/session/$sessionId': typeof LayoutSessionSessionIdRoute
   '/_layout/task/$taskId': typeof LayoutTaskTaskIdRoute
@@ -414,6 +432,7 @@ export interface FileRouteTypes {
     | '/activities'
     | '/activities-all'
     | '/agents'
+    | '/catalog'
     | '/credentials'
     | '/knowledge-sources'
     | '/sessions'
@@ -433,6 +452,7 @@ export interface FileRouteTypes {
     | '/agentic-teams/$teamId'
     | '/credential/$credentialId'
     | '/dashboards/$dashboardId'
+    | '/install/$bundleId'
     | '/knowledge-source/$sourceId'
     | '/session/$sessionId'
     | '/task/$taskId'
@@ -457,6 +477,7 @@ export interface FileRouteTypes {
     | '/activities'
     | '/activities-all'
     | '/agents'
+    | '/catalog'
     | '/credentials'
     | '/knowledge-sources'
     | '/settings'
@@ -475,6 +496,7 @@ export interface FileRouteTypes {
     | '/agentic-teams/$teamId'
     | '/credential/$credentialId'
     | '/dashboards/$dashboardId'
+    | '/install/$bundleId'
     | '/knowledge-source/$sourceId'
     | '/session/$sessionId'
     | '/task/$taskId'
@@ -500,6 +522,7 @@ export interface FileRouteTypes {
     | '/_layout/activities'
     | '/_layout/activities-all'
     | '/_layout/agents'
+    | '/_layout/catalog'
     | '/_layout/credentials'
     | '/_layout/knowledge-sources'
     | '/_layout/sessions'
@@ -519,6 +542,7 @@ export interface FileRouteTypes {
     | '/_layout/agentic-teams/$teamId'
     | '/_layout/credential/$credentialId'
     | '/_layout/dashboards/$dashboardId'
+    | '/_layout/install/$bundleId'
     | '/_layout/knowledge-source/$sourceId'
     | '/_layout/session/$sessionId'
     | '/_layout/task/$taskId'
@@ -665,6 +689,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutCredentialsRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/catalog': {
+      id: '/_layout/catalog'
+      path: '/catalog'
+      fullPath: '/catalog'
+      preLoaderRoute: typeof LayoutCatalogRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/agents': {
       id: '/_layout/agents'
       path: '/agents'
@@ -747,6 +778,13 @@ declare module '@tanstack/react-router' {
       path: '/knowledge-source/$sourceId'
       fullPath: '/knowledge-source/$sourceId'
       preLoaderRoute: typeof LayoutKnowledgeSourceSourceIdRouteImport
+      parentRoute: typeof LayoutRoute
+    }
+    '/_layout/install/$bundleId': {
+      id: '/_layout/install/$bundleId'
+      path: '/install/$bundleId'
+      fullPath: '/install/$bundleId'
+      preLoaderRoute: typeof LayoutInstallBundleIdRouteImport
       parentRoute: typeof LayoutRoute
     }
     '/_layout/dashboards/$dashboardId': {
@@ -879,6 +917,7 @@ interface LayoutRouteChildren {
   LayoutActivitiesRoute: typeof LayoutActivitiesRoute
   LayoutActivitiesAllRoute: typeof LayoutActivitiesAllRoute
   LayoutAgentsRoute: typeof LayoutAgentsRoute
+  LayoutCatalogRoute: typeof LayoutCatalogRoute
   LayoutCredentialsRoute: typeof LayoutCredentialsRoute
   LayoutKnowledgeSourcesRoute: typeof LayoutKnowledgeSourcesRoute
   LayoutSessionsRoute: typeof LayoutSessionsRouteWithChildren
@@ -892,6 +931,7 @@ interface LayoutRouteChildren {
   LayoutAgenticTeamsTeamIdRoute: typeof LayoutAgenticTeamsTeamIdRoute
   LayoutCredentialCredentialIdRoute: typeof LayoutCredentialCredentialIdRoute
   LayoutDashboardsDashboardIdRoute: typeof LayoutDashboardsDashboardIdRoute
+  LayoutInstallBundleIdRoute: typeof LayoutInstallBundleIdRoute
   LayoutKnowledgeSourceSourceIdRoute: typeof LayoutKnowledgeSourceSourceIdRoute
   LayoutSessionSessionIdRoute: typeof LayoutSessionSessionIdRoute
   LayoutTaskTaskIdRoute: typeof LayoutTaskTaskIdRoute
@@ -909,6 +949,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutActivitiesRoute: LayoutActivitiesRoute,
   LayoutActivitiesAllRoute: LayoutActivitiesAllRoute,
   LayoutAgentsRoute: LayoutAgentsRoute,
+  LayoutCatalogRoute: LayoutCatalogRoute,
   LayoutCredentialsRoute: LayoutCredentialsRoute,
   LayoutKnowledgeSourcesRoute: LayoutKnowledgeSourcesRoute,
   LayoutSessionsRoute: LayoutSessionsRouteWithChildren,
@@ -922,6 +963,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutAgenticTeamsTeamIdRoute: LayoutAgenticTeamsTeamIdRoute,
   LayoutCredentialCredentialIdRoute: LayoutCredentialCredentialIdRoute,
   LayoutDashboardsDashboardIdRoute: LayoutDashboardsDashboardIdRoute,
+  LayoutInstallBundleIdRoute: LayoutInstallBundleIdRoute,
   LayoutKnowledgeSourceSourceIdRoute: LayoutKnowledgeSourceSourceIdRoute,
   LayoutSessionSessionIdRoute: LayoutSessionSessionIdRoute,
   LayoutTaskTaskIdRoute: LayoutTaskTaskIdRoute,

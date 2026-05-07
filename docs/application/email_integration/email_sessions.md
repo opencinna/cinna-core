@@ -6,12 +6,12 @@ Define how incoming emails are processed into agent sessions or tasks, how repli
 
 ## Core Concepts
 
-- **Session Mode** — Determines where email sessions run: `clone` (isolated per sender) or `owner` (shared on parent agent)
+- **Session Mode** — Determines where email sessions run: `install` (isolated per sender — each new sender gets their own install of the agent's bundle) or `owner` (shared on the owner's agent)
 - **Processing Mode** — Determines what happens with incoming emails: `new_session` (auto-respond) or `new_task` (human review first)
 - **Email Threading** — Mapping email Message-ID / In-Reply-To / References headers to session continuity
 - **Session Context** — HMAC-verified metadata (sender, subject, session_id) injected into agent's system prompt and exposed via API
 - **Outgoing Email Queue** — Asynchronous queue for agent replies sent via SMTP
-- **Pending Clone Creation** — Emails queued until the sender's clone environment is ready
+- **Pending Install Creation** — Emails queued until the sender's install environment is ready
 
 ## User Stories / Flows
 
@@ -19,9 +19,9 @@ Define how incoming emails are processed into agent sessions or tasks, how repli
 
 1. Polling scheduler fetches unread emails from IMAP (every 5 min)
 2. Routing service determines the target agent:
-   - **Clone mode**: finds existing clone or creates one for the sender
-   - **Owner mode**: routes directly to parent agent
-3. If the target clone is still building → email queued with `pending_clone_creation=True`
+   - **Install mode**: calls `InstallService.install_bundle_for_email(publisher_agent_id, recipient_user_id)` to find or create the sender's install of the agent's bundle; on first email the publisher's agent is auto-published if it has no revisions yet
+   - **Owner mode**: routes directly to the owner's agent
+3. If the target install is still building → email queued with `pending_clone_creation=True` (field name preserved for DB compatibility)
 4. Processing service matches email to an existing session via threading headers
 5. If no existing session → new session created with `email_thread_id` and `integration_type="email"`
 6. Email body injected as user message; agent streaming begins
@@ -47,31 +47,29 @@ Define how incoming emails are processed into agent sessions or tasks, how repli
 4. New message injected into the same session — conversation continues
 5. Agent's response is threaded back with proper `References` chain
 
-### 4. Pending Clone Retry
+### 4. Pending Install Retry
 
-1. First email from a new sender triggers clone creation
-2. Email marked `pending_clone_creation=True` (not processed yet)
+1. First email from a new sender triggers install creation via `InstallService.install_bundle_for_email`
+2. Email marked `pending_clone_creation=True` (field name preserved for DB compatibility)
 3. Polling scheduler periodically retries pending messages
-4. Once clone environment reaches `running` status → email is processed normally
+4. Once install environment reaches `running` status → email is processed normally
 5. Sender receives no immediate feedback (response arrives when agent processes)
 
 ## Business Rules
 
 ### Session Modes
 
-**Clone Mode** (`agent_session_mode = 'clone'`, default):
-- Each email sender gets a dedicated clone with isolated Docker environment
-- Clone created via standard `AgentCloneService.create_clone()` flow
+**Install Mode** (`agent_session_mode = 'clone'`, value preserved for DB compatibility):
+- Each email sender gets a dedicated install of the agent's bundle with isolated Docker environment
+- Install created via `InstallService.install_bundle_for_email(publisher_agent_id, recipient_user_id)`; on first call the publisher's agent is auto-published if it has no revisions yet
 - Sessions belong to the sender's user account
-- Clone count tracked against `max_clones` limit
-- `clone_share_mode` controls access level: `user` or `builder`
+- Per-user App Data volume attached to the install persists across email conversations
 - Ideal for: multi-user bots, customer support, public-facing agents
 
 **Owner Mode** (`agent_session_mode = 'owner'`):
-- Sessions created directly on the original agent in owner's user space
-- No clone creation — all emails processed in the same environment
+- Sessions created directly on the owner's agent
+- No install creation — all emails processed in the same environment
 - `sender_email` stored on the session to route replies back to original sender
-- Clone-specific settings (`max_clones`, `clone_share_mode`) ignored
 - Ideal for: personal automation, single-user workflows
 
 ### Processing Modes
@@ -162,7 +160,7 @@ Sending Scheduler (2 min)
 - [Email Integration](email_integration.md) — Parent feature: access control, security model, overall architecture
 - [Mail Servers](mail_servers.md) — IMAP/SMTP server credentials used by polling and sending services
 - Agent Sessions — Session lifecycle, streaming, message injection <!-- TODO: link when agents/agent_sessions docs are created -->
-- [Agent Sharing](../../agents/agent_sharing/agent_sharing.md) — Auto-share and clone creation for email senders
+- [Agent Bundles & Installs](../../agents/agent_bundles/agent_bundles.md) — Auto-install for email senders via `InstallService.install_bundle_for_email`; publisher's agent is auto-published on first email if it has no revisions
 - [Agent Environment Core](../../agents/agent_environment_core/agent_environment_core.md) — Session context injection, prompt generation, helper scripts
 - [Input Tasks](../input_tasks/input_tasks.md) — Task creation from emails, "Send Answer" flow
 - [Agent Activities](../agent_activities/agent_activities.md) — Email-originated tasks create `email_task_incoming` and `email_task_reply_pending` activities that notify the agent owner via the sidebar bell indicator

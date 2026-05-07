@@ -14,10 +14,10 @@ interface LatestSessionsProps {
 
 export function LatestSessions({ limit = 8 }: LatestSessionsProps) {
   const navigate = useNavigate()
-  const { activeWorkspaceId } = useWorkspace()
+  const { workspaceFilter } = useWorkspace()
 
   const { data, isLoading } = useQuery({
-    queryKey: ["sessions", "latest", limit, activeWorkspaceId],
+    queryKey: ["sessions", "latest", limit, workspaceFilter],
     queryFn: ({ queryKey }) => {
       const [, , limitValue, workspaceId] = queryKey
       return SessionsService.listSessions({
@@ -25,7 +25,7 @@ export function LatestSessions({ limit = 8 }: LatestSessionsProps) {
         limit: limitValue as number,
         orderBy: "last_message_at",
         orderDesc: true,
-        userWorkspaceId: (workspaceId ?? "") as string,
+        userWorkspaceId: workspaceId as string | undefined,
       })
     },
   })

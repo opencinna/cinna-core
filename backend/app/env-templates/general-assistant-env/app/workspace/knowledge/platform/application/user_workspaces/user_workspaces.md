@@ -10,6 +10,7 @@ Workspaces let users organize agents, credentials, sessions, and tasks into sepa
 - **Default Workspace** - Virtual workspace for entities with no explicit workspace assignment (`user_workspace_id = null`)
 - **Active Workspace** - The currently selected workspace in the browser session, stored in localStorage (not server-side)
 - **Workspace Inheritance** - Sessions and activities automatically inherit their workspace from their parent agent, rather than being assigned directly
+- **Workspaces Enabled Toggle** - Per-user UI preference (Settings → Interface → Workspaces card) that turns workspace filtering on or off. When off, list queries omit the workspace filter and show every entity owned by the user; the sidebar workspace switcher is hidden. Persisted on the `User` row (`User.workspaces_enabled` boolean column) so the setting follows the user across browsers and devices. The toggle is role-agnostic and works the same for `agent-user`, `agent-developer`, and `admin`
 
 ## User Stories / Flows
 
@@ -55,6 +56,11 @@ Workspaces let users organize agents, credentials, sessions, and tasks into sepa
 - **Explicitly assigned entities**: agents, credentials (user picks workspace)
 - **Inherited entities**: sessions (from agent), activities (from session/agent)
 - **Deletion behavior** - if the deleted workspace was active, UI switches to Default
+- **Toggle default for new users** - the `User.workspaces_enabled` column defaults to `false`, so new accounts see all of their entities without a workspace filter and the sidebar switcher is hidden until they opt in
+- **Toggle gates the sidebar switcher** - the workspace switcher in the sidebar appears only when Workspaces Enabled is on. Role does not affect this — every role sees (or doesn't see) the switcher based purely on this toggle
+- **Toggle gates list filtering** - when the toggle is on, list queries pass `userWorkspaceId = activeWorkspaceId ?? ""` and the backend applies the workspace filter. When off, queries omit the parameter (`undefined`) so the backend returns every owned entity
+- **Workspace assignment on create when toggle is off** - new agents, credentials, and tasks created while the toggle is off are persisted with `user_workspace_id = null` (Default workspace); enabling the toggle later does not retroactively assign them
+- **Cross-workspace visibility for foreign-bundle installs** - when a list query is filtered to a non-default workspace, foreign-bundle installs (agents installed from another publisher's bundle, identified by `bundle_uuid IS NOT NULL` AND `is_publisher_install = false` AND `user_workspace_id IS NULL`) and the General Assistant always appear, regardless of the active workspace. Plain default-workspace agents (`user_workspace_id IS NULL` with no bundle linkage) are NOT shown in non-default views — they belong only to the Default workspace
 
 ## Architecture Overview
 

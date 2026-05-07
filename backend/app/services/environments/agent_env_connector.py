@@ -106,10 +106,22 @@ class AgentEnvConnector:
         auth_token: str,
         command: str,
         timeout: int = 120,
+        env: dict[str, str] | None = None,
+        stdin: str | None = None,
     ) -> dict:
         """Execute a shell command in the agent environment.
 
         Posts to {base_url}/exec and returns the result dict.
+
+        Args:
+            base_url: Environment HTTP base URL.
+            auth_token: Bearer token for the agent-env.
+            command: Shell command to execute.
+            timeout: Command timeout in seconds (max enforced env-side).
+            env: Optional extra env vars merged with the subprocess's default
+                environment. Values are expected to be strings; callers should
+                keep individual values well below the env-side 100 KB cap.
+            stdin: Optional input piped to the subprocess's stdin.
 
         Returns:
             {"exit_code": int, "stdout": str, "stderr": str}
@@ -128,11 +140,16 @@ class AgentEnvConnector:
             write=30.0,
             pool=30.0,
         )
+        payload: dict = {"command": command, "timeout": timeout}
+        if env is not None:
+            payload["env"] = env
+        if stdin is not None:
+            payload["stdin"] = stdin
         try:
             async with httpx.AsyncClient(timeout=http_timeout) as client:
                 response = await client.post(
                     f"{base_url}/exec",
-                    json={"command": command, "timeout": timeout},
+                    json=payload,
                     headers=headers,
                 )
                 response.raise_for_status()

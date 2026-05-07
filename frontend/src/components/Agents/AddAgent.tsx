@@ -43,7 +43,7 @@ const AddAgent = () => {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { showSuccessToast, showErrorToast } = useCustomToast()
-  const { activeWorkspaceId } = useWorkspace()
+  const { workspaceFilter } = useWorkspace()
 
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
@@ -73,7 +73,7 @@ const AddAgent = () => {
     // Include active workspace_id in the agent creation
     const agentData: AgentCreate = {
       ...data,
-      user_workspace_id: activeWorkspaceId || undefined,
+      user_workspace_id: workspaceFilter || undefined,
     }
     mutation.mutate(agentData)
   }

@@ -151,8 +151,8 @@ External Sender → Email → IMAP Server → Backend Polling (parent agent)
 ## Integration Points
 
 - Agent Sessions — Session creation, streaming, message injection <!-- TODO: link when agents/agent_sessions docs are created -->
-- [Agent Sharing](../../agents/agent_sharing/agent_sharing.md) — Auto-share + clone creation for email senders
-- [Agent Environments](../../agents/agent_environments/agent_environments.md) — Docker environment build for clones
+- [Agent Bundles & Installs](../../agents/agent_bundles/agent_bundles.md) — Auto-install for email senders; `InstallService.install_bundle_for_email` replaces the legacy auto-share flow
+- [Agent Environments](../../agents/agent_environments/agent_environments.md) — Docker environment build for installs
 - [Agent Environment Core](../../agents/agent_environment_core/agent_environment_core.md) — Session context injection for email awareness
 - [Mail Servers](mail_servers.md) — IMAP/SMTP server configuration and credential management
 - [Email Sessions](email_sessions.md) — Session modes, processing, threading, and sending

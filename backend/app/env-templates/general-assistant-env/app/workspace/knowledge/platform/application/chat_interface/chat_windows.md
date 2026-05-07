@@ -146,7 +146,7 @@ Key behaviors:
 - **[Agent Commands](../../agents/agent_commands/agent_commands.md)** — `/files` and other slash commands processed as special message types
 - **[Agent Handover](../../agents/agent_handover/agent_handover.md)** — Sub-tasks panel and task feedback messages in chat
 - **[Input Tasks](../input_tasks/input_tasks.md)** — Task-linked sessions with bidirectional status sync
-- **[Guest Sharing](../../agents/agent_sharing/guest_sharing.md)** — Guest share page authentication and session scoping
+- **[Guest Sharing](../../agents/guest_sharing/guest_sharing.md)** — Guest share page authentication and session scoping; token-based unauthenticated access to an agent install
 - **[Webapp Chat](../../agents/agent_webapp/webapp_chat.md)** — Webapp-specific chat endpoints, page context, and action forwarding
 - **[Tools Approval](../../agents/agent_environment_core/tools_approval_management.md)** — Tool approval flow triggered from chat message actions
 - **[Ask User Question Widget](tool_answer_questions_widget.md)** — Detailed question answering flow documentation

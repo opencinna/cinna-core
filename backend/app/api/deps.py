@@ -66,6 +66,32 @@ def get_current_active_superuser(current_user: CurrentUser) -> User:
     return current_user
 
 
+def require_developer(current_user: CurrentUser) -> User:
+    """Allow only ``agent-developer`` or ``admin`` roles.
+
+    Phase 3 — used as ``dependencies=[Depends(require_developer)]`` on
+    routes that mutate agents, bundles, or sessions in building mode,
+    and on publish-bundle endpoints.  Layered on top of any ownership
+    checks the routes already perform.
+
+    Superusers always pass — they implicitly hold admin privileges
+    even if their stored ``role`` ever drifts (defense-in-depth).
+    """
+    # Imported lazily to avoid a circular import at module load
+    # (services may import from app.models which imports deps in a few
+    # edge cases during test collection).
+    from app.services.users.role_service import RoleService
+
+    try:
+        RoleService.require_developer(current_user)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    return current_user
+
+
+CurrentDeveloper = Annotated[User, Depends(require_developer)]
+
+
 # ── Guest share context ─────────────────────────────────────────────────
 
 

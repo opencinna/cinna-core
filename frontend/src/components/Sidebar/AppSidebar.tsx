@@ -1,5 +1,5 @@
 import { Link as RouterLink, useRouterState } from "@tanstack/react-router"
-import { Bot, Key, MessageSquare, Bell, ClipboardList, Home } from "lucide-react"
+import { Bot, Key, MessageSquare, Bell, ClipboardList, Home, Store } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 
 import { Logo } from "@/components/Common/Logo"
@@ -19,6 +19,8 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import useAuth from "@/hooks/useAuth"
+import useRole from "@/hooks/useRole"
+import useWorkspace from "@/hooks/useWorkspace"
 import { type Item, Main } from "./Main"
 import { User } from "./User"
 import { AdminMenu } from "./AdminMenu"
@@ -34,6 +36,29 @@ const menuItems: Item[] = [
   { icon: MessageSquare, title: "Sessions", path: "/sessions" },
   { icon: Key, title: "Credentials", path: "/credentials" },
 ]
+
+function CatalogMenu() {
+  const { isMobile, setOpenMobile } = useSidebar()
+  const router = useRouterState()
+  const isActive = router.location.pathname === "/catalog"
+
+  const handleMenuClick = () => {
+    if (isMobile) {
+      setOpenMobile(false)
+    }
+  }
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton tooltip="Catalog" isActive={isActive} asChild>
+        <RouterLink to="/catalog" onClick={handleMenuClick}>
+          <Store className="size-4" />
+          <span>Catalog</span>
+        </RouterLink>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  )
+}
 
 function ActivitiesMenu() {
   const { isMobile, setOpenMobile } = useSidebar()
@@ -107,27 +132,37 @@ function ActivitiesMenu() {
 
 export function AppSidebar() {
   const { user: currentUser } = useAuth()
+  const { isDeveloper } = useRole()
+  const { workspacesEnabled } = useWorkspace()
 
+  // Workspace switcher visibility follows the user's `workspacesEnabled`
+  // preference (Settings → Interface). Dashboard / agentic-teams switchers
+  // and the admin menu stay developer-tier.
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader className="px-4 py-6 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:items-center">
         <Logo variant="responsive" />
       </SidebarHeader>
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarWorkspaceSwitcher />
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-        <SidebarSeparator />
+        {workspacesEnabled && (
+          <>
+            <SidebarGroup>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarWorkspaceSwitcher />
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+            <SidebarSeparator />
+          </>
+        )}
         <Main items={menuItems} />
       </SidebarContent>
       <SidebarFooter>
         <ActivitiesMenu />
-        <SidebarDashboardSwitcher />
-        <AgenticTeamsSwitcher />
+        <CatalogMenu />
+        {isDeveloper && <SidebarDashboardSwitcher />}
+        {isDeveloper && <AgenticTeamsSwitcher />}
         {currentUser?.is_superuser && <AdminMenu />}
         <User user={currentUser} />
       </SidebarFooter>

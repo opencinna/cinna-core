@@ -117,7 +117,7 @@ Tool interception uses regex patterns to detect credential access:
 - [Agent Environment Core](../agent_environment_core/agent_environment_core.md) — routes.py SSE stream wrapped with redaction; new `/security/report` proxy endpoint
 - [Agent Environments](../agent_environments/agent_environments.md) — `environment_lifecycle.py` extended to write Claude Code hook settings
 - [Agent Sessions](../../application/agent_sessions/agent_sessions.md) — `session_id` on SecurityEvent links events to sessions
-- [Guest Sharing](../agent_sharing/guest_sharing.md) — `guest_share_id` on SecurityEvent enables guest-specific security queries
+- **[Guest Sharing](../guest_sharing/guest_sharing.md)** — `guest_share_id` on SecurityEvent enables guest-specific security queries for token-based guest sessions
 
 ## Known Limitations
 

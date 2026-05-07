@@ -77,10 +77,19 @@ System prompt construction for agent environments. Each agent environment operat
 
 ### Workspace File Organization
 
-- `./scripts/` - All Python scripts
-- `./files/` - Machine-format files (JSON, CSV, binaries, intermediate data)
-- `./docs/` - Human documentation (Markdown reports, summaries, workflow prompts)
+- `./scripts/` - All Python scripts — **bundle-owned**, snapshotted at publish, replaced on update
+- `./docs/` - Human documentation (Markdown reports, summaries, workflow prompts) — **bundle-owned**
+- `./knowledge/` - Integration docs and API guides — **bundle-owned**
+- `./files/` - Static assets shipped with the bundle — **bundle-owned**; for runtime data use `./app-data/storage/`
+- `./app-data/` - **Per-user persistent App Data** — never overwritten by bundle updates; agents SHOULD write all runtime state here:
+  - `./app-data/storage/` — structured data (databases, JSON, CSVs)
+  - `./app-data/uploads/` — user-provided files at runtime
+  - `./app-data/cache/` — cached downloads and processed output
 - All packages installed via `uv`
+
+**Persistence rules for bundle agents**:
+- Conversation-mode runs SHOULD only write to `/tmp` or `./app-data/`. Writing to bundle-owned folders during conversation mode will be lost on the next update.
+- Building-mode runs MAY write anywhere. The publisher's working install is what gets snapshotted on publish.
 
 ### Credential Security
 
@@ -100,6 +109,7 @@ System prompt construction for agent environments. Each agent environment operat
 - **Environment to Backend** - Automatic after building session completion. Updates Agent model fields
 - **Backend to Environment** - Manual, triggered by user via sync endpoint. Requires active running environment
 - Workflow prompt changes trigger A2A skills regeneration and optional description update
+- **Publish snapshot** - At publish time (`POST /agents/{id}/publish`), the three prompt fields (`workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`) are copied from the `Agent` row into `AgentBundleRevision` and into the revision's `manifest.json`. On `apply_update`, the install's prompt fields are updated from the revision — the next dynamic sync then writes them to `workspace/docs/`
 
 ## Architecture Overview
 

@@ -1,6 +1,6 @@
 # Cinna Core
 
-A conversational AI agent platform where users create custom AI agents, run them in isolated Docker environments, and interact through persistent chat sessions. Agents can be shared, scheduled, triggered by email/webhooks, and exposed via A2A and MCP protocols.
+A conversational AI agent platform where users create custom AI agents, run them in isolated Docker environments, and interact through persistent chat sessions. Agent developers publish versioned bundles to a catalog; other users install them. Agents can be scheduled, triggered by email/webhooks, and exposed via A2A and MCP protocols.
 
 **Stack:** FastAPI + PostgreSQL | React + TypeScript + TanStack | Docker isolation | SQLModel ORM
 
@@ -37,13 +37,18 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | **Agent Plugin** | Marketplace capability that extends agent functionality |
 | **Input Task** | User-submitted task that goes through refinement before agent execution; extended with short-code IDs, comments, attachments, status history, and subtask delegation |
 | **Task Trigger** | Automated rule (CRON, webhook, date) that creates tasks for an agent |
-| **Agent Share** | Clone-based sharing of an agent with another user, including credential requirements |
-| **Guest Share** | Token-based limited access to an agent for unauthenticated users |
+| **Agent Bundle** | Publisher-owned, versioned packaging of an agent identified by a reverse-DNS bundle ID. Publishing an agent creates a bundle; each publish creates an immutable revision |
+| **Bundle Revision** | Immutable snapshot of a bundle's workspace content (scripts, docs, knowledge, files, prompts, SDK settings) taken at publish time |
+| **Install** | A user's running copy of a published bundle — an `Agent` row seeded from a bundle revision with its own persistent App Data volume |
+| **App Data** | Per-user, per-bundle persistent storage volume (`/app/workspace/app-data`) that survives uninstall and reattaches on reinstall |
+| **Guest Share** | Token-based, time-limited, revocable link that gives unauthenticated (or authenticated) viewers chat-only access to a specific agent install; protected by a 4-digit security code, scoped to conversation mode, and optionally exposes a read-only environment panel |
 | **Handover** | Agent-to-agent task delegation within the platform |
 | **Workspace** | Isolation boundary for user's agents, sessions, and resources |
 | **AI Function** | LLM utility for text generation, classification, extraction with multi-provider cascade fallback |
 | **Building Mode** | Agent environment state for configuration and development |
 | **Conversation Mode** | Agent environment state for executing tasks and chat |
+| **Agent User** | Default role for new signups — can install, chat, and manage settings; cannot create agents or publish bundles |
+| **Agent Developer** | Admin-promoted role — unlocks agent creation, building mode, publishing, and all developer UI |
 | **A2A** | Agent-to-Agent protocol for cross-platform agent communication |
 | **MCP** | Model Context Protocol - exposes agents as tool servers to external LLM clients |
 | **App MCP Server** | Universal MCP endpoint that routes messages to agents via pattern matching or AI classification |
@@ -64,9 +69,9 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | [agents](#agents) | Core agent lifecycle - creation, configuration, environments, sessions, chat, file management |
 | [tasks](#tasks) | Task submission, refinement, triggers, and scheduling |
 | [credentials](#credentials) | Credential management, encryption, AI provider keys |
-| [application](#application) | User-facing platform features - authentication, integrations, real-time events, workspaces |
+| [application](#application) | User-facing platform features - authentication, roles, integrations, real-time events, workspaces |
 | [knowledge](#knowledge) | Git-based knowledge sources, vector search, RAG |
-| [sharing](#sharing) | Agent sharing, guest access, workspace collaboration |
+| [sharing](#sharing) | Guest access, workspace collaboration |
 | [agentic_teams](#agentic_teams) | Visual org-chart builder for agent orchestration topology — teams, nodes, connections with AI-generated handover prompts |
 | [development](#development) | Backend/frontend patterns, AI functions, debugging |
 | [infrastructure](#infrastructure) | Deployment-level concerns — nginx reverse proxy, well-known URIs, origin-root routing |
@@ -93,9 +98,12 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | agent_commands | Slash commands in agent sessions — `/files`, `/session-recover`, `/session-reset`, `/rebuild-env`, `/agent-status`, and the `/run:*` family — with autocomplete popup UI. Command output with `include_in_llm_context=True` is forwarded to the next LLM turn via a `<prior_commands>` XML block | [business logic](agents/agent_commands/agent_commands.md) \| [tech](agents/agent_commands/agent_commands_tech.md) \| [files](agents/agent_commands/files_command.md) \| [recovery](agents/agent_commands/session_recovery_command.md) \| [reset](agents/agent_commands/session_reset_command.md) \| [rebuild-env](agents/agent_commands/rebuild_env_command.md) \| [autocomplete](agents/agent_commands/slash_command_autocomplete.md) \| [agent-status](agents/agent_commands/agent_status_command.md) \| [non-llm context bridging tech](agents/agent_commands/non_llm_context_bridging_tech.md) |
 | agent_plugins | Plugin marketplace integration, capability loading | [business logic](agents/agent_plugins/agent_plugins.md) \| [tech](agents/agent_plugins/agent_plugins_tech.md) |
 | agent_schedulers | Multi-schedule CRON execution with natural language input, two schedule types (static prompt, script trigger), and execution logging | [business logic](agents/agent_schedulers/agent_schedulers.md) \| [tech](agents/agent_schedulers/agent_schedulers_tech.md) |
+| agent_webhooks | Per-agent authenticated HTTP webhooks — two trigger types (session: starts a new agent session seeded with the payload; script: runs a shell command in the agent's Docker environment), bearer-token auth with Fernet encryption and one-time reveal, immutable invocation logs | [business logic](agents/agent_webhooks/agent_webhooks.md) \| [tech](agents/agent_webhooks/agent_webhooks_tech.md) |
 | agent_handover | Agent-to-agent task delegation and inbox creation | [business logic](agents/agent_handover/agent_handover.md) \| [tech](agents/agent_handover/agent_handover_tech.md) |
 | agent_environment_core | Server-side core running inside Docker containers: HTTP API, SDK adapters, prompt generation. Two SDK engines: Claude Code (Anthropic/MiniMax), OpenCode (Anthropic, OpenAI, Google, OpenAI-compatible). Each environment links separate AI credentials per mode (building/conversation) with optional per-mode model overrides. OpenCode uses MCP bridge servers for custom tools. All adapters emit unified lowercase tool names via `tool_name_registry.py`. | [business logic](agents/agent_environment_core/agent_environment_core.md) \| [tech](agents/agent_environment_core/agent_environment_core_tech.md) \| [multi-sdk](agents/agent_environment_core/multi_sdk.md) \| [multi-sdk tech](agents/agent_environment_core/multi_sdk_tech.md) \| [knowledge tool](agents/agent_environment_core/knowledge_tool.md) \| [create agent task tool](agents/agent_environment_core/create_agent_task_tool.md) \| [tools approval](agents/agent_environment_core/tools_approval_management.md) \| [tools approval tech](agents/agent_environment_core/tools_approval_management_tech.md) |
-| agent_environment_data_management | Environment data flow, cloning, syncing operations | [business logic](agents/agent_environment_data_management/agent_environment_data_management.md) \| [tech](agents/agent_environment_data_management/agent_environment_data_management_tech.md) |
+| agent_environment_data_management | Environment data flow — bundle-owned vs. App Data vs. credentials vs. runtime data; install creation and apply-update flows | [business logic](agents/agent_environment_data_management/agent_environment_data_management.md) \| [tech](agents/agent_environment_data_management/agent_environment_data_management_tech.md) |
+| agent_bundles | Desktop-app-style bundle / install model — agents published as versioned bundles, installed by other users, push-updated; bundle ID format, visibility/grants, revisions, publisher working install | [business logic](agents/agent_bundles/agent_bundles.md) \| [tech](agents/agent_bundles/agent_bundles_tech.md) |
+| agent_app_data | Per-user, per-bundle persistent App Data volume (`/app/workspace/app-data`) keyed by `(user_id × bundle_id)` — survives uninstall/reinstall, Settings tab management, manual wipe on orphaned volumes | [business logic](agents/agent_app_data/agent_app_data.md) \| [tech](agents/agent_app_data/agent_app_data_tech.md) |
 | agent_credentials | Credential syncing to agent environments, whitelisting, redaction, OAuth refresh | [business logic](agents/agent_credentials/agent_credentials.md) \| [tech](agents/agent_credentials/agent_credentials_tech.md) \| [oauth](agents/agent_credentials/oauth_credentials.md) \| [whitelist](agents/agent_credentials/credentials_whitelist.md) \| [google SA](agents/agent_credentials/google_service_account.md) \| [ssh key](agents/agent_credentials/ssh_key_credentials.md) \| [ssh key tech](agents/agent_credentials/ssh_key_credentials_tech.md) \| [sharing](agents/agent_credentials/credential_sharing.md) \| [security hardening](agents/agent_credentials/credential_security_hardening.md) \| [security hardening tech](agents/agent_credentials/credential_security_hardening_tech.md) \| [add credential widget](agents/agent_credentials/add_credential_widget.md) |
 | agent_file_management | File upload/download, workspace file viewing, storage quota, garbage collection | [business logic](agents/agent_file_management/agent_file_management.md) \| [tech](agents/agent_file_management/agent_file_management_tech.md) \| [remote db viewer](agents/agent_file_management/remote_database_viewer.md) |
 | agent_webapp | Lightweight data dashboards served from agent workspace via shareable URLs, with dynamic Python data endpoints | [business logic](agents/agent_webapp/agent_webapp.md) \| [tech](agents/agent_webapp/agent_webapp_tech.md) \| [chat widget](agents/agent_webapp/webapp_chat.md) \| [chat tech](agents/agent_webapp/webapp_chat_tech.md) \| [chat context](agents/agent_webapp/webapp_chat_context.md) \| [chat context tech](agents/agent_webapp/webapp_chat_context_tech.md) \| [chat actions](agents/agent_webapp/webapp_chat_actions.md) \| [chat actions tech](agents/agent_webapp/webapp_chat_actions_tech.md) \| [actions context](agents/agent_webapp/webapp_actions_context.md) \| [actions context tech](agents/agent_webapp/webapp_actions_context_tech.md) |
@@ -123,6 +131,7 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | agent_management | Agent definition lifecycle — identity, prompts, SDK, credentials, integrations, sharing — the config entry point for all platform features | [business logic](application/agent_management/agent_management.md) \| [creation wizard](application/agent_management/new_agent_wizard.md) |
 | agent_sessions | Persistent chat sessions between users/external systems and agent environments — lifecycle, modes, streaming, integration types, UI | [business logic](application/agent_sessions/agent_sessions.md) \| [tech](application/agent_sessions/agent_sessions_tech.md) \| [env panel widget](application/agent_sessions/app_env_panel_widget.md) |
 | auth | User authentication - JWT tokens, password login, Google OAuth, domain whitelist, password recovery | [business logic](application/auth/auth.md) \| [tech](application/auth/auth_tech.md) \| [google oauth](application/auth/google_oauth.md) |
+| user_roles | Three-value `UserRole` enum (`agent-user`, `agent-developer`, `admin`) layered on top of `is_superuser`. `agent-user` is the default and gets a simplified shell (Catalog + Installed + Settings); `agent-developer` unlocks agent CRUD, building-mode sessions, publishing, sync-prompts; `admin` is paired with the existing superuser tier. Promote / demote from the Edit User dialog on Admin → Users; `USER_ROLE_CHANGED` WebSocket event re-routes the affected user on demote. | [business logic](application/user_roles/user_roles.md) \| [tech](application/user_roles/user_roles_tech.md) |
 | ssh_keys | User SSH key management for private Git repository access | [business logic](application/ssh_keys/ssh_keys.md) \| [tech](application/ssh_keys/ssh_keys_tech.md) |
 | knowledge_sources | Admin-only Git-based knowledge sources with article indexing, embeddings, and semantic search. Public sources are automatically available to all users' agents; private sources are owner-only | [business logic](application/knowledge_sources/knowledge_sources.md) \| [tech](application/knowledge_sources/knowledge_sources_tech.md) |
 | user_workspaces | Workspace isolation for organizing agents, credentials, sessions by context | [business logic](application/user_workspaces/user_workspaces.md) \| [tech](application/user_workspaces/user_workspaces_tech.md) |
@@ -154,9 +163,11 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 
 ### sharing
 
+> Note: `agent_sharing` (clone-based sharing) has been removed and replaced by the bundle/install model. The `docs/agents/agent_sharing/` directory has been deleted.
+
 | Feature | Description | Docs |
 |---------|-------------|------|
-| agent_sharing | Clone-based agent sharing, credential requirements, push updates, guest access | [business logic](agents/agent_sharing/agent_sharing.md) \| [tech](agents/agent_sharing/agent_sharing_tech.md) \| [accept wizard](agents/agent_sharing/accept_share_wizard_widget.md) \| [guest sharing](agents/agent_sharing/guest_sharing.md) \| [guest tech](agents/agent_sharing/guest_sharing_tech.md) |
+| guest_sharing | Token-based unauthenticated chat access to an agent install — disposable URLs with 4-digit security codes, expiration, lockout protection, optional env-panel access, and grant activation for authenticated users | [business logic](agents/guest_sharing/guest_sharing.md) \| [tech](agents/guest_sharing/guest_sharing_tech.md) |
 | workspaces | Workspace isolation, entity separation, multi-workspace support | [business logic](application/user_workspaces/user_workspaces.md) |
 
 ### agentic_teams
@@ -197,4 +208,4 @@ User ──→ Frontend (React) ──→ Backend API (FastAPI) ──→ Servic
 
 ---
 
-*Last updated: 2026-04-14*
+*Last updated: 2026-05-06*

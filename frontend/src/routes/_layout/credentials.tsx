@@ -24,16 +24,16 @@ export const Route = createFileRoute("/_layout/credentials")({
 })
 
 function CredentialsGrid() {
-  const { activeWorkspaceId } = useWorkspace()
+  const { workspaceFilter } = useWorkspace()
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["credentials", activeWorkspaceId],
+    queryKey: ["credentials", workspaceFilter],
     queryFn: async ({ queryKey }) => {
       const [, workspaceId] = queryKey
       const response = await CredentialsService.readCredentials({
         skip: 0,
         limit: 100,
-        userWorkspaceId: workspaceId ?? "",
+        userWorkspaceId: workspaceId as string | undefined,
       })
       return response
     },

@@ -1364,8 +1364,11 @@ class EnvironmentLifecycleManager:
         openai_api_key = bag["openai_api_key"]
         google_api_key = bag["google_api_key"]
 
-        # 4. Generate docker-compose.yml (injects shared template image tag)
-        self._generate_compose_file(instance_dir, environment, agent, port, auth_token, image_tag=image_tag)
+        # 4. Generate docker-compose.yml (injects shared template image tag
+        # and the per-(user, bundle) app-data host path).
+        self._generate_compose_file(
+            db_session, instance_dir, environment, agent, port, auth_token, image_tag=image_tag
+        )
 
         # 5. Generate .env file and SDK settings files
         self._generate_env_file(
@@ -1401,6 +1404,7 @@ class EnvironmentLifecycleManager:
 
     def _generate_compose_file(
         self,
+        db_session: Session,
         instance_dir: Path,
         environment: AgentEnvironment,
         agent: Agent,
@@ -1408,7 +1412,12 @@ class EnvironmentLifecycleManager:
         auth_token: str,
         image_tag: str = "",
     ):
-        """Generate docker-compose.yml from template."""
+        """Generate docker-compose.yml from template.
+
+        Substitutes per-environment variables, including the per-(user, bundle)
+        app-data host path. The app-data volume is created on demand here so
+        existing environments pick up the new mount on their next configure.
+        """
         template_path = instance_dir / "docker-compose.template.yml"
         output_path = instance_dir / "docker-compose.yml"
 
@@ -1430,6 +1439,14 @@ class EnvironmentLifecycleManager:
             host_instance_dir = str(instance_dir.absolute())
             logger.debug(f"Using container path for volumes: {host_instance_dir}")
 
+        # Resolve / create the app-data volume for this install. Phase 1: every
+        # agent has a ``bundle_id``, so this always succeeds. The host path
+        # produced here is what docker-compose will bind-mount into the
+        # container at ``/app/workspace/app-data``.
+        app_data_host_path = self._resolve_app_data_host_path(
+            db_session, environment, agent, instance_dir
+        )
+
         # Replace variables
         content = content.replace("${ENV_ID}", str(environment.id))
         content = content.replace("${AGENT_ID}", str(agent.id))
@@ -1438,11 +1455,58 @@ class EnvironmentLifecycleManager:
         content = content.replace("${AGENT_PORT}", str(port))
         content = content.replace("${AGENT_AUTH_TOKEN}", auth_token)
         content = content.replace("${HOST_INSTANCE_DIR}", host_instance_dir)
+        content = content.replace("${APP_DATA_HOST_PATH}", app_data_host_path)
         content = content.replace("${TEMPLATE_IMAGE_TAG}", image_tag)
 
         # Write output
         with open(output_path, 'w') as f:
             f.write(content)
+
+    def _resolve_app_data_host_path(
+        self,
+        db_session: Session,
+        environment: AgentEnvironment,
+        agent: Agent,
+        instance_dir: Path,
+    ) -> str:
+        """Resolve the host-side app-data path for the agent's install.
+
+        Creates the ``AppDataVolume`` row + on-disk tree on demand. Falls back
+        to a per-environment empty directory under the env's instance dir when
+        the agent has no ``bundle_id`` (legacy rows present at migration time
+        before backfill, or DB shapes that pre-date this column). The container
+        always sees ``/app/workspace/app-data`` whether or not a real volume is
+        attached, matching the prompt convention agents now rely on.
+        """
+        from app.services.bundles.app_data_service import AppDataService
+
+        bundle_id = getattr(agent, "bundle_id", None)
+        if not bundle_id:
+            # The Phase 1 migration backfills bundle_id for every existing
+            # row and the column is NOT NULL going forward, so reaching this
+            # branch means a bug — either an agent slipped through without
+            # a bundle_id or the column got cleared. Surface it loudly so
+            # we notice in logs; fall back to a per-env scratch dir to keep
+            # the env startable while the issue is investigated.
+            logger.warning(
+                "Agent %s has no bundle_id — using per-env fallback app-data dir. "
+                "This should not happen post-Phase-1 migration; investigate.",
+                agent.id,
+            )
+            fallback = instance_dir / "app-data"
+            for sub in ("storage", "uploads", "cache"):
+                (fallback / sub).mkdir(parents=True, exist_ok=True, mode=0o755)
+            if settings.HOST_AGENT_ENVIRONMENTS_DIR:
+                return f"{settings.HOST_AGENT_ENVIRONMENTS_DIR}/{environment.id}/app-data"
+            return str(fallback.absolute())
+
+        volume = AppDataService.get_or_create_volume(
+            db_session,
+            user_id=agent.owner_id,
+            bundle_id=bundle_id,
+            current_install_id=agent.id,
+        )
+        return volume.host_path
 
     def _generate_env_file(
         self,
@@ -2059,3 +2123,27 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
         await asyncio.to_thread(_copy_sync)
         logger.info(f"Workspace copied from environment {source_env.id} to {target_env.id}")
         return True
+
+    async def replace_bundle_content(
+        self, environment: AgentEnvironment, snapshot_path: Path
+    ) -> None:
+        """Replace bundle-owned folders in ``environment`` with snapshot content.
+
+        Phase 2 — called by ``InstallService.apply_update`` to land a new
+        published revision on a foreign install. Preserves
+        ``app/workspace/credentials/`` (synced separately) and
+        ``app/workspace/app-data/`` (per-user persistent data; never touched
+        by updates) by deliberately *not* listing them in the swap set.
+        Runs the blocking I/O in a thread pool to keep the event loop free.
+        """
+        from app.services.environments.workspace_copy import (
+            seed_workspace_from_bundle_snapshot,
+        )
+
+        await asyncio.to_thread(
+            seed_workspace_from_bundle_snapshot, snapshot_path, environment.id
+        )
+        logger.info(
+            "Replaced bundle content in env %s from snapshot %s",
+            environment.id, snapshot_path,
+        )

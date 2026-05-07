@@ -8,6 +8,7 @@ Auto-generated from OpenAPI spec. Tag: `users`
 **Query parameters:**
 - `skip`: integer, default: `0`
 - `limit`: integer, default: `100`
+- `role`: string | null
 
 **Response:** `UsersPublic`
 
@@ -22,6 +23,7 @@ Auto-generated from OpenAPI spec. Tag: `users`
   - `is_superuser`: boolean
   - `full_name`: string | null
   - `username`: string | null
+  - `role`: string
   - `password`: string (required)
 
 **Response:** `UserPublic`
@@ -54,6 +56,7 @@ Auto-generated from OpenAPI spec. Tag: `users`
   - `default_ai_functions_sdk`: string | null
   - `default_ai_functions_credential_id`: string | null
   - `general_assistant_enabled`: boolean | null
+  - `workspaces_enabled`: boolean | null
   - `default_ai_credential_conversation_id`: string | null
   - `default_ai_credential_building_id`: string | null
   - `default_model_override_conversation`: string | null
@@ -91,6 +94,26 @@ Auto-generated from OpenAPI spec. Tag: `users`
 
 ---
 
+## GET `/api/v1/users/me/role`
+**Read My Role**
+
+**Response:** `UserRolePublic`
+
+---
+
+## PATCH `/api/v1/users/{user_id}/role`
+**Update User Role**
+
+**Path parameters:**
+- `user_id`: uuid
+
+**Request body** (`UserRoleUpdate`):
+  - `role`: string (required)
+
+**Response:** `UserPublic`
+
+---
+
 ## POST `/api/v1/users/signup`
 **Register User**
 
@@ -125,6 +148,7 @@ Auto-generated from OpenAPI spec. Tag: `users`
   - `is_superuser`: boolean
   - `full_name`: string | null
   - `username`: string | null
+  - `role`: string
   - `password`: string | null
 
 **Response:** `UserPublic`

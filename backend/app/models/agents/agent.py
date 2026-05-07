@@ -1,27 +1,20 @@
 import uuid
 from datetime import datetime, UTC
-from typing import TYPE_CHECKING, List, Optional
+from typing import List
 from sqlmodel import Field, Relationship, SQLModel, Column
-from sqlalchemy import JSON, Index, ForeignKeyConstraint, text, Text
+from sqlalchemy import JSON, Index, text, Text, UniqueConstraint
 
 from app.models.users.user import User
 from app.models.credentials.link_models import AgentCredentialLink
 
-if TYPE_CHECKING:
-    from app.models.sharing.agent_share import AgentShare
 
-
-# Clone-related constants
-class CloneMode:
-    """Sharing mode for cloned agents"""
-    USER = "user"  # Read-only config, no building mode
-    BUILDER = "builder"  # Editable config, building mode allowed
-
-
+# Update mode constant — repurposed from the old clone flow. Used by Install
+# rows (every Agent row IS an Install) to control how published-bundle
+# updates roll out to the user.
 class UpdateMode:
-    """Update mode for cloned agents"""
-    AUTOMATIC = "automatic"  # Updates applied automatically
-    MANUAL = "manual"  # User decides when to apply updates
+    """Update mode for Installs — when a publisher releases a new revision."""
+    AUTOMATIC = "automatic"  # Apply on next env activation cycle
+    MANUAL = "manual"        # User decides when to apply
 
 
 # Shared properties
@@ -53,28 +46,29 @@ class AgentUpdate(SQLModel):
     example_prompts: list[str] | None = None
     inactivity_period_limit: str | None = None
     webapp_enabled: bool | None = None
-    # Clone owners can update these
+    # Install owners can update update mode for bundle updates
     update_mode: str | None = None  # "automatic" | "manual"
 
 
 # Database model, database table inferred from class name
 class Agent(AgentBase, table=True):
     __table_args__ = (
-        # Partial indexes for efficient clone/update queries
-        Index(
-            "ix_agent_is_clone",
-            "is_clone",
-            postgresql_where=text("is_clone = true"),
-        ),
-        Index(
-            "ix_agent_parent",
-            "parent_agent_id",
-            postgresql_where=text("parent_agent_id IS NOT NULL"),
-        ),
         Index(
             "ix_agent_pending_update",
             "pending_update",
             postgresql_where=text("pending_update = true"),
+        ),
+        Index(
+            "ix_agent_bundle_uuid",
+            "bundle_uuid",
+            postgresql_where=text("bundle_uuid IS NOT NULL"),
+        ),
+        # Partial unique index — exactly one publisher install per bundle.
+        Index(
+            "uq_agent_publisher_install_per_bundle",
+            "bundle_uuid",
+            unique=True,
+            postgresql_where=text("is_publisher_install = true"),
         ),
         # Partial unique index: one General Assistant per user
         Index(
@@ -83,12 +77,14 @@ class Agent(AgentBase, table=True):
             postgresql_where=text("is_general_assistant = true"),
             unique=True,
         ),
-        # Named foreign key for parent_agent_id
-        ForeignKeyConstraint(
-            ["parent_agent_id"],
-            ["agent.id"],
-            name="fk_agent_parent",
-            ondelete="SET NULL",
+        # One install per (owner, bundle_id) — both the publisher's install
+        # and any foreign install of the same bundle have a unique pair
+        # (owner_id × bundle_id). Foreign installs differ from the publisher
+        # by ``owner_id``.
+        UniqueConstraint(
+            "owner_id",
+            "bundle_id",
+            name="uq_agent_bundle_id_per_publisher",
         ),
     )
 
@@ -99,6 +95,28 @@ class Agent(AgentBase, table=True):
     user_workspace_id: uuid.UUID | None = Field(
         default=None, foreign_key="user_workspace.id", ondelete="CASCADE"
     )
+    # Reverse-DNS bundle identifier — auto-generated on agent creation by
+    # ``BundleIdService.generate_bundle_id``. Stable across bundle row
+    # deletion so per-user app-data volumes can reattach on reinstall.
+    # The Agent row IS the "Install" record; the publisher install and every
+    # foreign user install share the same ``bundle_id`` once published.
+    bundle_id: str = Field(max_length=255, nullable=False, index=True)
+    # Phase 2 — bundle linkage. ``bundle_uuid`` is NULL until the agent
+    # is published (the publisher install creates the bundle row on first
+    # publish); foreign installs always have it set after install_bundle().
+    bundle_uuid: uuid.UUID | None = Field(
+        default=None,
+        foreign_key="agent_bundle.id",
+        ondelete="SET NULL",
+    )
+    installed_revision_id: uuid.UUID | None = Field(
+        default=None,
+        foreign_key="agent_bundle_revision.id",
+        ondelete="SET NULL",
+    )
+    # True only on the publisher's working install. Exactly one such row per
+    # bundle (enforced by partial unique index above).
+    is_publisher_install: bool = Field(default=False)
     # NEW FIELDS for agent sessions
     description: str | None = None
     is_active: bool = Field(default=True)
@@ -114,17 +132,12 @@ class Agent(AgentBase, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
-    # Clone relationship fields
-    is_clone: bool = Field(default=False)
-    parent_agent_id: uuid.UUID | None = Field(default=None)  # FK defined in __table_args__
-    clone_mode: str | None = Field(default=None)  # "user" | "builder"
-    last_sync_at: datetime | None = Field(default=None)
-
-    # Update preferences (for clones)
-    update_mode: str = Field(default="automatic")  # "automatic" | "manual"
+    # Update preferences (for installs of published bundles)
+    update_mode: str = Field(default="manual")  # "automatic" | "manual"
     pending_update: bool = Field(default=False)
     pending_update_at: datetime | None = Field(default=None)
-    last_update_status: str | None = Field(default=None)  # "synced" | "dismissed" | None
+    last_sync_at: datetime | None = Field(default=None)
+    last_update_status: str | None = Field(default=None)  # "synced" | "failed" | None
 
     # General Assistant flag
     is_general_assistant: bool = Field(default=False)
@@ -144,13 +157,6 @@ class Agent(AgentBase, table=True):
             "cascade": "all, delete-orphan"
         }
     )
-
-    # Clone relationships (self-referential)
-    parent_agent: Optional["Agent"] = Relationship(
-        back_populates="clones",
-        sa_relationship_kwargs={"remote_side": "Agent.id"}
-    )
-    clones: List["Agent"] = Relationship(back_populates="parent_agent")
 
 
 # Properties to return via API, id is always required
@@ -176,15 +182,20 @@ class AgentPublic(SQLModel):
     owner_id: uuid.UUID
     user_workspace_id: uuid.UUID | None
 
-    # Clone info for UI
-    is_clone: bool = False
-    clone_mode: str | None = None
-    update_mode: str = "automatic"
+    # Bundle identity — reverse-DNS, stable per (publisher × bundle).
+    # Displayed in monospace + copy on the agent detail header.
+    bundle_id: str
+
+    # Bundle / install linkage
+    bundle_uuid: uuid.UUID | None = None
+    installed_revision_id: uuid.UUID | None = None
+    installed_revision_number: int | None = None
+    is_publisher_install: bool = False
+    update_mode: str = "manual"
     pending_update: bool = False
-    last_update_status: str | None = None  # "synced" | "dismissed" | None
-    parent_agent_id: uuid.UUID | None = None
-    parent_agent_name: str | None = None  # Resolved from parent_agent
-    shared_by_email: str | None = None  # Resolved from share record
+    pending_update_at: datetime | None = None
+    last_sync_at: datetime | None = None
+    last_update_status: str | None = None  # "synced" | "failed" | None
 
     # General Assistant flag
     is_general_assistant: bool = False

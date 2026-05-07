@@ -456,9 +456,13 @@ class PromptGenerator:
         if agent_id:
             lines.append(f"- **Agent ID**: `{agent_id}`")
 
-        if session_context.get("is_clone"):
-            parent_id = session_context.get("parent_agent_id")
-            lines.append(f"- **Is Clone**: yes (parent: `{parent_id}`)")
+        bundle_id = session_context.get("bundle_id")
+        if bundle_id:
+            lines.append(f"- **Bundle ID**: `{bundle_id}`")
+        if session_context.get("is_publisher_install") is False and session_context.get("bundle_uuid"):
+            # Foreign install of a published bundle — surface to the agent
+            # so prompts can recognise "I am running on someone else's copy".
+            lines.append(f"- **Install Type**: foreign install of bundle")
 
         if backend_session_id:
             lines.append("")

@@ -35,7 +35,7 @@ See [Agent Sessions](./agent_sessions.md) for how the panel fits into the sessio
 **Guest flow:**
 - Guest users see the same panel but with Credentials tab hidden and database viewer disabled
 - File/folder download and workspace tree work normally for guests
-- See [Guest Sharing](../../agents/agent_sharing/guest_sharing.md)
+- See [Guest Sharing](../../agents/guest_sharing/guest_sharing.md) for the overall guest access model
 
 ## Component Structure
 

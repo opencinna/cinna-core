@@ -14,12 +14,14 @@ import {
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import useAuth from "@/hooks/useAuth"
 import { AccessTokensCard } from "./AccessTokensCard"
 import { EmailIntegrationCard } from "./EmailIntegrationCard"
 import { GuestShareCard } from "./GuestShareCard"
 import { McpConnectorsCard } from "./McpConnectorsCard"
 import { WebappShareCard } from "./WebappShareCard"
 import { LocalDevCard } from "./LocalDevCard"
+import { AgentWebhooksCard } from "./Webhooks/AgentWebhooksCard"
 
 interface AgentIntegrationsTabProps {
   agent: AgentPublic
@@ -29,6 +31,8 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
   const [copiedUrl, setCopiedUrl] = useState(false)
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
+  const { user } = useAuth()
+  const isOwner = !!user && user.id === agent.owner_id
 
   // A2A state
   const a2aConfig = agent.a2a_config as { enabled?: boolean; [key: string]: unknown } | null | undefined
@@ -150,10 +154,16 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
         {/* Webapp Share Links Card */}
         <WebappShareCard agentId={agent.id} webappEnabled={agent.webapp_enabled ?? false} />
 
-        {/* Email Integration Card - Half width, only for non-clone agents */}
-        {!agent.is_clone && (
+        {/* Email Integration Card — only for the publisher install (or
+            unpublished agents). Foreign installs of a published bundle
+            inherit email integration from the publisher and don't get
+            their own. */}
+        {(agent.is_publisher_install || !agent.bundle_uuid) && (
           <EmailIntegrationCard agentId={agent.id} />
         )}
+
+        {/* Webhooks Card - owner-only (mirrors AgentSchedulesCard ownership gate) */}
+        {isOwner && <AgentWebhooksCard agentId={agent.id} />}
 
         {/* Local Development Card */}
         <LocalDevCard agentId={agent.id} />

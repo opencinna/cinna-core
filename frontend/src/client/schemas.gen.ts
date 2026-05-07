@@ -140,23 +140,6 @@ export const AICredentialPublicSchema = {
     description: 'Public AI credential (no sensitive data)'
 } as const;
 
-export const AICredentialRequirementSchema = {
-    properties: {
-        sdk_type: {
-            type: 'string',
-            title: 'Sdk Type'
-        },
-        purpose: {
-            type: 'string',
-            title: 'Purpose'
-        }
-    },
-    type: 'object',
-    required: ['sdk_type', 'purpose'],
-    title: 'AICredentialRequirement',
-    description: 'Info about an AI credential type required for agent'
-} as const;
-
 export const AICredentialSelectionsSchema = {
     properties: {
         conversation_credential_id: {
@@ -186,7 +169,7 @@ export const AICredentialSelectionsSchema = {
     },
     type: 'object',
     title: 'AICredentialSelections',
-    description: 'AI credential selections for accepting a share.'
+    description: 'AI credential selections used by the install wizard.'
 } as const;
 
 export const AICredentialTypeSchema = {
@@ -751,36 +734,6 @@ export const AIServiceCredentialsUpdateSchema = {
     type: 'object',
     title: 'AIServiceCredentialsUpdate',
     description: 'Update AI service credentials (partial update)'
-} as const;
-
-export const AcceptShareRequestSchema = {
-    properties: {
-        credentials: {
-            anyOf: [
-                {
-                    additionalProperties: true,
-                    type: 'object'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Credentials'
-        },
-        ai_credential_selections: {
-            anyOf: [
-                {
-                    '$ref': '#/components/schemas/AICredentialSelections'
-                },
-                {
-                    type: 'null'
-                }
-            ]
-        }
-    },
-    type: 'object',
-    title: 'AcceptShareRequest',
-    description: 'Request body for accepting a share.'
 } as const;
 
 export const AccessTokenModeSchema = {
@@ -1519,6 +1472,42 @@ export const AdminBulkSkippedSchema = {
     description: 'A single environment that was skipped during a bulk rebuild.'
 } as const;
 
+export const AdminInstallRequestSchema = {
+    properties: {
+        credentials: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credentials'
+        },
+        ai_credential_selections: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AICredentialSelections'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        target_user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Target User Id'
+        }
+    },
+    type: 'object',
+    required: ['target_user_id'],
+    title: 'AdminInstallRequest',
+    description: 'Body of ``POST /catalog/{bundle_id}/admin-install``.'
+} as const;
+
 export const AdminTemplateInfoPublicSchema = {
     properties: {
         env_name: {
@@ -1846,6 +1835,363 @@ export const AgentAccessTokensPublicSchema = {
     type: 'object',
     required: ['data', 'count'],
     title: 'AgentAccessTokensPublic'
+} as const;
+
+export const AgentBundlePublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        bundle_id: {
+            type: 'string',
+            title: 'Bundle Id'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        publisher_user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Publisher User Id'
+        },
+        publisher_handle: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Handle'
+        },
+        latest_revision_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Revision Id'
+        },
+        latest_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Revision Number'
+        },
+        is_listed: {
+            type: 'boolean',
+            title: 'Is Listed'
+        },
+        visibility: {
+            type: 'string',
+            title: 'Visibility'
+        },
+        default_install_mode: {
+            type: 'string',
+            title: 'Default Install Mode'
+        },
+        install_count: {
+            type: 'integer',
+            title: 'Install Count',
+            default: 0
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'bundle_id', 'display_name', 'description', 'publisher_user_id', 'latest_revision_id', 'is_listed', 'visibility', 'default_install_mode', 'created_at', 'updated_at'],
+    title: 'AgentBundlePublic',
+    description: 'Response schema for ``GET /bundles/...``.'
+} as const;
+
+export const AgentBundleRevisionPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        bundle_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Bundle Id'
+        },
+        revision_number: {
+            type: 'integer',
+            title: 'Revision Number'
+        },
+        manifest: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Manifest'
+        },
+        content_hash: {
+            type: 'string',
+            title: 'Content Hash'
+        },
+        workflow_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Workflow Prompt'
+        },
+        entrypoint_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Entrypoint Prompt'
+        },
+        refiner_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Refiner Prompt'
+        },
+        agent_sdk_building: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Sdk Building'
+        },
+        agent_sdk_conversation: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Sdk Conversation'
+        },
+        model_override_building: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Building'
+        },
+        model_override_conversation: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Conversation'
+        },
+        required_credential_specs: {
+            items: {},
+            type: 'array',
+            title: 'Required Credential Specs',
+            default: []
+        },
+        published_by_user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Published By User Id'
+        },
+        published_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Published At'
+        },
+        release_notes: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Release Notes'
+        },
+        install_count: {
+            type: 'integer',
+            title: 'Install Count',
+            default: 0
+        }
+    },
+    type: 'object',
+    required: ['id', 'bundle_id', 'revision_number', 'content_hash', 'published_by_user_id', 'published_at'],
+    title: 'AgentBundleRevisionPublic',
+    description: 'Response schema for revision listings + detail.'
+} as const;
+
+export const AgentBundleRevisionsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentBundleRevisionPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AgentBundleRevisionsPublic'
+} as const;
+
+export const AgentBundleUpdateSchema = {
+    properties: {
+        display_name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Display Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        is_listed: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Is Listed'
+        },
+        visibility: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Visibility'
+        },
+        default_install_mode: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Install Mode'
+        }
+    },
+    type: 'object',
+    title: 'AgentBundleUpdate',
+    description: 'Editable fields on an existing bundle (publisher only).'
+} as const;
+
+export const AgentBundlesPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentBundlePublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AgentBundlesPublic'
 } as const;
 
 export const AgentCommentResponseSchema = {
@@ -3310,31 +3656,83 @@ export const AgentPublicSchema = {
             ],
             title: 'User Workspace Id'
         },
-        is_clone: {
-            type: 'boolean',
-            title: 'Is Clone',
-            default: false
+        bundle_id: {
+            type: 'string',
+            title: 'Bundle Id'
         },
-        clone_mode: {
+        bundle_uuid: {
             anyOf: [
                 {
-                    type: 'string'
+                    type: 'string',
+                    format: 'uuid'
                 },
                 {
                     type: 'null'
                 }
             ],
-            title: 'Clone Mode'
+            title: 'Bundle Uuid'
+        },
+        installed_revision_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Revision Id'
+        },
+        installed_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Revision Number'
+        },
+        is_publisher_install: {
+            type: 'boolean',
+            title: 'Is Publisher Install',
+            default: false
         },
         update_mode: {
             type: 'string',
             title: 'Update Mode',
-            default: 'automatic'
+            default: 'manual'
         },
         pending_update: {
             type: 'boolean',
             title: 'Pending Update',
             default: false
+        },
+        pending_update_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Pending Update At'
+        },
+        last_sync_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Sync At'
         },
         last_update_status: {
             anyOf: [
@@ -3347,40 +3745,6 @@ export const AgentPublicSchema = {
             ],
             title: 'Last Update Status'
         },
-        parent_agent_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Parent Agent Id'
-        },
-        parent_agent_name: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Parent Agent Name'
-        },
-        shared_by_email: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Shared By Email'
-        },
         is_general_assistant: {
             type: 'boolean',
             title: 'Is General Assistant',
@@ -3388,7 +3752,7 @@ export const AgentPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'name', 'description', 'workflow_prompt', 'entrypoint_prompt', 'refiner_prompt', 'is_active', 'active_environment_id', 'ui_color_preset', 'show_on_dashboard', 'conversation_mode_ui', 'created_at', 'updated_at', 'owner_id', 'user_workspace_id'],
+    required: ['id', 'name', 'description', 'workflow_prompt', 'entrypoint_prompt', 'refiner_prompt', 'is_active', 'active_environment_id', 'ui_color_preset', 'show_on_dashboard', 'conversation_mode_ui', 'created_at', 'updated_at', 'owner_id', 'user_workspace_id', 'bundle_id'],
     title: 'AgentPublic'
 } as const;
 
@@ -3652,145 +4016,6 @@ export const AgentSessionModeSchema = {
     type: 'string',
     enum: ['clone', 'owner'],
     title: 'AgentSessionMode'
-} as const;
-
-export const AgentShareCreateSchema = {
-    properties: {
-        shared_with_email: {
-            type: 'string',
-            title: 'Shared With Email'
-        },
-        share_mode: {
-            type: 'string',
-            title: 'Share Mode'
-        },
-        provide_ai_credentials: {
-            type: 'boolean',
-            title: 'Provide Ai Credentials',
-            default: false
-        },
-        conversation_ai_credential_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Conversation Ai Credential Id'
-        },
-        building_ai_credential_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Building Ai Credential Id'
-        }
-    },
-    type: 'object',
-    required: ['shared_with_email', 'share_mode'],
-    title: 'AgentShareCreate',
-    description: 'Input for creating a new share'
-} as const;
-
-export const AgentSharePublicSchema = {
-    properties: {
-        share_mode: {
-            type: 'string',
-            title: 'Share Mode'
-        },
-        id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Id'
-        },
-        original_agent_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Original Agent Id'
-        },
-        original_agent_name: {
-            type: 'string',
-            title: 'Original Agent Name'
-        },
-        status: {
-            type: 'string',
-            title: 'Status'
-        },
-        source: {
-            type: 'string',
-            title: 'Source',
-            default: 'manual'
-        },
-        shared_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Shared At'
-        },
-        accepted_at: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'date-time'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Accepted At'
-        },
-        shared_with_email: {
-            type: 'string',
-            title: 'Shared With Email'
-        },
-        shared_by_email: {
-            type: 'string',
-            title: 'Shared By Email'
-        },
-        cloned_agent_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Cloned Agent Id'
-        }
-    },
-    type: 'object',
-    required: ['share_mode', 'id', 'original_agent_id', 'original_agent_name', 'status', 'shared_at', 'accepted_at', 'shared_with_email', 'shared_by_email'],
-    title: 'AgentSharePublic',
-    description: 'Public representation of a share (for API responses)'
-} as const;
-
-export const AgentSharesPublicSchema = {
-    properties: {
-        data: {
-            items: {
-                '$ref': '#/components/schemas/AgentSharePublic'
-            },
-            type: 'array',
-            title: 'Data'
-        },
-        count: {
-            type: 'integer',
-            title: 'Count'
-        }
-    },
-    type: 'object',
-    required: ['data', 'count'],
-    title: 'AgentSharesPublic',
-    description: 'List response for agent shares'
 } as const;
 
 export const AgentStatusListPublicSchema = {
@@ -4757,6 +4982,678 @@ export const AgentWebappSharesPublicSchema = {
     title: 'AgentWebappSharesPublic'
 } as const;
 
+export const AgentWebhookCreateScriptSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        type: {
+            type: 'string',
+            const: 'script',
+            title: 'Type',
+            default: 'script'
+        },
+        payload_template: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 10000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Payload Template'
+        },
+        command: {
+            type: 'string',
+            maxLength: 2000,
+            minLength: 1,
+            title: 'Command'
+        },
+        command_timeout_seconds: {
+            type: 'integer',
+            maximum: 300,
+            minimum: 1,
+            title: 'Command Timeout Seconds',
+            default: 120
+        }
+    },
+    type: 'object',
+    required: ['name', 'command'],
+    title: 'AgentWebhookCreateScript',
+    description: 'Create payload for a script-type webhook.'
+} as const;
+
+export const AgentWebhookCreateSessionSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        type: {
+            type: 'string',
+            const: 'session',
+            title: 'Type',
+            default: 'session'
+        },
+        payload_template: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 10000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Payload Template'
+        },
+        prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Prompt'
+        },
+        session_mode: {
+            type: 'string',
+            enum: ['conversation', 'building'],
+            title: 'Session Mode',
+            default: 'conversation'
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'AgentWebhookCreateSession',
+    description: 'Create payload for a session-type webhook.'
+} as const;
+
+export const AgentWebhookLogPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        webhook_id_fk: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Webhook Id Fk'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        webhook_type: {
+            type: 'string',
+            title: 'Webhook Type'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        remote_ip: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Remote Ip'
+        },
+        headers_subset: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Headers Subset'
+        },
+        payload_received: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Payload Received'
+        },
+        payload_content_type: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Payload Content Type'
+        },
+        prompt_used: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Prompt Used'
+        },
+        command_executed: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Command Executed'
+        },
+        command_output: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Command Output'
+        },
+        command_stderr: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Command Stderr'
+        },
+        command_exit_code: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Command Exit Code'
+        },
+        session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Id'
+        },
+        error_message: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error Message'
+        },
+        duration_ms: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Duration Ms'
+        },
+        executed_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Executed At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'webhook_id_fk', 'agent_id', 'webhook_type', 'status', 'remote_ip', 'headers_subset', 'payload_received', 'payload_content_type', 'prompt_used', 'command_executed', 'command_output', 'command_stderr', 'command_exit_code', 'session_id', 'error_message', 'duration_ms', 'executed_at'],
+    title: 'AgentWebhookLogPublic',
+    description: 'Public log response.'
+} as const;
+
+export const AgentWebhookLogsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentWebhookLogPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AgentWebhookLogsPublic',
+    description: 'List response.'
+} as const;
+
+export const AgentWebhookPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        owner_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Owner Id'
+        },
+        type: {
+            type: 'string',
+            title: 'Type'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled'
+        },
+        payload_template: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Payload Template'
+        },
+        prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Prompt'
+        },
+        session_mode: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Mode'
+        },
+        command: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Command'
+        },
+        command_timeout_seconds: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Command Timeout Seconds'
+        },
+        webhook_id: {
+            type: 'string',
+            title: 'Webhook Id'
+        },
+        webhook_token_prefix: {
+            type: 'string',
+            title: 'Webhook Token Prefix'
+        },
+        webhook_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Webhook Url'
+        },
+        last_execution: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Execution'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'agent_id', 'owner_id', 'type', 'name', 'enabled', 'payload_template', 'webhook_id', 'webhook_token_prefix', 'created_at', 'updated_at'],
+    title: 'AgentWebhookPublic',
+    description: 'Public response model — never includes the full plaintext token.'
+} as const;
+
+export const AgentWebhookPublicWithTokenSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        owner_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Owner Id'
+        },
+        type: {
+            type: 'string',
+            title: 'Type'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled'
+        },
+        payload_template: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Payload Template'
+        },
+        prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Prompt'
+        },
+        session_mode: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Mode'
+        },
+        command: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Command'
+        },
+        command_timeout_seconds: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Command Timeout Seconds'
+        },
+        webhook_id: {
+            type: 'string',
+            title: 'Webhook Id'
+        },
+        webhook_token_prefix: {
+            type: 'string',
+            title: 'Webhook Token Prefix'
+        },
+        webhook_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Webhook Url'
+        },
+        last_execution: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Execution'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        webhook_token: {
+            type: 'string',
+            title: 'Webhook Token'
+        }
+    },
+    type: 'object',
+    required: ['id', 'agent_id', 'owner_id', 'type', 'name', 'enabled', 'payload_template', 'webhook_id', 'webhook_token_prefix', 'created_at', 'updated_at', 'webhook_token'],
+    title: 'AgentWebhookPublicWithToken',
+    description: `Returned only on creation or regenerate-token. Includes the full plaintext
+bearer token — UI must prompt the user to copy it immediately.`
+} as const;
+
+export const AgentWebhookUpdateSchema = {
+    properties: {
+        name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        },
+        enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Enabled'
+        },
+        payload_template: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 10000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Payload Template'
+        },
+        prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Prompt'
+        },
+        session_mode: {
+            anyOf: [
+                {
+                    type: 'string',
+                    enum: ['conversation', 'building']
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Mode'
+        },
+        command: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2000,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Command'
+        },
+        command_timeout_seconds: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    maximum: 300,
+                    minimum: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Command Timeout Seconds'
+        }
+    },
+    type: 'object',
+    title: 'AgentWebhookUpdate',
+    description: `Update payload. All fields optional.
+
+\`\`type\`\` is intentionally excluded — immutable after creation. Fields that
+don't match the webhook's actual type are rejected in the service layer.`
+} as const;
+
+export const AgentWebhooksPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentWebhookPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AgentWebhooksPublic',
+    description: 'List response.'
+} as const;
+
 export const AgenticTeamChartPublicSchema = {
     properties: {
         team: {
@@ -5608,6 +6505,100 @@ export const AppAgentRouteUpdateSchema = {
     title: 'AppAgentRouteUpdate'
 } as const;
 
+export const AppDataVolumePublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        bundle_id: {
+            type: 'string',
+            title: 'Bundle Id'
+        },
+        volume_name: {
+            type: 'string',
+            title: 'Volume Name'
+        },
+        size_bytes: {
+            type: 'integer',
+            title: 'Size Bytes'
+        },
+        last_size_check_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Size Check At'
+        },
+        current_install_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Current Install Id'
+        },
+        current_install_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Current Install Name'
+        },
+        is_orphaned: {
+            type: 'boolean',
+            title: 'Is Orphaned'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'bundle_id', 'volume_name', 'size_bytes', 'last_size_check_at', 'current_install_id', 'is_orphaned', 'created_at', 'updated_at'],
+    title: 'AppDataVolumePublic',
+    description: 'Response schema for ``GET /users/me/app-data``.'
+} as const;
+
+export const AppDataVolumesPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AppDataVolumePublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AppDataVolumesPublic'
+} as const;
+
 export const ArticleContentSchema = {
     properties: {
         id: {
@@ -5944,6 +6935,90 @@ export const BulkDeleteResponseSchema = {
     title: 'BulkDeleteResponse'
 } as const;
 
+export const BundleAccessGrantCreateSchema = {
+    properties: {
+        email: {
+            type: 'string',
+            title: 'Email'
+        }
+    },
+    type: 'object',
+    required: ['email'],
+    title: 'BundleAccessGrantCreate',
+    description: 'Body of ``POST /bundles/{bundle_id}/grants``.'
+} as const;
+
+export const BundleAccessGrantPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        bundle_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Bundle Id'
+        },
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        user_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Email'
+        },
+        granted_by_user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Granted By User Id'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'bundle_id', 'user_id', 'created_at'],
+    title: 'BundleAccessGrantPublic',
+    description: 'Response schema for a bundle access grant.'
+} as const;
+
+export const BundleAccessGrantsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/BundleAccessGrantPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'BundleAccessGrantsPublic'
+} as const;
+
 export const CLISetupTokenCreateSchema = {
     properties: {
         agent_id: {
@@ -6106,6 +7181,134 @@ export const CLITokensPublicSchema = {
     title: 'CLITokensPublic'
 } as const;
 
+export const CatalogEntryPublicSchema = {
+    properties: {
+        bundle_id: {
+            type: 'string',
+            title: 'Bundle Id'
+        },
+        bundle_uuid: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Bundle Uuid'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        publisher_handle: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Handle'
+        },
+        visibility: {
+            type: 'string',
+            title: 'Visibility'
+        },
+        latest_revision_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Revision Id'
+        },
+        latest_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Revision Number'
+        },
+        latest_published_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Published At'
+        },
+        install_count: {
+            type: 'integer',
+            title: 'Install Count'
+        },
+        is_installed: {
+            type: 'boolean',
+            title: 'Is Installed'
+        },
+        user_install_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Install Id'
+        },
+        required_credential_specs: {
+            items: {},
+            type: 'array',
+            title: 'Required Credential Specs',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['bundle_id', 'bundle_uuid', 'display_name', 'description', 'publisher_handle', 'visibility', 'latest_revision_id', 'latest_revision_number', 'latest_published_at', 'install_count', 'is_installed', 'user_install_id'],
+    title: 'CatalogEntryPublic',
+    description: "One row in the user's catalog."
+} as const;
+
+export const CatalogPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/CatalogEntryPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'CatalogPublic'
+} as const;
+
 export const CheckAccessResponseSchema = {
     properties: {
         accessible: {
@@ -6123,32 +7326,35 @@ export const CheckAccessResponseSchema = {
     description: 'Response for check access endpoint.'
 } as const;
 
-export const CloneUpdateRequestPublicSchema = {
+export const CheckUpdatesResponseSchema = {
     properties: {
-        copy_files_folder: {
+        pending_update: {
             type: 'boolean',
-            title: 'Copy Files Folder'
+            title: 'Pending Update'
         },
-        rebuild_environment: {
-            type: 'boolean',
-            title: 'Rebuild Environment'
+        installed_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Revision Number'
         },
-        id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Id'
+        latest_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Revision Number'
         },
-        clone_agent_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Clone Agent Id'
-        },
-        parent_agent_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Parent Agent Id'
-        },
-        parent_agent_name: {
+        last_update_status: {
             anyOf: [
                 {
                     type: 'string'
@@ -6157,29 +7363,9 @@ export const CloneUpdateRequestPublicSchema = {
                     type: 'null'
                 }
             ],
-            title: 'Parent Agent Name'
+            title: 'Last Update Status'
         },
-        pushed_by_email: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Pushed By Email'
-        },
-        status: {
-            type: 'string',
-            title: 'Status'
-        },
-        created_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Created At'
-        },
-        applied_at: {
+        last_sync_at: {
             anyOf: [
                 {
                     type: 'string',
@@ -6189,45 +7375,17 @@ export const CloneUpdateRequestPublicSchema = {
                     type: 'null'
                 }
             ],
-            title: 'Applied At'
+            title: 'Last Sync At'
         },
-        dismissed_at: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'date-time'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Dismissed At'
+        update_mode: {
+            type: 'string',
+            title: 'Update Mode'
         }
     },
     type: 'object',
-    required: ['copy_files_folder', 'rebuild_environment', 'id', 'clone_agent_id', 'parent_agent_id', 'status', 'created_at'],
-    title: 'CloneUpdateRequestPublic',
-    description: 'Public representation of an update request (for API responses)'
-} as const;
-
-export const CloneUpdateRequestsPublicSchema = {
-    properties: {
-        data: {
-            items: {
-                '$ref': '#/components/schemas/CloneUpdateRequestPublic'
-            },
-            type: 'array',
-            title: 'Data'
-        },
-        count: {
-            type: 'integer',
-            title: 'Count'
-        }
-    },
-    type: 'object',
-    required: ['data', 'count'],
-    title: 'CloneUpdateRequestsPublic',
-    description: 'List response for clone update requests'
+    required: ['pending_update', 'installed_revision_number', 'latest_revision_number', 'last_update_status', 'last_sync_at', 'update_mode'],
+    title: 'CheckUpdatesResponse',
+    description: 'Response of ``POST /agents/{agent_id}/check-updates``.'
 } as const;
 
 export const ConsentApproveResponseSchema = {
@@ -6628,27 +7786,6 @@ export const CredentialPublicSchema = {
     title: 'CredentialPublic'
 } as const;
 
-export const CredentialRequirementSchema = {
-    properties: {
-        name: {
-            type: 'string',
-            title: 'Name'
-        },
-        type: {
-            type: 'string',
-            title: 'Type'
-        },
-        allow_sharing: {
-            type: 'boolean',
-            title: 'Allow Sharing'
-        }
-    },
-    type: 'object',
-    required: ['name', 'type', 'allow_sharing'],
-    title: 'CredentialRequirement',
-    description: 'Info about a credential required for agent acceptance'
-} as const;
-
 export const CredentialShareCreateSchema = {
     properties: {
         shared_with_email: {
@@ -7009,19 +8146,6 @@ export const DatabaseQueryRequestSchema = {
     description: 'Request to execute SQL query on SQLite database'
 } as const;
 
-export const DeclineResponseSchema = {
-    properties: {
-        status: {
-            type: 'string',
-            title: 'Status'
-        }
-    },
-    type: 'object',
-    required: ['status'],
-    title: 'DeclineResponse',
-    description: 'Response for decline action.'
-} as const;
-
 export const DesktopOAuthClientPublicSchema = {
     properties: {
         client_id: {
@@ -7127,6 +8251,24 @@ export const DiscoverableSourcePublicSchema = {
     required: ['id', 'name', 'status'],
     title: 'DiscoverableSourcePublic',
     description: 'Public schema for discoverable knowledge sources (read-only admin view).'
+} as const;
+
+export const EditBundleIdRequestSchema = {
+    properties: {
+        bundle_id: {
+            type: 'string',
+            title: 'Bundle Id'
+        }
+    },
+    type: 'object',
+    required: ['bundle_id'],
+    title: 'EditBundleIdRequest',
+    description: `Body of \`\`PATCH /agents/{agent_id}/bundle-id\`\`.
+
+Only valid for the publisher install of a bundle that has not yet been
+published (no revisions exist). Once a revision is published, mutating
+the bundle id would silently orphan installed app-data — the API
+rejects with 409.`
 } as const;
 
 export const EmailAccessModeSchema = {
@@ -9600,6 +10742,39 @@ export const InputTasksPublicExtendedSchema = {
     title: 'InputTasksPublicExtended'
 } as const;
 
+export const InstallRequestSchema = {
+    properties: {
+        credentials: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credentials'
+        },
+        ai_credential_selections: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AICredentialSelections'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        }
+    },
+    type: 'object',
+    title: 'InstallRequest',
+    description: `Body of \`\`POST /catalog/{bundle_id}/install\`\`.
+
+\`\`credentials\`\` mirrors the legacy accept-share shape:
+\`\`{credential_name: credential_id_str | {field: value}}\`\`.`
+} as const;
+
 export const KnowledgeArticlePublicSchema = {
     properties: {
         id: {
@@ -11080,126 +12255,6 @@ export const OdooVerifyResponseSchema = {
     title: 'OdooVerifyResponse'
 } as const;
 
-export const PendingSharePublicSchema = {
-    properties: {
-        id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Id'
-        },
-        original_agent_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Original Agent Id'
-        },
-        original_agent_name: {
-            type: 'string',
-            title: 'Original Agent Name'
-        },
-        original_agent_description: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Original Agent Description'
-        },
-        share_mode: {
-            type: 'string',
-            title: 'Share Mode'
-        },
-        shared_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Shared At'
-        },
-        shared_by_email: {
-            type: 'string',
-            title: 'Shared By Email'
-        },
-        shared_by_name: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Shared By Name'
-        },
-        credentials_required: {
-            items: {
-                '$ref': '#/components/schemas/CredentialRequirement'
-            },
-            type: 'array',
-            title: 'Credentials Required'
-        },
-        ai_credentials_provided: {
-            type: 'boolean',
-            title: 'Ai Credentials Provided',
-            default: false
-        },
-        conversation_ai_credential_name: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Conversation Ai Credential Name'
-        },
-        building_ai_credential_name: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Building Ai Credential Name'
-        },
-        required_ai_credential_types: {
-            items: {
-                '$ref': '#/components/schemas/AICredentialRequirement'
-            },
-            type: 'array',
-            title: 'Required Ai Credential Types',
-            default: []
-        }
-    },
-    type: 'object',
-    required: ['id', 'original_agent_id', 'original_agent_name', 'original_agent_description', 'share_mode', 'shared_at', 'shared_by_email', 'shared_by_name', 'credentials_required'],
-    title: 'PendingSharePublic',
-    description: 'Pending share for recipient view (includes agent details)'
-} as const;
-
-export const PendingSharesPublicSchema = {
-    properties: {
-        data: {
-            items: {
-                '$ref': '#/components/schemas/PendingSharePublic'
-            },
-            type: 'array',
-            title: 'Data'
-        },
-        count: {
-            type: 'integer',
-            title: 'Count'
-        }
-    },
-    type: 'object',
-    required: ['data', 'count'],
-    title: 'PendingSharesPublic',
-    description: 'List response for pending shares'
-} as const;
-
 export const PendingToolsResponseSchema = {
     properties: {
         pending_tools: {
@@ -11330,43 +12385,45 @@ export const ProcessEmailsResultSchema = {
     title: 'ProcessEmailsResult'
 } as const;
 
-export const PushUpdateActionsRequestSchema = {
+export const PublishRequestSchema = {
     properties: {
-        copy_files_folder: {
-            type: 'boolean',
-            title: 'Copy Files Folder',
-            default: false
+        release_notes: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Release Notes'
         },
-        rebuild_environment: {
-            type: 'boolean',
-            title: 'Rebuild Environment',
-            default: false
+        display_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Display Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
         }
     },
     type: 'object',
-    title: 'PushUpdateActionsRequest',
-    description: 'Request body for pushing updates to clones'
-} as const;
-
-export const PushUpdatesResponseSchema = {
-    properties: {
-        clones_queued: {
-            type: 'integer',
-            title: 'Clones Queued'
-        },
-        clones_auto_updated: {
-            type: 'integer',
-            title: 'Clones Auto Updated'
-        },
-        clones_pending_manual: {
-            type: 'integer',
-            title: 'Clones Pending Manual'
-        }
-    },
-    type: 'object',
-    required: ['clones_queued', 'clones_auto_updated', 'clones_pending_manual'],
-    title: 'PushUpdatesResponse',
-    description: 'Response for push updates action.'
+    title: 'PublishRequest',
+    description: 'Body of ``POST /agents/{agent_id}/publish``.'
 } as const;
 
 export const RefinePromptRequestSchema = {
@@ -11592,23 +12649,6 @@ export const RevokeRequestSchema = {
     },
     type: 'object',
     title: 'RevokeRequest'
-} as const;
-
-export const RevokeResponseSchema = {
-    properties: {
-        status: {
-            type: 'string',
-            title: 'Status'
-        },
-        action: {
-            type: 'string',
-            title: 'Action'
-        }
-    },
-    type: 'object',
-    required: ['status', 'action'],
-    title: 'RevokeResponse',
-    description: 'Response for revoke action.'
 } as const;
 
 export const SSHKeyGenerateSchema = {
@@ -13043,7 +14083,7 @@ export const SetUpdateModeRequestSchema = {
     type: 'object',
     required: ['update_mode'],
     title: 'SetUpdateModeRequest',
-    description: 'Request body for setting update mode.'
+    description: 'Body of ``PATCH /agents/{agent_id}/update-mode``.'
 } as const;
 
 export const SharedCredentialPublicSchema = {
@@ -14302,69 +15342,6 @@ export const UpdateSessionStateResponseSchema = {
     description: 'Response from session state update.'
 } as const;
 
-export const UpdateStatusResponseSchema = {
-    properties: {
-        has_pending_update: {
-            type: 'boolean',
-            title: 'Has Pending Update'
-        },
-        pending_since: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'date-time'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Pending Since'
-        },
-        last_sync_at: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'date-time'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Last Sync At'
-        },
-        update_mode: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Update Mode'
-        },
-        parent_exists: {
-            type: 'boolean',
-            title: 'Parent Exists'
-        },
-        parent_name: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Parent Name'
-        }
-    },
-    type: 'object',
-    required: ['has_pending_update', 'pending_since', 'last_sync_at', 'update_mode', 'parent_exists', 'parent_name'],
-    title: 'UpdateStatusResponse',
-    description: 'Response for update status check.'
-} as const;
-
 export const UserAppAgentRouteCreateSchema = {
     properties: {
         agent_id: {
@@ -14599,6 +15576,12 @@ export const UserCreateSchema = {
                 }
             ],
             title: 'Username'
+        },
+        role: {
+            type: 'string',
+            maxLength: 32,
+            title: 'Role',
+            default: 'agent-user'
         },
         password: {
             type: 'string',
@@ -15206,6 +16189,12 @@ export const UserPublicSchema = {
             ],
             title: 'Username'
         },
+        role: {
+            type: 'string',
+            maxLength: 32,
+            title: 'Role',
+            default: 'agent-user'
+        },
         id: {
             type: 'string',
             format: 'uuid',
@@ -15272,6 +16261,11 @@ export const UserPublicSchema = {
         general_assistant_enabled: {
             type: 'boolean',
             title: 'General Assistant Enabled',
+            default: false
+        },
+        workspaces_enabled: {
+            type: 'boolean',
+            title: 'Workspaces Enabled',
             default: false
         },
         default_ai_credential_conversation_id: {
@@ -15368,6 +16362,12 @@ export const UserPublicWithAICredentialsSchema = {
             ],
             title: 'Username'
         },
+        role: {
+            type: 'string',
+            maxLength: 32,
+            title: 'Role',
+            default: 'agent-user'
+        },
         id: {
             type: 'string',
             format: 'uuid',
@@ -15434,6 +16434,11 @@ export const UserPublicWithAICredentialsSchema = {
         general_assistant_enabled: {
             type: 'boolean',
             title: 'General Assistant Enabled',
+            default: false
+        },
+        workspaces_enabled: {
+            type: 'boolean',
+            title: 'Workspaces Enabled',
             default: false
         },
         default_ai_credential_conversation_id: {
@@ -15546,6 +16551,32 @@ export const UserRegisterSchema = {
     title: 'UserRegister'
 } as const;
 
+export const UserRolePublicSchema = {
+    properties: {
+        role: {
+            type: 'string',
+            title: 'Role'
+        }
+    },
+    type: 'object',
+    required: ['role'],
+    title: 'UserRolePublic',
+    description: 'Response for ``GET /users/me/role``.'
+} as const;
+
+export const UserRoleUpdateSchema = {
+    properties: {
+        role: {
+            type: 'string',
+            title: 'Role'
+        }
+    },
+    type: 'object',
+    required: ['role'],
+    title: 'UserRoleUpdate',
+    description: 'Request body for ``PATCH /users/{user_id}/role`` — admin only.'
+} as const;
+
 export const UserUpdateSchema = {
     properties: {
         email: {
@@ -15594,6 +16625,12 @@ export const UserUpdateSchema = {
                 }
             ],
             title: 'Username'
+        },
+        role: {
+            type: 'string',
+            maxLength: 32,
+            title: 'Role',
+            default: 'agent-user'
         },
         password: {
             anyOf: [
@@ -15710,6 +16747,17 @@ export const UserUpdateMeSchema = {
                 }
             ],
             title: 'General Assistant Enabled'
+        },
+        workspaces_enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Workspaces Enabled'
         },
         default_ai_credential_conversation_id: {
             anyOf: [

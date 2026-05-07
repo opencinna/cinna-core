@@ -1,5 +1,0 @@
-export { ShareManagementDialog } from "./ShareManagementDialog"
-export { AddShareForm } from "./AddShareForm"
-export { ShareList } from "./ShareList"
-export { ClonesList } from "./ClonesList"
-export { RevokeShareDialog } from "./RevokeShareDialog"

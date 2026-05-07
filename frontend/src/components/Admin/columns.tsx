@@ -39,13 +39,24 @@ export const columns: ColumnDef<UserTableData>[] = [
     ),
   },
   {
-    accessorKey: "is_superuser",
+    accessorKey: "role",
     header: "Role",
-    cell: ({ row }) => (
-      <Badge variant={row.original.is_superuser ? "default" : "secondary"}>
-        {row.original.is_superuser ? "Superuser" : "User"}
-      </Badge>
-    ),
+    cell: ({ row }) => {
+      const role = (row.original.role ?? "agent-user") as string
+      const label =
+        role === "admin"
+          ? "Admin"
+          : role === "agent-developer"
+            ? "Agent Developer"
+            : "Agent User"
+      const variant =
+        role === "admin"
+          ? "default"
+          : role === "agent-developer"
+            ? "secondary"
+            : "outline"
+      return <Badge variant={variant}>{label}</Badge>
+    },
   },
   {
     accessorKey: "is_active",

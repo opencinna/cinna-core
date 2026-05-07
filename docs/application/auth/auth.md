@@ -13,7 +13,7 @@ Provides user identity and session management for the platform. Users authentica
 | **Google OAuth** | Authorization code flow via Google popup. See [Google OAuth](google_oauth.md) |
 | **Domain Whitelist** | Optional restriction limiting new user registration to specific email domains |
 | **Access Token** | The JWT stored in frontend `localStorage` and auto-included in API requests |
-| **Guest Token** | Special JWT with `role=chat-guest` for unauthenticated agent chat access. See [Guest Sharing](../../agents/agent_sharing/guest_sharing.md) |
+| **Guest Token** | Special JWT with `role=chat-guest` for unauthenticated agent chat access via guest share links |
 
 ## User Stories / Flows
 
@@ -99,7 +99,7 @@ Frontend (localStorage) ──→ Authorization Header ──→ deps.get_curren
 ## Integration Points
 
 - **[Google OAuth](google_oauth.md)** - Alternative authentication method via Google popup flow
-- **[Guest Sharing](../../agents/agent_sharing/guest_sharing.md)** - Special guest JWT tokens for unauthenticated agent chat access
+- **[Guest Sharing](../../agents/guest_sharing/guest_sharing.md)** - Special guest JWT tokens (`role=chat-guest`) for unauthenticated access to agent chat via guest share links
 - **[User Workspaces](../user_workspaces/user_workspaces.md)** - Workspace context applied after authentication
 - **[AI Credentials](../ai_credentials/ai_credentials.md)** - User model stores encrypted AI credentials
 - **Route Protection** - All `/_layout/*` frontend routes require valid authentication

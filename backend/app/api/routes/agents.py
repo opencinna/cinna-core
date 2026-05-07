@@ -4,9 +4,9 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import CurrentUser, SessionDep, require_developer
 
 logger = logging.getLogger(__name__)
 from app.models import (
@@ -131,12 +131,18 @@ def read_agent(session: SessionDep, current_user: CurrentUser, id: uuid.UUID) ->
     return _agent_to_public(session, agent)
 
 
-@router.post("/", response_model=AgentPublic)
+@router.post(
+    "/",
+    response_model=AgentPublic,
+    dependencies=[Depends(require_developer)],
+)
 async def create_agent(
     *, session: SessionDep, current_user: CurrentUser, agent_in: AgentCreate
 ) -> Any:
     """
     Create new agent with default environment.
+
+    Phase 3 — restricted to ``agent-developer`` and ``admin`` roles.
     """
     agent = await AgentService.create_agent(
         session=session, user_id=current_user.id, data=agent_in, user=current_user
@@ -144,7 +150,11 @@ async def create_agent(
     return agent
 
 
-@router.post("/create-flow", response_model=AgentCreateFlowResponse)
+@router.post(
+    "/create-flow",
+    response_model=AgentCreateFlowResponse,
+    dependencies=[Depends(require_developer)],
+)
 async def create_agent_with_flow(
     *, session: SessionDep, current_user: CurrentUser, request: AgentCreateFlowRequest
 ) -> Any:
@@ -152,6 +162,8 @@ async def create_agent_with_flow(
     Initiate agent creation flow (agent + environment + session).
     This endpoint starts the process and returns immediately.
     Use the /create-flow-stream endpoint to monitor progress.
+
+    Phase 3 — restricted to ``agent-developer`` and ``admin`` roles.
     """
     async def event_generator():
         async for event in AgentService.create_agent_flow(
@@ -177,7 +189,11 @@ async def create_agent_with_flow(
     )
 
 
-@router.put("/{id}", response_model=AgentPublic)
+@router.put(
+    "/{id}",
+    response_model=AgentPublic,
+    dependencies=[Depends(require_developer)],
+)
 async def update_agent(
     *,
     session: SessionDep,
@@ -188,35 +204,15 @@ async def update_agent(
     """
     Update an agent.
 
-    For "user" mode clones: Only interface settings can be modified
-    (ui_color_preset, show_on_dashboard, conversation_mode_ui, update_mode).
-    For "builder" mode clones: Full modification allowed.
-    For non-clones: Normal owner access.
+    Phase 3 — restricted to ``agent-developer`` and ``admin`` roles.
+    The legacy ``clone_mode == 'user'`` restriction was removed when
+    clones were retired in favor of the bundle/install model.
     """
     agent = session.get(Agent, id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_superuser and (agent.owner_id != current_user.id):
         raise HTTPException(status_code=400, detail="Not enough permissions")
-
-    # Clone restrictions for "user" mode
-    if agent.is_clone and agent.clone_mode == "user":
-        # Only allow interface settings and update_mode for user mode clones
-        allowed_fields = {
-            "ui_color_preset",
-            "show_on_dashboard",
-            "conversation_mode_ui",
-            "update_mode",
-            "is_active"
-        }
-        update_dict = agent_in.model_dump(exclude_unset=True)
-
-        for field in update_dict.keys():
-            if field not in allowed_fields:
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"User mode clones cannot modify '{field}'. Only interface settings allowed."
-                )
 
     updated_agent = await AgentService.update_agent(
         session=session, agent_id=id, data=agent_in, user_id=current_user.id
@@ -226,7 +222,11 @@ async def update_agent(
     return _agent_to_public(session, updated_agent)
 
 
-@router.post("/{id}/sync-prompts", response_model=Message)
+@router.post(
+    "/{id}/sync-prompts",
+    response_model=Message,
+    dependencies=[Depends(require_developer)],
+)
 async def sync_agent_prompts(
     *,
     session: SessionDep,
@@ -238,6 +238,8 @@ async def sync_agent_prompts(
 
     When user manually edits workflow_prompt, entrypoint_prompt, or refiner_prompt in the backend,
     this endpoint pushes those changes to the active environment's docs files.
+
+    Phase 3 — restricted to ``agent-developer`` and ``admin`` roles.
     """
     agent = session.get(Agent, id)
     if not agent:
@@ -280,7 +282,7 @@ async def sync_agent_prompts(
         )
 
 
-@router.delete("/{id}")
+@router.delete("/{id}", dependencies=[Depends(require_developer)])
 async def delete_agent(
     session: SessionDep, current_user: CurrentUser, id: uuid.UUID
 ) -> Message:
@@ -291,6 +293,10 @@ async def delete_agent(
     (they become independent agents).
     Clone owners can delete their own clones.
     If deleting a clone, the corresponding share record is updated to 'deleted' status.
+
+    Phase 3 — restricted to ``agent-developer`` and ``admin`` roles.
+    Note that ``agent-user`` accounts use ``POST /agents/{id}/uninstall``
+    to remove their own installs; that path stays open for them.
     """
     agent = session.get(Agent, id)
     if not agent:
