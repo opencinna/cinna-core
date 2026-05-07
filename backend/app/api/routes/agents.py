@@ -175,6 +175,12 @@ async def create_agent_with_flow(
             user_workspace_id=request.user_workspace_id,
             agent_sdk_conversation=request.agent_sdk_conversation,
             agent_sdk_building=request.agent_sdk_building,
+            env_name=request.env_name,
+            model_override_conversation=request.model_override_conversation,
+            model_override_building=request.model_override_building,
+            use_default_ai_credentials=request.use_default_ai_credentials,
+            conversation_ai_credential_id=request.conversation_ai_credential_id,
+            building_ai_credential_id=request.building_ai_credential_id,
         ):
             yield f"data: {json.dumps(event)}\n\n"
 

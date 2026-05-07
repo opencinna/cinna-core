@@ -224,6 +224,19 @@ class AgentCreateFlowRequest(SQLModel):
     user_workspace_id: uuid.UUID | None = None
     agent_sdk_conversation: str | None = None  # SDK for conversation mode (e.g., "claude-code/anthropic")
     agent_sdk_building: str | None = None  # SDK for building mode
+    # Environment template name (e.g., "python-env-advanced", "general-env").
+    # When None, the service falls back to settings.DEFAULT_AGENT_ENV_NAME.
+    env_name: str | None = None
+    # Per-mode model override strings (e.g., "claude-haiku-4-5"); empty/None
+    # leaves the SDK default in place.
+    model_override_conversation: str | None = None
+    model_override_building: str | None = None
+    # Credential resolution: when True (default), the environment uses the
+    # user's account-default AI credentials; when False, the explicit
+    # *_ai_credential_id fields below pin specific credentials.
+    use_default_ai_credentials: bool = True
+    conversation_ai_credential_id: uuid.UUID | None = None
+    building_ai_credential_id: uuid.UUID | None = None
 
 
 # Response for agent creation flow initiation

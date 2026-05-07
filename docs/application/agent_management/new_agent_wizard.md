@@ -8,25 +8,28 @@ Multi-step wizard that guides users through creating an agent with environment s
 
 **Flow:**
 1. User clicks "+ New Agent" badge on dashboard → switches to building mode
-2. User configures SDK providers via cog icon dropdown (optional)
-3. User enters agent description and sends
-4. Backend creates agent, generates configuration via LLM
-5. Backend builds and starts environment with selected SDKs
-6. Frontend handles credential sharing and session creation
-7. User redirected to new session
+2. User optionally clicks the cog (Settings) icon to open the environment pre-configuration Modal Dialog
+3. Inside the dialog, user configures: environment template, SDK engine per mode, AI credential per mode, and optional model override per mode
+4. User enters agent description and sends
+5. Dashboard composes SDK IDs and forwards all configuration as URL search params to the creation wizard route
+6. Backend creates agent, generates configuration via LLM
+7. Backend builds and starts the default environment using the pre-configured settings
+8. Frontend handles credential sharing and session creation
+9. User redirected to new session
 
 ## Architecture
 
 ```
 Dashboard UI → Agent Creation Route → Backend SSE → Environment Service → Agent-Env Container
-(SDK Config)   (creating.tsx)         (create-flow)  (with SDK params)    (SDK-specific config)
+(Env Config    (creating.tsx)         (create-flow)  (with all env       (SDK-specific config,
+ Modal Dialog)                                         preconfig params)   model overrides)
 ```
 
 **Configuration Flow:**
-- Dashboard: SDK selection via dropdown → passed as search params
-- Creating route: SDK params sent in SSE request body
-- Backend: SDK params passed to environment creation
-- Environment: SDK-specific settings files generated
+- Dashboard: env-config Modal Dialog (template + per-mode SDK/credential/model) → selections forwarded as URL search params
+- Creating route: all env-preconfig params sent in SSE request body (camelCase → snake_case)
+- Backend: all preconfig fields passed to `AgentEnvironmentCreate` for the default environment
+- Environment: SDK-specific settings files generated with selected engine, credential, and model override
 
 ## SDK Pre-Configuration
 
@@ -35,52 +38,70 @@ Dashboard UI → Agent Creation Route → Backend SSE → Environment Service �
 **Location:** `frontend/src/routes/_layout/index.tsx`
 
 When "+ New Agent" is selected:
-- Mode switch replaced with Settings (cog) icon
-- Cog opens dropdown with SDK configuration
-- User selects SDK Engine, AI Credential (filtered by compatibility), and optional Model Override for each mode
-- Selections passed to creation wizard via URL search params
+- Mode switch is replaced with a Settings (cog) icon
+- Clicking the cog opens a Modal Dialog containing the full environment configuration form — the same shared component (`EnvironmentConfigForm`) used by `AddEnvironment.tsx` on an agent's Environments tab
+
+**Form fields inside the dialog:**
+- **Environment Template** — a 2-column card picker showing both templates side by side. Each card displays a lucide icon, a bold title, and a one-line description so the user can distinguish them without opening a dropdown. Cards: `python-env-advanced` "Python" (slim Python image, fast builds, pure-Python work) and `general-env` "General Purpose" (full Debian, supports system packages such as ffmpeg and sqlite). The selected card gets a highlighted border and background.
+- **Conversation mode summary row** — shows selected engine and credential; clicking the edit (pencil) icon opens an `EnvModeEditDialog` sub-dialog
+- **Building mode summary row** — same structure, independent settings; clicking edit opens its own `EnvModeEditDialog`
+
+**Per-mode sub-dialog (`EnvModeEditDialog`) fields:**
+- SDK Engine — `claude-code` (Anthropic's CLI agent SDK) or `opencode` (multi-provider, 75+ providers)
+- AI Credential — filtered by `SDK_CREDENTIAL_COMPATIBILITY`; "Default" option uses the account default resolved at environment build time; explicit credential selection pins a specific credential UUID
+- Model Override — optional free-text field (with browser-native datalist suggestions per credential type); left empty means the SDK uses its own default for that mode
 
 **State:**
-- `showSdkConfig`: Controls dropdown visibility
-- `sdkConversation`: Selected SDK for conversation mode (default: `claude-code/anthropic`)
-- `sdkBuilding`: Selected SDK for building mode (default: `claude-code/anthropic`)
+- `envConfigOpen`: Controls Modal Dialog visibility
+- `envConfig: EnvConfigValue`: Full configuration value holding `envName`, `sdkEngineConversation`, `conversationCredentialId`, `modelOverrideConversation`, `sdkEngineBuilding`, `buildingCredentialId`, and `modelOverrideBuilding`
+- `envNameTouched`: Boolean (default `false`) that records whether the user explicitly clicked a template card in the current "+ New Agent" flow. Reset to `false` in `handleAgentClick` each time the user enters a fresh flow. Only when this is `true` does the dashboard include `envName` in the navigation search params.
+- The form is seeded from `aiCredentialsStatus` defaults each time the dialog is opened (re-seeds on every open, not just the first)
 
-**SDK Engine Options:** Two engine choices per mode
-- `claude-code` — Claude Code (Anthropic or MiniMax credentials)
-- `opencode` — OpenCode (Anthropic, OpenAI, OpenAI-compatible, Google)
+**Credential Filtering:** Credential dropdown is filtered by `SDK_CREDENTIAL_COMPATIBILITY` — only credentials whose type is compatible with the selected engine are shown. Compatible types: `claude-code` → `anthropic`, `minimax`; `opencode` → `anthropic`, `openai`, `openai_compatible`, `google`.
 
-**Credential Filtering:** Credential dropdown is filtered by `SDK_CREDENTIAL_COMPATIBILITY` — only credentials whose type is compatible with the selected engine are shown.
+**Model Override:** Optional text field per mode for explicit model selection (e.g., `gpt-4o-mini`, `claude-opus-4`). Left empty means the adapter uses its default for that mode.
 
-**Model Override:** Optional text field per mode for explicit model selection (e.g., `gpt-4o-mini`, `claude-opus-4`). Left empty = adapter uses its default.
-
-**API Key Validation:** Uses `getKeyStatus()` helper with `aiCredentialsStatus` query to show warnings for unconfigured SDKs
+**SDK ID composition:** On Send, `composeSDKId(engine, credential)` combines the selected engine and credential type into the wire format (e.g., `claude-code/anthropic`, `opencode/openai`) that the backend stores as the environment's SDK setting for each mode.
 
 ### Search Params
 
 **Route:** `frontend/src/routes/_layout/agent/creating.tsx`
 - `description`: Agent description text
 - `mode`: "conversation" | "building"
-- `sdkConversation`: Optional SDK for conversation mode
-- `sdkBuilding`: Optional SDK for building mode
+- `sdkConversation`: Optional SDK ID for conversation mode (composed via `composeSDKId`)
+- `sdkBuilding`: Optional SDK ID for building mode
+- `envName`: Optional environment template name (e.g., `general-env`). The dashboard only forwards this param when the user has explicitly clicked a template card in the cog Dialog — internally tracked via `envNameTouched` state that starts `false` and resets to `false` each time the user enters a fresh "+ New Agent" flow. When the param is absent (user never touched the picker), TanStack Router drops it from the URL entirely and the backend falls back to `settings.DEFAULT_AGENT_ENV_NAME` as the single source of truth. The `AddEnvironment.tsx` consumer of the shared form does not use this mechanism and always sends `envName`.
+- `modelOverrideConversation`: Optional model override string for conversation mode
+- `modelOverrideBuilding`: Optional model override string for building mode
+- `useDefaultAiCredentials`: Boolean — when `true`, the backend resolves the user's account defaults; when `false`, the explicit credential ID params below govern. `validateSearch` uses a `coerceBool` helper that accepts both native boolean values (from programmatic navigation) and `"true"`/`"false"` strings (from URL reloads)
+- `conversationAiCredentialId`: Optional explicit AI credential UUID for conversation mode; omitted when `useDefaultAiCredentials` is `true` or the conversation credential is left at "Default"
+- `buildingAiCredentialId`: Optional explicit AI credential UUID for building mode; same omission rule
 
 ## Backend Components
 
-**Agent Model:** `backend/app/models/agents/agent.py:107`
+**Agent Model:** `backend/app/models/agents/agent.py`
 - `AgentCreateFlowRequest`: Request schema with fields:
   - `description`, `mode`, `auto_create_session`, `user_workspace_id`
-  - `agent_sdk_conversation`: SDK for conversation mode
+  - `agent_sdk_conversation`: SDK for conversation mode (e.g., `"claude-code/anthropic"`)
   - `agent_sdk_building`: SDK for building mode
+  - `env_name: str | None = None` — environment template name (e.g., `"general-env"`); `None` causes the service to fall back to `settings.DEFAULT_AGENT_ENV_NAME`
+  - `model_override_conversation: str | None = None` — optional per-mode model override (e.g., `"claude-haiku-4-5"`); `None` or empty leaves the SDK default in place
+  - `model_override_building: str | None = None` — same for building mode
+  - `use_default_ai_credentials: bool = True` — when `True` (the default), the environment uses the user's account-default AI credentials; when `False`, the explicit `*_ai_credential_id` fields below pin specific credentials
+  - `conversation_ai_credential_id: uuid.UUID | None = None` — explicit AI credential UUID for conversation mode
+  - `building_ai_credential_id: uuid.UUID | None = None` — explicit AI credential UUID for building mode
 
-**Agent Service:** `backend/app/services/agents/agent_service.py:119`
+**Agent Service:** `backend/app/services/agents/agent_service.py`
 - `create_agent_flow()`: Async generator that yields progress events
-- Accepts `agent_sdk_conversation` and `agent_sdk_building` parameters
-- Passes SDK params to `AgentEnvironmentCreate` for environment setup
+- Accepts `agent_sdk_conversation`, `agent_sdk_building`, `env_name`, `model_override_conversation`, `model_override_building`, `use_default_ai_credentials`, `conversation_ai_credential_id`, and `building_ai_credential_id` parameters
+- All new kwargs are passed directly into the `AgentEnvironmentCreate` it constructs for the default environment; `env_name` falls back to `settings.DEFAULT_AGENT_ENV_NAME` when `None`
 - Supports partial flows: when `auto_create_session=False`, stops after environment is ready
 - Returns `agent_id` and `environment_id` in events for frontend state management
 
-**Agent Routes:** `backend/app/api/routes/agents.py:150`
+**Agent Routes:** `backend/app/api/routes/agents.py`
 - `POST /agents/create-flow`: SSE endpoint streaming creation progress
-  - Extracts SDK params from request and passes to service
+  - Extracts all fields from `AgentCreateFlowRequest` — including all six new env-preconfig fields — and forwards them to `AgentService.create_agent_flow()`
+  - Restricted to `agent-developer` and `admin` roles (`require_developer` dependency)
 - `POST /agents/{id}/credentials`: Endpoint for sharing credentials with agent
 
 **SSE Event Schema**
@@ -93,14 +114,15 @@ The service yields events with these fields:
 ### Frontend Components
 
 **Dashboard:** `frontend/src/routes/_layout/index.tsx`
-- New Agent badge triggers building mode with SDK config UI
-- `handleAgentClick()`: Manages agent selection and SDK config visibility
-- `handleSend()`: Navigates to creation wizard with SDK params
+- New Agent badge triggers building mode with env-config UI
+- Cog (Settings) icon opens a Modal Dialog hosting `EnvironmentConfigForm`; dialog state is `envConfigOpen` / `envConfig`
+- `handleAgentClick()`: Manages agent selection and env-config dialog visibility
+- `handleSend()`: Composes SDK IDs via `composeSDKId`, resolves credential flags, and navigates to creation wizard with all env-preconfig search params; gates `envName` on `envNameTouched` (omits it when the user never explicitly picked a template, deferring to the backend default)
 
 **Creation Wizard Route:** `frontend/src/routes/_layout/agent/creating.tsx`
 Main component managing the entire wizard flow:
-- Extracts `sdkConversation` and `sdkBuilding` from search params
-- Sends SDK params in SSE request body to backend
+- Extracts `sdkConversation`, `sdkBuilding`, `envName`, `modelOverrideConversation`, `modelOverrideBuilding`, `useDefaultAiCredentials`, `conversationAiCredentialId`, and `buildingAiCredentialId` from search params
+- Sends all params in SSE request body to backend (camelCase search params → snake_case JSON fields)
 - SSE event consumption and state updates
 - Credential selection UI
 - Post-environment flow orchestration (credential sharing, session creation)
@@ -289,18 +311,25 @@ When extending the wizard, test these scenarios:
 7. Network interruptions (SSE timeout handling)
 8. SDK selection with missing API key (should show warning)
 9. Different SDK combinations for conversation vs building modes
+10. Env-config dialog opens with defaults seeded from `aiCredentialsStatus` (re-seeds on every open)
+11. Explicit AI credential IDs are omitted from search params when `useDefaultAiCredentials` is `true`
+12. `useDefaultAiCredentials` round-trips correctly across a page reload (string `"true"`/`"false"` via `coerceBool`)
+13. `general-env` template selected in dialog results in correct `env_name` passed to backend
+14. Model override fields left empty result in backend using SDK defaults (not empty strings)
 
 ## File Locations Reference
 
 **Backend:**
-- Models: `backend/app/models/agents/agent.py` (AgentCreateFlowRequest with SDK fields)
-- Service: `backend/app/services/agents/agent_service.py:create_agent_flow()`
-- Routes: `backend/app/api/routes/agents.py` (create-flow endpoint)
-- Environment: `backend/app/models/environments/environment.py` (AgentEnvironmentCreate with SDK fields)
+- Models: `backend/app/models/agents/agent.py` (`AgentCreateFlowRequest` with all env-preconfig fields)
+- Service: `backend/app/services/agents/agent_service.py` (`create_agent_flow()` with all new kwargs)
+- Routes: `backend/app/api/routes/agents.py` (create-flow endpoint — `create_agent_with_flow`)
+- Environment: `backend/app/models/environments/environment.py` (`AgentEnvironmentCreate` with SDK, credential, and model override fields)
 
 **Frontend:**
-- Dashboard: `frontend/src/routes/_layout/index.tsx` (SDK config dropdown, NEW_AGENT_ID handling)
-- Creation Wizard: `frontend/src/routes/_layout/agent/creating.tsx` (SSE consumption, SDK param extraction)
+- Dashboard: `frontend/src/routes/_layout/index.tsx` (env-config Modal Dialog, NEW_AGENT_ID handling)
+- Creation Wizard: `frontend/src/routes/_layout/agent/creating.tsx` (SSE consumption, all env-preconfig param extraction)
+- Shared env-config form: `frontend/src/components/Environments/EnvironmentConfigForm.tsx` (exports `EnvironmentConfigForm`, `EnvModeEditDialog`, `EnvConfigValue`, `composeSDKId`, constants)
+- Env tab consumer: `frontend/src/components/Environments/AddEnvironment.tsx` (agent Environments tab — uses shared form; no behavior change)
 - Client: Auto-generated from OpenAPI (`frontend/src/client/*`)
 
 **Related SDK Configuration:**

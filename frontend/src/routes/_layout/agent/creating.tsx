@@ -10,8 +10,28 @@ type SearchParams = {
   mode: "conversation" | "building"
   sdkConversation?: string
   sdkBuilding?: string
+  envName?: string
+  modelOverrideConversation?: string
+  modelOverrideBuilding?: string
+  useDefaultAiCredentials?: boolean
+  conversationAiCredentialId?: string
+  buildingAiCredentialId?: string
   fileIds?: string
   fileObjects?: string
+}
+
+// Coerce a search-param value (which may arrive as native boolean from
+// programmatic navigation, or as the string "true"/"false" after a URL reload)
+// into a strict boolean; return `undefined` when absent so the backend
+// default governs.
+function coerceBool(raw: unknown): boolean | undefined {
+  if (raw === undefined || raw === null || raw === "") return undefined
+  if (typeof raw === "boolean") return raw
+  if (typeof raw === "string") {
+    if (raw === "true") return true
+    if (raw === "false") return false
+  }
+  return undefined
 }
 
 export const Route = createFileRoute("/_layout/agent/creating")({
@@ -22,6 +42,12 @@ export const Route = createFileRoute("/_layout/agent/creating")({
       mode: (search.mode as "conversation" | "building") || "building",
       sdkConversation: (search.sdkConversation as string) || undefined,
       sdkBuilding: (search.sdkBuilding as string) || undefined,
+      envName: (search.envName as string) || undefined,
+      modelOverrideConversation: (search.modelOverrideConversation as string) || undefined,
+      modelOverrideBuilding: (search.modelOverrideBuilding as string) || undefined,
+      useDefaultAiCredentials: coerceBool(search.useDefaultAiCredentials),
+      conversationAiCredentialId: (search.conversationAiCredentialId as string) || undefined,
+      buildingAiCredentialId: (search.buildingAiCredentialId as string) || undefined,
       fileIds: (search.fileIds as string) || undefined,
       fileObjects: (search.fileObjects as string) || undefined,
     }
@@ -37,7 +63,20 @@ type Step = {
 
 function AgentCreating() {
   const navigate = useNavigate()
-  const { description, mode, sdkConversation, sdkBuilding, fileIds, fileObjects } = Route.useSearch()
+  const {
+    description,
+    mode,
+    sdkConversation,
+    sdkBuilding,
+    envName,
+    modelOverrideConversation,
+    modelOverrideBuilding,
+    useDefaultAiCredentials,
+    conversationAiCredentialId,
+    buildingAiCredentialId,
+    fileIds,
+    fileObjects,
+  } = Route.useSearch()
   const { workspaceFilter } = useWorkspace()
   const [steps, setSteps] = useState<Step[]>([
     { id: "create_agent", label: "Creating agent", status: "pending" },
@@ -115,6 +154,13 @@ function AgentCreating() {
             user_workspace_id: workspaceFilter || undefined,
             agent_sdk_conversation: sdkConversation || undefined,
             agent_sdk_building: sdkBuilding || undefined,
+            env_name: envName || undefined,
+            model_override_conversation: modelOverrideConversation || undefined,
+            model_override_building: modelOverrideBuilding || undefined,
+            // Omit when undefined so the backend default (True) takes effect.
+            use_default_ai_credentials: useDefaultAiCredentials,
+            conversation_ai_credential_id: conversationAiCredentialId || undefined,
+            building_ai_credential_id: buildingAiCredentialId || undefined,
           }),
         })
 

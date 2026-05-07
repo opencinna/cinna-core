@@ -461,6 +461,12 @@ class AgentService:
         user_workspace_id: UUID | None = None,
         agent_sdk_conversation: str | None = None,
         agent_sdk_building: str | None = None,
+        env_name: str | None = None,
+        model_override_conversation: str | None = None,
+        model_override_building: str | None = None,
+        use_default_ai_credentials: bool = True,
+        conversation_ai_credential_id: UUID | None = None,
+        building_ai_credential_id: UUID | None = None,
     ):
         """
         Create full agent flow: agent + environment + (optionally) session
@@ -471,6 +477,14 @@ class AgentService:
                                If False, stop after environment is ready (for credential sharing).
             agent_sdk_conversation: SDK to use for conversation mode (e.g., "claude-code/anthropic")
             agent_sdk_building: SDK to use for building mode
+            env_name: Environment template name; falls back to settings.DEFAULT_AGENT_ENV_NAME when None.
+            model_override_conversation: Optional per-mode model override (e.g., "claude-haiku-4-5").
+            model_override_building: Optional per-mode model override.
+            use_default_ai_credentials: When True (default), the environment uses the user's
+                account-default AI credentials; when False, the explicit credential IDs below pin
+                specific credentials.
+            conversation_ai_credential_id: Optional explicit AI credential UUID for conversation mode.
+            building_ai_credential_id: Optional explicit AI credential UUID for building mode.
         """
         agent = None
         environment = None
@@ -539,13 +553,18 @@ class AgentService:
             }
 
             default_env_data = AgentEnvironmentCreate(
-                env_name=settings.DEFAULT_AGENT_ENV_NAME,
+                env_name=env_name or settings.DEFAULT_AGENT_ENV_NAME,
                 env_version=settings.DEFAULT_AGENT_ENV_VERSION,
                 instance_name="Default",
                 type="docker",
                 config={},
                 agent_sdk_conversation=agent_sdk_conversation,
                 agent_sdk_building=agent_sdk_building,
+                model_override_conversation=model_override_conversation,
+                model_override_building=model_override_building,
+                use_default_ai_credentials=use_default_ai_credentials,
+                conversation_ai_credential_id=conversation_ai_credential_id,
+                building_ai_credential_id=building_ai_credential_id,
             )
 
             environment = await EnvironmentService.create_environment(

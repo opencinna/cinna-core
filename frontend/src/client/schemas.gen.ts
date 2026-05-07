@@ -2352,6 +2352,68 @@ export const AgentCreateFlowRequestSchema = {
                 }
             ],
             title: 'Agent Sdk Building'
+        },
+        env_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Env Name'
+        },
+        model_override_conversation: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Conversation'
+        },
+        model_override_building: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Building'
+        },
+        use_default_ai_credentials: {
+            type: 'boolean',
+            title: 'Use Default Ai Credentials',
+            default: true
+        },
+        conversation_ai_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Conversation Ai Credential Id'
+        },
+        building_ai_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Building Ai Credential Id'
         }
     },
     type: 'object',

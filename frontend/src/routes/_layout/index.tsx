@@ -3,18 +3,20 @@ import { useEffect, useState, useMemo, Fragment, KeyboardEvent, DragEvent } from
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 
-import { AgentsService, SessionsService, FilesService, UsersService, UtilsService } from "@/client"
+import { AgentsService, SessionsService, FilesService, UsersService, UtilsService, AiCredentialsService } from "@/client"
 import type { SessionCreate, FileUploadPublic } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { Send, Bot, Paperclip, Plus, Sparkles, Settings, MessageCircle, Wrench, AlertCircle } from "lucide-react"
+import { Send, Bot, Paperclip, Plus, Sparkles, Settings, AlertCircle } from "lucide-react"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,6 +28,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import {
+  EnvironmentConfigForm,
+  EnvConfigValue,
+  INITIAL_ENV_CONFIG,
+  USE_DEFAULT_SENTINEL,
+  composeSDKId,
+} from "@/components/Environments/EnvironmentConfigForm"
 import { usePageHeader } from "@/routes/_layout"
 import useCustomToast from "@/hooks/useCustomToast"
 import useWorkspace from "@/hooks/useWorkspace"
@@ -55,12 +64,6 @@ export const Route = createFileRoute("/_layout/")({
 const NEW_AGENT_ID = "__new_agent__"
 const MAX_MESSAGE_LENGTH = 8000
 
-// SDK options for new agent configuration
-const SDK_OPTIONS = [
-  { value: "claude-code/anthropic", label: "Anthropic Claude", requiredKey: "anthropic" },
-  { value: "claude-code/minimax", label: "MiniMax M2", requiredKey: "minimax" },
-]
-
 function Dashboard() {
   const { setHeaderContent } = usePageHeader()
   const [selectedAgentId, setSelectedAgentId] = useState<string>("")
@@ -73,10 +76,15 @@ function Dashboard() {
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   const [showGettingStarted, setShowGettingStarted] = useState(false)
   const [isHoveringInput, setIsHoveringInput] = useState(false)
-  const [showSdkConfig, setShowSdkConfig] = useState(false)
+  const [envConfigOpen, setEnvConfigOpen] = useState(false)
+  const [envConfig, setEnvConfig] = useState<EnvConfigValue>(INITIAL_ENV_CONFIG)
+  // Tracks whether the user explicitly picked an env template in the cog dialog.
+  // When false, we omit `envName` from the navigation search params so the
+  // backend's `settings.DEFAULT_AGENT_ENV_NAME` wins via the existing fallback
+  // in `AgentService.create_agent_flow` — rather than coincidentally pinning
+  // the frontend literal "python-env-advanced" from `INITIAL_ENV_CONFIG`.
+  const [envNameTouched, setEnvNameTouched] = useState(false)
   const [inputError, setInputError] = useState<string | null>(null)
-  const [sdkConversation, setSdkConversation] = useState("claude-code/anthropic")
-  const [sdkBuilding, setSdkBuilding] = useState("claude-code/anthropic")
 
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -94,14 +102,13 @@ function Dashboard() {
   })
 
   const hasAnthropicKey = credentialsStatus?.has_anthropic_api_key ?? false
-  const hasMinimaxKey = credentialsStatus?.has_minimax_api_key ?? false
 
-  // Check if user has required API key for a given SDK
-  const getKeyStatus = (sdk: string) => {
-    if (sdk === "claude-code/anthropic") return hasAnthropicKey
-    if (sdk === "claude-code/minimax") return hasMinimaxKey
-    return false
-  }
+  // Fetch user's AI credentials list — used by handleSend to resolve the
+  // selected credential objects when composing the SDK ID.
+  const { data: aiCredentials } = useQuery({
+    queryKey: ["aiCredentialsList"],
+    queryFn: () => AiCredentialsService.listAiCredentials(),
+  })
 
   const {
     data: agentsData,
@@ -305,6 +312,21 @@ function Dashboard() {
     // Handle "New Agent" flow
     if (selectedAgentId === NEW_AGENT_ID) {
       setInputError(null)
+
+      // Compose SDK IDs from the env config form state — same logic as
+      // AddEnvironment.tsx so dashboard and agent-tab produce identical payloads.
+      const allCredentials = aiCredentials?.data ?? []
+      const convIsDefault = envConfig.conversationCredentialId === USE_DEFAULT_SENTINEL
+      const buildIsDefault = envConfig.buildingCredentialId === USE_DEFAULT_SENTINEL
+      const selConv = allCredentials.find((c) => c.id === envConfig.conversationCredentialId) ?? null
+      const selBuild = allCredentials.find((c) => c.id === envConfig.buildingCredentialId) ?? null
+      const sdkConversation = composeSDKId(envConfig.sdkEngineConversation, convIsDefault ? null : selConv)
+      const sdkBuilding = composeSDKId(envConfig.sdkEngineBuilding, buildIsDefault ? null : selBuild)
+      const useDefaultForAll = convIsDefault && buildIsDefault
+
+      const trimmedConvModel = envConfig.modelOverrideConversation.trim()
+      const trimmedBuildModel = envConfig.modelOverrideBuilding.trim()
+
       navigate({
         to: "/agent/creating",
         search: {
@@ -312,6 +334,16 @@ function Dashboard() {
           mode,
           sdkConversation,
           sdkBuilding,
+          // Only forward envName if the user explicitly chose a template.
+          // Otherwise let the backend's DEFAULT_AGENT_ENV_NAME take over.
+          envName: envNameTouched ? envConfig.envName : undefined,
+          modelOverrideConversation: trimmedConvModel || undefined,
+          modelOverrideBuilding: trimmedBuildModel || undefined,
+          useDefaultAiCredentials: useDefaultForAll,
+          conversationAiCredentialId:
+            useDefaultForAll || convIsDefault ? undefined : envConfig.conversationCredentialId,
+          buildingAiCredentialId:
+            useDefaultForAll || buildIsDefault ? undefined : envConfig.buildingCredentialId,
           fileIds: attachedFiles.length > 0 ? attachedFiles.map(f => f.id).join(',') : undefined,
           fileObjects: attachedFiles.length > 0 ? JSON.stringify(attachedFiles) : undefined,
         },
@@ -404,13 +436,16 @@ function Dashboard() {
       setMessage("")
       setInputError(null)
       setMode("building")
+      // Reset env-template "touched" flag so a fresh "+ New Agent" flow
+      // defers to the backend default until the user picks a template.
+      setEnvNameTouched(false)
       return
     }
 
-    // Switching from "New Agent" to regular agent - restore previous mode and close SDK config
+    // Switching from "New Agent" to regular agent - restore previous mode and close env config dialog
     if (selectedAgentId === NEW_AGENT_ID) {
       setMode(previousMode)
-      setShowSdkConfig(false)
+      setEnvConfigOpen(false)
     }
 
     if (selectedAgentId === agentId && inputMode === "automatic") {
@@ -629,71 +664,41 @@ function Dashboard() {
               {/* Mode Switch or SDK Config Cog (for New Agent) */}
               <div className="flex items-center gap-3">
                 {selectedAgentId === NEW_AGENT_ID ? (
-                  /* SDK Config Dropdown for New Agent */
-                  <DropdownMenu open={showSdkConfig} onOpenChange={setShowSdkConfig}>
-                    <DropdownMenuTrigger asChild>
+                  /* Env Config Dialog for New Agent */
+                  <Dialog open={envConfigOpen} onOpenChange={setEnvConfigOpen}>
+                    <DialogTrigger asChild>
                       <button
                         type="button"
                         className={`
                           p-2 rounded-lg transition-all duration-200
-                          ${showSdkConfig
+                          ${envConfigOpen
                             ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white'
                             : 'bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground'}
                         `}
                       >
                         <Settings className="h-5 w-5" />
                       </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="p-3 space-y-2">
-                      <div className="text-xs font-medium text-muted-foreground mb-2">Environment SDK</div>
-                      {/* Conversation Mode SDK */}
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-2">
-                          <MessageCircle className="h-3.5 w-3.5 text-blue-500" />
-                          <span className="text-xs font-medium">Conversation</span>
-                        </div>
-                        <Select value={sdkConversation} onValueChange={setSdkConversation}>
-                          <SelectTrigger className="w-[165px] h-7 text-xs">
-                            <SelectValue placeholder="Select SDK" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {SDK_OPTIONS.map((option) => (
-                              <SelectItem key={option.value} value={option.value}>
-                                {option.label}
-                                {!getKeyStatus(option.value) && " *"}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      {/* Building Mode SDK */}
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-2">
-                          <Wrench className="h-3.5 w-3.5 text-orange-500" />
-                          <span className="text-xs font-medium">Building</span>
-                        </div>
-                        <Select value={sdkBuilding} onValueChange={setSdkBuilding}>
-                          <SelectTrigger className="w-[165px] h-7 text-xs">
-                            <SelectValue placeholder="Select SDK" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {SDK_OPTIONS.map((option) => (
-                              <SelectItem key={option.value} value={option.value}>
-                                {option.label}
-                                {!getKeyStatus(option.value) && " *"}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      {(!getKeyStatus(sdkConversation) || !getKeyStatus(sdkBuilding)) && (
-                        <p className="text-xs text-destructive flex items-center gap-1 pt-1">
-                          <AlertCircle className="h-3 w-3" />
-                          * API key not configured
-                        </p>
-                      )}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                    </DialogTrigger>
+                    <DialogContent className="sm:max-w-[540px]">
+                      <DialogHeader>
+                        <DialogTitle>Configure Environment</DialogTitle>
+                        <DialogDescription>
+                          Pre-configure the environment your new agent will be created with.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <EnvironmentConfigForm
+                        value={envConfig}
+                        onChange={setEnvConfig}
+                        open={envConfigOpen}
+                        onTemplateChange={() => setEnvNameTouched(true)}
+                      />
+                      <DialogFooter>
+                        <Button variant="outline" onClick={() => setEnvConfigOpen(false)}>
+                          Done
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
                 ) : (() => {
                   const selectedAgent = agentsWithActiveEnv.find((a) => a.id === selectedAgentId)
                   const isGASelected = selectedAgent?.is_general_assistant ?? false
