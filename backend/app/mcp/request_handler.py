@@ -16,7 +16,10 @@ from sqlmodel import Session as DbSession
 
 from app.models import Agent
 from app.models.environments.environment import AgentEnvironment
+from app.models.events.event import EventType
 from app.models.mcp.mcp_connector import MCPConnector
+from app.services.bundles.install_readiness_gate import InstallReadinessGate
+from app.services.events.event_service import event_service
 from app.services.sessions.session_service import SessionService
 from app.services.sessions.message_service import MessageService
 from app.mcp.message_streaming import stream_and_collect_response
@@ -88,6 +91,63 @@ class MCPRequestHandler:
 
             session_id = platform_session.id
             result_context_id = str(session_id)
+
+            # Install readiness gate (plan §6.2 — MCP rendering). When the
+            # install has empty placeholders or broken publisher creds we
+            # skip the message-create + stream pipeline entirely and return
+            # the synthesised setup-required reply directly.
+            try:
+                gate_result = InstallReadinessGate.check(db, self.agent)
+            except Exception as e:  # pragma: no cover — defensive
+                logger.warning(
+                    "[MCP] Install readiness gate raised for agent %s; allowing through: %s",
+                    self.agent.id, e,
+                )
+                gate_result = None
+
+            if gate_result is not None and gate_result.status != "ready":
+                logger.info(
+                    "[MCP] Install readiness gate blocking agent %s (status=%s, %d missing)",
+                    self.agent.id, gate_result.status, len(gate_result.missing),
+                )
+                try:
+                    await event_service.emit_event(
+                        event_type=EventType.INSTALL_SETUP_REQUIRED,
+                        model_id=self.agent.id,
+                        user_id=self.agent.owner_id,
+                        meta={
+                            "agent_id": str(self.agent.id),
+                            "session_id": str(session_id),
+                            "setup_url": gate_result.setup_url,
+                            "status": gate_result.status,
+                            "missing_count": len(gate_result.missing),
+                            "channel": "mcp",
+                        },
+                    )
+                    if gate_result.status == "publisher_broken":
+                        await event_service.emit_event(
+                            event_type=EventType.PUBLISHER_CREDENTIAL_BROKEN,
+                            model_id=self.agent.id,
+                            user_id=self.agent.owner_id,
+                            meta={
+                                "agent_id": str(self.agent.id),
+                                "session_id": str(session_id),
+                                "setup_url": gate_result.setup_url,
+                                "missing_count": len(gate_result.missing),
+                                "channel": "mcp",
+                            },
+                        )
+                except Exception as e:  # pragma: no cover — diagnostic-only
+                    logger.warning(
+                        "[MCP] Failed to emit install-setup events for agent %s: %s",
+                        self.agent.id, e,
+                    )
+
+                return json.dumps({
+                    "response": gate_result.user_message,
+                    "context_id": result_context_id,
+                    "setup_url": gate_result.setup_url,
+                })
 
             # Create user message as "pending" — the shared streaming pipeline
             # will collect it, mark as sent, and stream (same as process_pending_messages)

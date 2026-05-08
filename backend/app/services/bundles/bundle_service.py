@@ -27,6 +27,7 @@ from app.models.bundles.agent_bundle import (
 )
 from app.models.bundles.agent_bundle_revision import AgentBundleRevision
 from app.models.bundles.bundle_access_grant import BundleAccessGrant
+from app.models.credentials.ai_credential import AICredential
 from app.models.users.user import User
 from app.services.bundles.exceptions import (
     BundleAccessDeniedError,
@@ -211,9 +212,31 @@ class BundleService:
                     f"Invalid default_install_mode: {update_dict['default_install_mode']}"
                 )
 
+        # Validate publisher-provided AI credentials belong to the bundle's
+        # publisher. NULL clears the publisher-provides state; non-NULL must
+        # reference an ``AICredential`` row owned by ``bundle.publisher_user_id``.
+        for ai_field in (
+            "publisher_ai_credential_conversation_id",
+            "publisher_ai_credential_building_id",
+        ):
+            if ai_field in update_dict and update_dict[ai_field] is not None:
+                ai_cred = session.get(AICredential, update_dict[ai_field])
+                if ai_cred is None:
+                    raise BundleValidationError(
+                        f"{ai_field} references an unknown AI credential"
+                    )
+                if ai_cred.owner_id != bundle.publisher_user_id:
+                    raise BundleValidationError(
+                        f"{ai_field} must reference an AI credential "
+                        "owned by the bundle publisher"
+                    )
+
+        # Setattr semantics: explicit NULL clears the field; absent keys
+        # are left untouched. The earlier "if v is not None" gate stripped
+        # NULLs which would block clearing the publisher-AI knobs, so
+        # iterate the unset-aware dict directly.
         for k, v in update_dict.items():
-            if v is not None:
-                setattr(bundle, k, v)
+            setattr(bundle, k, v)
         bundle.updated_at = datetime.now(UTC)
         session.add(bundle)
         session.commit()

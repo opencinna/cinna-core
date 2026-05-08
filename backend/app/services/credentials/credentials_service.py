@@ -7,6 +7,7 @@ import copy
 import logging
 import re
 from sqlmodel import Session, select
+from sqlalchemy import func as func_sql
 from app.core.security import encrypt_field, decrypt_field
 from app.core.ssh_key_utils import (
     calculate_fingerprint,
@@ -1244,9 +1245,18 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         # Update credential
         update_dict = credential_in.model_dump(exclude_unset=True)
         if "credential_data" in update_dict:
-            encrypted_data = encrypt_field(json.dumps(update_dict["credential_data"]))
+            data_payload = update_dict["credential_data"] or {}
+            encrypted_data = encrypt_field(json.dumps(data_payload))
             update_dict.pop("credential_data")
             credential.encrypted_data = encrypted_data
+            # Phase 4 install setup gate: a placeholder Credential becomes
+            # "real" the moment a user supplies non-empty data through the
+            # setup-credentials path. Flipping ``is_placeholder=False`` here
+            # is the single signal the gate uses to mark the install ready.
+            if credential.is_placeholder and isinstance(data_payload, dict) and any(
+                v not in (None, "", [], {}) for v in data_payload.values()
+            ):
+                credential.is_placeholder = False
         credential.sqlmodel_update(update_dict)
         session.add(credential)
         session.commit()
@@ -1351,6 +1361,71 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             "user_workspace_id": credential.user_workspace_id,
             "credential_data": credential_data
         }
+
+    @staticmethod
+    def find_match_for_spec(
+        session: Session,
+        user_id: uuid.UUID,
+        name: str,
+        type: str,
+    ) -> Credential | None:
+        """Suggest an existing credential matching ``(name, type)`` for the user.
+
+        Used by ``CatalogService.build_install_context`` to populate
+        ``suggested_credential_id`` on each PBU spec on the install screen.
+        Suggestion-only — never auto-commits.
+
+        Match rules (plan §2 D6):
+          - Case-insensitive match on ``name`` AND exact match on ``type``.
+          - Searches the user's owned credentials AND credentials shared
+            with them via ``CredentialShare``.
+          - Prefers owned > shared, then most-recently-updated within each
+            tier. ``Credential`` has no ``updated_at`` column; we
+            approximate "most-recently-updated" with descending ``id`` so
+            newer rows (created later in time) win.
+
+        Returns ``None`` when no match is found.
+        """
+        from app.models.credentials.credential import CredentialType
+        from app.models.credentials.credential_share import CredentialShare
+
+        # Spec ``type`` arrives as a raw string from the revision JSON; map
+        # it to the enum so the comparison hits the indexed column. Bail
+        # out early on unknown types — no match is possible.
+        try:
+            type_enum = CredentialType(type)
+        except ValueError:
+            return None
+
+        # Owned credentials first (preferred tier).
+        owned_stmt = (
+            select(Credential)
+            .where(
+                Credential.owner_id == user_id,
+                Credential.type == type_enum,
+                func_sql.lower(Credential.name) == name.lower(),
+            )
+            .order_by(Credential.id.desc())
+        )
+        owned_match = session.exec(owned_stmt).first()
+        if owned_match is not None:
+            return owned_match
+
+        # Shared credentials (fallback tier).
+        shared_stmt = (
+            select(Credential)
+            .join(
+                CredentialShare,
+                CredentialShare.credential_id == Credential.id,
+            )
+            .where(
+                CredentialShare.shared_with_user_id == user_id,
+                Credential.type == type_enum,
+                func_sql.lower(Credential.name) == name.lower(),
+            )
+            .order_by(Credential.id.desc())
+        )
+        return session.exec(shared_stmt).first()
 
     @staticmethod
     def get_agent_credentials(

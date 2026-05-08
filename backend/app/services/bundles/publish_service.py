@@ -211,6 +211,9 @@ class PublishService:
             PublishService._copy_bundle_tree(env_workspace_root, tmp_dir)
 
             # Required credential specs from the install's linked credentials.
+            # Validate first so a misconfigured publisher-provided credential
+            # surfaces a clean error before we touch the snapshot tree.
+            PublishService._validate_publisher_provides(session, install)
             cred_specs = PublishService._collect_credential_specs(session, install)
 
             manifest = {
@@ -435,7 +438,31 @@ class PublishService:
 
     @staticmethod
     def _collect_credential_specs(session: Session, install: Agent) -> list[dict]:
-        """Snapshot the install's credential set as ``required_credential_specs``."""
+        """Snapshot the install's credential set as ``required_credential_specs``.
+
+        Phase 1 of the install-experience-redesign plan: emit the evolved
+        per-spec shape with ``provided_by`` and ``publisher_credential_id``.
+
+        Resolution order for ``provided_by`` (Phase 5):
+
+        1. ``install.publish_settings["credential_overrides"][cred.name]
+           ["provided_by"]`` — explicit publisher choice from the bundle
+           tab UI. Wins if present and equals ``"user"`` or ``"publisher"``.
+        2. Fallback inference: when the linked ``Credential.allow_sharing``
+           is True, emit ``provided_by="publisher"`` with the publisher's
+           credential id. Otherwise emit ``provided_by="user"``.
+
+        ``_validate_publisher_provides`` (run before this) guarantees that
+        every ``provided_by="publisher"`` spec references a credential
+        with ``allow_sharing=True``.
+        """
+        publish_settings = getattr(install, "publish_settings", None) or {}
+        overrides_raw = publish_settings.get("credential_overrides") or {}
+        # Defensive: if the JSON is malformed (somehow not a dict) we treat
+        # it as empty rather than crashing the publish path.
+        if not isinstance(overrides_raw, dict):
+            overrides_raw = {}
+
         stmt = select(AgentCredentialLink).where(
             AgentCredentialLink.agent_id == install.id
         )
@@ -445,10 +472,81 @@ class PublishService:
             cred = session.get(Credential, link.credential_id)
             if not cred:
                 continue
+            allow_sharing = bool(cred.allow_sharing)
+
+            # Override lookup — case-sensitive on the spec name (matches
+            # the credential name as written by the publisher).
+            override_entry = overrides_raw.get(cred.name)
+            override_value = None
+            if isinstance(override_entry, dict):
+                raw = override_entry.get("provided_by")
+                if raw in ("user", "publisher"):
+                    override_value = raw
+
+            if override_value is not None:
+                provided_by = override_value
+            else:
+                provided_by = "publisher" if allow_sharing else "user"
+
+            publisher_credential_id = cred.id if provided_by == "publisher" else None
             specs.append({
                 "name": cred.name,
                 "type": cred.type.value if hasattr(cred.type, "value") else str(cred.type),
-                "allow_sharing": bool(cred.allow_sharing),
+                "allow_sharing": allow_sharing,
                 "description": cred.notes or None,
+                "provided_by": provided_by,
+                "publisher_credential_id": (
+                    str(publisher_credential_id)
+                    if publisher_credential_id is not None
+                    else None
+                ),
             })
         return specs
+
+    @staticmethod
+    def _validate_publisher_provides(
+        session: Session, install: Agent
+    ) -> None:
+        """Assert publisher-provided spec credentials are actually shareable.
+
+        Walks the credentials that ``_collect_credential_specs`` would emit
+        as ``provided_by="publisher"`` and verifies each underlying
+        ``Credential`` row has ``allow_sharing=True``. Raises a publish-time
+        error otherwise — a publisher who flips a credential to
+        publisher-provided but leaves ``allow_sharing=False`` would publish
+        a bundle that no foreign install could ever resolve.
+
+        In Phase 1 the inference rule guarantees the invariant by
+        construction (we only mark a spec as publisher-provided when
+        ``allow_sharing=True``). Phase 5 introduces a publisher override
+        map where this gate becomes load-bearing — landing it now keeps
+        the publish pathway honest as later phases evolve the inference.
+        """
+        specs = PublishService._collect_credential_specs(session, install)
+        for spec in specs:
+            if spec.get("provided_by") != "publisher":
+                continue
+            raw_id = spec.get("publisher_credential_id")
+            if not raw_id:
+                raise ValueError(
+                    f"Credential spec '{spec.get('name')}' is marked "
+                    "publisher-provided but has no publisher_credential_id"
+                )
+            try:
+                cred_uuid = uuid.UUID(str(raw_id))
+            except (ValueError, TypeError) as exc:
+                raise ValueError(
+                    f"Credential spec '{spec.get('name')}' has an invalid "
+                    f"publisher_credential_id: {raw_id}"
+                ) from exc
+            cred = session.get(Credential, cred_uuid)
+            if cred is None:
+                raise ValueError(
+                    f"Credential spec '{spec.get('name')}' references missing "
+                    f"publisher credential {raw_id}"
+                )
+            if not bool(cred.allow_sharing):
+                raise ValueError(
+                    f"Credential '{cred.name}' is marked publisher-provided "
+                    "but is not shareable (allow_sharing=False)"
+                )

@@ -24,7 +24,15 @@ from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import AgentBundle, BundleVisibility
 from app.models.bundles.agent_bundle_revision import AgentBundleRevision
 from app.models.bundles.bundle_access_grant import BundleAccessGrant
-from app.models.bundles.catalog import CatalogEntryPublic
+from app.models.bundles.catalog import (
+    CatalogEntryPublic,
+    CatalogInstallContext,
+    InstallContextAIPublisherSummaries,
+    InstallContextPublisherSummary,
+    InstallContextSpec,
+)
+from app.models.credentials.ai_credential import AICredential
+from app.models.credentials.credential import Credential
 from app.models.users.user import User
 
 logger = logging.getLogger(__name__)
@@ -176,4 +184,140 @@ class CatalogService:
             is_installed=user_install is not None,
             user_install_id=user_install.id if user_install else None,
             required_credential_specs=cred_specs,
+            publisher_ai_credential_conversation_id=(
+                bundle.publisher_ai_credential_conversation_id
+            ),
+            publisher_ai_credential_building_id=(
+                bundle.publisher_ai_credential_building_id
+            ),
+        )
+
+    @staticmethod
+    def build_install_context(
+        session: Session, bundle: AgentBundle, user: User
+    ) -> CatalogInstallContext:
+        """Build the per-user install context for the install page.
+
+        Resolves:
+          - The catalog entry (visibility-aware; assumes the caller has
+            already gated on ``user_can_install``).
+          - Whether the publisher provides AI credentials and a friendly
+            ``{name, type}`` summary of those rows (no secrets).
+          - For every entry of ``required_credential_specs``: the spec
+            metadata plus an auto-prefill suggestion picked from the
+            user's owned + shared credentials (case-insensitive
+            ``(name, type)`` match — pure suggestion, never auto-commit).
+
+        The publisher-provides-AI summaries are best-effort: a missing AI
+        credential row (race against deletion, FK ``SET NULL``) yields
+        ``None`` for that side of the summary; the bundle FKs themselves
+        already nulled out via ``ON DELETE SET NULL``.
+        """
+        from app.services.credentials.credentials_service import CredentialsService
+
+        entry = CatalogService._bundle_to_entry(session, bundle, user)
+
+        # Publisher AI credential summaries.
+        ai_provided_by_publisher = (
+            bundle.publisher_ai_credential_conversation_id is not None
+            or bundle.publisher_ai_credential_building_id is not None
+        )
+        ai_summaries = InstallContextAIPublisherSummaries()
+        if bundle.publisher_ai_credential_conversation_id is not None:
+            conv = session.get(
+                AICredential, bundle.publisher_ai_credential_conversation_id
+            )
+            if conv is not None:
+                ai_summaries.conversation = InstallContextPublisherSummary(
+                    name=conv.name,
+                    type=conv.type.value if hasattr(conv.type, "value") else str(conv.type),
+                )
+        if bundle.publisher_ai_credential_building_id is not None:
+            build = session.get(
+                AICredential, bundle.publisher_ai_credential_building_id
+            )
+            if build is not None:
+                ai_summaries.building = InstallContextPublisherSummary(
+                    name=build.name,
+                    type=build.type.value if hasattr(build.type, "value") else str(build.type),
+                )
+
+        # Resolve the latest revision specs (already mirrored on the
+        # entry, but we want full spec dicts to read provided_by /
+        # publisher_credential_id). Read off the revision row directly.
+        revision = (
+            session.get(AgentBundleRevision, bundle.latest_revision_id)
+            if bundle.latest_revision_id
+            else None
+        )
+        raw_specs: list = []
+        if revision is not None:
+            raw_specs = revision.required_credential_specs or []
+
+        service_specs: list[InstallContextSpec] = []
+        for spec in raw_specs:
+            if not isinstance(spec, dict):
+                continue
+            name = spec.get("name")
+            type_str = spec.get("type")
+            if not name or not type_str:
+                continue
+            description = spec.get("description")
+            provided_by = spec.get("provided_by") or "user"
+            publisher_credential_id_raw = spec.get("publisher_credential_id")
+
+            publisher_summary: InstallContextPublisherSummary | None = None
+            suggested_id: uuid.UUID | None = None
+            suggested_name: str | None = None
+
+            if provided_by == "publisher" and publisher_credential_id_raw:
+                # Try to resolve the publisher's row for the {name, type}
+                # summary. Same defensive parsing as the install service.
+                try:
+                    pub_cred_id = uuid.UUID(str(publisher_credential_id_raw))
+                except (ValueError, TypeError):
+                    pub_cred_id = None
+                if pub_cred_id is not None:
+                    pub_cred = session.get(Credential, pub_cred_id)
+                    if pub_cred is not None:
+                        cred_type_value = (
+                            pub_cred.type.value
+                            if hasattr(pub_cred.type, "value")
+                            else str(pub_cred.type)
+                        )
+                        publisher_summary = InstallContextPublisherSummary(
+                            name=pub_cred.name,
+                            type=cred_type_value,
+                        )
+            else:
+                # PBU spec — auto-prefill matcher.
+                match = CredentialsService.find_match_for_spec(
+                    session=session,
+                    user_id=user.id,
+                    name=name,
+                    type=type_str,
+                )
+                if match is not None:
+                    suggested_id = match.id
+                    suggested_name = match.name
+
+            service_specs.append(
+                InstallContextSpec(
+                    name=name,
+                    type=type_str,
+                    description=description,
+                    provided_by=(
+                        "publisher" if provided_by == "publisher" else "user"
+                    ),
+                    publisher_summary=publisher_summary,
+                    suggested_credential_id=suggested_id,
+                    suggested_credential_name=suggested_name,
+                )
+            )
+
+        return CatalogInstallContext(
+            bundle=entry,
+            ai_provided_by_publisher=ai_provided_by_publisher,
+            ai_publisher_credential_summaries=ai_summaries,
+            service_specs=service_specs,
         )

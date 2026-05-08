@@ -8,6 +8,8 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlmodel import select
 
 from app.api.deps import CurrentUser, SessionDep, require_developer
 from app.models.agents.agent import Agent, AgentPublic
@@ -19,10 +21,22 @@ from app.models.bundles.catalog import (
     CheckUpdatesResponse,
     EditBundleIdRequest,
     SetUpdateModeRequest,
+    SetupCredentialSummary,
+    SetupStatusMissingItem,
+    SetupStatusResponse,
 )
+from app.models.credentials.credential import (
+    Credential,
+    CredentialPublic,
+    CredentialUpdate,
+)
+from app.models.credentials.link_models import AgentCredentialLink
+from app.models.events.event import EventType
 from app.services.agents.agent_service import AgentService
+from app.services.bundles.install_readiness_gate import InstallReadinessGate
 from app.services.bundles.install_service import InstallError, InstallService
 from app.services.bundles.publish_service import PublishService
+from app.services.credentials.credentials_service import CredentialsService
 
 logger = logging.getLogger(__name__)
 
@@ -179,3 +193,301 @@ def edit_bundle_id(
         session=session, install=install, new_bundle_id=request.bundle_id
     )
     return AgentService.to_public_with_clone_info(session, install)
+
+
+# ── Phase 5 — publisher override map for credential provisioning ───
+
+
+class _CredentialOverride(BaseModel):
+    """Per-spec ``provided_by`` choice persisted on the publisher install."""
+
+    provided_by: str  # "user" | "publisher"
+
+
+class PublishSettingsUpdate(BaseModel):
+    """Body of ``PATCH /agents/{agent_id}/publish-settings``.
+
+    Only the publisher install (``is_publisher_install=True``) can hold
+    publish settings. The route validates that:
+
+    - Each entry references the **name** of a credential currently linked
+      to the install (so the override never points at a stale spec).
+    - Each ``provided_by`` value is ``"user"`` or ``"publisher"``.
+    """
+
+    credential_overrides: dict[str, _CredentialOverride] = {}
+
+
+@router.patch(
+    "/{agent_id}/publish-settings",
+    response_model=AgentPublic,
+    dependencies=[Depends(require_developer)],
+)
+def update_publish_settings(
+    agent_id: uuid.UUID,
+    request: PublishSettingsUpdate,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> AgentPublic:
+    """Persist the publisher override map for credential provisioning.
+
+    Phase 5 of the install-experience-redesign plan: lets the publisher
+    explicitly mark each linked credential as user-provided or
+    publisher-provided. The publish-time spec collector reads this map
+    before falling back to inference from ``Credential.allow_sharing``.
+
+    Validation:
+      - The install must be the publisher install (``is_publisher_install=True``).
+        Foreign installs have no publish-settings concept.
+      - Override keys must match the **names** of credentials currently
+        linked to the install — keeps the map honest if the publisher
+        unlinked a credential.
+      - ``provided_by`` must be ``"user"`` or ``"publisher"``.
+
+    On success the override map replaces the existing one wholesale —
+    omitting an entry returns that spec to inference behaviour.
+    """
+    install = _resolve_install_owned(session, agent_id, current_user)
+    if not install.is_publisher_install:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Publish settings can only be edited on the publisher install."
+            ),
+        )
+
+    # Resolve linked credential names — case-sensitive match the publish
+    # collector uses.
+    linked_names: set[str] = set()
+    rows = session.exec(
+        select(Credential)
+        .join(
+            AgentCredentialLink,
+            AgentCredentialLink.credential_id == Credential.id,
+        )
+        .where(AgentCredentialLink.agent_id == install.id)
+    ).all()
+    for cred in rows:
+        if cred.name:
+            linked_names.add(cred.name)
+
+    cleaned: dict[str, dict] = {}
+    for spec_name, override in request.credential_overrides.items():
+        if spec_name not in linked_names:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Override targets unknown spec '{spec_name}' — only "
+                    "credentials currently linked to this install can be "
+                    "overridden."
+                ),
+            )
+        if override.provided_by not in ("user", "publisher"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Invalid provided_by '{override.provided_by}' for spec "
+                    f"'{spec_name}': must be 'user' or 'publisher'."
+                ),
+            )
+        cleaned[spec_name] = {"provided_by": override.provided_by}
+
+    install.publish_settings = {"credential_overrides": cleaned}
+    session.add(install)
+    session.commit()
+    session.refresh(install)
+
+    return AgentService.to_public_with_clone_info(session, install)
+
+
+# ── Phase 4 — install setup gate (status + per-credential setup) ───
+
+
+def _gate_result_to_response(result) -> SetupStatusResponse:
+    """Marshal an internal ``GateResult`` into the public response model."""
+    return SetupStatusResponse(
+        status=result.status,
+        missing=[
+            SetupStatusMissingItem(
+                spec_name=m.spec_name,
+                spec_type=m.spec_type,
+                reason=m.reason,
+                is_ai=m.is_ai,
+            )
+            for m in result.missing
+        ],
+        setup_url=result.setup_url,
+    )
+
+
+@router.get("/{agent_id}/setup-status", response_model=SetupStatusResponse)
+def get_setup_status(
+    agent_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> SetupStatusResponse:
+    """Return the current install readiness verdict.
+
+    Powers the "setup needed" banner on the install detail page and the
+    setup-credentials route. Same scan as the runtime gate, minus the
+    pre-rendered ``user_message`` (the frontend renders its own copy).
+    """
+    install = _resolve_install_owned(session, agent_id, current_user)
+    result = InstallReadinessGate.check(session, install)
+    return _gate_result_to_response(result)
+
+
+@router.get(
+    "/{agent_id}/setup-credentials",
+    response_model=list[SetupCredentialSummary],
+)
+def list_setup_credentials(
+    agent_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> list[SetupCredentialSummary]:
+    """List the install's user-fillable placeholder credentials.
+
+    Returns only rows owned by the install owner AND linked to the
+    install AND ``is_placeholder=True``. Publisher-shared rows are not
+    listed because the installer can't fill them — those surface in
+    ``setup-status`` as ``publisher_credential_*`` items instead.
+    """
+    install = _resolve_install_owned(session, agent_id, current_user)
+
+    rows = session.exec(
+        select(Credential)
+        .join(
+            AgentCredentialLink,
+            AgentCredentialLink.credential_id == Credential.id,
+        )
+        .where(
+            AgentCredentialLink.agent_id == install.id,
+            Credential.owner_id == install.owner_id,
+            Credential.is_placeholder == True,  # noqa: E712
+        )
+    ).all()
+
+    return [
+        SetupCredentialSummary(
+            id=cred.id,
+            name=cred.name,
+            type=cred.type.value if hasattr(cred.type, "value") else str(cred.type),
+            description=cred.notes,
+        )
+        for cred in rows
+    ]
+
+
+@router.put(
+    "/{agent_id}/setup-credentials/{credential_id}",
+    response_model=CredentialPublic,
+)
+async def update_setup_credential(
+    agent_id: uuid.UUID,
+    credential_id: uuid.UUID,
+    credential_in: CredentialUpdate,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> CredentialPublic:
+    """Fill in a placeholder credential for this install.
+
+    Validates that the credential is:
+      1. Owned by the install owner.
+      2. Linked to this install via ``AgentCredentialLink``.
+      3. Currently ``is_placeholder=True`` (gate will refuse to flip an
+         already-real credential because there's no setup flow for it).
+
+    On success: persists the new data via ``CredentialsService.update_credential``
+    (which also flips ``is_placeholder=False`` when the saved data is
+    non-empty), then re-runs the gate; if the install is now ready, emits
+    ``INSTALL_SETUP_COMPLETED`` so the frontend can hide the banner.
+    """
+    install = _resolve_install_owned(session, agent_id, current_user)
+
+    cred = session.get(Credential, credential_id)
+    if cred is None:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    if cred.owner_id != install.owner_id:
+        raise HTTPException(status_code=403, detail="Not your credential")
+
+    link = session.exec(
+        select(AgentCredentialLink).where(
+            AgentCredentialLink.agent_id == install.id,
+            AgentCredentialLink.credential_id == credential_id,
+        )
+    ).first()
+    if link is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Credential is not linked to this install",
+        )
+
+    if not cred.is_placeholder:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Credential is already set up. Edit it from the credentials "
+                "page instead."
+            ),
+        )
+
+    try:
+        updated = await CredentialsService.update_credential(
+            session=session,
+            credential_id=credential_id,
+            credential_in=credential_in,
+            owner_id=current_user.id,
+            is_superuser=current_user.is_superuser,
+        )
+    except ValueError as e:
+        status_code = 404 if "not found" in str(e).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(e))
+
+    # Re-run the gate. If we just made the install ready, emit a WS
+    # notice so the install detail page can hide its setup banner
+    # without polling. Best-effort — failures are logged, not raised.
+    try:
+        result = InstallReadinessGate.check(session, install)
+        if result.status == "ready":
+            from app.services.events.event_service import event_service
+
+            await event_service.emit_event(
+                event_type=EventType.INSTALL_SETUP_COMPLETED,
+                model_id=install.id,
+                user_id=install.owner_id,
+                meta={
+                    "agent_id": str(install.id),
+                    "credential_id": str(credential_id),
+                },
+            )
+    except Exception as e:  # pragma: no cover — diagnostic-only path
+        logger.warning(
+            "Failed to emit INSTALL_SETUP_COMPLETED for install %s: %s",
+            install.id, e,
+        )
+
+    # Build the same CredentialPublic payload the credentials PUT route
+    # returns so frontend code can reuse the existing type.
+    credential_data = CredentialsService.decrypt_credential_data(
+        session=session, credential=updated
+    )
+    status = CredentialsService.check_credential_completeness(
+        credential_type=updated.type.value,
+        credential_data=credential_data,
+    )
+    return CredentialPublic(
+        id=updated.id,
+        name=updated.name,
+        type=updated.type,
+        notes=updated.notes,
+        allow_sharing=updated.allow_sharing,
+        owner_id=updated.owner_id,
+        user_workspace_id=updated.user_workspace_id,
+        share_count=0,
+        is_shared=False,
+        owner_email=None,
+        is_placeholder=updated.is_placeholder,
+        placeholder_source_id=updated.placeholder_source_id,
+        status=status,
+    )

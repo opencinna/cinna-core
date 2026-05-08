@@ -1,15 +1,23 @@
 /**
- * Step 3 — AI credentials.
+ * InstallAICredentialSection — AI credential picker on the install page.
  *
- * The bundle revision doesn't tell us which SDK type the install needs
- * yet (the install endpoint will use the user's defaults if neither
- * dropdown is set). We surface the user's available credentials grouped
- * by type and let them optionally pin one for conversation / building
- * mode.
+ * Two render modes:
+ *   - "Provided by publisher" — the bundle ships AI credentials; we
+ *     surface a friendly summary and skip the picker entirely.
+ *   - "Pick your own" — the user selects their conversation/building AI
+ *     credential (or leaves "Use my defaults").
+ *
+ * Refactored from ``WizardStepAICredentials`` so the wizard files can be
+ * deleted in this phase.
  */
 import { useQuery } from "@tanstack/react-query"
+import { CheckCircle2 } from "lucide-react"
 
-import { AiCredentialsService, type AICredentialSelections } from "@/client"
+import {
+  AiCredentialsService,
+  type AICredentialSelections,
+  type InstallContextAIPublisherSummaries,
+} from "@/client"
 import {
   Card,
   CardContent,
@@ -26,22 +34,69 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
-interface WizardStepAICredentialsProps {
+interface InstallAICredentialSectionProps {
+  aiProvidedByPublisher: boolean
+  aiPublisherSummaries: InstallContextAIPublisherSummaries
   selections: AICredentialSelections
   onChange: (next: AICredentialSelections) => void
 }
 
 const NONE_VALUE = "__use_default__"
 
-export function WizardStepAICredentials({
+export function InstallAICredentialSection({
+  aiProvidedByPublisher,
+  aiPublisherSummaries,
   selections,
   onChange,
-}: WizardStepAICredentialsProps) {
+}: InstallAICredentialSectionProps) {
   const { data, isLoading } = useQuery({
     queryKey: ["aiCredentialsList"],
     queryFn: () => AiCredentialsService.listAiCredentials(),
+    enabled: !aiProvidedByPublisher,
   })
   const credentials = data?.data ?? []
+
+  if (aiProvidedByPublisher) {
+    const conv = aiPublisherSummaries.conversation
+    const build = aiPublisherSummaries.building
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">AI credentials</CardTitle>
+          <CardDescription>
+            Provided by the publisher — no action needed and billed to the
+            publisher.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          {conv && (
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+              <span>
+                <span className="font-medium">Conversation:</span> {conv.name}{" "}
+                <span className="text-muted-foreground">({conv.type})</span>
+              </span>
+            </div>
+          )}
+          {build && (
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+              <span>
+                <span className="font-medium">Building:</span> {build.name}{" "}
+                <span className="text-muted-foreground">({build.type})</span>
+              </span>
+            </div>
+          )}
+          {!conv && !build && (
+            <p className="text-muted-foreground">
+              Publisher AI credential summary is unavailable; the install
+              will still link the publisher's keys.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+    )
+  }
 
   const conversation = selections.conversation_credential_id ?? NONE_VALUE
   const building = selections.building_credential_id ?? NONE_VALUE
@@ -62,10 +117,10 @@ export function WizardStepAICredentials({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>AI credentials</CardTitle>
+        <CardTitle className="text-base">AI credentials</CardTitle>
         <CardDescription>
-          Optional — pick a specific AI credential for each mode, or leave on
-          "Use my defaults" to inherit the credentials marked as default.
+          Pick an AI credential per mode, or leave on "Use my defaults" to
+          inherit your default credentials.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -73,9 +128,9 @@ export function WizardStepAICredentials({
           <p className="text-sm text-muted-foreground">Loading...</p>
         ) : credentials.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            You don't have any AI credentials yet. Add one in Settings → AI
-            Credentials before installing, or proceed and the install will use
-            placeholders.
+            You don't have any AI credentials yet. Add one in Settings -
+            AI Credentials before installing, or proceed and the install
+            will use placeholders.
           </p>
         ) : (
           <>

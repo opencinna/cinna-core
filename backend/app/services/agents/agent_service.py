@@ -135,6 +135,7 @@ class AgentService:
             last_sync_at=agent.last_sync_at,
             last_update_status=agent.last_update_status,
             is_general_assistant=agent.is_general_assistant,
+            publish_settings=agent.publish_settings or {},
         )
 
     @staticmethod

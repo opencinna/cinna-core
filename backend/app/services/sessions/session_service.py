@@ -1546,6 +1546,21 @@ class SessionService:
                     "pending_count": 0
                 }
 
+            # ── Phase 4: install readiness gate ───────────────────────
+            # Inserted before the env-ready / activation branches so an
+            # install with empty placeholder credentials never spins up
+            # the env (or calls the LLM) on a doomed message. The gate
+            # is a stateless read; we synthesise a system reply here and
+            # short-circuit. See plan §6.2 (chat rendering).
+            gate_short_circuit = await SessionService._maybe_short_circuit_with_gate(
+                db=db,
+                chat_session=session,
+                agent=agent,
+                pending_messages=pending_messages,
+            )
+            if gate_short_circuit is not None:
+                return gate_short_circuit
+
             # Auto-generate session title from first message if no title exists
             if not session.title or session.title.strip() == "":
                 # Start background task to generate title with error logging
@@ -1680,6 +1695,149 @@ class SessionService:
                     "message": f"Environment is {environment.status}, messages will be processed once ready",
                     "pending_count": len(pending_messages)
                 }
+
+    @staticmethod
+    async def _maybe_short_circuit_with_gate(
+        db: DBSession,
+        chat_session: Session,
+        agent: Agent,
+        pending_messages: list,
+    ) -> dict[str, Any] | None:
+        """Run the install readiness gate; short-circuit when not ready.
+
+        Phase 4 of the install-experience-redesign plan. When an install
+        has empty placeholder credentials (or broken publisher creds) we
+        synthesise a system-role reply, mark pending user messages as
+        sent (they'll never reach the LLM), and emit
+        ``INSTALL_SETUP_REQUIRED`` over WS. Returns the streaming-action
+        dict the caller should propagate, or ``None`` when the gate
+        passes (caller continues to the env-ready / activation branches).
+
+        The gate is best-effort: any unexpected exception falls through
+        so an unrelated bug here can't lock users out of chat.
+        """
+        from app.models.events.event import EventType
+        from app.services.bundles.install_readiness_gate import InstallReadinessGate
+        from app.services.events.event_service import event_service
+        from app.services.sessions.message_service import MessageService
+
+        try:
+            result = InstallReadinessGate.check(db, agent)
+        except Exception as e:  # pragma: no cover — defensive
+            logger.warning(
+                "Install readiness gate raised for session %s; allowing through: %s",
+                chat_session.id, e,
+            )
+            return None
+
+        if result.status == "ready":
+            return None
+
+        logger.info(
+            "Install readiness gate blocking session %s (status=%s, %d missing)",
+            chat_session.id, result.status, len(result.missing),
+        )
+
+        # Persist the synthesised reply as a system-role message so the
+        # chat history shows it just like any other assistant turn.
+        message_metadata = {
+            "synthesized": True,
+            "install_setup_required": True,
+            "setup_url": result.setup_url,
+            "missing": [
+                {
+                    "spec_name": m.spec_name,
+                    "spec_type": m.spec_type,
+                    "reason": m.reason,
+                    "is_ai": m.is_ai,
+                }
+                for m in result.missing
+            ],
+            "gate_status": result.status,
+        }
+        MessageService.create_message(
+            session=db,
+            session_id=chat_session.id,
+            role="system",
+            content=result.user_message,
+            message_metadata=message_metadata,
+            sent_to_agent_status="sent",
+            status="completed",
+        )
+
+        # Mark the user's pending messages as sent so they don't restream
+        # the next time initiate_stream is called for this session.
+        try:
+            MessageService.mark_messages_as_sent(
+                db, [m.id for m in pending_messages]
+            )
+        except Exception as e:  # pragma: no cover — defensive
+            logger.warning(
+                "Failed to mark pending messages sent after gate trip: %s", e,
+            )
+
+        # Reset pending count; we did not flip interaction_status to
+        # "running" because the env was never engaged.
+        chat_session.pending_messages_count = 0
+        db.add(chat_session)
+        db.commit()
+
+        # Stream the synthesised reply to any open chat-session room so
+        # the UI renders it identically to a normal assistant turn. Best
+        # effort — the persisted message is the source of truth.
+        try:
+            await event_service.emit_stream_event(
+                chat_session.id, "assistant", {
+                    "type": "assistant",
+                    "content": result.user_message,
+                    "event_seq": 1,
+                    "metadata": {
+                        "install_setup_required": True,
+                        "setup_url": result.setup_url,
+                        "gate_status": result.status,
+                    },
+                },
+            )
+            await event_service.emit_stream_event(
+                chat_session.id, "stream_completed", {
+                    "status": "completed",
+                    "session_id": str(chat_session.id),
+                },
+            )
+        except Exception as e:  # pragma: no cover — diagnostic-only
+            logger.warning(
+                "Failed to emit gate stream event for session %s: %s",
+                chat_session.id, e,
+            )
+
+        # WS event so the install detail page can show its banner
+        # immediately. Best-effort.
+        try:
+            await event_service.emit_event(
+                event_type=EventType.INSTALL_SETUP_REQUIRED,
+                model_id=agent.id,
+                user_id=agent.owner_id,
+                meta={
+                    "agent_id": str(agent.id),
+                    "session_id": str(chat_session.id),
+                    "setup_url": result.setup_url,
+                    "status": result.status,
+                    "missing_count": len(result.missing),
+                },
+            )
+        except Exception as e:  # pragma: no cover — diagnostic-only
+            logger.warning(
+                "Failed to emit INSTALL_SETUP_REQUIRED for session %s: %s",
+                chat_session.id, e,
+            )
+
+        return {
+            "action": "setup_required",
+            "message": result.user_message,
+            "pending_count": 0,
+            "setup_url": result.setup_url,
+            "gate_status": result.status,
+        }
 
     @staticmethod
     async def _activate_environment_and_wait(

@@ -28,6 +28,7 @@ Key flows:
   service. Auto-promotes the publisher install into a bundle on first
   email-driven install (mirrors today's ``create_auto_share`` semantics).
 """
+import json
 import logging
 import uuid
 from datetime import datetime, UTC
@@ -37,6 +38,7 @@ from sqlmodel import Session, select
 from fastapi import HTTPException
 
 from app.core.config import settings
+from app.core.security import encrypt_field
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import AgentBundle, BundleInstallMode
 from app.models.bundles.agent_bundle_revision import AgentBundleRevision
@@ -89,6 +91,15 @@ class InstallService:
         )
         existing = session.exec(existing_stmt).first()
         if existing:
+            # Self-heal: if the publisher's AICredentialShare row was
+            # deleted (manually, or by a future housekeeping job) we
+            # recreate it on every idempotent re-install. The helper is
+            # itself idempotent, so this is safe to call repeatedly.
+            await InstallService._link_publisher_ai_credential(
+                session=session,
+                user=user,
+                bundle=bundle,
+            )
             return existing
 
         return await InstallService._install_from_revision(
@@ -206,7 +217,42 @@ class InstallService:
         session.commit()
         session.refresh(install)
 
-        # 2. Build environment (uses revision SDK selection).
+        # 2. Resolve AI credential ids before env creation. Resolution order
+        # for each mode (conversation / building) is:
+        #   1. publisher AI credential FK on the bundle (Phase 2 PBP);
+        #   2. installer's request selection (existing path);
+        #   3. None — env-side resolver falls back to the installer's defaults.
+        # When the bundle provides an AI credential, the request selection
+        # for THAT mode is ignored — we ensure the AICredentialShare exists
+        # so the env-side resolver can decrypt the publisher's row, then
+        # link the env to the publisher's credential id.
+        request_conv_id = (
+            request.ai_credential_selections.conversation_credential_id
+            if request and request.ai_credential_selections
+            else None
+        )
+        request_build_id = (
+            request.ai_credential_selections.building_credential_id
+            if request and request.ai_credential_selections
+            else None
+        )
+        await InstallService._link_publisher_ai_credential(
+            session=session,
+            user=user,
+            bundle=bundle,
+        )
+        conversation_ai_credential_id = (
+            bundle.publisher_ai_credential_conversation_id
+            if bundle.publisher_ai_credential_conversation_id is not None
+            else request_conv_id
+        )
+        building_ai_credential_id = (
+            bundle.publisher_ai_credential_building_id
+            if bundle.publisher_ai_credential_building_id is not None
+            else request_build_id
+        )
+
+        # 2b. Build environment (uses revision SDK selection).
         env_data = AgentEnvironmentCreate(
             env_name=settings.DEFAULT_AGENT_ENV_NAME,
             env_version=settings.DEFAULT_AGENT_ENV_VERSION,
@@ -216,16 +262,8 @@ class InstallService:
             agent_sdk_conversation=revision.agent_sdk_conversation,
             agent_sdk_building=revision.agent_sdk_building,
             use_default_ai_credentials=False,
-            conversation_ai_credential_id=(
-                request.ai_credential_selections.conversation_credential_id
-                if request and request.ai_credential_selections
-                else None
-            ),
-            building_ai_credential_id=(
-                request.ai_credential_selections.building_credential_id
-                if request and request.ai_credential_selections
-                else None
-            ),
+            conversation_ai_credential_id=conversation_ai_credential_id,
+            building_ai_credential_id=building_ai_credential_id,
         )
         try:
             env = await EnvironmentService.create_environment(
@@ -286,13 +324,33 @@ class InstallService:
             )
 
         # 5. Setup credentials (placeholders for required specs).
+        # Normalise the payload up-front so the new
+        # InstallCredentialSelection shape and the legacy
+        # ``{name: uuid_string | dict}`` shape both reach the writer in a
+        # single, well-typed dict. The shim is sunset in Phase 5; see
+        # ``_normalise_credentials_payload``.
+        normalised_credentials = InstallService._normalise_credentials_payload(
+            (request.credentials if request else None),
+            revision,
+        )
         try:
             await InstallService._setup_install_credentials(
                 session=session,
                 install=install,
                 revision=revision,
-                user_provided_data=(request.credentials if request else None) or {},
+                user_provided_data=normalised_credentials,
             )
+        except HTTPException:
+            # Validation errors (e.g. user-override on a publisher spec)
+            # MUST propagate so the route returns 422. Rollback the
+            # half-built install before bubbling up.
+            try:
+                session.rollback()
+                session.delete(install)
+                session.commit()
+            except Exception:
+                session.rollback()
+            raise
         except Exception as e:
             logger.warning(
                 "Failed to setup credentials for install %s: %s",
@@ -319,6 +377,68 @@ class InstallService:
             name = f"{original_name} ({counter})"
 
     @staticmethod
+    def _normalise_credentials_payload(
+        raw: dict | None,
+        revision: AgentBundleRevision,
+    ) -> dict[str, dict]:
+        """Validate and pass through the install request's ``credentials`` body.
+
+        Phase 5: only the typed :class:`InstallCredentialSelection` shape
+        is accepted — the legacy ``{spec_name: uuid_string | dict}`` shim
+        was sunset here. Each value must be a dict with a ``mode`` key in
+        ``{"use_existing", "placeholder", "publisher_provides", "skip"}``;
+        unknown modes are coerced to ``"placeholder"`` so a misconfigured
+        client doesn't abort the install.
+        """
+        if not raw:
+            return {}
+
+        normalised: dict[str, dict] = {}
+        for spec_name, value in raw.items():
+            # Accept either an :class:`InstallCredentialSelection` instance
+            # (when the route validated the body) or a plain dict (in-tree
+            # callers that bypass FastAPI validation, e.g. service tests).
+            if hasattr(value, "model_dump"):
+                value_dict = value.model_dump()
+            elif isinstance(value, dict):
+                value_dict = value
+            else:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Invalid credentials payload for spec '{spec_name}': "
+                        "expected an object with a 'mode' field "
+                        "({'use_existing','placeholder','publisher_provides','skip'})."
+                    ),
+                )
+
+            if "mode" not in value_dict:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Invalid credentials payload for spec '{spec_name}': "
+                        "missing 'mode' field."
+                    ),
+                )
+
+            mode = value_dict.get("mode")
+            if mode not in (
+                "use_existing",
+                "placeholder",
+                "publisher_provides",
+                "skip",
+            ):
+                # Unknown mode — coerce to placeholder so we don't reject
+                # the install on a typo.
+                normalised[spec_name] = {"mode": "placeholder"}
+                continue
+            normalised[spec_name] = {
+                "mode": mode,
+                "credential_id": value_dict.get("credential_id"),
+            }
+        return normalised
+
+    @staticmethod
     async def _setup_install_credentials(
         *,
         session: Session,
@@ -329,34 +449,101 @@ class InstallService:
         """Create placeholders / link selections for the install's credentials.
 
         ``required_credential_specs`` lives on the revision; for each spec
-        we create a placeholder credential owned by the install owner and
-        link it via ``AgentCredentialLink``. Selection data follows the
-        legacy accept-share shape — a credential ID string links an
-        existing user credential, while a dict places legacy values into
-        the placeholder.
+        we either link a foreign publisher-shared credential (when the
+        spec is ``provided_by="publisher"``) or create a placeholder /
+        link the installer's selection (``provided_by="user"``).
+
+        Backward-compat reader: spec dicts authored before Phase 1 of the
+        install-experience-redesign plan have no ``provided_by`` /
+        ``publisher_credential_id`` fields. We default missing
+        ``provided_by`` to ``"user"`` and missing ``publisher_credential_id``
+        to ``None``, which keeps install-time behaviour unchanged for
+        every pre-Phase-1 revision.
+
+        Phase 3: ``user_provided_data`` arrives normalised via
+        :meth:`_normalise_credentials_payload` — values are dicts with
+        ``mode`` and optional ``credential_id``. Legacy single-string and
+        raw-dict values from older clients are accepted there.
+
+        Validation (plan §5):
+          - ``mode="use_existing"`` for a publisher-provided spec is
+            rejected with 422 (publisher specs are not user-overridable).
+          - ``mode="use_existing"`` with a credential_id that doesn't
+            belong to the installer falls back to placeholder (existing
+            soft behaviour; surfacing a hard error here would break old
+            tests sending best-effort uuids).
+
+        Degradation, not failure: if the publisher branch fails (missing
+        row, ``allow_sharing=false``, share creation hiccup) we log a
+        warning, mark the install ``last_update_status="degraded"``, and
+        fall through to the placeholder path. The runtime gate (Phase 4)
+        will surface this to the user; Phase 2+ just keeps the install
+        from aborting.
         """
-        from app.services.credentials.credentials_service import CredentialsService
         from app.models.credentials.credential import Credential, CredentialType
         from app.models.credentials.link_models import AgentCredentialLink
 
+        degraded = False
         for spec in revision.required_credential_specs or []:
             name = spec.get("name")
             cred_type_str = spec.get("type")
+            provided_by = spec.get("provided_by") or "user"
+            publisher_credential_id_raw = spec.get("publisher_credential_id")
             if not name or not cred_type_str:
                 continue
 
-            user_selection = user_provided_data.get(name)
-            selected_credential_id = None
-            legacy_data = None
-            if isinstance(user_selection, str):
-                try:
-                    selected_credential_id = uuid.UUID(user_selection)
-                except (ValueError, TypeError):
-                    pass
-            elif isinstance(user_selection, dict):
-                legacy_data = user_selection
+            user_selection = (
+                user_provided_data.get(name) if user_provided_data else None
+            )
 
-            if selected_credential_id:
+            # ── Publisher-provided branch ─────────────────────────────────
+            if provided_by == "publisher" and publisher_credential_id_raw:
+                # Validate: explicit user_existing override on a publisher
+                # spec is not permitted.
+                if (
+                    isinstance(user_selection, dict)
+                    and user_selection.get("mode") == "use_existing"
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"Spec '{name}' is provided by the publisher and "
+                            "cannot be overridden with a personal credential. "
+                            "Re-submit with mode='publisher_provides' or omit "
+                            "the entry."
+                        ),
+                    )
+                linked = InstallService._try_link_publisher_credential(
+                    session=session,
+                    install=install,
+                    publisher_credential_id_raw=publisher_credential_id_raw,
+                    spec_name=name,
+                )
+                if linked:
+                    continue
+                # Fall through to placeholder; record degradation.
+                degraded = True
+                logger.warning(
+                    "Falling back to placeholder for spec '%s' on install %s "
+                    "(publisher credential %s unusable)",
+                    name, install.id, publisher_credential_id_raw,
+                )
+
+            # ── User-provided branch (default) ────────────────────────────
+            mode: str = "placeholder"
+            selected_credential_id: uuid.UUID | None = None
+            if isinstance(user_selection, dict):
+                mode = user_selection.get("mode") or "placeholder"
+                cred_id_raw = user_selection.get("credential_id")
+                if cred_id_raw:
+                    try:
+                        selected_credential_id = uuid.UUID(str(cred_id_raw))
+                    except (ValueError, TypeError):
+                        selected_credential_id = None
+
+            # Treat publisher_provides on a user-spec as a no-op echo —
+            # the user-branch fall-through creates the placeholder.
+            if mode == "use_existing" and selected_credential_id:
                 selected = session.get(Credential, selected_credential_id)
                 if selected and selected.owner_id == install.owner_id:
                     session.add(AgentCredentialLink(
@@ -383,12 +570,10 @@ class InstallService:
                 name=f"{name} (placeholder)",
                 type=cred_type,
                 notes="Placeholder for required bundle credential.",
-                encrypted_data=CredentialsService._encrypt_data(legacy_data or {}),
-                is_placeholder=legacy_data is None,
+                encrypted_data=encrypt_field(json.dumps({})),
+                is_placeholder=True,
                 allow_sharing=False,
             )
-            if legacy_data:
-                placeholder.name = name
             session.add(placeholder)
             session.flush()
             session.add(AgentCredentialLink(
@@ -396,6 +581,155 @@ class InstallService:
                 credential_id=placeholder.id,
             ))
         session.commit()
+
+        if degraded:
+            install.last_update_status = "degraded"
+            session.add(install)
+            session.commit()
+            session.refresh(install)
+
+    @staticmethod
+    def _try_link_publisher_credential(
+        *,
+        session: Session,
+        install: Agent,
+        publisher_credential_id_raw: str,
+        spec_name: str,
+    ) -> bool:
+        """Best-effort link of a publisher-shared service credential.
+
+        Returns True on success, False on any validation failure (caller
+        falls through to the placeholder path).
+
+        Steps:
+          1. Resolve the publisher's ``Credential`` row by id.
+          2. Verify ownership matches the bundle publisher and the row
+             still has ``allow_sharing=True`` (a publisher-revoked share
+             is the most common breakage at this point).
+          3. Ensure a ``CredentialShare`` exists from publisher to
+             installer (idempotent — keys on credential_id +
+             shared_with_user_id).
+          4. Insert the ``AgentCredentialLink`` for the install.
+        """
+        from app.models.credentials.credential import Credential
+        from app.models.credentials.credential_share import CredentialShare
+        from app.models.credentials.link_models import AgentCredentialLink
+
+        try:
+            publisher_credential_id = uuid.UUID(str(publisher_credential_id_raw))
+        except (ValueError, TypeError):
+            logger.warning(
+                "Invalid publisher_credential_id %r on spec '%s'",
+                publisher_credential_id_raw, spec_name,
+            )
+            return False
+
+        publisher_cred = session.get(Credential, publisher_credential_id)
+        if publisher_cred is None:
+            logger.warning(
+                "Publisher credential %s missing for spec '%s' on install %s",
+                publisher_credential_id, spec_name, install.id,
+            )
+            return False
+        if not publisher_cred.allow_sharing:
+            logger.warning(
+                "Publisher credential %s no longer allows sharing for spec '%s' on install %s",
+                publisher_credential_id, spec_name, install.id,
+            )
+            return False
+
+        # Bundle publisher == credential owner is the trust boundary.
+        bundle = session.get(AgentBundle, install.bundle_uuid) if install.bundle_uuid else None
+        if bundle is not None and publisher_cred.owner_id != bundle.publisher_user_id:
+            logger.warning(
+                "Publisher credential %s not owned by bundle publisher %s "
+                "(actual owner %s) — falling through for spec '%s'",
+                publisher_credential_id, bundle.publisher_user_id,
+                publisher_cred.owner_id, spec_name,
+            )
+            return False
+
+        # Installer-as-publisher (publisher install) doesn't need a share.
+        if publisher_cred.owner_id != install.owner_id:
+            existing_share = session.exec(
+                select(CredentialShare).where(
+                    CredentialShare.credential_id == publisher_credential_id,
+                    CredentialShare.shared_with_user_id == install.owner_id,
+                )
+            ).first()
+            if existing_share is None:
+                session.add(CredentialShare(
+                    credential_id=publisher_credential_id,
+                    shared_with_user_id=install.owner_id,
+                    shared_by_user_id=publisher_cred.owner_id,
+                    access_level="read",
+                ))
+                session.flush()
+
+        # Idempotent link insertion (re-install hits this path again).
+        existing_link = session.exec(
+            select(AgentCredentialLink).where(
+                AgentCredentialLink.agent_id == install.id,
+                AgentCredentialLink.credential_id == publisher_credential_id,
+            )
+        ).first()
+        if existing_link is None:
+            session.add(AgentCredentialLink(
+                agent_id=install.id,
+                credential_id=publisher_credential_id,
+            ))
+        return True
+
+    @staticmethod
+    async def _link_publisher_ai_credential(
+        *,
+        session: Session,
+        user: User,
+        bundle: AgentBundle,
+    ) -> None:
+        """Materialise ``AICredentialShare`` rows for the bundle's PBP AI credentials.
+
+        Idempotent: if the share already exists (or the user is the
+        publisher) the call is a no-op. Called both at install time and
+        at re-install time so a publisher who flips ``publisher_ai_credential_*_id``
+        post-publish gets shares created on the next install / reinstall.
+        """
+        from app.services.credentials.ai_credentials_service import (
+            ai_credentials_service,
+        )
+
+        for credential_id in (
+            bundle.publisher_ai_credential_conversation_id,
+            bundle.publisher_ai_credential_building_id,
+        ):
+            if credential_id is None:
+                continue
+            if bundle.publisher_user_id == user.id:
+                # The publisher install never needs a share-with-self row.
+                continue
+            try:
+                ai_credentials_service.share_credential(
+                    session=session,
+                    credential_id=credential_id,
+                    owner_id=bundle.publisher_user_id,
+                    recipient_id=user.id,
+                )
+            except HTTPException as exc:
+                # Most likely: credential row vanished (FK is SET NULL on
+                # the bundle but a small race remains) or some other
+                # transient validation hiccup. Don't abort the install —
+                # the env-side resolver will surface "no credential" via
+                # the existing path and the runtime gate will catch it.
+                logger.warning(
+                    "Failed to ensure AI credential share for bundle %s "
+                    "credential %s -> user %s: %s",
+                    bundle.id, credential_id, user.id, exc.detail,
+                )
+            except Exception as exc:  # noqa: BLE001 — defensive
+                logger.warning(
+                    "Unexpected error sharing AI credential %s for bundle %s: %s",
+                    credential_id, bundle.id, exc,
+                )
 
     # ── Apply update ───────────────────────────────────────────────
 

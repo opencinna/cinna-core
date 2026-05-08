@@ -68,3 +68,51 @@ Auto-generated from OpenAPI spec. Tag: `installs`
 **Response:** `AgentPublic`
 
 ---
+
+## PATCH `/api/v1/agents/{agent_id}/publish-settings`
+**Update Publish Settings**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Request body** (`PublishSettingsUpdate`):
+  - `credential_overrides`: object
+
+**Response:** `AgentPublic`
+
+---
+
+## GET `/api/v1/agents/{agent_id}/setup-status`
+**Get Setup Status**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Response:** `SetupStatusResponse`
+
+---
+
+## GET `/api/v1/agents/{agent_id}/setup-credentials`
+**List Setup Credentials**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+---
+
+## PUT `/api/v1/agents/{agent_id}/setup-credentials/{credential_id}`
+**Update Setup Credential**
+
+**Path parameters:**
+- `agent_id`: uuid
+- `credential_id`: uuid
+
+**Request body** (`CredentialUpdate`):
+  - `name`: string | null
+  - `notes`: string | null
+  - `credential_data`: object | null
+  - `allow_sharing`: boolean | null
+
+**Response:** `CredentialPublic`
+
+---

@@ -1,10 +1,17 @@
 /**
- * Step 1 — Overview of the bundle being installed.
+ * InstallAgentHeaderCard — left-column sticky header on the install page.
+ *
+ * Shows the bundle identity (display name, version, publisher), the
+ * description, and a compact summary of required credentials so the
+ * user always knows what they're installing while scrolling the form.
  */
 import { Bot, Globe, Lock, Users } from "lucide-react"
 import type { ReactNode } from "react"
 
-import type { CatalogEntryPublic } from "@/client"
+import type {
+  CatalogEntryPublic,
+  InstallContextSpec,
+} from "@/client"
 import { Badge } from "@/components/ui/badge"
 import {
   Card,
@@ -14,8 +21,9 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 
-interface WizardStepOverviewProps {
+interface InstallAgentHeaderCardProps {
   entry: CatalogEntryPublic
+  serviceSpecs: InstallContextSpec[]
 }
 
 const VISIBILITY_ICONS: Record<string, ReactNode> = {
@@ -24,14 +32,12 @@ const VISIBILITY_ICONS: Record<string, ReactNode> = {
   private: <Lock className="h-3.5 w-3.5" />,
 }
 
-export function WizardStepOverview({ entry }: WizardStepOverviewProps) {
-  const credSpecs = (entry.required_credential_specs ?? []) as Array<{
-    name: string
-    type: string
-  }>
-
+export function InstallAgentHeaderCard({
+  entry,
+  serviceSpecs,
+}: InstallAgentHeaderCardProps) {
   return (
-    <Card>
+    <Card className="lg:sticky lg:top-4">
       <CardHeader>
         <div className="flex items-start gap-3">
           <div className="rounded-lg p-2 bg-muted shrink-0">
@@ -42,8 +48,17 @@ export function WizardStepOverview({ entry }: WizardStepOverviewProps) {
               {entry.display_name}
             </CardTitle>
             <p className="text-xs text-muted-foreground mt-1">
-              by {entry.publisher_handle ?? "unknown publisher"}
+              by{" "}
+              {entry.publisher_name ||
+                entry.publisher_email ||
+                entry.publisher_handle ||
+                "unknown publisher"}
             </p>
+            {entry.publisher_name && entry.publisher_email && (
+              <p className="text-xs text-muted-foreground truncate">
+                {entry.publisher_email}
+              </p>
+            )}
           </div>
         </div>
       </CardHeader>
@@ -68,12 +83,31 @@ export function WizardStepOverview({ entry }: WizardStepOverviewProps) {
               rev {entry.latest_revision_number}
             </Badge>
           ) : null}
-          {entry.visibility === "public" && (
-            <Badge variant="outline" className="font-normal">
-              {entry.install_count} install{entry.install_count === 1 ? "" : "s"}
-            </Badge>
-          )}
         </div>
+
+        {serviceSpecs.length > 0 && (
+          <div>
+            <p className="text-xs text-muted-foreground mb-2">
+              Required credentials
+            </p>
+            <ul className="space-y-1">
+              {serviceSpecs.map((spec) => (
+                <li
+                  key={spec.name}
+                  className="text-sm flex items-center gap-2"
+                >
+                  <Badge variant="secondary" className="text-xs">
+                    {spec.type}
+                  </Badge>
+                  <span className="truncate">{spec.name}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {spec.provided_by === "publisher" ? "publisher" : "user"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div>
           <p className="text-xs text-muted-foreground mb-1">Bundle ID</p>
@@ -82,25 +116,12 @@ export function WizardStepOverview({ entry }: WizardStepOverviewProps) {
           </code>
         </div>
 
-        {credSpecs.length > 0 && (
+        {entry.latest_revision_number !== null && (
           <div>
-            <p className="text-xs text-muted-foreground mb-2">
-              This bundle uses the following credentials:
+            <p className="text-xs text-muted-foreground mb-1">
+              Latest revision
             </p>
-            <ul className="space-y-1">
-              {credSpecs.map((spec) => (
-                <li key={spec.name} className="text-sm flex items-center gap-2">
-                  <Badge variant="secondary" className="text-xs">
-                    {spec.type}
-                  </Badge>
-                  <span>{spec.name}</span>
-                </li>
-              ))}
-            </ul>
-            <p className="text-xs text-muted-foreground mt-2">
-              On the next step you can pick existing credentials to bind, or
-              create placeholders to fill in later.
-            </p>
+            <p className="text-sm">rev {entry.latest_revision_number}</p>
           </div>
         )}
       </CardContent>

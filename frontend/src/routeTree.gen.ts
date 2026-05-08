@@ -32,15 +32,16 @@ import { Route as LayoutActivitiesRouteImport } from './routes/_layout/activitie
 import { Route as LayoutTasksIndexRouteImport } from './routes/_layout/tasks/index'
 import { Route as LayoutSessionsIndexRouteImport } from './routes/_layout/sessions/index'
 import { Route as LayoutDashboardsIndexRouteImport } from './routes/_layout/dashboards/index'
+import { Route as LayoutCatalogIndexRouteImport } from './routes/_layout/catalog/index'
 import { Route as LayoutAgenticTeamsIndexRouteImport } from './routes/_layout/agentic-teams/index'
 import { Route as CredentialsOauthCallbackRouteImport } from './routes/credentials/oauth/callback'
 import { Route as LayoutTasksShortCodeRouteImport } from './routes/_layout/tasks/$shortCode'
 import { Route as LayoutTaskTaskIdRouteImport } from './routes/_layout/task/$taskId'
 import { Route as LayoutSessionSessionIdRouteImport } from './routes/_layout/session/$sessionId'
 import { Route as LayoutKnowledgeSourceSourceIdRouteImport } from './routes/_layout/knowledge-source/$sourceId'
-import { Route as LayoutInstallBundleIdRouteImport } from './routes/_layout/install/$bundleId'
 import { Route as LayoutDashboardsDashboardIdRouteImport } from './routes/_layout/dashboards/$dashboardId'
 import { Route as LayoutCredentialCredentialIdRouteImport } from './routes/_layout/credential/$credentialId'
+import { Route as LayoutCatalogAgentsRouteImport } from './routes/_layout/catalog/agents'
 import { Route as LayoutAgenticTeamsTeamIdRouteImport } from './routes/_layout/agentic-teams/$teamId'
 import { Route as LayoutAgentCreatingRouteImport } from './routes/_layout/agent/creating'
 import { Route as LayoutAgentAgentIdRouteImport } from './routes/_layout/agent/$agentId'
@@ -50,8 +51,11 @@ import { Route as LayoutAdminAgentEnvsRouteImport } from './routes/_layout/admin
 import { Route as LayoutSessionsAgentAgentIdRouteImport } from './routes/_layout/sessions/agent/$agentId'
 import { Route as LayoutEnvironmentEnvIdFileRouteImport } from './routes/_layout/environment/$envId/file'
 import { Route as LayoutEnvironmentEnvIdDatabaseRouteImport } from './routes/_layout/environment/$envId/database'
+import { Route as LayoutCatalogAgentsInstallRouteImport } from './routes/_layout/catalog/agents/install'
+import { Route as LayoutAgentAgentIdSetupCredentialsRouteImport } from './routes/_layout/agent/$agentId/setup-credentials'
 import { Route as LayoutAgentAgentIdConversationsRouteImport } from './routes/_layout/agent/$agentId/conversations'
 import { Route as LayoutAdminMarketplaceMarketplaceIdRouteImport } from './routes/_layout/admin/marketplace/$marketplaceId'
+import { Route as LayoutCatalogAgentsInstallBundleIdRouteImport } from './routes/_layout/catalog/agents/install/$bundleId'
 import { Route as LayoutAdminMarketplacePluginPluginIdRouteImport } from './routes/_layout/admin/marketplace/plugin/$pluginId'
 
 const SignupRoute = SignupRouteImport.update({
@@ -169,6 +173,11 @@ const LayoutDashboardsIndexRoute = LayoutDashboardsIndexRouteImport.update({
   path: '/dashboards/',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutCatalogIndexRoute = LayoutCatalogIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => LayoutCatalogRoute,
+} as any)
 const LayoutAgenticTeamsIndexRoute = LayoutAgenticTeamsIndexRouteImport.update({
   id: '/agentic-teams/',
   path: '/agentic-teams/',
@@ -201,11 +210,6 @@ const LayoutKnowledgeSourceSourceIdRoute =
     path: '/knowledge-source/$sourceId',
     getParentRoute: () => LayoutRoute,
   } as any)
-const LayoutInstallBundleIdRoute = LayoutInstallBundleIdRouteImport.update({
-  id: '/install/$bundleId',
-  path: '/install/$bundleId',
-  getParentRoute: () => LayoutRoute,
-} as any)
 const LayoutDashboardsDashboardIdRoute =
   LayoutDashboardsDashboardIdRouteImport.update({
     id: '/dashboards/$dashboardId',
@@ -218,6 +222,11 @@ const LayoutCredentialCredentialIdRoute =
     path: '/credential/$credentialId',
     getParentRoute: () => LayoutRoute,
   } as any)
+const LayoutCatalogAgentsRoute = LayoutCatalogAgentsRouteImport.update({
+  id: '/agents',
+  path: '/agents',
+  getParentRoute: () => LayoutCatalogRoute,
+} as any)
 const LayoutAgenticTeamsTeamIdRoute =
   LayoutAgenticTeamsTeamIdRouteImport.update({
     id: '/agentic-teams/$teamId',
@@ -267,6 +276,18 @@ const LayoutEnvironmentEnvIdDatabaseRoute =
     path: '/environment/$envId/database',
     getParentRoute: () => LayoutRoute,
   } as any)
+const LayoutCatalogAgentsInstallRoute =
+  LayoutCatalogAgentsInstallRouteImport.update({
+    id: '/install',
+    path: '/install',
+    getParentRoute: () => LayoutCatalogAgentsRoute,
+  } as any)
+const LayoutAgentAgentIdSetupCredentialsRoute =
+  LayoutAgentAgentIdSetupCredentialsRouteImport.update({
+    id: '/setup-credentials',
+    path: '/setup-credentials',
+    getParentRoute: () => LayoutAgentAgentIdRoute,
+  } as any)
 const LayoutAgentAgentIdConversationsRoute =
   LayoutAgentAgentIdConversationsRouteImport.update({
     id: '/conversations',
@@ -278,6 +299,12 @@ const LayoutAdminMarketplaceMarketplaceIdRoute =
     id: '/admin/marketplace/$marketplaceId',
     path: '/admin/marketplace/$marketplaceId',
     getParentRoute: () => LayoutRoute,
+  } as any)
+const LayoutCatalogAgentsInstallBundleIdRoute =
+  LayoutCatalogAgentsInstallBundleIdRouteImport.update({
+    id: '/$bundleId',
+    path: '/$bundleId',
+    getParentRoute: () => LayoutCatalogAgentsInstallRoute,
   } as any)
 const LayoutAdminMarketplacePluginPluginIdRoute =
   LayoutAdminMarketplacePluginPluginIdRouteImport.update({
@@ -294,7 +321,7 @@ export interface FileRoutesByFullPath {
   '/activities': typeof LayoutActivitiesRoute
   '/activities-all': typeof LayoutActivitiesAllRoute
   '/agents': typeof LayoutAgentsRoute
-  '/catalog': typeof LayoutCatalogRoute
+  '/catalog': typeof LayoutCatalogRouteWithChildren
   '/credentials': typeof LayoutCredentialsRoute
   '/knowledge-sources': typeof LayoutKnowledgeSourcesRoute
   '/sessions': typeof LayoutSessionsRouteWithChildren
@@ -312,24 +339,28 @@ export interface FileRoutesByFullPath {
   '/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
   '/agent/creating': typeof LayoutAgentCreatingRoute
   '/agentic-teams/$teamId': typeof LayoutAgenticTeamsTeamIdRoute
+  '/catalog/agents': typeof LayoutCatalogAgentsRouteWithChildren
   '/credential/$credentialId': typeof LayoutCredentialCredentialIdRoute
   '/dashboards/$dashboardId': typeof LayoutDashboardsDashboardIdRoute
-  '/install/$bundleId': typeof LayoutInstallBundleIdRoute
   '/knowledge-source/$sourceId': typeof LayoutKnowledgeSourceSourceIdRoute
   '/session/$sessionId': typeof LayoutSessionSessionIdRoute
   '/task/$taskId': typeof LayoutTaskTaskIdRoute
   '/tasks/$shortCode': typeof LayoutTasksShortCodeRoute
   '/credentials/oauth/callback': typeof CredentialsOauthCallbackRoute
   '/agentic-teams': typeof LayoutAgenticTeamsIndexRoute
+  '/catalog/': typeof LayoutCatalogIndexRoute
   '/dashboards': typeof LayoutDashboardsIndexRoute
   '/sessions/': typeof LayoutSessionsIndexRoute
   '/tasks': typeof LayoutTasksIndexRoute
   '/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
   '/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
+  '/agent/$agentId/setup-credentials': typeof LayoutAgentAgentIdSetupCredentialsRoute
+  '/catalog/agents/install': typeof LayoutCatalogAgentsInstallRouteWithChildren
   '/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
   '/sessions/agent/$agentId': typeof LayoutSessionsAgentAgentIdRoute
   '/admin/marketplace/plugin/$pluginId': typeof LayoutAdminMarketplacePluginPluginIdRoute
+  '/catalog/agents/install/$bundleId': typeof LayoutCatalogAgentsInstallBundleIdRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
@@ -339,7 +370,6 @@ export interface FileRoutesByTo {
   '/activities': typeof LayoutActivitiesRoute
   '/activities-all': typeof LayoutActivitiesAllRoute
   '/agents': typeof LayoutAgentsRoute
-  '/catalog': typeof LayoutCatalogRoute
   '/credentials': typeof LayoutCredentialsRoute
   '/knowledge-sources': typeof LayoutKnowledgeSourcesRoute
   '/settings': typeof LayoutSettingsRoute
@@ -356,24 +386,28 @@ export interface FileRoutesByTo {
   '/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
   '/agent/creating': typeof LayoutAgentCreatingRoute
   '/agentic-teams/$teamId': typeof LayoutAgenticTeamsTeamIdRoute
+  '/catalog/agents': typeof LayoutCatalogAgentsRouteWithChildren
   '/credential/$credentialId': typeof LayoutCredentialCredentialIdRoute
   '/dashboards/$dashboardId': typeof LayoutDashboardsDashboardIdRoute
-  '/install/$bundleId': typeof LayoutInstallBundleIdRoute
   '/knowledge-source/$sourceId': typeof LayoutKnowledgeSourceSourceIdRoute
   '/session/$sessionId': typeof LayoutSessionSessionIdRoute
   '/task/$taskId': typeof LayoutTaskTaskIdRoute
   '/tasks/$shortCode': typeof LayoutTasksShortCodeRoute
   '/credentials/oauth/callback': typeof CredentialsOauthCallbackRoute
   '/agentic-teams': typeof LayoutAgenticTeamsIndexRoute
+  '/catalog': typeof LayoutCatalogIndexRoute
   '/dashboards': typeof LayoutDashboardsIndexRoute
   '/sessions': typeof LayoutSessionsIndexRoute
   '/tasks': typeof LayoutTasksIndexRoute
   '/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
   '/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
+  '/agent/$agentId/setup-credentials': typeof LayoutAgentAgentIdSetupCredentialsRoute
+  '/catalog/agents/install': typeof LayoutCatalogAgentsInstallRouteWithChildren
   '/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
   '/sessions/agent/$agentId': typeof LayoutSessionsAgentAgentIdRoute
   '/admin/marketplace/plugin/$pluginId': typeof LayoutAdminMarketplacePluginPluginIdRoute
+  '/catalog/agents/install/$bundleId': typeof LayoutCatalogAgentsInstallBundleIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -385,7 +419,7 @@ export interface FileRoutesById {
   '/_layout/activities': typeof LayoutActivitiesRoute
   '/_layout/activities-all': typeof LayoutActivitiesAllRoute
   '/_layout/agents': typeof LayoutAgentsRoute
-  '/_layout/catalog': typeof LayoutCatalogRoute
+  '/_layout/catalog': typeof LayoutCatalogRouteWithChildren
   '/_layout/credentials': typeof LayoutCredentialsRoute
   '/_layout/knowledge-sources': typeof LayoutKnowledgeSourcesRoute
   '/_layout/sessions': typeof LayoutSessionsRouteWithChildren
@@ -403,24 +437,28 @@ export interface FileRoutesById {
   '/_layout/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
   '/_layout/agent/creating': typeof LayoutAgentCreatingRoute
   '/_layout/agentic-teams/$teamId': typeof LayoutAgenticTeamsTeamIdRoute
+  '/_layout/catalog/agents': typeof LayoutCatalogAgentsRouteWithChildren
   '/_layout/credential/$credentialId': typeof LayoutCredentialCredentialIdRoute
   '/_layout/dashboards/$dashboardId': typeof LayoutDashboardsDashboardIdRoute
-  '/_layout/install/$bundleId': typeof LayoutInstallBundleIdRoute
   '/_layout/knowledge-source/$sourceId': typeof LayoutKnowledgeSourceSourceIdRoute
   '/_layout/session/$sessionId': typeof LayoutSessionSessionIdRoute
   '/_layout/task/$taskId': typeof LayoutTaskTaskIdRoute
   '/_layout/tasks/$shortCode': typeof LayoutTasksShortCodeRoute
   '/credentials/oauth/callback': typeof CredentialsOauthCallbackRoute
   '/_layout/agentic-teams/': typeof LayoutAgenticTeamsIndexRoute
+  '/_layout/catalog/': typeof LayoutCatalogIndexRoute
   '/_layout/dashboards/': typeof LayoutDashboardsIndexRoute
   '/_layout/sessions/': typeof LayoutSessionsIndexRoute
   '/_layout/tasks/': typeof LayoutTasksIndexRoute
   '/_layout/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
   '/_layout/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
+  '/_layout/agent/$agentId/setup-credentials': typeof LayoutAgentAgentIdSetupCredentialsRoute
+  '/_layout/catalog/agents/install': typeof LayoutCatalogAgentsInstallRouteWithChildren
   '/_layout/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/_layout/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
   '/_layout/sessions/agent/$agentId': typeof LayoutSessionsAgentAgentIdRoute
   '/_layout/admin/marketplace/plugin/$pluginId': typeof LayoutAdminMarketplacePluginPluginIdRoute
+  '/_layout/catalog/agents/install/$bundleId': typeof LayoutCatalogAgentsInstallBundleIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -450,24 +488,28 @@ export interface FileRouteTypes {
     | '/agent/$agentId'
     | '/agent/creating'
     | '/agentic-teams/$teamId'
+    | '/catalog/agents'
     | '/credential/$credentialId'
     | '/dashboards/$dashboardId'
-    | '/install/$bundleId'
     | '/knowledge-source/$sourceId'
     | '/session/$sessionId'
     | '/task/$taskId'
     | '/tasks/$shortCode'
     | '/credentials/oauth/callback'
     | '/agentic-teams'
+    | '/catalog/'
     | '/dashboards'
     | '/sessions/'
     | '/tasks'
     | '/admin/marketplace/$marketplaceId'
     | '/agent/$agentId/conversations'
+    | '/agent/$agentId/setup-credentials'
+    | '/catalog/agents/install'
     | '/environment/$envId/database'
     | '/environment/$envId/file'
     | '/sessions/agent/$agentId'
     | '/admin/marketplace/plugin/$pluginId'
+    | '/catalog/agents/install/$bundleId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -477,7 +519,6 @@ export interface FileRouteTypes {
     | '/activities'
     | '/activities-all'
     | '/agents'
-    | '/catalog'
     | '/credentials'
     | '/knowledge-sources'
     | '/settings'
@@ -494,24 +535,28 @@ export interface FileRouteTypes {
     | '/agent/$agentId'
     | '/agent/creating'
     | '/agentic-teams/$teamId'
+    | '/catalog/agents'
     | '/credential/$credentialId'
     | '/dashboards/$dashboardId'
-    | '/install/$bundleId'
     | '/knowledge-source/$sourceId'
     | '/session/$sessionId'
     | '/task/$taskId'
     | '/tasks/$shortCode'
     | '/credentials/oauth/callback'
     | '/agentic-teams'
+    | '/catalog'
     | '/dashboards'
     | '/sessions'
     | '/tasks'
     | '/admin/marketplace/$marketplaceId'
     | '/agent/$agentId/conversations'
+    | '/agent/$agentId/setup-credentials'
+    | '/catalog/agents/install'
     | '/environment/$envId/database'
     | '/environment/$envId/file'
     | '/sessions/agent/$agentId'
     | '/admin/marketplace/plugin/$pluginId'
+    | '/catalog/agents/install/$bundleId'
   id:
     | '__root__'
     | '/_layout'
@@ -540,24 +585,28 @@ export interface FileRouteTypes {
     | '/_layout/agent/$agentId'
     | '/_layout/agent/creating'
     | '/_layout/agentic-teams/$teamId'
+    | '/_layout/catalog/agents'
     | '/_layout/credential/$credentialId'
     | '/_layout/dashboards/$dashboardId'
-    | '/_layout/install/$bundleId'
     | '/_layout/knowledge-source/$sourceId'
     | '/_layout/session/$sessionId'
     | '/_layout/task/$taskId'
     | '/_layout/tasks/$shortCode'
     | '/credentials/oauth/callback'
     | '/_layout/agentic-teams/'
+    | '/_layout/catalog/'
     | '/_layout/dashboards/'
     | '/_layout/sessions/'
     | '/_layout/tasks/'
     | '/_layout/admin/marketplace/$marketplaceId'
     | '/_layout/agent/$agentId/conversations'
+    | '/_layout/agent/$agentId/setup-credentials'
+    | '/_layout/catalog/agents/install'
     | '/_layout/environment/$envId/database'
     | '/_layout/environment/$envId/file'
     | '/_layout/sessions/agent/$agentId'
     | '/_layout/admin/marketplace/plugin/$pluginId'
+    | '/_layout/catalog/agents/install/$bundleId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -738,6 +787,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutDashboardsIndexRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/catalog/': {
+      id: '/_layout/catalog/'
+      path: '/'
+      fullPath: '/catalog/'
+      preLoaderRoute: typeof LayoutCatalogIndexRouteImport
+      parentRoute: typeof LayoutCatalogRoute
+    }
     '/_layout/agentic-teams/': {
       id: '/_layout/agentic-teams/'
       path: '/agentic-teams'
@@ -780,13 +836,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutKnowledgeSourceSourceIdRouteImport
       parentRoute: typeof LayoutRoute
     }
-    '/_layout/install/$bundleId': {
-      id: '/_layout/install/$bundleId'
-      path: '/install/$bundleId'
-      fullPath: '/install/$bundleId'
-      preLoaderRoute: typeof LayoutInstallBundleIdRouteImport
-      parentRoute: typeof LayoutRoute
-    }
     '/_layout/dashboards/$dashboardId': {
       id: '/_layout/dashboards/$dashboardId'
       path: '/dashboards/$dashboardId'
@@ -800,6 +849,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/credential/$credentialId'
       preLoaderRoute: typeof LayoutCredentialCredentialIdRouteImport
       parentRoute: typeof LayoutRoute
+    }
+    '/_layout/catalog/agents': {
+      id: '/_layout/catalog/agents'
+      path: '/agents'
+      fullPath: '/catalog/agents'
+      preLoaderRoute: typeof LayoutCatalogAgentsRouteImport
+      parentRoute: typeof LayoutCatalogRoute
     }
     '/_layout/agentic-teams/$teamId': {
       id: '/_layout/agentic-teams/$teamId'
@@ -864,6 +920,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutEnvironmentEnvIdDatabaseRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/catalog/agents/install': {
+      id: '/_layout/catalog/agents/install'
+      path: '/install'
+      fullPath: '/catalog/agents/install'
+      preLoaderRoute: typeof LayoutCatalogAgentsInstallRouteImport
+      parentRoute: typeof LayoutCatalogAgentsRoute
+    }
+    '/_layout/agent/$agentId/setup-credentials': {
+      id: '/_layout/agent/$agentId/setup-credentials'
+      path: '/setup-credentials'
+      fullPath: '/agent/$agentId/setup-credentials'
+      preLoaderRoute: typeof LayoutAgentAgentIdSetupCredentialsRouteImport
+      parentRoute: typeof LayoutAgentAgentIdRoute
+    }
     '/_layout/agent/$agentId/conversations': {
       id: '/_layout/agent/$agentId/conversations'
       path: '/conversations'
@@ -878,6 +948,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAdminMarketplaceMarketplaceIdRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/catalog/agents/install/$bundleId': {
+      id: '/_layout/catalog/agents/install/$bundleId'
+      path: '/$bundleId'
+      fullPath: '/catalog/agents/install/$bundleId'
+      preLoaderRoute: typeof LayoutCatalogAgentsInstallBundleIdRouteImport
+      parentRoute: typeof LayoutCatalogAgentsInstallRoute
+    }
     '/_layout/admin/marketplace/plugin/$pluginId': {
       id: '/_layout/admin/marketplace/plugin/$pluginId'
       path: '/admin/marketplace/plugin/$pluginId'
@@ -887,6 +964,46 @@ declare module '@tanstack/react-router' {
     }
   }
 }
+
+interface LayoutCatalogAgentsInstallRouteChildren {
+  LayoutCatalogAgentsInstallBundleIdRoute: typeof LayoutCatalogAgentsInstallBundleIdRoute
+}
+
+const LayoutCatalogAgentsInstallRouteChildren: LayoutCatalogAgentsInstallRouteChildren =
+  {
+    LayoutCatalogAgentsInstallBundleIdRoute:
+      LayoutCatalogAgentsInstallBundleIdRoute,
+  }
+
+const LayoutCatalogAgentsInstallRouteWithChildren =
+  LayoutCatalogAgentsInstallRoute._addFileChildren(
+    LayoutCatalogAgentsInstallRouteChildren,
+  )
+
+interface LayoutCatalogAgentsRouteChildren {
+  LayoutCatalogAgentsInstallRoute: typeof LayoutCatalogAgentsInstallRouteWithChildren
+}
+
+const LayoutCatalogAgentsRouteChildren: LayoutCatalogAgentsRouteChildren = {
+  LayoutCatalogAgentsInstallRoute: LayoutCatalogAgentsInstallRouteWithChildren,
+}
+
+const LayoutCatalogAgentsRouteWithChildren =
+  LayoutCatalogAgentsRoute._addFileChildren(LayoutCatalogAgentsRouteChildren)
+
+interface LayoutCatalogRouteChildren {
+  LayoutCatalogAgentsRoute: typeof LayoutCatalogAgentsRouteWithChildren
+  LayoutCatalogIndexRoute: typeof LayoutCatalogIndexRoute
+}
+
+const LayoutCatalogRouteChildren: LayoutCatalogRouteChildren = {
+  LayoutCatalogAgentsRoute: LayoutCatalogAgentsRouteWithChildren,
+  LayoutCatalogIndexRoute: LayoutCatalogIndexRoute,
+}
+
+const LayoutCatalogRouteWithChildren = LayoutCatalogRoute._addFileChildren(
+  LayoutCatalogRouteChildren,
+)
 
 interface LayoutSessionsRouteChildren {
   LayoutSessionsIndexRoute: typeof LayoutSessionsIndexRoute
@@ -904,10 +1021,13 @@ const LayoutSessionsRouteWithChildren = LayoutSessionsRoute._addFileChildren(
 
 interface LayoutAgentAgentIdRouteChildren {
   LayoutAgentAgentIdConversationsRoute: typeof LayoutAgentAgentIdConversationsRoute
+  LayoutAgentAgentIdSetupCredentialsRoute: typeof LayoutAgentAgentIdSetupCredentialsRoute
 }
 
 const LayoutAgentAgentIdRouteChildren: LayoutAgentAgentIdRouteChildren = {
   LayoutAgentAgentIdConversationsRoute: LayoutAgentAgentIdConversationsRoute,
+  LayoutAgentAgentIdSetupCredentialsRoute:
+    LayoutAgentAgentIdSetupCredentialsRoute,
 }
 
 const LayoutAgentAgentIdRouteWithChildren =
@@ -917,7 +1037,7 @@ interface LayoutRouteChildren {
   LayoutActivitiesRoute: typeof LayoutActivitiesRoute
   LayoutActivitiesAllRoute: typeof LayoutActivitiesAllRoute
   LayoutAgentsRoute: typeof LayoutAgentsRoute
-  LayoutCatalogRoute: typeof LayoutCatalogRoute
+  LayoutCatalogRoute: typeof LayoutCatalogRouteWithChildren
   LayoutCredentialsRoute: typeof LayoutCredentialsRoute
   LayoutKnowledgeSourcesRoute: typeof LayoutKnowledgeSourcesRoute
   LayoutSessionsRoute: typeof LayoutSessionsRouteWithChildren
@@ -931,7 +1051,6 @@ interface LayoutRouteChildren {
   LayoutAgenticTeamsTeamIdRoute: typeof LayoutAgenticTeamsTeamIdRoute
   LayoutCredentialCredentialIdRoute: typeof LayoutCredentialCredentialIdRoute
   LayoutDashboardsDashboardIdRoute: typeof LayoutDashboardsDashboardIdRoute
-  LayoutInstallBundleIdRoute: typeof LayoutInstallBundleIdRoute
   LayoutKnowledgeSourceSourceIdRoute: typeof LayoutKnowledgeSourceSourceIdRoute
   LayoutSessionSessionIdRoute: typeof LayoutSessionSessionIdRoute
   LayoutTaskTaskIdRoute: typeof LayoutTaskTaskIdRoute
@@ -949,7 +1068,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutActivitiesRoute: LayoutActivitiesRoute,
   LayoutActivitiesAllRoute: LayoutActivitiesAllRoute,
   LayoutAgentsRoute: LayoutAgentsRoute,
-  LayoutCatalogRoute: LayoutCatalogRoute,
+  LayoutCatalogRoute: LayoutCatalogRouteWithChildren,
   LayoutCredentialsRoute: LayoutCredentialsRoute,
   LayoutKnowledgeSourcesRoute: LayoutKnowledgeSourcesRoute,
   LayoutSessionsRoute: LayoutSessionsRouteWithChildren,
@@ -963,7 +1082,6 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutAgenticTeamsTeamIdRoute: LayoutAgenticTeamsTeamIdRoute,
   LayoutCredentialCredentialIdRoute: LayoutCredentialCredentialIdRoute,
   LayoutDashboardsDashboardIdRoute: LayoutDashboardsDashboardIdRoute,
-  LayoutInstallBundleIdRoute: LayoutInstallBundleIdRoute,
   LayoutKnowledgeSourceSourceIdRoute: LayoutKnowledgeSourceSourceIdRoute,
   LayoutSessionSessionIdRoute: LayoutSessionSessionIdRoute,
   LayoutTaskTaskIdRoute: LayoutTaskTaskIdRoute,

@@ -1,24 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import {
-  Briefcase,
-  Calendar,
-  HardDrive,
-  Inbox,
-  Key,
-  KeyRound,
-  Mail,
-  Plus,
-  Search,
-  Send,
-  ShieldCheck,
-  type LucideIcon,
-} from "lucide-react"
+import { Plus, Search } from "lucide-react"
 import { useMemo, useState } from "react"
 
 import {
   CredentialsService,
   type CredentialCreate,
+  type CredentialType,
 } from "@/client"
 import { Button } from "@/components/ui/button"
 import {
@@ -34,157 +22,12 @@ import useCustomToast from "@/hooks/useCustomToast"
 import useWorkspace from "@/hooks/useWorkspace"
 import { cn } from "@/lib/utils"
 import { handleError } from "@/utils"
+import {
+  CREDENTIAL_TYPE_GROUPS,
+  type CredentialTypeOption,
+} from "@/components/Credentials/credentialTypes"
 
-type CredentialTypeKey =
-  | "email_imap"
-  | "email_smtp"
-  | "gmail_oauth"
-  | "gmail_oauth_readonly"
-  | "gdrive_oauth"
-  | "gdrive_oauth_readonly"
-  | "gcalendar_oauth"
-  | "gcalendar_oauth_readonly"
-  | "google_service_account"
-  | "api_token"
-  | "ssh_key"
-  | "odoo"
-
-interface CredentialTypeOption {
-  type: CredentialTypeKey
-  label: string
-  defaultName: string
-  keywords: string
-  icon: LucideIcon
-}
-
-interface CredentialTypeGroup {
-  key: string
-  label: string
-  // Tailwind classes applied to every badge in this group. Kept as a single
-  // concatenated string so the whole palette (bg + text + border + hover) lives
-  // in one place per group.
-  badgeClass: string
-  options: CredentialTypeOption[]
-}
-
-const CREDENTIAL_GROUPS: CredentialTypeGroup[] = [
-  {
-    key: "api_access",
-    label: "API & Access",
-    badgeClass:
-      "bg-slate-100 text-slate-800 border-slate-200 hover:bg-slate-200 dark:bg-slate-800/60 dark:text-slate-100 dark:border-slate-700 dark:hover:bg-slate-700",
-    options: [
-      {
-        type: "api_token",
-        label: "API Token",
-        defaultName: "API Token",
-        keywords: "api token bearer key secret",
-        icon: Key,
-      },
-      {
-        type: "ssh_key",
-        label: "SSH Key",
-        defaultName: "SSH Key",
-        keywords: "ssh key git deploy private public",
-        icon: KeyRound,
-      },
-    ],
-  },
-  {
-    key: "email",
-    label: "Email",
-    badgeClass:
-      "bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100 dark:bg-amber-950/40 dark:text-amber-100 dark:border-amber-900 dark:hover:bg-amber-900/40",
-    options: [
-      {
-        type: "email_imap",
-        label: "Email (IMAP)",
-        defaultName: "Email (IMAP)",
-        keywords: "email imap mail inbox",
-        icon: Inbox,
-      },
-      {
-        type: "email_smtp",
-        label: "Email (SMTP)",
-        defaultName: "Email (SMTP)",
-        keywords: "email smtp mail send outgoing",
-        icon: Send,
-      },
-    ],
-  },
-  {
-    key: "google",
-    label: "Google",
-    badgeClass:
-      "bg-blue-50 text-blue-900 border-blue-200 hover:bg-blue-100 dark:bg-blue-950/40 dark:text-blue-100 dark:border-blue-900 dark:hover:bg-blue-900/40",
-    options: [
-      {
-        type: "gmail_oauth",
-        label: "Gmail",
-        defaultName: "Gmail",
-        keywords: "gmail google oauth mail",
-        icon: Mail,
-      },
-      {
-        type: "gmail_oauth_readonly",
-        label: "Gmail (Read-Only)",
-        defaultName: "Gmail (Read-Only)",
-        keywords: "gmail google oauth readonly mail",
-        icon: Mail,
-      },
-      {
-        type: "gdrive_oauth",
-        label: "Google Drive",
-        defaultName: "Google Drive",
-        keywords: "google drive files oauth",
-        icon: HardDrive,
-      },
-      {
-        type: "gdrive_oauth_readonly",
-        label: "Google Drive (Read-Only)",
-        defaultName: "Google Drive (Read-Only)",
-        keywords: "google drive files oauth readonly",
-        icon: HardDrive,
-      },
-      {
-        type: "gcalendar_oauth",
-        label: "Google Calendar",
-        defaultName: "Google Calendar",
-        keywords: "google calendar events oauth",
-        icon: Calendar,
-      },
-      {
-        type: "gcalendar_oauth_readonly",
-        label: "Google Calendar (Read-Only)",
-        defaultName: "Google Calendar (Read-Only)",
-        keywords: "google calendar events oauth readonly",
-        icon: Calendar,
-      },
-      {
-        type: "google_service_account",
-        label: "Google Service Account",
-        defaultName: "Google Service Account",
-        keywords: "google service account json sa",
-        icon: ShieldCheck,
-      },
-    ],
-  },
-  {
-    key: "applications",
-    label: "Applications",
-    badgeClass:
-      "bg-violet-50 text-violet-900 border-violet-200 hover:bg-violet-100 dark:bg-violet-950/40 dark:text-violet-100 dark:border-violet-900 dark:hover:bg-violet-900/40",
-    options: [
-      {
-        type: "odoo",
-        label: "Odoo",
-        defaultName: "Odoo",
-        keywords: "odoo erp applications",
-        icon: Briefcase,
-      },
-    ],
-  },
-]
+type CredentialTypeKey = CredentialType
 
 const SSH_KEY_DEFAULT_DATA = {
   mode: "generate" as const,
@@ -202,8 +45,8 @@ const AddCredential = () => {
 
   const filteredGroups = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return CREDENTIAL_GROUPS
-    return CREDENTIAL_GROUPS.map((group) => ({
+    if (!q) return CREDENTIAL_TYPE_GROUPS
+    return CREDENTIAL_TYPE_GROUPS.map((group) => ({
       ...group,
       options: group.options.filter((opt) => {
         const haystack = `${opt.label} ${opt.keywords} ${group.label}`.toLowerCase()

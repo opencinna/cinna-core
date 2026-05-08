@@ -48,6 +48,9 @@ class AgentUpdate(SQLModel):
     webapp_enabled: bool | None = None
     # Install owners can update update mode for bundle updates
     update_mode: str | None = None  # "automatic" | "manual"
+    # Publisher override map (Phase 5). Only meaningful on the publisher
+    # install; ignored on foreign installs. The route validates the shape.
+    publish_settings: dict | None = None
 
 
 # Database model, database table inferred from class name
@@ -142,6 +145,20 @@ class Agent(AgentBase, table=True):
     # General Assistant flag
     is_general_assistant: bool = Field(default=False)
 
+    # Publisher overrides (Phase 5 of the install-experience-redesign plan).
+    # Lives only on the publisher install; ignored on foreign installs. The
+    # publish-time spec collector reads ``credential_overrides[<spec_name>]
+    # .provided_by`` to decide whether the spec is publisher-provided or
+    # user-provided, falling back to inference from ``Credential.allow_sharing``
+    # when the override is absent. Shape:
+    #
+    #   {
+    #     "credential_overrides": {
+    #       "<spec_name>": {"provided_by": "user" | "publisher"}
+    #     }
+    #   }
+    publish_settings: dict = Field(default_factory=dict, sa_column=Column(JSON))
+
     owner: User | None = Relationship(back_populates="agents")
     credentials: List["app.models.credentials.credential.Credential"] = Relationship(
         back_populates="agents", link_model=AgentCredentialLink
@@ -199,6 +216,9 @@ class AgentPublic(SQLModel):
 
     # General Assistant flag
     is_general_assistant: bool = False
+
+    # Publisher override map (Phase 5). Empty / absent on foreign installs.
+    publish_settings: dict = {}
 
 
 class AgentsPublic(SQLModel):

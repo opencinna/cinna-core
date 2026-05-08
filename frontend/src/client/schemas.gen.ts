@@ -165,11 +165,21 @@ export const AICredentialSelectionsSchema = {
                 }
             ],
             title: 'Building Credential Id'
+        },
+        use_publisher_ai: {
+            type: 'boolean',
+            title: 'Use Publisher Ai',
+            default: false
         }
     },
     type: 'object',
     title: 'AICredentialSelections',
-    description: 'AI credential selections used by the install wizard.'
+    description: `AI credential selections used by the install wizard.
+
+\`\`use_publisher_ai\`\` is a UI hint — it tells the backend the frontend
+has acknowledged a publisher-provides-AI bundle. The backend never
+depends on this flag: when the bundle has \`\`publisher_ai_credential_*_id\`\`
+set, those rows are always linked regardless of what the frontend sent.`
 } as const;
 
 export const AICredentialTypeSchema = {
@@ -1477,7 +1487,9 @@ export const AdminInstallRequestSchema = {
         credentials: {
             anyOf: [
                 {
-                    additionalProperties: true,
+                    additionalProperties: {
+                        '$ref': '#/components/schemas/InstallCredentialSelection'
+                    },
                     type: 'object'
                 },
                 {
@@ -1919,6 +1931,30 @@ export const AgentBundlePublicSchema = {
             title: 'Install Count',
             default: 0
         },
+        publisher_ai_credential_conversation_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Ai Credential Conversation Id'
+        },
+        publisher_ai_credential_building_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Ai Credential Building Id'
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -2179,6 +2215,30 @@ export const AgentBundleUpdateSchema = {
                 }
             ],
             title: 'Default Install Mode'
+        },
+        publisher_ai_credential_conversation_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Ai Credential Conversation Id'
+        },
+        publisher_ai_credential_building_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Ai Credential Building Id'
         }
     },
     type: 'object',
@@ -3822,6 +3882,12 @@ export const AgentPublicSchema = {
             type: 'boolean',
             title: 'Is General Assistant',
             default: false
+        },
+        publish_settings: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Publish Settings',
+            default: {}
         }
     },
     type: 'object',
@@ -4683,6 +4749,18 @@ export const AgentUpdateSchema = {
                 }
             ],
             title: 'Update Mode'
+        },
+        publish_settings: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publish Settings'
         }
     },
     type: 'object',
@@ -7388,12 +7466,84 @@ export const CatalogEntryPublicSchema = {
             type: 'array',
             title: 'Required Credential Specs',
             default: []
+        },
+        publisher_ai_credential_conversation_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Ai Credential Conversation Id'
+        },
+        publisher_ai_credential_building_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Ai Credential Building Id'
         }
     },
     type: 'object',
     required: ['bundle_id', 'bundle_uuid', 'display_name', 'description', 'publisher_handle', 'visibility', 'latest_revision_id', 'latest_revision_number', 'latest_published_at', 'install_count', 'is_installed', 'user_install_id'],
     title: 'CatalogEntryPublic',
     description: "One row in the user's catalog."
+} as const;
+
+export const CatalogInstallContextSchema = {
+    properties: {
+        bundle: {
+            '$ref': '#/components/schemas/CatalogEntryPublic'
+        },
+        ai_provided_by_publisher: {
+            type: 'boolean',
+            title: 'Ai Provided By Publisher'
+        },
+        ai_publisher_credential_summaries: {
+            '$ref': '#/components/schemas/InstallContextAIPublisherSummaries'
+        },
+        service_specs: {
+            items: {
+                '$ref': '#/components/schemas/InstallContextSpec'
+            },
+            type: 'array',
+            title: 'Service Specs'
+        },
+        credentials_payload_schema: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/InstallCredentialSelection'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        }
+    },
+    type: 'object',
+    required: ['bundle', 'ai_provided_by_publisher', 'ai_publisher_credential_summaries', 'service_specs'],
+    title: 'CatalogInstallContext',
+    description: `Response body for \`\`GET /catalog/{bundle_id}/install-context\`\`.
+
+Powers the single-screen install page — the catalog entry plus
+enough metadata for the form to default-populate every section
+without further round-trips.
+
+\`\`credentials_payload_schema\`\` is always \`\`None\`\` at runtime; it
+exists purely so the generated OpenAPI client emits a public
+:class:\`InstallCredentialSelection\` TypeScript type. The frontend
+reads that type when building the install request body (the
+request type itself is left as a loose dict to preserve the
+backward-compat shim that accepts the legacy
+\`\`dict[str, uuid_str | data_dict]\`\` shape).`
 } as const;
 
 export const CatalogPublicSchema = {
@@ -10848,12 +10998,173 @@ export const InputTasksPublicExtendedSchema = {
     title: 'InputTasksPublicExtended'
 } as const;
 
+export const InstallContextAIPublisherSummariesSchema = {
+    properties: {
+        conversation: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/InstallContextPublisherSummary'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        building: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/InstallContextPublisherSummary'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        }
+    },
+    type: 'object',
+    title: 'InstallContextAIPublisherSummaries',
+    description: 'Publisher AI credential summaries for the install context.'
+} as const;
+
+export const InstallContextPublisherSummarySchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        type: {
+            type: 'string',
+            title: 'Type'
+        }
+    },
+    type: 'object',
+    required: ['name', 'type'],
+    title: 'InstallContextPublisherSummary',
+    description: `Lightweight publisher-credential descriptor (name + type, no secrets).
+
+Surfaced on the install context so the install screen can label
+publisher-shared specs without leaking the underlying secret.`
+} as const;
+
+export const InstallContextSpecSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        type: {
+            type: 'string',
+            title: 'Type'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        provided_by: {
+            type: 'string',
+            enum: ['user', 'publisher'],
+            title: 'Provided By',
+            default: 'user'
+        },
+        publisher_summary: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/InstallContextPublisherSummary'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        suggested_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Suggested Credential Id'
+        },
+        suggested_credential_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Suggested Credential Name'
+        }
+    },
+    type: 'object',
+    required: ['name', 'type'],
+    title: 'InstallContextSpec',
+    description: `One service-credential spec, augmented with auto-prefill suggestions.
+
+\`\`provided_by\`\` mirrors the revision spec; \`\`publisher_summary\`\` is
+populated only when \`\`provided_by="publisher"\`\` (and the row is still
+resolvable). \`\`suggested_credential_id\`\` / \`\`suggested_credential_name\`\`
+are the auto-prefill matcher's output for PBU specs — pure suggestion;
+nothing is committed until the user submits the install.`
+} as const;
+
+export const InstallCredentialSelectionSchema = {
+    properties: {
+        mode: {
+            type: 'string',
+            enum: ['use_existing', 'placeholder', 'publisher_provides', 'skip'],
+            title: 'Mode'
+        },
+        credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credential Id'
+        }
+    },
+    type: 'object',
+    required: ['mode'],
+    title: 'InstallCredentialSelection',
+    description: `Per-spec credential selection in the install request body.
+
+\`\`mode\`\` semantics (matches plan §5):
+  - \`\`use_existing\`\`: link the user's credential identified by
+    \`\`credential_id\`\`. Validated server-side: must be owner-accessible
+    and not target a publisher-provides spec.
+  - \`\`placeholder\`\`: create an empty placeholder \`\`Credential\`\`;
+    runtime gate (Phase 4) prompts the user to fill it later.
+  - \`\`publisher_provides\`\`: UI hint that the frontend has acknowledged
+    a publisher-provided spec. Backend takes the revision as truth and
+    ignores this for branch selection.
+  - \`\`skip\`\`: equivalent to \`\`placeholder\`\` for now; reserved for a
+    future "do not even link this credential" semantics.`
+} as const;
+
 export const InstallRequestSchema = {
     properties: {
         credentials: {
             anyOf: [
                 {
-                    additionalProperties: true,
+                    additionalProperties: {
+                        '$ref': '#/components/schemas/InstallCredentialSelection'
+                    },
                     type: 'object'
                 },
                 {
@@ -10877,8 +11188,12 @@ export const InstallRequestSchema = {
     title: 'InstallRequest',
     description: `Body of \`\`POST /catalog/{bundle_id}/install\`\`.
 
-\`\`credentials\`\` mirrors the legacy accept-share shape:
-\`\`{credential_name: credential_id_str | {field: value}}\`\`.`
+\`\`credentials\`\` is keyed on the spec \`\`name\`\` (from
+\`\`required_credential_specs\`\`) → :class:\`InstallCredentialSelection\`.
+
+Phase 5: the legacy \`\`{name: uuid_string | dict}\`\` shape was dropped
+along with the install-time shim. Only the typed
+:class:\`InstallCredentialSelection\` shape is accepted now.`
 } as const;
 
 export const KnowledgeArticlePublicSchema = {
@@ -12563,6 +12878,29 @@ first publish and suggests a minor bump from the previous revision
 afterwards.`
 } as const;
 
+export const PublishSettingsUpdateSchema = {
+    properties: {
+        credential_overrides: {
+            additionalProperties: {
+                '$ref': '#/components/schemas/_CredentialOverride'
+            },
+            type: 'object',
+            title: 'Credential Overrides',
+            default: {}
+        }
+    },
+    type: 'object',
+    title: 'PublishSettingsUpdate',
+    description: `Body of \`\`PATCH /agents/{agent_id}/publish-settings\`\`.
+
+Only the publisher install (\`\`is_publisher_install=True\`\`) can hold
+publish settings. The route validates that:
+
+- Each entry references the **name** of a credential currently linked
+  to the install (so the override never points at a stale spec).
+- Each \`\`provided_by\`\` value is \`\`"user"\`\` or \`\`"publisher"\`\`.`
+} as const;
+
 export const RefinePromptRequestSchema = {
     properties: {
         user_input: {
@@ -14221,6 +14559,111 @@ export const SetUpdateModeRequestSchema = {
     required: ['update_mode'],
     title: 'SetUpdateModeRequest',
     description: 'Body of ``PATCH /agents/{agent_id}/update-mode``.'
+} as const;
+
+export const SetupCredentialSummarySchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        type: {
+            type: 'string',
+            title: 'Type'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name', 'type'],
+    title: 'SetupCredentialSummary',
+    description: `One placeholder credential the install owner can fill in.
+
+Used by \`\`GET /agents/{agent_id}/setup-credentials\`\`. Only credentials
+owned by the install owner AND linked to the install AND
+\`\`is_placeholder=True\`\` are surfaced (publisher-shared rows are not
+user-fillable).`
+} as const;
+
+export const SetupStatusMissingItemSchema = {
+    properties: {
+        spec_name: {
+            type: 'string',
+            title: 'Spec Name'
+        },
+        spec_type: {
+            type: 'string',
+            title: 'Spec Type'
+        },
+        reason: {
+            type: 'string',
+            enum: ['placeholder_empty', 'publisher_credential_missing', 'publisher_credential_unshared'],
+            title: 'Reason'
+        },
+        is_ai: {
+            type: 'boolean',
+            title: 'Is Ai',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['spec_name', 'spec_type', 'reason'],
+    title: 'SetupStatusMissingItem',
+    description: `One credential item the install is currently missing.
+
+Mirrors :class:\`app.services.bundles.install_readiness_gate.GateMissingItem\`
+but as a Pydantic model so it shows up in the generated OpenAPI client.
+The frontend banner / setup page renders this list.`
+} as const;
+
+export const SetupStatusResponseSchema = {
+    properties: {
+        status: {
+            type: 'string',
+            enum: ['ready', 'needs_setup', 'publisher_broken'],
+            title: 'Status'
+        },
+        missing: {
+            items: {
+                '$ref': '#/components/schemas/SetupStatusMissingItem'
+            },
+            type: 'array',
+            title: 'Missing'
+        },
+        setup_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Setup Url'
+        }
+    },
+    type: 'object',
+    required: ['status', 'missing'],
+    title: 'SetupStatusResponse',
+    description: `Response of \`\`GET /agents/{agent_id}/setup-status\`\`.
+
+Intentionally omits \`\`user_message\`\` — the chat / MCP / A2A renderers
+use that field, but the frontend banner renders its own copy from the
+typed \`\`missing\`\` list.`
 } as const;
 
 export const SharedCredentialPublicSchema = {
@@ -17187,4 +17630,17 @@ export const WorkspaceFilesChangedRequestSchema = {
 
 \`\`changed_files\`\` is informational — currently used for logging only;
 downstream handlers refresh all caches regardless.`
+} as const;
+
+export const _CredentialOverrideSchema = {
+    properties: {
+        provided_by: {
+            type: 'string',
+            title: 'Provided By'
+        }
+    },
+    type: 'object',
+    required: ['provided_by'],
+    title: '_CredentialOverride',
+    description: 'Per-spec ``provided_by`` choice persisted on the publisher install.'
 } as const;

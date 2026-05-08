@@ -25,6 +25,7 @@ import {
   type AgentPublic,
 } from "@/client"
 import useCustomToast from "@/hooks/useCustomToast"
+import { CredentialProvisioningSection } from "@/components/Agents/CredentialProvisioningSection"
 import { UserAllowlistPicker } from "@/components/Common/UserAllowlistPicker"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -568,6 +569,13 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
           </CardContent>
         </Card>
       </div>
+
+      {/* Phase 5 — publisher-only credential provisioning controls. */}
+      {agent.is_publisher_install && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <CredentialProvisioningSection agent={agent} bundle={bundle} />
+        </div>
+      )}
 
       {/* Delete revision confirmation. */}
       <AlertDialog

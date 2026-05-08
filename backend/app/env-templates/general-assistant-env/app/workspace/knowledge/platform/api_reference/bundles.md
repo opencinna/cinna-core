@@ -31,6 +31,8 @@ Auto-generated from OpenAPI spec. Tag: `bundles`
   - `is_listed`: boolean | null
   - `visibility`: string | null
   - `default_install_mode`: string | null
+  - `publisher_ai_credential_conversation_id`: string | null
+  - `publisher_ai_credential_building_id`: string | null
 
 **Response:** `AgentBundlePublic`
 

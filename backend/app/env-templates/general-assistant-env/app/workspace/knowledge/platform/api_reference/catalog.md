@@ -19,6 +19,16 @@ Auto-generated from OpenAPI spec. Tag: `catalog`
 
 ---
 
+## GET `/api/v1/catalog/{bundle_id}/install-context`
+**Get Install Context**
+
+**Path parameters:**
+- `bundle_id`: string
+
+**Response:** `CatalogInstallContext`
+
+---
+
 ## POST `/api/v1/catalog/{bundle_id}/install`
 **Install Bundle**
 

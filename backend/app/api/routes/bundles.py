@@ -74,6 +74,12 @@ def _bundle_to_public(session, bundle: AgentBundle) -> AgentBundlePublic:
         visibility=bundle.visibility,
         default_install_mode=bundle.default_install_mode,
         install_count=install_count,
+        publisher_ai_credential_conversation_id=(
+            bundle.publisher_ai_credential_conversation_id
+        ),
+        publisher_ai_credential_building_id=(
+            bundle.publisher_ai_credential_building_id
+        ),
         created_at=bundle.created_at,
         updated_at=bundle.updated_at,
     )

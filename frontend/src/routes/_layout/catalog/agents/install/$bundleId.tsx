@@ -1,33 +1,30 @@
-import { useQuery } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { ArrowLeft } from "lucide-react"
 import { useEffect } from "react"
 
-import { CatalogService } from "@/client"
-import { InstallWizard } from "@/components/Install/InstallWizard"
+import { InstallPage } from "@/components/Install/InstallPage"
+import { useInstallContext } from "@/components/Install/useInstallContext"
 import PendingItems from "@/components/Pending/PendingItems"
 import { Button } from "@/components/ui/button"
 import { useNavigationHistory } from "@/hooks/useNavigationHistory"
 import { usePageHeader } from "@/routes/_layout"
 import { APP_NAME } from "@/utils"
 
-export const Route = createFileRoute("/_layout/install/$bundleId")({
-  component: InstallPage,
+export const Route = createFileRoute("/_layout/catalog/agents/install/$bundleId")({
+  component: InstallRouteComponent,
   head: () => ({
     meta: [{ title: `Install - ${APP_NAME}` }],
   }),
 })
 
-function InstallPage() {
+function InstallRouteComponent() {
   const { bundleId } = Route.useParams()
   const { setHeaderContent } = usePageHeader()
   const { goBack } = useNavigationHistory()
   const navigate = useNavigate()
 
-  const { data: entry, isLoading, error } = useQuery({
-    queryKey: ["catalog", bundleId],
-    queryFn: () => CatalogService.getCatalogEntry({ bundleId }),
-  })
+  const { data: context, isLoading, error } = useInstallContext(bundleId)
+  const entry = context?.bundle
 
   useEffect(() => {
     setHeaderContent(
@@ -66,7 +63,7 @@ function InstallPage() {
     return <PendingItems />
   }
 
-  if (error || !entry) {
+  if (error || !context) {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <p className="text-destructive">
@@ -76,7 +73,7 @@ function InstallPage() {
     )
   }
 
-  if (entry.latest_revision_id === null) {
+  if (context.bundle.latest_revision_id === null) {
     return (
       <div className="p-6 md:p-8 mx-auto max-w-3xl">
         <p className="text-sm text-muted-foreground">
@@ -89,8 +86,8 @@ function InstallPage() {
 
   return (
     <div className="p-6 md:p-8 overflow-y-auto">
-      <div className="mx-auto max-w-3xl">
-        <InstallWizard entry={entry} />
+      <div className="mx-auto max-w-6xl">
+        <InstallPage context={context} />
       </div>
     </div>
   )

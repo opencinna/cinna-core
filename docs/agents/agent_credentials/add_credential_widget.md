@@ -30,7 +30,9 @@ Replaces an earlier two-step wizard (enter name → pick type → submit → for
 
 ## Component Structure
 
-- `frontend/src/components/Credentials/AddCredential.tsx` — single component that owns the trigger button, the Dialog, the search state, the grouped badge grid, and the create mutation. All credential-type metadata (label, default name, icon, search keywords, group palette) lives in the `CREDENTIAL_GROUPS` array at the top of the file.
+- `frontend/src/components/Credentials/AddCredential.tsx` — owns the trigger button, the Dialog, the search state, the grouped badge grid, and the create mutation. Imports `CREDENTIAL_TYPE_GROUPS` from the shared registry below.
+- `frontend/src/components/Credentials/credentialTypes.ts` — shared credential-type metadata registry. Exports `CREDENTIAL_TYPE_GROUPS` (per-group `badgeClass` + per-type `label` / `defaultName` / `keywords` / `icon`) and the `getCredentialTypeMeta(type)` helper that flattens it into a single per-type lookup (with a neutral slate fallback for unregistered types). Single source of truth — keeps the picker and any display badges visually in sync.
+- `frontend/src/components/Credentials/CredentialTypeBadge.tsx` — display-only `<span>` chip that renders the icon + label + palette for a credential type by reading from `getCredentialTypeMeta`. Same pill shape, icon size, and Tailwind palette as the picker chips, but non-interactive. Reused on the publisher credential-provisioning panel (`Agents/CredentialProvisioningSection.tsx`).
 - `frontend/src/routes/_layout/credential/$credentialId.tsx` — consumes the `?new=1` search param via `validateSearch`, passes a latched `focusNameField` boolean into `OwnedCredentialView` and `SSHKeyEditView`.
 - `frontend/src/components/Credentials/CredentialForms/SSHKeyEditView.tsx` — accepts the `focusNameField` prop and triggers `form.setFocus("name", { shouldSelect: true })` on mount.
 
@@ -41,7 +43,7 @@ Icons come from `lucide-react`: `Key`, `KeyRound`, `Inbox`, `Send`, `Mail`, `Har
 All local to `AddCredential`:
 
 - `isOpen: boolean` — Dialog open state.
-- `query: string` — search input, drives client-side filtering via a `useMemo` over `CREDENTIAL_GROUPS`.
+- `query: string` — search input, drives client-side filtering via a `useMemo` over `CREDENTIAL_TYPE_GROUPS`.
 - `pendingType: CredentialTypeKey | null` — which badge is currently creating (drives the per-badge spinner).
 - `createMutation` — `useMutation` wrapping `CredentialsService.createCredential`. Invalidates the `["credentials"]` query on settle.
 

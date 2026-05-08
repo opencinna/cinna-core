@@ -74,6 +74,23 @@ class AgentBundle(AgentBundleBase, table=True):
         ondelete="SET NULL",
     )
 
+    # Optional publisher-provided AI credentials. NULL = user provides AI at
+    # install time (current default). When set, foreign installs link to the
+    # publisher's row by reference (via ``AICredentialShare``) instead of
+    # snapshotting the API key. The mode lives on the bundle (not on the
+    # revision) so a publisher can flip "I now provide AI" without
+    # re-publishing.
+    publisher_ai_credential_conversation_id: uuid.UUID | None = Field(
+        default=None,
+        foreign_key="ai_credential.id",
+        ondelete="SET NULL",
+    )
+    publisher_ai_credential_building_id: uuid.UUID | None = Field(
+        default=None,
+        foreign_key="ai_credential.id",
+        ondelete="SET NULL",
+    )
+
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -96,6 +113,8 @@ class AgentBundlePublic(SQLModel):
     visibility: str
     default_install_mode: str
     install_count: int = 0
+    publisher_ai_credential_conversation_id: uuid.UUID | None = None
+    publisher_ai_credential_building_id: uuid.UUID | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -112,3 +131,8 @@ class AgentBundleUpdate(SQLModel):
     is_listed: bool | None = None
     visibility: str | None = None
     default_install_mode: str | None = None
+    # Optional publisher-provided AI credentials (Phase 1 of the install
+    # redesign). Setting either to NULL clears the publisher-provides
+    # state for that mode and reverts to "user provides at install time".
+    publisher_ai_credential_conversation_id: uuid.UUID | None = None
+    publisher_ai_credential_building_id: uuid.UUID | None = None

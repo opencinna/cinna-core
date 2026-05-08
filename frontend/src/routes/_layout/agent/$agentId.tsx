@@ -14,6 +14,7 @@ import { AgentEnvironmentsTab } from "@/components/Agents/AgentEnvironmentsTab"
 import { AgentInterfaceTab } from "@/components/Agents/AgentInterfaceTab"
 import { AgentBundleTab } from "@/components/Agents/AgentBundleTab"
 import { UpdateAvailableBanner } from "@/components/Agents/UpdateAvailableBanner"
+import { SetupNeededBanner } from "@/components/Install/SetupNeededBanner"
 import EditAgent from "@/components/Agents/EditAgent"
 import DeleteAgent from "@/components/Agents/DeleteAgent"
 import PendingItems from "@/components/Pending/PendingItems"
@@ -157,6 +158,11 @@ function AgentDetail() {
   return (
     <div className="p-6 md:p-8 overflow-y-auto">
       <div className="mx-auto max-w-7xl">
+        {/* Setup-needed banner (Phase 4 pre-LLM gate). Renders nothing when
+            the install is ready. Shown above the chat/tabs surface so it's
+            the first thing users see when an install needs attention. */}
+        <SetupNeededBanner agentId={agent.id} />
+
         {/* Update banner for installs with pending updates */}
         <UpdateAvailableBanner agent={agent} />
 

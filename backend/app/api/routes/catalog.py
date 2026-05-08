@@ -17,6 +17,7 @@ from app.models.agents.agent import AgentPublic
 from app.models.bundles.catalog import (
     AdminInstallRequest,
     CatalogEntryPublic,
+    CatalogInstallContext,
     CatalogPublic,
     InstallRequest,
 )
@@ -47,6 +48,26 @@ def get_catalog_entry(
     if not entry:
         raise HTTPException(status_code=404, detail="Bundle not found")
     return entry
+
+
+@router.get(
+    "/{bundle_id}/install-context", response_model=CatalogInstallContext
+)
+def get_install_context(
+    bundle_id: str,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> CatalogInstallContext:
+    """Per-user install context for the single-screen install page.
+
+    Returns the catalog entry plus auto-prefill suggestions for every
+    service-credential spec and publisher AI credential summaries (no
+    secret material). 404 when the bundle is not visible to the user.
+    """
+    bundle = BundleService.get_bundle_by_id(session, bundle_id)
+    if not bundle or not CatalogService.user_can_see(session, bundle, current_user):
+        raise HTTPException(status_code=404, detail="Bundle not found")
+    return CatalogService.build_install_context(session, bundle, current_user)
 
 
 @router.post("/{bundle_id}/install", response_model=AgentPublic)

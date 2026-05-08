@@ -52,10 +52,14 @@ from a2a.types import (
     Message,
     Part,
     TextPart,
+    DataPart,
 )
 
 from app.models import Agent, Session as ChatSession, A2ATokenPayload
 from app.models.environments.environment import AgentEnvironment
+from app.models.events.event import EventType
+from app.services.bundles.install_readiness_gate import InstallReadinessGate
+from app.services.events.event_service import event_service
 from app.services.sessions.session_service import SessionService
 from app.services.a2a.a2a_event_mapper import A2AEventMapper
 from app.services.a2a.a2a_task_store import DatabaseTaskStore
@@ -257,6 +261,108 @@ class A2ARequestHandler:
                     self.log_prefix, e,
                 )
                 raise self._wrap_env_error(e)
+
+        # Install readiness gate (plan §6.2 — A2A rendering). When the
+        # install isn't ready, synthesise a ``completed`` Task carrying
+        # the gate's user_message plus a structured data part so callers
+        # don't poll forever and can react programmatically.
+        try:
+            with self.get_db_session() as gate_db:
+                gate_result = InstallReadinessGate.check(gate_db, self.agent)
+        except Exception as e:  # pragma: no cover — defensive
+            logger.warning(
+                "%s install readiness gate raised for agent %s; allowing through: %s",
+                self.log_prefix, self.agent.id, e,
+            )
+            gate_result = None
+
+        if gate_result is not None and gate_result.status != "ready":
+            logger.info(
+                "%s install readiness gate blocking agent %s (status=%s, %d missing)",
+                self.log_prefix, self.agent.id, gate_result.status, len(gate_result.missing),
+            )
+
+            # Stamp the existing session (if any) so the next inbound message
+            # creates a new task instead of reattaching to this synthetic one.
+            if session_id is not None:
+                try:
+                    with self.get_db_session() as db:
+                        existing = SessionService.get_session(db, session_id)
+                        if existing is not None:
+                            metadata = dict(existing.session_metadata or {})
+                            metadata["a2a_setup_required_terminated"] = True
+                            existing.session_metadata = metadata
+                            db.add(existing)
+                            db.commit()
+                except Exception as e:  # pragma: no cover — diagnostic-only
+                    logger.warning(
+                        "%s failed to stamp session_metadata after gate trip: %s",
+                        self.log_prefix, e,
+                    )
+
+            try:
+                await event_service.emit_event(
+                    event_type=EventType.INSTALL_SETUP_REQUIRED,
+                    model_id=self.agent.id,
+                    user_id=self.agent.owner_id,
+                    meta={
+                        "agent_id": str(self.agent.id),
+                        "session_id": str(session_id) if session_id else None,
+                        "setup_url": gate_result.setup_url,
+                        "status": gate_result.status,
+                        "missing_count": len(gate_result.missing),
+                        "channel": "a2a",
+                    },
+                )
+                if gate_result.status == "publisher_broken":
+                    await event_service.emit_event(
+                        event_type=EventType.PUBLISHER_CREDENTIAL_BROKEN,
+                        model_id=self.agent.id,
+                        user_id=self.agent.owner_id,
+                        meta={
+                            "agent_id": str(self.agent.id),
+                            "session_id": str(session_id) if session_id else None,
+                            "setup_url": gate_result.setup_url,
+                            "missing_count": len(gate_result.missing),
+                            "channel": "a2a",
+                        },
+                    )
+            except Exception as e:  # pragma: no cover — diagnostic-only
+                logger.warning(
+                    "%s failed to emit install-setup events for agent %s: %s",
+                    self.log_prefix, self.agent.id, e,
+                )
+
+            synthetic_id = str(session_id) if session_id is not None else str(self.agent.id)
+            data_payload = {
+                "type": "cinna.setup_required",
+                "setup_url": gate_result.setup_url,
+                "missing": [
+                    {
+                        "spec_name": m.spec_name,
+                        "spec_type": m.spec_type,
+                        "reason": m.reason,
+                        "is_ai": m.is_ai,
+                    }
+                    for m in gate_result.missing
+                ],
+            }
+            return Task(
+                id=synthetic_id,
+                contextId=synthetic_id,
+                status=TaskStatus(
+                    state=TaskState.completed,
+                    timestamp=datetime.now(UTC).isoformat() + "Z",
+                    message=Message(
+                        messageId="setup_required",
+                        role="agent",
+                        parts=[
+                            Part(root=TextPart(text=gate_result.user_message)),
+                            Part(root=DataPart(data=data_payload)),
+                        ],
+                    ),
+                ),
+            )
 
         # Send message using SessionService (creates session if session_id is None).
         # ``access_token_id`` is passed regardless of new/existing because

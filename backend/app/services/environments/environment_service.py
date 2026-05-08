@@ -511,7 +511,12 @@ class EnvironmentService:
             # Resolve conversation credential
             if data.conversation_ai_credential_id:
                 conv_cred_obj = session.get(AICredential, data.conversation_ai_credential_id)
-                if not conv_cred_obj or conv_cred_obj.owner_id != user.id:
+                # Owner OR a recipient of an AICredentialShare may use the
+                # row. Shared credentials are how publisher-provided AI
+                # credentials reach foreign installs.
+                if not conv_cred_obj or not ai_credentials_service.can_access_credential(
+                    session, data.conversation_ai_credential_id, user.id
+                ):
                     raise EnvironmentCredentialError("Cannot access the specified conversation AI credential")
                 _validate_sdk_credential_compatibility(sdk_conversation, conv_cred_obj)
                 conv_cred_data = ai_credentials_service.get_credential_for_use(
@@ -536,7 +541,9 @@ class EnvironmentService:
             # Resolve building credential
             if data.building_ai_credential_id:
                 build_cred_obj = session.get(AICredential, data.building_ai_credential_id)
-                if not build_cred_obj or build_cred_obj.owner_id != user.id:
+                if not build_cred_obj or not ai_credentials_service.can_access_credential(
+                    session, data.building_ai_credential_id, user.id
+                ):
                     raise EnvironmentCredentialError("Cannot access the specified building AI credential")
                 if sdk_building:
                     _validate_sdk_credential_compatibility(sdk_building, build_cred_obj)

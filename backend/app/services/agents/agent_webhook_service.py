@@ -520,8 +520,87 @@ class AgentWebhookService:
         start: float,
     ) -> AgentWebhookLog:
         """Assemble prompt, create session, enqueue user message, log."""
+        from app.models.events.event import EventType
+        from app.services.bundles.install_readiness_gate import InstallReadinessGate
+        from app.services.events.event_service import event_service
         from app.services.sessions.message_service import MessageService
         from app.services.sessions.session_service import SessionService
+
+        # Install readiness gate (plan §6.2 — webhook rendering). When the
+        # install isn't ready we skip session creation entirely. The webhook
+        # log row records ``status="setup_required"`` so the publisher can
+        # see why the agent declined to act.
+        try:
+            gate_result = InstallReadinessGate.check(db_session, agent)
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.warning(
+                "webhook %s: install readiness gate raised for agent %s; allowing through: %s",
+                webhook.id, agent.id, exc,
+            )
+            gate_result = None
+
+        if gate_result is not None and gate_result.status != "ready":
+            logger.info(
+                "webhook %s: install readiness gate blocking agent %s (status=%s, %d missing)",
+                webhook.id, agent.id, gate_result.status, len(gate_result.missing),
+            )
+            try:
+                await event_service.emit_event(
+                    event_type=EventType.INSTALL_SETUP_REQUIRED,
+                    model_id=agent.id,
+                    user_id=agent.owner_id,
+                    meta={
+                        "agent_id": str(agent.id),
+                        "webhook_id": str(webhook.id),
+                        "setup_url": gate_result.setup_url,
+                        "status": gate_result.status,
+                        "missing_count": len(gate_result.missing),
+                        "channel": "webhook",
+                    },
+                )
+                if gate_result.status == "publisher_broken":
+                    await event_service.emit_event(
+                        event_type=EventType.PUBLISHER_CREDENTIAL_BROKEN,
+                        model_id=agent.id,
+                        user_id=agent.owner_id,
+                        meta={
+                            "agent_id": str(agent.id),
+                            "webhook_id": str(webhook.id),
+                            "setup_url": gate_result.setup_url,
+                            "missing_count": len(gate_result.missing),
+                            "channel": "webhook",
+                        },
+                    )
+            except Exception as exc:  # pragma: no cover — diagnostic-only
+                logger.warning(
+                    "webhook %s: failed to emit install-setup events: %s",
+                    webhook.id, exc,
+                )
+
+            setup_summary = {
+                "status": "setup_required",
+                "setup_url": gate_result.setup_url,
+                "missing": [
+                    {
+                        "spec_name": m.spec_name,
+                        "spec_type": m.spec_type,
+                        "reason": m.reason,
+                        "is_ai": m.is_ai,
+                    }
+                    for m in gate_result.missing
+                ],
+            }
+            return cls._create_log(
+                db_session,
+                webhook=webhook,
+                status="setup_required",
+                remote_ip=remote_ip,
+                headers_subset=headers_subset,
+                payload_received=payload_text,
+                payload_content_type=payload_content_type,
+                error_message=json.dumps(setup_summary),
+                duration_ms=int((time.perf_counter() - start) * 1000),
+            )
 
         prompt = cls._assemble_session_prompt(
             webhook=webhook,

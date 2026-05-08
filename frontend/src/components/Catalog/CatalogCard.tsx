@@ -98,7 +98,7 @@ export function CatalogCard({ entry }: CatalogCardProps) {
           </Button>
         ) : (
           <Button asChild className="w-full">
-            <Link to="/install/$bundleId" params={{ bundleId: entry.bundle_id }}>
+            <Link to="/catalog/agents/install/$bundleId" params={{ bundleId: entry.bundle_id }}>
               <Download className="h-4 w-4 mr-2" />
               Install
             </Link>

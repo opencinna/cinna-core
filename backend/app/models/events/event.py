@@ -93,6 +93,17 @@ class EventType:
     INSTALL_UPDATE_APPLIED = "install_update_applied"    # Apply succeeded
     INSTALL_UPDATE_FAILED = "install_update_failed"      # Apply errored
 
+    # Install setup gate events (Phase 4 — Pre-LLM gate / setup page)
+    # Emitted when a user→agent dispatch is short-circuited by the readiness
+    # gate (placeholder credentials still empty, or publisher creds broken).
+    INSTALL_SETUP_REQUIRED = "install_setup_required"
+    # Emitted when the install transitions from non-ready to ready (e.g.
+    # the user just filled the last placeholder credential on the setup page).
+    INSTALL_SETUP_COMPLETED = "install_setup_completed"
+    # Emitted when a publisher-provided credential becomes unavailable
+    # (deleted / unshared / allow_sharing flipped off).
+    PUBLISHER_CREDENTIAL_BROKEN = "publisher_credential_broken"
+
     # Role events (Phase 3 — Roles & agent-user UX)
     # Targeted at the user whose role changed; payload carries
     # ``new_role``, ``previous_role``, and ``changed_by_user_id`` so the

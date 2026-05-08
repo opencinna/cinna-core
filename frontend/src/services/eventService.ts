@@ -73,6 +73,11 @@ export const EventTypes = {
   INSTALL_UPDATE_APPLIED: "install_update_applied",        // Apply succeeded
   INSTALL_UPDATE_FAILED: "install_update_failed",          // Apply errored
 
+  // Install setup gate events (Phase 4 — pre-LLM gate + setup page)
+  INSTALL_SETUP_REQUIRED: "install_setup_required",        // Gate blocked an interaction; setup needed
+  INSTALL_SETUP_COMPLETED: "install_setup_completed",      // Last placeholder filled; install ready
+  PUBLISHER_CREDENTIAL_BROKEN: "publisher_credential_broken", // Publisher credential vanished/unshared
+
   // Role events (Phase 3 — Roles & agent-user UX)
   USER_ROLE_CHANGED: "user_role_changed",                  // Current user's role changed
 

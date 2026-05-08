@@ -20,7 +20,7 @@ Each file below documents one API domain.
 | App Agent Routes | [app_agent_routes.md](./app_agent_routes.md) | 7 |
 | App Data | [app_data.md](./app_data.md) | 3 |
 | Bundles | [bundles.md](./bundles.md) | 9 |
-| Catalog | [catalog.md](./catalog.md) | 4 |
+| Catalog | [catalog.md](./catalog.md) | 5 |
 | Cli | [cli.md](./cli.md) | 10 |
 | Credentials | [credentials.md](./credentials.md) | 16 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
@@ -34,7 +34,7 @@ Each file below documents one API domain.
 | Guest Shares | [guest_shares.md](./guest_shares.md) | 5 |
 | Identity | [identity.md](./identity.md) | 7 |
 | Identity Contacts | [identity_contacts.md](./identity_contacts.md) | 2 |
-| Installs | [installs.md](./installs.md) | 6 |
+| Installs | [installs.md](./installs.md) | 10 |
 | Knowledge | [knowledge.md](./knowledge.md) | 1 |
 | Knowledge Sources | [knowledge_sources.md](./knowledge_sources.md) | 11 |
 | Llm Plugins | [llm_plugins.md](./llm_plugins.md) | 13 |
