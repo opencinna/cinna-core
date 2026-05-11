@@ -19,6 +19,7 @@ Scenarios:
   L. PUT /agents/{id}/setup-credentials/{credential_id} — rejected for non-placeholder creds.
   M. Chat short-circuit — placeholder install: system message persisted, LLM not engaged.
   N. MCP short-circuit — handle_send_message returns gate shape, not LLM.
+  O. Chat gate-block still generates session title from user message.
 
 A2A and webhook short-circuit tests are deferred (deep transport mocking needed).
 Gate logic already validates the A2A/webhook channels — see scenarios A–G.
@@ -815,6 +816,63 @@ def test_chat_short_circuit_persists_system_message_for_placeholder_install(
     )
 
 
+# ── Scenario O — Title generated for gate-blocked new session ───────────────
+
+
+def test_chat_gate_block_still_generates_session_title(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    """O. Sending the first message to a gate-blocked install still produces a session title.
+
+    Regression: previously the install-readiness gate short-circuited before
+    the title-generation task was scheduled, so gate-blocked new sessions
+    stayed untitled in the sidebar. The fix moves title generation above the
+    gate check; the title is derived from the user's message and does not
+    require the install to be runnable.
+
+    With ``mock_ai_functions=True`` (autouse), ``AIFunctionsService.is_available``
+    returns False, so title generation falls back to a truncation of the
+    first message body.
+    """
+    install_dict, installer, installer_headers = _setup_pbu_install(
+        client, superuser_token_headers, db
+    )
+    install_id = install_dict["id"]
+
+    session_data = create_session_via_api(client, installer_headers, install_id)
+    session_id = session_data["id"]
+    assert (session_data.get("title") or "").strip() == "", (
+        "Test precondition: new session should start untitled"
+    )
+
+    first_message = "Help me draft the Q3 board update."
+    send_message(client, installer_headers, session_id, first_message)
+    drain_tasks()
+
+    # The session should now have a title derived from the user message,
+    # even though the gate blocked LLM dispatch.
+    from app.models.sessions.session import Session as ChatSessionModel
+    db.expire_all()
+    chat_session = db.get(ChatSessionModel, uuid.UUID(session_id))
+    assert chat_session is not None
+    title = (chat_session.title or "").strip()
+    assert title != "", (
+        f"Expected a non-empty title after gate-blocked first message; got {title!r}"
+    )
+    # Fallback path truncates to <=100 chars; the message is short enough that
+    # the full body should appear verbatim as the title.
+    assert title == first_message, (
+        f"Expected fallback title to equal first message body; got {title!r}"
+    )
+
+    # The gate's system reply must still have been persisted alongside the title.
+    messages = list_messages(client, installer_headers, session_id)
+    system_messages = [m for m in messages if m["role"] == "system"]
+    assert len(system_messages) >= 1, "Expected gate's system reply to still be persisted"
+
+
 # ── Scenario N — MCP short-circuit ───────────────────────────────────────────
 
 
@@ -825,10 +883,10 @@ def test_mcp_short_circuit_returns_gate_shape_without_llm(
 ) -> None:
     """N. MCPRequestHandler.handle_send_message returns gate JSON shape; LLM not invoked.
 
-    We call the handler with a stub connector (persisted) so FK constraints
-    are satisfied, and patch get_or_create_mcp_session to return a dummy
-    platform session — the gate fires before any streaming, so the mock
-    session id just needs to be a valid UUID.
+    When the gate blocks we also persist the user message and a synthesised
+    system reply on the platform-side Session so the chat tab shows what
+    happened, mirroring chat-channel behaviour. We therefore use a real
+    persisted Session (not a stub) so FK constraints are satisfied.
     """
     install_dict, installer, installer_headers = _setup_pbu_install(
         client, superuser_token_headers, db
@@ -859,12 +917,13 @@ def test_mcp_short_circuit_returns_gate_shape_without_llm(
     if environment is None:
         environment = AgentEnvironment(id=uuid.uuid4(), agent_id=install_id)
 
-    # Stub platform session returned by get_or_create_mcp_session.
-    # The gate fires BEFORE message creation so the session contents don't matter.
-    stub_session_id = uuid.uuid4()
+    # Real, FK-valid platform session — the gate-block path now persists
+    # both the user message and the synthesised system reply onto it.
+    real_session = create_session_via_api(client, installer_headers, str(install_id))
+    real_session_id = uuid.UUID(real_session["id"])
 
-    class _StubSession:
-        id = stub_session_id
+    class _RealSession:
+        id = real_session_id
 
     @contextmanager
     def _get_db():
@@ -881,7 +940,7 @@ def test_mcp_short_circuit_returns_gate_shape_without_llm(
     )
 
     stream_mock = AsyncMock(return_value="should-not-be-called")
-    session_mock = MagicMock(return_value=(_StubSession(), True))
+    session_mock = MagicMock(return_value=(_RealSession(), True))
     with patch("app.mcp.message_streaming.stream_and_collect_response", stream_mock):
         with patch("app.mcp.request_handler.stream_and_collect_response", stream_mock):
             with patch(
@@ -903,3 +962,14 @@ def test_mcp_short_circuit_returns_gate_shape_without_llm(
     assert "setup_url" in result, f"Missing 'setup_url' key in MCP gate response: {result}"
     assert result["setup_url"] is not None
     assert result["response"] != "", "Gate user_message should be non-empty"
+
+    # The session must now carry both the user message and a synthesised
+    # system reply (mirrors chat-channel persistence on gate-block).
+    messages = list_messages(client, installer_headers, str(real_session_id))
+    user_messages = [m for m in messages if m["role"] == "user"]
+    system_messages = [m for m in messages if m["role"] == "system"]
+    assert len(user_messages) >= 1, "Expected user's MCP message to be persisted on gate-block"
+    assert len(system_messages) >= 1, "Expected gate's system reply to be persisted on gate-block"
+    gate_meta = system_messages[0].get("message_metadata") or {}
+    assert gate_meta.get("install_setup_required") is True
+    assert gate_meta.get("setup_url") is not None

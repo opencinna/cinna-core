@@ -56,9 +56,7 @@ def patch_environment_adapter(tmp_path_factory):
 @pytest.fixture(autouse=True)
 def background_tasks():
     """Collect background tasks for deferred execution."""
-    with patched_background_tasks(BACKGROUND_TASK_TARGETS_FULL + [
-        "app.mcp.request_handler.create_task_with_error_logging",
-    ]):
+    with patched_background_tasks(BACKGROUND_TASK_TARGETS_FULL):
         yield
 
 

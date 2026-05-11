@@ -16,14 +16,11 @@ from sqlmodel import Session as DbSession
 
 from app.models import Agent
 from app.models.environments.environment import AgentEnvironment
-from app.models.events.event import EventType
 from app.models.mcp.mcp_connector import MCPConnector
-from app.services.bundles.install_readiness_gate import InstallReadinessGate
-from app.services.events.event_service import event_service
+from app.services.bundles.install_gate_dispatcher import InstallGateDispatcher
 from app.services.sessions.session_service import SessionService
 from app.services.sessions.message_service import MessageService
 from app.mcp.message_streaming import stream_and_collect_response
-from app.utils import create_task_with_error_logging
 
 logger = logging.getLogger(__name__)
 
@@ -92,56 +89,59 @@ class MCPRequestHandler:
             session_id = platform_session.id
             result_context_id = str(session_id)
 
+            # Trigger title generation for new sessions before the install
+            # gate, so gate-blocked sessions still get a title derived from
+            # the user message. The title is derived from user input via
+            # ``AIFunctionsService`` (or falls back to a truncated body when
+            # no AI provider is available) and does not require the install's
+            # own agent to be runnable.
+            if is_new_session:
+                SessionService.ensure_title_for_new_session(
+                    session_id=session_id,
+                    first_message_content=message,
+                    get_fresh_db_session=self.get_db_session,
+                )
+
             # Install readiness gate (plan §6.2 — MCP rendering). When the
             # install has empty placeholders or broken publisher creds we
-            # skip the message-create + stream pipeline entirely and return
-            # the synthesised setup-required reply directly.
-            try:
-                gate_result = InstallReadinessGate.check(db, self.agent)
-            except Exception as e:  # pragma: no cover — defensive
-                logger.warning(
-                    "[MCP] Install readiness gate raised for agent %s; allowing through: %s",
-                    self.agent.id, e,
-                )
-                gate_result = None
-
-            if gate_result is not None and gate_result.status != "ready":
+            # persist the user's message + a synthesised system reply (so
+            # the platform chat tab shows what happened, mirroring chat
+            # channel behaviour) and return the gate's JSON envelope to
+            # the MCP client without touching the LLM.
+            gate_result = InstallGateDispatcher.check(db, self.agent)
+            if gate_result is not None:
                 logger.info(
                     "[MCP] Install readiness gate blocking agent %s (status=%s, %d missing)",
                     self.agent.id, gate_result.status, len(gate_result.missing),
                 )
-                try:
-                    await event_service.emit_event(
-                        event_type=EventType.INSTALL_SETUP_REQUIRED,
-                        model_id=self.agent.id,
-                        user_id=self.agent.owner_id,
-                        meta={
-                            "agent_id": str(self.agent.id),
-                            "session_id": str(session_id),
-                            "setup_url": gate_result.setup_url,
-                            "status": gate_result.status,
-                            "missing_count": len(gate_result.missing),
-                            "channel": "mcp",
-                        },
-                    )
-                    if gate_result.status == "publisher_broken":
-                        await event_service.emit_event(
-                            event_type=EventType.PUBLISHER_CREDENTIAL_BROKEN,
-                            model_id=self.agent.id,
-                            user_id=self.agent.owner_id,
-                            meta={
-                                "agent_id": str(self.agent.id),
-                                "session_id": str(session_id),
-                                "setup_url": gate_result.setup_url,
-                                "missing_count": len(gate_result.missing),
-                                "channel": "mcp",
-                            },
-                        )
-                except Exception as e:  # pragma: no cover — diagnostic-only
-                    logger.warning(
-                        "[MCP] Failed to emit install-setup events for agent %s: %s",
-                        self.agent.id, e,
-                    )
+
+                # Persist the user message so the platform-side session
+                # history shows it. Marked ``sent`` because no LLM dispatch
+                # is going to consume it.
+                MessageService.create_message(
+                    session=db,
+                    session_id=session_id,
+                    role="user",
+                    content=message,
+                    sent_to_agent_status="sent",
+                )
+
+                # Persist the gate's synthesised reply as a system message
+                # so the chat history shows it identically to chat-channel
+                # gate trips. No pending messages to scrub — the user
+                # message above was created already-sent.
+                InstallGateDispatcher.persist_for_session(
+                    db,
+                    session_id=session_id,
+                    gate_result=gate_result,
+                )
+
+                await InstallGateDispatcher.emit_events(
+                    agent=self.agent,
+                    gate_result=gate_result,
+                    channel="mcp",
+                    session_id=session_id,
+                )
 
                 return json.dumps({
                     "response": gate_result.user_message,
@@ -156,17 +156,6 @@ class MCPRequestHandler:
                 session_id=session_id,
                 role="user",
                 content=message,
-            )
-
-        # Trigger title generation for new sessions (background task)
-        if is_new_session:
-            create_task_with_error_logging(
-                SessionService.auto_generate_session_title(
-                    session_id=session_id,
-                    first_message_content=message,
-                    get_fresh_db_session=self.get_db_session,
-                ),
-                task_name=f"auto_generate_title_session_{session_id}",
             )
 
         # Phases 2–3: Environment readiness + streaming (shared pipeline)
