@@ -109,7 +109,11 @@ export function InstallSetupForm({ context }: InstallSetupFormProps) {
       queryClient.invalidateQueries({ queryKey: ["agents"] })
       queryClient.invalidateQueries({ queryKey: ["catalog"] })
       showSuccessToast(`Installed ${install.name}`)
-      navigate({ to: "/agent/$agentId", params: { agentId: install.id } })
+      navigate({
+        to: "/agent/$agentId",
+        params: { agentId: install.id },
+        hash: "credentials",
+      })
     },
     onError: (e: unknown) => {
       const detail =
@@ -160,13 +164,6 @@ export function InstallSetupForm({ context }: InstallSetupFormProps) {
 
   return (
     <div className="space-y-4">
-      <InstallAICredentialSection
-        aiProvidedByPublisher={ai_provided_by_publisher}
-        aiPublisherSummaries={context.ai_publisher_credential_summaries}
-        selections={aiSelections}
-        onChange={setAISelections}
-      />
-
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Service credentials</CardTitle>
@@ -192,6 +189,13 @@ export function InstallSetupForm({ context }: InstallSetupFormProps) {
           </CardContent>
         )}
       </Card>
+
+      <InstallAICredentialSection
+        aiProvidedByPublisher={ai_provided_by_publisher}
+        aiPublisherSummaries={context.ai_publisher_credential_summaries}
+        selections={aiSelections}
+        onChange={setAISelections}
+      />
 
       <div className="flex justify-end pt-2">
         {installMutation.isPending ? (

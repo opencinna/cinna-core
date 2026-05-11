@@ -11,7 +11,7 @@
  * deleted in this phase.
  */
 import { useQuery } from "@tanstack/react-query"
-import { CheckCircle2 } from "lucide-react"
+import { MessageCircle, Wrench } from "lucide-react"
 
 import {
   AiCredentialsService,
@@ -25,7 +25,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
@@ -68,27 +67,35 @@ export function InstallAICredentialSection({
             publisher.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-2 text-sm">
+        <CardContent className="space-y-3">
           {conv && (
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-              <span>
-                <span className="font-medium">Conversation:</span> {conv.name}{" "}
-                <span className="text-muted-foreground">({conv.type})</span>
-              </span>
+            <div className="flex items-start gap-3 rounded-md border px-3 py-2.5">
+              <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-blue-500/10 shrink-0 mt-0.5">
+                <MessageCircle className="h-3.5 w-3.5 text-blue-500" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs text-muted-foreground mb-0.5">
+                  Conversation
+                </p>
+                <p className="text-sm font-medium">{conv.name}</p>
+                <p className="text-xs text-muted-foreground">{conv.type}</p>
+              </div>
             </div>
           )}
           {build && (
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-              <span>
-                <span className="font-medium">Building:</span> {build.name}{" "}
-                <span className="text-muted-foreground">({build.type})</span>
-              </span>
+            <div className="flex items-start gap-3 rounded-md border px-3 py-2.5">
+              <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-orange-500/10 shrink-0 mt-0.5">
+                <Wrench className="h-3.5 w-3.5 text-orange-500" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs text-muted-foreground mb-0.5">Building</p>
+                <p className="text-sm font-medium">{build.name}</p>
+                <p className="text-xs text-muted-foreground">{build.type}</p>
+              </div>
             </div>
           )}
           {!conv && !build && (
-            <p className="text-muted-foreground">
+            <p className="text-sm text-muted-foreground">
               Publisher AI credential summary is unavailable; the install
               will still link the publisher's keys.
             </p>
@@ -123,7 +130,7 @@ export function InstallAICredentialSection({
           inherit your default credentials.
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-3">
         {isLoading ? (
           <p className="text-sm text-muted-foreground">Loading...</p>
         ) : credentials.length === 0 ? (
@@ -134,39 +141,72 @@ export function InstallAICredentialSection({
           </p>
         ) : (
           <>
-            <div className="space-y-1.5">
-              <Label>Conversation mode</Label>
-              <Select value={conversation} onValueChange={handleConvChange}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Use my defaults" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NONE_VALUE}>Use my defaults</SelectItem>
-                  {credentials.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}{" "}
-                      <span className="text-muted-foreground">({c.type})</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <div className="flex items-start justify-between gap-3 rounded-md border px-3 py-2.5">
+              <div className="flex items-start gap-3 min-w-0 flex-1">
+                <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-blue-500/10 shrink-0 mt-0.5">
+                  <MessageCircle className="h-3.5 w-3.5 text-blue-500" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-muted-foreground mb-1">
+                    Conversation
+                  </p>
+                  <Select
+                    value={conversation}
+                    onValueChange={handleConvChange}
+                  >
+                    <SelectTrigger className="h-8">
+                      <SelectValue placeholder="Use my defaults" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={NONE_VALUE}>
+                        Use my defaults
+                      </SelectItem>
+                      {credentials.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.name}{" "}
+                          <span className="text-muted-foreground">
+                            ({c.type})
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <Label>Building mode</Label>
-              <Select value={building} onValueChange={handleBuildChange}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Use my defaults" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NONE_VALUE}>Use my defaults</SelectItem>
-                  {credentials.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}{" "}
-                      <span className="text-muted-foreground">({c.type})</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+
+            <div className="flex items-start justify-between gap-3 rounded-md border px-3 py-2.5">
+              <div className="flex items-start gap-3 min-w-0 flex-1">
+                <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-orange-500/10 shrink-0 mt-0.5">
+                  <Wrench className="h-3.5 w-3.5 text-orange-500" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-muted-foreground mb-1">
+                    Building
+                  </p>
+                  <Select
+                    value={building}
+                    onValueChange={handleBuildChange}
+                  >
+                    <SelectTrigger className="h-8">
+                      <SelectValue placeholder="Use my defaults" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={NONE_VALUE}>
+                        Use my defaults
+                      </SelectItem>
+                      {credentials.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.name}{" "}
+                          <span className="text-muted-foreground">
+                            ({c.type})
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
             </div>
           </>
         )}

@@ -220,6 +220,8 @@ When `isStreaming` is true, the button area shows a destructive stop button (28p
 | `model`, `total_cost_usd`, `duration_ms`, `num_turns` | MessageBubble | Metadata tooltip on info icon |
 | `task_created`, `task_id`, `session_id`, `inbox_task` | MessageBubble | Task creation system message links |
 | `task_feedback`, `task_state` | MessageBubble | Task feedback message styling and icons |
+| `install_setup_required` | MessageBubble | When `true`, routes a system message to the install-gate warning block instead of the generic system message style. Renders amber (`needs_setup`) or red (`publisher_broken`, derived from `gate_status`) left-bordered alert block |
+| `gate_status` | MessageBubble | Used alongside `install_setup_required`; `"publisher_broken"` triggers the red destructive variant; any other value (including absent) renders the amber needs-setup variant |
 
 ### `sent_to_agent_status` Field (Top-Level Message Field)
 

@@ -17,6 +17,7 @@ import { UpdateAvailableBanner } from "@/components/Agents/UpdateAvailableBanner
 import { SetupNeededBanner } from "@/components/Install/SetupNeededBanner"
 import EditAgent from "@/components/Agents/EditAgent"
 import DeleteAgent from "@/components/Agents/DeleteAgent"
+import UninstallAgent from "@/components/Agents/UninstallAgent"
 import PendingItems from "@/components/Pending/PendingItems"
 import { HashTabs } from "@/components/Common/HashTabs"
 import { Button } from "@/components/ui/button"
@@ -89,22 +90,43 @@ function AgentDetail() {
               </p>
             </div>
           </div>
-          {!agent.is_general_assistant && isDeveloper && (
-            <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="shrink-0">
-                  <EllipsisVertical className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <EditAgent agent={agent} onSuccess={() => setMenuOpen(false)} />
-                <DeleteAgent
-                  id={agent.id}
-                  onSuccess={handleDeleteSuccess}
-                />
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+          {(() => {
+            const isForeignInstallHdr =
+              !!agent.bundle_uuid && !agent.is_publisher_install
+            const showDeveloperActions =
+              !agent.is_general_assistant && isDeveloper
+            const showUninstall = isForeignInstallHdr
+            if (!showDeveloperActions && !showUninstall) return null
+            return (
+              <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="sm" className="shrink-0">
+                    <EllipsisVertical className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {showDeveloperActions && (
+                    <>
+                      <EditAgent
+                        agent={agent}
+                        onSuccess={() => setMenuOpen(false)}
+                      />
+                      <DeleteAgent
+                        id={agent.id}
+                        onSuccess={handleDeleteSuccess}
+                      />
+                    </>
+                  )}
+                  {showUninstall && (
+                    <UninstallAgent
+                      agentId={agent.id}
+                      onSuccess={handleDeleteSuccess}
+                    />
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )
+          })()}
         </>
       )
     }
@@ -123,8 +145,28 @@ function AgentDetail() {
     )
   }
 
+  // Foreign install = install of a bundle published by someone else.
+  // The current user owns the install row, but the bundle content
+  // (prompts, description, etc.) was authored by the publisher, so the
+  // configuration tab must render read-only for these installs.
+  const isForeignInstall = !!agent.bundle_uuid && !agent.is_publisher_install
+  const configReadOnly = isForeignInstall
+
   const allTabs = [
-    { value: "configuration", title: "Configuration", content: <AgentConfigTab agent={agent} /> },
+    {
+      value: "configuration",
+      title: "Configuration",
+      content: (
+        <AgentConfigTab
+          agent={agent}
+          readOnly={configReadOnly}
+          // Agent-users see the simplified view (just Information +
+          // Agent Prompts). Schedules / Handovers belong to the
+          // developer-tier configuration surface.
+          showOperationalSettings={!isAgentUser}
+        />
+      ),
+    },
     { value: "integrations", title: "Integrations", content: <AgentIntegrationsTab agent={agent} /> },
     { value: "credentials", title: "Credentials", content: <AgentCredentialsTab agentId={agent.id} /> },
     { value: "plugins", title: "Plugins", content: <AgentPluginsTab agentId={agent.id} /> },
@@ -133,27 +175,31 @@ function AgentDetail() {
     { value: "bundle", title: "Bundle", content: <AgentBundleTab agent={agent} /> },
   ]
 
-  // Phase 3 — agent-user view is conversation-only.  We keep
-  // ``credentials`` (so users can fill in placeholder credentials for
-  // their install) and ``environments`` (the install→chat entry point —
-  // that tab surfaces the active env and its sessions).  All other
-  // developer-tier tabs (configuration / integrations / plugins /
-  // interface / bundle) stay hidden; any developer-only sub-controls
-  // inside the kept tabs are gated separately by `isDeveloper`.
+  // Phase 3 — agent-user view is conversation-only with one read-only
+  // peek into the agent's identity.  Visible tabs:
+  //   - ``configuration`` (read-only, Information + Agent Prompts only)
+  //   - ``credentials``   (fill in placeholder credentials)
+  //   - ``environments``  (install→chat entry point, active sessions)
+  // All other developer-tier tabs (integrations / plugins / interface /
+  // bundle) stay hidden; developer-only sub-controls inside the kept
+  // tabs are gated separately by `isDeveloper`.
   let tabs = allTabs
   if (isAgentUser) {
-    tabs = allTabs.filter(
-      (tab) => tab.value === "environments" || tab.value === "credentials",
-    )
+    const agentUserTabs = new Set([
+      "configuration",
+      "credentials",
+      "environments",
+    ])
+    tabs = allTabs.filter((tab) => agentUserTabs.has(tab.value))
   } else if (agent.is_general_assistant) {
     // Hide bundle tab for General Assistant agents (cannot be published).
     tabs = allTabs.filter((tab) => tab.value !== "bundle")
   }
 
-  // Default tab depends on the visible tab set: agent-users land on
-  // "environments" (their session entry point), developers land on
-  // "configuration" (today's behavior).
-  const defaultTab = isAgentUser ? "environments" : "configuration"
+  // Default tab: everyone lands on "configuration" — for developers
+  // that's the editable config surface, for agent-users it's the
+  // read-only Information + Agent Prompts peek.
+  const defaultTab = "configuration"
 
   return (
     <div className="p-6 md:p-8 overflow-y-auto">

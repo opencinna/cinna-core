@@ -70,6 +70,7 @@ One-click chat shortcuts embedded inside dashboard blocks. Clicking a prompt act
 - Centered, contextual styling:
   - **Error** — red destructive background with "Recover Session" button
   - **Task created** — blue background with navigation link (to task or session)
+  - **Install setup required** — distinct warning block for messages where `message_metadata.install_setup_required === true`. Amber left-border block for `needs_setup` status; red left-border block for `publisher_broken` status (`gate_status === "publisher_broken"` in metadata). Each shows a header ("Setup needed before this agent can run" / "Publisher credentials unavailable") and the message body. For `needs_setup` only: when `agentId` is available (full session page), an inline link to `/agent/$agentId#credentials` directs the user to the Credentials tab. In the webapp widget context where `agentId` is not passed, the block degrades to text-only (no link).
   - **General** — muted background
 - System errors in active sessions trigger RecoverSessionModal availability
 

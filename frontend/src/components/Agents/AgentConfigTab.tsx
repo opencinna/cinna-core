@@ -21,9 +21,19 @@ import { EditExamplePromptsModal } from "./EditExamplePromptsModal"
 interface AgentConfigTabProps {
   agent: AgentPublic
   readOnly?: boolean
+  /**
+   * When false, hides the Schedules + Handovers row. Used in the
+   * simplified agent-user view of foreign installs, where only the two
+   * informational cards (Information + Agent Prompts) are relevant.
+   */
+  showOperationalSettings?: boolean
 }
 
-export function AgentConfigTab({ agent, readOnly = false }: AgentConfigTabProps) {
+export function AgentConfigTab({
+  agent,
+  readOnly = false,
+  showOperationalSettings = true,
+}: AgentConfigTabProps) {
   const queryClient = useQueryClient()
 
   // Modal state
@@ -106,13 +116,15 @@ export function AgentConfigTab({ agent, readOnly = false }: AgentConfigTabProps)
 
       {/* Third Row: Scheduler and Handovers (side by side) */}
       {/* Note: Scheduler and Handovers are always editable for agent owner (including clone owners) */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Schedules Card */}
-        <AgentSchedulesCard agentId={agent.id} />
+      {showOperationalSettings && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Schedules Card */}
+          <AgentSchedulesCard agentId={agent.id} />
 
-        {/* Handover to Agents - always editable for agent owner (including clone owners) */}
-        <AgentHandovers agent={agent} />
-      </div>
+          {/* Handover to Agents - always editable for agent owner (including clone owners) */}
+          <AgentHandovers agent={agent} />
+        </div>
+      )}
 
       {/* Modals */}
       <EditDescriptionModal

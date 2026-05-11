@@ -281,7 +281,7 @@ def test_gate_needs_setup_with_placeholder_pbu_credential(
     assert result.missing[0].reason == "placeholder_empty"
     assert result.missing[0].is_ai is False
     assert result.setup_url is not None
-    assert f"/agent/{install_id}/setup-credentials" in result.setup_url
+    assert f"/agent/{install_id}#credentials" in result.setup_url
     assert result.user_message != ""
 
 
@@ -582,7 +582,7 @@ def test_get_setup_status_needs_setup(
     assert isinstance(body["missing"], list)
     assert len(body["missing"]) >= 1
     assert body["setup_url"] is not None
-    assert f"/agent/{install_id}/setup-credentials" in body["setup_url"]
+    assert f"/agent/{install_id}#credentials" in body["setup_url"]
     # user_message must NOT be in the response (frontend renders its own copy).
     assert "user_message" not in body
 

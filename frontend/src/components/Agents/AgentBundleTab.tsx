@@ -103,6 +103,7 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
   const [releaseNotes, setReleaseNotes] = useState("")
   const [bundleIdDraft, setBundleIdDraft] = useState(agent.bundle_id)
   const [versionDraft, setVersionDraft] = useState(DEFAULT_FIRST_VERSION)
+  const [publishToPublicCatalog, setPublishToPublicCatalog] = useState(false)
   const [publishError, setPublishError] = useState<string | null>(null)
   const [copiedBundleId, setCopiedBundleId] = useState(false)
   const [copiedHashId, setCopiedHashId] = useState<string | null>(null)
@@ -156,6 +157,7 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
           : DEFAULT_FIRST_VERSION,
       )
       setReleaseNotes("")
+      setPublishToPublicCatalog(false)
       setPublishError(null)
     }
   }, [publishOpen, isPublished, agent.bundle_id, previousVersion])
@@ -174,12 +176,29 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
           bundle_id: !isPublished ? bundleIdDraft.trim() || null : null,
         },
       }),
-    onSuccess: (rev) => {
+    onSuccess: async (rev) => {
       const label = rev.version ? `version ${rev.version}` : `revision ${rev.revision_number}`
-      showSuccessToast(`Published ${label}`)
+      const wasFirstPublish = !isPublished
+      if (wasFirstPublish && publishToPublicCatalog) {
+        try {
+          await BundlesService.updateBundle({
+            bundleUuid: rev.bundle_id,
+            requestBody: { visibility: "public", is_listed: true },
+          })
+          showSuccessToast(`Published ${label} to public catalog`)
+        } catch (e: any) {
+          showErrorToast(
+            e?.body?.detail ||
+              "Published, but the bundle is still private — toggle visibility in Bundle settings.",
+          )
+        }
+      } else {
+        showSuccessToast(`Published ${label}`)
+      }
       setPublishOpen(false)
       queryClient.invalidateQueries({ queryKey: ["agent", agent.id] })
       queryClient.invalidateQueries({ queryKey: ["bundles"] })
+      queryClient.invalidateQueries({ queryKey: ["catalog"] })
     },
     onError: (e: any) => {
       setPublishError(e?.body?.detail || "Failed to publish")
@@ -635,23 +654,46 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
           </DialogHeader>
           <div className="space-y-4">
             {!isPublished && (
-              <div className="space-y-2">
-                <Label htmlFor="publish-bundle-id">Bundle ID</Label>
-                <Input
-                  id="publish-bundle-id"
-                  value={bundleIdDraft}
-                  onChange={(e) => {
-                    setBundleIdDraft(e.target.value)
-                    if (publishError) setPublishError(null)
-                  }}
-                  placeholder="io.example.bundle.abc12345"
-                  className="font-mono text-sm"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Reverse-DNS identifier for this bundle. Locked once the
-                  first revision is published.
-                </p>
-              </div>
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="publish-bundle-id">Bundle ID</Label>
+                  <Input
+                    id="publish-bundle-id"
+                    value={bundleIdDraft}
+                    onChange={(e) => {
+                      setBundleIdDraft(e.target.value)
+                      if (publishError) setPublishError(null)
+                    }}
+                    placeholder="io.example.bundle.abc12345"
+                    className="font-mono text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Reverse-DNS identifier for this bundle. Locked once the
+                    first revision is published.
+                  </p>
+                </div>
+
+                <div className="flex items-start justify-between gap-4 rounded-lg border px-3 py-2">
+                  <div className="min-w-0 space-y-0.5">
+                    <Label
+                      htmlFor="publish-public-catalog"
+                      className="text-sm font-medium"
+                    >
+                      Publish in Public Catalog
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Make this bundle visible to all users on this instance
+                      and list it in the catalog. You can change this later in
+                      Bundle settings.
+                    </p>
+                  </div>
+                  <Switch
+                    id="publish-public-catalog"
+                    checked={publishToPublicCatalog}
+                    onCheckedChange={setPublishToPublicCatalog}
+                  />
+                </div>
+              </>
             )}
 
             <div className="space-y-2">

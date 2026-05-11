@@ -35,6 +35,18 @@ Agents access user-provided credentials (email, APIs, databases, OAuth services)
 5. Agent prompt receives `workspace/credentials/README.md` with redacted values for context
 6. User updates a credential - all running agent environments auto-sync
 
+### Install-Time Placeholder Credentials and the Setup Flow
+
+When a bundle is installed, placeholder credentials are created for any user-provided (PBU) or template-provided (PBT) specs that were not filled in at install time:
+
+1. After install, the user is redirected to the agent detail page's **Credentials tab** (`/agent/$agentId#credentials`)
+2. The Credentials tab fetches `GET /agents/{id}/credentials`, which decrypts each linked credential and returns `is_placeholder` + `status` (`"complete"` / `"incomplete"`) per row
+3. A top-of-card amber `Alert` summarises how many credentials still need setup (e.g. "2 credentials still need to be filled in")
+4. Each row where `is_placeholder=true` OR `status === "incomplete"` shows a "Setup needed" amber badge next to the credential name
+5. Clicking the credential name link (which navigates to `/credential/$credentialId`) opens the full credential detail page where the user fills in the missing values
+6. Once all required fields pass the per-type completeness check, `is_placeholder` is cleared and the runtime gate re-evaluates
+7. The `SetupNeededBanner` above the tabs clears automatically when `INSTALL_SETUP_COMPLETED` fires
+
 ### API Token Processing
 
 1. User creates API Token credential, choosing "Bearer" or "Custom" type
@@ -158,6 +170,7 @@ workspace/
 - [Credential Sharing](credential_sharing.md) - User-to-user credential sharing with read-only access for recipients
 - [SSH Key Credentials](ssh_key_credentials.md) - SSH key pair credentials: generate/import, ~/.ssh/ materialization, known_hosts seeding, security model
 - [Agent Prompts](../agent_prompts/agent_prompts.md) - Credentials README included in building mode prompt <!-- TODO: create agent_prompts docs -->
+- [Agent Bundles & Installs](../agent_bundles/agent_bundles.md) - Install-time placeholder credentials and the runtime gate; the Credentials tab is the primary surface for resolving gate blocks after install
 
 ## Best Practices
 

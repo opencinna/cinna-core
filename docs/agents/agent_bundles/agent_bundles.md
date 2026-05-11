@@ -36,12 +36,14 @@ Replace the clone-based sharing model with a desktop-app-style **bundle / instal
 - **Publisher-provided AI credentials** — two optional FK columns on `AgentBundle` (`publisher_ai_credential_conversation_id`, `publisher_ai_credential_building_id`) record which of the publisher's `AICredential` rows to use for conversation and building modes respectively. At install time `InstallService` materialises an `AICredentialShare` (publisher → installer) for each non-null FK, then passes the publisher's credential id directly into `AgentEnvironmentCreate` — bypassing the installer's own AI credential selection for that mode. The `AICredentialShare` is also re-asserted on every idempotent re-install so a previously deleted share is automatically self-healed. When the installer IS the publisher, no share-with-self row is created
 - **Runtime gate** — `InstallReadinessGate` runs synchronously on every user-message-to-LLM dispatch (chat, MCP, A2A, webhook session trigger) before any LLM call is made. It inspects the install's credential link state and returns one of three statuses:
   - `ready` — all credentials are in order; the message is forwarded to the LLM.
-  - `needs_setup` — one or more user-provided credentials are still placeholders (the installer hasn't filled them in yet). A setup-needed reply is synthesised without engaging the LLM, and includes a link to `/agent/{id}/setup-credentials` where the installer can fill in the missing values.
-  - `publisher_broken` — one or more publisher-provided credentials are missing or have had sharing revoked. The synthesised reply instructs the installer to contact the publisher; the installer can optionally replace the broken credentials from the setup page.
+  - `needs_setup` — one or more user-provided credentials are still placeholders (the installer hasn't filled them in yet). A setup-needed reply is synthesised without engaging the LLM. Lead copy: "Setup needed before this agent can run. Open the agent's Credentials tab and fill in the missing values one by one."
+  - `publisher_broken` — one or more publisher-provided credentials are missing or have had sharing revoked. The synthesised reply instructs the installer to contact the publisher. Lead copy: "This bundle's publisher-provided credentials are unavailable. The publisher needs to fix this, or you can supply your own credentials from the agent's Credentials tab."
   
-  Each channel renders the gate result in its native idiom: chat persists a `system`-role message and emits it as a normal stream event; MCP returns a structured tool reply `{response, context_id, setup_url}`; A2A synthesises a completed Task with the message and a `data` part carrying `{type: "cinna.setup_required", setup_url, missing}`; webhook session triggers log `status="setup_required"` with the structured payload in the invocation log. The LLM is never engaged when the gate blocks. When the user fills in the last placeholder, `INSTALL_SETUP_COMPLETED` fires over WebSocket and the banner on the install detail page clears automatically.
-  
-  Placeholder credentials for user-provided specs are filled in via the focused setup page at `/agent/{id}/setup-credentials`, accessible via the `SetupNeededBanner` shown on the agent detail page when the gate would block.
+  Each channel renders the gate result in its native idiom: chat persists a `system`-role message with `install_setup_required=true` metadata and the Cinna chat UI renders it as a distinct warning block with a link to the Credentials tab (not derived from the message body); MCP returns a structured tool reply `{response, context_id, setup_url}`; A2A synthesises a completed Task with the message and a `data` part carrying `{type: "cinna.setup_required", setup_url, missing}`; webhook session triggers log `status="setup_required"` with the structured payload in the invocation log. The LLM is never engaged when the gate blocks. When the user fills in the last placeholder, `INSTALL_SETUP_COMPLETED` fires over WebSocket and the banner on the install detail page clears automatically.
+
+  The `setup_url` field (returned in all structured channel payloads — MCP, A2A, webhook) now points at the agent detail page's Credentials tab: `{FRONTEND_HOST}/agent/{install_id}#credentials`. External MCP/A2A/webhook clients receive this URL in the structured payload; the Cinna chat UI renders its own inline link independently.
+
+  Incomplete credentials are fixed directly from the agent's **Credentials tab** (`/agent/{id}#credentials`), where each placeholder or incomplete row is highlighted with a "Setup needed" badge. The user navigates to the credential detail page (`/credential/$credentialId`) to fill in the missing values one at a time. There is no dedicated setup-credentials page in the web UI (the backend endpoints remain for cinna CLI use).
 
 ## User Stories / Flows
 
@@ -49,11 +51,12 @@ Replace the clone-based sharing model with a desktop-app-style **bundle / instal
 
 1. Developer opens an agent they own and navigates to the **Bundle tab**
 2. Before publishing, the **Credential provisioning** panel (visible only on the publisher install) lets the publisher choose, per linked credential, whether it will be user-provided, publisher-provided, or template-provided. Template mode additionally requires the publisher to mark which `credential_data` fields are private (the remainder become the pre-filled template data for each installer). A toggle also controls whether the publisher provides AI credentials (conversation and/or building mode). These choices are saved immediately and consulted at the next publish step
-3. Clicks "Publish" — the `PublishDialog` opens with three fields:
+3. Clicks "Publish" — the `PublishDialog` opens with three fields (four on the first publish):
    - **Bundle ID** — only on the first publish; prefilled with the auto-generated value, editable. Locked once the first revision exists
+   - **Publish in Public Catalog** — switch shown only on the first publish, directly below the Bundle ID. Defaults to off. When on, the bundle is made public and listed in the catalog immediately after the revision is recorded (visibility → `public`, `is_listed` → `true`). The publisher can always change either of these later in Bundle settings
    - **Version** — required; defaults to `1.0` on the first publish, otherwise suggests a minor bump from the previous revision (e.g. `1.0` → `1.1`). Manually editable for major releases
    - **Release notes** (optional)
-4. On submit: workspace folders (`scripts/`, `docs/`, `knowledge/`, `files/`, `workspace_requirements.txt`, `workspace_system_packages.txt`) are copied to `<BUNDLE_STORAGE_DIR>/<bundle_id>/<revision>/`; a new `AgentBundleRevision` row is created with the user-entered `version`; `BUNDLE_PUBLISHED` WebSocket event fires
+4. On submit: workspace folders (`scripts/`, `docs/`, `knowledge/`, `files/`, `workspace_requirements.txt`, `workspace_system_packages.txt`) are copied to `<BUNDLE_STORAGE_DIR>/<bundle_id>/<revision>/`; a new `AgentBundleRevision` row is created with the user-entered `version`; `BUNDLE_PUBLISHED` WebSocket event fires. If "Publish in Public Catalog" was on (first publish only), the frontend chains a `PATCH /bundles/{uuid}` setting `visibility="public"` and `is_listed=true` immediately after the publish response. The chained call is best-effort — a failure surfaces an error toast pointing to Bundle settings but does not roll back the publish
 5. On first publish the `AgentBundle` row is also created; the `bundle_id` value submitted in the publish form is applied to the agent before the snapshot. Subsequent publishes append a new revision
 6. All existing foreign installs receive `INSTALL_UPDATE_AVAILABLE` events (manual mode) or are marked for next-idle-cycle update (automatic mode)
 7. The revision appears in the revisions list on the Bundle tab with a "current" badge — labeled `v<version>` when present, falling back to `rev <revision_number>` for legacy revisions
@@ -64,14 +67,14 @@ Replace the clone-based sharing model with a desktop-app-style **bundle / instal
 2. Clicks **Install** on a catalog card
 3. The **Install Page** opens — a single screen with two columns:
    - **Left (sticky)**: agent header card showing the bundle icon, display name, version, publisher, description, required credentials summary, and Bundle ID
-   - **Right (scrollable)**: a setup form with an AI credentials section and a service credentials section. Each service credential spec is an accordion item labelled with its name and mode (user-provided or publisher-provided)
+   - **Right (scrollable)**: a setup form with a service credentials section first (each spec rendered as an accordion item leading with the credential type pill and a secondary name caption, mirroring the publisher's "Credential provisioning" panel) followed by an AI credentials section. Conversation and Building selectors (and the publisher-provided summary variant) use the same icon-block row pattern as Settings → AI Credentials → Default SDK Preferences (blue `MessageCircle` tile for Conversation, orange `Wrench` tile for Building)
    - For PBP specs the accordion item is collapsed by default and shows "Shared by publisher — no action needed"
    - For PBT specs the accordion item lists the field names the installer must supply after install (from `template_private_fields`); the non-private values are already arranged. The installer can accept the template materialisation or choose "use existing" to link their own complete credential instead
    - For PBU specs the system runs the **auto-prefill matcher**: it searches the installer's owned and shared (via `CredentialShare`) credentials for a case-insensitive `(name, type)` match. If a match is found, the item shows a suggestion ("We found `<name>` — use?") with options to accept it, skip (set up later), or pick another; the installer must make an explicit choice. If no match is found, the item is expanded and defaults to "skip — set up later". Accepted suggestions are sent as `mode="use_existing"` with the matched credential's UUID
    - When all specs are PBP and AI is publisher-provided, the form shows three short informational paragraphs and Install is one click
    - A single primary **Install** button at the bottom of the form; no "Next / Back" steps and no step indicator
 4. On submit: a new `Agent` row is created seeded from the latest revision; `CredentialShare` rows are automatically created for any PBP service credentials in the revision and `AICredentialShare` rows are created for any publisher-provided AI credentials; PBT specs materialise a fresh installer-owned `Credential` row seeded with the publisher's non-private template data (`is_placeholder=True`); an environment is provisioned and started using the resolved credentials; the App Data volume for `(user, bundle_id)` is created (or reattached if previously orphaned). Install never blocks on incomplete credentials — PBU specs for which the installer skipped or deferred, and PBT specs awaiting private-field input, both create placeholder `Credential` rows that the runtime gate detects at first use
-5. Loading state with environment progress display; on activation redirect to the install detail page. If any PBU credentials were deferred, a `SetupNeededBanner` appears on the install detail page directing the installer to the setup page
+5. Loading state with environment progress display; on activation the user is redirected directly to the **Credentials tab** of the install detail page (`/agent/$agentId#credentials`). If any credentials still need setup, the `SetupNeededBanner` and the per-row "Setup needed" badges on the Credentials tab direct the installer to complete them.
 
 ### Applying an Update (install owner)
 
@@ -84,11 +87,13 @@ Replace the clone-based sharing model with a desktop-app-style **bundle / instal
 
 ### Uninstalling (install owner)
 
-1. User clicks "Uninstall" on the install detail page
-2. Confirmation dialog shown ("stop and uninstall?")
+1. User opens the header kebab menu on the install detail page and clicks **Uninstall** (available for any foreign install — `bundle_uuid` set and `is_publisher_install=False` — regardless of the user's role)
+2. Confirmation dialog explains: the install and its environment are removed; per-bundle App Data is preserved and reattaches automatically on reinstall
 3. Environment stopped and removed (bundle workspace volume removed; app-data volume preserved)
 4. `Agent` row deleted; `AppDataVolume.is_orphaned` set to `true`
 5. App data remains visible in Settings → App Data as an orphaned entry
+
+Publisher installs cannot be uninstalled via this flow — the backend returns 400. The publisher manages their install via the Bundle settings (delete agent / delete bundle).
 
 ### Reinstalling the Same Bundle
 

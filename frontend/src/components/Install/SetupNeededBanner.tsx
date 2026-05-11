@@ -4,8 +4,9 @@
  * Calls ``GET /agents/{agentId}/setup-status`` and renders a warning banner
  * when the install is not ``ready``. The two non-ready statuses get distinct
  * copy:
- *   - ``needs_setup`` — installer-fillable placeholders are empty, primary
- *     action navigates to the setup-credentials page.
+ *   - ``needs_setup`` — installer-fillable placeholders are empty; the
+ *     banner tells the user to open the Credentials tab and fill in the
+ *     missing values one credential at a time.
  *   - ``publisher_broken`` — publisher credentials are missing/unshared, no
  *     installer-side action will help; we tell the user to contact the
  *     publisher.
@@ -16,12 +17,10 @@
  * so the banner appears/disappears in real time without a manual refresh.
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
 import { AlertTriangle, ShieldAlert } from "lucide-react"
 
 import { InstallsService, type SetupStatusMissingItem } from "@/client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Button } from "@/components/ui/button"
 import { useMultiEventSubscription, EventTypes } from "@/hooks/useEventBus"
 
 interface SetupNeededBannerProps {
@@ -92,24 +91,10 @@ export function SetupNeededBanner({ agentId }: SetupNeededBannerProps) {
     <Alert className="mb-4 border-amber-500/50 bg-amber-50 text-amber-900 dark:border-amber-400/40 dark:bg-amber-950/40 dark:text-amber-100 [&>svg]:text-amber-600 dark:[&>svg]:text-amber-300">
       <AlertTriangle className="h-4 w-4" />
       <AlertTitle>Setup needed before this agent can run</AlertTitle>
-      <AlertDescription className="flex flex-col gap-3">
-        <span>
-          {missingDesc
-            ? `Fill in the missing credential${
-                status.missing.length === 1 ? "" : "s"
-              } for ${missingDesc} to start using this agent.`
-            : "Some credentials need to be filled in before this agent can start."}
-        </span>
-        <div>
-          <Button asChild size="sm">
-            <Link
-              to="/agent/$agentId/setup-credentials"
-              params={{ agentId }}
-            >
-              Open setup
-            </Link>
-          </Button>
-        </div>
+      <AlertDescription>
+        {missingDesc
+          ? `Open the Credentials tab below and fill in ${missingDesc} to start using this agent.`
+          : "Open the Credentials tab below and fill in the missing credentials to start using this agent."}
       </AlertDescription>
     </Alert>
   )

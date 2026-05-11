@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { Plus, ExternalLink, Unlink, Users } from "lucide-react"
+import { AlertTriangle, ExternalLink, Plus, Unlink, Users } from "lucide-react"
 import { useState, useMemo } from "react"
 
 import { AgentsService, CredentialsService } from "@/client"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -120,6 +121,14 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
   const agentCredentials = agentCredentialsData?.data || []
   const ownedCredentials = ownedCredentialsData?.data || []
   const sharedCredentials = sharedCredentialsData?.data || []
+
+  const incompleteCredentials = useMemo(
+    () =>
+      agentCredentials.filter(
+        (cred) => cred.is_placeholder || cred.status === "incomplete",
+      ),
+    [agentCredentials],
+  )
 
   // Combine owned and shared credentials, marking which are shared
   const allCredentials = useMemo(() => {
@@ -290,6 +299,18 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
         </div>
       </CardHeader>
       <CardContent>
+        {incompleteCredentials.length > 0 && (
+          <Alert className="mb-4 border-amber-500/50 bg-amber-50 text-amber-900 dark:border-amber-400/40 dark:bg-amber-950/40 dark:text-amber-100 [&>svg]:text-amber-600 dark:[&>svg]:text-amber-300">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription>
+              {incompleteCredentials.length === 1
+                ? "1 credential still needs to be filled in. "
+                : `${incompleteCredentials.length} credentials still need to be filled in. `}
+              Click a credential below to open its form and add the missing
+              details.
+            </AlertDescription>
+          </Alert>
+        )}
         {agentCredentials.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <p className="text-muted-foreground mb-4">
@@ -315,7 +336,11 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {agentCredentials.map((credential) => (
+              {agentCredentials.map((credential) => {
+                const needsSetup =
+                  credential.is_placeholder ||
+                  credential.status === "incomplete"
+                return (
                 <TableRow key={credential.id}>
                   <TableCell className="font-medium">
                     <div className="flex items-center gap-2">
@@ -327,6 +352,20 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
                         {credential.name}
                         <ExternalLink className="h-3 w-3" />
                       </Link>
+                      {needsSetup && (
+                        <Badge
+                          variant="outline"
+                          className="text-xs border-amber-500/60 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-100 dark:border-amber-400/40"
+                          title={
+                            credential.is_placeholder
+                              ? "This credential is a placeholder — open it to fill in the required values."
+                              : "This credential is missing required fields — open it to complete the form."
+                          }
+                        >
+                          <AlertTriangle className="h-3 w-3 mr-1" />
+                          Setup needed
+                        </Badge>
+                      )}
                       {credential.is_shared && (
                         <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">
                           <Users className="h-3 w-3 mr-1" />
@@ -365,7 +404,8 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
                     </Button>
                   </TableCell>
                 </TableRow>
-              ))}
+                )
+              })}
             </TableBody>
           </Table>
         )}

@@ -52,7 +52,6 @@ import { Route as LayoutSessionsAgentAgentIdRouteImport } from './routes/_layout
 import { Route as LayoutEnvironmentEnvIdFileRouteImport } from './routes/_layout/environment/$envId/file'
 import { Route as LayoutEnvironmentEnvIdDatabaseRouteImport } from './routes/_layout/environment/$envId/database'
 import { Route as LayoutCatalogAgentsInstallRouteImport } from './routes/_layout/catalog/agents/install'
-import { Route as LayoutAgentAgentIdSetupCredentialsRouteImport } from './routes/_layout/agent/$agentId/setup-credentials'
 import { Route as LayoutAgentAgentIdConversationsRouteImport } from './routes/_layout/agent/$agentId/conversations'
 import { Route as LayoutAdminMarketplaceMarketplaceIdRouteImport } from './routes/_layout/admin/marketplace/$marketplaceId'
 import { Route as LayoutCatalogAgentsInstallBundleIdRouteImport } from './routes/_layout/catalog/agents/install/$bundleId'
@@ -282,12 +281,6 @@ const LayoutCatalogAgentsInstallRoute =
     path: '/install',
     getParentRoute: () => LayoutCatalogAgentsRoute,
   } as any)
-const LayoutAgentAgentIdSetupCredentialsRoute =
-  LayoutAgentAgentIdSetupCredentialsRouteImport.update({
-    id: '/setup-credentials',
-    path: '/setup-credentials',
-    getParentRoute: () => LayoutAgentAgentIdRoute,
-  } as any)
 const LayoutAgentAgentIdConversationsRoute =
   LayoutAgentAgentIdConversationsRouteImport.update({
     id: '/conversations',
@@ -354,7 +347,6 @@ export interface FileRoutesByFullPath {
   '/tasks': typeof LayoutTasksIndexRoute
   '/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
   '/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
-  '/agent/$agentId/setup-credentials': typeof LayoutAgentAgentIdSetupCredentialsRoute
   '/catalog/agents/install': typeof LayoutCatalogAgentsInstallRouteWithChildren
   '/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
@@ -401,7 +393,6 @@ export interface FileRoutesByTo {
   '/tasks': typeof LayoutTasksIndexRoute
   '/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
   '/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
-  '/agent/$agentId/setup-credentials': typeof LayoutAgentAgentIdSetupCredentialsRoute
   '/catalog/agents/install': typeof LayoutCatalogAgentsInstallRouteWithChildren
   '/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
@@ -452,7 +443,6 @@ export interface FileRoutesById {
   '/_layout/tasks/': typeof LayoutTasksIndexRoute
   '/_layout/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
   '/_layout/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
-  '/_layout/agent/$agentId/setup-credentials': typeof LayoutAgentAgentIdSetupCredentialsRoute
   '/_layout/catalog/agents/install': typeof LayoutCatalogAgentsInstallRouteWithChildren
   '/_layout/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/_layout/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
@@ -503,7 +493,6 @@ export interface FileRouteTypes {
     | '/tasks'
     | '/admin/marketplace/$marketplaceId'
     | '/agent/$agentId/conversations'
-    | '/agent/$agentId/setup-credentials'
     | '/catalog/agents/install'
     | '/environment/$envId/database'
     | '/environment/$envId/file'
@@ -550,7 +539,6 @@ export interface FileRouteTypes {
     | '/tasks'
     | '/admin/marketplace/$marketplaceId'
     | '/agent/$agentId/conversations'
-    | '/agent/$agentId/setup-credentials'
     | '/catalog/agents/install'
     | '/environment/$envId/database'
     | '/environment/$envId/file'
@@ -600,7 +588,6 @@ export interface FileRouteTypes {
     | '/_layout/tasks/'
     | '/_layout/admin/marketplace/$marketplaceId'
     | '/_layout/agent/$agentId/conversations'
-    | '/_layout/agent/$agentId/setup-credentials'
     | '/_layout/catalog/agents/install'
     | '/_layout/environment/$envId/database'
     | '/_layout/environment/$envId/file'
@@ -927,13 +914,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutCatalogAgentsInstallRouteImport
       parentRoute: typeof LayoutCatalogAgentsRoute
     }
-    '/_layout/agent/$agentId/setup-credentials': {
-      id: '/_layout/agent/$agentId/setup-credentials'
-      path: '/setup-credentials'
-      fullPath: '/agent/$agentId/setup-credentials'
-      preLoaderRoute: typeof LayoutAgentAgentIdSetupCredentialsRouteImport
-      parentRoute: typeof LayoutAgentAgentIdRoute
-    }
     '/_layout/agent/$agentId/conversations': {
       id: '/_layout/agent/$agentId/conversations'
       path: '/conversations'
@@ -1021,13 +1001,10 @@ const LayoutSessionsRouteWithChildren = LayoutSessionsRoute._addFileChildren(
 
 interface LayoutAgentAgentIdRouteChildren {
   LayoutAgentAgentIdConversationsRoute: typeof LayoutAgentAgentIdConversationsRoute
-  LayoutAgentAgentIdSetupCredentialsRoute: typeof LayoutAgentAgentIdSetupCredentialsRoute
 }
 
 const LayoutAgentAgentIdRouteChildren: LayoutAgentAgentIdRouteChildren = {
   LayoutAgentAgentIdConversationsRoute: LayoutAgentAgentIdConversationsRoute,
-  LayoutAgentAgentIdSetupCredentialsRoute:
-    LayoutAgentAgentIdSetupCredentialsRoute,
 }
 
 const LayoutAgentAgentIdRouteWithChildren =

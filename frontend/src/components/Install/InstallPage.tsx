@@ -21,7 +21,7 @@ interface InstallPageProps {
 
 export function InstallPage({ context }: InstallPageProps) {
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(280px,360px)_1fr]">
+    <div className="grid items-start gap-6 lg:grid-cols-[minmax(280px,360px)_1fr]">
       <div className="lg:order-1">
         <InstallAgentHeaderCard
           entry={context.bundle}

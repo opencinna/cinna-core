@@ -71,6 +71,15 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
   const taskId = message.message_metadata?.task_id as string | undefined
   const taskSessionId = message.message_metadata?.session_id as string | undefined
 
+  // Pre-LLM install-readiness gate synthesised a "setup needed" reply —
+  // render it with a distinctive warning style and a link to the agent's
+  // Credentials tab where the user can fill in the missing values.
+  const isInstallSetupRequired =
+    isSystem && message.message_metadata?.install_setup_required === true
+  const installSetupGateStatus = message.message_metadata?.gate_status as
+    | string
+    | undefined
+
   // Check if this is a task feedback message (from sub-task agent)
   const isTaskFeedback = isUser && message.message_metadata?.task_feedback === true
   const feedbackState = message.message_metadata?.task_state as string | undefined
@@ -114,6 +123,52 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
   // by the command-specific branches further down (isCommandStream / isCommand)
   // via MarkdownRenderer or the terminal-style block — don't short-circuit here.
   const isCommandSystemMessage = isSystem && message.message_metadata?.command === true
+
+  if (isInstallSetupRequired) {
+    const isPublisherBroken = installSetupGateStatus === "publisher_broken"
+    return (
+      <div className="flex justify-center my-4">
+        <div className="max-w-2xl w-full">
+          <div
+            className={`text-sm px-4 py-3 rounded-lg border-l-4 ${
+              isPublisherBroken
+                ? "border-red-500 bg-red-50/70 dark:bg-red-950/30 text-red-900 dark:text-red-100"
+                : "border-amber-500 bg-amber-50/70 dark:bg-amber-950/30 text-amber-900 dark:text-amber-100"
+            }`}
+          >
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+              <div className="flex-1 min-w-0 space-y-2">
+                <p className="font-medium">
+                  {isPublisherBroken
+                    ? "Publisher credentials unavailable"
+                    : "Setup needed before this agent can run"}
+                </p>
+                <p className="whitespace-pre-wrap break-words">
+                  {message.content}
+                </p>
+                {!isPublisherBroken && agentId && (
+                  <p className="text-xs">
+                    Open the{" "}
+                    <Link
+                      to="/agent/$agentId"
+                      params={{ agentId }}
+                      hash="credentials"
+                      className="underline underline-offset-2 hover:no-underline"
+                    >
+                      Credentials tab
+                    </Link>{" "}
+                    on this agent and fill in the missing credentials one by
+                    one.
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (isSystem && !isCommandSystemMessage) {
     return (

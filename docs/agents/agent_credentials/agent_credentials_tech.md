@@ -22,7 +22,7 @@
 - `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` - Loads credentials README for prompt
 
 ### Frontend
-- `frontend/src/components/Agents/AgentCredentialsTab.tsx` - Link/unlink credentials to agents
+- `frontend/src/components/Agents/AgentCredentialsTab.tsx` - Link/unlink credentials to agents; now also surfaces incomplete credential state: a top-of-card amber `Alert` when one or more linked credentials have `is_placeholder=true` or `status === "incomplete"`, and a per-row "Setup needed" badge next to the credential name. The credential name is a link to `/credential/$credentialId` (the standard edit page) — clicking it is the fix entry point
 - `frontend/src/components/Credentials/` - Full credential management UI (create, edit, delete, share)
 - `frontend/src/components/Credentials/CredentialForms/ApiTokenCredentialForm.tsx` - API token template form
 - `frontend/src/components/Credentials/CredentialForms/OAuthCredentialForm.tsx` - OAuth flow handler
@@ -50,7 +50,7 @@
 - `owner_id` (UUID, FK → User) - Credential owner
 - `user_workspace_id` (UUID, FK → UserWorkspace, nullable) - Optional workspace assignment
 - `allow_sharing` (bool) - Whether credential can be shared with other users
-- `is_placeholder` (bool) - Placeholder for cloned agent credential requirements
+- `is_placeholder` (bool) - True for install-time placeholder credentials (PBU/PBT specs not yet filled in). Cleared to `False` by `CredentialsService.update_credential` when `check_credential_completeness` returns `"complete"`. Both `is_placeholder=True` and `status="incomplete"` trigger the "Setup needed" badge in `AgentCredentialsTab`
 
 ### AgentCredentialLink Table
 - `agent_id` (UUID, FK → Agent) - Linked agent
@@ -67,6 +67,7 @@
 
 ### Agent-Credential Linking (triggers environment sync)
 - `backend/app/api/routes/agents.py`
+  - `GET /api/v1/agents/{id}/credentials` - List all credentials linked to an agent. Decrypts each credential and returns `is_placeholder` (bool) + `status` (`"complete"` / `"incomplete"`, derived from `CredentialsService.check_credential_completeness`) alongside the standard credential fields. Used by `AgentCredentialsTab` to drive the per-row "Setup needed" badge and the summary alert
   - `POST /api/v1/agents/{agent_id}/credentials/{credential_id}` - Link credential to agent
   - `DELETE /api/v1/agents/{agent_id}/credentials/{credential_id}` - Unlink credential from agent
 
@@ -90,6 +91,7 @@
 - `_process_api_token_credential()` - Converts API token input (type + template + token) to ready-to-use HTTP headers
 - `sync_credentials_to_agent_environments()` - Syncs credential files to all running environments of an agent
 - `refresh_expiring_credentials_for_agent()` - Checks OAuth tokens linked to agent, refreshes those expiring within threshold
+- `check_credential_completeness(credential_type, credential_data)` - Returns `"complete"` or `"incomplete"` based on whether the per-type required fields are all non-empty in the decrypted `credential_data`. Used by `GET /agents/{id}/credentials` to populate the `status` field on each row
 - `event_credential_updated()` - Event handler: syncs updated credential to all linked agents' running environments
 - `event_credential_deleted()` - Event handler: syncs removal to all linked agents' running environments
 - `event_credential_shared()` / `event_credential_unshared()` - Event handlers for credential link changes

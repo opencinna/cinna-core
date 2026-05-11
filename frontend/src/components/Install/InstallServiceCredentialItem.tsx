@@ -23,6 +23,7 @@ import {
   type InstallContextSpec,
 } from "@/client"
 import { Badge } from "@/components/ui/badge"
+import { CredentialTypeBadge } from "@/components/Credentials/CredentialTypeBadge"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import {
@@ -105,12 +106,9 @@ export function InstallServiceCredentialItem({
             <ChevronRight className="h-4 w-4" />
           )}
         </span>
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 space-y-1.5">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium text-sm">{spec.name}</span>
-            <Badge variant="secondary" className="text-xs font-normal">
-              {spec.type}
-            </Badge>
+            <CredentialTypeBadge type={spec.type} />
             {isPublisher ? (
               <Badge
                 variant="outline"
@@ -133,9 +131,12 @@ export function InstallServiceCredentialItem({
               </Badge>
             )}
           </div>
-          <p className="text-xs text-muted-foreground mt-0.5 truncate">
-            {summary}
-          </p>
+          <div className="text-xs text-muted-foreground flex items-center gap-2 flex-wrap">
+            <Badge variant="outline" className="font-normal">
+              {spec.name}
+            </Badge>
+            <span className="truncate">{summary}</span>
+          </div>
         </div>
       </button>
 

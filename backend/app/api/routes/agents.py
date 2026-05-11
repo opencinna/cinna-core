@@ -325,6 +325,10 @@ def read_agent_credentials(
 ) -> Any:
     """
     Get all credentials linked to an agent.
+
+    Each entry carries the ``is_placeholder`` flag and a per-type
+    ``status`` (``"complete"`` / ``"incomplete"``) so the agent
+    Credentials tab can highlight credentials that still need user input.
     """
     # Authorization check
     agent = session.get(Agent, id)
@@ -335,7 +339,33 @@ def read_agent_credentials(
 
     # Get credentials via service
     credentials = CredentialsService.get_agent_credentials(session=session, agent_id=id)
-    return CredentialsPublic(data=credentials, count=len(credentials))
+
+    public = []
+    for credential in credentials:
+        credential_data = CredentialsService.decrypt_credential_data(
+            session=session, credential=credential
+        )
+        status = CredentialsService.check_credential_completeness(
+            credential_type=credential.type.value,
+            credential_data=credential_data,
+        )
+        public.append(
+            {
+                "id": credential.id,
+                "name": credential.name,
+                "type": credential.type,
+                "notes": credential.notes,
+                "allow_sharing": credential.allow_sharing,
+                "allow_template_sharing": credential.allow_template_sharing,
+                "template_private_fields": list(credential.template_private_fields or []),
+                "owner_id": credential.owner_id,
+                "user_workspace_id": credential.user_workspace_id,
+                "is_placeholder": credential.is_placeholder,
+                "placeholder_source_id": credential.placeholder_source_id,
+                "status": status,
+            }
+        )
+    return CredentialsPublic(data=public, count=len(public))
 
 
 @router.post("/{id}/credentials", response_model=Message)

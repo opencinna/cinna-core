@@ -310,12 +310,14 @@ class InstallReadinessGate:
 
     @staticmethod
     def _build_setup_url(install_id: uuid.UUID) -> str:
-        """Setup page URL — single source of truth.
+        """Setup URL — points at the agent detail page's Credentials tab.
 
-        The setup page is a normal authenticated route; no token in URL.
+        There is no dedicated setup page; users fix missing credentials
+        one by one from the agent's own Credentials tab, where each
+        placeholder/incomplete row is highlighted.
         """
         host = (settings.FRONTEND_HOST or "").rstrip("/")
-        return f"{host}/agent/{install_id}/setup-credentials"
+        return f"{host}/agent/{install_id}#credentials"
 
     @staticmethod
     def _format_user_message(
@@ -323,11 +325,12 @@ class InstallReadinessGate:
         setup_url: str | None,
         status: GateStatus,
     ) -> str:
-        """Render the markdown reply the gate emits as a system message.
+        """Render the plain-text reply the gate emits as a system message.
 
-        Plan §6.2 — chat / MCP / A2A all reuse this body. The format
-        intentionally stays plain text + one markdown link so any client
-        renders it usefully (MCP non-rich tool output, A2A SSE, etc.).
+        Chat / MCP / A2A all reuse this body. Channels that can render
+        rich UI (Cinna chat) read ``install_setup_required`` metadata and
+        render their own navigation; external clients receive the URL in
+        the structured ``setup_url`` field instead of inside the message.
         """
         if status == "ready":
             return ""
@@ -340,13 +343,12 @@ class InstallReadinessGate:
             lead = (
                 "This bundle's publisher-provided credentials are unavailable. "
                 "The publisher needs to fix this, or you can supply your own "
-                "credentials via the setup page."
+                "credentials from the agent's Credentials tab."
             )
         else:
-            lead = "Setup needed before this agent can run."
-
-        if setup_url:
-            return (
-                f"{lead} [Open setup]({setup_url}) to provide:\n{items_md}"
+            lead = (
+                "Setup needed before this agent can run. Open the agent's "
+                "Credentials tab and fill in the missing values one by one."
             )
-        return f"{lead} The following credentials need attention:\n{items_md}"
+
+        return f"{lead}\n{items_md}"

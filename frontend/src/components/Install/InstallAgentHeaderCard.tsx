@@ -121,7 +121,9 @@ export function InstallAgentHeaderCard({
             <p className="text-xs text-muted-foreground mb-1">
               Latest revision
             </p>
-            <p className="text-sm">rev {entry.latest_revision_number}</p>
+            <code className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded break-all">
+              rev {entry.latest_revision_number}
+            </code>
           </div>
         )}
       </CardContent>

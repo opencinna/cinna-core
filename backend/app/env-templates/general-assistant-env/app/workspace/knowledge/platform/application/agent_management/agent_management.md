@@ -85,6 +85,8 @@ See [Agent Webhooks](../../agents/agent_webhooks/agent_webhooks.md)
 ### Bundles & Installs
 An agent developer can **publish** their agent as a versioned bundle. Other users **install** the bundle, each getting their own running copy plus a persistent per-user App Data area. The publisher can push updates to all installs; users choose manual or automatic update mode. Guest tokens continue to provide time-limited unauthenticated access to a user's install.
 
+**Uninstalling:** The header kebab on any foreign install's detail page offers an **Uninstall** option (available regardless of user role). A confirmation dialog explains that the install and environment are removed but per-bundle App Data is preserved and reattaches on reinstall. The action calls `POST /agents/{id}/uninstall` via `InstallsService.uninstallInstall`. Publisher installs cannot be uninstalled this way (backend returns 400).
+
 See [Agent Bundles & Installs](../../agents/agent_bundles/agent_bundles.md) · [Agent App Data](../../agents/agent_app_data/agent_app_data.md) · [Guest Sharing](../../agents/guest_sharing/guest_sharing.md)
 
 ## Architecture Overview
@@ -108,6 +110,22 @@ Agent (config entity)
   │
   └── Bundles & Installs ──────────────→ Published to catalog; other users install
 ```
+
+## Agent Detail Page — Tab Layout by Role
+
+The agent detail page (`/agent/$agentId`) shows different tabs and read-only states depending on the user's role and whether the agent is a foreign install:
+
+### Agent Developer (own agent or publisher install)
+All tabs visible: **Configuration** (editable), **Integrations**, **Credentials**, **Plugins**, **Environments**, **Interface**, **Bundle**. Default landing tab: **Configuration**.
+
+### Agent Developer (foreign install)
+Tabs: **Configuration** (read-only), **Integrations**, **Credentials**, **Plugins**, **Environments**, **Interface**. No Bundle tab. Default landing tab: **Configuration**. The Configuration tab renders read-only because `configReadOnly = !!agent.bundle_uuid && !agent.is_publisher_install` — edit modals disable inputs and hide Save.
+
+### Agent User (any install)
+Tabs: **Configuration** (read-only, Information + Agent Prompts only), **Credentials**, **Environments**. Default landing tab: **Configuration**. The Configuration tab hides the Schedules + Handovers row via `showOperationalSettings={false}` (`AgentConfigTab` prop).
+
+### Read-only Configuration tab
+Foreign installs render the Configuration tab read-only. The tab uses `AgentConfigTab` with `readOnly={true}`, which passes `readOnly` into each edit modal — Description, Entrypoint prompt, Workflow prompt, Refiner prompt, and Example Prompts modals disable their inputs and hide the Save button.
 
 ## Agent Creation Wizard
 
