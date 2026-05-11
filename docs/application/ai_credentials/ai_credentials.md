@@ -59,8 +59,8 @@ Note: `anthropic` credentials also support OAuth tokens (prefix `sk-ant-oat*`) â
 ### Using Specific Credentials with Environments
 
 1. User opens Add Environment dialog and clicks Edit on a mode row
-2. Selects a specific credential from the dropdown (filtered by the chosen SDK engine)
-3. Backend validates the selected credential type matches the SDK engine compatibility rules
+2. Selects a specific credential from the dropdown (filtered to types compatible with the chosen SDK engine â€” Add Environment composes the final SDK id from `engine/credential.type`)
+3. Backend validates the selected credential type matches the resolved full SDK id exactly (e.g. `opencode/anthropic` only accepts an `anthropic`-typed credential â€” not other types the `opencode` engine can run with). Mismatches fail with HTTP 400
 4. Environment created with explicit credential links
 
 ### Sharing Agent WITH AI Credentials
@@ -94,6 +94,7 @@ Note: `anthropic` credentials also support OAuth tokens (prefix `sk-ant-oat*`) â
 
 - **One default per type** - Setting a new default automatically unsets the previous one for the same type
 - **Prioritized default resolution** - When resolving which default credential to use for an SDK engine, priority order is: Anthropic > Google (Gemini) > OpenAI > any other compatible type ordered by creation date (oldest first). Only credentials marked as default AND compatible with the SDK engine are considered
+- **Strict SDK provider match at validation time** - Wherever an AI credential is wired to a stored SDK id (env create, bundle PATCH, pre-publish draft, publish), the credential's `type` must equal the SDK's provider suffix exactly. `opencode/anthropic` requires `anthropic`; `opencode/openai` requires `openai` â€” engine-wide compatibility is not enough. Without this rule a publisher could ship a bundle that writes an OpenAI key into the Anthropic provider slot, producing HTTP 401 from the LLM at runtime. See [Agent Bundles](../../agents/agent_bundles/agent_bundles.md) and [Multi-SDK](../../agents/agent_environment_core/multi_sdk.md) for the strict-match enforcement points
 - **Auto-sync on default** - Default credential values are always copied to user profile fields
 - **Profile cleared on delete** - If the deleted credential was the default, corresponding user profile fields are cleared
 - **Ownership validation** - All operations verify the credential belongs to the requesting user

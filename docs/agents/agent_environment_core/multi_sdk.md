@@ -50,16 +50,23 @@ The event translation layer for each adapter is responsible for converting SDK-s
 | `opencode/openai_compatible` | OpenCode + OpenAI-Compatible | `openai_compatible` | Implemented |
 | `opencode/google` | OpenCode + Google | `google` | Implemented |
 
-## SDK ↔ Credential Compatibility Matrix
+## SDK ↔ Credential Compatibility
 
-Each SDK engine only supports certain credential types. This is enforced by backend validation and used for frontend filtering.
+Each full SDK id (engine + provider suffix) accepts **exactly one** credential type, taken from `SDK_TO_CREDENTIAL_TYPE` in `backend/app/services/environments/sdk_constants.py`. The provider suffix in the SDK id IS the required credential `type` — there is no engine-wide list. Pairing `opencode/anthropic` with an OpenAI credential is rejected even though both share the `opencode` engine, because the env would otherwise write the OpenAI key into `provider.anthropic.options.apiKey` and runtime would fail with HTTP 401 from `api.anthropic.com`.
 
-| SDK Engine | Compatible Credential Types |
-|------------|----------------------------|
-| `claude-code` | `anthropic`, `minimax` |
-| `opencode` | `anthropic`, `openai`, `openai_compatible`, `google` |
+| Full SDK ID | Required Credential Type |
+|-------------|--------------------------|
+| `claude-code/anthropic` | `anthropic` |
+| `claude-code/minimax` | `minimax` |
+| `opencode/anthropic` | `anthropic` |
+| `opencode/openai` | `openai` |
+| `opencode/openai_compatible` | `openai_compatible` |
+| `opencode/google` | `google` |
+| `opencode` (engine-only fallback) | `anthropic` |
 
-Defined as `SDK_CREDENTIAL_COMPATIBILITY` in `backend/app/services/environments/environment_service.py`.
+The strict match is enforced at six places (see `multi_sdk_tech.md` for file references): the env create / update path, the bundle PATCH endpoint, the pre-publish draft endpoint, the publish-time pre-flight, the env-side rebuild resolver, and the publisher AI credential dropdown filter in the Bundle tab.
+
+A coarser engine matrix (`SDK_CREDENTIAL_COMPATIBILITY` — `claude-code` ↔ `[anthropic, minimax]`, `opencode` ↔ `[anthropic, openai, openai_compatible, google]`) is still used in two non-validating spots: as a fallback when an SDK id isn't in the strict map (forward-compat for custom provider suffixes), and in `resolve_default_credential_for_sdk` to rank candidate user-default credentials by provider priority when several are eligible.
 
 ## User Stories / Flows
 
@@ -95,7 +102,7 @@ Defined as `SDK_CREDENTIAL_COMPATIBILITY` in `backend/app/services/environments/
 
 - **SDK immutability:** `agent_sdk_conversation` and `agent_sdk_building` cannot be changed after environment creation
 - **Credentials required:** Backend rejects environment creation if the user lacks the API key(s) required by the selected SDK
-- **SDK ↔ credential validation:** Backend checks compatibility via `_validate_sdk_credential_compatibility()` in `environment_service.py`
+- **SDK ↔ credential validation (strict provider match):** Backend checks compatibility via `_validate_sdk_credential_compatibility()` in `environment_service.py`, which compares the credential's `type` against `sdk_expected_credential_type(full_sdk_id)` from `sdk_constants.py`. The same strict match is applied at every other entry point that writes a credential id alongside an SDK id — `BundleService.update_bundle`, `InstallService._validate_ai_credentials_draft`, `PublishService._validate_publisher_ai_credentials_sdk`
 - **Default cascade:** If no SDK is provided on creation → use user's `default_sdk_*` fields → fall back to `claude-code/anthropic`
 - **MiniMax conflict prevention:** When MiniMax is selected, `ANTHROPIC_API_KEY` is NOT written to `.env` to avoid SDK conflicts
 - **OpenAI Compatible requires all three fields:** API key, base URL, and model name must all be set

@@ -1201,12 +1201,27 @@ class InstallService:
         install: Agent,
         draft: dict,
     ) -> dict:
-        """Validate the AI-credentials draft and return its serialised form."""
+        """Validate the AI-credentials draft and return its serialised form.
+
+        Also enforces SDK ↔ credential provider match against the publisher
+        install's active env, mirroring the post-publish check in
+        :meth:`BundleService.update_bundle`. The draft is what gets copied
+        onto the bundle row at first publish, so catching the mismatch here
+        prevents shipping a broken bundle.
+        """
+        from app.services.environments.sdk_constants import (
+            sdk_expected_credential_type,
+        )
+
+        env: AgentEnvironment | None = None
+        if install.active_environment_id is not None:
+            env = session.get(AgentEnvironment, install.active_environment_id)
+
         conversation_id = draft.get("conversation_credential_id")
         building_id = draft.get("building_credential_id")
-        for slot_label, ai_cred_id in (
-            ("conversation", conversation_id),
-            ("building", building_id),
+        for slot_label, ai_cred_id, sdk_attr in (
+            ("conversation", conversation_id, "agent_sdk_conversation"),
+            ("building", building_id, "agent_sdk_building"),
         ):
             if ai_cred_id is None:
                 continue
@@ -1216,6 +1231,26 @@ class InstallService:
                     f"AI credential for {slot_label} mode must reference "
                     "an AI credential you own."
                 )
+            if env is not None:
+                sdk_id = getattr(env, sdk_attr, None)
+                expected = sdk_expected_credential_type(sdk_id)
+                if expected is None:
+                    continue
+                cred_type_value = (
+                    ai_cred.type.value if hasattr(ai_cred.type, "value")
+                    else str(ai_cred.type)
+                )
+                expected_value = (
+                    expected.value if hasattr(expected, "value") else str(expected)
+                )
+                if cred_type_value != expected_value:
+                    raise ValueError(
+                        f"AI credential for {slot_label} mode is of type "
+                        f"'{cred_type_value}', but the env's {slot_label} "
+                        f"SDK '{sdk_id}' requires a '{expected_value}' "
+                        "credential. Switch the env's SDK provider or pick a "
+                        "matching credential."
+                    )
         return {
             "conversation_credential_id": (
                 str(conversation_id) if conversation_id is not None else None

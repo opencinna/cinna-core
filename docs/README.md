@@ -209,4 +209,4 @@ User ──→ Frontend (React) ──→ Backend API (FastAPI) ──→ Servic
 
 ---
 
-*Last updated: 2026-05-06*
+*Last updated: 2026-05-11*

@@ -55,6 +55,7 @@ import {
   SDK_CREDENTIAL_COMPATIBILITY,
   extractEngine,
   getEngineLabel,
+  sdkExpectedCredentialType,
 } from "@/components/Environments/EnvironmentConfigForm"
 
 interface CredentialProvisioningSectionProps {
@@ -98,15 +99,30 @@ export function CredentialProvisioningSection({
   const aiCredentialOptions = aiCredentials?.data ?? []
 
   // SDK engine per mode (claude-code / opencode), derived from the env's
-  // SDK ID. Used to (a) display which SDK is currently in use, (b) filter
-  // the AI credential dropdown to only types compatible with that SDK.
+  // SDK ID. Used to display which SDK is currently in use.
   const conversationEngine = extractEngine(environment?.agent_sdk_conversation)
   const buildingEngine = extractEngine(environment?.agent_sdk_building)
 
-  const conversationCompatibleTypes =
-    SDK_CREDENTIAL_COMPATIBILITY[conversationEngine] ?? []
-  const buildingCompatibleTypes =
-    SDK_CREDENTIAL_COMPATIBILITY[buildingEngine] ?? []
+  // Strict provider match — the dropdown only offers credentials whose
+  // ``type`` equals the SDK's expected provider (e.g. ``opencode/anthropic``
+  // → ``anthropic`` only, never ``openai``). Backend rejects the mismatch
+  // at PATCH /bundles and at publish time; matching the filter here keeps
+  // the UI from suggesting choices that would fail server-side.
+  const conversationExpectedType = sdkExpectedCredentialType(
+    environment?.agent_sdk_conversation,
+  )
+  const buildingExpectedType = sdkExpectedCredentialType(
+    environment?.agent_sdk_building,
+  )
+  // Fallback to engine compatibility for SDK strings the strict map doesn't
+  // know yet (e.g. custom provider suffixes) so we don't accidentally show
+  // an empty dropdown.
+  const conversationCompatibleTypes = conversationExpectedType
+    ? [conversationExpectedType]
+    : SDK_CREDENTIAL_COMPATIBILITY[conversationEngine] ?? []
+  const buildingCompatibleTypes = buildingExpectedType
+    ? [buildingExpectedType]
+    : SDK_CREDENTIAL_COMPATIBILITY[buildingEngine] ?? []
 
   const conversationOptions = aiCredentialOptions.filter((c) =>
     conversationCompatibleTypes.includes(c.type),

@@ -63,12 +63,14 @@
 - `model_override_conversation: str | None` — optional model override for conversation mode (e.g., `gpt-4o-mini`)
 - `model_override_building: str | None` — optional model override for building mode (e.g., `claude-opus-4`)
 
-**Schema constants** (`backend/app/services/environments/environment_service.py`):
+**Schema constants & helpers** (`backend/app/services/environments/sdk_constants.py`):
 - `SDK_ANTHROPIC` (`claude-code/anthropic`), `SDK_MINIMAX` (`claude-code/minimax`)
 - `SDK_ENGINE_CLAUDE_CODE`, `SDK_ENGINE_OPENCODE` — engine-only prefix constants
 - `VALID_SDK_ENGINES` — list of the two valid engine prefixes
-- `SDK_CREDENTIAL_COMPATIBILITY` — dict mapping engine → list of compatible credential type strings
-- `SDK_TO_CREDENTIAL_TYPE` — full SDK ID → `AICredentialType` mapping including all `opencode/*` variants
+- `SDK_CREDENTIAL_COMPATIBILITY` — engine → list of credential types. Used only for two non-validating purposes: forward-compat fallback when an SDK id isn't in the strict map, and as the candidate set for `resolve_default_credential_for_sdk`'s priority ranking
+- `SDK_TO_CREDENTIAL_TYPE` — full SDK ID → `AICredentialType` mapping. Single source of truth for strict provider matching
+- `sdk_expected_credential_type(sdk_id)` — returns the exact `AICredentialType` a full SDK id requires, or `None` for SDK strings outside the strict map
+- `is_credential_compatible_with_sdk(sdk_id, cred_type)` — strict boolean check using the helper above; returns `True` when the SDK id is unmapped so callers can pre-validate the SDK with `is_valid_sdk` if they want hard rejection
 
 ## API Endpoints
 
@@ -86,9 +88,8 @@
 
 **`backend/app/services/environments/environment_service.py`:**
 - `SDK_API_KEY_MAP` — maps legacy SDK ID to required credential field name (for backward compat)
-- `SDK_CREDENTIAL_COMPATIBILITY` — maps engine prefix to list of compatible credential type strings
-- `_validate_sdk_credential_compatibility()` — raises `EnvironmentCredentialError` if SDK engine and credential type are incompatible
-- `create_environment()` — applies default SDK cascade, validates SDK ↔ credential compatibility, passes credential params to background task
+- `_validate_sdk_credential_compatibility(sdk_id, credential)` — strict full-SDK-id match via `sdk_expected_credential_type`. Raises `EnvironmentCredentialError` with a "SDK 'X' requires a 'Y' credential, got 'Z'" detail when types don't match. Falls back to the engine-level `SDK_CREDENTIAL_COMPATIBILITY` list only when the SDK id is unmapped (forward-compat)
+- `create_environment()` — applies default SDK cascade, validates SDK ↔ credential compatibility, passes credential params to background task. `POST /agents/{id}/environments` wraps the call with `try/except AgentEnvironmentError` so the validation surfaces as HTTP 400 (not 500)
 
 **`backend/app/services/environments/environment_lifecycle.py`:**
 - `create_environment_instance()` — accepts all credential params for supported provider types

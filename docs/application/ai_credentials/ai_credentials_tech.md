@@ -15,7 +15,8 @@
 
 **Services:**
 - `backend/app/services/credentials/ai_credentials_service.py` - `AICredentialsService` (singleton: `ai_credentials_service`)
-- `backend/app/services/environments/environment_service.py:27` - `SDK_API_KEY_MAP`, `SDK_TO_CREDENTIAL_TYPE` mappings
+- `backend/app/services/environments/environment_service.py` - `SDK_API_KEY_MAP`, strict `_validate_sdk_credential_compatibility`
+- `backend/app/services/environments/sdk_constants.py` - `SDK_TO_CREDENTIAL_TYPE`, `SDK_CREDENTIAL_COMPATIBILITY`, `sdk_expected_credential_type`, `is_credential_compatible_with_sdk`
 - `backend/app/services/sharing/agent_share_service.py` - AI credential provision handling in shares
 - `backend/app/services/sharing/agent_clone_service.py` - Clone AI credential setup
 - `backend/app/services/environments/environment_lifecycle.py` - Credential type detection and `.env` generation
@@ -150,9 +151,25 @@ Indexes: `ix_ai_credential_shares_credential` (ai_credential_id), `ix_ai_credent
 
 ### Environment Service (`backend/app/services/environments/environment_service.py`)
 
-- `SDK_API_KEY_MAP` (line 27) - Maps SDK IDs to API key field names
-- `SDK_TO_CREDENTIAL_TYPE` (line 34) - Maps SDK IDs to `AICredentialType` values
+- `SDK_API_KEY_MAP` - Maps legacy SDK IDs to API key field names
+- `_validate_sdk_credential_compatibility(sdk_id, credential)` - Strict full-SDK provider match (e.g. `opencode/anthropic` only accepts `anthropic`-typed credentials). Raises `EnvironmentCredentialError` (400) on mismatch. Re-exports its lookup via `sdk_constants.sdk_expected_credential_type`
 - `create_environment()` - Resolves default or validates linked credentials per SDK type
+
+### SDK Constants (`backend/app/services/environments/sdk_constants.py`)
+
+- `SDK_TO_CREDENTIAL_TYPE` - Single source of truth: maps full SDK IDs (e.g. `opencode/anthropic`, `opencode/openai`) to their required `AICredentialType`
+- `SDK_CREDENTIAL_COMPATIBILITY` - Engine-wide credential type lists. Used only for forward-compat fallback (unmapped SDK ids) and for `resolve_default_credential_for_sdk` priority ranking — NOT for strict validation
+- `sdk_expected_credential_type(sdk_id)` - Helper returning the exact `AICredentialType` for a full SDK id, or `None` for unmapped ids
+- `is_credential_compatible_with_sdk(sdk_id, cred_type)` - Strict boolean check used by the bundle-level validators
+
+### Where the strict match is enforced
+
+- `EnvironmentService.create_environment` (env create / update path)
+- `BundleService.update_bundle` (`PATCH /bundles/{uuid}` for `publisher_ai_credential_*_id`)
+- `InstallService._validate_ai_credentials_draft` (`PATCH /agents/{id}/publish-settings` pre-publish draft)
+- `PublishService._validate_publisher_ai_credentials_sdk` (publish-time pre-flight)
+- `EnvironmentLifecycleManager` (rebuild path — uses `SDK_TO_CREDENTIAL_TYPE` to route the right key into the right provider slot)
+- `frontend/src/components/Agents/CredentialProvisioningSection.tsx` (publisher AI credential dropdown filter — strict full-SDK match via `sdkExpectedCredentialType`)
 
 ### Clone Service (`backend/app/services/sharing/agent_clone_service.py`)
 

@@ -215,6 +215,15 @@ class PublishService:
             else:
                 env_workspace_root = Path(settings.ENV_INSTANCES_DIR) / str(env.id)
 
+            # Pre-flight: publisher-provided AI credentials must match the
+            # env's per-mode SDK provider. The bundle PATCH endpoint already
+            # validates this, but the publisher can change either side
+            # (env SDK or AI credential) between writes — this is the last
+            # line of defence before we ship an unusable revision.
+            PublishService._validate_publisher_ai_credentials_sdk(
+                session, install, bundle, env
+            )
+
             PublishService._copy_bundle_tree(env_workspace_root, tmp_dir)
 
             # Required credential specs from the install's linked credentials.
@@ -670,6 +679,74 @@ class PublishService:
                 k: v for k, v in template_data.items() if k in allowlist
             }
         return template_data, private_fields
+
+    @staticmethod
+    def _validate_publisher_ai_credentials_sdk(
+        session: Session,
+        install: Agent,
+        bundle: AgentBundle,
+        env: AgentEnvironment | None,
+    ) -> None:
+        """Reject publish when a publisher AI credential doesn't match the env SDK.
+
+        Mirrors :meth:`BundleService.update_bundle` and
+        :meth:`InstallService._validate_ai_credentials_draft`. Catches the
+        case where the publisher set ``publisher_ai_credential_conversation_id``
+        to an OpenAI credential, then changed the env's conversation SDK to
+        ``opencode/anthropic`` (or vice versa) before publishing — at runtime
+        the env would write the wrong key into the wrong provider slot and
+        the LLM call would fail with 401.
+
+        When ``env`` is ``None`` (publishing without an active environment),
+        the check is skipped — the install will be unable to run anyway and
+        the publisher will see the missing-env warning instead.
+        """
+        from app.models.credentials.ai_credential import AICredential
+        from app.services.environments.sdk_constants import (
+            sdk_expected_credential_type,
+        )
+
+        if env is None:
+            return
+
+        for ai_field, sdk_attr, mode_label in (
+            (
+                "publisher_ai_credential_conversation_id",
+                "agent_sdk_conversation",
+                "conversation",
+            ),
+            (
+                "publisher_ai_credential_building_id",
+                "agent_sdk_building",
+                "building",
+            ),
+        ):
+            cred_id = getattr(bundle, ai_field, None)
+            if cred_id is None:
+                continue
+            ai_cred = session.get(AICredential, cred_id)
+            if ai_cred is None:
+                continue
+            sdk_id = getattr(env, sdk_attr, None)
+            expected = sdk_expected_credential_type(sdk_id)
+            if expected is None:
+                continue
+            cred_type_value = (
+                ai_cred.type.value if hasattr(ai_cred.type, "value")
+                else str(ai_cred.type)
+            )
+            expected_value = (
+                expected.value if hasattr(expected, "value") else str(expected)
+            )
+            if cred_type_value != expected_value:
+                raise ValueError(
+                    f"Publisher-provided AI credential for {mode_label} mode "
+                    f"is of type '{cred_type_value}', but the env's "
+                    f"{mode_label} SDK '{sdk_id}' requires a "
+                    f"'{expected_value}' credential. Update the env's SDK "
+                    "provider or clear the publisher AI credential before "
+                    "publishing."
+                )
 
     @staticmethod
     def _validate_publisher_provides(

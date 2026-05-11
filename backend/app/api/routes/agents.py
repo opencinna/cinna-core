@@ -435,15 +435,20 @@ async def create_agent_environment(
     """
     Create new environment for agent.
     """
+    from app.services.environments.environment_service import AgentEnvironmentError
+
     agent = session.get(Agent, id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_superuser and (agent.owner_id != current_user.id):
         raise HTTPException(status_code=400, detail="Not enough permissions")
 
-    environment = await EnvironmentService.create_environment(
-        session=session, agent_id=id, data=environment_in, user=current_user
-    )
+    try:
+        environment = await EnvironmentService.create_environment(
+            session=session, agent_id=id, data=environment_in, user=current_user
+        )
+    except AgentEnvironmentError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
     return environment
 
 

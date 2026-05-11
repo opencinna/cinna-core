@@ -64,6 +64,38 @@ def is_valid_sdk(sdk: str) -> bool:
     return sdk in VALID_SDK_ENGINES
 
 
+def sdk_expected_credential_type(sdk_id: str | None) -> AICredentialType | None:
+    """Return the exact credential type a full SDK id requires, or ``None``.
+
+    Strict match keyed by the **full** SDK id (engine + provider suffix), not
+    just the engine. ``opencode/anthropic`` expects ``ANTHROPIC``;
+    ``opencode/openai`` expects ``OPENAI`` — even though both share the
+    ``opencode`` engine. Unknown SDK strings return ``None`` so callers can
+    decide whether to skip validation rather than reject silently.
+    """
+    if not sdk_id:
+        return None
+    return SDK_TO_CREDENTIAL_TYPE.get(sdk_id)
+
+
+def is_credential_compatible_with_sdk(
+    sdk_id: str | None, cred_type: AICredentialType | str
+) -> bool:
+    """Strict provider-level compatibility between an SDK id and a credential type.
+
+    Returns ``True`` if the SDK's expected type equals the given credential
+    type. Unknown SDK strings (not in :data:`SDK_TO_CREDENTIAL_TYPE`) return
+    ``True`` — callers that want strict rejection should pre-validate the SDK
+    with :func:`is_valid_sdk`.
+    """
+    expected = sdk_expected_credential_type(sdk_id)
+    if expected is None:
+        return True
+    expected_value = expected.value if hasattr(expected, "value") else str(expected)
+    cred_value = cred_type.value if hasattr(cred_type, "value") else str(cred_type)
+    return expected_value == cred_value
+
+
 def make_empty_credential_bag() -> dict[str, str | None]:
     """Create a fresh credential bag with all keys set to None."""
     return {

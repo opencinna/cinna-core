@@ -25,6 +25,8 @@ from .sdk_constants import (
     SDK_CREDENTIAL_COMPATIBILITY,
     CREDENTIAL_TYPE_TO_BAG_KEY,
     is_valid_sdk,
+    is_credential_compatible_with_sdk,
+    sdk_expected_credential_type,
     make_empty_credential_bag,
     apply_credential_to_bag,
 )
@@ -61,22 +63,42 @@ class EnvironmentCredentialError(AgentEnvironmentError):
 
 def _validate_sdk_credential_compatibility(sdk_id: str, credential: AICredential) -> None:
     """
-    Validate that the SDK engine is compatible with the given credential type.
+    Validate that the full SDK id (engine + provider) matches the credential type exactly.
+
+    The earlier engine-only check (``claude-code`` ↔ ``[anthropic, minimax]``,
+    ``opencode`` ↔ ``[anthropic, openai, openai_compatible, google]``) lets a
+    publisher pair ``opencode/anthropic`` with an OpenAI credential — the env
+    then writes the OpenAI key into ``provider.anthropic.options.apiKey`` and
+    runtime fails with HTTP 401 from ``api.anthropic.com``. We now require the
+    SDK's provider suffix to equal the credential's provider.
 
     Args:
-        sdk_id: Full SDK ID (e.g., "claude-code/anthropic") or engine prefix
+        sdk_id: Full SDK ID (e.g., "claude-code/anthropic", "opencode/openai")
         credential: The AICredential instance to validate against
 
     Raises:
-        EnvironmentCredentialError: If the SDK and credential type are incompatible
+        EnvironmentCredentialError: If the SDK and credential type don't match.
     """
-    engine = sdk_id.split("/")[0] if "/" in sdk_id else sdk_id
-    compatible_types = SDK_CREDENTIAL_COMPATIBILITY.get(engine, [])
     cred_type_value = credential.type.value if hasattr(credential.type, 'value') else str(credential.type)
-    if cred_type_value not in compatible_types:
+    expected = sdk_expected_credential_type(sdk_id)
+    if expected is None:
+        # Unknown SDK string — keep older fall-through behaviour: validate
+        # against the engine compatibility list so we don't block legitimate
+        # use of custom provider suffixes we haven't mapped yet.
+        engine = sdk_id.split("/")[0] if "/" in sdk_id else sdk_id
+        compatible_types = SDK_CREDENTIAL_COMPATIBILITY.get(engine, [])
+        if cred_type_value not in compatible_types:
+            raise EnvironmentCredentialError(
+                f"SDK '{sdk_id}' is not compatible with credential type "
+                f"'{cred_type_value}'. Compatible types: {compatible_types}"
+            )
+        return
+    expected_value = expected.value if hasattr(expected, "value") else str(expected)
+    if cred_type_value != expected_value:
         raise EnvironmentCredentialError(
-            f"SDK '{engine}' is not compatible with credential type '{cred_type_value}'. "
-            f"Compatible types: {compatible_types}"
+            f"SDK '{sdk_id}' requires a '{expected_value}' credential, "
+            f"got '{cred_type_value}'. Either change the credential to a "
+            f"'{expected_value}' one or switch the SDK provider."
         )
 
 

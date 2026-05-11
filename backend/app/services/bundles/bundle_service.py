@@ -28,7 +28,9 @@ from app.models.bundles.agent_bundle import (
 from app.models.bundles.agent_bundle_revision import AgentBundleRevision
 from app.models.bundles.bundle_access_grant import BundleAccessGrant
 from app.models.credentials.ai_credential import AICredential
+from app.models.environments.environment import AgentEnvironment
 from app.models.users.user import User
+from app.services.environments.sdk_constants import sdk_expected_credential_type
 from app.services.bundles.exceptions import (
     BundleAccessDeniedError,
     BundleConflictError,
@@ -125,6 +127,30 @@ class BundleService:
         return session.get(AgentBundleRevision, bundle.latest_revision_id)
 
     @staticmethod
+    def _publisher_env_for(
+        session: Session, bundle: AgentBundle
+    ) -> AgentEnvironment | None:
+        """Return the publisher install's active env, or ``None`` if missing.
+
+        Used to look up the SDK ids that publisher-provided AI credentials must
+        match at PATCH and publish time. Returns ``None`` if either the
+        publisher install or its active environment isn't present yet — the
+        caller treats that as "skip the SDK check" (e.g. bundle exists but
+        the publisher's install row is mid-creation).
+        """
+        stmt = (
+            select(Agent)
+            .where(
+                Agent.bundle_uuid == bundle.id,
+                Agent.is_publisher_install == True,  # noqa: E712
+            )
+        )
+        publisher_install = session.exec(stmt).first()
+        if publisher_install is None or publisher_install.active_environment_id is None:
+            return None
+        return session.get(AgentEnvironment, publisher_install.active_environment_id)
+
+    @staticmethod
     def revision_install_count(
         session: Session, revision_id: uuid.UUID
     ) -> int:
@@ -213,11 +239,23 @@ class BundleService:
                 )
 
         # Validate publisher-provided AI credentials belong to the bundle's
-        # publisher. NULL clears the publisher-provides state; non-NULL must
-        # reference an ``AICredential`` row owned by ``bundle.publisher_user_id``.
-        for ai_field in (
-            "publisher_ai_credential_conversation_id",
-            "publisher_ai_credential_building_id",
+        # publisher and match the publisher install's env SDK provider for that
+        # mode. The provider check protects against the case where the SDK is
+        # ``opencode/anthropic`` but the publisher picks an OpenAI credential —
+        # at runtime that key would be written into ``provider.anthropic.options.apiKey``
+        # and api.anthropic.com would reject it.
+        publisher_env = BundleService._publisher_env_for(session, bundle)
+        for ai_field, sdk_attr, mode_label in (
+            (
+                "publisher_ai_credential_conversation_id",
+                "agent_sdk_conversation",
+                "conversation",
+            ),
+            (
+                "publisher_ai_credential_building_id",
+                "agent_sdk_building",
+                "building",
+            ),
         ):
             if ai_field in update_dict and update_dict[ai_field] is not None:
                 ai_cred = session.get(AICredential, update_dict[ai_field])
@@ -230,6 +268,26 @@ class BundleService:
                         f"{ai_field} must reference an AI credential "
                         "owned by the bundle publisher"
                     )
+                if publisher_env is not None:
+                    sdk_id = getattr(publisher_env, sdk_attr, None)
+                    expected = sdk_expected_credential_type(sdk_id)
+                    cred_type_value = (
+                        ai_cred.type.value if hasattr(ai_cred.type, "value")
+                        else str(ai_cred.type)
+                    )
+                    expected_value = (
+                        expected.value if expected is not None and hasattr(expected, "value")
+                        else (str(expected) if expected is not None else None)
+                    )
+                    if expected_value is not None and cred_type_value != expected_value:
+                        raise BundleValidationError(
+                            f"AI credential for {mode_label} mode is of type "
+                            f"'{cred_type_value}', but the publisher install's "
+                            f"{mode_label} SDK '{sdk_id}' requires a "
+                            f"'{expected_value}' credential. Switch the env's "
+                            f"{mode_label} SDK provider or pick a matching "
+                            "credential."
+                        )
 
         # Setattr semantics: explicit NULL clears the field; absent keys
         # are left untouched. The earlier "if v is not None" gate stripped

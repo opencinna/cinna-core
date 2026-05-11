@@ -53,6 +53,26 @@ export const SDK_CREDENTIAL_COMPATIBILITY: Record<string, string[]> = {
   "opencode": ["anthropic", "openai", "openai_compatible", "google"],
 }
 
+// Strict mapping from full SDK id (engine + provider suffix) to the single
+// credential type it accepts. Source of truth on the backend lives in
+// ``app/services/environments/sdk_constants.py::SDK_TO_CREDENTIAL_TYPE``;
+// keep this map in sync. Used to filter the publisher AI credential
+// dropdown by exact provider match (not engine-only).
+export const SDK_TO_CREDENTIAL_TYPE: Record<string, string> = {
+  "claude-code/anthropic": "anthropic",
+  "claude-code/minimax": "minimax",
+  "opencode/anthropic": "anthropic",
+  "opencode/openai": "openai",
+  "opencode/openai_compatible": "openai_compatible",
+  "opencode/google": "google",
+  "opencode": "anthropic",
+}
+
+export function sdkExpectedCredentialType(sdkId: string | null | undefined): string | null {
+  if (!sdkId) return null
+  return SDK_TO_CREDENTIAL_TYPE[sdkId] ?? null
+}
+
 // Suggested models per credential type (for model override hints)
 export const SUGGESTED_MODELS: Record<string, string[]> = {
   anthropic: ["claude-opus-4", "claude-sonnet-4-5", "claude-haiku-4-5"],
