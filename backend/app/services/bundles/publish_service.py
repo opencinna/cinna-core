@@ -41,6 +41,7 @@ from app.models.events.event import EventType
 from app.models.credentials.credential import Credential
 from app.models.credentials.link_models import AgentCredentialLink
 from app.services.bundles.bundle_service import BundleService
+from app.services.credentials.credentials_service import CredentialsService
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +164,12 @@ class PublishService:
             session.add(install)
             session.commit()
             session.refresh(install)
+            # Transfer the pre-publish AI credential draft (set via
+            # PATCH /agents/{id}/publish-settings while the bundle row
+            # didn't yet exist) onto the new bundle row. After this point
+            # the bundle FK columns are the source of truth and the
+            # frontend writes to them via PATCH /bundles/{uuid}.
+            PublishService._apply_pre_publish_ai_drafts(session, install, bundle)
         else:
             if bundle.publisher_user_id != publisher_user_id:
                 raise ValueError("This bundle belongs to a different publisher")
@@ -437,32 +444,57 @@ class PublishService:
         return h.hexdigest()
 
     @staticmethod
+    def resolve_provided_by(
+        credential: Credential, publisher_install: Agent
+    ) -> str:
+        """Single source of truth for ``provided_by`` resolution.
+
+        Resolution order:
+
+        1. ``publisher_install.publish_settings["credential_overrides"]
+           [credential.name]["provided_by"]`` — explicit publisher choice
+           from the bundle tab UI. Wins if present and equals ``"user"``,
+           ``"publisher"``, or ``"template"``.
+        2. Fallback inference:
+           - ``allow_sharing=True`` → ``"publisher"``
+           - else if ``allow_template_sharing=True`` → ``"template"``
+           - else → ``"user"``
+
+        Returns the resolved string. Used by both the publish-time spec
+        collector and the credential-bundle-usages projection so the two
+        paths can never disagree.
+        """
+        publish_settings = (
+            getattr(publisher_install, "publish_settings", None) or {}
+        )
+        overrides_raw = publish_settings.get("credential_overrides") or {}
+        if isinstance(overrides_raw, dict):
+            entry = overrides_raw.get(credential.name)
+            if isinstance(entry, dict):
+                raw = entry.get("provided_by")
+                if raw in ("user", "publisher", "template"):
+                    return raw
+
+        if bool(credential.allow_sharing):
+            return "publisher"
+        if bool(getattr(credential, "allow_template_sharing", False)):
+            return "template"
+        return "user"
+
+    @staticmethod
     def _collect_credential_specs(session: Session, install: Agent) -> list[dict]:
         """Snapshot the install's credential set as ``required_credential_specs``.
 
-        Phase 1 of the install-experience-redesign plan: emit the evolved
-        per-spec shape with ``provided_by`` and ``publisher_credential_id``.
-
-        Resolution order for ``provided_by`` (Phase 5):
-
-        1. ``install.publish_settings["credential_overrides"][cred.name]
-           ["provided_by"]`` — explicit publisher choice from the bundle
-           tab UI. Wins if present and equals ``"user"`` or ``"publisher"``.
-        2. Fallback inference: when the linked ``Credential.allow_sharing``
-           is True, emit ``provided_by="publisher"`` with the publisher's
-           credential id. Otherwise emit ``provided_by="user"``.
+        Emits the evolved per-spec shape with ``provided_by``,
+        ``publisher_credential_id`` and (for templates) ``template_data``
+        + ``template_private_fields``. ``provided_by`` is resolved by
+        :meth:`resolve_provided_by`.
 
         ``_validate_publisher_provides`` (run before this) guarantees that
         every ``provided_by="publisher"`` spec references a credential
-        with ``allow_sharing=True``.
+        with ``allow_sharing=True`` and every ``provided_by="template"``
+        spec references a credential with ``allow_template_sharing=True``.
         """
-        publish_settings = getattr(install, "publish_settings", None) or {}
-        overrides_raw = publish_settings.get("credential_overrides") or {}
-        # Defensive: if the JSON is malformed (somehow not a dict) we treat
-        # it as empty rather than crashing the publish path.
-        if not isinstance(overrides_raw, dict):
-            overrides_raw = {}
-
         stmt = select(AgentCredentialLink).where(
             AgentCredentialLink.agent_id == install.id
         )
@@ -473,26 +505,15 @@ class PublishService:
             if not cred:
                 continue
             allow_sharing = bool(cred.allow_sharing)
-
-            # Override lookup — case-sensitive on the spec name (matches
-            # the credential name as written by the publisher).
-            override_entry = overrides_raw.get(cred.name)
-            override_value = None
-            if isinstance(override_entry, dict):
-                raw = override_entry.get("provided_by")
-                if raw in ("user", "publisher"):
-                    override_value = raw
-
-            if override_value is not None:
-                provided_by = override_value
-            else:
-                provided_by = "publisher" if allow_sharing else "user"
+            allow_template_sharing = bool(getattr(cred, "allow_template_sharing", False))
+            provided_by = PublishService.resolve_provided_by(cred, install)
 
             publisher_credential_id = cred.id if provided_by == "publisher" else None
-            specs.append({
+            spec: dict = {
                 "name": cred.name,
                 "type": cred.type.value if hasattr(cred.type, "value") else str(cred.type),
                 "allow_sharing": allow_sharing,
+                "allow_template_sharing": allow_template_sharing,
                 "description": cred.notes or None,
                 "provided_by": provided_by,
                 "publisher_credential_id": (
@@ -500,53 +521,188 @@ class PublishService:
                     if publisher_credential_id is not None
                     else None
                 ),
-            })
+            }
+            if provided_by == "template":
+                template_data, template_private_fields = (
+                    PublishService._template_payload_for(session, cred)
+                )
+                spec["template_data"] = template_data
+                spec["template_private_fields"] = template_private_fields
+            specs.append(spec)
         return specs
+
+    # Credential types whose ``credential_data`` is intrinsically per-user
+    # (OAuth tokens, SA JSON). Template sharing is still allowed on these
+    # types so the publisher can ship the credential's ``notes`` as setup
+    # instructions, but no field of ``credential_data`` is ever included
+    # in the template payload — the backend strips the dict regardless of
+    # UI state. Defence in depth.
+    _TEMPLATE_FORCE_PRIVATE_TYPES = frozenset({
+        "gmail_oauth",
+        "gmail_oauth_readonly",
+        "gdrive_oauth",
+        "gdrive_oauth_readonly",
+        "gcalendar_oauth",
+        "gcalendar_oauth_readonly",
+        "google_service_account",
+    })
+
+    # Per-type templatable allowlist. When a type has an entry, ONLY those
+    # fields are eligible for ``template_data`` even if the publisher
+    # forgot to mark the rest as private. Types not listed allow every
+    # field through (modulo the publisher's private-field selection).
+    #
+    # ssh_key: ``host_aliases`` is configuration the publisher can share
+    # as a default; ``public_key`` / ``fingerprint`` / ``key_type`` are
+    # generated per-key (the installer generates their own); the secret
+    # ``private_key`` / ``passphrase`` are stripped here AND by the
+    # whitelist on the agent-env sync path.
+    _TEMPLATE_TEMPLATABLE_FIELDS_BY_TYPE: dict[str, frozenset[str]] = {
+        "ssh_key": frozenset({"host_aliases"}),
+    }
+
+    @staticmethod
+    def _apply_pre_publish_ai_drafts(
+        session: Session, install: Agent, bundle: AgentBundle
+    ) -> None:
+        """Transfer the pre-publish AI credential draft onto a new bundle.
+
+        Reads ``install.publish_settings["ai_credentials"]`` (set via
+        ``PATCH /agents/{id}/publish-settings`` while the bundle didn't
+        yet exist) and writes the resolved UUIDs to
+        ``bundle.publisher_ai_credential_*_id``. The route already
+        validated ownership; we re-check here as defence in depth and
+        skip on any mismatch.
+        """
+        from app.models.credentials.ai_credential import AICredential
+
+        publish_settings = getattr(install, "publish_settings", None) or {}
+        draft = publish_settings.get("ai_credentials")
+        if not isinstance(draft, dict):
+            return
+
+        changed = False
+        for column, key in (
+            ("publisher_ai_credential_conversation_id", "conversation_credential_id"),
+            ("publisher_ai_credential_building_id", "building_credential_id"),
+        ):
+            raw = draft.get(key)
+            if raw is None:
+                continue
+            try:
+                cred_id = uuid.UUID(str(raw))
+            except (ValueError, TypeError):
+                continue
+            ai_cred = session.get(AICredential, cred_id)
+            if ai_cred is None or ai_cred.owner_id != bundle.publisher_user_id:
+                logger.warning(
+                    "Pre-publish AI credential draft %s for bundle %s "
+                    "is not owned by the publisher; skipping transfer",
+                    cred_id, bundle.bundle_id,
+                )
+                continue
+            setattr(bundle, column, cred_id)
+            changed = True
+
+        if changed:
+            session.add(bundle)
+            session.commit()
+            session.refresh(bundle)
+
+    @staticmethod
+    def _template_payload_for(
+        session: Session, cred: Credential
+    ) -> tuple[dict, list[str]]:
+        """Return ``(template_data, template_private_fields)`` for ``cred``.
+
+        ``template_data`` carries only the non-private credential_data
+        fields — values the publisher consents to ship inside the bundle
+        revision JSON. The private fields list tells the install screen
+        and the runtime gate which fields the installer must supply.
+
+        For credential types in ``_TEMPLATE_FORCE_PRIVATE_TYPES`` the
+        whole credential_data dict is dropped regardless of UI state — the
+        installer authenticates themselves (OAuth, SSH key generation,
+        service-account JSON upload). The publisher's ``notes`` still
+        carry through via the spec's ``description`` field.
+
+        Decryption failures are surfaced as a publish-time ``ValueError``
+        rather than silently shipping an empty template — a corrupt
+        publisher credential would otherwise produce a bundle with zero
+        defaults that no installer could complete usefully.
+        """
+        cred_type_value = (
+            cred.type.value if hasattr(cred.type, "value") else str(cred.type)
+        )
+        if cred_type_value in PublishService._TEMPLATE_FORCE_PRIVATE_TYPES:
+            return {}, []
+
+        try:
+            full = CredentialsService.decrypt_credential_data(
+                session=session, credential=cred
+            )
+        except Exception as exc:
+            logger.exception(
+                "Failed to decrypt credential %s for template publishing",
+                cred.id,
+            )
+            raise ValueError(
+                f"Credential '{cred.name}' is marked template-provided "
+                "but its stored data could not be decrypted. Re-save the "
+                "credential and try again."
+            ) from exc
+        private_fields = [
+            f for f in (cred.template_private_fields or []) if isinstance(f, str)
+        ]
+        private_set = set(private_fields)
+        template_data = {
+            k: v for k, v in full.items() if k not in private_set
+        }
+
+        # Apply the per-type templatable allowlist (defence in depth) — fields
+        # not in the allowlist are stripped even if the publisher forgot to
+        # mark them private.
+        allowlist = PublishService._TEMPLATE_TEMPLATABLE_FIELDS_BY_TYPE.get(
+            cred_type_value
+        )
+        if allowlist is not None:
+            template_data = {
+                k: v for k, v in template_data.items() if k in allowlist
+            }
+        return template_data, private_fields
 
     @staticmethod
     def _validate_publisher_provides(
         session: Session, install: Agent
     ) -> None:
-        """Assert publisher-provided spec credentials are actually shareable.
+        """Assert publisher-provided / template spec credentials are valid.
 
-        Walks the credentials that ``_collect_credential_specs`` would emit
-        as ``provided_by="publisher"`` and verifies each underlying
-        ``Credential`` row has ``allow_sharing=True``. Raises a publish-time
-        error otherwise — a publisher who flips a credential to
-        publisher-provided but leaves ``allow_sharing=False`` would publish
-        a bundle that no foreign install could ever resolve.
-
-        In Phase 1 the inference rule guarantees the invariant by
-        construction (we only mark a spec as publisher-provided when
-        ``allow_sharing=True``). Phase 5 introduces a publisher override
-        map where this gate becomes load-bearing — landing it now keeps
-        the publish pathway honest as later phases evolve the inference.
+        Walks the install's linked credentials, resolves each one's
+        ``provided_by`` via :meth:`resolve_provided_by`, and verifies the
+        underlying ``Credential`` row carries the matching consent flag
+        (``allow_sharing`` or ``allow_template_sharing``). Raises a
+        publish-time error otherwise — a publisher who flips a
+        credential's ``provided_by`` override but leaves the consent flag
+        off would publish a bundle that no foreign install could resolve.
         """
-        specs = PublishService._collect_credential_specs(session, install)
-        for spec in specs:
-            if spec.get("provided_by") != "publisher":
-                continue
-            raw_id = spec.get("publisher_credential_id")
-            if not raw_id:
-                raise ValueError(
-                    f"Credential spec '{spec.get('name')}' is marked "
-                    "publisher-provided but has no publisher_credential_id"
-                )
-            try:
-                cred_uuid = uuid.UUID(str(raw_id))
-            except (ValueError, TypeError) as exc:
-                raise ValueError(
-                    f"Credential spec '{spec.get('name')}' has an invalid "
-                    f"publisher_credential_id: {raw_id}"
-                ) from exc
-            cred = session.get(Credential, cred_uuid)
+        stmt = select(AgentCredentialLink).where(
+            AgentCredentialLink.agent_id == install.id
+        )
+        links = list(session.exec(stmt).all())
+        for link in links:
+            cred = session.get(Credential, link.credential_id)
             if cred is None:
-                raise ValueError(
-                    f"Credential spec '{spec.get('name')}' references missing "
-                    f"publisher credential {raw_id}"
-                )
-            if not bool(cred.allow_sharing):
+                continue
+            provided_by = PublishService.resolve_provided_by(cred, install)
+            if provided_by == "publisher" and not bool(cred.allow_sharing):
                 raise ValueError(
                     f"Credential '{cred.name}' is marked publisher-provided "
                     "but is not shareable (allow_sharing=False)"
+                )
+            if provided_by == "template" and not bool(
+                getattr(cred, "allow_template_sharing", False)
+            ):
+                raise ValueError(
+                    f"Credential '{cred.name}' is marked template-provided "
+                    "but template sharing is not enabled (allow_template_sharing=False)"
                 )

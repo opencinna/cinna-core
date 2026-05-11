@@ -76,8 +76,10 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
   - `type`: CredentialType (required)
   - `notes`: string | null
   - `allow_sharing`: boolean
+  - `allow_template_sharing`: boolean
   - `credential_data`: object | null
   - `user_workspace_id`: string | null
+  - `template_private_fields`: array | null
 
 **Response:** `CredentialPublic`
 
@@ -104,6 +106,8 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
   - `notes`: string | null
   - `credential_data`: object | null
   - `allow_sharing`: boolean | null
+  - `allow_template_sharing`: boolean | null
+  - `template_private_fields`: array | null
 
 **Response:** `CredentialPublic`
 
@@ -126,6 +130,16 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
 - `id`: uuid
 
 **Response:** `CredentialWithData`
+
+---
+
+## GET `/api/v1/credentials/{id}/bundles`
+**List Credential Bundle Usages**
+
+**Path parameters:**
+- `id`: uuid
+
+**Response:** `CredentialBundleUsages`
 
 ---
 

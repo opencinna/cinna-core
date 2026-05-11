@@ -76,7 +76,8 @@ Auto-generated from OpenAPI spec. Tag: `installs`
 - `agent_id`: uuid
 
 **Request body** (`PublishSettingsUpdate`):
-  - `credential_overrides`: object
+  - `credential_overrides`: object | null
+  - `ai_credentials`: _AICredentialDraft | null
 
 **Response:** `AgentPublic`
 
@@ -112,6 +113,8 @@ Auto-generated from OpenAPI spec. Tag: `installs`
   - `notes`: string | null
   - `credential_data`: object | null
   - `allow_sharing`: boolean | null
+  - `allow_template_sharing`: boolean | null
+  - `template_private_fields`: array | null
 
 **Response:** `CredentialPublic`
 

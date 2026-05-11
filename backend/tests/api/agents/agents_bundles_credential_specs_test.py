@@ -1,9 +1,9 @@
-"""Phase 1 — install-experience-redesign tests.
+"""Credential spec shape tests for agent bundle publishing.
 
-Covers the new spec shape (``provided_by`` / ``publisher_credential_id``),
-the publisher AI credential FK columns on ``AgentBundle``, and the
-backward-compat guarantee that pre-Phase-1 revision shapes still install
-cleanly.
+Covers the ``provided_by`` / ``publisher_credential_id`` spec fields emitted
+during publish, the publisher AI credential FK columns on ``AgentBundle``, and
+the backward-compat guarantee that pre-spec-redesign revision shapes still
+install cleanly.
 
 Scenarios:
   A. Publish emits ``provided_by="publisher"`` / ``publisher_credential_id``
@@ -29,16 +29,15 @@ Notes:
   - All tests operate via the API layer only.
   - ``_validate_publisher_provides`` (scenario I) is the one spot where we
     must call into the service layer because we need to hand-craft a spec
-    shape that cannot be produced through the API in Phase 1 (i.e. a
+    shape that cannot be produced through the API (i.e. a
     ``provided_by="publisher"`` spec backed by a non-shareable credential).
     The README allows importing from ``app.core.config`` and ``app.utils``
     only; importing service methods is not permitted.  We therefore implement
     scenario I as a white-box call inside the agent-fixtures context — this
     is flagged explicitly in the test body.
-  - Scenario I is NOT possible to exercise through the API in Phase 1 because
+  - Scenario I is NOT possible to exercise through the API because
     the inference guarantees the invariant by construction.  We import the
     service method directly for this one scenario and call it out clearly.
-    See deliverables note in the PR description for rationale.
 """
 import json
 import uuid
@@ -177,7 +176,7 @@ def test_publish_emits_publisher_spec_for_shareable_credential(
     """
     # ── Phase 1: create + link shareable credential ───────────────────────────
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="Phase1-A-Agent"
+        client, superuser_token_headers, name="CredSpec-A-Agent"
     )
     drain_tasks()
 
@@ -220,7 +219,7 @@ def test_publish_emits_user_spec_for_non_shareable_credential(
     4. Assert spec has provided_by="user" and publisher_credential_id=None.
     """
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="Phase1-B-Agent"
+        client, superuser_token_headers, name="CredSpec-B-Agent"
     )
     drain_tasks()
 
@@ -261,7 +260,7 @@ def test_publish_mixed_credentials_emits_per_credential_provided_by(
     4. Assert each spec has the correct provided_by and publisher_credential_id.
     """
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="Phase1-C-Agent"
+        client, superuser_token_headers, name="CredSpec-C-Agent"
     )
     drain_tasks()
 
@@ -306,21 +305,21 @@ def test_old_shape_revision_installs_cleanly(
     client: TestClient,
     superuser_token_headers: dict[str, str],
 ) -> None:
-    """D. A revision whose required_credential_specs lacks the new Phase 1 fields
+    """D. A revision whose required_credential_specs lacks the new fields
     still installs without error and the install row activates cleanly.
 
-    Phase 1 backward-compat guarantee: revisions written before the Phase 1
-    schema change (no ``provided_by`` / ``publisher_credential_id`` fields)
-    must install without raising an HTTP error.  The reader in
+    Backward-compat guarantee: revisions written before the spec redesign
+    (no ``provided_by`` / ``publisher_credential_id`` fields) must install
+    without raising an HTTP error.  The reader in
     ``InstallService._setup_install_credentials`` defaults missing
     ``provided_by`` to ``"user"`` and missing ``publisher_credential_id`` to
-    ``None``.  A credential with ``allow_sharing=False`` (new Phase 1
-    ``provided_by="user"``) is semantically identical to an old-shape spec
-    so this test exercises the same install path.
+    ``None``.  A credential with ``allow_sharing=False`` (provided_by="user")
+    is semantically identical to an old-shape spec so this test exercises the
+    same install path.
 
     NOTE: The assertion that placeholder credentials are visible via
     ``GET /agents/{id}/credentials`` is intentionally omitted.  As of the
-    Phase 1 implementation, ``InstallService._setup_install_credentials``
+    current implementation, ``InstallService._setup_install_credentials``
     calls ``CredentialsService._encrypt_data(...)`` — a method that does not
     exist on ``CredentialsService`` (the service uses ``encrypt_field`` from
     ``app.core.security`` directly).  This causes an ``AttributeError`` that
@@ -328,13 +327,12 @@ def test_old_shape_revision_installs_cleanly(
     row is never created.  This is a **source code bug** that should be fixed
     in ``install_service.py``: replace ``CredentialsService._encrypt_data(...)``
     with ``encrypt_field(json.dumps(...))`` (imported from
-    ``app.core.security``).  The test asserts only the observable Phase 1
-    contract (install activates, HTTP 200) and documents the bug for the
-    implementing team.
+    ``app.core.security``).  The test asserts only the observable contract
+    (install activates, HTTP 200) and documents the bug for the implementing team.
     """
     # ── Phase 1: publish a bundle with a non-shareable credential ────────────
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="Phase1-D-Publisher"
+        client, superuser_token_headers, name="CredSpec-D-Publisher"
     )
     drain_tasks()
 
@@ -404,7 +402,7 @@ def test_patch_bundle_accepts_publisher_ai_credential(
     4. GET the bundle → assert the field is persisted.
     """
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="Phase1-E-Agent"
+        client, superuser_token_headers, name="CredSpec-E-Agent"
     )
     drain_tasks()
 
@@ -463,7 +461,7 @@ def test_patch_bundle_rejects_ai_credential_owned_by_other_user(
     4. Assert HTTP 400.
     """
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="Phase1-F-Agent"
+        client, superuser_token_headers, name="CredSpec-F-Agent"
     )
     drain_tasks()
     r = client.post(
@@ -515,7 +513,7 @@ def test_patch_bundle_clears_ai_credential_with_null(
     4. GET bundle → field is null.
     """
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="Phase1-G-Agent"
+        client, superuser_token_headers, name="CredSpec-G-Agent"
     )
     drain_tasks()
     r = client.post(
@@ -576,7 +574,7 @@ def test_catalog_entry_surfaces_publisher_ai_credential_fields(
     4. GET /catalog/{bundle_id} (as a different user) → assert both fields present.
     """
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="Phase1-H-Agent"
+        client, superuser_token_headers, name="CredSpec-H-Agent"
     )
     drain_tasks()
     r = client.post(
@@ -633,30 +631,25 @@ def test_validate_publisher_provides_raises_for_non_shareable_publisher_spec(
     client: TestClient,
     superuser_token_headers: dict[str, str],
 ) -> None:
-    """I. _validate_publisher_provides raises ValueError when a spec is
-    hand-crafted as provided_by="publisher" but the underlying Credential
-    has allow_sharing=False.
+    """I. _validate_publisher_provides raises ValueError when the publisher's
+    override map marks a non-shareable credential as ``provided_by="publisher"``.
 
     NOTE: This test imports from app.services — a deliberate exception to the
-    API-only rule documented in backend/tests/README.md.  The invariant tested
-    here cannot be triggered through the API in Phase 1 because the inference
-    rule guarantees it cannot happen:
-      - _collect_credential_specs only emits provided_by="publisher" when
-        allow_sharing=True.
-      - _validate_publisher_provides exists to future-proof against Phase 5
-        publisher override maps that could violate the invariant.
-    The test constructs the bad state directly (non-shareable credential, but
-    a manually-crafted spec claiming provided_by="publisher") so the contract
-    is locked for Phase 5 regression protection.  This approach is explicitly
-    noted in the PR deliverables.
+    API-only rule documented in backend/tests/README.md. The invariant tested
+    here is the contract: a publisher override map can claim a credential is
+    publisher-provided even though the credential's ``allow_sharing=False``
+    flag says otherwise. ``_validate_publisher_provides`` must catch this at
+    publish time so we never ship a bundle that no foreign install can resolve.
+
+    The override path is the only way this state can occur in production:
+    the inference rule alone (``allow_sharing → "publisher"``) trivially
+    upholds the invariant, so we drive the validator via the real override
+    mechanism it exists to guard.
     """
-    # Allowed service import for this scenario only — see note above.
     from app.services.bundles.publish_service import PublishService
 
-    # Create a non-shareable credential and a minimal agent install so we
-    # can call _validate_publisher_provides in a real DB context.
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="Phase1-I-Agent"
+        client, superuser_token_headers, name="CredSpec-I-Agent"
     )
     drain_tasks()
 
@@ -667,7 +660,10 @@ def test_validate_publisher_provides_raises_for_non_shareable_publisher_spec(
         client, superuser_token_headers, agent["id"], non_shareable["id"]
     )
 
-    # Publish once to create the bundle + promote the install.
+    # Publish once to create the bundle + promote the install. The
+    # post-publish row is what the validator runs against on subsequent
+    # publishes — the install must be is_publisher_install=True for
+    # publish_settings to apply.
     r = client.post(
         f"{API}/agents/{agent['id']}/publish",
         headers=superuser_token_headers,
@@ -676,42 +672,24 @@ def test_validate_publisher_provides_raises_for_non_shareable_publisher_spec(
     assert r.status_code == 200, r.text
     drain_tasks()
 
-    # At this point the normal Phase 1 inference would have produced
-    # provided_by="user" for the non-shareable credential — the validator
-    # would pass silently.  We want to verify it FAILS when someone
-    # hand-builds provided_by="publisher" + non-shareable credential.
-    #
-    # We do this by monkey-patching _collect_credential_specs locally to
-    # return the bad spec shape, then calling _validate_publisher_provides
-    # which reads the same data.
-    from unittest.mock import patch as mock_patch
+    # Drive the bad state via the real override map — same path that ships in production.
     from app.models.agents.agent import Agent
     from app.core.db import create_session
 
-    # Read the real agent row so we can pass it to the validator.
     with create_session() as db:
         install_row = db.get(Agent, uuid.UUID(agent["id"]))
         assert install_row is not None
+        install_row.publish_settings = {
+            "credential_overrides": {
+                "private-cred": {"provided_by": "publisher"},
+            }
+        }
+        db.add(install_row)
+        db.commit()
+        db.refresh(install_row)
 
-        # Craft the bad spec: non-shareable credential labelled "publisher".
-        bad_specs = [{
-            "name": "private-cred",
-            "type": "api_token",
-            "allow_sharing": False,  # credential is NOT shareable
-            "description": None,
-            "provided_by": "publisher",  # but spec claims publisher provides it
-            "publisher_credential_id": non_shareable["id"],
-        }]
-
-        # Patch _collect_credential_specs so _validate_publisher_provides
-        # operates on our hand-crafted bad shape.
-        with mock_patch.object(
-            PublishService,
-            "_collect_credential_specs",
-            return_value=bad_specs,
-        ):
-            with pytest.raises(ValueError) as exc_info:
-                PublishService._validate_publisher_provides(db, install_row)
+        with pytest.raises(ValueError) as exc_info:
+            PublishService._validate_publisher_provides(db, install_row)
 
     err_msg = str(exc_info.value).lower()
     assert "not shareable" in err_msg or "allow_sharing" in err_msg, (
@@ -735,7 +713,7 @@ def test_manifest_on_disk_contains_new_spec_fields(
     3. Assert each spec dict in required_credential_specs includes both new fields.
     """
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="Phase1-J-Agent"
+        client, superuser_token_headers, name="CredSpec-J-Agent"
     )
     drain_tasks()
 

@@ -7881,6 +7881,76 @@ export const CreateScheduleRequestSchema = {
     description: 'Request to create a new schedule.'
 } as const;
 
+export const CredentialBundleUsageSchema = {
+    properties: {
+        bundle_uuid: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Bundle Uuid'
+        },
+        bundle_id: {
+            type: 'string',
+            title: 'Bundle Id'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        },
+        publisher_install_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Install Id'
+        },
+        provided_by: {
+            type: 'string',
+            title: 'Provided By'
+        }
+    },
+    type: 'object',
+    required: ['bundle_uuid', 'bundle_id', 'display_name', 'provided_by'],
+    title: 'CredentialBundleUsage',
+    description: `One bundle that uses this credential.
+
+\`\`publisher_install_id\`\` is the publisher install's \`\`Agent.id\`\` —
+the frontend uses it to deep-link into the agent's Bundle tab where
+bundle settings live (the platform doesn't expose a standalone
+/bundles/{uuid} route).
+
+\`\`provided_by\`\` is the resolved provisioning mode for this credential
+in the bundle, computed from the publisher install's
+\`\`publish_settings.credential_overrides\`\` map (when set) and falling
+back to the inference rule used at publish time:
+\`\`allow_sharing → "publisher"\`\` else \`\`allow_template_sharing → "template"\`\`
+else \`\`"user"\`\`. The frontend uses this to split usages between the
+Sharing and Share-as-Template cards.`
+} as const;
+
+export const CredentialBundleUsagesSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/CredentialBundleUsage'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'CredentialBundleUsages'
+} as const;
+
 export const CredentialCreateSchema = {
     properties: {
         name: {
@@ -7908,6 +7978,11 @@ export const CredentialCreateSchema = {
             title: 'Allow Sharing',
             default: false
         },
+        allow_template_sharing: {
+            type: 'boolean',
+            title: 'Allow Template Sharing',
+            default: false
+        },
         credential_data: {
             anyOf: [
                 {
@@ -7931,6 +8006,20 @@ export const CredentialCreateSchema = {
                 }
             ],
             title: 'User Workspace Id'
+        },
+        template_private_fields: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Template Private Fields'
         }
     },
     type: 'object',
@@ -7963,6 +8052,11 @@ export const CredentialPublicSchema = {
         allow_sharing: {
             type: 'boolean',
             title: 'Allow Sharing',
+            default: false
+        },
+        allow_template_sharing: {
+            type: 'boolean',
+            title: 'Allow Template Sharing',
             default: false
         },
         id: {
@@ -8007,6 +8101,14 @@ export const CredentialPublicSchema = {
                 }
             ],
             title: 'Owner Email'
+        },
+        template_private_fields: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Template Private Fields',
+            default: []
         },
         is_placeholder: {
             type: 'boolean',
@@ -8183,6 +8285,31 @@ export const CredentialUpdateSchema = {
                 }
             ],
             title: 'Allow Sharing'
+        },
+        allow_template_sharing: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Allow Template Sharing'
+        },
+        template_private_fields: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Template Private Fields'
         }
     },
     type: 'object',
@@ -8214,6 +8341,11 @@ export const CredentialWithDataSchema = {
         allow_sharing: {
             type: 'boolean',
             title: 'Allow Sharing',
+            default: false
+        },
+        allow_template_sharing: {
+            type: 'boolean',
+            title: 'Allow Template Sharing',
             default: false
         },
         id: {
@@ -8258,6 +8390,14 @@ export const CredentialWithDataSchema = {
                 }
             ],
             title: 'Owner Email'
+        },
+        template_private_fields: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Template Private Fields',
+            default: []
         },
         is_placeholder: {
             type: 'boolean',
@@ -11069,7 +11209,7 @@ export const InstallContextSpecSchema = {
         },
         provided_by: {
             type: 'string',
-            enum: ['user', 'publisher'],
+            enum: ['user', 'publisher', 'template'],
             title: 'Provided By',
             default: 'user'
         },
@@ -11105,6 +11245,14 @@ export const InstallContextSpecSchema = {
                 }
             ],
             title: 'Suggested Credential Name'
+        },
+        template_private_fields: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Template Private Fields',
+            default: []
         }
     },
     type: 'object',
@@ -11116,7 +11264,13 @@ export const InstallContextSpecSchema = {
 populated only when \`\`provided_by="publisher"\`\` (and the row is still
 resolvable). \`\`suggested_credential_id\`\` / \`\`suggested_credential_name\`\`
 are the auto-prefill matcher's output for PBU specs — pure suggestion;
-nothing is committed until the user submits the install.`
+nothing is committed until the user submits the install.
+
+For \`\`provided_by="template"\`\` specs, \`\`template_private_fields\`\` lists
+the field names the installer is expected to fill in after install.
+The non-private template values are not surfaced here — they live on
+the materialised placeholder credential and are returned by the
+setup-credentials endpoint instead.`
 } as const;
 
 export const InstallCredentialSelectionSchema = {
@@ -12881,12 +13035,28 @@ afterwards.`
 export const PublishSettingsUpdateSchema = {
     properties: {
         credential_overrides: {
-            additionalProperties: {
-                '$ref': '#/components/schemas/_CredentialOverride'
-            },
-            type: 'object',
-            title: 'Credential Overrides',
-            default: {}
+            anyOf: [
+                {
+                    additionalProperties: {
+                        '$ref': '#/components/schemas/_CredentialOverride'
+                    },
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credential Overrides'
+        },
+        ai_credentials: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/_AICredentialDraft'
+                },
+                {
+                    type: 'null'
+                }
+            ]
         }
     },
     type: 'object',
@@ -12894,11 +13064,15 @@ export const PublishSettingsUpdateSchema = {
     description: `Body of \`\`PATCH /agents/{agent_id}/publish-settings\`\`.
 
 Only the publisher install (\`\`is_publisher_install=True\`\`) can hold
-publish settings. The route validates that:
+publish settings. Fields are partial — omitting a top-level key
+preserves the existing value; sending it (even as empty) replaces it.
 
-- Each entry references the **name** of a credential currently linked
-  to the install (so the override never points at a stale spec).
-- Each \`\`provided_by\`\` value is \`\`"user"\`\` or \`\`"publisher"\`\`.`
+- \`\`credential_overrides\`\`: per-spec \`\`provided_by\`\` map. Keys must
+  match the names of credentials currently linked to the install;
+  values must use \`\`"user"\`\`, \`\`"publisher"\`\`, or \`\`"template"\`\`.
+- \`\`ai_credentials\`\`: pre-publish AI credential draft (see
+  \`\`_AICredentialDraft\`\`). Each id, when non-null, must reference an
+  \`\`AICredential\`\` owned by the publisher.`
 } as const;
 
 export const RefinePromptRequestSchema = {
@@ -14586,6 +14760,20 @@ export const SetupCredentialSummarySchema = {
                 }
             ],
             title: 'Description'
+        },
+        template_private_fields: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Template Private Fields',
+            default: []
+        },
+        template_prefilled_data: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Template Prefilled Data',
+            default: {}
         }
     },
     type: 'object',
@@ -14596,7 +14784,13 @@ export const SetupCredentialSummarySchema = {
 Used by \`\`GET /agents/{agent_id}/setup-credentials\`\`. Only credentials
 owned by the install owner AND linked to the install AND
 \`\`is_placeholder=True\`\` are surfaced (publisher-shared rows are not
-user-fillable).`
+user-fillable).
+
+For credentials materialised from a bundle template, \`\`template_private_fields\`\`
+lists the field names the installer is expected to fill in, and
+\`\`template_prefilled_data\`\` carries the publisher's non-private values
+so the setup page can render them as read-only context. For non-template
+placeholders both fields are empty.`
 } as const;
 
 export const SetupStatusMissingItemSchema = {
@@ -17630,6 +17824,47 @@ export const WorkspaceFilesChangedRequestSchema = {
 
 \`\`changed_files\`\` is informational — currently used for logging only;
 downstream handlers refresh all caches regardless.`
+} as const;
+
+export const _AICredentialDraftSchema = {
+    properties: {
+        conversation_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Conversation Credential Id'
+        },
+        building_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Building Credential Id'
+        }
+    },
+    type: 'object',
+    title: '_AICredentialDraft',
+    description: `Pre-publish draft of the bundle's publisher AI credentials.
+
+Stored on the publisher install while the \`\`AgentBundle\`\` row does
+not yet exist (i.e. the agent has never been published). At first
+publish, \`\`PublishService\`\` copies these UUIDs onto the new bundle
+row and they become the source of truth via the FK columns. After
+that, the picker writes directly to \`\`AgentBundle\`\` via
+\`\`PATCH /bundles/{uuid}\`\` and these draft fields stop being read.
+\`\`null\`\` explicitly means "no publisher-provided AI for this mode";
+omitting the field on update leaves the existing draft unchanged.`
 } as const;
 
 export const _CredentialOverrideSchema = {

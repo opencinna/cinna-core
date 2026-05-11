@@ -297,8 +297,10 @@ export function SSHKeyEditView({
         <Alert>
           <Lock className="h-4 w-4" />
           <AlertDescription className="text-xs">
-            Private key is encrypted and cannot be viewed or exported. To
-            replace it, use <strong>Rotate key</strong>.
+            <p>
+              Private key is encrypted and cannot be viewed or exported. To
+              replace it, use <strong>Rotate key</strong>.
+            </p>
           </AlertDescription>
         </Alert>
 

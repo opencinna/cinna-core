@@ -116,14 +116,21 @@ class InstallContextSpec(BaseModel):
     resolvable). ``suggested_credential_id`` / ``suggested_credential_name``
     are the auto-prefill matcher's output for PBU specs — pure suggestion;
     nothing is committed until the user submits the install.
+
+    For ``provided_by="template"`` specs, ``template_private_fields`` lists
+    the field names the installer is expected to fill in after install.
+    The non-private template values are not surfaced here — they live on
+    the materialised placeholder credential and are returned by the
+    setup-credentials endpoint instead.
     """
     name: str
     type: str
     description: str | None = None
-    provided_by: Literal["user", "publisher"] = "user"
+    provided_by: Literal["user", "publisher", "template"] = "user"
     publisher_summary: InstallContextPublisherSummary | None = None
     suggested_credential_id: uuid.UUID | None = None
     suggested_credential_name: str | None = None
+    template_private_fields: list[str] = []
 
 
 class InstallContextAIPublisherSummaries(BaseModel):
@@ -219,8 +226,16 @@ class SetupCredentialSummary(BaseModel):
     owned by the install owner AND linked to the install AND
     ``is_placeholder=True`` are surfaced (publisher-shared rows are not
     user-fillable).
+
+    For credentials materialised from a bundle template, ``template_private_fields``
+    lists the field names the installer is expected to fill in, and
+    ``template_prefilled_data`` carries the publisher's non-private values
+    so the setup page can render them as read-only context. For non-template
+    placeholders both fields are empty.
     """
     id: uuid.UUID
     name: str
     type: str
     description: str | None = None
+    template_private_fields: list[str] = []
+    template_prefilled_data: dict = {}

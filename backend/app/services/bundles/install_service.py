@@ -47,6 +47,10 @@ from app.models.bundles.catalog import (
     AICredentialSelections,
     InstallRequest,
 )
+from app.models.bundles.catalog import SetupCredentialSummary
+from app.models.credentials.ai_credential import AICredential
+from app.models.credentials.credential import Credential
+from app.models.credentials.link_models import AgentCredentialLink
 from app.models.environments.environment import (
     AgentEnvironment,
     AgentEnvironmentCreate,
@@ -496,6 +500,42 @@ class InstallService:
                 user_provided_data.get(name) if user_provided_data else None
             )
 
+            # ── Template-provided branch ─────────────────────────────────
+            # The publisher chose to ship non-private fields as template
+            # defaults; the installer only needs to fill in the private
+            # ones. We materialise a fresh Credential row owned by the
+            # installer with the template_data pre-filled and
+            # is_placeholder=True so the runtime gate keeps the install
+            # in needs_setup until the private fields are supplied.
+            #
+            # If the installer explicitly opted to link an existing
+            # credential of theirs (``mode="use_existing"``) we honour
+            # that and skip the template materialisation — a fully-set-up
+            # credential they already own beats a half-filled template.
+            if provided_by == "template":
+                wants_existing = (
+                    isinstance(user_selection, dict)
+                    and user_selection.get("mode") == "use_existing"
+                    and user_selection.get("credential_id")
+                )
+                if not wants_existing:
+                    if InstallService._materialise_template_credential(
+                        session=session,
+                        install=install,
+                        spec=spec,
+                    ):
+                        continue
+                    # Bad spec data falls through to a regular placeholder so
+                    # the install still completes and the runtime gate guides
+                    # the installer. Mark the install as degraded so the
+                    # publisher can see template materialisation didn't take.
+                    degraded = True
+                    logger.warning(
+                        "Failed to materialise template credential for spec '%s' "
+                        "on install %s — falling back to placeholder",
+                        name, install.id,
+                    )
+
             # ── Publisher-provided branch ─────────────────────────────────
             if provided_by == "publisher" and publisher_credential_id_raw:
                 # Validate: explicit user_existing override on a publisher
@@ -587,6 +627,76 @@ class InstallService:
             session.add(install)
             session.commit()
             session.refresh(install)
+
+    @staticmethod
+    def _materialise_template_credential(
+        *,
+        session: Session,
+        install: Agent,
+        spec: dict,
+    ) -> bool:
+        """Create a placeholder Credential seeded from a template spec.
+
+        Reads ``template_data`` (publisher's non-private values) and
+        ``template_private_fields`` (the field names the installer must
+        supply). Persists a Credential row owned by the installer with:
+
+          - ``encrypted_data`` initialised from ``template_data``
+          - ``is_placeholder=True`` so the runtime gate keeps the install
+            in needs_setup until the private fields are filled in
+          - ``allow_sharing=False`` and ``allow_template_sharing=False``
+            (the installer's row is private to them; downstream re-sharing
+            requires an explicit toggle)
+          - ``template_private_fields`` mirrored onto the installer's row
+            so the setup page can highlight which fields are still empty
+
+        Returns ``True`` on success; ``False`` if the spec lacks a usable
+        type so the caller falls back to the regular placeholder path.
+        """
+        from app.models.credentials.credential import CredentialType
+
+        name = spec.get("name") or "template credential"
+        cred_type_str = spec.get("type")
+        try:
+            cred_type = CredentialType(cred_type_str)
+        except ValueError:
+            return False
+
+        template_data_raw = spec.get("template_data") or {}
+        if not isinstance(template_data_raw, dict):
+            template_data_raw = {}
+
+        private_fields_raw = spec.get("template_private_fields") or []
+        if not isinstance(private_fields_raw, list):
+            private_fields_raw = []
+        private_fields = [f for f in private_fields_raw if isinstance(f, str)]
+
+        # Drop any private-field values that may have leaked into the
+        # spec's template_data — defensive belt-and-suspenders so the
+        # installer always supplies private values themselves.
+        private_set = set(private_fields)
+        template_data = {
+            k: v for k, v in template_data_raw.items() if k not in private_set
+        }
+
+        cred = Credential(
+            owner_id=install.owner_id,
+            name=name,
+            type=cred_type,
+            notes=spec.get("description") or "Created from bundle template.",
+            encrypted_data=encrypt_field(json.dumps(template_data)),
+            is_placeholder=True,
+            allow_sharing=False,
+            allow_template_sharing=False,
+            template_private_fields=private_fields,
+        )
+        session.add(cred)
+        session.flush()
+        session.add(AgentCredentialLink(
+            agent_id=install.id,
+            credential_id=cred.id,
+        ))
+        return True
 
     @staticmethod
     def _try_link_publisher_credential(
@@ -990,3 +1100,186 @@ class InstallService:
         session.commit()
         session.refresh(install)
         return install
+
+    # ── Publish settings ───────────────────────────────────────────
+
+    @staticmethod
+    def update_publish_settings(
+        session: Session,
+        install: Agent,
+        *,
+        credential_overrides: dict[str, dict] | None,
+        ai_credentials: dict | None,
+    ) -> Agent:
+        """Validate and persist a partial update to ``install.publish_settings``.
+
+        Both arguments are partial: ``None`` leaves that section
+        untouched, an empty/populated value replaces it.
+
+        - ``credential_overrides``: ``{spec_name: {"provided_by": ...}}``.
+          Each key must match the name of a credential currently linked
+          to the install; each ``provided_by`` must be ``"user"``,
+          ``"publisher"``, or ``"template"``.
+        - ``ai_credentials``: ``{"conversation_credential_id": uuid|None,
+          "building_credential_id": uuid|None}``. Each non-null id must
+          reference an ``AICredential`` owned by the install owner.
+
+        Raises ``ValueError`` for any validation failure (route maps to
+        HTTP 400). Caller must have already verified the install is the
+        publisher install — this method asserts and raises ``ValueError``
+        defensively if not.
+        """
+        if not install.is_publisher_install:
+            raise ValueError(
+                "Publish settings can only be edited on the publisher install."
+            )
+
+        current = dict(install.publish_settings or {})
+
+        if credential_overrides is not None:
+            current["credential_overrides"] = (
+                InstallService._validate_credential_overrides(
+                    session=session, install=install, overrides=credential_overrides
+                )
+            )
+
+        if ai_credentials is not None:
+            current["ai_credentials"] = (
+                InstallService._validate_ai_credentials_draft(
+                    session=session, install=install, draft=ai_credentials
+                )
+            )
+
+        install.publish_settings = current
+        session.add(install)
+        session.commit()
+        session.refresh(install)
+        return install
+
+    @staticmethod
+    def _validate_credential_overrides(
+        *,
+        session: Session,
+        install: Agent,
+        overrides: dict[str, dict],
+    ) -> dict[str, dict]:
+        """Validate the ``credential_overrides`` map and return its cleaned form."""
+        linked_names: set[str] = set()
+        rows = session.exec(
+            select(Credential)
+            .join(
+                AgentCredentialLink,
+                AgentCredentialLink.credential_id == Credential.id,
+            )
+            .where(AgentCredentialLink.agent_id == install.id)
+        ).all()
+        for cred in rows:
+            if cred.name:
+                linked_names.add(cred.name)
+
+        cleaned: dict[str, dict] = {}
+        for spec_name, override in overrides.items():
+            if spec_name not in linked_names:
+                raise ValueError(
+                    f"Override targets unknown spec '{spec_name}' — only "
+                    "credentials currently linked to this install can be "
+                    "overridden."
+                )
+            provided_by = override.get("provided_by") if isinstance(override, dict) else None
+            if provided_by not in ("user", "publisher", "template"):
+                raise ValueError(
+                    f"Invalid provided_by '{provided_by}' for spec "
+                    f"'{spec_name}': must be 'user', 'publisher', or 'template'."
+                )
+            cleaned[spec_name] = {"provided_by": provided_by}
+        return cleaned
+
+    @staticmethod
+    def _validate_ai_credentials_draft(
+        *,
+        session: Session,
+        install: Agent,
+        draft: dict,
+    ) -> dict:
+        """Validate the AI-credentials draft and return its serialised form."""
+        conversation_id = draft.get("conversation_credential_id")
+        building_id = draft.get("building_credential_id")
+        for slot_label, ai_cred_id in (
+            ("conversation", conversation_id),
+            ("building", building_id),
+        ):
+            if ai_cred_id is None:
+                continue
+            ai_cred = session.get(AICredential, ai_cred_id)
+            if ai_cred is None or ai_cred.owner_id != install.owner_id:
+                raise ValueError(
+                    f"AI credential for {slot_label} mode must reference "
+                    "an AI credential you own."
+                )
+        return {
+            "conversation_credential_id": (
+                str(conversation_id) if conversation_id is not None else None
+            ),
+            "building_credential_id": (
+                str(building_id) if building_id is not None else None
+            ),
+        }
+
+    # ── Setup credentials ──────────────────────────────────────────
+
+    @staticmethod
+    def list_setup_credentials(
+        session: Session, install: Agent
+    ) -> list[SetupCredentialSummary]:
+        """List the install's user-fillable placeholder credentials.
+
+        Returns rows owned by the install owner AND linked to the install
+        AND ``is_placeholder=True``. For credentials materialised from a
+        bundle template, ``template_private_fields`` lists the field names
+        the installer is expected to fill in and ``template_prefilled_data``
+        carries the publisher's non-private values so the setup page can
+        render them as read-only context.
+
+        Decryption failures fall back to an empty prefilled dict — a
+        corrupted credential should still surface in the setup list so
+        the installer can re-fill it from scratch rather than disappear.
+        """
+        from app.services.credentials.credentials_service import CredentialsService
+
+        rows = session.exec(
+            select(Credential)
+            .join(
+                AgentCredentialLink,
+                AgentCredentialLink.credential_id == Credential.id,
+            )
+            .where(
+                AgentCredentialLink.agent_id == install.id,
+                Credential.owner_id == install.owner_id,
+                Credential.is_placeholder == True,  # noqa: E712
+            )
+        ).all()
+
+        summaries: list[SetupCredentialSummary] = []
+        for cred in rows:
+            private_fields = list(cred.template_private_fields or [])
+            prefilled: dict = {}
+            if private_fields:
+                try:
+                    full = CredentialsService.decrypt_credential_data(
+                        session=session, credential=cred
+                    )
+                except Exception:
+                    full = {}
+                private_set = set(private_fields)
+                prefilled = {k: v for k, v in full.items() if k not in private_set}
+            summaries.append(
+                SetupCredentialSummary(
+                    id=cred.id,
+                    name=cred.name,
+                    type=cred.type.value if hasattr(cred.type, "value") else str(cred.type),
+                    description=cred.notes,
+                    template_private_fields=private_fields,
+                    template_prefilled_data=prefilled,
+                )
+            )
+        return summaries

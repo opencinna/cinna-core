@@ -16,6 +16,7 @@ The publisher's working install row is filtered out — publishers should not
 import logging
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from sqlmodel import Session, select
 from sqlalchemy import func
@@ -269,6 +270,7 @@ class CatalogService:
             publisher_summary: InstallContextPublisherSummary | None = None
             suggested_id: uuid.UUID | None = None
             suggested_name: str | None = None
+            template_private_fields: list[str] = []
 
             if provided_by == "publisher" and publisher_credential_id_raw:
                 # Try to resolve the publisher's row for the {name, type}
@@ -289,6 +291,12 @@ class CatalogService:
                             name=pub_cred.name,
                             type=cred_type_value,
                         )
+            elif provided_by == "template":
+                raw_private = spec.get("template_private_fields") or []
+                if isinstance(raw_private, list):
+                    template_private_fields = [
+                        f for f in raw_private if isinstance(f, str)
+                    ]
             else:
                 # PBU spec — auto-prefill matcher.
                 match = CredentialsService.find_match_for_spec(
@@ -301,17 +309,24 @@ class CatalogService:
                     suggested_id = match.id
                     suggested_name = match.name
 
+            normalised_provided_by: Literal["user", "publisher", "template"]
+            if provided_by == "publisher":
+                normalised_provided_by = "publisher"
+            elif provided_by == "template":
+                normalised_provided_by = "template"
+            else:
+                normalised_provided_by = "user"
+
             service_specs.append(
                 InstallContextSpec(
                     name=name,
                     type=type_str,
                     description=description,
-                    provided_by=(
-                        "publisher" if provided_by == "publisher" else "user"
-                    ),
+                    provided_by=normalised_provided_by,
                     publisher_summary=publisher_summary,
                     suggested_credential_id=suggested_id,
                     suggested_credential_name=suggested_name,
+                    template_private_fields=template_private_fields,
                 )
             )
 

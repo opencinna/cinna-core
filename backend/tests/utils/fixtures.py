@@ -119,6 +119,29 @@ def patched_background_tasks(targets=None):
 
 
 @contextmanager
+def patched_storage_dirs(tmp_path_factory):
+    """Redirect bundle + app-data storage roots to a tmp tree.
+
+    Without this, ``PublishService.publish`` and
+    ``AppDataService.get_or_create_volume`` create real directories under
+    ``settings.BUNDLE_STORAGE_DIR`` and ``settings.APP_DATA_STORAGE_DIR``.
+    The latter is bind-mounted from the host (``backend/data/agents/app-data/``),
+    so every test run leaves a per-(user, bundle) folder there.
+    """
+    tmp = tmp_path_factory.mktemp("storage")
+    app_data = tmp / "app-data"
+    bundles = tmp / "bundles"
+    app_data.mkdir()
+    bundles.mkdir()
+    with (
+        patch.object(settings, "APP_DATA_STORAGE_DIR", str(app_data)),
+        patch.object(settings, "BUNDLE_STORAGE_DIR", str(bundles)),
+        patch.object(settings, "HOST_APP_DATA_DIR", None),
+    ):
+        yield
+
+
+@contextmanager
 def patched_external_services(
     mock_ai_functions=False,
     mock_a2a_skills=False,

@@ -1193,11 +1193,15 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         credential_data = credential_in.credential_data if credential_in.credential_data is not None else {}
         encrypted_data = encrypt_field(json.dumps(credential_data))
 
+        template_private_fields = list(credential_in.template_private_fields or [])
+
         db_credential = Credential(
             name=credential_in.name,
             type=credential_in.type,
             notes=credential_in.notes,
             allow_sharing=credential_in.allow_sharing,
+            allow_template_sharing=credential_in.allow_template_sharing,
+            template_private_fields=template_private_fields,
             encrypted_data=encrypted_data,
             owner_id=owner_id,
             user_workspace_id=credential_in.user_workspace_id,
@@ -1244,19 +1248,32 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
 
         # Update credential
         update_dict = credential_in.model_dump(exclude_unset=True)
+        if "template_private_fields" in update_dict:
+            raw_fields = update_dict.pop("template_private_fields") or []
+            if not isinstance(raw_fields, list) or not all(
+                isinstance(f, str) for f in raw_fields
+            ):
+                raise ValueError("template_private_fields must be a list of strings")
+            credential.template_private_fields = list(raw_fields)
         if "credential_data" in update_dict:
             data_payload = update_dict["credential_data"] or {}
             encrypted_data = encrypt_field(json.dumps(data_payload))
             update_dict.pop("credential_data")
             credential.encrypted_data = encrypted_data
             # Phase 4 install setup gate: a placeholder Credential becomes
-            # "real" the moment a user supplies non-empty data through the
-            # setup-credentials path. Flipping ``is_placeholder=False`` here
-            # is the single signal the gate uses to mark the install ready.
-            if credential.is_placeholder and isinstance(data_payload, dict) and any(
-                v not in (None, "", [], {}) for v in data_payload.values()
-            ):
-                credential.is_placeholder = False
+            # "real" the moment the saved data passes the per-type
+            # completeness check. ``check_credential_completeness`` honours
+            # the same required-field map the rest of the platform uses, so
+            # template-materialised credentials (where the publisher's
+            # non-private fields are pre-filled) only flip out of placeholder
+            # mode once the installer supplies the missing private fields.
+            if credential.is_placeholder and isinstance(data_payload, dict):
+                completeness = CredentialsService.check_credential_completeness(
+                    credential_type=credential.type.value,
+                    credential_data=data_payload,
+                )
+                if completeness == "complete":
+                    credential.is_placeholder = False
         credential.sqlmodel_update(update_dict)
         session.add(credential)
         session.commit()
@@ -1357,6 +1374,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             "type": credential.type,
             "notes": credential.notes,
             "allow_sharing": credential.allow_sharing,
+            "allow_template_sharing": credential.allow_template_sharing,
+            "template_private_fields": list(credential.template_private_fields or []),
             "owner_id": credential.owner_id,
             "user_workspace_id": credential.user_workspace_id,
             "credential_data": credential_data
@@ -1836,3 +1855,66 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 )
 
         return credentials_refreshed
+
+    @staticmethod
+    def list_bundle_usages(
+        session: Session,
+        *,
+        credential_id: uuid.UUID,
+        requester_id: uuid.UUID,
+    ) -> list:
+        """List bundles whose publisher install has this credential linked.
+
+        Owner-only: raises ``ValueError`` with ``"Credential not found"``
+        when the credential does not exist OR the requester is not the
+        owner. The route maps that to HTTP 404 (we don't differentiate
+        not-found from not-owned to avoid leaking credential existence).
+
+        ``provided_by`` on each entry is resolved via
+        ``PublishService.resolve_provided_by`` so the result matches what
+        the publish-time spec collector would emit for the same bundle.
+        """
+        from app.models import (
+            Agent,
+            CredentialBundleUsage,
+        )
+        from app.models.bundles.agent_bundle import AgentBundle
+        from app.services.bundles.publish_service import PublishService
+
+        credential = session.get(Credential, credential_id)
+        if not credential or credential.owner_id != requester_id:
+            raise ValueError("Credential not found")
+
+        stmt = (
+            select(AgentBundle, Agent)
+            .join(
+                Agent,
+                (Agent.bundle_uuid == AgentBundle.id)
+                & (Agent.is_publisher_install == True),  # noqa: E712
+            )
+            .join(
+                AgentCredentialLink,
+                AgentCredentialLink.agent_id == Agent.id,
+            )
+            .where(AgentCredentialLink.credential_id == credential_id)
+        )
+        rows = session.exec(stmt).all()
+
+        seen: set[uuid.UUID] = set()
+        usages: list[CredentialBundleUsage] = []
+        for bundle, publisher_install in rows:
+            if bundle.id in seen:
+                continue
+            seen.add(bundle.id)
+            usages.append(
+                CredentialBundleUsage(
+                    bundle_uuid=bundle.id,
+                    bundle_id=bundle.bundle_id,
+                    display_name=bundle.display_name,
+                    publisher_install_id=publisher_install.id,
+                    provided_by=PublishService.resolve_provided_by(
+                        credential, publisher_install
+                    ),
+                )
+            )
+        return usages

@@ -62,12 +62,30 @@ def _create_agent_with_shared_adapter(
 
 def _create_second_user_with_headers(
     client: TestClient,
+    superuser_token_headers: dict[str, str],
 ) -> tuple[dict, dict[str, str]]:
-    """Create a random user, seed their default AI credential, return (user, headers)."""
+    """Create a random user, promote to ``agent-developer`` (so they can create
+    agents), seed their default AI credential, return (user, headers).
+
+    ``POST /agents/`` is gated on the developer role since the Phase-3 RBAC
+    rollout, so the test recipient — who creates an agent to install the
+    shared credential against — has to be promoted before the agent step.
+    """
     user = create_random_user(client)
     headers = user_authentication_headers(
         client=client, email=user["email"], password=user["_password"]
     )
+
+    # Promote to agent-developer so the recipient can create an Agent row.
+    promote_resp = client.patch(
+        f"{settings.API_V1_STR}/users/{user['id']}/role",
+        headers=superuser_token_headers,
+        json={"role": "agent-developer"},
+    )
+    assert promote_resp.status_code == 200, (
+        f"Failed to promote recipient to agent-developer: {promote_resp.text}"
+    )
+
     # Every user needs a default AI credential before they can create an agent.
     create_random_ai_credential(
         client, headers,
@@ -329,7 +347,9 @@ def test_ssh_key_sharing_and_revocation(
     assert expected_private_key
 
     # ── Phase 2: Owner shares with recipient ─────────────────────────
-    recipient, recipient_headers = _create_second_user_with_headers(client)
+    recipient, recipient_headers = _create_second_user_with_headers(
+        client, superuser_token_headers
+    )
 
     share_resp = client.post(
         f"{settings.API_V1_STR}/credentials/{cred_id}/shares",

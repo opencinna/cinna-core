@@ -1,7 +1,8 @@
-"""Phase 4 — install-experience-redesign tests.
+"""Install readiness gate and setup endpoint tests for agent bundles.
 
-Covers the pre-LLM gate, setup endpoints, chat short-circuit, and MCP
-short-circuit introduced in Phase 4 of the install-experience-redesign plan.
+Covers the pre-LLM gate (InstallReadinessGate), setup endpoints
+(setup-status, setup-credentials), and the chat/MCP short-circuit behaviour
+for installs that are not yet ready.
 
 Scenarios:
   A. Gate check — ready when no missing (fully-filled, owner-installed credential).
@@ -76,7 +77,7 @@ def _make_user_and_headers(client: TestClient) -> tuple[dict, dict[str, str]]:
 def _create_credential(
     client: TestClient,
     headers: dict[str, str],
-    name: str = "p4-cred",
+    name: str = "ir-cred",
     allow_sharing: bool = False,
 ) -> dict:
     """Create a service credential (api_token type) via the credentials API."""
@@ -86,10 +87,10 @@ def _create_credential(
         json={
             "name": name,
             "type": "api_token",
-            "notes": "Phase 4 test credential",
+            "notes": "Install readiness test credential",
             "allow_sharing": allow_sharing,
             "credential_data": {
-                "api_token": "test-token-p4",
+                "api_token": "test-token-ir",
                 "api_token_type": "bearer",
             },
         },
@@ -185,9 +186,9 @@ def _setup_pbu_install(
     Returns (install, installer_user, installer_headers).
     """
     # Publisher side
-    publisher_agent = create_agent_via_api(client, superuser_token_headers, name="P4-PBU-Publisher")
+    publisher_agent = create_agent_via_api(client, superuser_token_headers, name="IR-PBU-Publisher")
     cred = _create_credential(
-        client, superuser_token_headers, name="p4-pbu-cred", allow_sharing=False
+        client, superuser_token_headers, name="ir-pbu-cred", allow_sharing=False
     )
     _link_credential_to_agent(client, superuser_token_headers, publisher_agent["id"], cred["id"])
     fresh_pub = _publish(client, superuser_token_headers, publisher_agent["id"])
@@ -209,9 +210,9 @@ def _setup_pbp_install(
 
     Returns (install, installer_user, installer_headers, publisher_cred).
     """
-    publisher_agent = create_agent_via_api(client, superuser_token_headers, name="P4-PBP-Publisher")
+    publisher_agent = create_agent_via_api(client, superuser_token_headers, name="IR-PBP-Publisher")
     shared_cred = _create_credential(
-        client, superuser_token_headers, name="p4-pbp-cred", allow_sharing=True
+        client, superuser_token_headers, name="ir-pbp-cred", allow_sharing=True
     )
     _link_credential_to_agent(
         client, superuser_token_headers, publisher_agent["id"], shared_cred["id"]
@@ -236,10 +237,10 @@ def test_gate_ready_when_no_missing(
     """A. Fully-filled credential owned by installer → gate says ready."""
     # Superuser installs their own agent (publisher = installer).
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="P4-A-Publisher"
+        client, superuser_token_headers, name="IR-A-Publisher"
     )
     cred = _create_credential(
-        client, superuser_token_headers, name="p4-a-cred", allow_sharing=False
+        client, superuser_token_headers, name="ir-a-cred", allow_sharing=False
     )
     _link_credential_to_agent(
         client, superuser_token_headers, publisher_agent["id"], cred["id"]
@@ -455,7 +456,7 @@ def test_gate_publisher_broken_when_ai_share_deleted(
 ) -> None:
     """F. AICredentialShare row deleted post-install → publisher_broken, publisher_credential_unshared, is_ai=True."""
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="P4-F-Publisher"
+        client, superuser_token_headers, name="IR-F-Publisher"
     )
     ai_cred_data = create_random_ai_credential(
         client, superuser_token_headers, set_default=True
@@ -528,7 +529,7 @@ def test_gate_ready_when_publisher_installs_own_bundle(
 ) -> None:
     """G. Publisher == installer; AI credential owned by them → no share needed → ready."""
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="P4-G-Publisher"
+        client, superuser_token_headers, name="IR-G-Publisher"
     )
     ai_cred_data = create_random_ai_credential(
         client, superuser_token_headers, set_default=True
@@ -738,10 +739,10 @@ def test_put_setup_credential_rejected_for_non_placeholder(
     """L. PUT against an already-filled credential returns 4xx."""
     # Create a fresh non-placeholder credential and link it to the superuser's agent.
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="P4-L-Agent"
+        client, superuser_token_headers, name="IR-L-Agent"
     )
     real_cred = _create_credential(
-        client, superuser_token_headers, name="p4-l-real-cred", allow_sharing=False
+        client, superuser_token_headers, name="ir-l-real-cred", allow_sharing=False
     )
     _link_credential_to_agent(
         client, superuser_token_headers, publisher_agent["id"], real_cred["id"]
@@ -843,7 +844,7 @@ def test_mcp_short_circuit_returns_gate_shape_without_llm(
     r = client.post(
         f"{API}/agents/{install_id}/mcp-connectors",
         headers=installer_headers,
-        json={"name": "p4-n-connector"},
+        json={"name": "ir-n-connector"},
     )
     assert r.status_code in (200, 201), f"Failed to create MCP connector: {r.text}"
     connector_id = uuid.UUID(r.json()["id"])

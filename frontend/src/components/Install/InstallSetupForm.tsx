@@ -50,6 +50,13 @@ function initialChoiceForSpec(
   if (spec.provided_by === "publisher") {
     return { mode: "publisher_provides" }
   }
+  // Template specs: the backend materialises a fresh placeholder
+  // credential pre-filled with the publisher's defaults. We send
+  // "skip" so the install service falls into the template branch
+  // (it short-circuits before user_selection is consulted).
+  if (spec.provided_by === "template") {
+    return { mode: "skip" }
+  }
   if (spec.suggested_credential_id) {
     return { mode: "use_suggested" }
   }

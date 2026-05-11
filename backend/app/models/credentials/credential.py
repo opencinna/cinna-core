@@ -3,6 +3,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, List, Optional
 from sqlmodel import Field, Relationship, SQLModel, Column, Text
 from sqlalchemy import Index, ForeignKeyConstraint, text
+from sqlalchemy.dialects.postgresql import JSON as PG_JSON
 
 from app.models.users.user import User
 from app.models.credentials.link_models import AgentCredentialLink
@@ -33,6 +34,7 @@ class CredentialBase(SQLModel):
     type: CredentialType
     notes: str | None = Field(default=None)
     allow_sharing: bool = Field(default=False)  # Whether this credential can be shared with other users
+    allow_template_sharing: bool = Field(default=False)  # Whether this credential can be shared as a template (non-private fields are copied as defaults; the installer must supply the private ones)
 
 
 # Type-specific credential data models (for validation)
@@ -111,6 +113,7 @@ class CredentialCreate(CredentialBase):
     # Optional to allow creating credentials with just name and type, then filling details later
     credential_data: dict | None = None
     user_workspace_id: uuid.UUID | None = None
+    template_private_fields: list[str] | None = None
 
 
 # Properties to receive on credential update
@@ -119,6 +122,8 @@ class CredentialUpdate(SQLModel):
     notes: str | None = None
     credential_data: dict | None = None
     allow_sharing: bool | None = None  # Update sharing permission
+    allow_template_sharing: bool | None = None  # Toggle template-sharing
+    template_private_fields: list[str] | None = None  # Fields the installer must supply when installing a bundle that uses this credential as a template
 
 
 # Database model
@@ -154,6 +159,15 @@ class Credential(CredentialBase, table=True):
         default=None, foreign_key="user_workspace.id", ondelete="SET NULL"
     )
 
+    # Names of credential_data fields that are private when this credential is
+    # shared as a template. Stored as a JSON array of strings (empty means
+    # "no fields are private", which is rare — a template that copies every
+    # field is functionally a full share).
+    template_private_fields: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(PG_JSON, nullable=False, server_default="[]"),
+    )
+
     # Placeholder fields (for clones when original credential is not shareable)
     is_placeholder: bool = Field(default=False)
     placeholder_source_id: uuid.UUID | None = Field(default=None)  # FK in __table_args__
@@ -177,6 +191,7 @@ class CredentialPublic(CredentialBase):
     share_count: int = 0  # Number of users this credential is shared with
     is_shared: bool = False  # True if this credential is shared with the user (not owned)
     owner_email: str | None = None  # Email of the owner (only set for shared credentials)
+    template_private_fields: list[str] = []
     # Placeholder fields for clones
     is_placeholder: bool = False
     placeholder_source_id: uuid.UUID | None = None
@@ -190,4 +205,30 @@ class CredentialWithData(CredentialPublic):
 
 class CredentialsPublic(SQLModel):
     data: list[CredentialPublic]
+    count: int
+
+
+class CredentialBundleUsage(SQLModel):
+    """One bundle that uses this credential.
+
+    ``publisher_install_id`` is the publisher install's ``Agent.id`` —
+    the frontend uses it to deep-link into the agent's Bundle tab where
+    bundle settings live (the platform doesn't expose a standalone
+    ``/bundles/{uuid}`` route).
+
+    ``provided_by`` is the resolved provisioning mode for this credential
+    in the bundle (``"user"`` | ``"publisher"`` | ``"template"``),
+    computed via ``PublishService.resolve_provided_by``. The frontend
+    uses it to split usages between the Sharing and Share-as-Template
+    cards.
+    """
+    bundle_uuid: uuid.UUID
+    bundle_id: str
+    display_name: str
+    publisher_install_id: uuid.UUID | None = None
+    provided_by: str  # "user" | "publisher" | "template"
+
+
+class CredentialBundleUsages(SQLModel):
+    data: list[CredentialBundleUsage]
     count: int

@@ -49,6 +49,7 @@ import {
   SSHKeyEditView,
 } from "@/components/Credentials/CredentialForms"
 import { CredentialSharing } from "@/components/Credentials/CredentialSharing"
+import { CredentialTemplateSharing } from "@/components/Credentials/CredentialTemplateSharing"
 
 const formSchema = z.object({
   name: z.string().min(1, { message: "Name is required" }),
@@ -248,7 +249,10 @@ function OwnedCredentialView({
           </CardContent>
         </Card>
 
-        <CredentialSharing credential={credential} />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <CredentialSharing credential={credential} />
+          <CredentialTemplateSharing credential={credential} />
+        </div>
       </div>
     )
   }
@@ -396,7 +400,10 @@ function OwnedCredentialView({
       )}
 
       {/* Sharing Section - Only for owned credentials */}
-      <CredentialSharing credential={credential} />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <CredentialSharing credential={credential} />
+        <CredentialTemplateSharing credential={credential} />
+      </div>
     </div>
   )
 }

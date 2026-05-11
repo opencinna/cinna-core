@@ -201,21 +201,43 @@ def edit_bundle_id(
 class _CredentialOverride(BaseModel):
     """Per-spec ``provided_by`` choice persisted on the publisher install."""
 
-    provided_by: str  # "user" | "publisher"
+    provided_by: str  # "user" | "publisher" | "template"
+
+
+class _AICredentialDraft(BaseModel):
+    """Pre-publish draft of the bundle's publisher AI credentials.
+
+    Stored on the publisher install while the ``AgentBundle`` row does
+    not yet exist (i.e. the agent has never been published). At first
+    publish, ``PublishService`` copies these UUIDs onto the new bundle
+    row and they become the source of truth via the FK columns. After
+    that, the picker writes directly to ``AgentBundle`` via
+    ``PATCH /bundles/{uuid}`` and these draft fields stop being read.
+    ``null`` explicitly means "no publisher-provided AI for this mode";
+    omitting the field on update leaves the existing draft unchanged.
+    """
+
+    conversation_credential_id: uuid.UUID | None = None
+    building_credential_id: uuid.UUID | None = None
 
 
 class PublishSettingsUpdate(BaseModel):
     """Body of ``PATCH /agents/{agent_id}/publish-settings``.
 
     Only the publisher install (``is_publisher_install=True``) can hold
-    publish settings. The route validates that:
+    publish settings. Fields are partial — omitting a top-level key
+    preserves the existing value; sending it (even as empty) replaces it.
 
-    - Each entry references the **name** of a credential currently linked
-      to the install (so the override never points at a stale spec).
-    - Each ``provided_by`` value is ``"user"`` or ``"publisher"``.
+    - ``credential_overrides``: per-spec ``provided_by`` map. Keys must
+      match the names of credentials currently linked to the install;
+      values must use ``"user"``, ``"publisher"``, or ``"template"``.
+    - ``ai_credentials``: pre-publish AI credential draft (see
+      ``_AICredentialDraft``). Each id, when non-null, must reference an
+      ``AICredential`` owned by the publisher.
     """
 
-    credential_overrides: dict[str, _CredentialOverride] = {}
+    credential_overrides: dict[str, _CredentialOverride] | None = None
+    ai_credentials: _AICredentialDraft | None = None
 
 
 @router.patch(
@@ -229,74 +251,35 @@ def update_publish_settings(
     session: SessionDep,
     current_user: CurrentUser,
 ) -> AgentPublic:
-    """Persist the publisher override map for credential provisioning.
+    """Persist the publisher overrides for credential / AI provisioning.
 
-    Phase 5 of the install-experience-redesign plan: lets the publisher
-    explicitly mark each linked credential as user-provided or
-    publisher-provided. The publish-time spec collector reads this map
-    before falling back to inference from ``Credential.allow_sharing``.
+    Lets the publisher explicitly mark each linked credential as
+    ``user``, ``publisher``, or ``template``-provided, and ship a
+    pre-publish AI credential draft. The publish-time spec collector
+    reads this map before falling back to inference from
+    ``Credential.allow_sharing`` / ``allow_template_sharing``.
 
-    Validation:
-      - The install must be the publisher install (``is_publisher_install=True``).
-        Foreign installs have no publish-settings concept.
-      - Override keys must match the **names** of credentials currently
-        linked to the install — keeps the map honest if the publisher
-        unlinked a credential.
-      - ``provided_by`` must be ``"user"`` or ``"publisher"``.
-
-    On success the override map replaces the existing one wholesale —
-    omitting an entry returns that spec to inference behaviour.
+    Both top-level fields are partial: omitting one preserves it,
+    sending it (even as empty) replaces it.
     """
     install = _resolve_install_owned(session, agent_id, current_user)
-    if not install.is_publisher_install:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Publish settings can only be edited on the publisher install."
+    try:
+        install = InstallService.update_publish_settings(
+            session=session,
+            install=install,
+            credential_overrides=(
+                {k: v.model_dump() for k, v in request.credential_overrides.items()}
+                if request.credential_overrides is not None
+                else None
+            ),
+            ai_credentials=(
+                request.ai_credentials.model_dump()
+                if request.ai_credentials is not None
+                else None
             ),
         )
-
-    # Resolve linked credential names — case-sensitive match the publish
-    # collector uses.
-    linked_names: set[str] = set()
-    rows = session.exec(
-        select(Credential)
-        .join(
-            AgentCredentialLink,
-            AgentCredentialLink.credential_id == Credential.id,
-        )
-        .where(AgentCredentialLink.agent_id == install.id)
-    ).all()
-    for cred in rows:
-        if cred.name:
-            linked_names.add(cred.name)
-
-    cleaned: dict[str, dict] = {}
-    for spec_name, override in request.credential_overrides.items():
-        if spec_name not in linked_names:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Override targets unknown spec '{spec_name}' — only "
-                    "credentials currently linked to this install can be "
-                    "overridden."
-                ),
-            )
-        if override.provided_by not in ("user", "publisher"):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Invalid provided_by '{override.provided_by}' for spec "
-                    f"'{spec_name}': must be 'user' or 'publisher'."
-                ),
-            )
-        cleaned[spec_name] = {"provided_by": override.provided_by}
-
-    install.publish_settings = {"credential_overrides": cleaned}
-    session.add(install)
-    session.commit()
-    session.refresh(install)
-
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return AgentService.to_public_with_clone_info(session, install)
 
 
@@ -354,29 +337,7 @@ def list_setup_credentials(
     ``setup-status`` as ``publisher_credential_*`` items instead.
     """
     install = _resolve_install_owned(session, agent_id, current_user)
-
-    rows = session.exec(
-        select(Credential)
-        .join(
-            AgentCredentialLink,
-            AgentCredentialLink.credential_id == Credential.id,
-        )
-        .where(
-            AgentCredentialLink.agent_id == install.id,
-            Credential.owner_id == install.owner_id,
-            Credential.is_placeholder == True,  # noqa: E712
-        )
-    ).all()
-
-    return [
-        SetupCredentialSummary(
-            id=cred.id,
-            name=cred.name,
-            type=cred.type.value if hasattr(cred.type, "value") else str(cred.type),
-            description=cred.notes,
-        )
-        for cred in rows
-    ]
+    return InstallService.list_setup_credentials(session=session, install=install)
 
 
 @router.put(
@@ -482,6 +443,8 @@ async def update_setup_credential(
         type=updated.type,
         notes=updated.notes,
         allow_sharing=updated.allow_sharing,
+        allow_template_sharing=updated.allow_template_sharing,
+        template_private_fields=list(updated.template_private_fields or []),
         owner_id=updated.owner_id,
         user_workspace_id=updated.user_workspace_id,
         share_count=0,

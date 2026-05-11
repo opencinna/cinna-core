@@ -1,6 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Share2, Trash2, Users, AlertTriangle } from "lucide-react"
+import { Link } from "@tanstack/react-router"
+import { Box, Share2, Trash2, Users, AlertTriangle } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
@@ -33,8 +34,6 @@ import {
   FormMessage,
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
-import { Switch } from "@/components/ui/switch"
-import { Label } from "@/components/ui/label"
 import { LoadingButton } from "@/components/ui/loading-button"
 import {
   Alert,
@@ -145,6 +144,15 @@ export function CredentialSharing({ credential }: CredentialSharingProps) {
     enabled: allowSharing,
   })
 
+  // Bundles whose publisher install has this credential linked. Shown
+  // on the sharing card so the owner can see at a glance where their
+  // credential is in use across the bundles they publish.
+  const { data: bundleUsages } = useQuery({
+    queryKey: ["credential-bundle-usages", credential.id],
+    queryFn: () =>
+      CredentialsService.listCredentialBundleUsages({ id: credential.id }),
+  })
+
   const shareForm = useForm<ShareFormData>({
     resolver: zodResolver(shareSchema),
     defaultValues: {
@@ -209,34 +217,42 @@ export function CredentialSharing({ credential }: CredentialSharingProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Share2 className="h-5 w-5" />
-          Sharing
-        </CardTitle>
-        <CardDescription>
-          Share this credential with other users to allow them to use it in their agents.
-        </CardDescription>
+        <div className="flex items-start justify-between">
+          <div className="space-y-1.5">
+            <CardTitle className="flex items-center gap-2">
+              <Share2 className="h-5 w-5" />
+              Sharing
+            </CardTitle>
+            <CardDescription>
+              {allowSharing
+                ? "Share this credential with other users to allow them to use it in their agents."
+                : "Enable to share this credential with other users."}
+            </CardDescription>
+          </div>
+          <label className="flex cursor-pointer select-none items-center ml-4 mt-1">
+            <div className="relative">
+              <input
+                type="checkbox"
+                checked={allowSharing}
+                onChange={(e) => handleToggleSharing(e.target.checked)}
+                disabled={toggleSharingMutation.isPending}
+                className="sr-only"
+              />
+              <div
+                className={`block h-6 w-11 rounded-full transition-colors ${
+                  allowSharing ? "bg-emerald-500" : "bg-gray-300 dark:bg-gray-600"
+                }`}
+              />
+              <div
+                className={`dot absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
+                  allowSharing ? "translate-x-5" : ""
+                }`}
+              />
+            </div>
+          </label>
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Sharing Toggle */}
-        <div className="flex items-center justify-between p-4 rounded-lg border">
-          <div className="space-y-0.5">
-            <Label htmlFor="allow-sharing" className="text-base">
-              Allow Sharing
-            </Label>
-            <div className="text-sm text-muted-foreground">
-              Enable to share this credential with other users
-            </div>
-          </div>
-          <Switch
-            id="allow-sharing"
-            checked={allowSharing}
-            onCheckedChange={handleToggleSharing}
-            disabled={toggleSharingMutation.isPending}
-          />
-        </div>
-
-        {/* Shares List (only when sharing is enabled) */}
         {allowSharing && (
           <>
             <div className="flex items-center justify-between">
@@ -306,6 +322,55 @@ export function CredentialSharing({ credential }: CredentialSharingProps) {
             />
           </>
         )}
+
+        {(() => {
+          const sharedUsages = (bundleUsages?.data ?? []).filter(
+            (u) => u.provided_by === "publisher",
+          )
+          if (sharedUsages.length === 0) return null
+          return (
+            <div className="space-y-2 pt-2">
+              <h4 className="text-sm font-medium">Used in Bundles</h4>
+              <p className="text-xs text-muted-foreground">
+                Bundles that ship this credential as a fully shared
+                publisher credential.
+              </p>
+              <ul className="space-y-1.5">
+                {sharedUsages.map((usage) => (
+                  <li
+                    key={usage.bundle_uuid}
+                    className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Box className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium truncate">
+                          {usage.display_name}
+                        </div>
+                        <div className="text-xs text-muted-foreground truncate font-mono">
+                          {usage.bundle_id}
+                        </div>
+                      </div>
+                    </div>
+                    {usage.publisher_install_id && (
+                      <Button asChild variant="outline" size="sm">
+                        <Link
+                          to="/agent/$agentId"
+                          params={{
+                            agentId: usage.publisher_install_id,
+                          }}
+                          hash="bundle"
+                        >
+                          Open
+                        </Link>
+                      </Button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )
+        })()}
 
         {/* Disable Sharing Confirmation Dialog */}
         <Dialog open={isDisableDialogOpen} onOpenChange={setIsDisableDialogOpen}>

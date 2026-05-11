@@ -10,6 +10,7 @@ from app.api.deps import CurrentUser, SessionDep
 from app.models.credentials.credential import CredentialType
 from app.models import (
     Credential,
+    CredentialBundleUsages,
     CredentialCreate,
     CredentialPublic,
     CredentialsPublic,
@@ -65,6 +66,8 @@ def _credential_to_public(
         type=credential.type,
         notes=credential.notes,
         allow_sharing=credential.allow_sharing,
+        allow_template_sharing=credential.allow_template_sharing,
+        template_private_fields=list(credential.template_private_fields or []),
         owner_id=credential.owner_id,
         user_workspace_id=credential.user_workspace_id,
         share_count=share_count,
@@ -306,6 +309,30 @@ async def delete_credential(
         # Service raises ValueError for not found or permission errors
         status_code = 404 if "not found" in str(e).lower() else 400
         raise HTTPException(status_code=status_code, detail=str(e))
+
+
+@router.get("/{id}/bundles", response_model=CredentialBundleUsages)
+def list_credential_bundle_usages(
+    session: SessionDep, current_user: CurrentUser, id: uuid.UUID
+) -> Any:
+    """List bundles whose publisher install has this credential linked.
+
+    Surfaced on the credential detail page so the owner can see at a
+    glance which of their bundles ship this credential (PBP / PBT / PBU
+    spec — all three modes start by linking the credential to the
+    publisher install). Each entry exposes the publisher install id so
+    the frontend can deep-link into the agent's Bundle tab.
+
+    Returns 404 when the credential does not exist or the requester does
+    not own it.
+    """
+    try:
+        usages = CredentialsService.list_bundle_usages(
+            session=session, credential_id=id, requester_id=current_user.id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return CredentialBundleUsages(data=usages, count=len(usages))
 
 
 @router.post("/verify/odoo", response_model=OdooVerifyResponse)

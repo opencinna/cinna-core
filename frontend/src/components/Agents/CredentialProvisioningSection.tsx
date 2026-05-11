@@ -62,7 +62,7 @@ interface CredentialProvisioningSectionProps {
   bundle: AgentBundlePublic | undefined
 }
 
-type ProvidedBy = "user" | "publisher"
+type ProvidedBy = "user" | "publisher" | "template"
 
 export function CredentialProvisioningSection({
   agent,
@@ -124,21 +124,61 @@ export function CredentialProvisioningSection({
         | undefined)?.credential_overrides ?? {}
     const out: Record<string, ProvidedBy> = {}
     for (const [name, entry] of Object.entries(raw)) {
-      if (entry?.provided_by === "user" || entry?.provided_by === "publisher") {
+      if (
+        entry?.provided_by === "user" ||
+        entry?.provided_by === "publisher" ||
+        entry?.provided_by === "template"
+      ) {
         out[name] = entry.provided_by
       }
     }
     return out
   }, [agent.publish_settings])
 
-  const inferredFor = (cred: { allow_sharing?: boolean }): ProvidedBy =>
-    cred.allow_sharing ? "publisher" : "user"
+  const inferredFor = (cred: {
+    allow_sharing?: boolean
+    allow_template_sharing?: boolean
+  }): ProvidedBy => {
+    if (cred.allow_sharing) return "publisher"
+    if (cred.allow_template_sharing) return "template"
+    return "user"
+  }
 
   const valueFor = (cred: {
     name: string
     allow_sharing?: boolean
+    allow_template_sharing?: boolean
   }): ProvidedBy =>
     serverOverrides[cred.name] ?? inferredFor(cred)
+
+  // Pre-publish AI credential draft — stored on the publisher install's
+  // ``publish_settings.ai_credentials`` until the bundle row exists. After
+  // first publish the bundle FK columns are the source of truth.
+  const draftAiCredentials = useMemo<{
+    conversation_credential_id: string | null
+    building_credential_id: string | null
+  }>(() => {
+    const raw =
+      (agent.publish_settings as
+        | {
+            ai_credentials?: {
+              conversation_credential_id?: string | null
+              building_credential_id?: string | null
+            }
+          }
+        | undefined)?.ai_credentials ?? {}
+    return {
+      conversation_credential_id: raw.conversation_credential_id ?? null,
+      building_credential_id: raw.building_credential_id ?? null,
+    }
+  }, [agent.publish_settings])
+
+  const conversationAiId = bundle
+    ? bundle.publisher_ai_credential_conversation_id ?? null
+    : draftAiCredentials.conversation_credential_id
+  const buildingAiId = bundle
+    ? bundle.publisher_ai_credential_building_id ?? null
+    : draftAiCredentials.building_credential_id
 
   // ── Mutations ───────────────────────────────────────────────────────
 
@@ -165,6 +205,7 @@ export function CredentialProvisioningSection({
     },
   })
 
+  // Post-publish: write directly to the bundle FK columns.
   const updateBundleAiMutation = useMutation({
     mutationFn: (patch: {
       publisher_ai_credential_conversation_id?: string | null
@@ -187,6 +228,25 @@ export function CredentialProvisioningSection({
     },
   })
 
+  // Pre-publish: persist on the publisher install's publish_settings draft.
+  const updateDraftAiMutation = useMutation({
+    mutationFn: (next: {
+      conversation_credential_id: string | null
+      building_credential_id: string | null
+    }) =>
+      InstallsService.updatePublishSettings({
+        agentId: agent.id,
+        requestBody: { ai_credentials: next },
+      }),
+    onSuccess: () => {
+      showSuccessToast("AI credential saved (will apply on first publish)")
+      queryClient.invalidateQueries({ queryKey: ["agent", agent.id] })
+    },
+    onError: (e: any) => {
+      showErrorToast(e?.body?.detail || "Failed to save AI credentials")
+    },
+  })
+
   const handleOverrideChange = (credName: string, providedBy: ProvidedBy) => {
     const next: Record<string, ProvidedBy> = {
       ...serverOverrides,
@@ -199,12 +259,24 @@ export function CredentialProvisioningSection({
     mode: "conversation" | "building",
     credentialId: string | null,
   ) => {
-    if (!bundle) return
-    const key =
-      mode === "conversation"
-        ? "publisher_ai_credential_conversation_id"
-        : "publisher_ai_credential_building_id"
-    updateBundleAiMutation.mutate({ [key]: credentialId })
+    if (bundle) {
+      const key =
+        mode === "conversation"
+          ? "publisher_ai_credential_conversation_id"
+          : "publisher_ai_credential_building_id"
+      updateBundleAiMutation.mutate({ [key]: credentialId })
+      return
+    }
+    // Pre-publish: persist as a draft on the install's publish_settings.
+    // The publish flow transfers these onto the new bundle row at first
+    // publish time.
+    const next = {
+      conversation_credential_id: draftAiCredentials.conversation_credential_id,
+      building_credential_id: draftAiCredentials.building_credential_id,
+    }
+    if (mode === "conversation") next.conversation_credential_id = credentialId
+    else next.building_credential_id = credentialId
+    updateDraftAiMutation.mutate(next)
   }
 
   // ── Render ──────────────────────────────────────────────────────────
@@ -217,7 +289,7 @@ export function CredentialProvisioningSection({
         <CardTitle>Credential provisioning</CardTitle>
         <CardDescription>
           Decide which credentials you (the publisher) provide for foreign
-          installs and which the installer must supply themselves. These
+          installs and which the user must supply themselves. These
           choices are baked into the next published revision.
         </CardDescription>
       </CardHeader>
@@ -249,11 +321,11 @@ export function CredentialProvisioningSection({
                         {cred.name}
                       </Link>
                     </Badge>
-                    {!cred.allow_sharing && (
+                    {!cred.allow_sharing && !cred.allow_template_sharing && (
                       <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300">
                         <AlertTriangle className="h-3 w-3 shrink-0" />
-                        not shareable — enable sharing on the credential to
-                        allow "Embedded (shared)"
+                        not shareable — enable Sharing or Template Sharing
+                        on the credential to expose it to users
                       </span>
                     )}
                   </div>
@@ -276,6 +348,12 @@ export function CredentialProvisioningSection({
                     >
                       Embedded (shared)
                     </SelectItem>
+                    <SelectItem
+                      value="template"
+                      disabled={!cred.allow_template_sharing}
+                    >
+                      Template (defaults + private)
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -288,95 +366,100 @@ export function CredentialProvisioningSection({
           <Label className="text-sm font-medium">AI credentials</Label>
           <p className="text-xs text-muted-foreground">
             Pick an AI credential to share with foreign installs, or leave
-            "None — user provides" so the installer supplies their own. Only
+            "None — user provides" so the user supplies their own. Only
             credentials compatible with the mode's SDK are listed.
+            {!bundle && (
+              <>
+                {" "}
+                Selections are saved as a draft and applied to the bundle
+                on first publish.
+              </>
+            )}
           </p>
         </div>
-        {!bundle ? (
-          <p className="text-sm text-muted-foreground italic py-2">
-            Publish the bundle first to manage AI credential provisioning.
-          </p>
-        ) : (
-          <>
-            {/* Conversation mode */}
-            <div className="flex items-start justify-between gap-4 py-2">
-              <div className="min-w-0 flex items-start gap-2">
-                <MessageCircle className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
-                <div className="min-w-0">
-                  <Label className="text-sm font-medium">Conversation AI</Label>
-                  <p className="text-xs text-muted-foreground">
-                    SDK in use: {getEngineLabel(conversationEngine)}
-                  </p>
+        {(() => {
+          const aiPending =
+            updateBundleAiMutation.isPending || updateDraftAiMutation.isPending
+          return (
+            <>
+              {/* Conversation mode */}
+              <div className="flex items-start justify-between gap-4 py-2">
+                <div className="min-w-0 flex items-start gap-2">
+                  <MessageCircle className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <Label className="text-sm font-medium">
+                      Conversation AI
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      SDK in use: {getEngineLabel(conversationEngine)}
+                    </p>
+                  </div>
                 </div>
-              </div>
-              <Select
-                value={
-                  bundle.publisher_ai_credential_conversation_id ?? "__none__"
-                }
-                onValueChange={(val) =>
-                  handlePickAi(
-                    "conversation",
-                    val === "__none__" ? null : val,
-                  )
-                }
-                disabled={updateBundleAiMutation.isPending}
-              >
-                <SelectTrigger className="w-[260px] shrink-0">
-                  <SelectValue placeholder="Select an AI credential" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">
-                    None — user provides
-                  </SelectItem>
-                  {conversationOptions.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name} ({c.type})
+                <Select
+                  value={conversationAiId ?? "__none__"}
+                  onValueChange={(val) =>
+                    handlePickAi(
+                      "conversation",
+                      val === "__none__" ? null : val,
+                    )
+                  }
+                  disabled={aiPending}
+                >
+                  <SelectTrigger className="w-[260px] shrink-0">
+                    <SelectValue placeholder="Select an AI credential" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">
+                      None — user provides
                     </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+                    {conversationOptions.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name} ({c.type})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-            {/* Building mode */}
-            <div className="flex items-start justify-between gap-4 py-2">
-              <div className="min-w-0 flex items-start gap-2">
-                <Hammer className="h-4 w-4 text-orange-500 shrink-0 mt-0.5" />
-                <div className="min-w-0">
-                  <Label className="text-sm font-medium">Building AI</Label>
-                  <p className="text-xs text-muted-foreground">
-                    SDK in use: {getEngineLabel(buildingEngine)}
-                  </p>
+              {/* Building mode */}
+              <div className="flex items-start justify-between gap-4 py-2">
+                <div className="min-w-0 flex items-start gap-2">
+                  <Hammer className="h-4 w-4 text-orange-500 shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <Label className="text-sm font-medium">Building AI</Label>
+                    <p className="text-xs text-muted-foreground">
+                      SDK in use: {getEngineLabel(buildingEngine)}
+                    </p>
+                  </div>
                 </div>
-              </div>
-              <Select
-                value={
-                  bundle.publisher_ai_credential_building_id ?? "__none__"
-                }
-                onValueChange={(val) =>
-                  handlePickAi(
-                    "building",
-                    val === "__none__" ? null : val,
-                  )
-                }
-                disabled={updateBundleAiMutation.isPending}
-              >
-                <SelectTrigger className="w-[260px] shrink-0">
-                  <SelectValue placeholder="Select an AI credential" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">
-                    None — user provides
-                  </SelectItem>
-                  {buildingOptions.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name} ({c.type})
+                <Select
+                  value={buildingAiId ?? "__none__"}
+                  onValueChange={(val) =>
+                    handlePickAi(
+                      "building",
+                      val === "__none__" ? null : val,
+                    )
+                  }
+                  disabled={aiPending}
+                >
+                  <SelectTrigger className="w-[260px] shrink-0">
+                    <SelectValue placeholder="Select an AI credential" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">
+                      None — user provides
                     </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </>
-        )}
+                    {buildingOptions.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name} ({c.type})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          )
+        })()}
       </CardContent>
     </Card>
   )

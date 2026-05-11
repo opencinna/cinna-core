@@ -1,8 +1,9 @@
-"""Phase 3 — install-experience-redesign tests.
+"""Install context and install payload tests for agent bundles.
 
-Covers the new ``GET /catalog/{bundle_id}/install-context`` endpoint, the
-new ``InstallCredentialSelection`` payload shape for
-``POST /catalog/{bundle_id}/install``, and the backwards-compat shim.
+Covers the ``GET /catalog/{bundle_id}/install-context`` endpoint, the
+``InstallCredentialSelection`` payload shape for
+``POST /catalog/{bundle_id}/install``, and the rejection of legacy payload
+formats.
 
 Scenarios:
   A. GET install-context — 404 for non-visible (private) bundle.
@@ -22,14 +23,11 @@ Scenarios:
      created (is_placeholder=True) and linked.
   K. POST install — mode="use_existing" rejected with HTTP 422 when spec
      is provided_by="publisher".
-  L. (removed in Phase 5 — the legacy ``{name: uuid_string}`` shim was
-     dropped together with the install-time normaliser hook; the typed
-     ``InstallCredentialSelection`` shape is now the only accepted form.)
+  L. Legacy ``{name: uuid_string}`` install payload rejected (the shim was
+     dropped; typed ``InstallCredentialSelection`` is the only accepted form).
 
 Direct DB access via the ``db`` fixture is used for verifying
 AgentCredentialLink and Credential rows that have no listing API endpoints.
-This is consistent with Phase 2 test precedents documented in
-``agents_bundles_phase2_test.py``.
 """
 import json
 import uuid
@@ -199,7 +197,7 @@ def test_install_context_404_for_non_visible_bundle(
     """
     # ── Phase 1: publish bundle (private by default) ───────────────────────────
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P3A-Agent"
+        client, superuser_token_headers, name="InstCtx-A-Agent"
     )
     drain_tasks()
     fresh = _publish(client, superuser_token_headers, agent["id"])
@@ -238,12 +236,12 @@ def test_install_context_minimal_shape_no_publisher_ai_no_pbp(
     """
     # ── Phase 1: publish bundle with one PBU credential ───────────────────────
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P3B-Agent"
+        client, superuser_token_headers, name="InstCtx-B-Agent"
     )
     drain_tasks()
 
     cred = _create_credential(
-        client, superuser_token_headers, name="p3b-mailbox", allow_sharing=False
+        client, superuser_token_headers, name="ic-b-mailbox", allow_sharing=False
     )
     _link_credential_to_agent(
         client, superuser_token_headers, agent["id"], cred["id"]
@@ -276,7 +274,7 @@ def test_install_context_minimal_shape_no_publisher_ai_no_pbp(
     specs = ctx["service_specs"]
     assert len(specs) == 1, f"Expected 1 spec; got {specs}"
     spec = specs[0]
-    assert spec["name"] == "p3b-mailbox"
+    assert spec["name"] == "ic-b-mailbox"
     assert spec["provided_by"] == "user"
     assert spec["publisher_summary"] is None
     assert spec["suggested_credential_id"] is None
@@ -304,7 +302,7 @@ def test_install_context_publisher_ai_summaries_no_secrets(
     """
     # ── Phase 1: publish + set both PBP AI credentials ────────────────────────
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P3C-Agent"
+        client, superuser_token_headers, name="InstCtx-C-Agent"
     )
     drain_tasks()
     fresh = _publish(client, superuser_token_headers, agent["id"])
@@ -377,7 +375,7 @@ def test_install_context_auto_prefill_suggestion_when_match_exists(
     """
     # ── Phase 1: publish bundle with PBU spec ────────────────────────────────
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P3D-Agent"
+        client, superuser_token_headers, name="InstCtx-D-Agent"
     )
     drain_tasks()
 
@@ -436,7 +434,7 @@ def test_install_context_case_insensitive_name_match(
     """
     # ── Phase 1: publish bundle with "gmail" spec ─────────────────────────────
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P3E-Agent"
+        client, superuser_token_headers, name="InstCtx-E-Agent"
     )
     drain_tasks()
 
@@ -492,7 +490,7 @@ def test_install_context_owned_preferred_over_shared(
     """
     # ── Phase 1: publish bundle ───────────────────────────────────────────────
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P3F-Agent"
+        client, superuser_token_headers, name="InstCtx-F-Agent"
     )
     drain_tasks()
 
@@ -562,7 +560,7 @@ def test_install_context_most_recent_shared_wins_when_no_owned(
     """
     # ── Phase 1: publish bundle ───────────────────────────────────────────────
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P3G-Agent"
+        client, superuser_token_headers, name="InstCtx-G-Agent"
     )
     drain_tasks()
 
@@ -641,7 +639,7 @@ def test_install_context_pbp_spec_exposes_publisher_summary(
     """
     # ── Phase 1: publish bundle with shareable (PBP) credential ──────────────
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P3H-Agent"
+        client, superuser_token_headers, name="InstCtx-H-Agent"
     )
     drain_tasks()
 
@@ -704,12 +702,12 @@ def test_install_new_payload_use_existing_links_credential(
     """
     # ── Phase 1: publish bundle with one PBU spec ─────────────────────────────
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P3I-Publisher"
+        client, superuser_token_headers, name="InstCtx-I-Publisher"
     )
     drain_tasks()
 
     pub_cred = _create_credential(
-        client, superuser_token_headers, name="p3i-cred", allow_sharing=False
+        client, superuser_token_headers, name="ic-i-cred", allow_sharing=False
     )
     _link_credential_to_agent(
         client, superuser_token_headers, agent["id"], pub_cred["id"]
@@ -722,7 +720,7 @@ def test_install_new_payload_use_existing_links_credential(
     installer_id = uuid.UUID(installer["id"])
 
     user_cred = _create_credential(
-        client, installer_headers, name="p3i-cred", allow_sharing=False
+        client, installer_headers, name="ic-i-cred", allow_sharing=False
     )
     user_cred_id = uuid.UUID(user_cred["id"])
 
@@ -732,7 +730,7 @@ def test_install_new_payload_use_existing_links_credential(
         fresh["bundle_id"],
         request_body={
             "credentials": {
-                "p3i-cred": {
+                "ic-i-cred": {
                     "mode": "use_existing",
                     "credential_id": user_cred["id"],
                 }
@@ -778,12 +776,12 @@ def test_install_new_payload_placeholder_creates_placeholder(
     """
     # ── Phase 1: publish bundle with one PBU spec ─────────────────────────────
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P3J-Publisher"
+        client, superuser_token_headers, name="InstCtx-J-Publisher"
     )
     drain_tasks()
 
     pub_cred = _create_credential(
-        client, superuser_token_headers, name="p3j-cred", allow_sharing=False
+        client, superuser_token_headers, name="ic-j-cred", allow_sharing=False
     )
     _link_credential_to_agent(
         client, superuser_token_headers, agent["id"], pub_cred["id"]
@@ -801,7 +799,7 @@ def test_install_new_payload_placeholder_creates_placeholder(
         fresh["bundle_id"],
         request_body={
             "credentials": {
-                "p3j-cred": {"mode": "placeholder"}
+                "ic-j-cred": {"mode": "placeholder"}
             }
         },
     )
@@ -848,12 +846,12 @@ def test_install_use_existing_rejected_for_publisher_provided_spec(
     """
     # ── Phase 1: publish bundle with one PBP credential ───────────────────────
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P3K-Publisher"
+        client, superuser_token_headers, name="InstCtx-K-Publisher"
     )
     drain_tasks()
 
     pbp_cred = _create_credential(
-        client, superuser_token_headers, name="p3k-shared", allow_sharing=True
+        client, superuser_token_headers, name="ic-k-shared", allow_sharing=True
     )
     _link_credential_to_agent(
         client, superuser_token_headers, agent["id"], pbp_cred["id"]
@@ -866,7 +864,7 @@ def test_install_use_existing_rejected_for_publisher_provided_spec(
     installer_id = uuid.UUID(installer["id"])
 
     user_cred = _create_credential(
-        client, installer_headers, name="p3k-own-cred", allow_sharing=False
+        client, installer_headers, name="ic-k-own-cred", allow_sharing=False
     )
 
     # ── Phase 3: attempt install with use_existing on a PBP spec ─────────────
@@ -875,7 +873,7 @@ def test_install_use_existing_rejected_for_publisher_provided_spec(
         headers=installer_headers,
         json={
             "credentials": {
-                "p3k-shared": {
+                "ic-k-shared": {
                     "mode": "use_existing",
                     "credential_id": user_cred["id"],
                 }
@@ -893,13 +891,12 @@ def test_install_use_existing_rejected_for_publisher_provided_spec(
     detail_lower = str(detail).lower()
     assert (
         "publisher" in detail_lower
-        or "p3k-shared" in detail_lower
+        or "ic-k-shared" in detail_lower
         or "cannot" in detail_lower
         or "override" in detail_lower
     ), f"Expected a helpful 422 detail about publisher spec; got: {detail}"
 
     # ── Phase 4: verify no Agent row was created ──────────────────────────────
-    from app.models.agents.agent import Agent
     from sqlmodel import select as sql_select
 
     db.expire_all()
@@ -915,7 +912,7 @@ def test_install_use_existing_rejected_for_publisher_provided_spec(
     )
 
 
-# ── Scenario L: legacy {name: uuid_string} payload rejected (Phase 5) ────────
+# ── Scenario L: legacy {name: uuid_string} payload rejected ──────────────────
 
 
 def test_install_legacy_uuid_string_payload_rejected(
@@ -923,7 +920,7 @@ def test_install_legacy_uuid_string_payload_rejected(
     superuser_token_headers: dict[str, str],
     db: Session,
 ) -> None:
-    """L. Phase 5 dropped the legacy ``{name: uuid_string}`` install payload.
+    """L. The legacy ``{name: uuid_string}`` install payload is rejected.
 
     The previous shim in ``InstallService._normalise_credentials_payload``
     accepted ``credentials: {"spec_name": "<uuid>"}`` and converted it
@@ -931,16 +928,15 @@ def test_install_legacy_uuid_string_payload_rejected(
     the shim gone, the route's typed validator rejects anything that
     isn't a typed :class:`InstallCredentialSelection` body.
 
-    Assert: the install endpoint returns HTTP 422 and creates no Agent
-    row.
+    Assert: the install endpoint returns HTTP 422 and creates no Agent row.
     """
     # Publish a bundle with one PBU spec.
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P3L-Publisher"
+        client, superuser_token_headers, name="InstCtx-L-Publisher"
     )
     drain_tasks()
     pub_cred = _create_credential(
-        client, superuser_token_headers, name="p3l-legacy", allow_sharing=False
+        client, superuser_token_headers, name="ic-l-legacy", allow_sharing=False
     )
     _link_credential_to_agent(
         client, superuser_token_headers, agent["id"], pub_cred["id"]
@@ -951,7 +947,7 @@ def test_install_legacy_uuid_string_payload_rejected(
     # Installer attempts the legacy shape — must be rejected at the API edge.
     installer, installer_headers = _make_user_and_headers(client)
     user_cred = _create_credential(
-        client, installer_headers, name="p3l-legacy", allow_sharing=False
+        client, installer_headers, name="ic-l-legacy", allow_sharing=False
     )
     r = client.post(
         f"{API}/catalog/{fresh['bundle_id']}/install",
@@ -959,13 +955,13 @@ def test_install_legacy_uuid_string_payload_rejected(
         json={
             "credentials": {
                 # OLD shape: spec-name → uuid string (no "mode" key).
-                "p3l-legacy": user_cred["id"]
+                "ic-l-legacy": user_cred["id"]
             }
         },
     )
     assert r.status_code == 422, (
-        f"Legacy payload must be rejected with 422 after the Phase 5 shim "
-        f"removal; got {r.status_code}: {r.text}"
+        f"Legacy payload must be rejected with 422 after the shim removal; "
+        f"got {r.status_code}: {r.text}"
     )
 
     # And no Install row should have been created on the rejected request.

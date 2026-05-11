@@ -1,7 +1,9 @@
-"""Phase 5 — install-experience-redesign tests.
+"""Publisher override map (publish-settings) tests for agent bundles.
 
-Covers the publisher override map (``Agent.publish_settings``) and the
-removal of the legacy install shim.
+Covers the ``Agent.publish_settings`` override map and its interaction with the
+credential spec inference at publish time. Also confirms that the legacy install
+shim was properly removed and the typed ``InstallCredentialSelection`` payload
+is the only accepted install form.
 
 Scenarios:
   A. PATCH /agents/{id}/publish-settings — happy path: stores overrides and
@@ -215,7 +217,7 @@ def test_patch_publish_settings_happy_path(
     5. GET the agent and confirm the field is persisted.
     """
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P5A-Agent"
+        client, superuser_token_headers, name="PubSet-A-Agent"
     )
     drain_tasks()
     cred = _create_credential(
@@ -272,7 +274,7 @@ def test_patch_publish_settings_rejects_unknown_spec_name(
     must be rejected with a clear error detail.
     """
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P5B-Agent"
+        client, superuser_token_headers, name="PubSet-B-Agent"
     )
     drain_tasks()
     # Link one credential so the agent has _some_ credentials
@@ -306,7 +308,7 @@ def test_patch_publish_settings_rejects_invalid_provided_by(
 ) -> None:
     """C. provided_by value not in ('user', 'publisher') → HTTP 4xx."""
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P5C-Agent"
+        client, superuser_token_headers, name="PubSet-C-Agent"
     )
     drain_tasks()
     cred = _create_credential(
@@ -341,7 +343,7 @@ def test_patch_publish_settings_auth_non_owner_rejected(
     """
     # Create a publisher agent (owned by superuser)
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P5D-Agent"
+        client, superuser_token_headers, name="PubSet-D-Agent"
     )
     drain_tasks()
     cred = _create_credential(
@@ -382,7 +384,7 @@ def test_override_publisher_non_shareable_credential_publish_fails(
     return HTTP 400 with an error mentioning shareability.
     """
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P5E-Agent"
+        client, superuser_token_headers, name="PubSet-E-Agent"
     )
     drain_tasks()
     # Non-shareable credential
@@ -430,7 +432,7 @@ def test_override_user_on_shareable_credential(
     publisher_credential_id=null.
     """
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P5F-Agent"
+        client, superuser_token_headers, name="PubSet-F-Agent"
     )
     drain_tasks()
     cred = _create_credential(
@@ -482,7 +484,7 @@ def test_override_publisher_on_shareable_credential(
     and the publisher_credential_id is populated correctly.
     """
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P5G-Agent"
+        client, superuser_token_headers, name="PubSet-G-Agent"
     )
     drain_tasks()
     cred = _create_credential(
@@ -526,11 +528,11 @@ def test_no_override_inference_still_applies(
     superuser_token_headers: dict[str, str],
 ) -> None:
     """H. With empty publish_settings, inference produces provided_by="publisher"
-    for allow_sharing=True.  Regression check that Phase 1 inference survives
-    the Phase 5 code path.
+    for allow_sharing=True.  Regression check that credential spec inference
+    survives the override code path.
     """
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P5H-Agent"
+        client, superuser_token_headers, name="PubSet-H-Agent"
     )
     drain_tasks()
     cred = _create_credential(
@@ -585,7 +587,7 @@ def test_mixed_override_and_inferred_specs(
     inference path.
     """
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P5I-Agent"
+        client, superuser_token_headers, name="PubSet-I-Agent"
     )
     drain_tasks()
 
@@ -661,7 +663,7 @@ def test_install_new_payload_works_after_shim_removal(
     """
     # ── Publisher side ────────────────────────────────────────────────────────
     agent = create_agent_via_api(
-        client, superuser_token_headers, name="P5J-Publisher"
+        client, superuser_token_headers, name="PubSet-J-Publisher"
     )
     drain_tasks()
 

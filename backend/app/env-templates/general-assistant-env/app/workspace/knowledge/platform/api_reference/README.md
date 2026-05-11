@@ -22,7 +22,7 @@ Each file below documents one API domain.
 | Bundles | [bundles.md](./bundles.md) | 9 |
 | Catalog | [catalog.md](./catalog.md) | 5 |
 | Cli | [cli.md](./cli.md) | 10 |
-| Credentials | [credentials.md](./credentials.md) | 16 |
+| Credentials | [credentials.md](./credentials.md) | 17 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
 | Email Integration | [email_integration.md](./email_integration.md) | 6 |
 | Environments | [environments.md](./environments.md) | 13 |

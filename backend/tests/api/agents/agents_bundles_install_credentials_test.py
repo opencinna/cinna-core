@@ -1,21 +1,16 @@
-"""Phase 2 — install-experience-redesign tests.
+"""Credential resolution at install time — agent bundle tests.
 
-Covers credential resolution at install time:
-  - PBU (provided_by="user") placeholder creation.
-  - PBP (provided_by="publisher") shared-credential linking.
-  - Degradation semantics (revoked / deleted / wrong-owner fallback).
-  - Publisher AI credential sharing (AICredentialShare rows, env FK resolution).
-  - Mixed PBP+PBU specs.
-  - Idempotency of re-install for CredentialShare and AICredentialShare.
-
-Scenario L is skipped — already covered by Phase 1 file scenario D
-(backward-compat install with old-shape revision).
+Covers PBU (provided_by="user") placeholder creation, PBP
+(provided_by="publisher") shared-credential linking, degradation semantics
+(revoked / deleted / wrong-owner fallback), publisher AI credential sharing
+(AICredentialShare rows, env FK resolution), mixed PBP+PBU specs, and
+idempotency of re-install for CredentialShare and AICredentialShare.
 
 Direct DB access via the ``db`` fixture is used for CredentialShare,
 AICredentialShare, AgentCredentialLink, and Credential rows which have no
-listing API endpoints (as documented in the test brief).  The ``db`` fixture
-IS the test transaction session — service writes and test reads share the same
-savepoint-wrapped session so visibility is guaranteed.
+listing API endpoints.  The ``db`` fixture IS the test transaction session —
+service writes and test reads share the same savepoint-wrapped session so
+visibility is guaranteed.
 """
 import uuid
 
@@ -175,12 +170,12 @@ def test_pbu_placeholder_credential_created_on_install(
     """
     # ── Phase 1: publish a bundle with a non-shareable (PBU) credential ───────
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="P2A-Publisher"
+        client, superuser_token_headers, name="InstCred-A-Publisher"
     )
     drain_tasks()
 
     cred = _create_credential(
-        client, superuser_token_headers, name="p2a-private", allow_sharing=False
+        client, superuser_token_headers, name="ic-a-private", allow_sharing=False
     )
     _link_credential_to_agent(
         client, superuser_token_headers, publisher_agent["id"], cred["id"]
@@ -236,12 +231,12 @@ def test_pbp_credential_linked_not_duplicated(
     """
     # ── Phase 1: publish a bundle with a shareable (PBP) credential ──────────
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="P2B-Publisher"
+        client, superuser_token_headers, name="InstCred-B-Publisher"
     )
     drain_tasks()
 
     shared_cred = _create_credential(
-        client, superuser_token_headers, name="p2b-shared", allow_sharing=True
+        client, superuser_token_headers, name="ic-b-shared", allow_sharing=True
     )
     _link_credential_to_agent(
         client, superuser_token_headers, publisher_agent["id"], shared_cred["id"]
@@ -303,12 +298,12 @@ def test_pbp_credential_idempotent_on_reinstall(
     """
     # ── Phase 1: publish + first install ─────────────────────────────────────
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="P2C-Publisher"
+        client, superuser_token_headers, name="InstCred-C-Publisher"
     )
     drain_tasks()
 
     shared_cred = _create_credential(
-        client, superuser_token_headers, name="p2c-shared", allow_sharing=True
+        client, superuser_token_headers, name="ic-c-shared", allow_sharing=True
     )
     _link_credential_to_agent(
         client, superuser_token_headers, publisher_agent["id"], shared_cred["id"]
@@ -365,12 +360,12 @@ def test_pbp_revoked_sharing_falls_through_to_placeholder_degraded(
     """
     # ── Phase 1: publish with shareable credential, then revoke ───────────────
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="P2D-Publisher"
+        client, superuser_token_headers, name="InstCred-D-Publisher"
     )
     drain_tasks()
 
     shared_cred = _create_credential(
-        client, superuser_token_headers, name="p2d-shared", allow_sharing=True
+        client, superuser_token_headers, name="ic-d-shared", allow_sharing=True
     )
     _link_credential_to_agent(
         client, superuser_token_headers, publisher_agent["id"], shared_cred["id"]
@@ -440,12 +435,12 @@ def test_pbp_deleted_publisher_credential_falls_through_gracefully(
     """
     # ── Phase 1: publish, then delete publisher's credential row ─────────────
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="P2E-Publisher"
+        client, superuser_token_headers, name="InstCred-E-Publisher"
     )
     drain_tasks()
 
     shared_cred = _create_credential(
-        client, superuser_token_headers, name="p2e-shared", allow_sharing=True
+        client, superuser_token_headers, name="ic-e-shared", allow_sharing=True
     )
     _link_credential_to_agent(
         client, superuser_token_headers, publisher_agent["id"], shared_cred["id"]
@@ -520,7 +515,7 @@ def test_pbp_wrong_owner_credential_falls_through_to_placeholder(
 
     # ── Phase 1: publish (no credentials linked) ──────────────────────────────
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="P2F-Publisher"
+        client, superuser_token_headers, name="InstCred-F-Publisher"
     )
     drain_tasks()
     fresh_pub = _publish(client, superuser_token_headers, publisher_agent["id"])
@@ -529,7 +524,7 @@ def test_pbp_wrong_owner_credential_falls_through_to_placeholder(
     # Third user's shareable credential.
     third_user, third_headers = _make_user_and_headers(client)
     third_cred = _create_credential(
-        client, third_headers, name="p2f-third-cred", allow_sharing=True
+        client, third_headers, name="ic-f-third-cred", allow_sharing=True
     )
     third_cred_id = uuid.UUID(third_cred["id"])
 
@@ -605,7 +600,7 @@ def test_publisher_ai_credential_both_modes_shared_on_install(
     """
     # ── Phase 1: publish + set both publisher AI creds ────────────────────────
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="P2G-Publisher"
+        client, superuser_token_headers, name="InstCred-G-Publisher"
     )
     drain_tasks()
     fresh_pub = _publish(client, superuser_token_headers, publisher_agent["id"])
@@ -688,7 +683,7 @@ def test_publisher_ai_credential_only_conversation_request_supplies_building(
     """
     # ── Phase 1: publish + set conversation PBP only ──────────────────────────
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="P2H-Publisher"
+        client, superuser_token_headers, name="InstCred-H-Publisher"
     )
     drain_tasks()
     fresh_pub = _publish(client, superuser_token_headers, publisher_agent["id"])
@@ -773,7 +768,7 @@ def test_publisher_ai_credential_request_selection_ignored_when_bundle_provides(
     """
     # ── Phase 1: publish + set both PBP AI creds ─────────────────────────────
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="P2I-Publisher"
+        client, superuser_token_headers, name="InstCred-I-Publisher"
     )
     drain_tasks()
     fresh_pub = _publish(client, superuser_token_headers, publisher_agent["id"])
@@ -842,7 +837,7 @@ def test_publisher_ai_credential_no_self_share_on_publisher_install(
     """
     # ── Phase 1: publish + set PBP AI credential ─────────────────────────────
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="P2J-Publisher"
+        client, superuser_token_headers, name="InstCred-J-Publisher"
     )
     drain_tasks()
 
@@ -863,7 +858,6 @@ def test_publisher_ai_credential_no_self_share_on_publisher_install(
     assert r.status_code == 200, r.text
 
     # ── Phase 2: publisher installs their own bundle ──────────────────────────
-    publisher_install_id = fresh_pub["id"]
     publisher_user_id_str = fresh_pub.get("owner_id")
     publisher_user_id = uuid.UUID(publisher_user_id_str)
 
@@ -901,15 +895,15 @@ def test_mixed_pbp_and_pbu_credentials_no_cross_contamination(
     """
     # ── Phase 1: publish bundle with one PBP + one PBU credential ────────────
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="P2K-Publisher"
+        client, superuser_token_headers, name="InstCred-K-Publisher"
     )
     drain_tasks()
 
     pbp_cred = _create_credential(
-        client, superuser_token_headers, name="p2k-shared", allow_sharing=True
+        client, superuser_token_headers, name="ic-k-shared", allow_sharing=True
     )
     pbu_cred = _create_credential(
-        client, superuser_token_headers, name="p2k-private", allow_sharing=False
+        client, superuser_token_headers, name="ic-k-private", allow_sharing=False
     )
     _link_credential_to_agent(
         client, superuser_token_headers, publisher_agent["id"], pbp_cred["id"]
@@ -969,10 +963,6 @@ def test_mixed_pbp_and_pbu_credentials_no_cross_contamination(
     )
 
 
-# ── Scenario L: SKIPPED ───────────────────────────────────────────────────────
-# Covered by Phase 1 file scenario D: backward-compat install with old-shape revision.
-
-
 # ── Scenario M: AICredentialShare deleted manually is recreated on re-install ─
 
 
@@ -993,7 +983,7 @@ def test_ai_credential_share_recreated_on_reinstall_after_manual_deletion(
     """
     # ── Phase 1: publish + set PBP AI credential + install ───────────────────
     publisher_agent = create_agent_via_api(
-        client, superuser_token_headers, name="P2M-Publisher"
+        client, superuser_token_headers, name="InstCred-M-Publisher"
     )
     drain_tasks()
     fresh_pub = _publish(client, superuser_token_headers, publisher_agent["id"])

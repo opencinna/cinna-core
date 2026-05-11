@@ -55,21 +55,32 @@ export function InstallServiceCredentialItem({
   onChange,
 }: InstallServiceCredentialItemProps) {
   const isPublisher = spec.provided_by === "publisher"
+  const isTemplate = spec.provided_by === "template"
   const hasSuggestion = Boolean(spec.suggested_credential_id)
 
   // Default-expand only PBU specs that have no auto-prefill suggestion
-  // (matches plan §3 layout rules).
+  // (matches plan §3 layout rules). Publisher and template specs both
+  // start collapsed because the install creates the credential for them
+  // — the user only needs to fill private fields after install.
   const [expanded, setExpanded] = useState<boolean>(
-    !isPublisher && !hasSuggestion,
+    !isPublisher && !isTemplate && !hasSuggestion,
   )
+
+  const privateFieldCount = isTemplate
+    ? (spec.template_private_fields ?? []).length
+    : 0
 
   // Collapsed-state summary — one short line per item.
   const summary = (() => {
     if (isPublisher) {
-      const summary = spec.publisher_summary
-      return summary
-        ? `Shared by publisher (${summary.name})`
-        : "Shared by publisher"
+      const s = spec.publisher_summary
+      return s ? `Shared by publisher (${s.name})` : "Shared by publisher"
+    }
+    if (isTemplate) {
+      if (privateFieldCount > 0) {
+        return `Pre-filled template — fill in ${privateFieldCount} private field${privateFieldCount === 1 ? "" : "s"} after install`
+      }
+      return "Pre-filled template — no private fields"
     }
     if (choice.mode === "use_suggested" && spec.suggested_credential_name) {
       return `Will use "${spec.suggested_credential_name}"`
@@ -108,6 +119,14 @@ export function InstallServiceCredentialItem({
                 <CheckCircle2 className="h-3 w-3" />
                 publisher-provided
               </Badge>
+            ) : isTemplate ? (
+              <Badge
+                variant="outline"
+                className="text-xs font-normal gap-1 border-sky-300 text-sky-700"
+              >
+                <CheckCircle2 className="h-3 w-3" />
+                template
+              </Badge>
             ) : (
               <Badge variant="outline" className="text-xs font-normal">
                 user-provided
@@ -129,6 +148,8 @@ export function InstallServiceCredentialItem({
           )}
           {isPublisher ? (
             <PublisherProvidedBody spec={spec} />
+          ) : isTemplate ? (
+            <TemplateProvidedBody spec={spec} />
           ) : (
             <PBUChoicesBody spec={spec} choice={choice} onChange={onChange} />
           )}
@@ -150,6 +171,36 @@ function PublisherProvidedBody({ spec }: { spec: InstallContextSpec }) {
         <p className="text-xs text-muted-foreground">
           Linked to <span className="font-medium">{summary.name}</span>{" "}
           ({summary.type})
+        </p>
+      )}
+    </div>
+  )
+}
+
+function TemplateProvidedBody({ spec }: { spec: InstallContextSpec }) {
+  const privateFields = spec.template_private_fields ?? []
+  return (
+    <div className="text-sm space-y-2">
+      <p>
+        <CheckCircle2 className="inline h-4 w-4 text-sky-500 mr-1.5 align-text-bottom" />
+        The publisher pre-filled this credential's setup so you only need
+        to supply the private fields after install.
+      </p>
+      {privateFields.length > 0 ? (
+        <div className="text-xs text-muted-foreground">
+          <p className="mb-1">You'll be asked to fill in:</p>
+          <ul className="list-disc pl-5 space-y-0.5">
+            {privateFields.map((f) => (
+              <li key={f} className="font-mono">
+                {f}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          No private fields — the credential will be ready immediately
+          after install.
         </p>
       )}
     </div>

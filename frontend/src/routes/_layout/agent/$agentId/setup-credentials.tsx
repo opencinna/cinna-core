@@ -186,7 +186,25 @@ function SetupCredentialCard({
 }: SetupCredentialCardProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
-  const [rows, setRows] = useState<KeyValueRow[]>([{ key: "", value: "" }])
+  // Template-shared placeholders carry the publisher's pre-filled
+  // defaults plus the list of fields the installer must supply.
+  const privateFields = credential.template_private_fields ?? []
+  const isTemplate = privateFields.length > 0
+  const prefilled = (credential.template_prefilled_data ?? {}) as Record<
+    string,
+    unknown
+  >
+
+  const [rows, setRows] = useState<KeyValueRow[]>(() => {
+    if (isTemplate) {
+      // Template flow: one input row per private field, key is fixed.
+      return privateFields.map((field) => ({
+        key: field,
+        value: "",
+      }))
+    }
+    return [{ key: "", value: "" }]
+  })
   const [savedOnce, setSavedOnce] = useState(false)
 
   const addRow = () =>
@@ -201,7 +219,7 @@ function SetupCredentialCard({
     )
 
   const buildCredentialData = (): Record<string, unknown> => {
-    const data: Record<string, unknown> = {}
+    const data: Record<string, unknown> = { ...prefilled }
     for (const row of rows) {
       const key = row.key.trim()
       if (!key) continue
@@ -233,7 +251,9 @@ function SetupCredentialCard({
   })
 
   const data = buildCredentialData()
-  const canSave = Object.keys(data).length > 0 && !mutation.isPending
+  const canSave = isTemplate
+    ? rows.every((r) => r.value.trim().length > 0) && !mutation.isPending
+    : Object.keys(data).length > 0 && !mutation.isPending
 
   return (
     <Card>
@@ -261,10 +281,34 @@ function SetupCredentialCard({
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        <p className="text-xs text-muted-foreground">
-          Add the key/value pairs this credential expects (e.g.
-          <code className="mx-1 rounded bg-muted px-1">api_key</code>).
-        </p>
+        {isTemplate ? (
+          <p className="text-xs text-muted-foreground">
+            The publisher pre-filled the non-private fields. Fill in the
+            private values below to complete this credential.
+          </p>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Add the key/value pairs this credential expects (e.g.
+            <code className="mx-1 rounded bg-muted px-1">api_key</code>).
+          </p>
+        )}
+        {isTemplate && Object.keys(prefilled).length > 0 && (
+          <div className="rounded-md border bg-muted/30 p-3 text-xs space-y-1">
+            <div className="font-medium text-muted-foreground">
+              Pre-filled by publisher (read-only)
+            </div>
+            <ul className="space-y-0.5">
+              {Object.entries(prefilled).map(([k, v]) => (
+                <li key={k} className="font-mono break-all">
+                  <span className="text-muted-foreground">{k}:</span>{" "}
+                  {typeof v === "string" || typeof v === "number"
+                    ? String(v)
+                    : JSON.stringify(v)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="space-y-2">
           {rows.map((row, i) => (
             <div key={i} className="flex items-end gap-2">
@@ -280,6 +324,7 @@ function SetupCredentialCard({
                   value={row.key}
                   placeholder="api_key"
                   onChange={(e) => updateRow(i, { key: e.target.value })}
+                  disabled={isTemplate}
                 />
               </div>
               <div className="flex-1">
@@ -296,29 +341,35 @@ function SetupCredentialCard({
                   onChange={(e) => updateRow(i, { value: e.target.value })}
                 />
               </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={() => removeRow(i)}
-                disabled={rows.length === 1}
-                aria-label="Remove row"
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
+              {!isTemplate && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => removeRow(i)}
+                  disabled={rows.length === 1}
+                  aria-label="Remove row"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              )}
             </div>
           ))}
         </div>
         <div className="flex items-center justify-between gap-2 pt-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={addRow}
-          >
-            <Plus className="h-4 w-4" />
-            Add field
-          </Button>
+          {isTemplate ? (
+            <span />
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={addRow}
+            >
+              <Plus className="h-4 w-4" />
+              Add field
+            </Button>
+          )}
           <LoadingButton
             type="button"
             loading={mutation.isPending}

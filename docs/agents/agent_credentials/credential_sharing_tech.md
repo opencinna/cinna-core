@@ -4,37 +4,52 @@
 
 ### Backend - Models
 - `backend/app/models/credentials/credential_share.py` - CredentialShare table model, CredentialSharePublic, CredentialShareCreate, SharedCredentialPublic response models
-- `backend/app/models/credentials/credential.py` - Updated: added `allow_sharing` field to CredentialBase/CredentialUpdate, added `share_count`, `is_shared`, `owner_email` to CredentialPublic
+- `backend/app/models/credentials/credential.py` - Adds `allow_sharing` and `allow_template_sharing` fields to CredentialBase, `template_private_fields` (JSON list[str]) to Credential / CredentialCreate / CredentialUpdate / CredentialPublic; `share_count`, `is_shared`, `owner_email` on CredentialPublic
 
 ### Backend - Services
-- `backend/app/services/credentials/credential_share_service.py` - Core sharing logic: share, revoke, toggle, access checks
-- `backend/app/services/credentials/credentials_service.py` - Updated: `link_credential_to_agent()` allows linking shared credentials (not just owned)
+- `backend/app/services/credentials/credential_share_service.py` - Core direct-sharing logic: share, revoke, toggle, access checks
+- `backend/app/services/credentials/credentials_service.py` - `link_credential_to_agent()` accepts shared credentials; `update_credential()` flips `is_placeholder=False` only when `check_credential_completeness == "complete"` (load-bearing for the template setup flow)
+- `backend/app/services/bundles/publish_service.py` - `_collect_credential_specs`, `_validate_publisher_provides`, `_template_payload_for` produce/validate `provided_by="template"` specs with `template_data` + `template_private_fields`
+- `backend/app/services/bundles/install_service.py` - `_setup_install_credentials` template branch + `_materialise_template_credential` create the installer-owned placeholder pre-seeded with template defaults
+- `backend/app/services/bundles/install_readiness_gate.py` - Detects template-materialised placeholders via `is_placeholder=True` and returns `placeholder_empty` until completion
 
 ### Backend - Routes
 - `backend/app/api/routes/credential_shares.py` - Sharing CRUD endpoints (share, list, revoke, toggle, shared-with-me)
-- `backend/app/api/routes/credentials.py` - Updated: credential detail allows viewing if user owns OR has share
+- `backend/app/api/routes/credentials.py` - `_credential_to_public()` exposes `allow_template_sharing` + `template_private_fields`; new `GET /credentials/{id}/bundles` endpoint with `provided_by` per usage
+- `backend/app/api/routes/installs.py` - `PATCH /agents/{id}/publish-settings` accepts `provided_by="template"`; `GET /agents/{id}/setup-credentials` returns `template_private_fields` + `template_prefilled_data` per placeholder; `update_setup_credential` re-runs the gate
 
 ### Frontend - Components
-- `frontend/src/components/Credentials/CredentialSharing.tsx` - Sharing toggle, share dialog, share list with revoke buttons
+- `frontend/src/components/Credentials/CredentialSharing.tsx` - Direct-sharing toggle, share dialog, shares list, "Used in Bundles" block filtered to `provided_by="publisher"` usages
+- `frontend/src/components/Credentials/CredentialTemplateSharing.tsx` - "Share as Template" toggle, per-field private/template checkboxes (with form labels mirrored from `CredentialFields/`), force-private message for OAuth + service account, "Used in Bundles" block filtered to `provided_by="template"` usages
 - `frontend/src/components/Credentials/SharedWithMeCredentials.tsx` - "Shared with Me" credential list with owner email and share date
-- `frontend/src/components/Credentials/CredentialCard.tsx` - Updated: "Shareable" badge, user count badge for active shares
+- `frontend/src/components/Credentials/CredentialCard.tsx` - "Shareable" badge, user count badge for active shares
+- `frontend/src/components/Agents/CredentialProvisioningSection.tsx` - Per-spec `User provides` / `Embedded (shared)` / `Template (defaults + private)` dropdown on the publisher install's Bundle tab
+- `frontend/src/components/Install/InstallServiceCredentialItem.tsx` - Renders the spec's `provided_by` badge + body; `TemplateProvidedBody` lists the private fields the installer will need to fill in
+- `frontend/src/components/Install/InstallSetupForm.tsx` - `initialChoiceForSpec` returns `"skip"` for template specs (the install service short-circuits into the template branch)
 
 ### Frontend - Routes
-- `frontend/src/routes/_layout/credentials.tsx` - Updated: split into "My Credentials" and "Shared with Me" sections
-- `frontend/src/routes/_layout/credential/$credentialId.tsx` - Updated: SharedCredentialView (read-only) vs OwnedCredentialView (full edit)
-- `frontend/src/components/Agents/AgentCredentialsTab.tsx` - Updated: fetches both owned and shared credentials, shows "Shared" indicator in dropdown
+- `frontend/src/routes/_layout/credentials.tsx` - "My Credentials" and "Shared with Me" sections
+- `frontend/src/routes/_layout/credential/$credentialId.tsx` - SharedCredentialView (read-only) vs OwnedCredentialView (full edit); owned view wraps `CredentialSharing` and `CredentialTemplateSharing` in a 2-column grid
+- `frontend/src/routes/_layout/agent/$agentId/setup-credentials.tsx` - Setup page renders one card per placeholder; template placeholders show a read-only "pre-filled by publisher" panel and one input row per private field
+- `frontend/src/components/Agents/AgentCredentialsTab.tsx` - Fetches both owned and shared credentials, shows "Shared" indicator in dropdown
 
 ### Migrations
 - `backend/app/alembic/versions/g7b8c9d0e1f2_add_credential_sharing.py` - `allow_sharing` column on credential table, new `credential_shares` table
+- `backend/app/alembic/versions/cc3de4f5a6b7_add_template_sharing_to_credential.py` - `allow_template_sharing` (boolean, default `false`) and `template_private_fields` (JSON list, default `[]`) on credential table
 
 ### Router Registration
 - `backend/app/api/main.py` - Added `credential_shares.router` import and registration
 
+### Tests
+- `backend/tests/api/agents/agents_bundles_template_sharing_test.py` - Eight scenario tests: CRUD persistence, publish spec shape, override validation, install materialisation, completion → ready, partial fill stays needs_setup, `use_existing` opt-out, re-publish guard when consent flag is revoked
+
 ## Database Schema
 
 ### Modified Table: `credential`
-- Added: `allow_sharing` (boolean, default false)
-- Added index: `ix_credential_allow_sharing` (partial index for shareable credentials)
+- `allow_sharing` (boolean, default false) — direct-sharing consent flag
+- `allow_template_sharing` (boolean, default false) — template-sharing consent flag (independent from `allow_sharing`)
+- `template_private_fields` (JSON, default `[]`) — list of `credential_data` field names that must be supplied per-installer; only stored, never inferred
+- Index: `ix_credential_allow_sharing` (partial index for shareable credentials)
 
 ### New Table: `credential_shares`
 - `id` (UUID, PK)
@@ -44,6 +59,15 @@
 - `shared_at` (datetime)
 - `access_level` (varchar, default 'read')
 - Unique constraint: `(credential_id, shared_with_user_id)`
+
+### Bundle Revision Spec (no DB column — JSON inside `agent_bundle_revision.required_credential_specs`)
+
+Each entry the publish flow emits:
+- `name`, `type`, `description` — credential metadata
+- `provided_by` — `"user"` | `"publisher"` | `"template"`
+- `publisher_credential_id` — populated only when `provided_by="publisher"`
+- `template_data` — non-private credential_data values; only present when `provided_by="template"`
+- `template_private_fields` — list of fields the installer must supply; only present when `provided_by="template"`
 
 ## API Endpoints
 
@@ -55,8 +79,14 @@
 - `PATCH /api/v1/credentials/{credential_id}/sharing` - Enable/disable sharing
 
 ### Updated Credential Endpoints (`backend/app/api/routes/credentials.py`)
-- `GET /api/v1/credentials/{id}` - Now allows viewing if user owns OR has share (returns `is_shared=true` for shared)
-- All endpoints now return `share_count`, `is_shared`, `owner_email` in CredentialPublic response via `_credential_to_public()` helper
+- `GET /api/v1/credentials/{id}` - Allows viewing if user owns OR has share (returns `is_shared=true` for shared)
+- `GET /api/v1/credentials/{id}/bundles` - Lists bundles whose publisher install has this credential linked; each entry resolves `provided_by` via `_resolve_provided_by_for_usage()` (override map → consent-flag inference) so the frontend can split usages between the Sharing and Share-as-Template cards
+- All endpoints return `share_count`, `is_shared`, `owner_email`, `allow_template_sharing`, `template_private_fields` in CredentialPublic response via `_credential_to_public()` helper
+
+### Install Setup Endpoints (`backend/app/api/routes/installs.py`)
+- `PATCH /api/v1/agents/{id}/publish-settings` - Accepts `provided_by` ∈ {`"user"`, `"publisher"`, `"template"`} per linked credential
+- `GET /api/v1/agents/{id}/setup-credentials` - Returns `SetupCredentialSummary` with `template_private_fields` + `template_prefilled_data` for template-materialised placeholders
+- `PUT /api/v1/agents/{id}/setup-credentials/{credential_id}` - Persists user-supplied data; re-runs `InstallReadinessGate.check()` and emits `INSTALL_SETUP_COMPLETED` when the gate flips to `ready`
 
 ## Services & Key Methods
 
@@ -70,17 +100,66 @@
 - `can_user_access_credential()` - Check if user owns OR has share
 - `delete_all_shares_for_credential()` - Bulk delete for credential deletion
 
-### Updated CredentialsService (`backend/app/services/credentials/credentials_service.py`)
-- `link_credential_to_agent()` - Updated to allow linking shared credentials (not just owned)
+### CredentialsService (`backend/app/services/credentials/credentials_service.py`)
+- `link_credential_to_agent()` - Allows linking shared credentials (not just owned)
+- `update_credential()` - Persists `allow_template_sharing` + `template_private_fields`; flips `is_placeholder=False` only when `check_credential_completeness == "complete"` (so partial fills on template placeholders keep the gate engaged); rejects non-`list[str]` `template_private_fields` payloads
+- `check_credential_completeness()` - Per-type required-field check the placeholder-flip relies on
+- `list_bundle_usages(*, credential_id, requester_id)` - Owner-only listing of bundles whose publisher install links this credential. Resolves each entry's `provided_by` via `PublishService.resolve_provided_by` so the projection matches what the publish-time spec collector would emit. Raises `ValueError("Credential not found")` for missing or non-owned rows (route maps to 404 to avoid leaking existence). Backs `GET /credentials/{id}/bundles`
+
+### PublishService (`backend/app/services/bundles/publish_service.py`)
+- `resolve_provided_by(credential, publisher_install)` - Public static method that is the single source of truth for `provided_by` resolution. Order: publisher override → `allow_sharing` → `allow_template_sharing` → `"user"`. Used by both publish-time spec emission and `CredentialsService.list_bundle_usages` so the two paths cannot disagree
+- `_collect_credential_specs()` - Reads linked credentials and emits the per-spec shape; delegates `provided_by` to `resolve_provided_by`; for template specs attaches `template_data` + `template_private_fields` via `_template_payload_for`
+- `_template_payload_for()` - Decrypts the credential, strips private fields, applies the per-type templatable allowlist (e.g. `ssh_key` → only `host_aliases`); raises `ValueError` on decrypt failure rather than silently shipping an empty payload
+- `_validate_publisher_provides()` - Pre-publish guard: rejects publish when a `"publisher"` spec has no shareable backing credential or a `"template"` spec has `allow_template_sharing=False`
+- `_TEMPLATE_FORCE_PRIVATE_TYPES` - Hard-strips `credential_data` from template payloads for OAuth + service account types regardless of UI state (defence in depth)
+- `_TEMPLATE_TEMPLATABLE_FIELDS_BY_TYPE` - Per-type allowlist applied after the publisher's private-field filter
+
+### InstallService (`backend/app/services/bundles/install_service.py`)
+- `_setup_install_credentials()` - Walks `required_credential_specs`; for `provided_by="template"` calls `_materialise_template_credential` unless the installer opted in with `mode="use_existing"`
+- `_materialise_template_credential()` - Creates a fresh `Credential` row owned by the installer with `encrypted_data` seeded from `spec["template_data"]`, `is_placeholder=True`, `allow_sharing=False`, `allow_template_sharing=False`, and `template_private_fields` mirrored from the spec; sets `last_update_status="degraded"` on materialisation fallback
+- `_try_link_publisher_credential()` - Existing PBP path
+- `update_publish_settings()` - Validates and persists partial updates to `install.publish_settings` (`credential_overrides` map and pre-publish AI credential draft); enforces publisher-install scope, that override keys reference linked credential names, that each `provided_by` is one of `"user"`/`"publisher"`/`"template"`, and that AI credential ids are owned by the install owner. Backs `PATCH /agents/{id}/publish-settings`
+- `list_setup_credentials()` - Returns `SetupCredentialSummary` items for placeholder credentials linked to the install. For template-materialised rows, decrypts and surfaces non-private fields under `template_prefilled_data` (decryption failures fall back to `{}` so the row still surfaces). Backs `GET /agents/{id}/setup-credentials`
+
+### InstallReadinessGate (`backend/app/services/bundles/install_readiness_gate.py`)
+- `check()` / `_scan_service_credentials()` - Returns `placeholder_empty` for any installer-owned `is_placeholder=True` credential, including template-materialised rows; same pathway as PBU placeholders
 
 ## Frontend Components
 
 ### CredentialSharing (`frontend/src/components/Credentials/CredentialSharing.tsx`)
-- Toggle switch for enable/disable sharing
+- Direct-sharing toggle in the CardHeader corner (matches `EmailIntegrationCard` / `WebappShareCard` pattern); body collapses when disabled
 - "Share" button opens dialog with email input form
 - List of current shares with revoke buttons
 - Confirmation dialog when disabling sharing with active shares
-- Early-returns `null` when `useRole().isAgentUser` is true, so the entire card is hidden from `agent-user` accounts in both render sites (SSH-key edit view and the standard credential edit view in `frontend/src/routes/_layout/credential/$credentialId.tsx`)
+- "Used in Bundles" block listing usages where `provided_by="publisher"`; each entry deep-links to `/agent/{publisher_install_id}#bundle`
+- Early-returns `null` when `useRole().isAgentUser` is true, so the entire card is hidden from `agent-user` accounts
+
+### CredentialTemplateSharing (`frontend/src/components/Credentials/CredentialTemplateSharing.tsx`)
+- Template-sharing toggle in the CardHeader corner; body collapses when disabled
+- Per-credential-type field schema (`FIELDS_BY_TYPE`) — fixed list rendered regardless of which fields the publisher has filled in; labels mirrored from `CredentialFields/` form labels via `FIELD_LABELS_BY_TYPE`
+- Per-field private/shared checkboxes laid out in a `grid-cols-[auto_1fr_auto]` grid; status text reads "private - user has to provide" / "shared - will be copied"
+- Default-private fields seeded the first time the publisher enables template sharing (`DEFAULT_PRIVATE_FIELDS_BY_TYPE`)
+- Force-private types (`FORCE_PRIVATE_TYPES`: OAuth + service account) render an info paragraph explaining only the credential's name and notes ship; no field checkboxes
+- SSH key only exposes `host_aliases` (per the backend allowlist)
+- Amber warning when `allowTemplate=true` AND `privateFields=[]` AND `fieldNames>0`
+- "Used in Bundles" block listing usages where `provided_by="template"`; deep-links to `/agent/{publisher_install_id}#bundle`
+
+### CredentialProvisioningSection (`frontend/src/components/Agents/CredentialProvisioningSection.tsx`)
+- Per-spec `provided_by` dropdown on the publisher install's Bundle tab: `User provides` / `Embedded (shared)` / `Template (defaults + private)`
+- Each option disabled until the corresponding consent flag is set on the credential
+
+### Install Screen Components
+- `frontend/src/components/Install/InstallServiceCredentialItem.tsx` - Renders the `provided_by` badge ("publisher-provided" / "template" / "user-provided"); `TemplateProvidedBody` lists the private fields the installer will need to fill in after install
+- `frontend/src/components/Install/InstallSetupForm.tsx` - `initialChoiceForSpec` returns `mode="skip"` for template specs; the install service short-circuits into the template branch when `wants_existing` is false
+
+### Setup Page (`frontend/src/routes/_layout/agent/$agentId/setup-credentials.tsx`)
+- One card per placeholder; template placeholders detected via `credential.template_private_fields.length > 0`
+- Read-only "Pre-filled by publisher" panel shows `template_prefilled_data` entries
+- One input row per private field with the key fixed; non-template placeholders fall back to the legacy add/remove key/value editor
+- Save button disabled until every private field has a non-empty value
+
+### SSH Key Edit View (`frontend/src/components/Credentials/CredentialForms/SSHKeyEditView.tsx`)
+- "Private key is encrypted..." Alert wraps content in a `<p>` so the shadcn `AlertDescription` (which uses `display: grid`) keeps the sentence inline instead of breaking into stacked grid items
 
 ### SharedWithMeCredentials (`frontend/src/components/Credentials/SharedWithMeCredentials.tsx`)
 - Displays credentials shared with current user
@@ -89,6 +168,7 @@
 
 ### Credential Detail Route (`frontend/src/routes/_layout/credential/$credentialId.tsx`)
 - Detects `is_shared` flag to switch between SharedCredentialView (read-only) and OwnedCredentialView (full edit)
+- Owned view wraps `CredentialSharing` and `CredentialTemplateSharing` in a `grid grid-cols-1 lg:grid-cols-2 gap-6` container
 - Header shows "Shared" badge and owner email for shared credentials
 - Delete button hidden for shared credentials
 
@@ -102,25 +182,41 @@
 ### Query Keys
 - `["credentials"]` - User's owned credentials list
 - `["credential", credentialId]` - Single credential detail
+- `["credential-with-data", credentialId]` - Decrypted credential payload (used by template-sharing UI to read field schema)
 - `["credential-shares", credentialId]` - Shares for a credential
+- `["credential-bundle-usages", credentialId]` - `GET /credentials/{id}/bundles` response, filtered client-side by `provided_by` for each card
 - `["credentials-shared-with-me"]` - Credentials shared with current user
+- `["agent", agentId, "setup-status"]` / `["agent", agentId, "setup-credentials"]` - Driven by the install setup page
 
 ### Mutations
 - `shareCredential` - Create new share
 - `revokeCredentialShare` - Delete share
 - `updateCredentialSharing` - Toggle allow_sharing
+- `updateCredential` - Used by `CredentialTemplateSharing` to persist `allow_template_sharing` + `template_private_fields`
+- `updatePublishSettings` - Per-spec `provided_by` override map on the publisher install
+- `updateSetupCredential` - PUT setup-credentials/{id} from the setup page
 
 ## Security
 
 ### Validation Rules
-- Owner-only operations: share, revoke, toggle allow_sharing
-- Share requires `allow_sharing=true` on credential
+- Owner-only operations: share, revoke, toggle `allow_sharing` / `allow_template_sharing`
+- Direct share requires `allow_sharing=true`
+- Template publish requires `allow_template_sharing=true` (enforced by `PublishService._validate_publisher_provides`)
 - Cannot share with non-existent users, yourself, or create duplicates
+- `update_credential` rejects malformed `template_private_fields` payloads (must be `list[str]`)
 
 ### Access Control
 - `CredentialShareService.can_user_access_credential()` - Returns true if owner OR has share
 - `CredentialsService.link_credential_to_agent()` - Allows linking owned OR shared credentials to agents
+- `GET /credentials/{id}/bundles` - 403 unless requester owns the credential (or is superuser)
 - Share recipients get read-only access (can use, cannot see values)
 - Credential values (encrypted_data) never exposed to share recipients
 - Revoking share immediately removes access
 - Disabling sharing is destructive (revokes all shares with warning)
+
+### Template Privacy Layers (defence in depth)
+1. **Frontend filter** — only fields the publisher leaves unchecked are sent as `template_private_fields=[]` candidates
+2. **Publisher private-fields filter** — `_template_payload_for` strips fields named in `template_private_fields` from the decrypted blob
+3. **Per-type templatable allowlist** — `_TEMPLATE_TEMPLATABLE_FIELDS_BY_TYPE` (e.g. `ssh_key` → only `host_aliases`) drops anything outside the allowlist
+4. **Force-private types** — `_TEMPLATE_FORCE_PRIVATE_TYPES` (OAuth + service account) zeros out `template_data` regardless of UI state; only credential `notes` ride through via `spec.description`
+5. **Materialised row defaults** — `_materialise_template_credential` always writes `allow_sharing=False` and `allow_template_sharing=False` on the installer's row; downstream re-sharing requires an explicit toggle
