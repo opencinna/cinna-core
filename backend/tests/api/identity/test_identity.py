@@ -33,6 +33,7 @@ from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.user import (
     create_random_user,
     create_random_user_with_headers,
+    promote_to_developer,
 )
 
 _BINDINGS = f"{settings.API_V1_STR}/identity/bindings"
@@ -406,6 +407,7 @@ def test_auto_enable_superuser_restriction(
     """
     # ── Phase 1: Regular user rejected for auto_enable ────────────────────
     regular_user, regular_headers = create_random_user_with_headers(client)
+    promote_to_developer(client, superuser_token_headers, regular_user["id"])
     # Regular user needs an AI credential to be able to create an agent
     create_random_ai_credential(
         client, regular_headers,
@@ -523,6 +525,7 @@ def test_agent_ownership_validation(
     assert r.status_code == 404
 
     # ── Phase 4: Regular user can bind their own agent ────────────────────
+    promote_to_developer(client, superuser_token_headers, regular_user["id"])
     # Create an AI credential for the regular user first (required for agent creation)
     create_random_ai_credential(
         client, regular_headers,

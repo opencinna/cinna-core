@@ -7,13 +7,18 @@ and resources/read protocol operations.
 
 URI scheme:
     workspace://files/{path}            — files in files/ folder
-    workspace://docs/{path}             — files in docs/ folder
     workspace://scripts/{path}          — files in scripts/ folder
+    workspace://uploads/{path}          — user-uploaded files (mapped to
+                                          app-data/uploads/ on disk)
 
 Only a safe subset of workspace folders is exposed. Sensitive folders
-(credentials/, databases/, knowledge/, logs/, app-data/) are excluded.
-The per-user app-data/ volume (including uploaded files) is intentionally
-private to the agent runtime and not surfaced via MCP resources.
+(credentials/, databases/, knowledge/, logs/, the rest of app-data/) are
+excluded. Files uploaded via the MCP ``get_file_upload_url`` tool land in
+``app-data/uploads/`` on the per-user app-data volume (so they survive
+bundle updates and uninstall/reinstall) but are surfaced at the stable
+``workspace://uploads/{path}`` URI so MCP clients can list and read them
+back. The rest of ``app-data/`` (storage/, sqlite databases, runtime
+state) stays private to the agent runtime.
 
 The key design challenge: Claude Desktop (and most MCP clients) only display
 concrete resources from `resources/list`, not templates from
@@ -39,7 +44,18 @@ from app.mcp.server import mcp_connector_id_var
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_FOLDERS: set[str] = {"files", "scripts"}
+ALLOWED_FOLDERS: set[str] = {"files", "scripts", "uploads"}
+
+# Logical MCP folders whose on-disk location differs from their URI prefix.
+# The "uploads" folder is exposed at workspace://uploads/{path} but the
+# files actually live under app-data/uploads/ on the per-user app-data
+# volume (see commit 077cde0 — moved so uploads survive bundle updates).
+_LOGICAL_TO_DISK_PREFIX: dict[str, str] = {"uploads": "app-data/uploads"}
+
+# Top-level disk folders to descend into when enumerating MCP resources.
+# Anything outside this set never reaches the file walker, so the rest of
+# app-data/ (storage, sqlite, runtime state) stays private.
+_TREE_SCAN_ROOTS: set[str] = {"files", "scripts", "app-data"}
 
 MAX_RESOURCE_SIZE_BYTES: int = 10 * 1024 * 1024  # 10 MB
 
@@ -111,6 +127,42 @@ def _is_text_mime(mime_type: str) -> bool:
     return mime_type in _TEXT_MIME_TYPES
 
 
+# ── Logical ↔ disk path translation ──────────────────────────────────────────
+
+
+def _logical_to_disk_path(workspace_path: str) -> str:
+    """Translate a workspace URI path to the agent-env on-disk relative path.
+
+    For most folders the two are identical (``files/report.csv`` → ``files/report.csv``).
+    For folders listed in :data:`_LOGICAL_TO_DISK_PREFIX` the disk prefix is
+    swapped in (``uploads/photo.png`` → ``app-data/uploads/photo.png``).
+    """
+    head, _, tail = workspace_path.partition("/")
+    disk_prefix = _LOGICAL_TO_DISK_PREFIX.get(head)
+    if disk_prefix is None:
+        return workspace_path
+    return f"{disk_prefix}/{tail}" if tail else disk_prefix
+
+
+def _disk_to_logical_path(disk_path: str) -> str | None:
+    """Translate an on-disk path to its MCP URI path, or ``None`` if blocked.
+
+    Returns the logical path that should follow ``workspace://`` (e.g.
+    ``uploads/photo.png`` for a file at ``app-data/uploads/photo.png`` on
+    disk). Files under top-level folders that are not in :data:`ALLOWED_FOLDERS`
+    (and are not the disk prefix of a logical alias) are blocked and return
+    ``None``.
+    """
+    for logical_folder, prefix in _LOGICAL_TO_DISK_PREFIX.items():
+        if disk_path == prefix or disk_path.startswith(f"{prefix}/"):
+            tail = disk_path[len(prefix):].lstrip("/")
+            return f"{logical_folder}/{tail}" if tail else logical_folder
+    head = disk_path.split("/", 1)[0]
+    if head in ALLOWED_FOLDERS and head not in _LOGICAL_TO_DISK_PREFIX:
+        return disk_path
+    return None
+
+
 # ── Adapter Resolution ───────────────────────────────────────────────────────
 
 
@@ -145,32 +197,41 @@ async def _get_adapter_for_connector():
 
 
 def _collect_files_from_tree(tree: dict) -> list[tuple[str, str, int | None]]:
-    """Walk workspace tree and collect all files from allowed folders.
+    """Walk workspace tree and collect all files reachable via an MCP URI.
+
+    The returned ``workspace_path`` is the logical (URI-shaped) path —
+    files under ``app-data/uploads/`` on disk surface as ``uploads/...``,
+    while files under top-level allowed folders pass through unchanged.
+    Blocked locations (logs/, credentials/, the rest of app-data/) are
+    silently filtered out by :func:`_disk_to_logical_path`.
 
     Args:
-        tree: Workspace tree dict from adapter (keys are folder names,
-              values are FileNode dicts with name, type, path, children).
+        tree: Workspace tree dict from adapter (keys are top-level disk
+              folder names, values are FileNode dicts with name, type,
+              path, children).
 
     Returns:
-        List of (workspace_path, name, size) tuples for all files.
-        Example: [("files/report.csv", "report.csv", 1234), ...]
+        List of ``(logical_path, name, size)`` tuples.
+        Example: ``[("files/report.csv", "report.csv", 1234),
+                    ("uploads/photo.png", "photo.png", 89012)]``.
     """
     results: list[tuple[str, str, int | None]] = []
 
     def _walk(node: dict) -> None:
         node_type = node.get("type", "")
         if node_type == "file":
-            path = node.get("path", "")
+            disk_path = node.get("path", "")
             name = node.get("name", "")
             size = node.get("size")
-            if path and name:
-                results.append((path, name, size))
+            logical_path = _disk_to_logical_path(disk_path) if disk_path else None
+            if logical_path and name:
+                results.append((logical_path, name, size))
         elif node_type == "folder":
             for child in node.get("children") or []:
                 _walk(child)
 
     for folder_name, folder_node in tree.items():
-        if folder_name not in ALLOWED_FOLDERS:
+        if folder_name not in _TREE_SCAN_ROOTS:
             continue
         if isinstance(folder_node, dict):
             _walk(folder_node)
@@ -182,7 +243,14 @@ def _collect_files_from_tree(tree: dict) -> list[tuple[str, str, int | None]]:
 
 
 async def _read_workspace_tree() -> str:
-    """Read the workspace tree, filtered to allowed folders.
+    """Read the workspace tree, filtered to allowed MCP folders.
+
+    Top-level allowed folders (``files``, ``scripts``) pass through with
+    their original FileNode subtree. The legacy ``uploads`` alias is
+    synthesised from ``app-data/uploads/`` on disk so MCP clients see
+    user-uploaded files under their stable URI. The rest of ``app-data/``
+    is never surfaced. ``summaries`` (if present) is preserved as
+    advisory metadata.
 
     Returns:
         JSON string with the filtered workspace tree.
@@ -190,21 +258,59 @@ async def _read_workspace_tree() -> str:
     adapter = await _get_adapter_for_connector()
     tree = await adapter.get_workspace_tree()
 
-    # Filter tree to only include allowed folders
-    filtered = {}
+    filtered: dict = {}
     for key, value in tree.items():
-        # Top-level keys may be folder names or metadata like "summaries"
-        if key in ALLOWED_FOLDERS or key == "summaries":
+        # Direct top-level allowed folders (no path translation needed).
+        if key in ALLOWED_FOLDERS and key not in _LOGICAL_TO_DISK_PREFIX:
+            filtered[key] = value
+        elif key == "summaries":
             filtered[key] = value
 
+    # Synthesise the "uploads" alias from app-data/uploads/ on disk, if
+    # the agent-env exposes it. The subtree is included verbatim — MCP
+    # clients then read individual files via workspace://uploads/{path},
+    # which our URI parser translates back to app-data/uploads/{path}.
+    for logical_folder, prefix in _LOGICAL_TO_DISK_PREFIX.items():
+        head, _, tail = prefix.partition("/")
+        root_node = tree.get(head)
+        if not isinstance(root_node, dict) or not tail:
+            continue
+        subtree = _find_subfolder_node(root_node, tail)
+        if subtree is not None:
+            filtered[logical_folder] = subtree
+
     return json.dumps(filtered, indent=2, default=str)
+
+
+def _find_subfolder_node(root_node: dict, relative_path: str) -> dict | None:
+    """Descend the agent-env workspace tree to find a folder by its
+    workspace-relative path (e.g. ``"uploads"`` inside the ``app-data``
+    root). Returns the FileNode dict or ``None`` if not found.
+    """
+    segments = [s for s in relative_path.split("/") if s]
+    node: dict | None = root_node
+    for segment in segments:
+        if not isinstance(node, dict):
+            return None
+        children = node.get("children") or []
+        node = next(
+            (c for c in children
+             if isinstance(c, dict) and c.get("type") == "folder" and c.get("name") == segment),
+            None,
+        )
+        if node is None:
+            return None
+    return node
 
 
 async def _read_workspace_file(workspace_path: str) -> str | bytes:
     """Read a single file from the workspace.
 
     Args:
-        workspace_path: relative path from workspace root, e.g. "files/report.csv"
+        workspace_path: logical (URI-shaped) path from workspace root,
+            e.g. ``"files/report.csv"`` or ``"uploads/photo.png"``.
+            Folders listed in :data:`_LOGICAL_TO_DISK_PREFIX` are
+            translated to their on-disk prefix before the adapter call.
 
     Returns:
         str for text files, bytes for binary files.
@@ -213,10 +319,11 @@ async def _read_workspace_file(workspace_path: str) -> str | bytes:
         ValueError: if the file exceeds MAX_RESOURCE_SIZE_BYTES.
     """
     adapter = await _get_adapter_for_connector()
+    disk_path = _logical_to_disk_path(workspace_path)
     chunks: list[bytes] = []
     total_size = 0
 
-    async for chunk in adapter.download_workspace_item(workspace_path):
+    async for chunk in adapter.download_workspace_item(disk_path):
         total_size += len(chunk)
         if total_size > MAX_RESOURCE_SIZE_BYTES:
             raise ValueError(

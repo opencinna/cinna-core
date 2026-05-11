@@ -35,6 +35,8 @@ from app.mcp.resources import (
     _read_workspace_file,
     _get_adapter_for_connector,
     _collect_files_from_tree,
+    _logical_to_disk_path,
+    _disk_to_logical_path,
 )
 from app.mcp.server import mcp_connector_id_var
 from tests.utils.agent import create_agent_via_api, get_agent
@@ -78,7 +80,9 @@ def _run_with_connector_context(connector_id: str, coro_fn):
     return asyncio.run(_run())
 
 
-# Sample workspace tree matching the real agent-env format (FileNode structure)
+# Sample workspace tree matching the real agent-env format (FileNode structure).
+# Uploaded files live under app-data/uploads/ on disk but are surfaced to MCP
+# clients at the legacy workspace://uploads/{path} URI by resources.py.
 SAMPLE_TREE = {
     "files": {
         "name": "files", "type": "folder", "path": "files",
@@ -87,12 +91,6 @@ SAMPLE_TREE = {
             {"name": "data", "type": "folder", "path": "files/data", "children": [
                 {"name": "output.json", "type": "file", "path": "files/data/output.json", "size": 567},
             ]},
-        ],
-    },
-    "uploads": {
-        "name": "uploads", "type": "folder", "path": "uploads",
-        "children": [
-            {"name": "photo.png", "type": "file", "path": "uploads/photo.png", "size": 89012},
         ],
     },
     "scripts": {
@@ -105,6 +103,18 @@ SAMPLE_TREE = {
         "name": "logs", "type": "folder", "path": "logs",
         "children": [
             {"name": "app.log", "type": "file", "path": "logs/app.log", "size": 9999},
+        ],
+    },
+    "app-data": {
+        "name": "app-data", "type": "folder", "path": "app-data",
+        "children": [
+            {"name": "uploads", "type": "folder", "path": "app-data/uploads", "children": [
+                {"name": "photo.png", "type": "file", "path": "app-data/uploads/photo.png", "size": 89012},
+            ]},
+            # storage/ stays private — only app-data/uploads/ is exposed via MCP.
+            {"name": "storage", "type": "folder", "path": "app-data/storage", "children": [
+                {"name": "STATUS.md", "type": "file", "path": "app-data/storage/STATUS.md", "size": 42},
+            ]},
         ],
     },
     "summaries": {
@@ -168,6 +178,45 @@ def test_parse_workspace_uri_no_folder():
         _parse_workspace_uri("workspace:///test.txt")
 
 
+# ── Logical ↔ disk path translation ──────────────────────────────────────────
+
+
+def test_logical_to_disk_path_passthrough_for_top_level_folders():
+    """Files under top-level allowed folders pass through unchanged."""
+    assert _logical_to_disk_path("files/report.csv") == "files/report.csv"
+    assert _logical_to_disk_path("scripts/run.sh") == "scripts/run.sh"
+    assert _logical_to_disk_path("files/sub/deep/file.txt") == "files/sub/deep/file.txt"
+
+
+def test_logical_to_disk_path_maps_uploads_to_app_data():
+    """The uploads/ URI prefix maps to app-data/uploads/ on disk."""
+    assert _logical_to_disk_path("uploads/photo.png") == "app-data/uploads/photo.png"
+    assert _logical_to_disk_path("uploads/sub/img.jpg") == "app-data/uploads/sub/img.jpg"
+    # Bare folder (no file path) still translates.
+    assert _logical_to_disk_path("uploads") == "app-data/uploads"
+
+
+def test_disk_to_logical_path_passthrough_for_top_level_folders():
+    """Files in top-level allowed folders surface at the same logical path."""
+    assert _disk_to_logical_path("files/report.csv") == "files/report.csv"
+    assert _disk_to_logical_path("scripts/run.sh") == "scripts/run.sh"
+
+
+def test_disk_to_logical_path_remaps_app_data_uploads():
+    """Disk files under app-data/uploads/ surface under the logical uploads/ URI."""
+    assert _disk_to_logical_path("app-data/uploads/photo.png") == "uploads/photo.png"
+    assert _disk_to_logical_path("app-data/uploads/sub/img.jpg") == "uploads/sub/img.jpg"
+
+
+def test_disk_to_logical_path_blocks_private_folders():
+    """The rest of app-data/ and other private folders are blocked (None)."""
+    assert _disk_to_logical_path("app-data/storage/STATUS.md") is None
+    assert _disk_to_logical_path("app-data/runtime.sqlite") is None
+    assert _disk_to_logical_path("logs/app.log") is None
+    assert _disk_to_logical_path("credentials/secret.key") is None
+    assert _disk_to_logical_path("docs/README.md") is None
+
+
 # ── _guess_mime_type Tests ───────────────────────────────────────────────────
 
 
@@ -202,17 +251,28 @@ def test_is_text_mime():
 
 
 def test_collect_files_from_tree_extracts_allowed_files():
-    """Collects files from allowed folders, ignoring blocked folders."""
+    """Collects files from allowed folders, ignoring blocked folders.
+
+    Files uploaded by users live under ``app-data/uploads/`` on disk but
+    are surfaced as logical ``uploads/{path}`` so MCP clients see them at
+    the stable URI. The rest of ``app-data/`` stays private.
+    """
     files = _collect_files_from_tree(SAMPLE_TREE)
     paths = [f[0] for f in files]
 
-    # Allowed folder files
+    # Top-level allowed folders surface as-is.
     assert "files/report.csv" in paths
     assert "files/data/output.json" in paths
-    assert "uploads/photo.png" in paths
     assert "scripts/run.sh" in paths
 
-    # Blocked folder files should NOT appear
+    # app-data/uploads/ is remapped to the logical "uploads/" URI prefix.
+    assert "uploads/photo.png" in paths
+    # The on-disk path must NOT leak into the listing.
+    assert "app-data/uploads/photo.png" not in paths
+
+    # Other app-data/ subtrees (storage, sqlite, runtime state) stay private.
+    assert "app-data/storage/STATUS.md" not in paths
+    # Blocked top-level folders never appear.
     assert "logs/app.log" not in paths
 
 
@@ -277,13 +337,28 @@ def test_read_workspace_tree_filters_to_allowed_folders(
     connector_id = connector["id"]
 
     mock_tree = {
-        "files": {"items": [{"name": "data.csv", "type": "file"}]},
-        "uploads": {"items": [{"name": "photo.jpg", "type": "file"}]},
-        "docs": {"items": []},
-        "scripts": {"items": [{"name": "run.sh", "type": "file"}]},
-        "credentials": {"items": [{"name": "secret.key", "type": "file"}]},
-        "databases": {"items": [{"name": "db.sqlite", "type": "file"}]},
-        "logs": {"items": [{"name": "app.log", "type": "file"}]},
+        "files": {"name": "files", "type": "folder", "path": "files", "children": [
+            {"name": "data.csv", "type": "file", "path": "files/data.csv"},
+        ]},
+        "docs": {"name": "docs", "type": "folder", "path": "docs", "children": []},
+        "scripts": {"name": "scripts", "type": "folder", "path": "scripts", "children": [
+            {"name": "run.sh", "type": "file", "path": "scripts/run.sh"},
+        ]},
+        "credentials": {"name": "credentials", "type": "folder", "path": "credentials", "children": [
+            {"name": "secret.key", "type": "file", "path": "credentials/secret.key"},
+        ]},
+        "databases": {"name": "databases", "type": "folder", "path": "databases", "children": [
+            {"name": "db.sqlite", "type": "file", "path": "databases/db.sqlite"},
+        ]},
+        "logs": {"name": "logs", "type": "folder", "path": "logs", "children": [
+            {"name": "app.log", "type": "file", "path": "logs/app.log"},
+        ]},
+        "app-data": {"name": "app-data", "type": "folder", "path": "app-data", "children": [
+            {"name": "uploads", "type": "folder", "path": "app-data/uploads", "children": [
+                {"name": "photo.jpg", "type": "file", "path": "app-data/uploads/photo.jpg"},
+            ]},
+            {"name": "storage", "type": "folder", "path": "app-data/storage", "children": []},
+        ]},
         "summaries": {"total_files": 7},
     }
 
@@ -301,12 +376,18 @@ def test_read_workspace_tree_filters_to_allowed_folders(
         )
 
     tree = json.loads(result)
-    # Allowed folders and summaries should be present
+    # Top-level allowed folders + the synthesised uploads alias + summaries
+    # should be present.
     assert "files" in tree
-    assert "uploads" in tree
     assert "scripts" in tree
+    assert "uploads" in tree
     assert "summaries" in tree
-    # Blocked folders should NOT be present
+    # The uploads alias must surface the app-data/uploads/ subtree, not the
+    # disk root, so its node carries the photo.jpg child.
+    uploads_children = tree["uploads"].get("children") or []
+    assert any(c.get("name") == "photo.jpg" for c in uploads_children)
+    # Blocked folders and the rest of app-data/ must NOT be present.
+    assert "app-data" not in tree
     assert "docs" not in tree
     assert "credentials" not in tree
     assert "databases" not in tree
@@ -382,6 +463,48 @@ def test_read_workspace_file_text(
     assert isinstance(result, str)
     assert "name,value" in result
     assert "foo,42" in result
+
+
+def test_read_workspace_file_uploads_uri_translates_to_disk_path(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db,
+) -> None:
+    """Reading workspace://uploads/{path} must request app-data/uploads/{path} from the adapter.
+
+    The agent-env stores user-uploaded files under ``app-data/uploads/`` on
+    the per-user app-data volume. MCP clients see them at the stable
+    ``workspace://uploads/{path}`` URI; the resource reader is responsible
+    for translating back to the on-disk prefix before calling the adapter.
+    """
+    agent, connector = _setup_agent_with_connector(
+        client, superuser_token_headers,
+        agent_name="Uploads URI Translation Agent",
+    )
+    connector_id = connector["id"]
+
+    requested_paths: list[str] = []
+
+    async def mock_download(path):
+        requested_paths.append(path)
+        yield b"image-bytes"
+
+    mock_adapter = AsyncMock()
+    mock_adapter.download_workspace_item = mock_download
+
+    with patch("app.mcp.resources.EnvironmentService") as mock_env_svc:
+        mock_lm = MagicMock()
+        mock_lm.get_adapter.return_value = mock_adapter
+        mock_env_svc.get_lifecycle_manager.return_value = mock_lm
+
+        _run_with_connector_context(
+            connector_id,
+            lambda: _read_workspace_file("uploads/photo.png"),
+        )
+
+    assert requested_paths == ["app-data/uploads/photo.png"], (
+        f"Expected adapter to be called with disk path; got {requested_paths}"
+    )
 
 
 def test_read_workspace_file_binary(
@@ -638,13 +761,16 @@ def test_workspace_resource_manager_list_resources_async(
         )
 
     uris = [str(r.uri) for r in resources]
-    # Files from allowed folders should be present
+    # Files from allowed folders should be present.
     assert "workspace://files/report.csv" in uris
     assert "workspace://files/data/output.json" in uris
-    assert "workspace://uploads/photo.png" in uris
     assert "workspace://scripts/run.sh" in uris
-    # File from blocked folder should NOT be present
+    # User-uploaded files surface at the logical workspace://uploads/ URI
+    # (mapped from app-data/uploads/ on disk).
+    assert "workspace://uploads/photo.png" in uris
+    # Files from blocked folders / blocked app-data subtrees must NOT be present.
     assert "workspace://logs/app.log" not in uris
+    assert "workspace://app-data/storage/STATUS.md" not in uris
 
 
 def test_workspace_resource_manager_list_resources_async_includes_size(
@@ -677,7 +803,7 @@ def test_workspace_resource_manager_list_resources_async_includes_size(
     by_uri = {str(r.uri): r for r in resources}
     # 1234 bytes → "1.2 KB"
     assert "1.2 KB" in by_uri["workspace://files/report.csv"].description
-    # 89012 bytes → "86.9 KB"
+    # 89012 bytes → "86.9 KB" (uploaded file, surfaced under uploads/ alias)
     assert "KB" in by_uri["workspace://uploads/photo.png"].description
 
 

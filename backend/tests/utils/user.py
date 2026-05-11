@@ -39,6 +39,25 @@ def create_random_user_with_headers(
     return user, headers
 
 
+def promote_to_developer(
+    client: TestClient,
+    superuser_headers: dict[str, str],
+    user_id: str,
+) -> None:
+    """Promote a user to the ``agent-developer`` role.
+
+    Agent creation (``POST /agents/``) is gated on the developer role since
+    the Phase-3 RBAC rollout. Tests that create agents as a freshly-signed-up
+    user must promote that user first.
+    """
+    r = client.patch(
+        f"{settings.API_V1_STR}/users/{user_id}/role",
+        headers=superuser_headers,
+        json={"role": "agent-developer"},
+    )
+    assert r.status_code == 200, f"Failed to promote user to agent-developer: {r.text}"
+
+
 def authentication_token_from_email(
     *, client: TestClient, email: str
 ) -> dict[str, str]:

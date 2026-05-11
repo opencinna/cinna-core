@@ -46,7 +46,11 @@ from tests.utils.background_tasks import drain_tasks
 from tests.utils.environment import list_environments
 from tests.utils.message import send_message
 from tests.utils.session import create_session_with_block
-from tests.utils.user import create_random_user, user_authentication_headers
+from tests.utils.user import (
+    create_random_user,
+    promote_to_developer,
+    user_authentication_headers,
+)
 
 _BASE = f"{settings.API_V1_STR}/dashboards"
 
@@ -350,6 +354,7 @@ def test_block_agent_access_validation(
     other_headers = user_authentication_headers(
         client=client, email=other_user["email"], password=other_user["_password"]
     )
+    promote_to_developer(client, superuser_token_headers, other_user["id"])
     # Set up default AI credential for other user so agent creation works
     create_random_ai_credential(client, other_headers, set_default=True)
     other_agent = create_agent_via_api(client, other_headers)

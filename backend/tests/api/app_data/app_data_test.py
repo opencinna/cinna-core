@@ -19,7 +19,11 @@ from app.core.config import settings
 from tests.utils.agent import create_agent_via_api
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.user import create_random_user, user_authentication_headers
+from tests.utils.user import (
+    create_random_user,
+    promote_to_developer,
+    user_authentication_headers,
+)
 
 
 _BASE = f"{settings.API_V1_STR}/users/me/app-data"
@@ -109,6 +113,7 @@ def test_app_data_volume_lifecycle(
 
 def test_app_data_owner_isolation(
     client: TestClient,
+    superuser_token_headers: dict[str, str],
 ) -> None:
     """
     Ownership guards:
@@ -121,6 +126,7 @@ def test_app_data_owner_isolation(
     headers_a = user_authentication_headers(
         client=client, email=user_a["email"], password=user_a["_password"]
     )
+    promote_to_developer(client, superuser_token_headers, user_a["id"])
     # Each user needs an AI credential to create an environment.
     create_random_ai_credential(
         client, headers_a, credential_type="anthropic",

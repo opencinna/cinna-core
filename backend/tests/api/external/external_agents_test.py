@@ -78,6 +78,25 @@ def _ensure_user_can_create_agents(client: TestClient, headers: dict) -> None:
     )
 
 
+def _promote_to_developer(
+    client: TestClient,
+    superuser_headers: dict,
+    user_id: str,
+) -> None:
+    """Promote a user to the ``agent-developer`` role.
+
+    Agent creation (``POST /agents/``) is gated on the developer role since
+    the Phase-3 RBAC rollout. Tests that create agents as a freshly-signed-up
+    user must promote that user first.
+    """
+    r = client.patch(
+        f"{settings.API_V1_STR}/users/{user_id}/role",
+        headers=superuser_headers,
+        json={"role": "agent-developer"},
+    )
+    assert r.status_code == 200, f"Failed to promote user to agent-developer: {r.text}"
+
+
 # ---------------------------------------------------------------------------
 # Scenario 1: Unauthenticated
 # ---------------------------------------------------------------------------
@@ -239,7 +258,8 @@ def test_identity_contact_appears_when_enabled(
     owner, owner_headers = create_random_user_with_headers(client)
     owner_id = owner["id"]
 
-    # Owner needs an AI credential to create an agent
+    # Owner needs developer role + AI credential to create an agent
+    _promote_to_developer(client, superuser_token_headers, owner_id)
     _ensure_user_can_create_agents(client, owner_headers)
 
     # Owner creates an agent and binding, assigns caller
@@ -288,6 +308,7 @@ def test_identity_contact_absent_when_disabled(
     caller_id = caller["id"]
 
     owner, owner_headers = create_random_user_with_headers(client)
+    _promote_to_developer(client, superuser_token_headers, owner["id"])
     _ensure_user_can_create_agents(client, owner_headers)
 
     owner_agent = create_agent_via_api(
@@ -314,6 +335,7 @@ def test_identity_contact_absent_when_disabled(
 
 def test_identity_contact_example_prompts_are_prefixed(
     client: TestClient,
+    superuser_token_headers: dict,
 ) -> None:
     """Identity contact example prompts are prefixed with 'ask {owner_name} to'."""
     caller, caller_headers = create_random_user_with_headers(client)
@@ -324,6 +346,7 @@ def test_identity_contact_example_prompts_are_prefixed(
     # full_name may be None for signup-created users; service coerces to ""
     owner_name = owner["full_name"] or ""
 
+    _promote_to_developer(client, superuser_token_headers, owner_id)
     _ensure_user_can_create_agents(client, owner_headers)
     owner_agent = create_agent_via_api(
         client, owner_headers, name="Identity Prompts Agent"
@@ -366,7 +389,8 @@ def test_all_three_sections_coexist(
     caller, caller_headers = create_random_user_with_headers(client)
     caller_id = caller["id"]
 
-    # 1. Caller owns a personal agent (needs AI credential)
+    # 1. Caller owns a personal agent (needs developer role + AI credential)
+    _promote_to_developer(client, superuser_token_headers, caller_id)
     _ensure_user_can_create_agents(client, caller_headers)
     personal_agent = create_agent_via_api(
         client, caller_headers, name="Caller Personal Agent"
@@ -389,6 +413,7 @@ def test_all_three_sections_coexist(
 
     # 3. A third user owns an agent and exposes it as an identity contact for the caller
     identity_owner, identity_owner_headers = create_random_user_with_headers(client)
+    _promote_to_developer(client, superuser_token_headers, identity_owner["id"])
     _ensure_user_can_create_agents(client, identity_owner_headers)
     identity_agent = create_agent_via_api(
         client, identity_owner_headers, name="Identity Source Agent"
