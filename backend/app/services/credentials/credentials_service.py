@@ -1386,33 +1386,41 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         session: Session,
         user_id: uuid.UUID,
         name: str,
-        type: str,
+        credential_type: str,
+        *,
+        fall_back_to_type_only: bool = True,
     ) -> Credential | None:
-        """Suggest an existing credential matching ``(name, type)`` for the user.
+        """Suggest an existing credential matching the spec for the user.
 
         Used by ``CatalogService.build_install_context`` to populate
-        ``suggested_credential_id`` on each PBU spec on the install screen.
+        ``suggested_credential_id`` on each spec on the install screen.
         Suggestion-only — never auto-commits.
 
-        Match rules (plan §2 D6):
-          - Case-insensitive match on ``name`` AND exact match on ``type``.
-          - Searches the user's owned credentials AND credentials shared
-            with them via ``CredentialShare``.
-          - Prefers owned > shared, then most-recently-updated within each
-            tier. ``Credential`` has no ``updated_at`` column; we
-            approximate "most-recently-updated" with descending ``id`` so
-            newer rows (created later in time) win.
+        Match precedence:
+          1. Owned + case-insensitive name match + exact type match.
+          2. Shared + case-insensitive name match + exact type match.
+          3. Type-only fallback (when ``fall_back_to_type_only=True``): if
+             the user has exactly one owned credential of the matching type
+             we return it. Two or more type matches return ``None`` so the
+             UI shows the manual dropdown instead of guessing.
+
+        The type-only tier is intentionally owned-only — picking an
+        ambiguous shared credential by type alone would be too aggressive.
+        Within each tier we order by descending ``id`` (a proxy for most
+        recent, since ``Credential`` has no ``updated_at`` column) but
+        the unique-match rule for the type-only tier short-circuits that.
 
         Returns ``None`` when no match is found.
         """
         from app.models.credentials.credential import CredentialType
         from app.models.credentials.credential_share import CredentialShare
 
-        # Spec ``type`` arrives as a raw string from the revision JSON; map
-        # it to the enum so the comparison hits the indexed column. Bail
-        # out early on unknown types — no match is possible.
+        # Spec ``credential_type`` arrives as a raw string from the
+        # revision JSON; map it to the enum so the comparison hits the
+        # indexed column. Bail out early on unknown types — no match is
+        # possible.
         try:
-            type_enum = CredentialType(type)
+            type_enum = CredentialType(credential_type)
         except ValueError:
             return None
 
@@ -1444,7 +1452,27 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             )
             .order_by(Credential.id.desc())
         )
-        return session.exec(shared_stmt).first()
+        shared_match = session.exec(shared_stmt).first()
+        if shared_match is not None:
+            return shared_match
+
+        if not fall_back_to_type_only:
+            return None
+
+        # Type-only fallback — owned credentials only, unique-match required.
+        type_only_stmt = (
+            select(Credential)
+            .where(
+                Credential.owner_id == user_id,
+                Credential.type == type_enum,
+            )
+            .order_by(Credential.id.desc())
+            .limit(2)
+        )
+        type_only_matches = list(session.exec(type_only_stmt).all())
+        if len(type_only_matches) == 1:
+            return type_only_matches[0]
+        return None
 
     @staticmethod
     def get_agent_credentials(

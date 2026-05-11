@@ -15,6 +15,7 @@ import { useState } from "react"
 
 import {
   CatalogService,
+  InstallsService,
   type AICredentialSelections,
   type CatalogInstallContext,
   type InstallContextSpec,
@@ -50,13 +51,12 @@ function initialChoiceForSpec(
   if (spec.provided_by === "publisher") {
     return { mode: "publisher_provides" }
   }
-  // Template specs: the backend materialises a fresh placeholder
-  // credential pre-filled with the publisher's defaults. We send
-  // "skip" so the install service falls into the template branch
-  // (it short-circuits before user_selection is consulted).
-  if (spec.provided_by === "template") {
-    return { mode: "skip" }
-  }
+  // PBU and PBT specs share the same default: if the install-context
+  // matcher surfaced an existing credential of the same type, prefer
+  // reusing it (handles the "uninstall → reinstall" scenario without
+  // recreating duplicate credentials). Otherwise PBT falls back to
+  // template materialisation and PBU to a placeholder — both routed
+  // through "skip" since the backend branches on provided_by.
   if (spec.suggested_credential_id) {
     return { mode: "use_suggested" }
   }
@@ -105,9 +105,43 @@ export function InstallSetupForm({ context }: InstallSetupFormProps) {
               : null,
         },
       }),
-    onSuccess: (install) => {
+    onSuccess: async (install) => {
       queryClient.invalidateQueries({ queryKey: ["agents"] })
       queryClient.invalidateQueries({ queryKey: ["catalog"] })
+
+      // Decide where to send the installer based on whether the runtime
+      // gate would let this agent chat right now. A "ready" install can
+      // skip the Credentials tab entirely and land on the dashboard with
+      // its pill pre-selected — a "chat with it now" experience for the
+      // no-setup case (e.g. publisher-shared AI + publisher-shared
+      // service credentials, or every spec auto-matched to an existing
+      // user credential).
+      //
+      // Anything other than "ready" (needs_setup, publisher_broken, or a
+      // setup-status call that errored) falls back to the existing
+      // Credentials-tab redirect so the SetupNeededBanner can guide the
+      // installer through the missing fields.
+      let isReady = false
+      try {
+        const status = await InstallsService.getSetupStatus({
+          agentId: install.id,
+        })
+        isReady = status.status === "ready"
+      } catch {
+        isReady = false
+      }
+
+      if (isReady) {
+        showSuccessToast(
+          `${install.name} installed — you can chat with it now.`,
+        )
+        navigate({
+          to: "/",
+          search: { selectAgentId: install.id },
+        })
+        return
+      }
+
       showSuccessToast(`Installed ${install.name}`)
       navigate({
         to: "/agent/$agentId",

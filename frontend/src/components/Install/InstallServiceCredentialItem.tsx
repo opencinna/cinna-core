@@ -1,18 +1,23 @@
 /**
  * InstallServiceCredentialItem — one accordion entry per service spec.
  *
- * Two flavours:
+ * Three flavours:
  *   - PBP (provided_by="publisher"): collapsed by default, labelled "no
  *     action needed". The radio block is hidden.
  *   - PBU (provided_by="user"): radio choices for "Use my existing X"
  *     (when an auto-prefill suggestion exists), "Skip — set up later"
- *     (default when no suggestion), and "Pick another credential…"
- *     (opens a dropdown of all the user's matching-type credentials).
+ *     (the placeholder default when no suggestion), and "Pick another
+ *     credential…" (opens a dropdown of the user's matching-type
+ *     credentials).
+ *   - PBT (provided_by="template"): same radio shape as PBU plus a
+ *     "Create from publisher template" option (the default when there is
+ *     no suggestion — it materialises a fresh placeholder seeded with
+ *     the publisher's non-private values).
  *
- * The "expanded by default" state mirrors the rule in plan §3:
+ * The "expanded by default" state:
  *   - PBP: collapsed.
- *   - PBU with a suggestion: collapsed.
- *   - PBU without a suggestion: expanded.
+ *   - PBU/PBT with a suggestion: collapsed (auto-prefill).
+ *   - PBU/PBT without a suggestion: expanded.
  */
 import { useQuery } from "@tanstack/react-query"
 import { CheckCircle2, ChevronDown, ChevronRight } from "lucide-react"
@@ -37,7 +42,7 @@ import {
 export type ServiceCredentialChoice =
   | { mode: "use_suggested" }
   | { mode: "use_existing"; credential_id: string }
-  | { mode: "skip" } // resolves to placeholder server-side
+  | { mode: "skip" } // resolves to placeholder server-side (or template materialisation for PBT)
   | { mode: "publisher_provides" }
 
 interface InstallServiceCredentialItemProps {
@@ -49,6 +54,7 @@ interface InstallServiceCredentialItemProps {
 const RADIO_USE_SUGGESTED = "use_suggested"
 const RADIO_SKIP = "skip"
 const RADIO_PICK_OTHER = "pick_other"
+const RADIO_TEMPLATE = "template"
 
 export function InstallServiceCredentialItem({
   spec,
@@ -77,17 +83,17 @@ export function InstallServiceCredentialItem({
       const s = spec.publisher_summary
       return s ? `Shared by publisher (${s.name})` : "Shared by publisher"
     }
-    if (isTemplate) {
-      if (privateFieldCount > 0) {
-        return `Pre-filled template — fill in ${privateFieldCount} private field${privateFieldCount === 1 ? "" : "s"} after install`
-      }
-      return "Pre-filled template — no private fields"
-    }
     if (choice.mode === "use_suggested" && spec.suggested_credential_name) {
       return `Will use "${spec.suggested_credential_name}"`
     }
     if (choice.mode === "use_existing") {
       return "Custom credential picked"
+    }
+    if (isTemplate) {
+      if (privateFieldCount > 0) {
+        return `Create from template — fill in ${privateFieldCount} private field${privateFieldCount === 1 ? "" : "s"} after install`
+      }
+      return "Create from template — no private fields"
     }
     return "Skip — set up later"
   })()
@@ -149,10 +155,13 @@ export function InstallServiceCredentialItem({
           )}
           {isPublisher ? (
             <PublisherProvidedBody spec={spec} />
-          ) : isTemplate ? (
-            <TemplateProvidedBody spec={spec} />
           ) : (
-            <PBUChoicesBody spec={spec} choice={choice} onChange={onChange} />
+            <UserOrTemplateChoicesBody
+              spec={spec}
+              choice={choice}
+              onChange={onChange}
+              isTemplate={isTemplate}
+            />
           )}
         </div>
       )}
@@ -178,44 +187,16 @@ function PublisherProvidedBody({ spec }: { spec: InstallContextSpec }) {
   )
 }
 
-function TemplateProvidedBody({ spec }: { spec: InstallContextSpec }) {
-  const privateFields = spec.template_private_fields ?? []
-  return (
-    <div className="text-sm space-y-2">
-      <p>
-        <CheckCircle2 className="inline h-4 w-4 text-sky-500 mr-1.5 align-text-bottom" />
-        The publisher pre-filled this credential's setup so you only need
-        to supply the private fields after install.
-      </p>
-      {privateFields.length > 0 ? (
-        <div className="text-xs text-muted-foreground">
-          <p className="mb-1">You'll be asked to fill in:</p>
-          <ul className="list-disc pl-5 space-y-0.5">
-            {privateFields.map((f) => (
-              <li key={f} className="font-mono">
-                {f}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          No private fields — the credential will be ready immediately
-          after install.
-        </p>
-      )}
-    </div>
-  )
-}
-
-function PBUChoicesBody({
+function UserOrTemplateChoicesBody({
   spec,
   choice,
   onChange,
+  isTemplate,
 }: {
   spec: InstallContextSpec
   choice: ServiceCredentialChoice
   onChange: (next: ServiceCredentialChoice) => void
+  isTemplate: boolean
 }) {
   const { data: credentialsData } = useQuery({
     queryKey: ["credentials"],
@@ -227,10 +208,15 @@ function PBUChoicesBody({
     return credType === spec.type
   })
 
+  // "skip" maps to a placeholder for PBU and to template materialisation
+  // for PBT — both flow through the same backend payload mode, but the
+  // radio value identifier is split so the UI labels stay distinct.
+  const fallbackRadioValue = isTemplate ? RADIO_TEMPLATE : RADIO_SKIP
+
   const radioValue = (() => {
     if (choice.mode === "use_suggested") return RADIO_USE_SUGGESTED
     if (choice.mode === "use_existing") return RADIO_PICK_OTHER
-    return RADIO_SKIP
+    return fallbackRadioValue
   })()
 
   const handleRadioChange = (value: string) => {
@@ -238,7 +224,7 @@ function PBUChoicesBody({
       onChange({ mode: "use_suggested" })
       return
     }
-    if (value === RADIO_SKIP) {
+    if (value === RADIO_SKIP || value === RADIO_TEMPLATE) {
       onChange({ mode: "skip" })
       return
     }
@@ -255,13 +241,15 @@ function PBUChoicesBody({
       })
       return
     }
-    // No matching credential to pick — fall back to skip and let the user
-    // try again after creating one.
+    // No matching credential to pick — fall back to the placeholder/template
+    // path so the install can still proceed.
     onChange({ mode: "skip" })
   }
 
   const dropdownDisabled =
     radioValue !== RADIO_PICK_OTHER || matchingCredentials.length === 0
+
+  const privateFields = spec.template_private_fields ?? []
 
   return (
     <div className="space-y-3">
@@ -284,7 +272,7 @@ function PBUChoicesBody({
                 </span>
               </Label>
               <p className="text-xs text-muted-foreground">
-                Auto-detected by name + type. You can change this below.
+                Auto-detected by type {isTemplate ? "(reuses your existing setup)" : "and name"}. You can change this below.
               </p>
             </div>
           </div>
@@ -292,21 +280,41 @@ function PBUChoicesBody({
 
         <div className="flex items-start gap-2">
           <RadioGroupItem
-            id={`${spec.name}-skip`}
-            value={RADIO_SKIP}
+            id={`${spec.name}-${fallbackRadioValue}`}
+            value={fallbackRadioValue}
             className="mt-0.5"
           />
           <div className="flex-1 min-w-0">
             <Label
-              htmlFor={`${spec.name}-skip`}
+              htmlFor={`${spec.name}-${fallbackRadioValue}`}
               className="cursor-pointer"
             >
-              Skip — set up later
+              {isTemplate
+                ? "Create from publisher template"
+                : "Skip — set up later"}
             </Label>
-            <p className="text-xs text-muted-foreground">
-              A placeholder is created. Fill it in from the agent settings
-              when you're ready.
-            </p>
+            {isTemplate ? (
+              <p className="text-xs text-muted-foreground">
+                A new credential is created from the publisher's defaults
+                {privateFields.length > 0
+                  ? `. You'll need to fill in ${privateFields.length} private field${privateFields.length === 1 ? "" : "s"} after install.`
+                  : "."}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                A placeholder is created. Fill it in from the agent settings
+                when you're ready.
+              </p>
+            )}
+            {isTemplate && privateFields.length > 0 && (
+              <ul className="mt-1.5 list-disc pl-5 space-y-0.5 text-xs text-muted-foreground">
+                {privateFields.map((f) => (
+                  <li key={f} className="font-mono">
+                    {f}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
 
@@ -321,7 +329,9 @@ function PBUChoicesBody({
               htmlFor={`${spec.name}-pick-other`}
               className="cursor-pointer"
             >
-              Pick another credential
+              {isTemplate
+                ? "Use one of my existing credentials"
+                : "Pick another credential"}
             </Label>
             <div className="mt-1.5">
               <Select

@@ -291,19 +291,26 @@ class CatalogService:
                             name=pub_cred.name,
                             type=cred_type_value,
                         )
-            elif provided_by == "template":
-                raw_private = spec.get("template_private_fields") or []
-                if isinstance(raw_private, list):
-                    template_private_fields = [
-                        f for f in raw_private if isinstance(f, str)
-                    ]
             else:
-                # PBU spec — auto-prefill matcher.
+                # PBU and PBT specs both run the auto-prefill matcher.
+                # For PBT this lets a reinstall reuse the previously-
+                # materialised template credential (which has the spec's
+                # name/type) instead of creating a duplicate every time;
+                # the installer can still opt to materialise a fresh
+                # template-derived row by picking "Create from template"
+                # in the UI. PBT also carries the private-field list so
+                # the form can render the post-install setup hint.
+                if provided_by == "template":
+                    raw_private = spec.get("template_private_fields") or []
+                    if isinstance(raw_private, list):
+                        template_private_fields = [
+                            f for f in raw_private if isinstance(f, str)
+                        ]
                 match = CredentialsService.find_match_for_spec(
                     session=session,
                     user_id=user.id,
                     name=name,
-                    type=type_str,
+                    credential_type=type_str,
                 )
                 if match is not None:
                     suggested_id = match.id

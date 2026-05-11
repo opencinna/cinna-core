@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { useEffect, useState, useMemo, Fragment, KeyboardEvent, DragEvent } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
+import { useNavigate, useSearch } from "@tanstack/react-router"
 
 import { AgentsService, SessionsService, FilesService, UsersService, UtilsService, AiCredentialsService } from "@/client"
 import type { SessionCreate, FileUploadPublic } from "@/client"
@@ -50,8 +50,22 @@ import { GettingStartedModal } from "@/components/Onboarding/GettingStartedModal
 import { DashboardHeader } from "@/components/Dashboard/DashboardHeader"
 import { APP_NAME } from "@/utils"
 
+type DashboardSearch = {
+  selectAgentId?: string
+}
+
 export const Route = createFileRoute("/_layout/")({
   component: Dashboard,
+  // Optional one-shot hint used by the install flow to pre-select the
+  // freshly-installed agent in the pill picker after redirecting here.
+  // The component reads it once on mount, applies it, then strips it
+  // from the URL so a refresh doesn't keep re-applying the same selection.
+  validateSearch: (search: Record<string, unknown>): DashboardSearch => {
+    const raw = search.selectAgentId
+    return typeof raw === "string" && raw.length > 0
+      ? { selectAgentId: raw }
+      : {}
+  },
   head: () => ({
     meta: [
       {
@@ -88,6 +102,9 @@ function Dashboard() {
 
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+  // `selectAgentId` is a one-shot prefill hint set by the catalog install
+  // flow when the new agent is already chat-ready. We apply it once below.
+  const { selectAgentId } = useSearch({ from: "/_layout/" })
   const { showErrorToast } = useCustomToast()
   const { activeWorkspaceId, workspaceFilter } = useWorkspace()
   const { isAgentUser } = useRole()
@@ -234,6 +251,28 @@ function Dashboard() {
     // Don't make selection decisions while agents are still loading
     if (agentsLoading) return
 
+    // One-shot prefill from the catalog install flow: an install that
+    // came back gate-ready redirects here with ?selectAgentId=<id>. Pin
+    // the picker to that agent if/when it shows up in the active list,
+    // then strip the param so a manual refresh doesn't keep overriding
+    // the user's later picks.
+    if (selectAgentId) {
+      const match = agentsWithActiveEnv.find((a) => a.id === selectAgentId)
+      if (match) {
+        if (selectedAgentId !== selectAgentId) {
+          setSelectedAgentId(selectAgentId)
+          setMode("conversation")
+        }
+        navigate({ to: "/", search: {}, replace: true })
+        return
+      }
+      // Agents query may not yet contain the new install (race against
+      // the post-install refetch). Hold off on the default-selection
+      // branch below so we don't snap to a stale agent before the
+      // freshly-installed one arrives in the list.
+      return
+    }
+
     if (!selectedAgentId) {
       if (agentsWithActiveEnv.length > 0) {
         // When agents with active environments exist, select the first one in conversation mode
@@ -246,7 +285,7 @@ function Dashboard() {
       }
       // If agents exist but none have active environments, don't auto-select anything
     }
-  }, [agentsWithActiveEnv, agents.length, selectedAgentId, agentsLoading, isAgentUser])
+  }, [agentsWithActiveEnv, agents.length, selectedAgentId, agentsLoading, isAgentUser, selectAgentId, navigate])
 
   // Auto-insert entrypoint prompt when agent changes (only in automatic mode)
   useEffect(() => {
