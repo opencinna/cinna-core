@@ -1389,6 +1389,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         credential_type: str,
         *,
         fall_back_to_type_only: bool = True,
+        template_data: dict | None = None,
+        template_private_fields: list[str] | None = None,
     ) -> Credential | None:
         """Suggest an existing credential matching the spec for the user.
 
@@ -1396,7 +1398,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         ``suggested_credential_id`` on each spec on the install screen.
         Suggestion-only — never auto-commits.
 
-        Match precedence:
+        Match precedence (default / PBU path, ``template_data is None``):
           1. Owned + case-insensitive name match + exact type match.
           2. Shared + case-insensitive name match + exact type match.
           3. Type-only fallback (when ``fall_back_to_type_only=True``): if
@@ -1409,6 +1411,17 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         Within each tier we order by descending ``id`` (a proxy for most
         recent, since ``Credential`` has no ``updated_at`` column) but
         the unique-match rule for the type-only tier short-circuits that.
+
+        PBT-strict path (``template_data is not None``):
+          Same owned-then-shared name+type lookup, but each candidate's
+          decrypted ``credential_data`` (with ``template_private_fields``
+          stripped) must exactly equal ``template_data`` (also stripped
+          of those private keys for symmetry). The type-only fallback is
+          disabled — a value-anchored match is required, so an ambiguous
+          type-only hit must not silently auto-link a user credential
+          pointing at a different URL/database than the publisher's
+          template specifies. Candidates whose data fails to decrypt are
+          skipped rather than raising.
 
         Returns ``None`` when no match is found.
         """
@@ -1424,6 +1437,24 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         except ValueError:
             return None
 
+        pbt_strict = template_data is not None
+        private_keys = set(template_private_fields or [])
+        spec_stripped = {
+            k: v for k, v in (template_data or {}).items() if k not in private_keys
+        }
+
+        def _matches_template_data(candidate: Credential) -> bool:
+            try:
+                data = CredentialsService.decrypt_credential_data(
+                    session=session, credential=candidate
+                )
+            except Exception:
+                return False
+            candidate_stripped = {
+                k: v for k, v in data.items() if k not in private_keys
+            }
+            return candidate_stripped == spec_stripped
+
         # Owned credentials first (preferred tier).
         owned_stmt = (
             select(Credential)
@@ -1434,9 +1465,14 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             )
             .order_by(Credential.id.desc())
         )
-        owned_match = session.exec(owned_stmt).first()
-        if owned_match is not None:
-            return owned_match
+        if pbt_strict:
+            for candidate in session.exec(owned_stmt).all():
+                if _matches_template_data(candidate):
+                    return candidate
+        else:
+            owned_match = session.exec(owned_stmt).first()
+            if owned_match is not None:
+                return owned_match
 
         # Shared credentials (fallback tier).
         shared_stmt = (
@@ -1452,9 +1488,16 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             )
             .order_by(Credential.id.desc())
         )
-        shared_match = session.exec(shared_stmt).first()
-        if shared_match is not None:
-            return shared_match
+        if pbt_strict:
+            for candidate in session.exec(shared_stmt).all():
+                if _matches_template_data(candidate):
+                    return candidate
+            # Skip type-only fallback for PBT — value-anchored match required.
+            return None
+        else:
+            shared_match = session.exec(shared_stmt).first()
+            if shared_match is not None:
+                return shared_match
 
         if not fall_back_to_type_only:
             return None

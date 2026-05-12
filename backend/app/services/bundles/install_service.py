@@ -57,6 +57,10 @@ from app.models.environments.environment import (
 )
 from app.models.events.event import EventType
 from app.models.users.user import User
+from app.services.bundles.credential_spec import (
+    ParsedCredentialSpec,
+    parse_credential_spec,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -665,16 +669,13 @@ class InstallService:
         from app.models.credentials.link_models import AgentCredentialLink
 
         degraded = False
-        for spec in revision.required_credential_specs or []:
-            name = spec.get("name")
-            cred_type_str = spec.get("type")
-            provided_by = spec.get("provided_by") or "user"
-            publisher_credential_id_raw = spec.get("publisher_credential_id")
-            if not name or not cred_type_str:
+        for raw_spec in revision.required_credential_specs or []:
+            parsed = parse_credential_spec(raw_spec)
+            if parsed is None:
                 continue
 
             user_selection = (
-                user_provided_data.get(name) if user_provided_data else None
+                user_provided_data.get(parsed.name) if user_provided_data else None
             )
 
             # ── Template-provided branch ─────────────────────────────────
@@ -689,7 +690,7 @@ class InstallService:
             # credential of theirs (``mode="use_existing"``) we honour
             # that and skip the template materialisation — a fully-set-up
             # credential they already own beats a half-filled template.
-            if provided_by == "template":
+            if parsed.provided_by == "template":
                 wants_existing = (
                     isinstance(user_selection, dict)
                     and user_selection.get("mode") == "use_existing"
@@ -699,7 +700,7 @@ class InstallService:
                     if InstallService._materialise_template_credential(
                         session=session,
                         install=install,
-                        spec=spec,
+                        parsed=parsed,
                     ):
                         continue
                     # Bad spec data falls through to a regular placeholder so
@@ -710,11 +711,14 @@ class InstallService:
                     logger.warning(
                         "Failed to materialise template credential for spec '%s' "
                         "on install %s — falling back to placeholder",
-                        name, install.id,
+                        parsed.name, install.id,
                     )
 
             # ── Publisher-provided branch ─────────────────────────────────
-            if provided_by == "publisher" and publisher_credential_id_raw:
+            if (
+                parsed.provided_by == "publisher"
+                and parsed.publisher_credential_id is not None
+            ):
                 # Validate: explicit user_existing override on a publisher
                 # spec is not permitted.
                 if (
@@ -724,7 +728,7 @@ class InstallService:
                     raise HTTPException(
                         status_code=422,
                         detail=(
-                            f"Spec '{name}' is provided by the publisher and "
+                            f"Spec '{parsed.name}' is provided by the publisher and "
                             "cannot be overridden with a personal credential. "
                             "Re-submit with mode='publisher_provides' or omit "
                             "the entry."
@@ -733,8 +737,8 @@ class InstallService:
                 linked = InstallService._try_link_publisher_credential(
                     session=session,
                     install=install,
-                    publisher_credential_id_raw=publisher_credential_id_raw,
-                    spec_name=name,
+                    publisher_credential_id_raw=str(parsed.publisher_credential_id),
+                    spec_name=parsed.name,
                 )
                 if linked:
                     continue
@@ -743,7 +747,7 @@ class InstallService:
                 logger.warning(
                     "Falling back to placeholder for spec '%s' on install %s "
                     "(publisher credential %s unusable)",
-                    name, install.id, publisher_credential_id_raw,
+                    parsed.name, install.id, parsed.publisher_credential_id,
                 )
 
             # ── User-provided branch (default) ────────────────────────────
@@ -774,17 +778,17 @@ class InstallService:
                 )
 
             try:
-                cred_type = CredentialType(cred_type_str)
+                cred_type = CredentialType(parsed.type)
             except ValueError:
                 logger.warning(
                     "Unknown credential type '%s' for spec '%s' — skipping",
-                    cred_type_str, name,
+                    parsed.type, parsed.name,
                 )
                 continue
 
             placeholder = Credential(
                 owner_id=install.owner_id,
-                name=f"{name} (placeholder)",
+                name=f"{parsed.name} (placeholder)",
                 type=cred_type,
                 notes="Placeholder for required bundle credential.",
                 encrypted_data=encrypt_field(json.dumps({})),
@@ -810,7 +814,7 @@ class InstallService:
         *,
         session: Session,
         install: Agent,
-        spec: dict,
+        parsed: ParsedCredentialSpec,
     ) -> bool:
         """Create a placeholder Credential seeded from a template spec.
 
@@ -832,40 +836,22 @@ class InstallService:
         """
         from app.models.credentials.credential import CredentialType
 
-        name = spec.get("name") or "template credential"
-        cred_type_str = spec.get("type")
+        name = parsed.name or "template credential"
         try:
-            cred_type = CredentialType(cred_type_str)
+            cred_type = CredentialType(parsed.type)
         except ValueError:
             return False
-
-        template_data_raw = spec.get("template_data") or {}
-        if not isinstance(template_data_raw, dict):
-            template_data_raw = {}
-
-        private_fields_raw = spec.get("template_private_fields") or []
-        if not isinstance(private_fields_raw, list):
-            private_fields_raw = []
-        private_fields = [f for f in private_fields_raw if isinstance(f, str)]
-
-        # Drop any private-field values that may have leaked into the
-        # spec's template_data — defensive belt-and-suspenders so the
-        # installer always supplies private values themselves.
-        private_set = set(private_fields)
-        template_data = {
-            k: v for k, v in template_data_raw.items() if k not in private_set
-        }
 
         cred = Credential(
             owner_id=install.owner_id,
             name=name,
             type=cred_type,
-            notes=spec.get("description") or "Created from bundle template.",
-            encrypted_data=encrypt_field(json.dumps(template_data)),
+            notes=parsed.description or "Created from bundle template.",
+            encrypted_data=encrypt_field(json.dumps(parsed.non_private_template_data)),
             is_placeholder=True,
             allow_sharing=False,
             allow_template_sharing=False,
-            template_private_fields=private_fields,
+            template_private_fields=parsed.template_private_fields,
         )
         session.add(cred)
         session.flush()

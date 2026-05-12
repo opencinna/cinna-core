@@ -16,7 +16,6 @@ The publisher's working install row is filtered out — publishers should not
 import logging
 import uuid
 from datetime import datetime
-from typing import Literal
 
 from sqlmodel import Session, select
 from sqlalchemy import func
@@ -35,6 +34,7 @@ from app.models.bundles.catalog import (
 from app.models.credentials.ai_credential import AICredential
 from app.models.credentials.credential import Credential
 from app.models.users.user import User
+from app.services.bundles.credential_spec import parse_credential_spec
 
 logger = logging.getLogger(__name__)
 
@@ -256,41 +256,30 @@ class CatalogService:
             raw_specs = revision.required_credential_specs or []
 
         service_specs: list[InstallContextSpec] = []
-        for spec in raw_specs:
-            if not isinstance(spec, dict):
+        for raw_spec in raw_specs:
+            parsed = parse_credential_spec(raw_spec)
+            if parsed is None:
                 continue
-            name = spec.get("name")
-            type_str = spec.get("type")
-            if not name or not type_str:
-                continue
-            description = spec.get("description")
-            provided_by = spec.get("provided_by") or "user"
-            publisher_credential_id_raw = spec.get("publisher_credential_id")
 
             publisher_summary: InstallContextPublisherSummary | None = None
             suggested_id: uuid.UUID | None = None
             suggested_name: str | None = None
-            template_private_fields: list[str] = []
 
-            if provided_by == "publisher" and publisher_credential_id_raw:
-                # Try to resolve the publisher's row for the {name, type}
-                # summary. Same defensive parsing as the install service.
-                try:
-                    pub_cred_id = uuid.UUID(str(publisher_credential_id_raw))
-                except (ValueError, TypeError):
-                    pub_cred_id = None
-                if pub_cred_id is not None:
-                    pub_cred = session.get(Credential, pub_cred_id)
-                    if pub_cred is not None:
-                        cred_type_value = (
-                            pub_cred.type.value
-                            if hasattr(pub_cred.type, "value")
-                            else str(pub_cred.type)
-                        )
-                        publisher_summary = InstallContextPublisherSummary(
-                            name=pub_cred.name,
-                            type=cred_type_value,
-                        )
+            if (
+                parsed.provided_by == "publisher"
+                and parsed.publisher_credential_id is not None
+            ):
+                pub_cred = session.get(Credential, parsed.publisher_credential_id)
+                if pub_cred is not None:
+                    cred_type_value = (
+                        pub_cred.type.value
+                        if hasattr(pub_cred.type, "value")
+                        else str(pub_cred.type)
+                    )
+                    publisher_summary = InstallContextPublisherSummary(
+                        name=pub_cred.name,
+                        type=cred_type_value,
+                    )
             else:
                 # PBU and PBT specs both run the auto-prefill matcher.
                 # For PBT this lets a reinstall reuse the previously-
@@ -300,40 +289,36 @@ class CatalogService:
                 # template-derived row by picking "Create from template"
                 # in the UI. PBT also carries the private-field list so
                 # the form can render the post-install setup hint.
-                if provided_by == "template":
-                    raw_private = spec.get("template_private_fields") or []
-                    if isinstance(raw_private, list):
-                        template_private_fields = [
-                            f for f in raw_private if isinstance(f, str)
-                        ]
-                match = CredentialsService.find_match_for_spec(
-                    session=session,
-                    user_id=user.id,
-                    name=name,
-                    credential_type=type_str,
-                )
+                if parsed.provided_by == "template":
+                    match = CredentialsService.find_match_for_spec(
+                        session=session,
+                        user_id=user.id,
+                        name=parsed.name,
+                        credential_type=parsed.type,
+                        template_data=parsed.template_data,
+                        template_private_fields=parsed.template_private_fields,
+                    )
+                else:
+                    match = CredentialsService.find_match_for_spec(
+                        session=session,
+                        user_id=user.id,
+                        name=parsed.name,
+                        credential_type=parsed.type,
+                    )
                 if match is not None:
                     suggested_id = match.id
                     suggested_name = match.name
 
-            normalised_provided_by: Literal["user", "publisher", "template"]
-            if provided_by == "publisher":
-                normalised_provided_by = "publisher"
-            elif provided_by == "template":
-                normalised_provided_by = "template"
-            else:
-                normalised_provided_by = "user"
-
             service_specs.append(
                 InstallContextSpec(
-                    name=name,
-                    type=type_str,
-                    description=description,
-                    provided_by=normalised_provided_by,
+                    name=parsed.name,
+                    type=parsed.type,
+                    description=parsed.description,
+                    provided_by=parsed.provided_by,
                     publisher_summary=publisher_summary,
                     suggested_credential_id=suggested_id,
                     suggested_credential_name=suggested_name,
-                    template_private_fields=template_private_fields,
+                    template_private_fields=parsed.template_private_fields,
                 )
             )
 
