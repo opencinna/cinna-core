@@ -15,6 +15,7 @@ System prompt construction for agent environments. Each agent environment operat
 - **scripts/README.md** - Dynamic catalog of existing scripts maintained by the building agent. Auto-loaded into prompts so agents know what scripts already exist
 - **credentials/README.md** - Redacted documentation of credentials shared with the agent. Shows structure but hides sensitive values
 - **knowledge/** - Integration-specific documentation organized by topic. Only folder names are included in prompts; agents read files on-demand
+- **Trigger Prompt** (`Agent.router_trigger_prompt`) - A short, capability-verb-focused sentence that the App MCP router uses to decide when to pick this agent for an incoming message (e.g., "Plans meetings and books events in my calendar"). Not part of the agent's conversation or building system prompt — used only by the router classifier. Editable via the "Trigger Prompt" button in the Agent Prompts card; a "Generate" button calls `POST /agents/{id}/generate-router-trigger-prompt` (AI-generated from the agent's name and description using `gemini-2.5-flash-lite`). Snapshotted into `AgentBundleRevision.router_trigger_prompt` at publish time
 
 ## User Stories / Flows
 
@@ -109,7 +110,11 @@ System prompt construction for agent environments. Each agent environment operat
 - **Environment to Backend** - Automatic after building session completion. Updates Agent model fields
 - **Backend to Environment** - Manual, triggered by user via sync endpoint. Requires active running environment
 - Workflow prompt changes trigger A2A skills regeneration and optional description update
-- **Publish snapshot** - At publish time (`POST /agents/{id}/publish`), the three prompt fields (`workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`) are copied from the `Agent` row into `AgentBundleRevision` and into the revision's `manifest.json`. On `apply_update`, the install's prompt fields are updated from the revision — the next dynamic sync then writes them to `workspace/docs/`
+- **Publish snapshot** - At publish time (`POST /agents/{id}/publish`), the four prompt fields (`workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`, `router_trigger_prompt`) are copied from the `Agent` row into `AgentBundleRevision` and into the revision's `manifest.json` (`prompts.router_trigger`). On `apply_update`, all four fields are synced back onto the install's `Agent` row and the auto-managed `AppAgentRoute.trigger_prompt` is refreshed
+
+### Trigger Prompt Scope
+
+The `router_trigger_prompt` field is agent-level metadata — it is not injected into building or conversation mode system prompts. Its only consumer is the App MCP router (`AIFunctionsService.route_to_agent`). The field is owned by the agent owner and is editable by any authenticated owner (publisher install or foreign install) via the focused `PATCH /agents/{id}/router-trigger-prompt` endpoint, which bypasses the `require_developer` gate so `agent-user` accounts can refine their install's trigger prompt without needing a role upgrade. Saving also propagates the new value to the install's auto-managed `AppAgentRoute` immediately via `AppAgentRouteService.sync_router_trigger_prompt_from_agent`
 
 ## Architecture Overview
 
@@ -160,3 +165,5 @@ Sync Flow:
 - **[Multi SDK](../agent_environment_core/multi_sdk.md)** - SDK adapter selection determines model and prompt format per mode
 - **[Knowledge Management](../../application/knowledge_sources/knowledge_sources.md)** - Knowledge topic folders listed in prompts; agents read files on-demand
 - **[Agent Handover](../agent_handover/agent_handover.md)** - The consolidated `handover_prompt` from `{workspace}/docs/agent_handover_config.json` is appended at the end of conversation mode prompts so agents know when and how to delegate work
+- **[App MCP Server](../../application/app_mcp_server/app_mcp_server.md)** - `router_trigger_prompt` is the only prompt field consumed by the App MCP router; it is snapshotted into the bundle revision and propagated to the auto-managed `AppAgentRoute` at install time and on apply-update
+- **[Agent Bundles](../agent_bundles/agent_bundles.md)** - `router_trigger_prompt` is snapshotted into `AgentBundleRevision` at publish and drives auto-route creation at install time

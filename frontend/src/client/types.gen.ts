@@ -281,6 +281,8 @@ export type AgentBundlePublic = {
     description: (string | null);
     publisher_user_id: string;
     publisher_handle?: (string | null);
+    publisher_name?: (string | null);
+    publisher_email?: (string | null);
     latest_revision_id: (string | null);
     latest_revision_number?: (number | null);
     is_listed: boolean;
@@ -308,6 +310,7 @@ export type AgentBundleRevisionPublic = {
     workflow_prompt?: (string | null);
     entrypoint_prompt?: (string | null);
     refiner_prompt?: (string | null);
+    router_trigger_prompt?: (string | null);
     agent_sdk_building?: (string | null);
     agent_sdk_conversation?: (string | null);
     model_override_building?: (string | null);
@@ -355,6 +358,7 @@ export type AgentCreate = {
     workflow_prompt?: (string | null);
     entrypoint_prompt?: (string | null);
     refiner_prompt?: (string | null);
+    router_trigger_prompt?: (string | null);
     description?: (string | null);
     user_workspace_id?: (string | null);
 };
@@ -705,6 +709,7 @@ export type AgentPublic = {
     workflow_prompt: (string | null);
     entrypoint_prompt: (string | null);
     refiner_prompt: (string | null);
+    router_trigger_prompt?: (string | null);
     is_active: boolean;
     active_environment_id: (string | null);
     ui_color_preset: (string | null);
@@ -890,6 +895,7 @@ export type AgentUpdate = {
     workflow_prompt?: (string | null);
     entrypoint_prompt?: (string | null);
     refiner_prompt?: (string | null);
+    router_trigger_prompt?: (string | null);
     is_active?: (boolean | null);
     ui_color_preset?: (string | null);
     show_on_dashboard?: (boolean | null);
@@ -1287,6 +1293,7 @@ export type AppAgentRoutePublic = {
     channel_app_mcp: boolean;
     is_active: boolean;
     auto_enable_for_users?: boolean;
+    is_auto_managed?: boolean;
     agent_owner_name?: string;
     agent_owner_email?: string;
     created_by: string;
@@ -1614,15 +1621,13 @@ export type CreateScheduleRequest = {
  * ``publisher_install_id`` is the publisher install's ``Agent.id`` —
  * the frontend uses it to deep-link into the agent's Bundle tab where
  * bundle settings live (the platform doesn't expose a standalone
- * /bundles/{uuid} route).
+ * ``/bundles/{uuid}`` route).
  *
  * ``provided_by`` is the resolved provisioning mode for this credential
- * in the bundle, computed from the publisher install's
- * ``publish_settings.credential_overrides`` map (when set) and falling
- * back to the inference rule used at publish time:
- * ``allow_sharing → "publisher"`` else ``allow_template_sharing → "template"``
- * else ``"user"``. The frontend uses this to split usages between the
- * Sharing and Share-as-Template cards.
+ * in the bundle (``"user"`` | ``"publisher"`` | ``"template"``),
+ * computed via ``PublishService.resolve_provided_by``. The frontend
+ * uses it to split usages between the Sharing and Share-as-Template
+ * cards.
  */
 export type CredentialBundleUsage = {
     bundle_uuid: string;
@@ -1992,6 +1997,15 @@ export type GenerateHandoverPromptRequest = {
 export type GenerateHandoverPromptResponse = {
     success: boolean;
     handover_prompt?: (string | null);
+    error?: (string | null);
+};
+
+/**
+ * Response for the router trigger prompt generator endpoint.
+ */
+export type GenerateRouterTriggerPromptResponse = {
+    success: boolean;
+    trigger_prompt?: (string | null);
     error?: (string | null);
 };
 
@@ -2812,6 +2826,41 @@ export type RespondToTaskRequest = {
 export type RevokeRequest = {
     client_id?: (string | null);
     refresh_token?: (string | null);
+};
+
+/**
+ * A single conflicting effective route the installer already has.
+ *
+ * Surfaced as a non-blocking toast on the install completion page when an
+ * agent's auto-created route looks similar (by lowercased token overlap)
+ * to another route already active for the installer. Helps the user
+ * spot near-duplicate intents (e.g. "Calendar Planner" vs "Vacation
+ * Planner") that could confuse the App MCP router.
+ */
+export type RouteConflictMatch = {
+    route_id: string;
+    agent_id: string;
+    agent_name: string;
+    trigger_prompt: string;
+    similarity: number;
+};
+
+/**
+ * Response payload for the install-time conflict check.
+ *
+ * ``matches`` is sorted by descending similarity. Empty when no
+ * effective route crosses the similarity threshold (or when the agent
+ * has no auto-managed route to compare against).
+ */
+export type RouteConflictResponse = {
+    matches?: Array<RouteConflictMatch>;
+};
+
+/**
+ * Owner-only update payload for ``Agent.router_trigger_prompt``.
+ */
+export type RouterTriggerPromptUpdate = {
+    router_trigger_prompt?: (string | null);
 };
 
 /**
@@ -3872,6 +3921,12 @@ export type AgentAppMcpRoutesDeleteAgentAppMcpRouteData = {
 
 export type AgentAppMcpRoutesDeleteAgentAppMcpRouteResponse = (Message);
 
+export type AgentAppMcpRoutesCheckRouteConflictsData = {
+    agentId: string;
+};
+
+export type AgentAppMcpRoutesCheckRouteConflictsResponse = (RouteConflictResponse);
+
 export type AgentAppMcpRoutesAssignUsersToAgentRouteData = {
     agentId: string;
     requestBody: Array<(string)>;
@@ -4244,6 +4299,19 @@ export type AgentsRespondToTaskData = {
 };
 
 export type AgentsRespondToTaskResponse = (UpdateSessionStateResponse);
+
+export type AgentsUpdateRouterTriggerPromptData = {
+    id: string;
+    requestBody: RouterTriggerPromptUpdate;
+};
+
+export type AgentsUpdateRouterTriggerPromptResponse = (AgentPublic);
+
+export type AgentsGenerateRouterTriggerPromptEndpointData = {
+    id: string;
+};
+
+export type AgentsGenerateRouterTriggerPromptEndpointResponse = (GenerateRouterTriggerPromptResponse);
 
 export type AgentTasksAgentCreateTaskData = {
     requestBody: AgentTaskCreate;

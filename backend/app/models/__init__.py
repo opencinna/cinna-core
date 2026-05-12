@@ -33,6 +33,8 @@ from .agents.agent import (
     AgentSdkConfig,
     AllowedToolsUpdate,
     PendingToolsResponse,
+    GenerateRouterTriggerPromptResponse,
+    RouterTriggerPromptUpdate,
     UpdateMode,
 )
 from .credentials.credential import (
@@ -476,6 +478,8 @@ from .app_mcp.app_agent_route import (
     AppAgentRouteUpdate,
     AppAgentRoutePublic,
     AppAgentRouteAssignmentPublic,
+    RouteConflictMatch,
+    RouteConflictResponse,
     UserAppAgentRouteCreate,
     UserAppAgentRouteUpdate,
     UserAppAgentRoutePublic,
@@ -553,6 +557,8 @@ __all__ = [
     "AgentSdkConfig",
     "AllowedToolsUpdate",
     "PendingToolsResponse",
+    "GenerateRouterTriggerPromptResponse",
+    "RouterTriggerPromptUpdate",
     "UpdateMode",
     # Credentials
     "Credential",
@@ -931,6 +937,8 @@ __all__ = [
     "AppAgentRouteUpdate",
     "AppAgentRoutePublic",
     "AppAgentRouteAssignmentPublic",
+    "RouteConflictMatch",
+    "RouteConflictResponse",
     "UserAppAgentRouteCreate",
     "UserAppAgentRouteUpdate",
     "UserAppAgentRoutePublic",

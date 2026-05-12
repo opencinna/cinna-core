@@ -27,6 +27,12 @@ class AppAgentRoute(SQLModel, table=True):
     channel_app_mcp: bool = Field(default=True)
     is_active: bool = Field(default=True)
     auto_enable_for_users: bool = Field(default=False)
+    # True when this route was created by ``InstallService`` on bundle
+    # install. ``apply_update`` refreshes ``trigger_prompt``/``name``/
+    # ``session_mode`` from the new revision only while this flag is
+    # ``True``. Any user-driven PUT via the public update endpoint flips
+    # it to ``False`` so manual edits are never overwritten.
+    is_auto_managed: bool = Field(default=False)
     created_by: uuid.UUID = Field(foreign_key="user.id", ondelete="CASCADE", index=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -84,6 +90,13 @@ class AppAgentRouteCreate(SQLModel):
     auto_enable_for_users: bool = False
     activate_for_myself: bool = False
     assigned_user_ids: list[uuid.UUID] = []
+    # ``is_auto_managed`` intentionally NOT exposed here — it's an
+    # internal flag set by ``InstallService`` (and the Phase 8 backfill
+    # script) via the explicit ``auto_managed=`` kwarg on
+    # ``AppAgentRouteService.create_route``. Allowing it through the
+    # public POST body would let users mint "bundle-managed" routes
+    # that the apply-update path would happily overwrite on the next
+    # revision push.
 
 
 class AppAgentRouteUpdate(SQLModel):
@@ -117,6 +130,7 @@ class AppAgentRoutePublic(SQLModel):
     channel_app_mcp: bool
     is_active: bool
     auto_enable_for_users: bool = False
+    is_auto_managed: bool = False
     agent_owner_name: str = ""
     agent_owner_email: str = ""
     created_by: uuid.UUID
@@ -189,3 +203,36 @@ class UserAppAgentRoutesResponse(SQLModel):
 
     personal_routes: list[UserAppAgentRoutePublic]
     shared_routes: list[SharedRoutePublic]
+
+
+# ---------------------------------------------------------------------------
+# Conflict detection — install-time fuzzy match against effective routes
+# ---------------------------------------------------------------------------
+
+
+class RouteConflictMatch(SQLModel):
+    """A single conflicting effective route the installer already has.
+
+    Surfaced as a non-blocking toast on the install completion page when an
+    agent's auto-created route looks similar (by lowercased token overlap)
+    to another route already active for the installer. Helps the user
+    spot near-duplicate intents (e.g. "Calendar Planner" vs "Vacation
+    Planner") that could confuse the App MCP router.
+    """
+
+    route_id: uuid.UUID
+    agent_id: uuid.UUID
+    agent_name: str
+    trigger_prompt: str
+    similarity: float  # 0.0 — 1.0 (Jaccard token overlap)
+
+
+class RouteConflictResponse(SQLModel):
+    """Response payload for the install-time conflict check.
+
+    ``matches`` is sorted by descending similarity. Empty when no
+    effective route crosses the similarity threshold (or when the agent
+    has no auto-managed route to compare against).
+    """
+
+    matches: list[RouteConflictMatch] = []

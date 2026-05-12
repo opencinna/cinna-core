@@ -33,14 +33,16 @@
 - `frontend/src/routes/_layout/catalog/agents/install.tsx` — `/catalog/agents/install` shell
 - `frontend/src/routes/_layout/catalog/agents/install/$bundleId.tsx` — `/catalog/agents/install/$bundleId` — renders `<InstallPage context={...} />` (Phase 3 rewrite; previously the Install Wizard route)
 - `frontend/src/components/Catalog/CatalogGrid.tsx` — catalog grid
-- `frontend/src/components/Catalog/CatalogCard.tsx` — single catalog entry card
+- `frontend/src/components/Catalog/CatalogCard.tsx` — single catalog entry card. The whole card body is clickable (navigates to the install page when not installed, or the agent detail page when installed). The footer button is "Quick Install" for uninstalled bundles (fires `useQuickInstall`, shows a `Loader2` spinner with "Installing…" label while pending) or "Open" for installed ones. Both footer buttons `stopPropagation` so they don't trigger the card-body navigation; card-body clicks are no-op while a Quick Install is in flight
 - `frontend/src/components/Catalog/CatalogFilters.tsx` — filter controls
 - `frontend/src/components/Install/InstallPage.tsx` — two-column install page container (left sticky agent header, right scrollable setup form, single Install button at bottom)
 - `frontend/src/components/Install/InstallAgentHeaderCard.tsx` — left-column sticky card showing bundle icon, name, version, publisher, description, credential summary, Bundle ID
-- `frontend/src/components/Install/InstallSetupForm.tsx` — right-column form; orchestrates AI section + service section + Install button; owns form state and submit logic
+- `frontend/src/components/Install/InstallSetupForm.tsx` — right-column form; orchestrates AI section + service section + Install button; owns form state and submit logic. Post-install side effects (query invalidation, route-conflict toast, setup-status check, dashboard-vs-credentials redirect) are delegated to `useBundleInstallNavigation`
 - `frontend/src/components/Install/InstallAICredentialSection.tsx` — renders publisher-provides info state OR the AI credential picker; replaces `WizardStepAICredentials` logic
 - `frontend/src/components/Install/InstallServiceCredentialItem.tsx` — one shadcn/ui `Accordion` item per service credential spec; handles auto-prefill suggestion display and mode selection (`use_existing` / `skip` / pick-another)
 - `frontend/src/components/Install/useInstallContext.ts` — React Query hook on `["catalog", bundleId, "install-context"]` fetching `GET /catalog/{bundle_id}/install-context`
+- `frontend/src/components/Install/useQuickInstall.ts` — `useMutation` hook used by `CatalogCard`'s Quick Install button. Fetches `install-context`, builds the default `InstallCredentialSelection` payload (PBP → `publisher_provides`, suggested credential → `use_existing`, else → `skip`) and the default `AICredentialSelections` (publisher-AI flag forwarded when offered), then calls `CatalogService.installBundle`. Delegates post-install to `useBundleInstallNavigation`
+- `frontend/src/components/Install/useBundleInstallNavigation.ts` — shared post-install side-effect hook used by both `InstallSetupForm` and `useQuickInstall`. Invalidates `["agents"]` and `["catalog"]`, fires the best-effort `AgentAppMcpRoutesService.checkRouteConflicts` warning toast, then calls `InstallsService.getSetupStatus` to branch: gate `ready` → navigate to `/` with `?selectAgentId=<install.id>`; anything else → `/agent/$agentId#credentials`
 - `frontend/src/components/Agents/AgentBundleTab.tsx` — bundle management tab on agent detail page
 - `frontend/src/components/Agents/CredentialProvisioningSection.tsx` — publisher-only half-width card on the bundle tab; only rendered when `agent.is_publisher_install === true`; lets the publisher set per-credential `provided_by` overrides (auto-save on change) and pick publisher AI credentials per mode with SDK-aware filtering (Phase 5)
 - `frontend/src/components/Credentials/credentialTypes.ts` — shared credential-type metadata registry (`CREDENTIAL_TYPE_GROUPS` array + `getCredentialTypeMeta(type)` helper); single source of truth for the icon, label, and per-group badge palette of every `CredentialType`. Consumed by both the Add Credential picker and the display-only `<CredentialTypeBadge>`
@@ -88,6 +90,7 @@ Indexes: `ix_agent_bundle_publisher` on `publisher_user_id`; `ix_agent_bundle_li
 | `workflow_prompt` | text | Snapshot from publisher install |
 | `entrypoint_prompt` | text | Snapshot from publisher install |
 | `refiner_prompt` | text | Snapshot from publisher install |
+| `router_trigger_prompt` | text NULLABLE | Snapshot of `Agent.router_trigger_prompt` at publish time. Used by `InstallService` to auto-create an `AppAgentRoute` at install time and by `apply_update` to refresh auto-managed routes. NULL when the publisher left the field blank — installs from such revisions are marked degraded and get no auto-route |
 | `agent_sdk_building` | varchar(128) | SDK selection snapshot |
 | `agent_sdk_conversation` | varchar(128) | SDK selection snapshot |
 | `model_override_building` | varchar(128) | |
@@ -127,8 +130,9 @@ New columns (added in Phase 2 migration):
 | `pending_update` | bool DEFAULT false | |
 | `pending_update_at` | timestamp | |
 | `last_sync_at` | timestamp | |
-| `last_update_status` | varchar(64) | `synced`, `failed`, or null |
+| `last_update_status` | varchar(64) | `synced`, `failed`, or null. Set to `"degraded"` when the install has no `router_trigger_prompt` and no auto-route could be created |
 | `publish_settings` | JSON DEFAULT `{}` | Publisher-only override map. Meaningful only on `is_publisher_install=True` rows. Shape: `{"credential_overrides": {"<spec_name>": {"provided_by": "user" \| "publisher" \| "template"}}}`. Added in Phase 5 migration `bb2cd3e4f5a6`; `"template"` value added with the template-sharing feature (migration `cc3de4f5a6b7`) |
+| `router_trigger_prompt` | text NULLABLE | Natural-language description of when the App MCP router should pick this agent. Editable by the agent owner via `PATCH /agents/{id}/router-trigger-prompt` (no developer gate). Snapshotted into `AgentBundleRevision` at publish; propagated back onto the install's row and its auto-managed `AppAgentRoute` on apply-update |
 
 Dropped columns (Phase 2 migration): `is_clone`, `parent_agent_id`, `clone_mode` and their indexes.
 
@@ -235,8 +239,8 @@ Publish flow detail:
 2. Bundle row resolved or created (first publish). On first publish, `_apply_pre_publish_ai_drafts` transfers any pre-publish AI credential draft from `install.publish_settings["ai_credentials"]` onto the new bundle's FK columns
 3. Next `revision_number = MAX(existing) + 1`
 4. `_validate_publisher_ai_credentials_sdk(session, install, bundle, env)` pre-flight runs before any snapshot work — rejects with `ValueError` (400) if a publisher AI credential's type no longer matches the env's per-mode SDK
-5. Snapshot written to `<tmp_dir>` then renamed to `<snapshot_dir>`
-6. `AgentBundleRevision` row inserted
+5. Snapshot written to `<tmp_dir>` then renamed to `<snapshot_dir>`. The manifest's `prompts` block includes `router_trigger` from `install.router_trigger_prompt` alongside `workflow`, `entrypoint`, and `refiner`
+6. `AgentBundleRevision` row inserted with `router_trigger_prompt=install.router_trigger_prompt`
 7. `bundle.latest_revision_id` and `install.installed_revision_id` updated
 8. `BUNDLE_PUBLISHED` event emitted
 9. `notify_installs()` called
@@ -261,6 +265,9 @@ Publish flow detail:
 | `update_publish_settings(session, install, *, credential_overrides, ai_credentials)` | Validates and persists a partial update to `install.publish_settings`. Both arguments are partial — `None` leaves that section untouched, a populated value replaces it. Asserts `is_publisher_install=True`, that override keys match currently-linked credential names, that each `provided_by` is `"user"`/`"publisher"`/`"template"`, that any non-null AI credential id is owned by the install owner, AND that the AI credential's `type` matches the install's env SDK provider for that mode (via `sdk_constants.sdk_expected_credential_type`). Raises `ValueError` (route maps to HTTP 400) on any validation failure. Implemented alongside `_validate_credential_overrides` and `_validate_ai_credentials_draft` helpers — the latter holds the SDK-vs-credential-type check |
 | `list_setup_credentials(session, install)` | Returns `list[SetupCredentialSummary]` for the install's user-fillable placeholder credentials (owner-owned, linked, `is_placeholder=True`). For template-materialised rows, decrypts and surfaces non-private fields under `template_prefilled_data` so the setup page can render read-only context; decryption failures fall back to an empty prefilled dict so a corrupted credential still surfaces. Backs the `GET /agents/{id}/setup-credentials` route |
 
+| `_auto_create_app_mcp_route(session, install, revision, user)` | Creates an `AppAgentRoute` + self-assignment (`activate_for_myself=True`) for the installer using `revision.router_trigger_prompt` as the trigger. Skips (and marks install `last_update_status="degraded"`) when `router_trigger_prompt` is empty. Idempotent — skips when an `is_auto_managed=True` route already exists for this agent. Exceptions are caught at the call site so install never aborts |
+| `_refresh_or_create_auto_route_on_update(session, install, revision)` | Apply-update hook. If an `is_auto_managed=True` route exists, refreshes `trigger_prompt` and `name` from the new revision. If no route exists and a manual (`is_auto_managed=False`) route is already present, does nothing. If neither exists and the revision has a trigger prompt, calls `_auto_create_app_mcp_route` |
+
 Install flow (`_install_from_revision`):
 1. `Agent` row created from revision prompts + SDK settings
 2. Name uniqueness enforced (appends "(2)", "(3)" etc.)
@@ -269,6 +276,7 @@ Install flow (`_install_from_revision`):
 5. Workspace seeded from `revision.snapshot_path` via `seed_workspace_from_bundle_snapshot`
 6. `AppDataService.get_or_create_volume` called; existing orphaned volume reattached
 7. `_setup_install_credentials` called — branches on `provided_by` per spec; PBP specs link the publisher's row; PBU specs create placeholders or link installer selections
+8. `_auto_create_app_mcp_route` called — creates `AppAgentRoute` + self-assignment from the revision's `router_trigger_prompt`; marks install degraded when prompt is empty
 
 ### `CatalogService`
 
@@ -499,6 +507,7 @@ The dedicated setup-credentials route (`frontend/src/routes/_layout/agent/$agent
 | `backend/app/alembic/versions/aa1bc2d3e4f5_add_publisher_ai_credentials_to_agent_bundle.py` | Adds `publisher_ai_credential_conversation_id` and `publisher_ai_credential_building_id` nullable UUID FK columns to `agent_bundle` (FK → `ai_credential.id`, `ON DELETE SET NULL`). `down_revision = i7e8f9a0b1c2`. No data backfill; downgrade drops both columns and their FK constraints |
 | `backend/app/alembic/versions/bb2cd3e4f5a6_add_publish_settings_to_agent.py` | Adds `publish_settings` JSON column (default `{}`) to the `agent` table. `down_revision = aa1bc2d3e4f5`. No data backfill; existing rows are read as `{}` naturally. Downgrade drops the column |
 | `backend/app/alembic/versions/cc3de4f5a6b7_add_template_sharing_to_credential.py` | Adds `allow_template_sharing` boolean (default `false`) and `template_private_fields` JSON list (default `[]`) to the `credential` table. `down_revision = bb2cd3e4f5a6`. Server defaults make the column add a no-op for existing rows; downgrade drops both columns |
+| `backend/app/alembic/versions/dd4ef5a6b7c8_add_router_trigger_prompt_and_auto_managed.py` | Adds `router_trigger_prompt` text NULLABLE to both `agent` and `agent_bundle_revision`; adds `is_auto_managed` boolean (server default `false`) to `app_agent_route`. `down_revision = cc3de4f5a6b7`. No data backfill in this migration — existing rows get NULL / false naturally. A separate Phase 8 backfill script populates `router_trigger_prompt` for pre-existing installs and creates their auto-routes |
 
 ## Runtime Cross-Service Rows Created at Install Time
 

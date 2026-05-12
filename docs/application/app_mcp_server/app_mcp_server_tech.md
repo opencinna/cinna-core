@@ -35,9 +35,10 @@
 
 ### Backend -- AI Router
 
-- `backend/app/agents/app_agent_router.py` -- `RouteToAgentResult` dataclass and `route_to_agent()` function; returns both agent ID and optional transformed message (routing prefix stripped); validates transformation: discards empty, identical-to-original, or exceeding-2x-length results
+- `backend/app/agents/app_agent_router.py` -- `RouteToAgentResult` dataclass and `route_to_agent(message, available_agents)` function; `available_agents` list of `{id, name, trigger_prompt, prompt_examples}` dicts; returns both agent ID and optional transformed message (routing prefix stripped); validates transformation: discards empty, identical-to-original, or exceeding-2x-length results
+- `backend/app/agents/router_trigger_prompt_generator.py` -- `generate_router_trigger_prompt(agent_name, description, provider_kwargs)` function; model `gemini-2.5-flash-lite`; target output ~120–150 chars, single capability-verb sentence; on any generation failure returns a fallback string `"Handles tasks related to: <description snippet>"`
 - `backend/app/agents/prompts/app_agent_router_prompt.md` -- prompt template instructing the LLM to return JSON `{"agent_id": "...", "message": "..."}` with routing prefix stripping rules
-- `backend/app/services/ai_functions/ai_functions_service.py` -- `route_to_agent()` method returns `RouteToAgentResult | None`
+- `backend/app/services/ai_functions/ai_functions_service.py` -- `route_to_agent()` method returns `RouteToAgentResult | None`; `generate_router_trigger_prompt(agent_name, description, user, db)` method wraps the generator, honours the user's `default_ai_functions_sdk` preference
 
 ### Backend -- OAuth Extensions
 
@@ -50,10 +51,12 @@
 - `backend/app/alembic/versions/a07a133c69d2_add_app_mcp_auth_code_tables.py` -- creates `app_mcp_auth_code`, `app_mcp_auth_request` tables
 - `backend/app/alembic/versions/72406c16543f_add_agent_id_to_session_table.py` -- adds `agent_id` to `session` table with backfill
 - Migration adding `auto_enable_for_users` column to `app_agent_route` with backfill for existing admin-created routes
+- `backend/app/alembic/versions/dd4ef5a6b7c8_add_router_trigger_prompt_and_auto_managed.py` -- adds `is_auto_managed` boolean (server default `false`) to `app_agent_route`; also adds `router_trigger_prompt` text NULLABLE to `agent` and `agent_bundle_revision` tables
 
 ### Frontend
 
 - `frontend/src/components/Agents/McpConnectorsCard.tsx` -- Unified card for both direct MCP connectors and App MCP Server routes; two-step creation dialog (type selector → form); App MCP form includes user assignment and admin-only "Make Active for Users" toggle
+- `frontend/src/components/Agents/McpConnectorsCardSimple.tsx` -- Simplified single-route view rendered for `agent-user` role on the Integrations tab; shows the auto-managed route with a per-user enable/disable toggle only
 - `frontend/src/components/UserSettings/AppAgentRoutesCard.tsx` -- Settings card with App MCP URL (copyable), "MCP Shared Agents" section (shared routes with toggle), and read-only legacy personal routes display
 - `frontend/src/components/Sidebar/AdminMenu.tsx` -- Admin dropdown menu (no longer includes "Application Agents" item)
 - `frontend/src/routes/oauth/mcp-consent.tsx` -- adapted for `app_mcp=true` query param
@@ -72,9 +75,10 @@
 
 ### `app_agent_route` -- Route definitions (any agent owner or superuser)
 
-- `id` (UUID, PK), `name` (str), `agent_id` (FK > agent, CASCADE), `session_mode` (str), `trigger_prompt` (Text), `message_patterns` (Text, nullable), `prompt_examples` (Text, nullable), `channel_app_mcp` (bool), `is_active` (bool), `auto_enable_for_users` (bool, default False), `created_by` (FK > user, CASCADE), `created_at`, `updated_at`
+- `id` (UUID, PK), `name` (str), `agent_id` (FK > agent, CASCADE), `session_mode` (str), `trigger_prompt` (Text), `message_patterns` (Text, nullable), `prompt_examples` (Text, nullable), `channel_app_mcp` (bool), `is_active` (bool), `auto_enable_for_users` (bool, default False), `is_auto_managed` (bool, default False), `created_by` (FK > user, CASCADE), `created_at`, `updated_at`
 - Indexes: `agent_id`, `created_by`
 - `auto_enable_for_users`: when `True`, assignments to new users are created with `is_enabled=True`; only superusers may set this field
+- `is_auto_managed`: set to `True` by `InstallService._auto_create_app_mcp_route` and by the Phase 8 backfill. When `True`, `apply_update` refreshes `trigger_prompt` and `name` from the new revision's `router_trigger_prompt`. Any user edit via the public `PUT /{route_id}` endpoint flips this to `False` permanently — the field is not settable from the `AppAgentRouteCreate` public body; the service exposes it only via the internal `auto_managed=` kwarg (trust boundary: prevents users from creating routes that the apply-update path would overwrite)
 
 ### `app_agent_route_assignment` -- Route > user link
 
@@ -122,9 +126,10 @@
 Any authenticated user who owns the agent (or a superuser) can use these endpoints.
 
 - `GET /` -- List App MCP routes for this agent; non-superusers see only routes they created; superusers see all
-- `POST /` -- Create a route for this agent; agent_id in body is overridden by path parameter
-- `PUT /{route_id}` -- Update route (creator or superuser); `agent_id` cannot be changed via update
+- `POST /` -- Create a route for this agent; agent_id in body is overridden by path parameter; `is_auto_managed` is NOT settable from this body (internal kwarg only)
+- `PUT /{route_id}` -- Update route (creator or superuser); `agent_id` cannot be changed via update; if the route has `is_auto_managed=True`, any successful update flips it to `False`
 - `DELETE /{route_id}` -- Delete route (creator or superuser)
+- `GET /conflicts` -- Find effective routes similar to this agent's auto-managed route using Jaccard token-overlap. Returns `RouteConflictResponse`. Empty matches when no auto-managed route exists or no similarity threshold is crossed. Used by the install page for the conflict toast
 - `POST /{route_id}/assignments` -- Assign users to route; `is_enabled` defaults follow `auto_enable_for_users`
 - `DELETE /{route_id}/assignments/{user_id}` -- Remove user assignment
 
@@ -182,12 +187,29 @@ message_patterns: str | None
 channel_app_mcp: bool
 is_active: bool
 auto_enable_for_users: bool
+is_auto_managed: bool        # True when created by InstallService; flipped to False on any user PUT
 agent_owner_name: str        # resolved from agent.owner
 agent_owner_email: str       # resolved from agent.owner
 created_by: uuid.UUID
 created_at: datetime
 updated_at: datetime
 assignments: list[AppAgentRouteAssignmentPublic]
+```
+
+### `RouteConflictMatch` / `RouteConflictResponse`
+
+Returned by `GET /api/v1/agents/{agent_id}/app-mcp-routes/conflicts`. Used by the install page to surface a non-blocking toast when the auto-created route's trigger prompt is similar to an existing effective route.
+
+```python
+class RouteConflictMatch(SQLModel):
+    route_id: uuid.UUID
+    agent_id: uuid.UUID
+    agent_name: str
+    trigger_prompt: str
+    similarity: float         # 0.0–1.0 Jaccard token-overlap score
+
+class RouteConflictResponse(SQLModel):
+    matches: list[RouteConflictMatch] = []  # sorted descending by similarity
 ```
 
 ### `SharedRoutePublic`
@@ -219,19 +241,21 @@ shared_routes: list[SharedRoutePublic]           # AppAgentRoute records assigne
 
 ### `AppAgentRouteService`
 
-- `create_route(db_session, data, current_user)` -- creates route with optional bulk user assignments; validates agent exists; enforces ownership check for non-superusers; enforces `auto_enable_for_users` superuser-only rule; when `activate_for_myself=True`, auto-adds creator as assigned user with `is_enabled=True`; other assignments' `is_enabled` follows `auto_enable_for_users`
+- `create_route(db_session, data, current_user, *, auto_managed=False)` -- creates route with optional bulk user assignments; validates agent exists; enforces ownership check for non-superusers; enforces `auto_enable_for_users` superuser-only rule; when `activate_for_myself=True`, auto-adds creator as assigned user with `is_enabled=True`; other assignments' `is_enabled` follows `auto_enable_for_users`. The `auto_managed` kwarg (internal only, not from the request body) sets `AppAgentRoute.is_auto_managed=True` — used by `InstallService` and the Phase 8 backfill
 - `list_routes(db_session)` -- lists all routes across all agents (superuser-only path)
 - `list_routes_for_agent(db_session, agent_id, current_user)` -- lists routes for a specific agent; non-superusers see only routes they created
 - `get_route(db_session, route_id)` -- get single route by ID (no ownership check, superuser path)
 - `get_route_for_agent(db_session, agent_id, route_id, current_user)` -- get route with agent + ownership validation; returns None for missing or unauthorized (treats as not-found for security)
 - `update_route(db_session, route_id, data)` -- update route (superuser-only path, no ownership check)
-- `update_route_for_agent(db_session, agent_id, route_id, data, current_user)` -- update with ownership check; raises ValueError on permission violation; blocks `auto_enable_for_users=True` for non-superusers; `agent_id` field is immutable
+- `update_route_for_agent(db_session, agent_id, route_id, data, current_user)` -- update with ownership check; raises ValueError on permission violation; blocks `auto_enable_for_users=True` for non-superusers; `agent_id` field is immutable; flips `is_auto_managed=False` on any route that was previously auto-managed
 - `delete_route(db_session, route_id)` -- delete route (superuser-only path)
 - `delete_route_for_agent(db_session, agent_id, route_id, current_user)` -- delete with ownership check; raises ValueError on permission violation
 - `assign_users(db_session, route_id, user_ids, auto_enable=False)` -- bulk assign users, skip duplicates; `auto_enable` controls `is_enabled` for new assignments
 - `remove_assignment(db_session, route_id, user_id)` -- remove single assignment
 - `get_effective_routes_for_user(db_session, user_id, channel)` -- returns unified `EffectiveRoute` list combining assigned routes (active + enabled) and personal routes (active), filtered by channel
 - `toggle_admin_assignment(db_session, assignment_id, user_id, is_enabled)` -- allow a user to toggle their own route assignment on/off
+- `find_route_conflicts_for_agent(db_session, agent_id, user_id, threshold=None)` -- compares the agent's auto-managed route trigger prompt against all other effective routes for `user_id` using Jaccard token-overlap; excludes identity routes and routes targeting the same agent; returns `RouteConflictResponse` sorted by descending similarity; returns empty when no auto-managed route exists for the agent
+- `sync_router_trigger_prompt_from_agent(db_session, agent)` -- called after `PATCH /agents/{id}/router-trigger-prompt` saves; propagates the new value onto the agent's auto-managed route (`is_auto_managed=True`) so the router sees it immediately without waiting for an apply-update
 
 ### `UserAppAgentRouteService`
 
@@ -245,7 +269,7 @@ shared_routes: list[SharedRoutePublic]           # AppAgentRoute records assigne
 
 - `route_message(db, user_id, message, channel)` -- main entry: gets effective routes, tries pattern match, falls back to AI, returns `RoutingResult` (with optional `transformed_message`) or None
 - `_try_pattern_match(message, routes)` -- fnmatch-based glob matching against `message_patterns`
-- `_ai_classify(message, routes)` -- calls `AIFunctionsService.route_to_agent()`, returns `(EffectiveRoute, transformed_message)` tuple or None
+- `_ai_classify(message, routes)` -- builds candidate list as `[{id, name, trigger_prompt, prompt_examples}]` (one dict per effective route; `prompt_examples` included so the LLM can use example phrasing for disambiguation); calls `AIFunctionsService.route_to_agent()`; returns `(EffectiveRoute, transformed_message)` tuple or None
 - `_route_identity(db, selected_route, caller_user_id, message, stage1_method, transformed_message)` -- Stage 2 delegation; passes Stage 1's transformed message to identity router; applies cascade logic (Stage 2 wins > Stage 1 fallback > None)
 
 ### `AppMCPRequestHandler`
@@ -285,6 +309,16 @@ Handles both direct MCP connector management and App MCP Server route management
 - `updateAppMcpRouteMutation` -- PUT; invalidates same query
 - `deleteAppMcpRouteMutation` -- DELETE; invalidates same query
 - `toggleAppMcpRouteMutation` -- PUT with `is_active` toggle; invalidates same query
+
+### McpConnectorsCardSimple (`McpConnectorsCardSimple.tsx`)
+
+Degraded view of the MCP Connectors card rendered for the `agent-user` role via `AgentIntegrationsTab`. Hides all developer-tier affordances:
+
+- Finds the agent's auto-managed route by filtering `routes.find((r) => r.is_auto_managed)` from `GET /api/v1/agents/{agent_id}/app-mcp-routes`
+- Renders a single row: route name + trigger prompt (read-only mirror of `AppAgentRoute.trigger_prompt`) + a per-user enable/disable `Switch`
+- Toggle writes `AppAgentRouteAssignment.is_enabled` via `UserAppAgentRoutesService.toggleAdminAssignment` — the route itself stays `is_active=True`
+- When no auto-managed route exists, shows a dashed-border hint directing the user to set a Trigger Prompt on the Configuration tab
+- Shares React Query key `["app-mcp-routes", agentId]` with `EditRouterTriggerPromptModal` so the trigger-prompt mirror refreshes after a save without a manual reload
 
 ### AppAgentRoutesCard (`AppAgentRoutesCard.tsx`)
 

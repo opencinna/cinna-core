@@ -159,6 +159,14 @@ migration: # create a new migration (will prompt for migration name)
 test-backend: # run backend pytest suite inside the backend container
 	docker compose exec backend python -m pytest tests/ -v
 
+.PHONY: backfill-router-trigger-prompts
+backfill-router-trigger-prompts: # one-time: generate router trigger prompts + auto App MCP routes for existing installs
+	docker compose exec backend python -m app.scripts.backfill_router_trigger_prompts
+
+.PHONY: backfill-router-trigger-prompts-dry-run
+backfill-router-trigger-prompts-dry-run: # dry-run: report what backfill-router-trigger-prompts would change
+	docker compose exec backend python -m app.scripts.backfill_router_trigger_prompts --dry-run
+
 .PHONY: check-docs
 check-docs: # check documentation for broken file references
 	python3 .cinna-core-kit/scripts/check_docs_references.py

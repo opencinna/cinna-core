@@ -15,10 +15,12 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import useAuth from "@/hooks/useAuth"
+import useRole from "@/hooks/useRole"
 import { AccessTokensCard } from "./AccessTokensCard"
 import { EmailIntegrationCard } from "./EmailIntegrationCard"
 import { GuestShareCard } from "./GuestShareCard"
 import { McpConnectorsCard } from "./McpConnectorsCard"
+import { McpConnectorsCardSimple } from "./McpConnectorsCardSimple"
 import { WebappShareCard } from "./WebappShareCard"
 import { LocalDevCard } from "./LocalDevCard"
 import { AgentWebhooksCard } from "./Webhooks/AgentWebhooksCard"
@@ -32,7 +34,20 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const { user } = useAuth()
+  const { isAgentUser } = useRole()
   const isOwner = !!user && user.id === agent.owner_id
+
+  // Agent-users see only a simplified MCP Connectors card — no A2A,
+  // access tokens, guest shares, email, webhooks, or local-dev cards.
+  if (isAgentUser) {
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <McpConnectorsCardSimple agentId={agent.id} />
+        </div>
+      </div>
+    )
+  }
 
   // A2A state
   const a2aConfig = agent.a2a_config as { enabled?: boolean; [key: string]: unknown } | null | undefined

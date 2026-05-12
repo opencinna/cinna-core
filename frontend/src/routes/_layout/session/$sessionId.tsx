@@ -450,7 +450,15 @@ function ChatInterface() {
                       : "External"}
                   </span>
                 )}
-                {session.caller_email && (
+                {/*
+                  Self-call sessions: when the agent owner is also the
+                  caller (e.g. agent-user installs that hit App MCP from
+                  their own Claude Desktop), suppress the redundant
+                  "called by yourself" email chip. Keep the integration-
+                  type badge (MCP / A2A / Email / etc.) so the channel
+                  is still visible.
+                */}
+                {session.caller_email && session.caller_id !== session.user_id && (
                   <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
                     <User className="h-2.5 w-2.5" />
                     {session.caller_email}

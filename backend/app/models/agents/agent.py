@@ -23,6 +23,13 @@ class AgentBase(SQLModel):
     workflow_prompt: str | None = Field(default=None)
     entrypoint_prompt: str | None = Field(default=None)
     refiner_prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    # Short, capability-verb-focused natural-language description of what to
+    # ask the agent to do. Used by the App MCP router for AI classification
+    # of incoming external messages. Edited by the agent owner on the
+    # Prompts tab; snapshotted onto each bundle revision at publish time
+    # and propagated back into auto-managed AppAgentRoute rows on install
+    # / apply-update.
+    router_trigger_prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
 
 
 # Properties to receive on agent creation
@@ -38,6 +45,7 @@ class AgentUpdate(SQLModel):
     workflow_prompt: str | None = None
     entrypoint_prompt: str | None = None
     refiner_prompt: str | None = None
+    router_trigger_prompt: str | None = None
     is_active: bool | None = None
     ui_color_preset: str | None = None
     show_on_dashboard: bool | None = None
@@ -184,6 +192,7 @@ class AgentPublic(SQLModel):
     workflow_prompt: str | None
     entrypoint_prompt: str | None
     refiner_prompt: str | None
+    router_trigger_prompt: str | None = None
     is_active: bool
     active_environment_id: uuid.UUID | None
     ui_color_preset: str | None
@@ -280,3 +289,15 @@ class AllowedToolsUpdate(SQLModel):
 class PendingToolsResponse(SQLModel):
     """Response for pending tools endpoint"""
     pending_tools: list[str]  # Tools that need approval (in sdk_tools but not in allowed_tools)
+
+
+class GenerateRouterTriggerPromptResponse(SQLModel):
+    """Response for the router trigger prompt generator endpoint."""
+    success: bool
+    trigger_prompt: str | None = None
+    error: str | None = None
+
+
+class RouterTriggerPromptUpdate(SQLModel):
+    """Owner-only update payload for ``Agent.router_trigger_prompt``."""
+    router_trigger_prompt: str | None = None

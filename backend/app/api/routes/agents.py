@@ -21,6 +21,8 @@ from app.models import (
     AgentSdkConfig,
     AllowedToolsUpdate,
     PendingToolsResponse,
+    GenerateRouterTriggerPromptResponse,
+    RouterTriggerPromptUpdate,
     Message,
     CredentialsPublic,
     AgentEnvironment,
@@ -1113,3 +1115,106 @@ async def respond_to_task(
         success=True,
         message="Message sent to task session"
     )
+
+
+# Router trigger prompt — owner-only edit + AI generator endpoints. These
+# bypass the ``require_developer`` gate that covers the generic PUT so
+# ``agent-user`` accounts can manage the trigger prompt on their installs
+# without being able to touch other agent fields.
+
+
+@router.patch("/{id}/router-trigger-prompt", response_model=AgentPublic)
+def update_router_trigger_prompt(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+    data: RouterTriggerPromptUpdate,
+) -> Any:
+    """Owner-only update of the App MCP router trigger prompt.
+
+    Available to ``agent-user`` accounts on their installs (the generic
+    ``PUT /agents/{id}`` is gated to developers/admins). Also propagates
+    the new value into the matching auto-managed ``AppAgentRoute`` so the
+    router sees it immediately.
+    """
+    from app.services.app_mcp.app_agent_route_service import AppAgentRouteService
+
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    new_value = data.router_trigger_prompt
+    if new_value is not None:
+        new_value = new_value.strip() or None
+    agent.router_trigger_prompt = new_value
+    session.add(agent)
+    session.commit()
+    session.refresh(agent)
+
+    # Propagate to the install's auto-managed route, if any.
+    try:
+        AppAgentRouteService.sync_router_trigger_prompt_from_agent(
+            db_session=session, agent=agent,
+        )
+    except Exception as exc:  # noqa: BLE001 — defensive
+        logger.warning(
+            "Failed to sync router_trigger_prompt to auto-managed route for "
+            "agent %s: %s",
+            id, exc,
+        )
+
+    return _agent_to_public(session, agent)
+
+
+# Router trigger prompt generator (App MCP routing)
+@router.post(
+    "/{id}/generate-router-trigger-prompt",
+    response_model=GenerateRouterTriggerPromptResponse,
+)
+def generate_router_trigger_prompt_endpoint(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+) -> Any:
+    """
+    Generate an App MCP router trigger prompt for this agent.
+
+    Sources from the agent's ``name`` + ``description``. Returns a short
+    single-sentence prompt the frontend can pre-fill into the Trigger
+    Prompt field on the Prompts tab; the user is free to edit it before
+    saving.
+
+    Available to any agent owner (publisher install + installs alike) so
+    `agent-user` accounts can regenerate their install's trigger prompt
+    without needing developer role.
+    """
+    from app.services.ai_functions.ai_functions_service import AIFunctionsService
+
+    agent = session.get(Agent, id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and (agent.owner_id != current_user.id):
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+
+    description = (agent.description or "").strip()
+    if not description:
+        return GenerateRouterTriggerPromptResponse(
+            success=False,
+            error=(
+                "Cannot generate a router trigger prompt — the agent has no "
+                "description. Add a short description on the agent details "
+                "tab first."
+            ),
+        )
+
+    result = AIFunctionsService.generate_router_trigger_prompt(
+        agent_name=agent.name,
+        description=description,
+        user=current_user,
+        db=session,
+    )
+    return GenerateRouterTriggerPromptResponse(**result)

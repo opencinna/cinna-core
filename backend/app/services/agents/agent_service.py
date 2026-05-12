@@ -110,6 +110,7 @@ class AgentService:
             workflow_prompt=agent.workflow_prompt,
             entrypoint_prompt=agent.entrypoint_prompt,
             refiner_prompt=agent.refiner_prompt,
+            router_trigger_prompt=agent.router_trigger_prompt,
             is_active=agent.is_active,
             active_environment_id=agent.active_environment_id,
             ui_color_preset=agent.ui_color_preset,
@@ -367,6 +368,29 @@ class AgentService:
                     )
                 except Exception as e:
                     logger.warning(f"Failed to sync prompts to environment after agent update: {e}")
+
+        # Propagate ``router_trigger_prompt`` changes to the install's
+        # auto-managed App MCP route. The focused
+        # ``PATCH /agents/{id}/router-trigger-prompt`` endpoint already
+        # does this; mirror the behaviour here so the generic
+        # ``PUT /agents/{id}`` path stays consistent — otherwise a
+        # publisher edit via the standard Edit form silently fails to
+        # reach the router until the next apply-update.
+        if "router_trigger_prompt" in update_dict:
+            try:
+                from app.services.app_mcp.app_agent_route_service import (
+                    AppAgentRouteService,
+                )
+
+                AppAgentRouteService.sync_router_trigger_prompt_from_agent(
+                    db_session=session, agent=agent,
+                )
+            except Exception as exc:  # noqa: BLE001 — defensive
+                logger.warning(
+                    "Failed to sync router_trigger_prompt to auto-managed route "
+                    "for agent %s after PUT: %s",
+                    agent.id, exc,
+                )
 
         return agent
 

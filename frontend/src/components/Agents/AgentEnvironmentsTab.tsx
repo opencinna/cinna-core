@@ -114,9 +114,18 @@ export function AgentEnvironmentsTab({ agentId }: AgentEnvironmentsTabProps) {
   }
 
   const environments = environmentsData?.data || []
-  const activeEnvironment = environments.find((env) => env.is_active)
+  // Use ``agent.active_environment_id`` as the source of truth for which
+  // env is "the primary one". During install/auto-start the env's own
+  // ``is_active`` flag stays ``false`` until the background Docker build
+  // completes — but the agent already points at the new env from the
+  // moment ``InstallService`` creates it, so this surface the still-
+  // building env immediately. ``is_active`` is a fallback for any older
+  // row whose pointer was lost.
+  const activeEnvironment =
+    environments.find((env) => env.id === agentData?.active_environment_id) ??
+    environments.find((env) => env.is_active)
   const inactiveEnvironments = environments
-    .filter((env) => !env.is_active)
+    .filter((env) => env.id !== activeEnvironment?.id)
     .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
 
   return (

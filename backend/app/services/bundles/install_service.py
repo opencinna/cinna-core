@@ -205,6 +205,7 @@ class InstallService:
             workflow_prompt=revision.workflow_prompt,
             entrypoint_prompt=revision.entrypoint_prompt,
             refiner_prompt=revision.refiner_prompt,
+            router_trigger_prompt=revision.router_trigger_prompt,
             bundle_id=bundle.bundle_id,
             bundle_uuid=bundle.id,
             installed_revision_id=revision.id,
@@ -361,7 +362,183 @@ class InstallService:
                 install.id, e,
             )
 
+        # 6. Auto-create the App MCP route so the installer can reach the
+        # agent through the App MCP Server immediately. Best-effort: a
+        # failure here logs a warning and marks the install degraded but
+        # does NOT abort the install.
+        try:
+            InstallService._auto_create_app_mcp_route(
+                session=session,
+                install=install,
+                revision=revision,
+                user=user,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to auto-create App MCP route for install %s: %s",
+                install.id, e,
+            )
+
         return install
+
+    @staticmethod
+    def _auto_create_app_mcp_route(
+        *,
+        session: Session,
+        install: Agent,
+        revision: AgentBundleRevision,
+        user: User,
+    ) -> None:
+        """Create the installer's auto-managed ``AppAgentRoute`` for this install.
+
+        Idempotent: if a route already exists for this agent (e.g. the
+        admin install path re-running), this is a no-op. When the
+        revision has no ``router_trigger_prompt``, the route is skipped
+        and the install is marked degraded so the UI can prompt the
+        owner to set one before the agent is reachable via App MCP.
+
+        Exceptions are caught at the call site so install never aborts on
+        a router failure.
+        """
+        from app.models.app_mcp.app_agent_route import (
+            AppAgentRoute,
+            AppAgentRouteCreate,
+        )
+        from app.services.app_mcp.app_agent_route_service import (
+            AppAgentRouteService,
+        )
+
+        trigger_prompt = (revision.router_trigger_prompt or "").strip()
+        if not trigger_prompt:
+            logger.info(
+                "Install %s of bundle %s has no router_trigger_prompt — "
+                "skipping auto-route creation. Owner can set one via the "
+                "Prompts tab and the route will be created on next "
+                "apply-update.",
+                install.id, install.bundle_id,
+            )
+            # Mark degraded so the UI can surface a hint. Preserve any
+            # existing "degraded" state set by credentials setup.
+            if install.last_update_status not in ("degraded",):
+                install.last_update_status = "degraded"
+                session.add(install)
+                session.commit()
+                session.refresh(install)
+            return
+
+        # Idempotency: skip when an auto-managed route already exists for
+        # this agent owned by the installer. Reinstall after uninstall
+        # always creates a new Agent row anyway, so this branch only
+        # triggers on internal retries. We intentionally scope the
+        # filter to ``is_auto_managed=True`` so a user-created route on
+        # the same agent (e.g. a developer who manually added an extra
+        # route in the UI) doesn't suppress the auto-route creation.
+        existing_stmt = select(AppAgentRoute).where(
+            AppAgentRoute.agent_id == install.id,
+            AppAgentRoute.created_by == user.id,
+            AppAgentRoute.is_auto_managed == True,  # noqa: E712
+        )
+        existing = session.exec(existing_stmt).first()
+        if existing is not None:
+            logger.debug(
+                "Auto-route skipped — install %s already has route %s",
+                install.id, existing.id,
+            )
+            return
+
+        payload = AppAgentRouteCreate(
+            name=install.name,
+            agent_id=install.id,
+            session_mode="conversation",
+            trigger_prompt=trigger_prompt,
+            channel_app_mcp=True,
+            is_active=True,
+            auto_enable_for_users=False,
+            activate_for_myself=True,
+        )
+        AppAgentRouteService.create_route(
+            db_session=session,
+            data=payload,
+            current_user=user,
+            auto_managed=True,
+        )
+
+    @staticmethod
+    def _refresh_or_create_auto_route_on_update(
+        *,
+        session: Session,
+        install: Agent,
+        revision: AgentBundleRevision,
+    ) -> None:
+        """Apply-update: refresh the auto-managed route off the new revision.
+
+        - If an auto-managed route already exists, refresh its
+          ``trigger_prompt`` and ``name`` from the new revision (but only
+          if it's still flagged auto-managed; manual edits flip that to
+          ``False`` and we leave them alone).
+        - If no route exists yet AND the revision has a trigger prompt,
+          create one — covers installs from before this feature shipped
+          (Phase 8 backfill handles existing installs more thoroughly,
+          but apply-update is a natural per-install retry point).
+        - If the user already edited the route (``is_auto_managed=False``),
+          do nothing — their override wins.
+        """
+        from app.models.app_mcp.app_agent_route import AppAgentRoute
+
+        new_prompt = (revision.router_trigger_prompt or "").strip()
+
+        # Look up the install's auto-managed route directly. Filtering
+        # on ``is_auto_managed=True`` keeps a user-created sibling route
+        # on the same agent (a developer who manually added an extra
+        # route in the UI) from shadowing the lookup.
+        existing_stmt = select(AppAgentRoute).where(
+            AppAgentRoute.agent_id == install.id,
+            AppAgentRoute.created_by == install.owner_id,
+            AppAgentRoute.is_auto_managed == True,  # noqa: E712
+        )
+        existing = session.exec(existing_stmt).first()
+
+        if existing is not None:
+            if not new_prompt:
+                # The revision dropped its trigger prompt; keep the old
+                # route value rather than blanking a NOT NULL column.
+                return
+            changed = False
+            if existing.trigger_prompt != new_prompt:
+                existing.trigger_prompt = new_prompt
+                changed = True
+            if existing.name != install.name:
+                existing.name = install.name
+                changed = True
+            if changed:
+                existing.updated_at = datetime.now(UTC)
+                session.add(existing)
+                session.commit()
+                session.refresh(existing)
+            return
+
+        # No auto-managed route yet. Before creating one, check whether
+        # the installer already has a manual (``is_auto_managed=False``)
+        # route on this agent — that's the "user flipped auto-managed
+        # off via PUT" path, and the plan says their override wins.
+        # Without this check we'd silently mint a second route alongside
+        # the user's customised one on every apply-update.
+        manual_stmt = select(AppAgentRoute).where(
+            AppAgentRoute.agent_id == install.id,
+            AppAgentRoute.created_by == install.owner_id,
+            AppAgentRoute.is_auto_managed == False,  # noqa: E712
+        )
+        if session.exec(manual_stmt).first() is not None:
+            return
+
+        if not new_prompt:
+            return
+        InstallService._auto_create_app_mcp_route(
+            session=session,
+            install=install,
+            revision=revision,
+            user=session.get(User, install.owner_id),
+        )
 
     @staticmethod
     async def _ensure_unique_name(
@@ -907,6 +1084,7 @@ class InstallService:
             install.workflow_prompt = revision.workflow_prompt
             install.entrypoint_prompt = revision.entrypoint_prompt
             install.refiner_prompt = revision.refiner_prompt
+            install.router_trigger_prompt = revision.router_trigger_prompt
             install.installed_revision_id = revision.id
             install.last_sync_at = datetime.now(UTC)
             install.last_update_status = "synced"
@@ -915,6 +1093,24 @@ class InstallService:
             session.add(install)
             session.commit()
             session.refresh(install)
+
+            # Refresh the auto-managed App MCP route off the new revision.
+            # User-edited routes (is_auto_managed=False) are left alone.
+            # If no route exists yet (install pre-dates auto-routing, or
+            # the previous revision shipped without a trigger prompt), we
+            # create one now.
+            try:
+                InstallService._refresh_or_create_auto_route_on_update(
+                    session=session,
+                    install=install,
+                    revision=revision,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to refresh auto-managed App MCP route for "
+                    "install %s on apply-update: %s",
+                    install.id, e,
+                )
 
             # Best-effort restart — failures here surface via env status.
             if env is not None and was_running:

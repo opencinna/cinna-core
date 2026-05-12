@@ -16,6 +16,7 @@ from app.models.app_mcp.app_agent_route import (
     AppAgentRouteUpdate,
     AppAgentRoutePublic,
     AppAgentRouteAssignmentPublic,
+    RouteConflictResponse,
 )
 from app.services.app_mcp.app_agent_route_service import AppAgentRouteService
 
@@ -128,6 +129,36 @@ def delete_agent_app_mcp_route(
     if not deleted:
         raise HTTPException(status_code=404, detail="Route not found")
     return Message(message="Route deleted successfully")
+
+
+@router.get("/conflicts", response_model=RouteConflictResponse)
+def check_route_conflicts(
+    agent_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """Find effective routes similar to this agent's auto-managed route.
+
+    Cheap token-overlap (Jaccard) comparison against the caller's other
+    effective App MCP routes — surfaced as a non-blocking toast on the
+    install completion page when a near-duplicate intent is detected.
+    Returns an empty match list when the agent has no auto-managed route
+    yet (no router_trigger_prompt at install time) or when no other route
+    crosses the similarity threshold.
+
+    Permission: same ownership gate as the other endpoints on this
+    router — the caller must own the agent (or be a superuser).
+    """
+    agent = session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_superuser and agent.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return AppAgentRouteService.find_route_conflicts_for_agent(
+        db_session=session,
+        agent_id=agent_id,
+        user_id=current_user.id,
+    )
 
 
 @router.post("/{route_id}/assignments", response_model=list[AppAgentRouteAssignmentPublic])

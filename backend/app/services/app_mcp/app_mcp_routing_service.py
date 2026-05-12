@@ -266,6 +266,7 @@ class AppMCPRoutingService:
                 "id": str(route.agent_id),
                 "name": route.agent_name,
                 "trigger_prompt": route.trigger_prompt,
+                "prompt_examples": route.prompt_examples or "",
             }
             for route in routes
         ]

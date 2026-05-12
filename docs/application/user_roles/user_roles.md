@@ -6,7 +6,7 @@ Introduce a three-value role system (`agent-user`, `agent-developer`, `admin`) t
 
 ## Core Concepts
 
-- **`agent-user`** — the default role for every new signup. Can browse the catalog, install bundles, chat with agents in conversation mode, manage their own credentials, app-data, and settings. Cannot create agents, access building-mode sessions, or publish bundles
+- **`agent-user`** — the default role for every new signup. Can browse the catalog, install bundles, chat with agents in conversation mode, manage their own credentials, app-data, and settings. Can access the Integrations tab on their install detail pages, but only the MCP Connectors card is rendered (simplified view: single auto-managed route row, on/off toggle, no Direct MCP option, no superuser affordances). Can update and regenerate their install's `router_trigger_prompt` via the Agent Prompts card without needing developer role. Cannot create agents, access building-mode sessions, or publish bundles
 - **`agent-developer`** — promoted by an admin. Unlocks the full developer UI: agent creation, building-mode sessions, publishing bundles, schedule configuration, webhook management, and all integration setup
 - **`admin`** — the existing superuser tier (`is_superuser = true`). Has all developer privileges plus admin-console access (agent environments fleet, user management, marketplace, roles table). The `role` column is kept in sync with `is_superuser` — superusers always hold `role = 'admin'`
 - **`require_developer` dependency** — a FastAPI dependency used on routes that require at least `agent-developer`. Superusers always pass. Raises 403 for `agent-user` accounts
@@ -84,6 +84,9 @@ The following are available to all authenticated users (any role):
 | View and manage app-data | `GET/DELETE /users/me/app-data` |
 | Manage own credentials | |
 | Manage own settings | |
+| Edit router trigger prompt | `PATCH /agents/{id}/router-trigger-prompt` (owner only, no developer gate) |
+| Generate router trigger prompt | `POST /agents/{id}/generate-router-trigger-prompt` (owner only, no developer gate) |
+| View Integrations tab on install | MCP Connectors card only for `agent-user`; full tab for developers |
 
 ## UI Surface per Role
 
@@ -93,7 +96,9 @@ The following are available to all authenticated users (any role):
 - **Sidebar (footer)**: Activities, Catalog (workspace-agnostic, lives below Activities), User-icon dropdown with User Settings + theme switcher + Log Out
 - **Workspace switcher visibility**: gated by the per-user `workspacesEnabled` toggle (Settings → Interface → Workspaces card), not by role
 - **Dashboard differences**: no "+ New Agent" badge, no Conversation/Building mode toggle; if the user has zero agents the page does not auto-fall-back into the New Agent flow
-- **Agent detail page**: conversation mode only; Update Available banner; credential linking; Uninstall button; no prompts editor, no schedulers UI, no integrations tab, no Bundle tab; the bundle-id chip + copy button are not shown in the page header (the bundle ID is still editable inside the Bundle tab itself)
+- **Agent detail page**: tabs visible are Configuration, Credentials, Environments, and **Integrations**. Conversation mode only; Update Available banner; credential linking; Uninstall button; no schedulers UI, no Bundle tab; the bundle-id chip + copy button are not shown in the page header
+- **Integrations tab (agent-user)**: only the **MCP Connectors** card is rendered, using `McpConnectorsCardSimple`. Shows the install's auto-managed App MCP route with a per-user enable/disable toggle. No "New" dialog, no Direct MCP connector option, no `auto_enable_for_users` superuser toggle, no user-share multi-select. When no auto-managed route exists (install had no `router_trigger_prompt`), a hint directs the user to set a Trigger Prompt on the Configuration tab
+- **Configuration tab (agent-user)**: reads from the "Agent Prompts" card; includes the **Trigger Prompt** button (opens `EditRouterTriggerPromptModal` with a Generate button); Schedules and Handovers row is hidden (`showOperationalSettings=false`)
 - **Credential detail page**: the Sharing card (allow-sharing toggle, share dialog, shares list) is hidden — agent-users don't share their credentials with anyone. See [Credential Sharing](../../agents/agent_credentials/credential_sharing.md)
 - **Settings**: Profile, SSH Keys, App Data, Interface (Workspaces toggle, Agentic Teams, Dashboards) — no developer-specific tabs
 - **Admin**: not accessible

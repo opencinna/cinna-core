@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { ArrowLeft, EllipsisVertical, Sparkles } from "lucide-react"
+import { ArrowLeft, EllipsisVertical, Package, Sparkles, Tag, User } from "lucide-react"
 import { useState, useEffect } from "react"
 
-import { AgentsService } from "@/client"
+import { AgentsService, BundlesService } from "@/client"
 import useRole from "@/hooks/useRole"
 import { useNavigationHistory } from "@/hooks/useNavigationHistory"
 import { AgentConfigTab } from "@/components/Agents/AgentConfigTab"
@@ -52,6 +52,14 @@ function AgentDetail() {
     staleTime: 0,
   })
 
+  const isForeignInstallHeader = !!agent?.bundle_uuid && !agent?.is_publisher_install
+  const { data: bundle } = useQuery({
+    queryKey: ["bundles", agent?.bundle_uuid],
+    queryFn: () =>
+      BundlesService.getBundle({ bundleUuid: agent?.bundle_uuid as string }),
+    enabled: isForeignInstallHeader,
+  })
+
   const handleDeleteSuccess = () => {
     navigate({ to: "/agents" })
   }
@@ -81,13 +89,41 @@ function AgentDetail() {
                   </span>
                 )}
               </div>
-              <p className="text-xs text-muted-foreground">
-                {agent.is_publisher_install
-                  ? "Publisher install"
-                  : agent.bundle_uuid
-                  ? "Bundle install"
-                  : "Agent Configuration"}
-              </p>
+              {agent.bundle_uuid && !agent.is_publisher_install ? (
+                <div className="flex gap-1.5 mt-1 overflow-hidden">
+                  <span
+                    title={`Bundle ID: ${agent.bundle_id}`}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs whitespace-nowrap opacity-50 hover:opacity-100 transition-opacity bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+                  >
+                    <Package className="h-3 w-3" />
+                    {agent.bundle_id}
+                  </span>
+                  {agent.installed_revision_number != null && (
+                    <span
+                      title="Installed revision"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs whitespace-nowrap opacity-50 hover:opacity-100 transition-opacity bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+                    >
+                      <Tag className="h-3 w-3" />
+                      v{agent.installed_revision_number}
+                    </span>
+                  )}
+                  {(bundle?.publisher_name || bundle?.publisher_email || bundle?.publisher_handle) && (
+                    <span
+                      title="Bundle author"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs whitespace-nowrap opacity-50 hover:opacity-100 transition-opacity bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+                    >
+                      <User className="h-3 w-3" />
+                      {bundle.publisher_name || bundle.publisher_email || bundle.publisher_handle}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {agent.is_publisher_install
+                    ? "Publisher install"
+                    : "Agent Configuration"}
+                </p>
+              )}
             </div>
           </div>
           {(() => {
@@ -131,7 +167,7 @@ function AgentDetail() {
       )
     }
     return () => setHeaderContent(null)
-  }, [agent, setHeaderContent, menuOpen, isDeveloper])
+  }, [agent, bundle, setHeaderContent, menuOpen, isDeveloper])
 
   if (isLoading) {
     return <PendingItems />
@@ -185,10 +221,14 @@ function AgentDetail() {
   // tabs are gated separately by `isDeveloper`.
   let tabs = allTabs
   if (isAgentUser) {
+    // Agent-users see the integrations tab too, but inside it only the
+    // MCP Connectors card is rendered (see ``AgentIntegrationsTab`` — it
+    // reads ``useRole`` and degrades to a single card for agent-users).
     const agentUserTabs = new Set([
       "configuration",
       "credentials",
       "environments",
+      "integrations",
     ])
     tabs = allTabs.filter((tab) => agentUserTabs.has(tab.value))
   } else if (agent.is_general_assistant) {

@@ -20,6 +20,7 @@ from app.agents import (
     generate_agent_description,
     generate_conversation_title,
     generate_handover_prompt as generate_handover_prompt_from_agents,
+    generate_router_trigger_prompt as generate_router_trigger_prompt_from_agents,
     generate_sql_query,
     refine_prompt,
     refine_task as refine_task_from_agents,
@@ -646,6 +647,51 @@ class AIFunctionsService:
             }
 
     @staticmethod
+    def generate_router_trigger_prompt(
+        agent_name: str,
+        description: str,
+        user: "User | None" = None,
+        db: Session | None = None,
+    ) -> dict:
+        """Generate a router trigger prompt from an agent name + description.
+
+        Args:
+            agent_name: Display name of the agent.
+            description: User-facing description of what the agent does.
+            user: Optional current user (for per-user provider routing).
+            db: Optional DB session (required when ``user`` is provided).
+
+        Returns:
+            dict with keys:
+                - success: bool
+                - trigger_prompt: Generated single-sentence prompt (if success)
+                - error: Error message (if not success)
+        """
+        try:
+            provider_kwargs = AIFunctionsService._resolve_provider_kwargs(user, db)
+            trigger_prompt = generate_router_trigger_prompt_from_agents(
+                agent_name=agent_name,
+                description=description,
+                provider_kwargs=provider_kwargs,
+            )
+            logger.info(
+                "Generated router trigger prompt for %r: %r",
+                agent_name, trigger_prompt[:80],
+            )
+            return {
+                "success": True,
+                "trigger_prompt": trigger_prompt,
+            }
+        except Exception as e:
+            logger.error(
+                "Failed to generate router trigger prompt: %s", e, exc_info=True,
+            )
+            return {
+                "success": False,
+                "error": f"Failed to generate router trigger prompt: {str(e)}",
+            }
+
+    @staticmethod
     def route_to_agent(
         message: str,
         available_agents: list[dict],
@@ -654,7 +700,16 @@ class AIFunctionsService:
 
         Args:
             message: The user's message.
-            available_agents: List of dicts with keys: id, name, trigger_prompt.
+            available_agents: List of dicts with keys:
+                - ``id`` — agent UUID string
+                - ``name`` — agent display name (used by the classifier
+                  to disambiguate near-duplicate trigger prompts, e.g.
+                  "Calendar Planner" vs "Vacation Planner")
+                - ``trigger_prompt`` — natural-language description of
+                  when this agent should handle the message
+                - ``prompt_examples`` (optional) — newline-separated
+                  example user prompts the router can pattern-match
+                  against
 
         Returns:
             RouteToAgentResult with agent_id and optional transformed_message,

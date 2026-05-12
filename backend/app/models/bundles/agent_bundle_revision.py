@@ -59,6 +59,11 @@ class AgentBundleRevision(SQLModel, table=True):
     workflow_prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     entrypoint_prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     refiner_prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    # Snapshot of the publisher's ``Agent.router_trigger_prompt`` at publish
+    # time. Read by ``InstallService`` to seed the auto-managed
+    # ``AppAgentRoute`` for installers; propagated back to
+    # ``Agent.router_trigger_prompt`` + auto-managed routes on apply-update.
+    router_trigger_prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
 
     # SDK selections at publish time.
     agent_sdk_building: str | None = Field(default=None, max_length=128)
@@ -100,6 +105,7 @@ class AgentBundleRevisionPublic(SQLModel):
     workflow_prompt: str | None = None
     entrypoint_prompt: str | None = None
     refiner_prompt: str | None = None
+    router_trigger_prompt: str | None = None
     agent_sdk_building: str | None = None
     agent_sdk_conversation: str | None = None
     model_override_building: str | None = None

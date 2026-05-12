@@ -10,12 +10,12 @@ Each file below documents one API domain.
 | Access Tokens | [access_tokens.md](./access_tokens.md) | 5 |
 | Activities | [activities.md](./activities.md) | 8 |
 | Admin Environments | [admin_environments.md](./admin_environments.md) | 3 |
-| Agent App Mcp Routes | [agent_app_mcp_routes.md](./agent_app_mcp_routes.md) | 6 |
+| Agent App Mcp Routes | [agent_app_mcp_routes.md](./agent_app_mcp_routes.md) | 7 |
 | Agent Hooks | [agent_hooks.md](./agent_hooks.md) | 1 |
 | Agent Tasks | [agent_tasks.md](./agent_tasks.md) | 11 |
 | Agent Webhooks | [agent_webhooks.md](./agent_webhooks.md) | 8 |
 | Agentic Teams | [agentic_teams.md](./agentic_teams.md) | 18 |
-| Agents | [agents.md](./agents.md) | 34 |
+| Agents | [agents.md](./agents.md) | 36 |
 | Ai Credentials | [ai_credentials.md](./ai_credentials.md) | 8 |
 | App Agent Routes | [app_agent_routes.md](./app_agent_routes.md) | 7 |
 | App Data | [app_data.md](./app_data.md) | 3 |

@@ -16,6 +16,7 @@ import { EditDescriptionModal } from "./EditDescriptionModal"
 import { EditEntrypointPromptModal } from "./EditEntrypointPromptModal"
 import { EditWorkflowPromptModal } from "./EditWorkflowPromptModal"
 import { EditRefinerPromptModal } from "./EditRefinerPromptModal"
+import { EditRouterTriggerPromptModal } from "./EditRouterTriggerPromptModal"
 import { EditExamplePromptsModal } from "./EditExamplePromptsModal"
 
 interface AgentConfigTabProps {
@@ -41,6 +42,7 @@ export function AgentConfigTab({
   const [entrypointModalOpen, setEntrypointModalOpen] = useState(false)
   const [workflowModalOpen, setWorkflowModalOpen] = useState(false)
   const [refinerModalOpen, setRefinerModalOpen] = useState(false)
+  const [triggerPromptModalOpen, setTriggerPromptModalOpen] = useState(false)
   const [examplePromptsModalOpen, setExamplePromptsModalOpen] = useState(false)
 
   const openWithRefresh = useCallback(
@@ -109,6 +111,12 @@ export function AgentConfigTab({
               >
                 Refiner Prompt
               </Button>
+              <Button
+                variant="outline"
+                onClick={() => openWithRefresh(setTriggerPromptModalOpen)}
+              >
+                Trigger Prompt
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -154,6 +162,17 @@ export function AgentConfigTab({
         open={refinerModalOpen}
         onClose={() => setRefinerModalOpen(false)}
         readOnly={readOnly}
+      />
+      {/* Trigger Prompt is editable for any install owner — including
+          foreign installs — because the backend
+          ``PATCH /agents/{id}/router-trigger-prompt`` endpoint bypasses
+          the read-only/developer gate. It's the installer's own routing
+          configuration, not bundle-authored content. */}
+      <EditRouterTriggerPromptModal
+        agentId={agent.id}
+        currentPrompt={agent.router_trigger_prompt}
+        open={triggerPromptModalOpen}
+        onClose={() => setTriggerPromptModalOpen(false)}
       />
       <EditExamplePromptsModal
         agentId={agent.id}

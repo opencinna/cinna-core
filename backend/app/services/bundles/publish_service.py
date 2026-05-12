@@ -242,6 +242,7 @@ class PublishService:
                     "workflow": install.workflow_prompt,
                     "entrypoint": install.entrypoint_prompt,
                     "refiner": install.refiner_prompt,
+                    "router_trigger": install.router_trigger_prompt,
                 },
                 "sdk": {
                     "building": env.agent_sdk_building if env else None,
@@ -288,6 +289,7 @@ class PublishService:
             workflow_prompt=install.workflow_prompt,
             entrypoint_prompt=install.entrypoint_prompt,
             refiner_prompt=install.refiner_prompt,
+            router_trigger_prompt=install.router_trigger_prompt,
             agent_sdk_building=env.agent_sdk_building if env else None,
             agent_sdk_conversation=env.agent_sdk_conversation if env else None,
             model_override_building=getattr(env, "model_override_building", None) if env else None,

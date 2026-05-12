@@ -34,11 +34,9 @@ TokenDep = Annotated[str, Depends(reusable_oauth2)]
 
 def get_current_user(session: SessionDep, token: TokenDep) -> User:
     try:
-        logger.debug(f"Attempting to decode token: {token[:20]}...")
         payload = jwt.decode(
             token, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
         )
-        logger.debug(f"Token payload: {payload}")
         token_data = TokenPayload(**payload)
     except (InvalidTokenError, ValidationError) as e:
         logger.error(f"Token validation failed: {type(e).__name__}: {str(e)}")

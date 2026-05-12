@@ -19,6 +19,8 @@ from app.models.app_mcp.app_agent_route import (
     AppAgentRouteUpdate,
     AppAgentRoutePublic,
     AppAgentRouteAssignmentPublic,
+    RouteConflictMatch,
+    RouteConflictResponse,
     UserAppAgentRoute,
     UserAppAgentRouteCreate,
     UserAppAgentRouteUpdate,
@@ -105,6 +107,7 @@ def _route_to_public(
         channel_app_mcp=route.channel_app_mcp,
         is_active=route.is_active,
         auto_enable_for_users=route.auto_enable_for_users,
+        is_auto_managed=route.is_auto_managed,
         agent_owner_name=agent_owner_name,
         agent_owner_email=agent_owner_email,
         created_by=route.created_by,
@@ -151,8 +154,18 @@ class AppAgentRouteService:
         db_session: DBSession,
         data: AppAgentRouteCreate,
         current_user: User,
+        *,
+        auto_managed: bool = False,
     ) -> AppAgentRoutePublic:
         """Create a new route with optional user assignments.
+
+        ``auto_managed`` is an internal flag flipped on by
+        ``InstallService`` and the Phase 8 backfill script when they
+        mint a bundle-managed route. It is intentionally a service-level
+        kwarg rather than a field on ``AppAgentRouteCreate`` so the
+        public POST cannot mint bundle-managed routes (which the
+        apply-update path would then overwrite on the next revision
+        push).
 
         Raises ValueError for permission violations.
         """
@@ -178,6 +191,7 @@ class AppAgentRouteService:
             channel_app_mcp=data.channel_app_mcp,
             is_active=data.is_active,
             auto_enable_for_users=data.auto_enable_for_users,
+            is_auto_managed=auto_managed,
             created_by=current_user.id,
         )
         db_session.add(route)
@@ -282,6 +296,10 @@ class AppAgentRouteService:
 
         Raises ValueError for permission violations.
         Returns None if not found.
+
+        Any user-driven edit via this public path flips
+        ``is_auto_managed=False`` so subsequent bundle apply-updates leave
+        the user's customisations alone.
         """
         route = db_session.get(AppAgentRoute, route_id)
         if not route or route.agent_id != agent_id:
@@ -294,6 +312,10 @@ class AppAgentRouteService:
         update_dict = data.model_dump(exclude_unset=True)
         update_dict.pop("agent_id", None)  # agent_id cannot be changed via update
         route.sqlmodel_update(update_dict)
+        # Public PUT = user-driven edit. Flip the auto-managed flag so the
+        # apply-update path stops overwriting this route.
+        if route.is_auto_managed:
+            route.is_auto_managed = False
         route.updated_at = datetime.now(UTC)
         db_session.add(route)
         db_session.commit()
@@ -560,6 +582,177 @@ class AppAgentRouteService:
 
         logger.info("[EffectiveRoutes] Total effective routes: %d", len(results))
         return results
+
+    @staticmethod
+    def sync_router_trigger_prompt_from_agent(
+        db_session: DBSession,
+        agent: Agent,
+    ) -> AppAgentRoute | None:
+        """Propagate ``agent.router_trigger_prompt`` to its auto-managed route.
+
+        Idempotent: skips silently when no auto-managed route exists for
+        this agent (an install where the auto-route creation was skipped
+        because the agent had no trigger prompt at install time). Updates
+        ``trigger_prompt``, ``name``, and ``updated_at`` on the route.
+
+        Does not touch user-edited routes (``is_auto_managed=False``) —
+        those are owned by the user.
+
+        Returns the updated route or ``None`` if nothing was synced.
+        """
+        stmt = select(AppAgentRoute).where(
+            AppAgentRoute.agent_id == agent.id,
+            AppAgentRoute.is_auto_managed == True,  # noqa: E712
+        )
+        route = db_session.exec(stmt).first()
+        if route is None:
+            return None
+
+        new_prompt = (agent.router_trigger_prompt or "").strip()
+        if not new_prompt:
+            # The agent's trigger prompt was cleared. Leave the route's
+            # current value alone rather than writing an empty string into
+            # a NOT NULL column. The route is still usable; the user can
+            # delete it explicitly via the UI.
+            return None
+
+        changed = False
+        if route.trigger_prompt != new_prompt:
+            route.trigger_prompt = new_prompt
+            changed = True
+        if route.name != agent.name:
+            route.name = agent.name
+            changed = True
+        if changed:
+            route.updated_at = datetime.now(UTC)
+            db_session.add(route)
+            db_session.commit()
+            db_session.refresh(route)
+        return route
+
+    # ── Conflict detection ───────────────────────────────────────────────
+    #
+    # Cheap install-time check: compare the auto-managed route's
+    # ``trigger_prompt`` against the installer's other effective routes
+    # using lowercased token-overlap (Jaccard) similarity. Surfaces
+    # near-duplicate intents (e.g. "Calendar Planner" vs "Vacation
+    # Planner") as a non-blocking toast on the install completion page.
+    #
+    # Stopwords aren't worth pruning — Jaccard already discounts common
+    # tokens that appear in both sides. Threshold tuned conservatively
+    # (≥ 0.45) so unrelated agents don't trigger noise.
+
+    SIMILARITY_THRESHOLD: float = 0.45
+
+    @staticmethod
+    def _tokens_for_similarity(text: str | None) -> set[str]:
+        """Tokenise ``text`` for Jaccard comparison.
+
+        Lowercases, splits on non-alphanumerics, drops tokens shorter than
+        3 chars (filters single letters / digits / very common short
+        words). Returns a set of tokens.
+        """
+        if not text:
+            return set()
+        import re
+
+        tokens = re.findall(r"[a-zA-Z0-9]+", text.lower())
+        return {t for t in tokens if len(t) >= 3}
+
+    @staticmethod
+    def _jaccard_similarity(a: set[str], b: set[str]) -> float:
+        if not a or not b:
+            return 0.0
+        intersection = a & b
+        union = a | b
+        if not union:
+            return 0.0
+        return len(intersection) / len(union)
+
+    @staticmethod
+    def find_route_conflicts_for_agent(
+        db_session: DBSession,
+        agent_id: uuid.UUID,
+        user_id: uuid.UUID,
+        threshold: float | None = None,
+    ) -> RouteConflictResponse:
+        """Find effective routes similar to this agent's auto-managed route.
+
+        Args:
+            db_session: Active DB session.
+            agent_id: The freshly-installed agent to compare *against*.
+            user_id: The installer — we scope effective routes to this
+                user only (their assigned + personal routes on the
+                App MCP channel).
+            threshold: Override the default Jaccard threshold. Routes
+                scoring below the threshold are excluded.
+
+        Returns:
+            :class:`RouteConflictResponse` with matches sorted by
+            descending similarity. Self-route, identity routes, and
+            routes that target the same ``agent_id`` are excluded.
+        """
+        cutoff = (
+            threshold if threshold is not None
+            else AppAgentRouteService.SIMILARITY_THRESHOLD
+        )
+
+        # Locate the agent's auto-managed route. If none exists (install
+        # had no trigger prompt, or the route was deleted), there is
+        # nothing to compare and we return an empty match list.
+        # Filter on ``is_auto_managed=True`` so a sibling manual route
+        # on the same agent (e.g. a developer added an extra route via
+        # the UI) doesn't shadow the lookup — the docstring promises
+        # "the agent's auto-managed route", not "some route".
+        own_route_stmt = select(AppAgentRoute).where(
+            AppAgentRoute.agent_id == agent_id,
+            AppAgentRoute.created_by == user_id,
+            AppAgentRoute.is_auto_managed == True,  # noqa: E712
+        )
+        own_route = db_session.exec(own_route_stmt).first()
+        if own_route is None or not own_route.trigger_prompt:
+            return RouteConflictResponse(matches=[])
+
+        own_tokens = AppAgentRouteService._tokens_for_similarity(
+            own_route.trigger_prompt
+        )
+        if not own_tokens:
+            return RouteConflictResponse(matches=[])
+
+        effective = AppAgentRouteService.get_effective_routes_for_user(
+            db_session=db_session,
+            user_id=user_id,
+            channel="app_mcp",
+        )
+
+        matches: list[RouteConflictMatch] = []
+        for r in effective:
+            # Identity routes have placeholder ids and target multiple
+            # agents — they don't represent a single comparable trigger
+            # prompt, so skip them.
+            if r.source == "identity":
+                continue
+            # Skip the route that belongs to this same agent (it's our
+            # baseline, not a conflict).
+            if r.agent_id == agent_id:
+                continue
+            other_tokens = AppAgentRouteService._tokens_for_similarity(
+                r.trigger_prompt
+            )
+            score = AppAgentRouteService._jaccard_similarity(own_tokens, other_tokens)
+            if score >= cutoff:
+                matches.append(
+                    RouteConflictMatch(
+                        route_id=r.route_id,
+                        agent_id=r.agent_id,
+                        agent_name=r.agent_name,
+                        trigger_prompt=r.trigger_prompt,
+                        similarity=round(score, 3),
+                    )
+                )
+
+        matches.sort(key=lambda m: m.similarity, reverse=True)
+        return RouteConflictResponse(matches=matches)
 
     @staticmethod
     def toggle_admin_assignment(

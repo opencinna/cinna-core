@@ -64,8 +64,14 @@ Replace the clone-based sharing model with a desktop-app-style **bundle / instal
 ### Installing a Bundle (any user)
 
 1. User opens the **Catalog** page; sees all public bundles and any bundles explicitly granted to them
-2. Clicks **Install** on a catalog card
+2. Two entry points on each catalog card:
+   - **Click the card body** — opens the full **Install Page** for custom setup (described below)
+   - **Click the "Quick Install" button** in the card footer — skips the Install Page entirely and submits the install with the same defaults the form would use unchanged (PBP → `publisher_provides`, auto-prefill suggestion → `use_existing`, otherwise → `skip`; publisher AI credentials are accepted when offered). The button shows an inline spinner while pending and is disabled to prevent double-submit. Card body clicks are no-op while a Quick Install is in flight. On completion, the same post-install redirect logic applies (gate `ready` → dashboard with `?selectAgentId`; otherwise → Credentials tab)
 3. The **Install Page** opens — a single screen with two columns:
+
+After a successful install, the platform automatically creates an **App MCP route** for the installer so the agent is reachable from Claude Desktop or any other MCP client immediately (see [App MCP Server](../../application/app_mcp_server/app_mcp_server.md)). If the installed revision has no `router_trigger_prompt`, the route is skipped and the install is marked `last_update_status="degraded"`. The installer can set or regenerate the trigger prompt from the Configuration tab's **Agent Prompts** card, after which applying an update creates the route retroactively.
+
+After the route is created, a non-blocking **conflict toast** may appear on the install page if the new route's trigger prompt closely matches an existing route the installer already has. This helps the user spot near-duplicate intents that could confuse the App MCP router.
    - **Left (sticky)**: agent header card showing the bundle icon, display name, version, publisher, description, required credentials summary, and Bundle ID
    - **Right (scrollable)**: a setup form with a service credentials section first (each spec rendered as an accordion item leading with the credential type pill and a secondary name caption, mirroring the publisher's "Credential provisioning" panel) followed by an AI credentials section. Conversation and Building selectors (and the publisher-provided summary variant) use the same icon-block row pattern as Settings → AI Credentials → Default SDK Preferences (blue `MessageCircle` tile for Conversation, orange `Wrench` tile for Building)
    - For PBP specs the accordion item is collapsed by default and shows "Shared by publisher — no action needed"
@@ -86,6 +92,8 @@ Replace the clone-based sharing model with a desktop-app-style **bundle / instal
    - If automatic mode: the suspension scheduler applies the update the next time the environment goes idle
    - If manual mode: user confirms; environment stops, bundle folders replaced from the new revision snapshot, environment restarts; app-data and credentials are preserved
 4. `INSTALL_UPDATE_APPLIED` event fires; banner clears; `installed_revision_id` advances
+
+During apply-update, `Agent.router_trigger_prompt` is refreshed from the new revision's snapshot. The install's **auto-managed App MCP route** (`AppAgentRoute.is_auto_managed=True`) also has its `trigger_prompt` and `name` refreshed. **Routes where `is_auto_managed=False` are left untouched** — manual edits via the PUT endpoint flip that flag and the user's custom value is preserved forever after.
 
 ### Uninstalling (install owner)
 
@@ -176,9 +184,10 @@ Publisher's Install (Agent row)
 | [Agent App Data](../agent_app_data/agent_app_data.md) | Every install gets exactly one `AppDataVolume` keyed by `(user_id, bundle_id)`. The volume is created/reattached by `InstallService` and mounted at `/app/workspace/app-data` inside the container |
 | [Agent Environments](../agent_environments/agent_environments.md) | `EnvironmentLifecycleManager` mounts the app-data volume; `replace_bundle_content()` swaps bundle folders during apply-update |
 | [Agent Environment Data Management](../agent_environment_data_management/agent_environment_data_management.md) | Bundle-owned folders are replaced on update; app-data and credentials are preserved |
-| [Agent Prompts](../agent_prompts/agent_prompts.md) | Prompts are snapshotted into the revision at publish time; `apply_update` syncs them back onto the install's `Agent` row |
+| [Agent Prompts](../agent_prompts/agent_prompts.md) | Prompts (including `router_trigger_prompt`) are snapshotted into the revision at publish time; `apply_update` syncs them back onto the install's `Agent` row |
+| [App MCP Server](../../application/app_mcp_server/app_mcp_server.md) | `InstallService` auto-creates an `AppAgentRoute` + self-assignment for the installer on every install, using the revision's `router_trigger_prompt`. The route is flagged `is_auto_managed=True`; apply-update refreshes it; manual edits via PUT flip `is_auto_managed=False` |
 | [Agent Credentials](../agent_credentials/agent_credentials.md) | `required_credential_specs` describes what credentials the bundle needs; at install time PBP specs link the publisher's existing `Credential` row via a materialised `CredentialShare` + `AgentCredentialLink`; PBT specs materialise a fresh installer-owned `Credential` pre-seeded with non-private template values (private fields must be supplied by the installer on the setup page); PBU specs create empty placeholder `Credential` rows the installer fills in later. See [Credential Sharing](../agent_credentials/credential_sharing.md) for the full template model |
 | [AI Credentials](../../application/ai_credentials/ai_credentials.md) | `AgentBundle` holds two optional FK columns (`publisher_ai_credential_conversation_id`, `publisher_ai_credential_building_id`) referencing `ai_credential.id` with `ON DELETE SET NULL` semantics. At install time `AICredentialShare` rows (publisher → installer) are materialised for any non-null FK and the publisher's credential id is wired directly into the `AgentEnvironment`. Deleting a publisher's AI credential nulls out the FK via `ON DELETE SET NULL`, degrading the bundle back to "user provides" |
-| [User Roles](../../application/user_roles/user_roles.md) | `publish` and `edit-bundle-id` require `agent-developer` or `admin`; catalog browse and install are available to all authenticated users |
+| [User Roles](../../application/user_roles/user_roles.md) | `publish` and `edit-bundle-id` require `agent-developer` or `admin`; catalog browse and install are available to all authenticated users; `agent-user` accounts can update their install's `router_trigger_prompt` via the focused `PATCH /agents/{id}/router-trigger-prompt` endpoint without needing developer role |
 | [Email Integration](../../application/email_integration/email_sessions.md) | `install_bundle_for_email` replaces the legacy auto-share flow; first inbound email from a new sender auto-publishes the publisher's agent and installs it for the sender |
 | [Agent Management](../../application/agent_management/agent_management.md) | The Bundle tab on the agent detail page exposes all bundle management controls for developer users |

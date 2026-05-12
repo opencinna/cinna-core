@@ -1891,6 +1891,28 @@ export const AgentBundlePublicSchema = {
             ],
             title: 'Publisher Handle'
         },
+        publisher_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Name'
+        },
+        publisher_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Email'
+        },
         latest_revision_id: {
             anyOf: [
                 {
@@ -2047,6 +2069,17 @@ export const AgentBundleRevisionPublicSchema = {
                 }
             ],
             title: 'Refiner Prompt'
+        },
+        router_trigger_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Router Trigger Prompt'
         },
         agent_sdk_building: {
             anyOf: [
@@ -2342,6 +2375,17 @@ export const AgentCreateSchema = {
                 }
             ],
             title: 'Refiner Prompt'
+        },
+        router_trigger_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Router Trigger Prompt'
         },
         description: {
             anyOf: [
@@ -3679,6 +3723,17 @@ export const AgentPublicSchema = {
             ],
             title: 'Refiner Prompt'
         },
+        router_trigger_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Router Trigger Prompt'
+        },
         is_active: {
             type: 'boolean',
             title: 'Is Active'
@@ -4646,6 +4701,17 @@ export const AgentUpdateSchema = {
                 }
             ],
             title: 'Refiner Prompt'
+        },
+        router_trigger_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Router Trigger Prompt'
         },
         is_active: {
             anyOf: [
@@ -6522,6 +6588,11 @@ export const AppAgentRoutePublicSchema = {
             title: 'Auto Enable For Users',
             default: false
         },
+        is_auto_managed: {
+            type: 'boolean',
+            title: 'Is Auto Managed',
+            default: false
+        },
         agent_owner_name: {
             type: 'string',
             title: 'Agent Owner Name',
@@ -7921,15 +7992,13 @@ export const CredentialBundleUsageSchema = {
 \`\`publisher_install_id\`\` is the publisher install's \`\`Agent.id\`\` —
 the frontend uses it to deep-link into the agent's Bundle tab where
 bundle settings live (the platform doesn't expose a standalone
-/bundles/{uuid} route).
+\`\`/bundles/{uuid}\`\` route).
 
 \`\`provided_by\`\` is the resolved provisioning mode for this credential
-in the bundle, computed from the publisher install's
-\`\`publish_settings.credential_overrides\`\` map (when set) and falling
-back to the inference rule used at publish time:
-\`\`allow_sharing → "publisher"\`\` else \`\`allow_template_sharing → "template"\`\`
-else \`\`"user"\`\`. The frontend uses this to split usages between the
-Sharing and Share-as-Template cards.`
+in the bundle (\`\`"user"\`\` | \`\`"publisher"\`\` | \`\`"template"\`\`),
+computed via \`\`PublishService.resolve_provided_by\`\`. The frontend
+uses it to split usages between the Sharing and Share-as-Template
+cards.`
 } as const;
 
 export const CredentialBundleUsagesSchema = {
@@ -9424,6 +9493,41 @@ export const GenerateHandoverPromptResponseSchema = {
     required: ['success'],
     title: 'GenerateHandoverPromptResponse',
     description: 'Response from AI handover prompt generation.'
+} as const;
+
+export const GenerateRouterTriggerPromptResponseSchema = {
+    properties: {
+        success: {
+            type: 'boolean',
+            title: 'Success'
+        },
+        trigger_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Trigger Prompt'
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        }
+    },
+    type: 'object',
+    required: ['success'],
+    title: 'GenerateRouterTriggerPromptResponse',
+    description: 'Response for the router trigger prompt generator endpoint.'
 } as const;
 
 export const GenerateSQLRequestSchema = {
@@ -13298,6 +13402,82 @@ export const RevokeRequestSchema = {
     },
     type: 'object',
     title: 'RevokeRequest'
+} as const;
+
+export const RouteConflictMatchSchema = {
+    properties: {
+        route_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Route Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        agent_name: {
+            type: 'string',
+            title: 'Agent Name'
+        },
+        trigger_prompt: {
+            type: 'string',
+            title: 'Trigger Prompt'
+        },
+        similarity: {
+            type: 'number',
+            title: 'Similarity'
+        }
+    },
+    type: 'object',
+    required: ['route_id', 'agent_id', 'agent_name', 'trigger_prompt', 'similarity'],
+    title: 'RouteConflictMatch',
+    description: `A single conflicting effective route the installer already has.
+
+Surfaced as a non-blocking toast on the install completion page when an
+agent's auto-created route looks similar (by lowercased token overlap)
+to another route already active for the installer. Helps the user
+spot near-duplicate intents (e.g. "Calendar Planner" vs "Vacation
+Planner") that could confuse the App MCP router.`
+} as const;
+
+export const RouteConflictResponseSchema = {
+    properties: {
+        matches: {
+            items: {
+                '$ref': '#/components/schemas/RouteConflictMatch'
+            },
+            type: 'array',
+            title: 'Matches',
+            default: []
+        }
+    },
+    type: 'object',
+    title: 'RouteConflictResponse',
+    description: `Response payload for the install-time conflict check.
+
+\`\`matches\`\` is sorted by descending similarity. Empty when no
+effective route crosses the similarity threshold (or when the agent
+has no auto-managed route to compare against).`
+} as const;
+
+export const RouterTriggerPromptUpdateSchema = {
+    properties: {
+        router_trigger_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Router Trigger Prompt'
+        }
+    },
+    type: 'object',
+    title: 'RouterTriggerPromptUpdate',
+    description: 'Owner-only update payload for ``Agent.router_trigger_prompt``.'
 } as const;
 
 export const SSHKeyGenerateSchema = {

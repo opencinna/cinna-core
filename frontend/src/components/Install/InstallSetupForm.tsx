@@ -9,13 +9,11 @@
  * The button area swaps to a small env-progress display while the
  * mutation is in flight, mirroring the previous wizard's confirm step.
  */
-import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
+import { useMutation } from "@tanstack/react-query"
 import { useState } from "react"
 
 import {
   CatalogService,
-  InstallsService,
   type AICredentialSelections,
   type CatalogInstallContext,
   type InstallContextSpec,
@@ -36,6 +34,7 @@ import {
   InstallServiceCredentialItem,
   type ServiceCredentialChoice,
 } from "./InstallServiceCredentialItem"
+import { useBundleInstallNavigation } from "./useBundleInstallNavigation"
 
 interface InstallSetupFormProps {
   context: CatalogInstallContext
@@ -64,9 +63,8 @@ function initialChoiceForSpec(
 }
 
 export function InstallSetupForm({ context }: InstallSetupFormProps) {
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
-  const { showSuccessToast, showErrorToast } = useCustomToast()
+  const handlePostInstall = useBundleInstallNavigation()
+  const { showErrorToast } = useCustomToast()
   const { bundle, ai_provided_by_publisher, service_specs } = context
 
   const [serviceChoices, setServiceChoices] = useState<
@@ -105,50 +103,7 @@ export function InstallSetupForm({ context }: InstallSetupFormProps) {
               : null,
         },
       }),
-    onSuccess: async (install) => {
-      queryClient.invalidateQueries({ queryKey: ["agents"] })
-      queryClient.invalidateQueries({ queryKey: ["catalog"] })
-
-      // Decide where to send the installer based on whether the runtime
-      // gate would let this agent chat right now. A "ready" install can
-      // skip the Credentials tab entirely and land on the dashboard with
-      // its pill pre-selected — a "chat with it now" experience for the
-      // no-setup case (e.g. publisher-shared AI + publisher-shared
-      // service credentials, or every spec auto-matched to an existing
-      // user credential).
-      //
-      // Anything other than "ready" (needs_setup, publisher_broken, or a
-      // setup-status call that errored) falls back to the existing
-      // Credentials-tab redirect so the SetupNeededBanner can guide the
-      // installer through the missing fields.
-      let isReady = false
-      try {
-        const status = await InstallsService.getSetupStatus({
-          agentId: install.id,
-        })
-        isReady = status.status === "ready"
-      } catch {
-        isReady = false
-      }
-
-      if (isReady) {
-        showSuccessToast(
-          `${install.name} installed — you can chat with it now.`,
-        )
-        navigate({
-          to: "/",
-          search: { selectAgentId: install.id },
-        })
-        return
-      }
-
-      showSuccessToast(`Installed ${install.name}`)
-      navigate({
-        to: "/agent/$agentId",
-        params: { agentId: install.id },
-        hash: "credentials",
-      })
-    },
+    onSuccess: handlePostInstall,
     onError: (e: unknown) => {
       const detail =
         (e as { body?: { detail?: string } }).body?.detail ?? "Install failed"

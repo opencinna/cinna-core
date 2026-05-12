@@ -28,6 +28,19 @@ The `default_ai_functions_sdk` preference applies to all AI utility calls routed
 | `generate_schedule` | Generates a CRON expression from a natural language schedule description |
 | `generate_handover_prompt` | Generates an AI handover prompt between two agents |
 | `generate_email_reply` | Generates a professional email reply from agent session results |
+| `generate_router_trigger_prompt` | Generates an App MCP router trigger prompt from an agent's name and description (see below) |
+
+### `generate_router_trigger_prompt`
+
+Implemented in `backend/app/agents/router_trigger_prompt_generator.py` and exposed via `AIFunctionsService.generate_router_trigger_prompt(agent_name, description, user, db)`.
+
+- **Model**: `gemini-2.5-flash-lite` — the same model used by `route_to_agent` for AI classification, so the generator and consumer share the same representation space
+- **Source**: `agent.name` + `agent.description` (not the workflow prompt — descriptions are stable, short, user-facing, and match the shape the router expects)
+- **Target output**: ~120–150 chars, single sentence, starts with a capability verb (e.g., "Plans meetings, finds free slots in my calendar, and books events on my behalf")
+- **Fallback**: on any generation failure, returns `"Handles tasks related to: <first line of description, truncated to 140 chars>"` — always a non-empty string so the caller can pre-fill the field even if the LLM is unavailable
+- **Empty description guard**: when `description` is empty or blank, the generator returns an empty string immediately (no LLM call). The API endpoint returns a structured error response (not 4xx) when the agent has no description
+- **Frontend surface**: "Generate" button (`Wand2` icon) in `EditRouterTriggerPromptModal`; calls `POST /agents/{id}/generate-router-trigger-prompt` and pre-fills the textarea; user may edit before saving
+- **Honour user SDK preference**: the `AIFunctionsService` wrapper resolves `provider_kwargs` from the caller's `default_ai_functions_sdk` / `default_ai_functions_credential_id` preferences before passing them to the generator
 
 ## User Flow
 
@@ -179,4 +192,4 @@ Migration `g2h3i4j5k6l7_add_ai_functions_credential_id_to_user.py` adds `default
 
 ---
 
-*Last updated: 2026-04-14*
+*Last updated: 2026-05-11*

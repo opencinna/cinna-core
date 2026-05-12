@@ -45,6 +45,7 @@ Auto-generated from OpenAPI spec. Tag: `agents`
   - `workflow_prompt`: string | null
   - `entrypoint_prompt`: string | null
   - `refiner_prompt`: string | null
+  - `router_trigger_prompt`: string | null
   - `description`: string | null
   - `user_workspace_id`: string | null
 
@@ -74,6 +75,7 @@ Auto-generated from OpenAPI spec. Tag: `agents`
   - `workflow_prompt`: string | null
   - `entrypoint_prompt`: string | null
   - `refiner_prompt`: string | null
+  - `router_trigger_prompt`: string | null
   - `is_active`: boolean | null
   - `ui_color_preset`: string | null
   - `show_on_dashboard`: boolean | null
@@ -449,5 +451,28 @@ Auto-generated from OpenAPI spec. Tag: `agents`
   - `source_session_id`: string (required)
 
 **Response:** `UpdateSessionStateResponse`
+
+---
+
+## PATCH `/api/v1/agents/{id}/router-trigger-prompt`
+**Update Router Trigger Prompt**
+
+**Path parameters:**
+- `id`: uuid
+
+**Request body** (`RouterTriggerPromptUpdate`):
+  - `router_trigger_prompt`: string | null
+
+**Response:** `AgentPublic`
+
+---
+
+## POST `/api/v1/agents/{id}/generate-router-trigger-prompt`
+**Generate Router Trigger Prompt Endpoint**
+
+**Path parameters:**
+- `id`: uuid
+
+**Response:** `GenerateRouterTriggerPromptResponse`
 
 ---

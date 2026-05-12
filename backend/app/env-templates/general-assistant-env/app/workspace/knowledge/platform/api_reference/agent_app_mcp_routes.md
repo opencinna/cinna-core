@@ -65,6 +65,16 @@ Auto-generated from OpenAPI spec. Tag: `agent-app-mcp-routes`
 
 ---
 
+## GET `/api/v1/agents/{agent_id}/app-mcp-routes/conflicts`
+**Check Route Conflicts**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Response:** `RouteConflictResponse`
+
+---
+
 ## POST `/api/v1/agents/{agent_id}/app-mcp-routes/{route_id}/assignments`
 **Assign Users To Agent Route**
 
