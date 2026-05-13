@@ -90,7 +90,7 @@ Superusers retain full management capabilities via the preserved admin API endpo
 
 ### `is_auto_managed` Flag
 
-The `is_auto_managed` boolean column on `AppAgentRoute` marks routes that were created by `InstallService` (and the Phase 8 backfill). Its semantics:
+The `is_auto_managed` boolean column on `AppAgentRoute` marks routes that were created by `InstallService` (and the Phase 8 backfill script `backend/app/scripts/backfill_router_trigger_prompts.py`). The backfill targets **foreign bundle installs only** (`is_publisher_install=False AND bundle_uuid IS NOT NULL`); owned non-bundle agents are intentionally skipped because the owner manages App MCP exposure manually via the Integrations tab. Its semantics:
 
 - **`True`** — the route was bundle-created. `apply_update` is permitted to refresh `trigger_prompt` and `name` from the new revision's `router_trigger_prompt`. The flag is not settable from the public `POST /api/v1/agents/{agent_id}/app-mcp-routes/` body; `InstallService` sets it via the internal `auto_managed=True` kwarg on `AppAgentRouteService.create_route`
 - **`False`** — default for routes created via the UI. Any user edit via `PUT /api/v1/agents/{agent_id}/app-mcp-routes/{route_id}` also flips an auto-managed route to `False`, after which `apply_update` will never overwrite it again

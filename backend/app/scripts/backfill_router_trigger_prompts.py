@@ -1,9 +1,10 @@
 """Phase 8 — Backfill router trigger prompts + auto-managed App MCP routes.
 
-Wires existing installs (``Agent.is_publisher_install=False``) into the
-App MCP router so they're reachable from external clients (Claude
-Desktop, etc.) without a republish. For every install that doesn't
-already have an auto-managed ``AppAgentRoute``:
+Wires existing **foreign bundle installs** (``Agent.is_publisher_install=False``
+AND ``bundle_uuid IS NOT NULL``) into the App MCP router so they're
+reachable from external clients (Claude Desktop, etc.) without a
+republish. For every eligible install that doesn't already have an
+auto-managed ``AppAgentRoute``:
 
   1. Generate a ``router_trigger_prompt`` from ``Agent.description`` via
      the existing :func:`generate_router_trigger_prompt` AI function.
@@ -12,6 +13,11 @@ already have an auto-managed ``AppAgentRoute``:
      ``session_mode="conversation"``, ``channel_app_mcp=True``,
      ``is_active=True``, ``name=agent.name``) + a self-assignment for
      the installer (``user_id=agent.owner_id``, ``is_enabled=True``).
+
+Owned agents that are NOT bundle installs (``bundle_uuid IS NULL``) are
+**intentionally skipped**. The owner manages App MCP exposure for their
+own agents directly via the agent's Integrations tab; auto-routing is
+reserved for the install-from-catalog flow.
 
 Schema migrations stay in Alembic. This script is the data half of
 Phase 8 because the AI function call doesn't belong inside a migration
@@ -24,6 +30,8 @@ Idempotent:
     installer.
   - Skips publisher installs (``is_publisher_install=True``) — those
     don't need a router route until they're installed elsewhere.
+  - Skips owned non-bundle agents (``bundle_uuid IS NULL``) — the owner
+    controls App MCP exposure manually for these.
 
 Failure handling:
   - AI-function failures for a given agent are logged at WARNING and
@@ -81,8 +89,12 @@ def backfill(session: Session, dry_run: bool = False) -> dict:
         "errors": 0,
     }
 
+    # Foreign bundle installs only. Owned agents that aren't installs
+    # (``bundle_uuid IS NULL``) are managed by their owner via the
+    # Integrations tab — never auto-routed.
     stmt = select(Agent).where(
         Agent.is_publisher_install == False,  # noqa: E712
+        Agent.bundle_uuid.is_not(None),
     )
     agents = session.exec(stmt).all()
 

@@ -17,6 +17,9 @@ Covers:
 
   4. Installs with empty description are skipped.
 
+  5. Owned non-bundle agents (bundle_uuid IS NULL) are skipped — the
+     owner manages App MCP exposure manually for their own agents.
+
 Note: The ``generate_router_trigger_prompt`` AI function is patched to
 return a deterministic string so tests are fast and LLM-independent.
 """
@@ -320,5 +323,63 @@ def test_backfill_skips_agents_without_description(
     auto_routes = [r for r in routes_after if r["is_auto_managed"]]
     assert auto_routes == [], (
         f"No auto-managed route must be created for install with empty description. "
+        f"Got: {routes_after}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Scenario 5: Owned non-bundle agents are skipped
+# ---------------------------------------------------------------------------
+
+
+def test_backfill_skips_owned_non_bundle_agents(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    """
+    Owned agents that are NOT bundle installs (``bundle_uuid IS NULL``)
+    must be skipped by the backfill — their owner controls App MCP
+    exposure manually via the Integrations tab. Auto-routing is reserved
+    for the install-from-catalog flow.
+    """
+    from app.scripts.backfill_router_trigger_prompts import backfill
+
+    # Create an owned agent (never published, never installed from a bundle)
+    agent = create_agent_via_api(
+        client, superuser_token_headers, name="Owned Non-Bundle Agent"
+    )
+    drain_tasks()
+    agent_id = agent["id"]
+
+    # Give it a description so the only thing keeping it out of the
+    # backfill is the bundle_uuid filter — not the description filter.
+    r = client.put(
+        f"{API}/agents/{agent_id}",
+        headers=superuser_token_headers,
+        json={"description": "A regular agent the user owns directly"},
+    )
+    assert r.status_code == 200, r.text
+
+    # Sanity check: this agent has no bundle linkage
+    fresh = client.get(f"{API}/agents/{agent_id}", headers=superuser_token_headers).json()
+    assert fresh["is_publisher_install"] is False
+    assert fresh["bundle_uuid"] is None
+
+    # No route to start with
+    routes_before = _list_routes_for_agent(client, superuser_token_headers, agent_id)
+    assert routes_before == []
+
+    with patch(
+        "app.scripts.backfill_router_trigger_prompts.generate_router_trigger_prompt",
+        return_value=_MOCK_TRIGGER,
+    ):
+        backfill(db, dry_run=False)
+
+    # Backfill must not have created a route for this owned non-bundle agent
+    routes_after = _list_routes_for_agent(client, superuser_token_headers, agent_id)
+    auto_routes = [r for r in routes_after if r["is_auto_managed"]]
+    assert auto_routes == [], (
+        f"Owned non-bundle agent must not receive an auto-managed route from backfill. "
         f"Got: {routes_after}"
     )
