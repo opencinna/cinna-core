@@ -22,9 +22,16 @@ export function FileUploadModal({ open, onOpenChange, onFileUploaded }: FileUplo
     onSuccess: (data) => {
       onFileUploaded(data)
       setError(null)
+      onOpenChange(false)
     },
     onError: (err: any) => {
-      setError(err.response?.data?.detail || "Upload failed")
+      const detail = err?.body?.detail ?? err?.response?.data?.detail
+      const message = typeof detail === "string"
+        ? detail
+        : Array.isArray(detail) && detail.length > 0
+          ? detail[0]?.msg
+          : err?.message
+      setError(message || "Upload failed")
     }
   })
 

@@ -258,7 +258,8 @@ class Settings(BaseSettings):
         "application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
         "image/png,image/jpeg,image/gif,image/webp,"
         "application/zip,application/x-tar,application/gzip,"
-        "application/json,text/javascript,text/html,text/x-python"
+        "application/json,text/javascript,text/html,text/x-python,"
+        "text/xml,application/xml"
     )
 
     @computed_field  # type: ignore[prop-decorator]

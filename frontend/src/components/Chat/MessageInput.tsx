@@ -125,6 +125,15 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
       onSuccess: (data) => {
         setAttachedFiles(prev => [...prev, data])
       },
+      onError: (err: any) => {
+        const detail = err?.body?.detail ?? err?.response?.data?.detail
+        const message = typeof detail === "string"
+          ? detail
+          : Array.isArray(detail) && detail.length > 0
+            ? detail[0]?.msg
+            : err?.message
+        showErrorToast(message || "Upload failed")
+      },
     })
 
     const handleSend = () => {
@@ -258,7 +267,7 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
       files.forEach(file => {
         // Validate file size (100MB)
         if (file.size > 100 * 1024 * 1024) {
-          console.error(`File ${file.name} is too large (max 100MB)`)
+          showErrorToast(`File ${file.name} is too large (max 100MB)`)
           return
         }
         uploadMutation.mutate(file)
@@ -393,11 +402,13 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
         </div>
 
         {/* File Upload Modal */}
-        <FileUploadModal
-          open={showFileModal}
-          onOpenChange={setShowFileModal}
-          onFileUploaded={handleFileUploaded}
-        />
+        {showFileModal && (
+          <FileUploadModal
+            open={showFileModal}
+            onOpenChange={setShowFileModal}
+            onFileUploaded={handleFileUploaded}
+          />
+        )}
 
         {/* Footer: Show attached files or rotating hints */}
         {attachedFiles.length > 0 ? (
