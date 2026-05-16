@@ -23,9 +23,18 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from sqlmodel import Session as DBSession, select
 
 from app.core.db import engine
-from app.models import AgentSchedule, Agent
+from app.models import (
+    AgentSchedule,
+    Agent,
+    ChannelAccessPolicy,
+    SessionSender,
+)
 from app.models.events.event import EventType
 from app.services.agents.agent_scheduler_service import AgentSchedulerService
+from app.services.sessions.channel_ingestion_service import (
+    ChannelIngestionService,
+    NoActiveEnvironmentError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -136,22 +145,44 @@ async def _execute_static_prompt(
     session_service,
 ) -> None:
     """Execute a static_prompt schedule — original behavior with added logging."""
+    del session_service  # kept for signature compatibility; routed through ChannelIngestionService
     message = schedule.prompt or agent.entrypoint_prompt or "Start scheduled execution."
 
-    result = await session_service.send_session_message(
-        session_id=None,
-        agent_id=agent.id,
-        user_id=agent.owner_id,
-        content=message,
-        initiate_streaming=True,
-        get_fresh_db_session=lambda: DBSession(engine),
+    sender = SessionSender.from_system_trigger(
+        owner_user_id=agent.owner_id,
+        trigger_kind="schedule",
+        trigger_id=schedule.id,
+        display_name=schedule.name,
     )
-
-    action = result.get("action")
-    session_id = result.get("session_id")
+    try:
+        ingestion = await ChannelIngestionService.ingest_inbound_message(
+            db=db_session,
+            agent=agent,
+            sender=sender,
+            thread_key=None,
+            content=message,
+            integration_type="schedule",
+            access_policy=ChannelAccessPolicy(
+                expected_owner_id=agent.owner_id,
+                allow_system_trigger_fastpath=True,
+            ),
+            get_fresh_db_session=lambda: DBSession(engine),
+            extra_session_kwargs={
+                "session_metadata_extra": {"schedule_id": str(schedule.id)},
+            },
+        )
+        action = ingestion.action
+        session_id = ingestion.session.id if ingestion.session is not None else None
+        error_msg = ingestion.message if action == "error" else None
+    except NoActiveEnvironmentError as exc:
+        # Mirror the old "Failed to create session" error path that returned
+        # when send_session_message(session_id=None, ...) hit an agent with no
+        # active environment.
+        action = "error"
+        session_id = None
+        error_msg = str(exc)
 
     if action == "error":
-        error_msg = result.get("message")
         logger.error(
             f"Schedule {schedule.id}: failed to execute agent {agent.id}: {error_msg}"
         )
@@ -209,6 +240,7 @@ async def _execute_script_trigger(
     env_connector,
 ) -> None:
     """Execute a script_trigger schedule — run command, check output, act accordingly."""
+    del session_service  # kept for signature compatibility; routed through ChannelIngestionService
     # Resolve active environment
     environment = AgentSchedulerService.get_active_environment(db_session, agent.id)
     if not environment:
@@ -358,20 +390,38 @@ async def _execute_script_trigger(
             stderr=stderr,
         )
 
-        result = await session_service.send_session_message(
-            session_id=None,
-            agent_id=agent.id,
-            user_id=agent.owner_id,
-            content=context_message,
-            initiate_streaming=True,
-            get_fresh_db_session=lambda: DBSession(engine),
+        sender = SessionSender.from_system_trigger(
+            owner_user_id=agent.owner_id,
+            trigger_kind="schedule",
+            trigger_id=schedule.id,
+            display_name=schedule.name,
         )
-
-        action = result.get("action")
-        session_id = result.get("session_id")
+        try:
+            ingestion = await ChannelIngestionService.ingest_inbound_message(
+                db=db_session,
+                agent=agent,
+                sender=sender,
+                thread_key=None,
+                content=context_message,
+                integration_type="schedule",
+                access_policy=ChannelAccessPolicy(
+                    expected_owner_id=agent.owner_id,
+                    allow_system_trigger_fastpath=True,
+                ),
+                get_fresh_db_session=lambda: DBSession(engine),
+                extra_session_kwargs={
+                    "session_metadata_extra": {"schedule_id": str(schedule.id)},
+                },
+            )
+            action = ingestion.action
+            session_id = ingestion.session.id if ingestion.session is not None else None
+            error_msg = ingestion.message if action == "error" else None
+        except NoActiveEnvironmentError as exc:
+            action = "error"
+            session_id = None
+            error_msg = str(exc)
 
         if action == "error":
-            error_msg = result.get("message")
             logger.error(
                 f"Schedule {schedule.id}: failed to create session for non-OK output: "
                 f"{error_msg}"

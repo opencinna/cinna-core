@@ -13,6 +13,12 @@ Scenarios covered:
   8. Unauthenticated POST returns 401/403
   9. Cross-owner task_id isolation (resuming an identity session for a
      different owner through /identity/other_owner/ is rejected)
+  10. [REGRESSION] identity_mcp session.user_id uses identity owner_id, not agent.owner_id
+      (Phase 2 A2A migration: ExternalA2AContextHandler._extra_session_kwargs must
+       pass session_owner_id so ChannelIngestionService doesn't default to agent.owner_id)
+  11. [REGRESSION] identity_mcp resume succeeds when identity owner != agent owner
+      (_parse_session_scope checks session.user_id == context.session_owner_id; if
+       session.user_id was stamped as agent.owner_id the check raises TaskScopeViolationError)
 """
 import uuid
 from unittest.mock import patch
@@ -587,4 +593,265 @@ def test_identity_cross_owner_task_isolation(
     body = resp_b.json()
     assert body.get("error", {}).get("code") == -32004, (
         f"Expected -32004 for cross-owner attempt, got {body}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression tests — Phase 2 A2A migration (session owner stamping)
+# ---------------------------------------------------------------------------
+
+
+def test_identity_mcp_session_user_id_uses_identity_owner_not_agent_owner(
+    client: TestClient,
+    superuser_token_headers: dict,
+    db: DBSession,
+) -> None:
+    """[REGRESSION] identity_mcp session.user_id must equal context.session_owner_id
+    (the identity owner), not agent.owner_id.
+
+    Failure mode (pre-fix): ExternalA2AContextHandler._extra_session_kwargs()
+    returned None. ChannelIngestionService._select_session_owner_id for
+    an 'a2a_caller' sender fell back to agent.owner_id. When
+    context.session_owner_id != agent.owner_id, the session was stamped with
+    the wrong user_id. On resume, _parse_session_scope raised
+    TaskScopeViolationError because session.user_id != context.session_owner_id.
+
+    This test creates that divergence directly: identity owner (User A) owns
+    the binding; the agent is owned by User B. The API binding-creation
+    endpoint enforces agent.owner_id == caller (which prevents this through
+    normal flows). We insert the binding row directly to reproduce the exact
+    condition the fix guards against.
+
+    Full story:
+      1. Create agent owner (User B).
+      2. Create identity owner (User A = superuser) and caller (User C).
+      3. Insert IdentityAgentBinding with owner_id=User A, agent_id=agent-owned-by-B.
+      4. Insert IdentityBindingAssignment for User C, is_enabled=True.
+      5. Send identity_mcp stream as User C against User A's identity.
+      6. Assert session.user_id == User A.id (NOT User B.id).
+      7. Assert session.user_id != agent.owner_id (proves the fix matters).
+      8. Resume with the same task_id — assert no scope-violation error.
+    """
+    # ── Phase 1: Setup users ──────────────────────────────────────────────────
+    # User A = identity owner (superuser, because auto_enable requires it)
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=superuser_token_headers)
+    assert r.status_code == 200
+    identity_owner = r.json()
+    identity_owner_id = identity_owner["id"]
+
+    # User B = agent owner (a different regular user)
+    agent_owner, _ = create_random_user_with_headers(client)
+    agent_owner_id = agent_owner["id"]
+
+    # User C = caller (the external caller)
+    caller, caller_headers = create_random_user_with_headers(client)
+    caller_id = caller["id"]
+
+    # ── Phase 2: Create the agent owned by User B ─────────────────────────────
+    # Use superuser to give User B an agent (agent creation requires superuser
+    # or developer role; easiest is to create via superuser and then we'll use
+    # the agent id in a direct DB binding).
+    owner_agent = create_agent_via_api(
+        client, superuser_token_headers, name="Regression Mismatched Owner Agent"
+    )
+    drain_tasks()
+    owner_agent = get_agent(client, superuser_token_headers, owner_agent["id"])
+    assert owner_agent["active_environment_id"] is not None
+
+    # Reassign the agent's owner_id to User B so agent.owner_id != identity owner.
+    # We do this via DB directly since there is no agent-transfer API.
+    from app.models import Agent
+    agent_row = db.get(Agent, uuid.UUID(owner_agent["id"]))
+    assert agent_row is not None
+    agent_row.owner_id = uuid.UUID(agent_owner_id)
+    db.add(agent_row)
+    db.flush()
+    db.refresh(agent_row)
+    # Confirm the divergence: agent.owner_id != identity owner
+    assert agent_row.owner_id != uuid.UUID(identity_owner_id), (
+        "Test pre-condition violated: agent.owner_id must differ from identity owner"
+    )
+
+    # ── Phase 3: Insert identity binding directly (bypassing API validation) ──
+    # The API's IdentityService.create_binding enforces agent.owner_id == caller.
+    # We insert directly to create the scenario the fix guards against.
+    binding_id = uuid.uuid4()
+    binding = IdentityAgentBinding(
+        id=binding_id,
+        owner_id=uuid.UUID(identity_owner_id),
+        agent_id=uuid.UUID(owner_agent["id"]),
+        trigger_prompt="Regression test binding — owner != agent.owner_id",
+        is_active=True,
+    )
+    db.add(binding)
+    db.flush()
+
+    # Assign User C with auto-enable so they can reach it immediately.
+    assignment = IdentityBindingAssignment(
+        binding_id=binding_id,
+        target_user_id=uuid.UUID(caller_id),
+        is_active=True,
+        is_enabled=True,
+        auto_enable=True,
+    )
+    db.add(assignment)
+    db.commit()
+
+    # ── Phase 4: Send identity_mcp stream as User C ───────────────────────────
+    resp, events = _send_identity_streaming(
+        client,
+        caller_headers,
+        identity_owner_id,
+        message_text="Regression test — first message",
+        response_text="Reply from mismatched-owner agent",
+    )
+    assert resp.status_code == 200, f"identity streaming failed: {resp.text}"
+    assert events, f"Expected SSE events: {resp.text}"
+
+    task_id = _extract_task_id(events)
+    assert task_id, f"Could not extract task_id from events: {events}"
+
+    # ── Phase 5: Assert session.user_id == identity owner, NOT agent.owner_id ─
+    # The regression: without the fix, session.user_id == agent.owner_id (User B).
+    # The fix: _extra_session_kwargs returns {"session_owner_id": owner_id} so
+    # ChannelIngestionService uses owner_id (User A) instead of agent.owner_id.
+    r = client.get(
+        f"{_SESSIONS_BASE}/{task_id}", headers=superuser_token_headers
+    )
+    assert r.status_code == 200, f"Owner should be able to read the session: {r.text}"
+    session = r.json()
+
+    assert session["integration_type"] == "identity_mcp", (
+        f"Expected integration_type='identity_mcp', got {session['integration_type']!r}"
+    )
+    assert session["user_id"] == identity_owner_id, (
+        f"REGRESSION: session.user_id should be identity_owner_id={identity_owner_id!r}, "
+        f"got {session['user_id']!r}. "
+        "Pre-fix behaviour: ChannelIngestionService defaulted to agent.owner_id "
+        f"({str(agent_row.owner_id)!r}) when _extra_session_kwargs returned None."
+    )
+    assert session["user_id"] != str(agent_row.owner_id), (
+        "REGRESSION: session.user_id must NOT equal agent.owner_id when they differ"
+    )
+
+    # ── Phase 6: Resume with the same task_id ────────────────────────────────
+    # Pre-fix: _parse_session_scope checked session.user_id != context.session_owner_id
+    # (User B != User A) → raised TaskScopeViolationError → SSE error event.
+    # Post-fix: session.user_id == context.session_owner_id (User A == User A) → success.
+    resp2, events2 = _send_identity_streaming(
+        client,
+        caller_headers,
+        identity_owner_id,
+        message_text="Regression test — resume",
+        response_text="Reply to resumed session",
+        task_id=task_id,
+    )
+    assert resp2.status_code == 200, f"Resume request failed: {resp2.text}"
+
+    # Must not contain a scope-violation error
+    for event in events2:
+        err = event.get("error")
+        if err:
+            assert err.get("code") not in (-32004, -32001), (
+                f"REGRESSION: resume raised scope-violation error: {err}. "
+                "This means session.user_id was stamped as agent.owner_id, not "
+                "context.session_owner_id, causing _parse_session_scope to reject "
+                "the resume. Fix: ExternalA2AContextHandler._extra_session_kwargs "
+                "must return {'session_owner_id': self.context.session_owner_id}."
+            )
+
+    task_id_2 = _extract_task_id(events2)
+    assert task_id_2 == task_id, (
+        f"Resume must reuse the same session (task_id={task_id}), "
+        f"got task_id_2={task_id_2}"
+    )
+
+
+def test_identity_mcp_session_identity_fields_stamped_correctly(
+    client: TestClient,
+    superuser_token_headers: dict,
+) -> None:
+    """identity_mcp session has identity_caller_id, binding_id, assignment_id stamped.
+
+    Complementary to the user_id regression test: verifies that
+    _stamp_new_session also writes the caller-scoped identity fields so the
+    _session_matches_context check (identity_caller_id == context.identity_caller_id)
+    succeeds on subsequent requests.
+
+    Full story:
+      1. Create identity binding (superuser owns it; caller is assigned).
+      2. Send first identity_mcp stream.
+      3. Fetch session via owner's GET /sessions/{id}.
+      4. Assert session_metadata contains identity_match_method (routing metadata).
+      5. Assert session.user_id == owner_id (owner-stamped, not caller-stamped).
+      6. Resume — task_id unchanged, no scope error.
+    """
+    caller, caller_headers = create_random_user_with_headers(client)
+    caller_id = caller["id"]
+
+    owner_id, owner_agent, binding = _setup_identity(
+        client,
+        superuser_token_headers,
+        caller_id=caller_id,
+        agent_name="Stamp Verification Agent",
+        trigger_prompt="Verify stamp fields",
+    )
+
+    # ── Phase 1: First message ─────────────────────────────────────────────────
+    resp, events = _send_identity_streaming(
+        client, caller_headers, owner_id,
+        message_text="Check my stamps please",
+        response_text="Stamps verified.",
+    )
+    assert resp.status_code == 200, f"identity streaming failed: {resp.text}"
+    task_id = _extract_task_id(events)
+    assert task_id
+
+    # ── Phase 2: Verify session fields via owner API ───────────────────────────
+    r = client.get(f"{_SESSIONS_BASE}/{task_id}", headers=superuser_token_headers)
+    assert r.status_code == 200
+    session = r.json()
+
+    assert session["integration_type"] == "identity_mcp"
+
+    # user_id == identity owner (NOT the caller) — this is the regression anchor
+    assert session["user_id"] == owner_id, (
+        f"session.user_id must be identity owner ({owner_id}), got {session['user_id']}. "
+        "If this fails, _extra_session_kwargs returned None and ChannelIngestionService "
+        "defaulted session.user_id to agent.owner_id."
+    )
+    assert session["user_id"] != caller_id, (
+        "session.user_id must NOT be the caller's user_id for identity_mcp sessions"
+    )
+
+    # session_metadata must contain routing info stamped by _stamp_new_session
+    meta = session.get("session_metadata") or {}
+    assert meta.get("identity_match_method") == "only_one", (
+        f"Expected identity_match_method='only_one' in session_metadata, got {meta}"
+    )
+    assert meta.get("app_mcp_route_type") == "identity", (
+        f"Expected app_mcp_route_type='identity' in session_metadata, got {meta}"
+    )
+
+    # ── Phase 3: Resume succeeds, same task_id ────────────────────────────────
+    resp2, events2 = _send_identity_streaming(
+        client, caller_headers, owner_id,
+        message_text="Follow-up message",
+        response_text="Reply to follow-up.",
+        task_id=task_id,
+    )
+    assert resp2.status_code == 200
+
+    for event in events2:
+        err = event.get("error")
+        if err:
+            assert err.get("code") not in (-32004, -32001), (
+                f"Unexpected scope error on resume: {err}. "
+                "This indicates _parse_session_scope raised TaskScopeViolationError "
+                "because session.user_id was not stamped as context.session_owner_id."
+            )
+
+    task_id_2 = _extract_task_id(events2)
+    assert task_id_2 == task_id, (
+        f"Resume must reuse the same session, got {task_id_2} vs {task_id}"
     )

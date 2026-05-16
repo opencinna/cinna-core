@@ -13,6 +13,12 @@ Scenarios covered:
   9. SendStreamingMessage — another user's agent returns JSON-RPC error
   10. GetTask after streaming — task is retrievable by task_id
   11. v0.3 protocol streaming — slash-case method names are accepted
+  12. [REGRESSION] external session.user_id == caller (agent owner) and resume succeeds
+      (Phase 2 A2A migration: ExternalA2AContextHandler._extra_session_kwargs must pass
+       session_owner_id; without it ChannelIngestionService defaults to agent.owner_id
+       which for the external path is the same user, but the explicit assertion documents
+       the invariant. Resume verifies _parse_session_scope doesn't raise
+       TaskScopeViolationError when session.user_id matches context.session_owner_id.)
 """
 import uuid
 from unittest.mock import patch
@@ -306,6 +312,65 @@ def test_external_a2a_streaming_creates_external_session(
     )
 
 
+def test_external_a2a_streaming_generates_session_title(
+    client: TestClient,
+    superuser_token_headers: dict,
+) -> None:
+    """[REGRESSION] External A2A SSE streaming generates a session title for the first message.
+
+    Pre-fix behaviour: the SSE handler (``handle_message_stream``) resolved/created
+    the session via ``ChannelIngestionService.resolve_or_create_session`` *before*
+    calling ``SessionService.send_session_message`` (with
+    ``initiate_streaming=False``), then ran ``SessionStreamProcessor`` itself.
+    Because ``send_session_message`` received an existing ``session_id``, its
+    internal ``is_new_session`` flag was always False, so its title-generation
+    guard was skipped. ``SessionStreamProcessor`` bypasses
+    ``SessionService.initiate_stream`` (which also generates titles), so the
+    session stayed untitled forever — sidebar showed an empty title for every
+    cinna-desktop session.
+
+    Fix: drop the ``is_new_session`` guard from the title-gen blocks in
+    ``send_session_message``. The "no title yet" check that already exists is
+    the correct invariant.
+
+    With ``mock_ai_functions=True`` (autouse), title generation falls back to a
+    truncation of the first user message body, so we can assert exact equality.
+    """
+    agent = _create_su_agent(client, superuser_token_headers, "Title Regression Agent")
+    agent_id = agent["id"]
+
+    first_message = "Investigate yesterday's deployment regression."
+    resp, _events = _send_streaming_message(
+        client,
+        superuser_token_headers,
+        agent_id,
+        message_text=first_message,
+        response_text="Sure, looking into it.",
+    )
+
+    assert resp.status_code == 200, f"Streaming request failed: {resp.text}"
+
+    sessions = list_sessions(client, superuser_token_headers)
+    agent_sessions = [s for s in sessions if s["agent_id"] == agent_id]
+    assert len(agent_sessions) == 1, (
+        f"Expected exactly 1 external session for the agent, got {len(agent_sessions)}"
+    )
+    session = agent_sessions[0]
+    assert session["integration_type"] == "external"
+
+    title = (session.get("title") or "").strip()
+    assert title != "", (
+        "Expected a non-empty title after the first external-A2A streaming "
+        f"message; got {title!r}. This is the regression the title-gen guard "
+        "fix targets."
+    )
+    # Fallback path truncates to <=100 chars; this message is short enough to
+    # appear verbatim.
+    assert title == first_message, (
+        f"Expected fallback title to equal first message body; got {title!r}"
+    )
+
+
 def test_external_a2a_streaming_rejects_wrong_owner(
     client: TestClient,
     superuser_token_headers: dict,
@@ -444,3 +509,119 @@ def test_external_a2a_streaming_unauthenticated(
     )
     # FastAPI dependency injection rejects before handler runs
     assert r.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# Regression tests — Phase 2 A2A migration (session owner stamping)
+# ---------------------------------------------------------------------------
+
+
+def test_external_session_user_id_uses_caller_not_agent_owner(
+    client: TestClient,
+    superuser_token_headers: dict,
+) -> None:
+    """[REGRESSION] external session.user_id == the agent's owner (= caller) and
+    resume succeeds without TaskScopeViolationError.
+
+    Pre-fix behaviour: ExternalA2AContextHandler._extra_session_kwargs() returned
+    None. ChannelIngestionService._select_session_owner_id for an 'a2a_caller'
+    sender fell back to agent.owner_id. On resume, _parse_session_scope checks
+    session.user_id == context.session_owner_id; if the values ever diverged
+    (e.g. because _resolve_agent_context used a different user than the agent
+    owner) this would raise TaskScopeViolationError.
+
+    For the 'external' target type ExternalAccessPolicy.resolve_agent enforces
+    caller == agent.owner_id, so session_owner_id and agent.owner_id are always
+    the same user. The test documents the invariant and verifies the resume path
+    is not broken by the fix.
+
+    Full story:
+      1. Create agent as superuser (agent.owner_id = superuser).
+      2. Send streaming message as the agent owner.
+      3. Assert session.user_id == superuser.id (context.session_owner_id).
+      4. Assert integration_type == "external".
+      5. Resume with the same task_id — assert no scope-violation error returned.
+      6. Assert resumed task_id is unchanged.
+    """
+    agent = _create_su_agent(client, superuser_token_headers, "Regression External Agent")
+    agent_id = agent["id"]
+
+    # Capture the agent owner's user id
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=superuser_token_headers)
+    assert r.status_code == 200
+    agent_owner_id = r.json()["id"]
+
+    # ── Phase 1: New session via streaming ────────────────────────────────────
+    resp, events = _send_streaming_message(
+        client,
+        superuser_token_headers,
+        agent_id,
+        message_text="Regression external — first message",
+        response_text="First reply.",
+    )
+    assert resp.status_code == 200, f"Streaming failed: {resp.text}"
+    assert events, f"Expected SSE events: {resp.text}"
+
+    task_id = None
+    for event in events:
+        result = event.get("result", {})
+        tid = result.get("id") or result.get("taskId")
+        if tid:
+            task_id = tid
+            break
+    assert task_id is not None, f"Could not extract task_id: {events}"
+
+    # ── Phase 2: Assert session.user_id == agent_owner_id ─────────────────────
+    r = client.get(
+        f"{settings.API_V1_STR}/sessions/{task_id}",
+        headers=superuser_token_headers,
+    )
+    assert r.status_code == 200, f"Session fetch failed: {r.text}"
+    session = r.json()
+
+    assert session["integration_type"] == "external", (
+        f"Expected integration_type='external', got {session['integration_type']!r}"
+    )
+    assert session["user_id"] == agent_owner_id, (
+        f"REGRESSION: session.user_id should be agent_owner_id={agent_owner_id!r}, "
+        f"got {session['user_id']!r}. "
+        "If this fails, ChannelIngestionService did not use context.session_owner_id "
+        "(returned by _extra_session_kwargs) and defaulted to a different owner."
+    )
+
+    # ── Phase 3: Resume with same task_id ─────────────────────────────────────
+    # Pre-fix risk: _parse_session_scope checks session.user_id != context.session_owner_id.
+    # If _extra_session_kwargs returned None and the values ever diverged, this would
+    # raise TaskScopeViolationError rendered as an SSE error event with code -32004.
+    resp2, events2 = _send_streaming_message(
+        client,
+        superuser_token_headers,
+        agent_id,
+        message_text="Regression external — resume",
+        response_text="Resume reply.",
+        task_id=task_id,
+    )
+    assert resp2.status_code == 200, f"Resume request failed: {resp2.text}"
+
+    # Must not contain a scope-violation error
+    for event in events2:
+        err = event.get("error")
+        if err:
+            assert err.get("code") not in (-32004, -32001), (
+                f"REGRESSION: resume raised a scope-violation error: {err}. "
+                "This indicates _parse_session_scope raised TaskScopeViolationError "
+                "because session.user_id did not match context.session_owner_id. "
+                "Fix: ExternalA2AContextHandler._extra_session_kwargs must return "
+                "{'session_owner_id': self.context.session_owner_id}."
+            )
+
+    task_id_2 = None
+    for event in events2:
+        result = event.get("result", {})
+        tid = result.get("id") or result.get("taskId")
+        if tid:
+            task_id_2 = tid
+            break
+    assert task_id_2 == task_id, (
+        f"Resume must reuse the same session (task_id={task_id}), got {task_id_2}"
+    )

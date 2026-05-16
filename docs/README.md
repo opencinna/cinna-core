@@ -130,7 +130,7 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | Feature | Description | Docs |
 |---------|-------------|------|
 | agent_management | Agent definition lifecycle — identity, prompts, SDK, credentials, integrations, sharing — the config entry point for all platform features | [business logic](application/agent_management/agent_management.md) \| [creation wizard](application/agent_management/new_agent_wizard.md) |
-| agent_sessions | Persistent chat sessions between users/external systems and agent environments — lifecycle, modes, streaming, integration types, UI | [business logic](application/agent_sessions/agent_sessions.md) \| [tech](application/agent_sessions/agent_sessions_tech.md) \| [env panel widget](application/agent_sessions/app_env_panel_widget.md) |
+| agent_sessions | Persistent chat sessions between users/external systems and agent environments — lifecycle, modes, streaming, integration types, UI | [business logic](application/agent_sessions/agent_sessions.md) \| [tech](application/agent_sessions/agent_sessions_tech.md) \| [env panel widget](application/agent_sessions/app_env_panel_widget.md) \| [channel ingestion](application/agent_sessions/channel_ingestion.md) \| [channel ingestion tech](application/agent_sessions/channel_ingestion_tech.md) |
 | auth | User authentication - JWT tokens, password login, Google OAuth, domain whitelist, password recovery | [business logic](application/auth/auth.md) \| [tech](application/auth/auth_tech.md) \| [google oauth](application/auth/google_oauth.md) |
 | user_roles | Three-value `UserRole` enum (`agent-user`, `agent-developer`, `admin`) layered on top of `is_superuser`. `agent-user` is the default and gets Configuration, Credentials, Environments, and Integrations tabs on install detail pages (Integrations shows only the MCP Connectors card in simplified form); `agent-developer` unlocks agent CRUD, building-mode sessions, publishing, sync-prompts; `admin` is paired with the existing superuser tier. Promote / demote from the Edit User dialog on Admin → Users; `USER_ROLE_CHANGED` WebSocket event re-routes the affected user on demote. | [business logic](application/user_roles/user_roles.md) \| [tech](application/user_roles/user_roles_tech.md) |
 | ssh_keys | User SSH key management for private Git repository access | [business logic](application/ssh_keys/ssh_keys.md) \| [tech](application/ssh_keys/ssh_keys_tech.md) |
@@ -210,4 +210,4 @@ User ──→ Frontend (React) ──→ Backend API (FastAPI) ──→ Servic
 
 ---
 
-*Last updated: 2026-05-11* <!-- installed-agents-auto-app-mcp-routing -->
+*Last updated: 2026-05-16* <!-- channel-ingestion-service -->

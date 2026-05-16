@@ -20,6 +20,8 @@ from app.models import (
     Agent,
     User,
 )
+from app.models.sessions.session_sender import SessionSender
+from app.services.sessions.channel_ingestion_service import ChannelIngestionService
 from app.services.sessions.session_service import SessionService
 from app.services.sharing.agent_guest_share_service import AgentGuestShareService
 from app.services.users.role_service import RoleService
@@ -155,13 +157,29 @@ def create_session(
             detail="Agent has no active environment. Please create and activate an environment first.",
         )
 
-    new_session = SessionService.create_session(
-        db_session=session, user_id=user_id, data=session_in,
-        guest_share_id=guest_share_id,
-        dashboard_block_id=session_in.dashboard_block_id,
+    # Build a webui_user SessionSender. Ownership/permission branching above
+    # already gated access — the service is asked only to perform uniform
+    # stamping (plan §5.3).
+    if isinstance(caller, GuestShareContext):
+        sender = SessionSender.from_guest_share(caller)
+    else:
+        sender = SessionSender.from_webui(caller)
+
+    new_session, _ = ChannelIngestionService.resolve_or_create_session(
+        db=session,
+        agent=agent,
+        sender=sender,
+        thread_key=None,
+        integration_type=None,  # web-UI sessions intentionally untagged
+        extra_session_kwargs={
+            "session_owner_id": user_id,
+            "guest_share_id": guest_share_id,
+            "dashboard_block_id": session_in.dashboard_block_id,
+            "mode": session_in.mode,
+            "title": session_in.title,
+            "webapp_share_id": session_in.webapp_share_id,
+        },
     )
-    if not new_session:
-        raise HTTPException(status_code=500, detail="Failed to create session")
 
     return new_session
 

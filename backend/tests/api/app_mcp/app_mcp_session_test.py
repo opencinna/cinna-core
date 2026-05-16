@@ -11,6 +11,8 @@ Verifies that AppMCPRequestHandler.handle_send_message() correctly:
   - Only reuses sessions with integration_type="app_mcp" (cross-isolation guard)
   - Returns the correct agent_name and context_id in the response payload
   - Returns caller_email in session list/get responses when caller_id is set
+  - Reuses an existing identity_mcp session when a valid context_id is passed back
+  - Returns an error (not raises) when the identity binding is deactivated mid-session
 
 These tests call handle_send_message() directly (not through MCP protocol)
 with the routing service and agent environment stubbed.
@@ -564,3 +566,267 @@ def test_app_mcp_context_id_caller_isolation(
     caller_ids = {s["caller_id"] for s in owner_mcp_sessions}
     assert str(caller_a_id) in caller_ids
     assert str(caller_b_id) in caller_ids
+
+
+def test_app_mcp_identity_mcp_context_id_reuses_existing_session(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db,
+) -> None:
+    """
+    Passing back context_id from a first identity_mcp call reuses the same session.
+
+    The _try_resume_session branch for integration_type="identity_mcp" matches on
+    session.identity_caller_id (not session.caller_id). This test exercises that
+    branch end-to-end through handle_send_message():
+
+      1. Create agent + identity binding with the caller assigned (auto_enable)
+      2. First call — identity routing → new identity_mcp session, get context_id
+      3. Second call — pass back context_id → same session reused (identity branch)
+      4. Verify only one identity_mcp session exists (no duplicate created)
+      5. Verify both user messages are in the same session
+
+    Both calls run within a single asyncio.run() so the handler's create_session()
+    calls share the test DB session state correctly.
+    """
+    from app.core.config import settings
+    from app.services.app_mcp.app_mcp_request_handler import AppMCPRequestHandler
+    from app.services.app_mcp.app_mcp_routing_service import RoutingResult
+    from tests.utils.identity import create_identity_binding, assign_users_to_binding
+    from tests.utils.message import list_messages
+    from tests.utils.user import create_random_user_with_headers
+
+    # ── Phase 1: Create agent (owned by superuser) ────────────────────────
+    agent = _setup_agent(client, superuser_token_headers, name="Identity Resume Agent")
+    agent_id = uuid.UUID(agent["id"])
+
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=superuser_token_headers)
+    assert r.status_code == 200
+    owner_id = uuid.UUID(r.json()["id"])
+
+    # ── Phase 2: Create caller + identity binding ─────────────────────────
+    caller_user, _ = create_random_user_with_headers(client)
+    caller_id = uuid.UUID(caller_user["id"])
+
+    binding = create_identity_binding(
+        client,
+        superuser_token_headers,
+        agent_id=agent["id"],
+        trigger_prompt="Route to this agent for identity test.",
+        assigned_user_ids=[caller_user["id"]],
+        auto_enable=True,
+    )
+    binding_id = uuid.UUID(binding["id"])
+
+    # Resolve the assignment ID — it's the first assignment in the binding.
+    assignments = binding.get("assignments", [])
+    assert len(assignments) == 1, f"Expected 1 assignment, got {assignments}"
+    assignment_id = uuid.UUID(assignments[0]["id"])
+
+    # Build an identity routing result pointing at this agent + binding.
+    fixed_identity_result = RoutingResult(
+        agent_id=agent_id,
+        agent_name=agent["name"],
+        session_mode="conversation",
+        route_id=uuid.uuid4(),
+        route_source="identity",
+        match_method="only_one",
+        is_identity=True,
+        identity_owner_id=owner_id,
+        identity_owner_name="Identity Owner",
+        identity_binding_id=binding_id,
+        identity_binding_assignment_id=assignment_id,
+    )
+
+    async def _run_both():
+        # First call — no context_id → new identity_mcp session
+        result1_raw = await AppMCPRequestHandler.handle_send_message(
+            user_id=caller_id,
+            message="First identity message",
+            context_id=None,
+            mcp_ctx=None,
+        )
+        result1 = json.loads(result1_raw)
+
+        # Second call — pass back context_id → reuse identity_mcp session
+        result2_raw = await AppMCPRequestHandler.handle_send_message(
+            user_id=caller_id,
+            message="Second identity message",
+            context_id=result1.get("context_id"),
+            mcp_ctx=None,
+        )
+        result2 = json.loads(result2_raw)
+        return result1, result2
+
+    stub = StubAgentEnvConnector(response_text="Identity agent reply")
+    with patch(
+        "app.services.app_mcp.app_mcp_request_handler.AppMCPRoutingService.route_message",
+        return_value=fixed_identity_result,
+    ):
+        with patch(
+            "app.services.sessions.message_service.agent_env_connector",
+            stub,
+        ):
+            result1, result2 = asyncio.run(_run_both())
+    drain_tasks()
+
+    # ── Verify first call succeeded ─────────────────────────────────────
+    assert "error" not in result1, f"First call failed: {result1.get('error')}"
+    ctx_id = result1["context_id"]
+    assert ctx_id, "First response should include context_id"
+
+    # ── Verify second call reused same session ──────────────────────────
+    assert "error" not in result2, f"Second call failed: {result2.get('error')}"
+    assert result2["context_id"] == ctx_id, (
+        f"identity_mcp context_id changed on resume: "
+        f"got {result2['context_id']!r}, expected {ctx_id!r}"
+    )
+
+    # ── Only one identity_mcp session should exist ────────────────────────
+    all_sessions = list_sessions(client, superuser_token_headers)
+    identity_sessions = [s for s in all_sessions if s.get("integration_type") == "identity_mcp"]
+    assert len(identity_sessions) == 1, (
+        f"Expected 1 identity_mcp session (reused), got {len(identity_sessions)}"
+    )
+    session_id = identity_sessions[0]["id"]
+    assert session_id == ctx_id, (
+        f"identity_mcp session_id {session_id!r} does not match context_id {ctx_id!r}"
+    )
+
+    # ── Both user messages are in the same session ────────────────────────
+    messages = list_messages(client, superuser_token_headers, session_id)
+    user_msgs = [m for m in messages if m["role"] == "user"]
+    assert len(user_msgs) >= 2, (
+        f"Expected 2 user messages in same session, got {len(user_msgs)}"
+    )
+    user_contents = {m["content"] for m in user_msgs}
+    assert "First identity message" in user_contents
+    assert "Second identity message" in user_contents
+
+
+def test_app_mcp_identity_binding_deactivated_mid_session_returns_error(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db,
+) -> None:
+    """
+    Deactivating an identity binding mid-session causes the next
+    handle_send_message() call with the same context_id to return a JSON error
+    (not raise), via AppMCPRequestHandler._check_identity_session_validity.
+
+    The handler's _try_resume_session finds the identity_mcp session, calls
+    _check_identity_session_validity, gets a non-None error string, and returns
+    (None, error_message, False). The outer _handle_inner then returns a JSON
+    response with an "error" key.
+
+      1. Create agent + identity binding with a caller assigned
+      2. First call — creates identity_mcp session, capture context_id
+      3. Deactivate the binding via PUT /identity/bindings/{id} (is_active=False)
+      4. Second call — same context_id → error JSON returned, context_id empty
+    """
+    from app.core.config import settings
+    from app.services.app_mcp.app_mcp_request_handler import AppMCPRequestHandler
+    from app.services.app_mcp.app_mcp_routing_service import RoutingResult
+    from tests.utils.identity import (
+        create_identity_binding,
+        update_identity_binding,
+    )
+    from tests.utils.user import create_random_user_with_headers
+
+    # ── Phase 1: Create agent + identity binding with caller assigned ────
+    agent = _setup_agent(client, superuser_token_headers, name="Revocation Test Agent")
+    agent_id = uuid.UUID(agent["id"])
+
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=superuser_token_headers)
+    assert r.status_code == 200
+    owner_id = uuid.UUID(r.json()["id"])
+
+    caller_user, _ = create_random_user_with_headers(client)
+    caller_id = uuid.UUID(caller_user["id"])
+
+    binding = create_identity_binding(
+        client,
+        superuser_token_headers,
+        agent_id=agent["id"],
+        trigger_prompt="Route to this agent for revocation test.",
+        assigned_user_ids=[caller_user["id"]],
+        auto_enable=True,
+    )
+    binding_id = uuid.UUID(binding["id"])
+
+    assignments = binding.get("assignments", [])
+    assert len(assignments) == 1, f"Expected 1 assignment, got {assignments}"
+    assignment_id = uuid.UUID(assignments[0]["id"])
+
+    fixed_identity_result = RoutingResult(
+        agent_id=agent_id,
+        agent_name=agent["name"],
+        session_mode="conversation",
+        route_id=uuid.uuid4(),
+        route_source="identity",
+        match_method="only_one",
+        is_identity=True,
+        identity_owner_id=owner_id,
+        identity_owner_name="Identity Owner",
+        identity_binding_id=binding_id,
+        identity_binding_assignment_id=assignment_id,
+    )
+
+    async def _run(context_id):
+        return await AppMCPRequestHandler.handle_send_message(
+            user_id=caller_id,
+            message="Test message",
+            context_id=context_id,
+            mcp_ctx=None,
+        )
+
+    # ── Phase 2: First call — establish identity_mcp session ─────────────
+    stub = StubAgentEnvConnector(response_text="Initial identity reply")
+    with patch(
+        "app.services.app_mcp.app_mcp_request_handler.AppMCPRoutingService.route_message",
+        return_value=fixed_identity_result,
+    ):
+        with patch(
+            "app.services.sessions.message_service.agent_env_connector",
+            stub,
+        ):
+            raw1 = asyncio.run(_run(context_id=None))
+    drain_tasks()
+
+    result1 = json.loads(raw1)
+    assert "error" not in result1, f"First call should succeed: {result1.get('error')}"
+    ctx_id = result1["context_id"]
+    assert ctx_id, "First call must return a context_id"
+
+    # ── Phase 3: Deactivate the binding via API ───────────────────────────
+    update_identity_binding(
+        client,
+        superuser_token_headers,
+        str(binding_id),
+        is_active=False,
+    )
+
+    # ── Phase 4: Second call with same context_id → error (not exception) ─
+    stub2 = StubAgentEnvConnector(response_text="Should not reach agent")
+    with patch(
+        "app.services.app_mcp.app_mcp_request_handler.AppMCPRoutingService.route_message",
+        return_value=fixed_identity_result,
+    ):
+        with patch(
+            "app.services.sessions.message_service.agent_env_connector",
+            stub2,
+        ):
+            raw2 = asyncio.run(_run(context_id=ctx_id))
+    drain_tasks()
+
+    result2 = json.loads(raw2)
+    assert "error" in result2, (
+        f"Expected error key in response after binding deactivation, got: {result2}"
+    )
+    assert "no longer active" in result2["error"].lower(), (
+        f"Error message should mention 'no longer active', got: {result2['error']!r}"
+    )
+    # context_id should be empty on error (handler contract)
+    assert result2.get("context_id") == "", (
+        f"context_id should be empty string on validity error, got: {result2.get('context_id')!r}"
+    )

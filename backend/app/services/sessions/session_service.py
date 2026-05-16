@@ -1210,7 +1210,6 @@ class SessionService:
             get_fresh_db_session = create_session
 
         has_files = bool(file_ids)
-        is_new_session = False
         environment_id: UUID | None = None
         environment_status: str | None = None
 
@@ -1241,7 +1240,6 @@ class SessionService:
                 if not chat_session:
                     return {"action": "error", "message": "Failed to create session"}
                 session_id = chat_session.id
-                is_new_session = True
                 logger.info(f"Created new session {session_id} for agent {agent_id}")
             else:
                 return {"action": "error", "message": "Either session_id or agent_id must be provided"}
@@ -1319,17 +1317,23 @@ class SessionService:
                         },
                     )
 
-                # Title generation for new sessions (before streaming)
-                if is_new_session:
-                    with get_fresh_db_session() as db:
-                        chat_session = SessionService.get_session(db, session_id)
-                        if chat_session and (not chat_session.title or chat_session.title.strip() == ""):
-                            SessionService.ensure_title_for_new_session(
-                                session_id=session_id,
-                                first_message_content=content,
-                                get_fresh_db_session=get_fresh_db_session,
-                                user_id=user_id,
-                            )
+                # Title generation for sessions still missing a title (before
+                # streaming). We can't gate on "session was created in this
+                # call" because channel adapters (A2A, App MCP, web-UI,
+                # scheduler) resolve/create the session via
+                # ``ChannelIngestionService`` *before* calling here and always
+                # pass an existing ``session_id``. Gate strictly on missing
+                # title, mirroring the unconditional check in
+                # ``initiate_stream`` (line ~1572).
+                with get_fresh_db_session() as db:
+                    chat_session = SessionService.get_session(db, session_id)
+                    if chat_session and (not chat_session.title or chat_session.title.strip() == ""):
+                        SessionService.ensure_title_for_new_session(
+                            session_id=session_id,
+                            first_message_content=content,
+                            get_fresh_db_session=get_fresh_db_session,
+                            user_id=user_id,
+                        )
 
                 # Initiate streaming — same call as for LLM messages
                 if initiate_streaming:
@@ -1379,17 +1383,20 @@ class SessionService:
                 "session_id": str(session_id),
             })
 
-            # Title generation for new sessions
-            if is_new_session:
-                with get_fresh_db_session() as db:
-                    chat_session = SessionService.get_session(db, session_id)
-                    if chat_session and (not chat_session.title or chat_session.title.strip() == ""):
-                        SessionService.ensure_title_for_new_session(
-                            session_id=session_id,
-                            first_message_content=content,
-                            get_fresh_db_session=get_fresh_db_session,
-                            user_id=user_id,
-                        )
+            # Title generation for sessions still missing a title.
+            # Sync slash commands never reach ``initiate_stream`` — its
+            # unconditional title-gen at line ~1572 doesn't run for them, so
+            # we have to fire it from here. Gate strictly on missing title
+            # (see the streaming command path above for the same rationale).
+            with get_fresh_db_session() as db:
+                chat_session = SessionService.get_session(db, session_id)
+                if chat_session and (not chat_session.title or chat_session.title.strip() == ""):
+                    SessionService.ensure_title_for_new_session(
+                        session_id=session_id,
+                        first_message_content=content,
+                        get_fresh_db_session=get_fresh_db_session,
+                        user_id=user_id,
+                    )
 
             return {
                 "action": "command_executed",
@@ -1465,11 +1472,14 @@ class SessionService:
 
             # If not initiating streaming, return session info for manual streaming
             if not initiate_streaming:
-                # Auto-generate session title for new sessions
-                # This handles cases where initiate_stream won't be called (e.g., A2A SSE streaming)
-                # When initiate_streaming=True, title generation happens in initiate_stream instead
-                if is_new_session and (not chat_session.title or chat_session.title.strip() == ""):
-                    logger.info(f"[DEBUG] New session {session_id} has no title. Creating title generation task...")
+                # Auto-generate session title for sessions still missing a title.
+                # This handles cases where ``initiate_stream`` won't be called
+                # (e.g., A2A SSE streaming, which kicks ``SessionStreamProcessor``
+                # itself). Gate strictly on missing title — channel adapters
+                # resolve/create sessions before calling here, so any
+                # "newly created" flag here would be unreliable.
+                if not chat_session.title or chat_session.title.strip() == "":
+                    logger.info(f"[DEBUG] Session {session_id} has no title. Creating title generation task...")
                     SessionService.ensure_title_for_new_session(
                         session_id=session_id,
                         first_message_content=content,

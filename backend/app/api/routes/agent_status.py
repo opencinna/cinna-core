@@ -89,8 +89,10 @@ async def get_agent_status(
     Get the agent's self-reported status snapshot.
 
     Returns the cached DB snapshot by default. Set force_refresh=true to
-    re-fetch STATUS.md from the running environment (subject to a 30-second
-    rate limit per environment — returns 429 when the limit is active).
+    re-fetch STATUS.md from the running environment. The 30-second per-env
+    rate limit applies only to event-driven refreshes (post-stream, post-CRON)
+    — user-initiated force-refresh always actually fetches, matching the
+    `/agent-status` slash command's behavior.
     """
     agent = session.get(Agent, agent_id)
     if not agent:
@@ -103,12 +105,6 @@ async def get_agent_status(
         return AgentStatusPublic(agent_id=agent_id)
 
     if force_refresh:
-        if AgentStatusService.is_rate_limited(environment.id):
-            raise HTTPException(
-                status_code=429,
-                detail="Status refresh rate limit exceeded. Try again in 30 seconds.",
-                headers={"Retry-After": "30"},
-            )
         try:
             snapshot = await AgentStatusService.fetch_status(environment)
             return _snapshot_to_public(snapshot, agent_id)

@@ -18,9 +18,11 @@ from app.models import (
     InputTaskDetailPublic,
     InputTaskStatus,
     Agent,
+    ChannelAccessPolicy,
     Session,
     SessionMessage,
     SessionCreate,
+    SessionSender,
     TaskStatusHistory,
     TaskStatusHistoryPublic,
     TaskComment,
@@ -37,6 +39,10 @@ from app.models.agentic_teams.agentic_team import AgenticTeamNode
 from app.core.db import create_session
 from app.utils import create_task_with_error_logging
 from app.services.sessions.session_service import SessionService
+from app.services.sessions.channel_ingestion_service import (
+    ChannelIngestionService,
+    NoActiveEnvironmentError,
+)
 from app.services.events.event_service import event_service
 from app.services.ai_functions.ai_functions_service import AIFunctionsService
 from app.services.events.activity_service import ActivityService
@@ -792,29 +798,60 @@ class InputTaskService:
 
         content = message_to_send or task.current_description
 
+        agent = db_session.get(Agent, task.selected_agent_id)
+        if agent is None:
+            InputTaskService.update_status(
+                db_session=db_session,
+                task=task,
+                status=InputTaskStatus.ERROR,
+                error_message="Selected agent not found",
+            )
+            return False, None, "Selected agent not found"
+
         # Create session for target agent
         session_title = f"Task: {content[:50]}..." if len(content) > 50 else f"Task: {content}"
-        session_create = SessionCreate(
-            agent_id=task.selected_agent_id,
-            title=session_title,
-            mode=mode,
-        )
 
-        new_session = SessionService.create_session(
-            db_session=db_session,
+        sender = SessionSender.from_task_execution(
             user_id=user_id,
-            data=session_create,
-            source_task_id=task.id,
+            task_id=task.id,
+            task_name=session_title,
         )
 
-        if not new_session:
+        try:
+            ingestion = await ChannelIngestionService.ingest_inbound_message(
+                db=db_session,
+                agent=agent,
+                sender=sender,
+                thread_key=None,
+                content=content,
+                file_ids=file_ids,
+                integration_type="task",
+                access_policy=ChannelAccessPolicy(
+                    expected_owner_id=user_id,
+                ),
+                get_fresh_db_session=create_session,
+                extra_session_kwargs={
+                    "title": session_title,
+                    "mode": mode,
+                    "source_task_id": task.id,
+                    "session_metadata_extra": {"task_id": str(task.id)},
+                },
+            )
+        except NoActiveEnvironmentError as exc:
+            # Mirrors today's "no session created" path: SessionService.create_session
+            # returned None when the agent had no active environment.
             InputTaskService.update_status(
                 db_session=db_session,
                 task=task,
                 status=InputTaskStatus.ERROR,
                 error_message="Failed to create session for agent",
             )
+            logger.warning(
+                f"Task {task.id}: failed to create session for agent {agent.id}: {exc}"
+            )
             return False, None, "Failed to create session for agent"
+
+        new_session = ingestion.session
 
         # Link session to task
         InputTaskService.link_session(
@@ -823,24 +860,15 @@ class InputTaskService:
             session_id=new_session.id,
         )
 
-        # Send message to session
-        result = await SessionService.send_session_message(
-            session_id=new_session.id,
-            user_id=user_id,
-            content=content,
-            file_ids=file_ids,
-            answers_to_message_id=None,
-            get_fresh_db_session=create_session,
-        )
-
-        if result["action"] == "error":
+        if ingestion.action == "error":
+            error_msg = ingestion.message
             InputTaskService.update_status(
                 db_session=db_session,
                 task=task,
                 status=InputTaskStatus.ERROR,
-                error_message=f"Failed to send message: {result['message']}",
+                error_message=f"Failed to send message: {error_msg}",
             )
-            return False, None, f"Failed to send message: {result['message']}"
+            return False, None, f"Failed to send message: {error_msg}"
 
         logger.info(f"Task {task.id} executed: session {new_session.id} created")
         return True, new_session, None
@@ -1220,70 +1248,6 @@ class InputTaskService:
             "refined_description": refined_description,
             "feedback_message": feedback_message,
         }
-
-    @staticmethod
-    def execute_task_sync(
-        db_session: DBSession,
-        task: InputTask,
-        user_id: UUID,
-        mode: str = "conversation",
-    ) -> tuple[bool, Session | None, str | None]:
-        """
-        Execute a task by creating a session (synchronous version).
-
-        This method validates the agent, creates a session linked to the task,
-        but does NOT send a message. Used by the API endpoint.
-
-        For the async version that also sends a message, see execute_task().
-
-        Args:
-            db_session: Database session
-            task: Task to execute
-            user_id: User ID executing the task
-            mode: Session mode (conversation, etc.)
-
-        Returns:
-            Tuple of (success, session, error_message)
-
-        Raises:
-            ValidationError: If no agent selected
-            AgentNotFoundError: If agent doesn't exist
-            PermissionDeniedError: If user doesn't have access to agent
-        """
-        # Verify agent is selected
-        if not task.selected_agent_id:
-            raise ValidationError("No agent selected for this task")
-
-        # Verify agent exists and user has access (with active environment required)
-        InputTaskService.verify_agent_access(
-            db_session=db_session,
-            agent_id=task.selected_agent_id,
-            user_id=user_id,
-            require_active_environment=True,
-        )
-
-        # Create session
-        session_data = SessionCreate(
-            agent_id=task.selected_agent_id,
-            title=task.current_description[:100],  # First 100 chars as title
-            mode=mode,
-        )
-        new_session = SessionService.create_session(
-            db_session=db_session,
-            user_id=user_id,
-            data=session_data,
-            source_task_id=task.id,
-        )
-
-        if not new_session:
-            return False, None, "Failed to create session"
-
-        # Link session to task and update status
-        InputTaskService.link_session(
-            db_session=db_session, task=task, session_id=new_session.id
-        )
-
-        return True, new_session, None
 
     # ==================== Status Sync Methods ====================
     # Compute and sync task status from connected sessions

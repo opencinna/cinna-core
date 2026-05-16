@@ -225,6 +225,13 @@ class ExternalA2AContextHandler(A2ARequestHandler):
     def _integration_type_for_new_session(self) -> str | None:
         return self.context.integration_type
 
+    def _extra_session_kwargs(self) -> dict[str, Any] | None:
+        # External target types (`external`, `identity_mcp`) own sessions
+        # under non-owner users — thread the resolved owner through so the
+        # new Session row's ``user_id`` matches what ``_parse_session_scope``
+        # and ``_session_matches_context`` expect on resume.
+        return {"session_owner_id": self.context.session_owner_id}
+
     def _session_access_token_id(self) -> Optional[UUID]:
         # External surface does not use A2A access tokens.
         return None

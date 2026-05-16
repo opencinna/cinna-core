@@ -274,8 +274,11 @@ shared_routes: list[SharedRoutePublic]           # AppAgentRoute records assigne
 
 ### `AppMCPRequestHandler`
 
+Session resolution flows through `ChannelIngestionService.assert_access` + `resolve_or_create_session` — see [channel ingestion](../agent_sessions/channel_ingestion.md) / [tech](../agent_sessions/channel_ingestion_tech.md). Message injection stays on the legacy `MessageService.create_message` + `stream_and_collect_response` pipeline (documented inline in the handler) due to a session-lock conflict with `initiate_stream`.
+
 - `handle_send_message(user_id, message, context_id, mcp_ctx)` -- main tool handler: resolves session, creates message with effective (transformed) content, streams response, returns JSON
-- `_resolve_session(db, user_id, message, context_id)` -- resumes existing session by `context_id` (checking `session.caller_id == user_id` for app_mcp, `session.identity_caller_id == user_id` for identity_mcp) or routes to new agent and creates session; for app_mcp sessions, sets `session.user_id = agent.owner_id` and `session.caller_id = user_id`; returns 4-tuple `(session, agent, is_new_session, routing_result)`; on session resumption `routing_result` is None (no transformation on resume)
+- `_try_resume_session(...)` -- single helper that resumes an existing session by `context_id` with strict `(integration_type, caller-column)` match (channel-edge resume verification; not delegated to `ChannelIngestionService._verify_resume_sender`)
+- New-session creation supplies `caller_id` (app_mcp) or `identity_caller_id` + identity-binding columns (identity_mcp) via `extra_session_kwargs`; the service stamps them post-create via its whitelisted `_STAMPABLE_COLUMNS`
 - Effective message: `routing_result.transformed_message or original_message`; used for `MessageService.create_message()` and title generation
 - Session lock management: per-session `asyncio.Lock` with 500-entry cap and best-effort eviction
 

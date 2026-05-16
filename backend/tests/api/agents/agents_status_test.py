@@ -10,7 +10,7 @@ Scenarios:
   1. GET /agents/status — list snapshots (empty list, with agent, workspace filter)
   2. GET /agents/{agent_id}/status — lifecycle: happy path, 404, 403, unauthenticated
   3. GET /agents/{agent_id}/status?force_refresh=true — file missing fallback,
-     file present (stub adapter), rate-limit 429
+     file present (stub adapter), force-refresh bypasses rate limit
 """
 import uuid
 
@@ -206,16 +206,18 @@ def test_get_agent_status_force_refresh_with_status_file(
         EnvironmentTestAdapter.workspace_files.pop("app-data/storage/STATUS.md", None)
 
 
-def test_get_agent_status_force_refresh_rate_limited(
+def test_get_agent_status_force_refresh_bypasses_rate_limit(
     client: TestClient,
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
-    force_refresh=true returns 429 when the rate limit is active.
+    force_refresh=true bypasses the per-env rate-limit window.
 
-    Strategy: create an agent, obtain its environment_id via the API response,
-    then pre-populate the module-level rate-limit lock so the next
-    force_refresh call is guaranteed to see the limit and return 429.
+    The 30-second rate limit only applies to event-driven refreshes
+    (post-stream, post-CRON). User-initiated force_refresh always actually
+    fetches, matching the `/agent-status` slash command's behavior — this
+    prevents the situation where a STREAM_COMPLETED post-action pull blocks
+    the user's immediate explicit refresh.
     """
     agent = create_agent_via_api(client, superuser_token_headers)
     agent_id = agent["id"]
@@ -231,15 +233,15 @@ def test_get_agent_status_force_refresh_rate_limited(
 
     env_id = uuid.UUID(env_id_str)
 
-    # Pre-mark the rate limit as just-set so the next call sees it
+    # Pre-mark the rate limit as just-set — pre-fix this would have returned 429.
     set_agent_status_rate_limit(env_id)
     try:
         r = client.get(
             f"{settings.API_V1_STR}/agents/{agent_id}/status?force_refresh=true",
             headers=superuser_token_headers,
         )
-        assert r.status_code == 429, (
-            f"Expected 429 when rate limit is active, got {r.status_code}: {r.text}"
+        assert r.status_code == 200, (
+            f"Expected 200 when rate limit is active (force_refresh bypasses it), got {r.status_code}: {r.text}"
         )
     finally:
         clear_agent_status_rate_limit(env_id)

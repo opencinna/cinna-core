@@ -4,6 +4,7 @@
 
 ### Backend — Models
 - `backend/app/models/sessions/session.py` — `Session`, `SessionMessage`, `SessionCreate`, `SessionUpdate`, `SessionPublic`, `SessionPublicExtended`, `SessionsPublicExtended`, `MessageCreate`, `MessagePublic`, `MessagesPublic`
+- `backend/app/models/sessions/session_sender.py` — `SessionSender` (frozen value type), `SessionSenderKind` (Literal), `ChannelAccessPolicy`, `IngestionResult`, `get_session_sender(session)` reader — see [channel ingestion tech](channel_ingestion_tech.md)
 
 ### Backend — Routes
 - `backend/app/api/routes/sessions.py` — Session CRUD endpoints
@@ -12,6 +13,7 @@
 
 ### Backend — Services
 - `backend/app/services/sessions/session_service.py` — All session lifecycle logic, streaming orchestration, environment activation
+- `backend/app/services/sessions/channel_ingestion_service.py` — Stateless orchestration layer used by every inbound entry point (A2A, App MCP, web-UI `POST /sessions`, scheduler, task execution). Composes `SessionService` primitives; never re-implements message creation, stream initiation, or DB inserts. See [channel ingestion](channel_ingestion.md) / [tech](channel_ingestion_tech.md).
 - `backend/app/services/sessions/message_service.py` — Message creation, streaming from agent-env, incremental DB flush
 - `backend/app/services/sessions/stream_processor.py` — `SessionStreamProcessor`: unified streaming pipeline shared by UI, MCP, and A2A paths (collect pending → mark sent → stream → finalize). Also contains per-session locking (`get_session_lock`) and the `StreamEventHandler` protocol
 - `backend/app/services/sessions/stream_event_handlers.py` — Concrete `StreamEventHandler` implementations: `WebSocketEventHandler` (UI/Socket.IO), `MCPEventHandler` (MCP progress notifications), `A2AStreamEventHandler` (A2A SSE mapping)

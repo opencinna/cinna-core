@@ -20,11 +20,15 @@ here and calls into those hooks:
     session id, or return ``None`` for new sessions.
   * ``_authorize_existing_session(session)`` — guard tasks/get &
     tasks/cancel against out-of-scope sessions.
-  * ``_stamp_new_session(session_id)`` — post-create hook (no-op by default).
+  * ``_stamp_new_session(session_id)`` — post-create hook (no-op by
+    default). Subclasses override to write fields that don't fit the
+    whitelisted ``extra_session_kwargs`` ChannelIngestionService accepts.
   * ``_integration_type_for_new_session()`` — passed to
-    ``SessionService.send_session_message`` (``None`` by default).
+    ``ChannelIngestionService.ingest_inbound_message`` (``"a2a"``
+    fallback by default).
   * ``_session_access_token_id()`` — A2A-token id to thread through
-    ``SessionService`` (powers both new-session lineage and command context).
+    ``ChannelIngestionService`` (powers both new-session lineage and
+    command context).
   * ``_task_list_access_token_filter()`` — DB-level filter for tasks/list.
   * ``_task_list_filter(session)`` — in-memory filter for tasks/list.
   * ``_wrap_env_error(exc)`` — shape env-readiness errors for the caller.
@@ -55,10 +59,17 @@ from a2a.types import (
     DataPart,
 )
 
-from app.models import Agent, Session as ChatSession, A2ATokenPayload
+from app.models import (
+    Agent,
+    Session as ChatSession,
+    A2ATokenPayload,
+    ChannelAccessPolicy,
+    SessionSender,
+)
 from app.models.environments.environment import AgentEnvironment
 from app.services.bundles.install_gate_dispatcher import InstallGateDispatcher
 from app.services.sessions.session_service import SessionService
+from app.services.sessions.channel_ingestion_service import ChannelIngestionService
 from app.services.a2a.a2a_event_mapper import A2AEventMapper
 from app.services.a2a.a2a_task_store import DatabaseTaskStore
 from app.services.a2a.access_token_service import AccessTokenService
@@ -159,7 +170,9 @@ class A2ARequestHandler:
         """Post-create hook for a newly created session.
 
         Default: no-op. Subclasses override to write ``caller_id``,
-        ``session_metadata``, and other bookkeeping fields.
+        ``session_metadata``, and other bookkeeping fields that don't fit
+        the whitelisted create-time kwargs forwarded via
+        ``extra_session_kwargs`` (see ``ExternalA2AContextHandler``).
         """
         return None
 
@@ -167,6 +180,18 @@ class A2ARequestHandler:
         """``integration_type`` to pass to ``SessionService.send_session_message``.
 
         Default: ``None`` — core A2A sessions inherit the default.
+        """
+        return None
+
+    def _extra_session_kwargs(self) -> dict[str, Any] | None:
+        """Hook for subclasses to contribute additional session-creation kwargs.
+
+        Returned dict is merged into ``extra_session_kwargs`` passed to
+        ``ChannelIngestionService`` on both message/send and message/stream.
+        Default: ``None``. ``ExternalA2AContextHandler`` overrides this to
+        thread ``session_owner_id`` through (the External surface owns
+        sessions under non-owner users for ``external`` / ``identity_mcp``
+        target types).
         """
         return None
 
@@ -237,15 +262,14 @@ class A2ARequestHandler:
         content = self._extract_text_from_parts(message_data.get("parts", []))
 
         task_id = message_data.get("taskId") or message_data.get("task_id")
-        session_id = self._parse_session_scope(task_id)
-        is_new_session = session_id is None
+        thread_key = self._parse_session_scope(task_id)
 
         # For existing sessions, ensure environment is ready before sending
         # (For new sessions, we check after creation)
-        if session_id is not None:
+        if thread_key is not None:
             try:
                 await SessionService.ensure_environment_ready_for_streaming(
-                    session_id=session_id,
+                    session_id=thread_key,
                     get_fresh_db_session=self.get_db_session,
                     timeout_seconds=120,
                 )
@@ -276,10 +300,10 @@ class A2ARequestHandler:
                 self.log_prefix, self.agent.id, gate_result.status, len(gate_result.missing),
             )
 
-            if session_id is not None:
+            if thread_key is not None:
                 try:
                     with self.get_db_session() as db:
-                        existing = SessionService.get_session(db, session_id)
+                        existing = SessionService.get_session(db, thread_key)
                         if existing is not None:
                             metadata = dict(existing.session_metadata or {})
                             metadata["a2a_setup_required_terminated"] = True
@@ -296,10 +320,10 @@ class A2ARequestHandler:
                 agent=self.agent,
                 gate_result=gate_result,
                 channel="a2a",
-                session_id=session_id,
+                session_id=thread_key,
             )
 
-            synthetic_id = str(session_id) if session_id is not None else str(self.agent.id)
+            synthetic_id = str(thread_key) if thread_key is not None else str(self.agent.id)
             return Task(
                 id=synthetic_id,
                 contextId=synthetic_id,
@@ -319,69 +343,72 @@ class A2ARequestHandler:
                 ),
             )
 
-        # Send message using SessionService (creates session if session_id is None).
-        # ``access_token_id`` is passed regardless of new/existing because
-        # slash commands (e.g. /files) use it to decide whether to render
-        # A2A-token-signed workspace links.
-        result = await SessionService.send_session_message(
-            session_id=session_id,
-            user_id=self.user_id,
-            content=content,
-            file_ids=None,
-            answers_to_message_id=None,
-            get_fresh_db_session=self.get_db_session,
-            agent_id=self.agent.id if is_new_session else None,
-            access_token_id=self._session_access_token_id(),
-            integration_type=self._integration_type_for_new_session() if is_new_session else None,
-            backend_base_url=self.backend_base_url,
-        )
+        # Drop the message + kick streaming via ChannelIngestionService.
+        token_id = self._session_access_token_id()
+        extra_kwargs: dict[str, Any] = {}
+        if token_id:
+            extra_kwargs["access_token_id"] = token_id
+        if hook_kwargs := self._extra_session_kwargs():
+            extra_kwargs.update(hook_kwargs)
+        with self.get_db_session() as ingest_db:
+            ingestion = await ChannelIngestionService.ingest_inbound_message(
+                db=ingest_db,
+                agent=self.agent,
+                sender=SessionSender.from_a2a(token_id, self.user_id),
+                thread_key=thread_key,
+                content=content,
+                integration_type=self._integration_type_for_new_session() or "a2a",
+                access_policy=ChannelAccessPolicy(
+                    expected_owner_id=self.agent.owner_id,
+                    require_access_token_scope=self.a2a_token_payload,
+                ),
+                get_fresh_db_session=self.get_db_session,
+                backend_base_url=self.backend_base_url,
+                extra_session_kwargs=extra_kwargs or None,
+            )
 
-        if result.get("action") == "error":
-            raise ValueError(result.get("message", "Unknown error"))
+        if ingestion.action == "error":
+            raise ValueError(ingestion.message or "Unknown error")
 
-        # Handle command results - return immediately with completed task
-        if result.get("action") == "command_executed":
-            cmd_session_id = result.get("session_id", session_id)
+        session_id = ingestion.session.id
+        is_new_session = ingestion.is_new_session
+
+        # Subclass post-create stamping hook (no-op by default).
+        if is_new_session:
+            self._stamp_new_session(session_id)
+
+        # Handle command results - return immediately with completed task.
+        if ingestion.action == "command_executed":
             return Task(
-                id=str(cmd_session_id),
-                contextId=str(cmd_session_id),
+                id=str(session_id),
+                contextId=str(session_id),
                 status=TaskStatus(
                     state=TaskState.completed,
                     timestamp=datetime.now(UTC).isoformat() + "Z",
                     message=Message(
                         messageId="cmd_response",
                         role="agent",
-                        parts=[Part(root=TextPart(text=result.get("message", "")))],
+                        parts=[Part(root=TextPart(text=ingestion.message or ""))],
                     ),
                 ),
             )
 
-        # Get the session_id from result (may be newly created)
-        session_id = result.get("session_id", session_id)
-
-        # Stamp a newly created session (no-op by default)
-        if is_new_session and session_id is not None:
-            self._stamp_new_session(session_id)
-
-        # For new sessions, ensure environment is ready now
-        # (session was just created, so we need to check environment status)
-        if result.get("action") in ["pending", "message_created"]:
+        # For new sessions whose stream did not kick (env not yet running),
+        # ensure environment is ready and re-initiate streaming. Mirrors the
+        # pre-migration handling for `pending` / `message_created` actions.
+        action = ingestion.action
+        if action in ("pending", "message_created"):
             try:
                 await SessionService.ensure_environment_ready_for_streaming(
                     session_id=session_id,
                     get_fresh_db_session=self.get_db_session,
                     timeout_seconds=120,
                 )
-                logger.info(
-                    "%s environment is ready for message/send (new session)",
-                    self.log_prefix,
-                )
-
-                # Re-initiate streaming now that environment is ready
                 result = await SessionService.initiate_stream(
                     session_id=session_id,
                     get_fresh_db_session=self.get_db_session,
                 )
+                action = result.get("action")
             except (ValueError, RuntimeError) as e:
                 logger.error(
                     "%s environment not ready for message/send: %s",
@@ -390,7 +417,7 @@ class A2ARequestHandler:
                 raise self._wrap_env_error(e)
 
         # Wait for completion if streaming started
-        if result.get("action") == "streaming":
+        if action == "streaming":
             max_wait = 300  # 5 minutes
             poll_interval = 1
             elapsed = 0
@@ -441,29 +468,64 @@ class A2ARequestHandler:
 
         task_id = message_data.get("taskId") or message_data.get("task_id")
         try:
-            session_id = self._parse_session_scope(task_id)
+            thread_key = self._parse_session_scope(task_id)
         except Exception as e:
             sse = self._stream_scope_error(e, request_id)
             if sse is not None:
                 yield sse
                 return
             raise
-        is_new_session = session_id is None
 
-        # Use SessionService to create message (without initiating background streaming).
-        # ``access_token_id`` is passed regardless of new/existing — see
-        # ``handle_message_send`` for the rationale.
+        # Use the lower-level service helpers — SessionStreamProcessor (below)
+        # owns the stream kick, so `ingest_inbound_message` (which always
+        # kicks streaming) would double-fire here.
+        token_id = self._session_access_token_id()
+        sender = SessionSender.from_a2a(token_id, self.user_id)
+        access_policy = ChannelAccessPolicy(
+            expected_owner_id=self.agent.owner_id,
+            require_access_token_scope=self.a2a_token_payload,
+        )
+        extra_kwargs: dict[str, Any] = {}
+        if token_id:
+            extra_kwargs["access_token_id"] = token_id
+        if hook_kwargs := self._extra_session_kwargs():
+            extra_kwargs.update(hook_kwargs)
+        try:
+            with self.get_db_session() as resolve_db:
+                ChannelIngestionService.assert_access(
+                    agent=self.agent, sender=sender, policy=access_policy,
+                )
+                session_obj, is_new_session = ChannelIngestionService.resolve_or_create_session(
+                    db=resolve_db,
+                    agent=self.agent,
+                    sender=sender,
+                    thread_key=thread_key,
+                    integration_type=self._integration_type_for_new_session() or "a2a",
+                    extra_session_kwargs=extra_kwargs or None,
+                )
+                session_id = session_obj.id
+        except (PermissionError, ValueError, RuntimeError) as e:
+            yield self._format_sse_error(request_id, -32001, str(e))
+            return
+
+        # Subclass post-create stamping hook (no-op by default).
+        if is_new_session:
+            self._stamp_new_session(session_id)
+
+        # Drop the user message without initiating background streaming;
+        # SessionStreamProcessor (below) kicks the agent stream and we
+        # forward chunks as SSE events to the caller.
         result = await SessionService.send_session_message(
             session_id=session_id,
-            user_id=self.user_id,
+            user_id=session_obj.user_id,
             content=content,
             file_ids=None,
             answers_to_message_id=None,
             get_fresh_db_session=self.get_db_session,
             initiate_streaming=False,
-            agent_id=self.agent.id if is_new_session else None,
-            access_token_id=self._session_access_token_id(),
-            integration_type=self._integration_type_for_new_session() if is_new_session else None,
+            agent_id=None,
+            access_token_id=token_id,
+            integration_type=None,
             backend_base_url=self.backend_base_url,
         )
 
@@ -487,9 +549,6 @@ class A2ARequestHandler:
 
         # Get the session_id from result (may be newly created)
         session_id = result.get("session_id", session_id)
-
-        if is_new_session and session_id is not None:
-            self._stamp_new_session(session_id)
 
         task_id_str = str(session_id)
         context_id_str = str(session_id)

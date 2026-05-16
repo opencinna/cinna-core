@@ -100,6 +100,8 @@ Use PascalCase methods on `/a2a/` and `/a2a/v1.0/` URLs. Use slash-case methods 
 ### A2A Request Handler
 **File:** `backend/app/services/a2a/a2a_request_handler.py`
 
+Both `handle_message_send` and `handle_message_stream` route inbound calls through `ChannelIngestionService` for access enforcement, session resolution, and message injection — see [channel ingestion](../../agent_sessions/channel_ingestion.md) / [tech](../../agent_sessions/channel_ingestion_tech.md). The streaming path uses `resolve_or_create_session` only (stream kick is owned by `SessionStreamProcessor`); the non-streaming path uses the full `ingest_inbound_message`.
+
 Shared dispatch methods (used by both the `/a2a/` surface and, via `ExternalA2AContextHandler`, the `/external/a2a/` surface):
 
 - `A2ARequestHandler.handle_message_send()` - Non-streaming message handling (polls for completion)

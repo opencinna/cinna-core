@@ -149,6 +149,7 @@ Create endpoint validates schedule type + command combination:
 
 - Uses **APScheduler BackgroundScheduler**
 - Polls every 1 minute for due schedules (`next_execution <= now`, `enabled = true`)
+- Session creation routes through `ChannelIngestionService.ingest_inbound_message` with `SessionSender.from_system_trigger(...)` (`kind="system_trigger"`) — see [channel ingestion](../../application/agent_sessions/channel_ingestion.md) / [tech](../../application/agent_sessions/channel_ingestion_tech.md). The `allow_system_trigger_fastpath=True` policy is paired with an asserted structural invariant (`expected_owner_id == agent.owner_id == sender.platform_user_id`) — a fire that mis-stamps the owner raises, not silently widens trust.
 - Branches on `schedule.schedule_type`:
   - `_execute_static_prompt()` — original behavior: resolves prompt, creates session, creates log entry
   - `_execute_script_trigger()` — resolves environment, auto-activates if needed, calls `AgentEnvConnector.exec_command()`, checks OK vs non-OK output, creates session with context if needed, creates log entry

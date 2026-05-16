@@ -148,6 +148,13 @@ from .sessions.session import (
     SessionCommandPublic,
     SessionCommandsPublic,
 )
+from .sessions.session_sender import (
+    ChannelAccessPolicy,
+    IngestionResult,
+    SessionSender,
+    SessionSenderKind,
+    get_session_sender,
+)
 from .sessions.activity import (
     Activity,
     ActivityCreate,
@@ -659,6 +666,12 @@ __all__ = [
     "MessagesPublic",
     "SessionCommandPublic",
     "SessionCommandsPublic",
+    # Session Sender (Channel Ingestion Service value types)
+    "SessionSender",
+    "SessionSenderKind",
+    "ChannelAccessPolicy",
+    "IngestionResult",
+    "get_session_sender",
     # Activities
     "Activity",
     "ActivityCreate",
