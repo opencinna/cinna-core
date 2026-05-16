@@ -138,7 +138,7 @@ export function TreeItemRenderer({
       <>
         <div
           className="flex items-center justify-between py-1 px-2 rounded-md hover:bg-muted/50 group transition-colors cursor-pointer"
-          style={{ paddingLeft: `${level * 12 + 24}px` }}
+          style={{ paddingLeft }}
         >
           <div
             className="flex items-center gap-2 min-w-0 flex-1"
@@ -176,7 +176,7 @@ export function TreeItemRenderer({
             {dbLoading && (
               <div
                 className="flex items-center gap-2 py-1 px-2 text-muted-foreground"
-                style={{ paddingLeft: `${(level + 1) * 12 + 48}px` }}
+                style={{ paddingLeft: `${(level + 1) * 12 + 24}px` }}
               >
                 <Loader2 className="h-3 w-3 animate-spin" />
                 <span className="text-xs">Loading tables...</span>
@@ -185,7 +185,7 @@ export function TreeItemRenderer({
             {dbError && (
               <div
                 className="flex items-center gap-2 py-1 px-2 text-destructive"
-                style={{ paddingLeft: `${(level + 1) * 12 + 48}px` }}
+                style={{ paddingLeft: `${(level + 1) * 12 + 24}px` }}
               >
                 <span className="text-xs">Error loading tables</span>
               </div>
@@ -193,7 +193,7 @@ export function TreeItemRenderer({
             {!dbLoading && !dbError && dbTables.length === 0 && (
               <div
                 className="flex items-center gap-2 py-1 px-2 text-muted-foreground"
-                style={{ paddingLeft: `${(level + 1) * 12 + 48}px` }}
+                style={{ paddingLeft: `${(level + 1) * 12 + 24}px` }}
               >
                 <span className="text-xs">No tables found</span>
               </div>
@@ -202,7 +202,7 @@ export function TreeItemRenderer({
               <div
                 key={index}
                 className="flex items-center gap-2 py-1 px-2 rounded-md hover:bg-muted/50 cursor-pointer transition-colors"
-                style={{ paddingLeft: `${(level + 1) * 12 + 48}px` }}
+                style={{ paddingLeft: `${(level + 1) * 12 + 24}px` }}
                 onClick={() => handleTableClick(table.name)}
               >
                 <Table2
