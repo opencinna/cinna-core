@@ -341,6 +341,26 @@ class TestRefreshAfterAction:
 
         mock_fetch.assert_not_called()
 
+    def test_force_bypasses_rate_limit(self):
+        """force=True fetches even when the rate-limit window is active.
+
+        Used when WORKSPACE_FILES_CHANGED explicitly reports docs/CLI_COMMANDS.yaml
+        in changed_files — we have direct evidence the cache is stale.
+        """
+        env = MagicMock()
+        env.id = uuid.uuid4()
+        CLICommandsService._mark_rate_limit(env.id)  # within rate-limit window
+
+        async def _fake_fetch(environment, db_session=None):
+            return []
+
+        with patch.object(
+            CLICommandsService, "fetch_commands", side_effect=_fake_fetch
+        ) as mock_fetch:
+            asyncio.run(CLICommandsService.refresh_after_action(env, force=True))
+
+        mock_fetch.assert_called_once()
+
     def test_calls_fetch_when_not_rate_limited(self):
         env = MagicMock()
         env.id = uuid.uuid4()
@@ -448,7 +468,7 @@ class TestHandlePostActionEvent:
         mock_cm.__enter__ = MagicMock(return_value=mock_session)
         mock_cm.__exit__ = MagicMock(return_value=False)
 
-        async def _noop(environment, db_session=None):
+        async def _noop(environment, db_session=None, force=False):
             return None
 
         with patch(
@@ -465,3 +485,80 @@ class TestHandlePostActionEvent:
         mock_refresh.assert_called_once()
         env_arg = mock_refresh.call_args.args[0]
         assert env_arg.id == env_id
+        # No changed_files in the event → speculative pull, rate-limit applies
+        assert mock_refresh.call_args.kwargs.get("force") is False
+
+    def test_workspace_files_changed_with_cli_file_forces_refresh(self):
+        """WORKSPACE_FILES_CHANGED with docs/CLI_COMMANDS.yaml in changed_files bypasses rate limit."""
+        env_id = uuid.uuid4()
+        env_id_str = str(env_id)
+
+        mock_env = MagicMock()
+        mock_env.id = env_id
+
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_env
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_session)
+        mock_cm.__exit__ = MagicMock(return_value=False)
+
+        async def _noop(environment, db_session=None, force=False):
+            return None
+
+        with patch(
+            "app.core.db.create_session", return_value=mock_cm
+        ), patch.object(
+            CLICommandsService, "refresh_after_action", side_effect=_noop
+        ) as mock_refresh:
+            asyncio.run(
+                CLICommandsService.handle_post_action_event(
+                    {
+                        "meta": {
+                            "environment_id": env_id_str,
+                            "changed_files": [
+                                "docs/CLI_COMMANDS.yaml",
+                                "docs/WORKFLOW_PROMPT.md",
+                            ],
+                        }
+                    }
+                )
+            )
+
+        mock_refresh.assert_called_once()
+        assert mock_refresh.call_args.kwargs.get("force") is True
+
+    def test_workspace_files_changed_without_cli_file_does_not_force(self):
+        """WORKSPACE_FILES_CHANGED naming only other files keeps the speculative (rate-limited) path."""
+        env_id = uuid.uuid4()
+        env_id_str = str(env_id)
+
+        mock_env = MagicMock()
+        mock_env.id = env_id
+
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_env
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_session)
+        mock_cm.__exit__ = MagicMock(return_value=False)
+
+        async def _noop(environment, db_session=None, force=False):
+            return None
+
+        with patch(
+            "app.core.db.create_session", return_value=mock_cm
+        ), patch.object(
+            CLICommandsService, "refresh_after_action", side_effect=_noop
+        ) as mock_refresh:
+            asyncio.run(
+                CLICommandsService.handle_post_action_event(
+                    {
+                        "meta": {
+                            "environment_id": env_id_str,
+                            "changed_files": ["docs/WORKFLOW_PROMPT.md"],
+                        }
+                    }
+                )
+            )
+
+        mock_refresh.assert_called_once()
+        assert mock_refresh.call_args.kwargs.get("force") is False

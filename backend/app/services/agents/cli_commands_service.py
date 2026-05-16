@@ -280,15 +280,19 @@ class CLICommandsService:
 
     @classmethod
     async def refresh_after_action(
-        cls, environment: AgentEnvironment, db_session=None
+        cls,
+        environment: AgentEnvironment,
+        db_session=None,
+        force: bool = False,
     ) -> None:
         """
         Pull CLI_COMMANDS.yaml after the backend completes an action that ran inside
-        the agent-env. Skipped when the per-env rate-limit window is still active.
+        the agent-env. Skipped when the per-env rate-limit window is still active,
+        unless ``force=True`` (used when the watcher explicitly reports the file changed).
 
         Best-effort: never raises. Failures are logged at debug level.
         """
-        if cls.is_rate_limited(environment.id):
+        if not force and cls.is_rate_limited(environment.id):
             return
         try:
             await cls.fetch_commands(environment, db_session=db_session)
@@ -305,20 +309,30 @@ class CLICommandsService:
         """
         Generic event handler: pulls CLI_COMMANDS.yaml whenever the backend finishes
         triggering work inside the agent-env. Registered against
-        ENVIRONMENT_ACTIVATED, STREAM_COMPLETED / STREAM_ERROR (session streams) and
-        CRON_COMPLETED_OK / CRON_TRIGGER_SESSION / CRON_ERROR (scheduler).
+        ENVIRONMENT_ACTIVATED, STREAM_COMPLETED / STREAM_ERROR (session streams),
+        CRON_COMPLETED_OK / CRON_TRIGGER_SESSION / CRON_ERROR (scheduler), and
+        WORKSPACE_FILES_CHANGED (env-core file watcher).
+
+        When the event names docs/CLI_COMMANDS.yaml in ``meta.changed_files`` we
+        have direct evidence the cache is stale, so the rate limit is bypassed
+        — this is the same auto-sync semantics prompt files use via
+        ``EnvironmentService.handle_workspace_files_changed_event``. For every
+        other trigger event the fetch is speculative and the 30 s rate limit
+        applies.
         """
         try:
             meta = event_data.get("meta", {}) or {}
             environment_id = meta.get("environment_id")
             if not environment_id:
                 return
+            changed_files = meta.get("changed_files") or []
+            force = CLI_COMMANDS_FILE_PATH in changed_files
             from app.core.db import create_session as _create_session
             with _create_session() as session:
                 env = session.get(AgentEnvironment, UUID(environment_id))
                 if env is None:
                     return
-                await cls.refresh_after_action(env, db_session=session)
+                await cls.refresh_after_action(env, db_session=session, force=force)
         except Exception as exc:
             logger.debug("cli_commands handle_post_action_event swallowed: %s", exc)
 

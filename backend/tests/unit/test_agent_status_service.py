@@ -213,6 +213,26 @@ class TestRefreshAfterAction:
 
         mock_fetch.assert_not_called()
 
+    def test_refresh_after_action_force_bypasses_rate_limit(self):
+        """force=True fetches even when the rate-limit window is active.
+
+        Used when WORKSPACE_FILES_CHANGED explicitly names STATUS.md in
+        changed_files — direct evidence the cache is stale.
+        """
+        env = MagicMock()
+        env.id = uuid.uuid4()
+        AgentStatusService._mark_rate_limit(env.id)  # within rate-limit window
+
+        async def _fake_fetch(environment, db_session=None):
+            return None
+
+        with patch.object(
+            AgentStatusService, "fetch_status", side_effect=_fake_fetch
+        ) as mock_fetch:
+            asyncio.run(AgentStatusService.refresh_after_action(env, force=True))
+
+        mock_fetch.assert_called_once()
+
     def test_refresh_after_action_calls_fetch_when_not_rate_limited(self):
         """Outside the rate-limit window, fetch_status is invoked."""
         env = MagicMock()
@@ -303,7 +323,7 @@ class TestRefreshAfterAction:
         mock_cm.__enter__ = MagicMock(return_value=mock_session)
         mock_cm.__exit__ = MagicMock(return_value=False)
 
-        async def _noop(environment, db_session=None):
+        async def _noop(environment, db_session=None, force=False):
             return None
 
         with patch(
@@ -320,3 +340,80 @@ class TestRefreshAfterAction:
         mock_refresh.assert_called_once()
         env_arg = mock_refresh.call_args.args[0]
         assert env_arg.id == env_id
+        # No changed_files in the event → speculative pull, rate-limit applies
+        assert mock_refresh.call_args.kwargs.get("force") is False
+
+    def test_handle_post_action_event_workspace_files_changed_forces_refresh(self):
+        """WORKSPACE_FILES_CHANGED with STATUS.md in changed_files bypasses rate limit."""
+        env_id = uuid.uuid4()
+        env_id_str = str(env_id)
+
+        mock_env = MagicMock()
+        mock_env.id = env_id
+
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_env
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_session)
+        mock_cm.__exit__ = MagicMock(return_value=False)
+
+        async def _noop(environment, db_session=None, force=False):
+            return None
+
+        with patch(
+            "app.core.db.create_session", return_value=mock_cm
+        ), patch.object(
+            AgentStatusService, "refresh_after_action", side_effect=_noop
+        ) as mock_refresh:
+            asyncio.run(
+                AgentStatusService.handle_post_action_event(
+                    {
+                        "meta": {
+                            "environment_id": env_id_str,
+                            "changed_files": [
+                                "app-data/storage/STATUS.md",
+                                "docs/CLI_COMMANDS.yaml",
+                            ],
+                        }
+                    }
+                )
+            )
+
+        mock_refresh.assert_called_once()
+        assert mock_refresh.call_args.kwargs.get("force") is True
+
+    def test_handle_post_action_event_workspace_files_changed_without_status_file_does_not_force(self):
+        """WORKSPACE_FILES_CHANGED naming only other files keeps the speculative (rate-limited) path."""
+        env_id = uuid.uuid4()
+        env_id_str = str(env_id)
+
+        mock_env = MagicMock()
+        mock_env.id = env_id
+
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_env
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_session)
+        mock_cm.__exit__ = MagicMock(return_value=False)
+
+        async def _noop(environment, db_session=None, force=False):
+            return None
+
+        with patch(
+            "app.core.db.create_session", return_value=mock_cm
+        ), patch.object(
+            AgentStatusService, "refresh_after_action", side_effect=_noop
+        ) as mock_refresh:
+            asyncio.run(
+                AgentStatusService.handle_post_action_event(
+                    {
+                        "meta": {
+                            "environment_id": env_id_str,
+                            "changed_files": ["docs/WORKFLOW_PROMPT.md"],
+                        }
+                    }
+                )
+            )
+
+        mock_refresh.assert_called_once()
+        assert mock_refresh.call_args.kwargs.get("force") is False

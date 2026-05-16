@@ -247,18 +247,22 @@ class AgentStatusService:
 
     @classmethod
     async def refresh_after_action(
-        cls, environment: AgentEnvironment, db_session=None
+        cls,
+        environment: AgentEnvironment,
+        db_session=None,
+        force: bool = False,
     ) -> None:
         """
         Pull STATUS.md after the backend completes an action that ran inside
         the agent-env (session stream, CRON script trigger). Skipped when the
         per-env rate-limit window is still active — another refresher
         (force-refresh REST endpoint or a recent post-action event) already
-        pulled within the last 30 s.
+        pulled within the last 30 s — unless ``force=True``, used when the
+        watcher explicitly reports the file changed.
 
         Best-effort: never raises. Failures are logged at debug level.
         """
-        if cls.is_rate_limited(environment.id):
+        if not force and cls.is_rate_limited(environment.id):
             return
         try:
             await cls.fetch_status(environment, db_session=db_session)
@@ -275,24 +279,33 @@ class AgentStatusService:
         """
         Generic event handler: pulls STATUS.md whenever the backend finishes
         triggering work inside the agent-env. Registered against
-        STREAM_COMPLETED / STREAM_ERROR (session streams) and
-        CRON_COMPLETED_OK / CRON_TRIGGER_SESSION / CRON_ERROR (scheduler).
+        STREAM_COMPLETED / STREAM_ERROR (session streams),
+        CRON_COMPLETED_OK / CRON_TRIGGER_SESSION / CRON_ERROR (scheduler), and
+        WORKSPACE_FILES_CHANGED (env-core file watcher).
 
         The agent-env has no outbound access, so the backend is the only
         actor that knows an action just finished — this handler turns that
         knowledge into a fresh snapshot.
+
+        When the event names ``app-data/storage/STATUS.md`` in
+        ``meta.changed_files`` we have direct evidence the cache is stale, so
+        the rate limit is bypassed — the same auto-sync semantics prompt files
+        use. For every other trigger event the fetch is speculative and the
+        30 s rate limit applies.
         """
         try:
             meta = event_data.get("meta", {}) or {}
             environment_id = meta.get("environment_id")
             if not environment_id:
                 return
+            changed_files = meta.get("changed_files") or []
+            force = cls.STATUS_FILE_PATH in changed_files
             from app.core.db import create_session as _create_session
             with _create_session() as session:
                 env = session.get(AgentEnvironment, UUID(environment_id))
                 if env is None:
                     return
-                await cls.refresh_after_action(env, db_session=session)
+                await cls.refresh_after_action(env, db_session=session, force=force)
         except Exception as exc:
             logger.debug("agent_status handle_post_action_event swallowed: %s", exc)
 

@@ -17,7 +17,7 @@
 - `backend/app/services/environments/environment_status_scheduler.py` — container health check only (no longer pulls STATUS.md)
 - `backend/app/services/environments/adapters/base.py` — `fetch_workspace_item_with_meta()` + `WorkspaceItemMeta` dataclass
 - `backend/app/services/environments/adapters/docker_adapter.py` — single-GET implementation that parses `Last-Modified` / `Content-Length` / `Content-Type` headers before streaming the body
-- `backend/app/main.py` — registers `handle_post_action_event` against `STREAM_COMPLETED`, `STREAM_ERROR`, `CRON_COMPLETED_OK`, `CRON_TRIGGER_SESSION`, `CRON_ERROR`
+- `backend/app/main.py` — registers `handle_post_action_event` against `STREAM_COMPLETED`, `STREAM_ERROR`, `CRON_COMPLETED_OK`, `CRON_TRIGGER_SESSION`, `CRON_ERROR`, and `WORKSPACE_FILES_CHANGED`
 
 **Routes**
 - `backend/app/api/routes/agent_status.py` — public `router` with `GET /agents/status` and `GET /agents/{agent_id}/status`
@@ -80,8 +80,8 @@ Migration: `backend/app/alembic/versions/34322f866173_add_agent_environment_stat
 - `fetch_status(environment, db_session=None)` — single round-trip via `adapter.fetch_workspace_item_with_meta()`, parse, persist, transition detection, event emission, activity creation. Raises `StatusUnavailableError` on adapter failure / missing file.
 - `parse_status_file(content)` — split optional YAML frontmatter from body; strict YAML with a lenient line-based fallback for the three known keys; normalize severity; truncate summary; fall back to first non-blank body line when summary missing.
 - `get_cached_status(environment)` — build `AgentStatusSnapshot` from persisted row fields without touching the adapter; recomputes `body` by re-parsing the stored `raw`.
-- `refresh_after_action(environment, db_session=None)` — post-action pull entrypoint. Rate-limit-aware, swallows `StatusUnavailableError`, logs other errors at debug level.
-- `handle_post_action_event(event_data)` — generic event handler. Reads `environment_id` from `event_data["meta"]`, loads the env, delegates to `refresh_after_action`. Registered against five events (two session-stream + three CRON).
+- `refresh_after_action(environment, db_session=None, force=False)` — post-action pull entrypoint. Rate-limit-aware (skipped when `force=True`), swallows `StatusUnavailableError`, logs other errors at debug level.
+- `handle_post_action_event(event_data)` — generic event handler. Reads `environment_id` from `event_data["meta"]` and `changed_files` for the `WORKSPACE_FILES_CHANGED` source; loads the env, delegates to `refresh_after_action` with `force=True` when `app-data/storage/STATUS.md` is in `changed_files`, otherwise the speculative (rate-limited) path. Registered against six events (two session-stream + three CRON + WORKSPACE_FILES_CHANGED).
 - `is_rate_limited(environment_id)` — module-level dict keyed by env id, 30 s TTL.
 - `get_primary_environment(session, agent_id, active_env_id)` — resolves which environment to read (active first, then latest by `updated_at`).
 - `empty_snapshot(agent_id)` — sentinel snapshot for agents with no environment.

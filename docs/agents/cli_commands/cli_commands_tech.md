@@ -107,8 +107,8 @@ class ParsedCLICommand:
 | `get_cached_commands` | `(environment) -> list[ParsedCLICommand]` | Cache-only, no adapter call |
 | `parse_commands_file` | `static (raw: str) -> list[ParsedCLICommand]` | Pure; raises `CLICommandsParseError` on bad YAML |
 | `is_rate_limited` | `(environment_id: UUID) -> bool` | 30 s TTL per env |
-| `refresh_after_action` | `async (environment, db_session=None) -> None` | Best-effort; checks rate limit; swallows all errors |
-| `handle_post_action_event` | `async (event_data: dict) -> None` | Reads `meta.environment_id`; delegates to `refresh_after_action` |
+| `refresh_after_action` | `async (environment, db_session=None, force=False) -> None` | Best-effort; checks rate limit (skipped when `force=True`); swallows all errors |
+| `handle_post_action_event` | `async (event_data: dict) -> None` | Reads `meta.environment_id`; passes `force=True` to `refresh_after_action` when `meta.changed_files` contains `docs/CLI_COMMANDS.yaml` |
 
 ### Module-Level Constants
 
@@ -203,12 +203,15 @@ for _event_type in (
     EventType.CRON_COMPLETED_OK,
     EventType.CRON_TRIGGER_SESSION,
     EventType.CRON_ERROR,
+    EventType.WORKSPACE_FILES_CHANGED,
 ):
     event_service.register_handler(
         event_type=_event_type,
         handler=CLICommandsService.handle_post_action_event,
     )
 ```
+
+`handle_post_action_event` reads `meta.changed_files` (populated by `WORKSPACE_FILES_CHANGED` from the env-core file watcher) and passes `force=True` to `refresh_after_action` when `docs/CLI_COMMANDS.yaml` is in the list. This bypasses the 30 s rate limit for that fetch — direct evidence that the cache is stale outweighs the de-dup heuristic.
 
 ---
 
