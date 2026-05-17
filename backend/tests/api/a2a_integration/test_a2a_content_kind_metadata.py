@@ -7,11 +7,12 @@ chain-of-thought (thinking), and tool-call narration via
 
 Test scenarios:
   1. Streaming SSE path — content-kind metadata present on each TextPart
-     emitted during a stream (text / thinking / tool); cinna.tool_name
-     present on tool events.
+     emitted during a stream (text / thinking / tool); cinna.tool_name,
+     cinna.tool_input, and cinna.tool_id present on tool events.
   2. History replay path — GetTask returns an agent message whose parts
      are expanded to one TextPart per streaming event, each carrying
-     cinna.content_kind metadata.
+     cinna.content_kind metadata; tool parts also carry cinna.tool_input
+     and cinna.tool_id.
 """
 import uuid
 from unittest.mock import patch
@@ -31,6 +32,8 @@ from tests.utils.background_tasks import drain_tasks
 # Vendor-namespaced metadata keys — mirrors a2a_event_mapper constants.
 _CONTENT_KIND_KEY = "cinna.content_kind"
 _TOOL_NAME_KEY = "cinna.tool_name"
+_TOOL_INPUT_KEY = "cinna.tool_input"
+_TOOL_ID_KEY = "cinna.tool_id"
 
 _KIND_TEXT = "text"
 _KIND_THINKING = "thinking"
@@ -58,8 +61,22 @@ def _build_rich_events(
     tool_name: str = "bash",
     tool_content: str = "ran ls -la",
     answer_text: str = "Here is the answer.",
+    tool_input: dict | None = None,
+    tool_id: str | None = None,
 ) -> list[dict]:
-    """Build a realistic SSE event sequence: thinking → tool → assistant → done."""
+    """Build a realistic SSE event sequence: thinking → tool → assistant → done.
+
+    ``tool_input`` and ``tool_id``, when provided, are embedded in the tool
+    event's ``metadata`` dict, matching what the real adapters emit (e.g.
+    claude_code_event_transformer).  The mapper will surface them as
+    ``cinna.tool_input`` and ``cinna.tool_id`` on the resulting TextPart.
+    """
+    tool_metadata: dict = {}
+    if isinstance(tool_input, dict):
+        tool_metadata["tool_input"] = tool_input
+    if isinstance(tool_id, str) and tool_id:
+        tool_metadata["tool_id"] = tool_id
+
     return [
         {
             "type": "session_created",
@@ -79,7 +96,7 @@ def _build_rich_events(
             "type": "tool",
             "tool_name": tool_name,
             "content": tool_content,
-            "metadata": {},
+            "metadata": tool_metadata,
         },
         {"type": "assistant", "content": answer_text, "metadata": {}},
         {"type": "done"},
@@ -98,10 +115,11 @@ def test_a2a_streaming_content_kind_metadata(
 
       1. Setup agent with A2A enabled and an access token
       2. Send a streaming message using a stub that emits thinking, tool,
-         and assistant events
+         and assistant events (tool event carries tool_input + tool_id)
       3. Verify working-state SSE events carry TextPart metadata:
          - thinking events → cinna.content_kind = "thinking"
-         - tool events → cinna.content_kind = "tool", cinna.tool_name = tool_name
+         - tool events → cinna.content_kind = "tool", cinna.tool_name,
+           cinna.tool_input (non-empty dict), cinna.tool_id (non-empty str)
          - assistant events → cinna.content_kind = "text"
       4. Verify no metadata-carrying event has empty text
     """
@@ -117,6 +135,8 @@ def test_a2a_streaming_content_kind_metadata(
     tool_name = "bash"
     tool_content = "total 8\ndrwxr-xr-x  2 user user 4096 Apr 18 10:00 ."
     answer_text = "The directory has one entry."
+    tool_input = {"command": "ls -la"}
+    tool_id = "toolu_streaming_01"
 
     # ── Phase 2: Send streaming message with custom events ────────────────
 
@@ -126,6 +146,8 @@ def test_a2a_streaming_content_kind_metadata(
             tool_name=tool_name,
             tool_content=tool_content,
             answer_text=answer_text,
+            tool_input=tool_input,
+            tool_id=tool_id,
         )
     )
 
@@ -198,6 +220,32 @@ def test_a2a_streaming_content_kind_metadata(
             f"Expected cinna.tool_name={tool_name!r}, got: {metadata.get(_TOOL_NAME_KEY)!r}"
         )
 
+        # cinna.tool_input must be a non-empty dict matching the emitted input
+        part_tool_input = metadata.get(_TOOL_INPUT_KEY)
+        assert isinstance(part_tool_input, dict), (
+            f"Expected cinna.tool_input to be a dict, got: {type(part_tool_input)!r} "
+            f"({part_tool_input!r})"
+        )
+        assert part_tool_input, (
+            "Expected cinna.tool_input to be non-empty"
+        )
+        assert "command" in part_tool_input, (
+            f"Expected 'command' key in cinna.tool_input, got keys: {list(part_tool_input.keys())}"
+        )
+
+        # cinna.tool_id must be a non-empty string matching the emitted tool_id
+        part_tool_id = metadata.get(_TOOL_ID_KEY)
+        assert isinstance(part_tool_id, str), (
+            f"Expected cinna.tool_id to be a str, got: {type(part_tool_id)!r} "
+            f"({part_tool_id!r})"
+        )
+        assert part_tool_id, (
+            "Expected cinna.tool_id to be a non-empty string"
+        )
+        assert part_tool_id == tool_id, (
+            f"Expected cinna.tool_id={tool_id!r}, got: {part_tool_id!r}"
+        )
+
     # ── Phase 6: Assert assistant (text) event metadata ───────────────────
 
     assert parts_by_kind[_KIND_TEXT], (
@@ -229,11 +277,13 @@ def test_a2a_get_task_history_replay_content_kind_metadata(
 
       1. Setup agent with A2A enabled and an access token
       2. Send a streaming message using a stub emitting thinking + tool +
-         assistant events
+         assistant events (tool event carries tool_input + tool_id)
       3. Call GetTask and retrieve the history
       4. Verify the agent message has multiple parts (not a single collapsed part)
       5. Verify each part carries the correct cinna.content_kind
       6. Verify the tool part carries cinna.tool_name
+      7. Verify the tool part carries cinna.tool_input (non-empty dict)
+         and cinna.tool_id (non-empty string)
     """
     # ── Phase 1: Setup ────────────────────────────────────────────────────
 
@@ -247,6 +297,8 @@ def test_a2a_get_task_history_replay_content_kind_metadata(
     tool_name = "read"
     tool_content = "file contents here"
     answer_text = "Based on the file, the answer is 42."
+    tool_input = {"path": "/workspace/notes.txt"}
+    tool_id = "toolu_history_01"
 
     # ── Phase 2: Send streaming message with thinking + tool + assistant ──
 
@@ -256,6 +308,8 @@ def test_a2a_get_task_history_replay_content_kind_metadata(
             tool_name=tool_name,
             tool_content=tool_content,
             answer_text=answer_text,
+            tool_input=tool_input,
+            tool_id=tool_id,
         )
     )
 
@@ -316,6 +370,7 @@ def test_a2a_get_task_history_replay_content_kind_metadata(
 
     kinds_found: set[str] = set()
     tool_name_found: str | None = None
+    tool_part_metadata: dict | None = None
 
     for part in parts:
         metadata = _part_metadata(part)
@@ -324,6 +379,7 @@ def test_a2a_get_task_history_replay_content_kind_metadata(
             kinds_found.add(kind)
         if kind == _KIND_TOOL:
             tool_name_found = metadata.get(_TOOL_NAME_KEY)
+            tool_part_metadata = metadata
 
     assert _KIND_THINKING in kinds_found, (
         f"Expected a part with cinna.content_kind='thinking' in history. "
@@ -345,7 +401,29 @@ def test_a2a_get_task_history_replay_content_kind_metadata(
         f"got: {tool_name_found!r}"
     )
 
-    # ── Phase 8: Verify no part has empty text ────────────────────────────
+    # ── Phase 8: Verify cinna.tool_input and cinna.tool_id on tool part ──
+
+    assert tool_part_metadata is not None, "tool_part_metadata was not collected (no tool part found)"
+
+    history_tool_input = tool_part_metadata.get(_TOOL_INPUT_KEY)
+    assert isinstance(history_tool_input, dict), (
+        f"Expected cinna.tool_input in history tool part to be a dict, "
+        f"got: {type(history_tool_input)!r} ({history_tool_input!r})"
+    )
+    assert history_tool_input, (
+        "Expected cinna.tool_input in history tool part to be non-empty"
+    )
+
+    history_tool_id = tool_part_metadata.get(_TOOL_ID_KEY)
+    assert isinstance(history_tool_id, str), (
+        f"Expected cinna.tool_id in history tool part to be a str, "
+        f"got: {type(history_tool_id)!r} ({history_tool_id!r})"
+    )
+    assert history_tool_id, (
+        "Expected cinna.tool_id in history tool part to be a non-empty string"
+    )
+
+    # ── Phase 9: Verify no part has empty text ────────────────────────────
 
     for part in parts:
         text = _part_text(part)

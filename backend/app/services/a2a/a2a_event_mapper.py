@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 # events (all of which otherwise look like generic "agent" text).
 CONTENT_KIND_KEY = "cinna.content_kind"
 TOOL_NAME_KEY = "cinna.tool_name"
+# Structured tool arguments (object) — surfaced on each tool TextPart so
+# clients can render the call without parsing the narration text.
+TOOL_INPUT_KEY = "cinna.tool_input"
+# Opaque tool-call identifier — pairs each tool-call TextPart with its later
+# tool-result event and cross-references the persisted streaming-event trace.
+TOOL_ID_KEY = "cinna.tool_id"
 
 CONTENT_KIND_TEXT = "text"
 CONTENT_KIND_THINKING = "thinking"
@@ -114,10 +120,17 @@ class A2AEventMapper:
         elif event_type == "tool":
             tool_name = event.get("tool_name", "")
             content = event.get("content", "")
+            event_metadata = event.get("metadata") or {}
+            tool_input = event_metadata.get("tool_input")
+            tool_id = event_metadata.get("tool_id")
             if tool_name or content:
                 metadata: dict[str, Any] = {CONTENT_KIND_KEY: CONTENT_KIND_TOOL}
                 if tool_name:
                     metadata[TOOL_NAME_KEY] = tool_name
+                if isinstance(tool_input, dict):
+                    metadata[TOOL_INPUT_KEY] = tool_input
+                if isinstance(tool_id, str) and tool_id:
+                    metadata[TOOL_ID_KEY] = tool_id
                 return A2AEventMapper._create_status_update(
                     task_id=task_id,
                     context_id=context_id,
@@ -334,6 +347,13 @@ class A2AEventMapper:
                 tool_name = evt.get("tool_name")
                 if tool_name:
                     part_metadata[TOOL_NAME_KEY] = tool_name
+                evt_meta = evt.get("metadata") or {}
+                evt_tool_input = evt_meta.get("tool_input")
+                if isinstance(evt_tool_input, dict):
+                    part_metadata[TOOL_INPUT_KEY] = evt_tool_input
+                evt_tool_id = evt_meta.get("tool_id")
+                if isinstance(evt_tool_id, str) and evt_tool_id:
+                    part_metadata[TOOL_ID_KEY] = evt_tool_id
 
             parts.append(Part(root=TextPart(text=content, metadata=part_metadata)))
 
