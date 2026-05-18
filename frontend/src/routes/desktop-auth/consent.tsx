@@ -1,8 +1,11 @@
-import { createFileRoute, redirect } from "@tanstack/react-router"
+import { createFileRoute } from "@tanstack/react-router"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
 import { z } from "zod"
-import { isLoggedIn } from "@/hooks/useAuth"
+import {
+  ensureSessionValid,
+  redirectToLoginPreservingTarget,
+} from "@/hooks/useAuth"
 import { DesktopAuthService } from "@/client"
 import { Button } from "@/components/ui/button"
 import {
@@ -31,16 +34,8 @@ export const Route = createFileRoute("/desktop-auth/consent")({
   component: DesktopAuthConsentPage,
   validateSearch: searchSchema,
   beforeLoad: async ({ search }) => {
-    if (!isLoggedIn()) {
-      // Redirect to login; user must navigate back to the consent URL after logging in.
-      // The desktop app can restart the authorization flow if needed.
-      throw redirect({
-        to: "/login",
-        search: {
-          redirect: `/desktop-auth/consent?request=${search.request}`,
-        },
-      })
-    }
+    const returnTo = `/desktop-auth/consent?request=${encodeURIComponent(search.request)}`
+    await ensureSessionValid(returnTo)
   },
   head: () => ({
     meta: [{ title: `Authorize Cinna Desktop - ${APP_NAME}` }],
@@ -75,6 +70,13 @@ function DesktopAuthConsentPage() {
       }
       // Redirect to the desktop app's local callback server
       window.location.href = data.redirect_to
+    },
+    onError: (error: any) => {
+      // Token may have expired between page load and click; bounce through
+      // /login preserving the consent URL so the user lands back here.
+      if (error?.status === 401 || error?.status === 403) {
+        redirectToLoginPreservingTarget()
+      }
     },
   })
 

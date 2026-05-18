@@ -11,6 +11,7 @@ import ReactDOM from "react-dom/client"
 import { ApiError, OpenAPI } from "./client"
 import { ThemeProvider } from "./components/theme-provider"
 import { Toaster } from "./components/ui/sonner"
+import { safeRedirectPath } from "./utils"
 import "./index.css"
 import { routeTree } from "./routeTree.gen"
 
@@ -26,7 +27,17 @@ const handleApiError = (error: Error) => {
       return
     }
     localStorage.removeItem("access_token")
-    window.location.href = "/login"
+    // Preserve the current location as ?redirect= so consent/authorize
+    // pages (OAuth MCP, Desktop Auth) bring the user back after re-login
+    // instead of dropping them on the dashboard.
+    const here =
+      window.location.pathname + window.location.search + window.location.hash
+    const safe = safeRedirectPath(here)
+    if (safe !== "/" && safe !== "/login") {
+      window.location.href = `/login?redirect=${encodeURIComponent(safe)}`
+    } else {
+      window.location.href = "/login"
+    }
   }
 }
 const queryClient = new QueryClient({

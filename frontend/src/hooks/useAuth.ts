@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
+import { redirect, useNavigate } from "@tanstack/react-router"
 
 import {
   type Body_login_login_access_token as AccessToken,
@@ -42,6 +42,56 @@ const navigateToPostAuthTarget = (target: string | null) => {
 
 const isLoggedIn = () => {
   return localStorage.getItem("access_token") !== null
+}
+
+/**
+ * Validate the local JWT is still accepted by the backend. Use this in a
+ * route's `beforeLoad` for public consent/authorize pages that need an
+ * authenticated user but live outside the `_layout` guard. On 401/403/404
+ * the local token is cleared and a redirect to `/login` is thrown with
+ * `?redirect=<returnTo>` so the user lands back on the consent page after
+ * re-authenticating instead of being dropped on the dashboard or stuck on
+ * a "Could not validate credentials" error.
+ */
+const ensureSessionValid = async (returnTo: string): Promise<void> => {
+  const loginRedirect = redirect({
+    to: "/login",
+    search: { redirect: returnTo },
+  })
+  if (!isLoggedIn()) {
+    throw loginRedirect
+  }
+  try {
+    await LoginService.testToken()
+  } catch (error: any) {
+    if (
+      error?.status === 401 ||
+      error?.status === 403 ||
+      error?.status === 404
+    ) {
+      localStorage.removeItem("access_token")
+      throw loginRedirect
+    }
+    throw error
+  }
+}
+
+/**
+ * Clear the local token and send the user to `/login`, preserving the
+ * current URL as `?redirect=` so they return here after signing in. Use
+ * from page-level error handlers when the token expires mid-session
+ * (e.g. while sitting on a consent screen).
+ */
+const redirectToLoginPreservingTarget = () => {
+  localStorage.removeItem("access_token")
+  const here =
+    window.location.pathname + window.location.search + window.location.hash
+  const safe = safeRedirectPath(here)
+  if (safe !== "/") {
+    window.location.href = `/login?redirect=${encodeURIComponent(safe)}`
+    return
+  }
+  window.location.href = "/login"
 }
 
 const useAuth = () => {
@@ -124,5 +174,5 @@ const useAuth = () => {
   }
 }
 
-export { isLoggedIn }
+export { isLoggedIn, ensureSessionValid, redirectToLoginPreservingTarget }
 export default useAuth

@@ -26,7 +26,7 @@ The flow uses a **consent-page pattern** (mirroring the MCP OAuth flow) so that 
 3. Desktop generates PKCE verifier and challenge, opens the browser to `/api/v1/desktop-auth/authorize?device_name=...&code_challenge=...&state=...&redirect_uri=...`
 4. The backend (public endpoint, no auth required) stores a pending consent request keyed by a random nonce, then redirects the browser to `{FRONTEND_HOST}/desktop-auth/consent?request={nonce}`
 5. The SPA consent page loads, fetches display metadata (`GET /requests/{nonce}`), and shows the user a card: "Allow **{device_name}** to sign in as **{email}**?"
-6. If the user is not logged in, they are redirected to the login page and return to the consent page after logging in
+6. The consent route validates the local JWT in `beforeLoad` (not just its presence) — unauthenticated or expired-token visitors are redirected to `/login?redirect=/desktop-auth/consent?request={nonce}` and bounced back here after re-authenticating. A token that expires while the user sits on the consent screen is handled the same way via the mutation's `onError`. See [Expired-Session Recovery on Consent Pages](../auth/auth.md#expired-session-recovery-on-consent-pages)
 7. User clicks **Approve**; the SPA calls `POST /consent` with its localStorage JWT
 8. The backend lazily creates a new `DesktopOAuthClient` for this device, issues an authorization code, and returns `{redirect_to: "http://localhost:{port}/callback?code=...&state=...&client_id=..."}` — `client_id` is included so lazy-registered clients learn their server-assigned id before calling `/token`
 9. The SPA navigates the browser to `redirect_to`; the desktop app's ephemeral local HTTP server captures the code and the `client_id`

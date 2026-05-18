@@ -20,7 +20,10 @@
 - `backend/app/api/deps.py` - Auth dependency injection (CurrentUser, TokenDep, guest context)
 
 ### Frontend - Hooks
-- `frontend/src/hooks/useAuth.ts` - Auth state management (login, logout, signup, current user query, post-login redirect)
+- `frontend/src/hooks/useAuth.ts` - Auth state management (login, logout, signup, current user query, post-login redirect, `ensureSessionValid` / `redirectToLoginPreservingTarget` helpers used by consent routes)
+
+### Frontend - Entry Point
+- `frontend/src/main.tsx` - React Query global `handleApiError`: on 401/403 from any `ApiError`, clears the token and redirects to `/login?redirect=<current-url>` (preserves return target, via `safeRedirectPath`). Skips redirect on `/guest/*` pages
 
 ### Frontend - Utils
 - `frontend/src/utils.ts` - `safeRedirectPath()` validates a `?redirect=` value as a same-origin local path (rejects protocol-relative, backslash tricks, cross-origin)
@@ -30,7 +33,9 @@
 - `frontend/src/routes/signup.tsx` - Registration page with Google button
 - `frontend/src/routes/recover-password.tsx` - Password recovery form
 - `frontend/src/routes/reset-password.tsx` - Password reset form (token from URL)
-- `frontend/src/routes/_layout.tsx` - Protected route guard (`isLoggedIn()` check)
+- `frontend/src/routes/_layout.tsx` - Protected route guard: `isLoggedIn()` + `LoginService.testToken()`, clears token and redirects to `/login` on 401/403/404
+- `frontend/src/routes/oauth/mcp-consent.tsx` - MCP OAuth consent page; `beforeLoad` calls `ensureSessionValid()`; approve mutation handles mid-page 401/403 via `redirectToLoginPreservingTarget()`
+- `frontend/src/routes/desktop-auth/consent.tsx` - Cinna Desktop OAuth consent page; same `ensureSessionValid()` + mid-page recovery pattern
 
 ### Frontend - Components
 - `frontend/src/components/Auth/GoogleLoginButton.tsx` - Google OAuth button component
@@ -103,7 +108,9 @@ Auth-relevant fields:
 ## Frontend Components
 
 ### useAuth Hook (`frontend/src/hooks/useAuth.ts`)
-- `isLoggedIn()` - Checks `localStorage.getItem("access_token") !== null`
+- `isLoggedIn()` - Checks `localStorage.getItem("access_token") !== null` (localStorage-only — does not verify the token with the backend)
+- `ensureSessionValid(returnTo)` - For use inside a route's `beforeLoad` on public consent/authorize pages. Verifies the token via `LoginService.testToken()`; on 401/403/404 clears the token and throws a TanStack `redirect({ to: "/login", search: { redirect: returnTo } })`. Re-throws other errors. Used by `oauth/mcp-consent.tsx` and `desktop-auth/consent.tsx`
+- `redirectToLoginPreservingTarget()` - Imperative variant for in-page error handlers (e.g. mutation `onError`). Clears the token and navigates the browser to `/login?redirect=<current-url>` after passing the current location through `safeRedirectPath`
 - `user` query - `useQuery(["currentUser"], UsersService.readUserMe())` with auto-logout on 401/404
 - `loginMutation` - Password login via `LoginService.loginAccessToken()`, stores token, then calls `navigateToPostAuthTarget(readRedirectFromUrl())`
 - `signUpMutation` - Registration via `UsersService.registerUser()`; on success navigates to `/login`, preserving the current `?redirect=` param
@@ -112,8 +119,14 @@ Auth-relevant fields:
 - `navigateToPostAuthTarget(target)` - Private helper that uses `window.location.assign()` so arbitrary same-origin paths (with their own query string) work regardless of TanStack Router's typed route registry
 
 ### Route Guard (`frontend/src/routes/_layout.tsx`)
-- `beforeLoad` checks `isLoggedIn()`, throws `redirect({ to: "/login" })` if false
+- `beforeLoad` checks `isLoggedIn()`, throws `redirect({ to: "/login" })` if false; then calls `LoginService.testToken()` and on 401/403/404 clears the token and redirects to `/login`
 - All routes under `/_layout/` are protected
+
+### Consent Page Route Guards
+- `frontend/src/routes/oauth/mcp-consent.tsx` `beforeLoad` calls `ensureSessionValid(buildConsentReturnTo(nonce, app_mcp))` so that visitors with an expired token (not just a missing one) get bounced through `/login?redirect=/oauth/mcp-consent?...` instead of landing on the page and failing on Authorize
+- `frontend/src/routes/desktop-auth/consent.tsx` `beforeLoad` calls `ensureSessionValid("/desktop-auth/consent?request=<nonce>")` with the same intent
+- Both pages also wire the approve/consent mutation's `onError` to `redirectToLoginPreservingTarget()` so that a token expiring while the user sits on the page does not strand them on a "Could not validate credentials" message
+- The mcp-consent page uses raw `fetch()` (not the generated client), so its helpers throw a local `ConsentRequestError` carrying `status` — the mutation `onError` reads `error.status` instead of relying on the global `ApiError` handler
 
 ### Login Page (`frontend/src/routes/login.tsx`)
 - Zod validation (email, password >= 8 chars)

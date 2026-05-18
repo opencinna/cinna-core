@@ -1,8 +1,11 @@
-import { createFileRoute, redirect } from "@tanstack/react-router"
+import { createFileRoute } from "@tanstack/react-router"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useState, useEffect } from "react"
 import { z } from "zod"
-import { isLoggedIn } from "@/hooks/useAuth"
+import {
+  ensureSessionValid,
+  redirectToLoginPreservingTarget,
+} from "@/hooks/useAuth"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -27,16 +30,20 @@ const searchSchema = z.object({
   app_mcp: z.boolean().optional(),
 })
 
+const buildConsentReturnTo = (
+  nonce: string,
+  appMcp: boolean | undefined,
+): string => {
+  const params = new URLSearchParams({ nonce })
+  if (appMcp) params.set("app_mcp", String(appMcp))
+  return `/oauth/mcp-consent?${params.toString()}`
+}
+
 export const Route = createFileRoute("/oauth/mcp-consent")({
   component: McpConsentPage,
   validateSearch: searchSchema,
   beforeLoad: async ({ search }) => {
-    if (!isLoggedIn()) {
-      throw redirect({
-        to: "/login",
-        search: { redirect: `/oauth/mcp-consent?nonce=${search.nonce}` },
-      })
-    }
+    await ensureSessionValid(buildConsentReturnTo(search.nonce, search.app_mcp))
   },
   head: () => ({
     meta: [{ title: `Authorize Access - ${APP_NAME}` }],
@@ -45,6 +52,14 @@ export const Route = createFileRoute("/oauth/mcp-consent")({
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 
+class ConsentRequestError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+  }
+}
+
 async function fetchConsentInfo(nonce: string, appMcp: boolean) {
   const params = new URLSearchParams({ app_mcp: String(appMcp) })
   const res = await fetch(
@@ -52,7 +67,10 @@ async function fetchConsentInfo(nonce: string, appMcp: boolean) {
   )
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new Error(body.detail || `Error ${res.status}`)
+    throw new ConsentRequestError(
+      body.detail || `Error ${res.status}`,
+      res.status,
+    )
   }
   return res.json()
 }
@@ -68,7 +86,10 @@ async function approveConsent(nonce: string) {
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new Error(body.detail || `Error ${res.status}`)
+    throw new ConsentRequestError(
+      body.detail || `Error ${res.status}`,
+      res.status,
+    )
   }
   return res.json()
 }
@@ -92,6 +113,15 @@ function McpConsentPage() {
     onSuccess: (data: { redirect_url: string }) => {
       setAuthorized(true)
       window.location.href = data.redirect_url
+    },
+    onError: (error: unknown) => {
+      // If the JWT expired between page load and the Authorize click, bounce
+      // through /login and come back instead of leaving the user stranded
+      // on a "Could not validate credentials" message.
+      const status = (error as ConsentRequestError | undefined)?.status
+      if (status === 401 || status === 403) {
+        redirectToLoginPreservingTarget()
+      }
     },
   })
 

@@ -90,6 +90,13 @@ Provides user identity and session management for the platform. Users authentica
 - The `?redirect=` value is preserved across the login ↔ signup switch links and through the Google OAuth round-trip (stashed in `sessionStorage` while Google's popup is open)
 - Validation: redirect targets must be same-origin local paths starting with `/`; protocol-relative (`//host`), backslash tricks (`/\\host`), and cross-origin URLs are rejected and silently fall back to the dashboard (open-redirect protection)
 - Primary consumer: the MCP OAuth consent page (`/oauth/mcp-consent`) — when an MCP client opens the consent URL in an embedded browser with no platform session, the user can log in inline and resume the OAuth flow without re-triggering it from the MCP client. See [MCP Integration](../mcp_integration/agent_mcp_architecture.md)
+- Secondary consumer: the Cinna Desktop consent page (`/desktop-auth/consent`) — same pattern for the desktop OAuth flow. See [Desktop Auth](../desktop_auth/desktop_auth.md)
+
+### Expired-Session Recovery on Consent Pages
+- Public consent/authorize pages (`/oauth/mcp-consent`, `/desktop-auth/consent`) sit outside the `_layout` guard and previously trusted any non-empty `access_token` in `localStorage` — an expired token was enough to render the page, and clicking Authorize then failed with "Could not validate credentials" leaving the user stranded
+- Both routes now validate the token in `beforeLoad` by calling `LoginService.testToken()`. On 401/403/404 the token is cleared and the user is redirected to `/login?redirect=<this-page>` so they re-authenticate and land back on the consent screen
+- If the token expires while the user sits on the consent screen (between page load and the Authorize click), the mutation's `onError` handler detects 401/403, clears the token, and bounces through `/login?redirect=` preserving the consent URL — the user never sees the credentials error
+- The global API error handler (React Query's shared `onError`) also preserves the current URL as `?redirect=` when bouncing on 401/403, so any future protected page using the generated client gets the same return-to-page behavior automatically
 
 ## Architecture Overview
 
