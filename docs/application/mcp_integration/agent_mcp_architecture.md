@@ -480,9 +480,10 @@ The **MCPConnectorsCard** lives in the agent's Integrations tab alongside A2A, A
 
 Public route at `/oauth/mcp-consent` (outside normal auth guard):
 - Displays: agent name, connector name/mode, client name, requested scopes
-- Redirects to login if unauthenticated
+- Redirects to login if unauthenticated, with `?redirect=/oauth/mcp-consent?nonce={nonce}` — after login (password, Google, or signup-then-login) the browser is sent back here with the same nonce, the server-stored OAuth request is re-hydrated, and the user lands on the consent screen. Critical for MCP clients that open the consent URL in an unauthenticated embedded browser. See [Post-Login Redirect](../auth/auth.md#post-login-redirect)
 - Authorize / Deny buttons
 - On approval → redirects to MCP client's callback with auth code
+- Caveat: the server-side `MCPAuthRequest` row expires 10 minutes after `/mcp/oauth/authorize`. If login takes longer, the consent page surfaces `AuthRequestExpiredError` and the user must re-trigger the connection from the MCP client
 
 ---
 

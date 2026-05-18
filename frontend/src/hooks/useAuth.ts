@@ -8,8 +8,37 @@ import {
   type UserRegister,
   UsersService,
 } from "@/client"
-import { handleError } from "@/utils"
+import { handleError, safeRedirectPath } from "@/utils"
 import useCustomToast from "./useCustomToast"
+
+/**
+ * Read a same-origin `?redirect=` target from the current URL, if any.
+ * Returns null when absent or unsafe — callers should fall back to "/".
+ */
+const readRedirectFromUrl = (): string | null => {
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const raw = params.get("redirect")
+    if (!raw) return null
+    const safe = safeRedirectPath(raw)
+    return safe === "/" ? null : safe
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Navigate to a post-auth target. Uses a full page assign for arbitrary
+ * paths (with query strings) so it works regardless of TanStack Router's
+ * typed route registry; falls back to "/" for unsafe or missing values.
+ */
+const navigateToPostAuthTarget = (target: string | null) => {
+  if (target && target !== "/") {
+    window.location.assign(target)
+    return
+  }
+  window.location.assign("/")
+}
 
 const isLoggedIn = () => {
   return localStorage.getItem("access_token") !== null
@@ -55,7 +84,11 @@ const useAuth = () => {
     mutationFn: (data: UserRegister) =>
       UsersService.registerUser({ requestBody: data }),
     onSuccess: () => {
-      navigate({ to: "/login" })
+      const target = readRedirectFromUrl()
+      navigate({
+        to: "/login",
+        search: target ? { redirect: target } : undefined,
+      })
     },
     onError: handleError.bind(showErrorToast),
     onSettled: () => {
@@ -73,7 +106,7 @@ const useAuth = () => {
   const loginMutation = useMutation({
     mutationFn: login,
     onSuccess: () => {
-      navigate({ to: "/" })
+      navigateToPostAuthTarget(readRedirectFromUrl())
     },
     onError: handleError.bind(showErrorToast),
   })

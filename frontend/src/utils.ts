@@ -31,3 +31,24 @@ export const getInitials = (name: string): string => {
     .join("")
     .toUpperCase()
 }
+
+/**
+ * Validate a post-auth `?redirect=` target. Only same-origin local paths
+ * are allowed, to prevent open-redirect attacks. Returns "/" for anything
+ * unsafe or empty.
+ */
+export const safeRedirectPath = (
+  input: string | null | undefined,
+): string => {
+  if (!input || typeof input !== "string") return "/"
+  if (!input.startsWith("/")) return "/"
+  // Reject protocol-relative URLs and backslash tricks
+  if (input.startsWith("//") || input.startsWith("/\\")) return "/"
+  try {
+    const url = new URL(input, window.location.origin)
+    if (url.origin !== window.location.origin) return "/"
+    return url.pathname + url.search + url.hash
+  } catch {
+    return "/"
+  }
+}

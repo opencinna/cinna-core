@@ -6,6 +6,9 @@ import type { GoogleCallbackRequest } from "@/client"
 import { OauthService } from "@/client"
 import { Button } from "@/components/ui/button"
 import useCustomToast from "@/hooks/useCustomToast"
+import { safeRedirectPath } from "@/utils"
+
+const GOOGLE_REDIRECT_KEY = "google_oauth_redirect"
 
 export function GoogleLoginButton() {
   const navigate = useNavigate()
@@ -28,10 +31,18 @@ export function GoogleLoginButton() {
     onSuccess: (data) => {
       localStorage.setItem("access_token", data.access_token)
       sessionStorage.removeItem("google_oauth_state")
+      const stashed = sessionStorage.getItem(GOOGLE_REDIRECT_KEY)
+      sessionStorage.removeItem(GOOGLE_REDIRECT_KEY)
+      const target = safeRedirectPath(stashed)
+      if (target !== "/") {
+        window.location.assign(target)
+        return
+      }
       navigate({ to: "/" })
     },
     onError: (error: Error) => {
       sessionStorage.removeItem("google_oauth_state")
+      sessionStorage.removeItem(GOOGLE_REDIRECT_KEY)
       showErrorToast(error.message || "Failed to login with Google")
     },
   })
@@ -47,6 +58,20 @@ export function GoogleLoginButton() {
     state: (() => {
       const state = crypto.randomUUID()
       sessionStorage.setItem("google_oauth_state", state)
+      // Stash any same-origin post-auth redirect target so we can honor it
+      // after Google round-trips back to this page.
+      try {
+        const params = new URLSearchParams(window.location.search)
+        const raw = params.get("redirect")
+        const safe = safeRedirectPath(raw)
+        if (safe !== "/") {
+          sessionStorage.setItem(GOOGLE_REDIRECT_KEY, safe)
+        } else {
+          sessionStorage.removeItem(GOOGLE_REDIRECT_KEY)
+        }
+      } catch {
+        sessionStorage.removeItem(GOOGLE_REDIRECT_KEY)
+      }
       return state
     })(),
   })

@@ -22,7 +22,7 @@ import { Input } from "@/components/ui/input"
 import { LoadingButton } from "@/components/ui/loading-button"
 import { PasswordInput } from "@/components/ui/password-input"
 import useAuth, { isLoggedIn } from "@/hooks/useAuth"
-import { APP_NAME } from "@/utils"
+import { APP_NAME, safeRedirectPath } from "@/utils"
 
 const formSchema = z.object({
   username: z.email(),
@@ -34,13 +34,20 @@ const formSchema = z.object({
 
 type FormData = z.infer<typeof formSchema>
 
+const searchSchema = z.object({
+  redirect: z.string().optional(),
+})
+
 export const Route = createFileRoute("/login")({
   component: Login,
-  beforeLoad: async () => {
+  validateSearch: searchSchema,
+  beforeLoad: async ({ search }) => {
     if (isLoggedIn()) {
-      throw redirect({
-        to: "/",
-      })
+      const target = safeRedirectPath(search.redirect)
+      if (target !== "/") {
+        throw redirect({ href: target })
+      }
+      throw redirect({ to: "/" })
     }
   },
   head: () => ({
@@ -54,6 +61,8 @@ export const Route = createFileRoute("/login")({
 
 function Login() {
   const { loginMutation } = useAuth()
+  const { redirect: redirectParam } = Route.useSearch()
+  const signupSearch = redirectParam ? { redirect: redirectParam } : undefined
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
     mode: "onBlur",
@@ -151,7 +160,11 @@ function Login() {
 
           <div className="text-center text-sm">
             Don't have an account yet?{" "}
-            <RouterLink to="/signup" className="underline underline-offset-4">
+            <RouterLink
+              to="/signup"
+              search={signupSearch}
+              className="underline underline-offset-4"
+            >
               Sign up
             </RouterLink>
           </div>

@@ -32,9 +32,6 @@ export const Route = createFileRoute("/oauth/mcp-consent")({
   validateSearch: searchSchema,
   beforeLoad: async ({ search }) => {
     if (!isLoggedIn()) {
-      // Note: The login page does not currently support a redirect search param.
-      // The user will need to re-navigate to the consent URL after logging in,
-      // or the OAuth client will need to restart the authorization flow.
       throw redirect({
         to: "/login",
         search: { redirect: `/oauth/mcp-consent?nonce=${search.nonce}` },

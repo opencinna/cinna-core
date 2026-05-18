@@ -23,7 +23,7 @@ Provides user identity and session management for the platform. Users authentica
 2. Frontend submits credentials as OAuth2PasswordRequestForm
 3. Backend validates credentials (bcrypt comparison)
 4. Backend returns JWT access token
-5. Frontend stores token in `localStorage` and redirects to dashboard
+5. Frontend stores token in `localStorage` and navigates to the post-login target — the validated `?redirect=` URL search param if present, otherwise the dashboard (see [Post-Login Redirect](#post-login-redirect))
 
 ### User Registration (Signup)
 
@@ -82,6 +82,14 @@ Provides user identity and session management for the platform. Users authentica
 - Users can have both password and Google OAuth linked
 - `has_password` and `has_google_account` booleans exposed in user profile
 - Either method produces the same JWT token
+
+### Post-Login Redirect
+- `/login` and `/signup` accept an optional `?redirect=` URL search param naming the page to land on after successful authentication
+- After password login, signup-then-login chain, or Google OAuth, the frontend navigates to the validated redirect target instead of the dashboard
+- Already-authenticated users hitting `/login` or `/signup` with `?redirect=` are sent straight to the target (no re-auth required)
+- The `?redirect=` value is preserved across the login ↔ signup switch links and through the Google OAuth round-trip (stashed in `sessionStorage` while Google's popup is open)
+- Validation: redirect targets must be same-origin local paths starting with `/`; protocol-relative (`//host`), backslash tricks (`/\\host`), and cross-origin URLs are rejected and silently fall back to the dashboard (open-redirect protection)
+- Primary consumer: the MCP OAuth consent page (`/oauth/mcp-consent`) — when an MCP client opens the consent URL in an embedded browser with no platform session, the user can log in inline and resume the OAuth flow without re-triggering it from the MCP client. See [MCP Integration](../mcp_integration/agent_mcp_architecture.md)
 
 ## Architecture Overview
 

@@ -29,7 +29,7 @@ Enables users to authenticate with their Google account as an alternative to pas
    - **Unknown Google ID, known email** -> auto-links Google to existing user
    - **Unknown Google ID, unknown email** -> creates new user (no password)
 8. Backend returns JWT access token
-9. Frontend stores token and redirects to dashboard
+9. Frontend stores token and navigates to the post-login target — the validated `?redirect=` URL param (stashed in `sessionStorage` before Google's popup opened) if present, otherwise the dashboard. See [Post-Login Redirect](auth.md#post-login-redirect)
 
 ### Link Google Account
 

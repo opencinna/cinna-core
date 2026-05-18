@@ -20,7 +20,10 @@
 - `backend/app/api/deps.py` - Auth dependency injection (CurrentUser, TokenDep, guest context)
 
 ### Frontend - Hooks
-- `frontend/src/hooks/useAuth.ts` - Auth state management (login, logout, signup, current user query)
+- `frontend/src/hooks/useAuth.ts` - Auth state management (login, logout, signup, current user query, post-login redirect)
+
+### Frontend - Utils
+- `frontend/src/utils.ts` - `safeRedirectPath()` validates a `?redirect=` value as a same-origin local path (rejects protocol-relative, backslash tricks, cross-origin)
 
 ### Frontend - Routes
 - `frontend/src/routes/login.tsx` - Login page with email/password form and Google button
@@ -102,9 +105,11 @@ Auth-relevant fields:
 ### useAuth Hook (`frontend/src/hooks/useAuth.ts`)
 - `isLoggedIn()` - Checks `localStorage.getItem("access_token") !== null`
 - `user` query - `useQuery(["currentUser"], UsersService.readUserMe())` with auto-logout on 401/404
-- `loginMutation` - Password login via `LoginService.loginAccessToken()`, stores token
-- `signUpMutation` - Registration via `UsersService.registerUser()`
+- `loginMutation` - Password login via `LoginService.loginAccessToken()`, stores token, then calls `navigateToPostAuthTarget(readRedirectFromUrl())`
+- `signUpMutation` - Registration via `UsersService.registerUser()`; on success navigates to `/login`, preserving the current `?redirect=` param
 - `logout()` - Removes token from localStorage, navigates to /login
+- `readRedirectFromUrl()` - Private helper that reads `?redirect=` from `window.location.search` and runs it through `safeRedirectPath()`; returns null when absent or unsafe
+- `navigateToPostAuthTarget(target)` - Private helper that uses `window.location.assign()` so arbitrary same-origin paths (with their own query string) work regardless of TanStack Router's typed route registry
 
 ### Route Guard (`frontend/src/routes/_layout.tsx`)
 - `beforeLoad` checks `isLoggedIn()`, throws `redirect({ to: "/login" })` if false
@@ -114,6 +119,17 @@ Auth-relevant fields:
 - Zod validation (email, password >= 8 chars)
 - Google button above email form with "Or continue with email" divider
 - Links to /signup and /recover-password
+- `validateSearch` accepts `redirect?: string`; `beforeLoad` honors it for already-logged-in visitors via `throw redirect({ href: target })` (validated through `safeRedirectPath`)
+- Forwards the `redirect` param into the `/signup` link so users can switch auth mode without losing the target
+
+### Signup Page (`frontend/src/routes/signup.tsx`)
+- Same `validateSearch` / `beforeLoad` redirect handling as login
+- Forwards the `redirect` param into the `/login` link
+
+### Google Login Button (`frontend/src/components/Auth/GoogleLoginButton.tsx`)
+- Before launching Google's popup, captures the current `?redirect=` param, validates it via `safeRedirectPath`, and stashes the result in `sessionStorage` under `google_oauth_redirect` (alongside the existing `google_oauth_state`)
+- After the Google callback succeeds, reads the stashed redirect and navigates via `window.location.assign()`; cleared in both `onSuccess` and `onError`
+- Why `sessionStorage`: Google's redirect strips query params, so the redirect target wouldn't survive the round-trip via URL alone
 
 ## Configuration
 
