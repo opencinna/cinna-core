@@ -641,10 +641,15 @@ if __name__ == "__main__":
             "platform_api_version": settings.PLATFORM_API_VERSION,
         }
 
+    # Default cap for `cinna exec` commands — generous enough for long
+    # backfills / training runs while still bounding orphaned subprocesses.
+    DEFAULT_CLI_EXEC_TIMEOUT_SECONDS = 1800
+
     @staticmethod
     async def stream_exec(
         environment: AgentEnvironment,
         command: str,
+        timeout: int | None = None,
     ) -> AsyncIterator[bytes]:
         """
         Stream command execution output from the env-core /command/stream endpoint.
@@ -659,6 +664,8 @@ if __name__ == "__main__":
         Args:
             environment: The agent environment to execute the command in
             command: Shell command string to execute
+            timeout: Max wall-clock seconds the remote command may run; falls
+                back to ``DEFAULT_CLI_EXEC_TIMEOUT_SECONDS`` when omitted.
 
         Yields:
             SSE-framed bytes for each event
@@ -668,25 +675,50 @@ if __name__ == "__main__":
         # domain just because cli_service is imported.
         from app.services.sessions.message_service import MessageService
 
+        effective_timeout = (
+            timeout if timeout is not None else CLIService.DEFAULT_CLI_EXEC_TIMEOUT_SECONDS
+        )
+
         exec_id = str(uuid.uuid4())
         base_url = MessageService.get_environment_url(environment)
         auth_headers = MessageService.get_auth_headers(environment)
+
+        logger.info(
+            f"cli stream_exec start: env={environment.id} exec_id={exec_id} "
+            f"timeout={effective_timeout}s command={command!r}"
+        )
 
         # Emit exec_id as the first event so the CLI can route interrupts
         exec_id_event = _json.dumps({"type": "exec_id", "exec_id": exec_id})
         yield f"data: {exec_id_event}\n\n".encode("utf-8")
 
+        final_event_type: str | None = None
+        final_exit_code: int | None = None
         try:
             async for event in _aec_module.agent_env_connector.stream_command(
                 base_url=base_url,
                 auth_headers=auth_headers,
                 exec_id=exec_id,
                 resolved_command=command,
+                timeout=effective_timeout,
             ):
+                etype = event.get("type")
+                if etype in ("done", "interrupted", "error"):
+                    final_event_type = etype
+                    final_exit_code = event.get("exit_code")
                 yield f"data: {_json.dumps(event)}\n\n".encode("utf-8")
         except Exception as e:
+            logger.exception(
+                f"cli stream_exec error: env={environment.id} exec_id={exec_id}: {e}"
+            )
             error_event = _json.dumps({"type": "error", "content": f"Stream error: {e}"})
             yield f"data: {error_event}\n\n".encode("utf-8")
+            final_event_type = "error"
+        finally:
+            logger.info(
+                f"cli stream_exec end: env={environment.id} exec_id={exec_id} "
+                f"final={final_event_type} exit_code={final_exit_code}"
+            )
 
     @staticmethod
     async def run_sync_tunnel(

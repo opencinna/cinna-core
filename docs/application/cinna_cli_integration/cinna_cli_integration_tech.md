@@ -123,7 +123,7 @@ Index: `ix_agent_environment_sync_active` (partial, `WHERE sync_active = true`)
 | GET | `/api/v1/cli/agents/{agent_id}/building-context` | Get assembled building-mode prompt + settings + inline `prompt_files` dict (contents of `/app/core/prompts/*.md` companions — `WEBAPP_BUILDING.md`, `COMPLEX_AGENT_DESIGN.md`, …) so the CLI can mirror them next to `BUILDING_AGENT.md` |
 | POST | `/api/v1/cli/agents/{agent_id}/knowledge/search` | Search agent's knowledge sources |
 | WS | `/api/v1/cli/agents/{agent_id}/sync-stream` | Mutagen tunnel WebSocket. Route is a thin controller: scope check + `CLIService.run_sync_tunnel(websocket, cli_ctx)` which owns env readiness, tracker register/unregister, env-core `/sync/exec` proxy, and the 30 s heartbeat loop |
-| POST | `/api/v1/cli/agents/{agent_id}/exec` | Streaming SSE — body `{command, cwd?}`; first event emits `exec_id`; delegates to env-core `/command/stream` |
+| POST | `/api/v1/cli/agents/{agent_id}/exec` | Streaming SSE — body `{command, timeout?}` where `timeout` is optional wall-clock seconds (1–86400, defaults to `CLIService.DEFAULT_CLI_EXEC_TIMEOUT_SECONDS` = 1800); first event emits `exec_id`; delegates to env-core `/command/stream` |
 | GET | `/api/v1/cli/agents/{agent_id}/sync-runtime` | Returns pinned `{mutagen_version, mutagen_agent_sha256, platform_api_version}` for version verification |
 
 ### Env-core callback (bearer + X-Agent-Env-Id header)
@@ -157,7 +157,7 @@ Index: `ix_agent_environment_sync_active` (partial, `WHERE sync_active = true`)
 - `get_building_context()` — Proxies to env-core prompt generator; falls back to minimal context if env unavailable. The env-core response includes a `prompt_files: {filename: content}` dict with every `.md` under `/app/core/prompts/` except `BUILDING_AGENT.md` (currently `WEBAPP_BUILDING.md`, `COMPLEX_AGENT_DESIGN.md`); the CLI mirrors them next to `BUILDING_AGENT.md` so the on-demand `./<NAME>.md` references in the building prompt resolve locally without a Docker build context
 - `search_knowledge()` — Generates query embedding, searches accessible knowledge sources via vector search
 - `get_sync_runtime_info()` — Returns `{mutagen_version, mutagen_agent_sha256, platform_api_version}` from `settings.MUTAGEN_VERSION` / `settings.PLATFORM_API_VERSION` (kept in lockstep with the Dockerfile `MUTAGEN_VERSION` build arg)
-- `stream_exec()` — Wraps env-core `/command/stream` via `AgentEnvConnector.stream_command()`; yields SSE-framed bytes and emits the `exec_id` event first
+- `stream_exec(environment, command, timeout=None)` — Wraps env-core `/command/stream` via `AgentEnvConnector.stream_command()`; yields SSE-framed bytes and emits the `exec_id` event first. When `timeout` is `None`, falls back to `CLIService.DEFAULT_CLI_EXEC_TIMEOUT_SECONDS` (1800). Emits start/stop INFO logs carrying env id, exec id, command, and final event type
 - `run_sync_tunnel(websocket, cli_ctx)` — End-to-end sync-stream lifecycle: ensures env is running, accepts WS, registers with `SyncActivityTracker`, opens env-core `/sync/exec` WebSocket, runs client↔env byte pumps + 30 s heartbeat (fresh `Session(engine)` per tick — does not hold the request-scoped dep session for the WS lifetime), cancels pumps and unregisters on teardown
 
 ### SyncActivityTracker (`backend/app/services/cli/sync_activity_tracker.py`)
@@ -211,6 +211,15 @@ Per-user JSON file mapping `agent_id` → `{platform_url, cli_token, frontend_ur
 Entries are upserted on every `cinna setup` (refreshing the token) and removed by `cinna disconnect` / `cinna disconnect-all`.
 
 ## Env-Core Additions
+
+### POST /command/stream (inside the container)
+
+- File: `backend/app/env-templates/app_core_base/core/server/routes.py`
+- Encapsulated by the `_StreamingExec` class — owns subprocess spawn, the stdout/stderr drain loop, deadline tracking, output-byte cap enforcement, and kill protocol in one place. The route function is a thin wrapper that builds a streamer, registers it in `_active_execs`, and converts the yielded event dicts into SSE frames
+- `_StreamingExec.run()` yields one `tool` event, zero or more `tool_result_delta` events (stdout/stderr chunks emitted as they arrive — no batching), then exactly one terminal event: `done` (with `exit_code` and optional `timed_out: true`), `interrupted` (output truncated at `max_output_bytes`), or `error` (subprocess spawn failure)
+- `_StreamingExec.kill()` — SIGTERM, then SIGKILL after 2 s; called by `POST /command/interrupt/{exec_id}` looking up the streamer in `_active_execs` (keyed by `exec_id`). Idempotent and safe to call before the subprocess starts or after it has exited
+- Drain loop uses a 1 s asyncio `wait_for` cap as a deadline-check heartbeat (NOT an EOF signal — output gaps longer than 1 s do not terminate the stream). The real cutoff is the `CommandStreamRequest.timeout` deadline
+- Post-EOF reaper: after both stdout and stderr hit EOF, `_StreamingExec` waits up to 5 s for `proc.wait()` and force-kills the subprocess if it's still alive — prevents orphaned subprocesses from continuing to run after the CLI has detached
 
 ### WS /sync/exec (inside the container)
 

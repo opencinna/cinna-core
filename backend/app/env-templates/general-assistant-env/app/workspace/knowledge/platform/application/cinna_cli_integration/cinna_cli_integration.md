@@ -109,13 +109,22 @@ Enables local development of remote agents using the `cinna` CLI tool. Users dev
 
 - Credentials are never written to the user's machine. The remote environment holds all credentials; `cinna exec` runs commands in that environment where credentials are already available via `workspace/credentials/credentials.json`
 
+### Remote Exec
+
+- `cinna exec` streams stdout and stderr in real time as each chunk arrives — output is not buffered until the command finishes, so long-running scripts produce visible progress at print time
+- Default timeout is **1800 seconds (30 minutes)**. Override per-invocation with `--timeout / -t SECS` (range 1–86400, i.e. 1 second to 24 hours)
+- When the timeout expires the remote subprocess is killed (SIGKILL); the CLI receives a `done` event marked `timed_out: true` and exits non-zero
+- If the user's own command takes a `--timeout` flag, separate it with `--`: `cinna exec --timeout 3600 -- python tool.py --timeout 30`
+- Three terminal events from the remote: `done` (normal completion or timeout — carries the exit code), `interrupted` (output truncated at the 256 KB byte cap), `error` (subprocess failed to start)
+- Output is hard-capped at 256 KB per invocation. Output beyond that is truncated and the subprocess is terminated
+
 ## CLI Commands
 
 | Command | Purpose |
 |---------|---------|
 | `cinna setup <token_or_url>` | Exchange a setup token, bootstrap the workspace, and attach a foreground TUI. The primary entry point from the platform's Integrations tab |
 | `cinna dev` | Start (or reuse) the Mutagen sync session and attach a two-tab TUI. Ctrl-C stops sync and detaches. The primary developer loop |
-| `cinna exec <command>` | Run a command in the remote environment; streams stdout/stderr and returns the remote exit code |
+| `cinna exec [--timeout SECS] <command>` | Run a command in the remote environment; streams stdout/stderr and returns the remote exit code. Default timeout 1800 s (30 min); raise with `--timeout` / `-t` for longer jobs |
 | `cinna status` | One-shot snapshot of agent info and sync state for the current workspace |
 | `cinna sync status` | Read-only view of the live sync session state (safe to run from a second terminal while `cinna dev` is attached) |
 | `cinna sync conflicts` | List Mutagen `.conflict.*` files; the user resolves them by editing in place |

@@ -108,7 +108,7 @@ class ParsedCLICommand:
 | `parse_commands_file` | `static (raw: str) -> list[ParsedCLICommand]` | Pure; raises `CLICommandsParseError` on bad YAML |
 | `is_rate_limited` | `(environment_id: UUID) -> bool` | 30 s TTL per env |
 | `refresh_after_action` | `async (environment, db_session=None, force=False) -> None` | Best-effort; checks rate limit (skipped when `force=True`); swallows all errors |
-| `handle_post_action_event` | `async (event_data: dict) -> None` | Reads `meta.environment_id`; passes `force=True` to `refresh_after_action` when `meta.changed_files` contains `docs/CLI_COMMANDS.yaml` |
+| `handle_post_action_event` | `async (event_data: dict) -> None` | Reads `meta.environment_id`; passes `force=True` to `refresh_after_action` when `meta.changed_files` contains `docs/CLI_COMMANDS.yaml` | <!-- nocheck -->
 
 ### Module-Level Constants
 
@@ -211,7 +211,7 @@ for _event_type in (
     )
 ```
 
-`handle_post_action_event` reads `meta.changed_files` (populated by `WORKSPACE_FILES_CHANGED` from the env-core file watcher) and passes `force=True` to `refresh_after_action` when `docs/CLI_COMMANDS.yaml` is in the list. This bypasses the 30 s rate limit for that fetch — direct evidence that the cache is stale outweighs the de-dup heuristic.
+`handle_post_action_event` reads `meta.changed_files` (populated by `WORKSPACE_FILES_CHANGED` from the env-core file watcher) and passes `force=True` to `refresh_after_action` when `docs/CLI_COMMANDS.yaml` is in the list. This bypasses the 30 s rate limit for that fetch — direct evidence that the cache is stale outweighs the de-dup heuristic. <!-- nocheck -->
 
 ---
 
@@ -388,8 +388,8 @@ RUN_COMMAND_MAX_OUTPUT_BYTES: int = 262144  # 256 KB
 
 **File:** `backend/app/env-templates/app_core_base/core/server/routes.py`
 
-- `POST /command/stream` — `asyncio.create_subprocess_shell`, concurrent stdout/stderr reading via `asyncio.Queue`, SSE emission of `tool` / `tool_result_delta` / `done` events, timeout via `asyncio.wait_for`, byte cap enforcement, exec_id tracking in module-level dict `_active_execs`
-- `POST /command/interrupt/{exec_id}` — SIGTERM then SIGKILL with 2 s grace period
+- `POST /command/stream` — Driven by the `_StreamingExec` class (subprocess spawn, concurrent stdout/stderr drain via `asyncio.Queue`, real-time SSE emission of `tool` / `tool_result_delta` / `done` / `interrupted` / `error` events, deadline tracking, byte-cap enforcement, post-EOF reaper). The route function is a thin wrapper that registers the streamer in `_active_execs` (keyed by `exec_id`) and converts yielded event dicts into SSE frames. Output chunks are yielded as they arrive — the drain loop does not batch
+- `POST /command/interrupt/{exec_id}` — Looks up the streamer in `_active_execs` and calls `_StreamingExec.kill()` (SIGTERM then SIGKILL with 2 s grace period). Idempotent
 
 Request model:
 

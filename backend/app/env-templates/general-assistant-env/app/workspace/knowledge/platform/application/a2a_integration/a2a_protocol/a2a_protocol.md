@@ -140,14 +140,16 @@ Events are delivered incrementally. `A2AStreamEventHandler` pushes each mapped e
 
 A2A clients can inspect `TextPart.metadata` to distinguish the three kinds of agent content emitted during a stream. This metadata is placed on the `TextPart` (not on `Message`) because a single agent message can contain parts of mixed kinds.
 
-| `cinna.content_kind` value | Meaning | Additional metadata key |
-|----------------------------|---------|------------------------|
+| `cinna.content_kind` value | Meaning | Additional metadata keys |
+|----------------------------|---------|-------------------------|
 | `text` | Agent's final answer text (from `assistant` events) | — |
 | `thinking` | Chain-of-thought reasoning (from `thinking` events) | — |
-| `tool` | Tool-call narration (from `tool` events) | `cinna.tool_name` — name of the tool invoked |
+| `tool` | Tool-call narration (from `tool` events) | `cinna.tool_name` — name of the tool invoked; `cinna.tool_input` — structured tool arguments (JSON object); `cinna.tool_id` — opaque tool-call identifier string |
 
-- The `cinna.tool_name` key is present on `TextPart.metadata` only when `cinna.content_kind` is `"tool"`.
-- Tool event text contains the raw tool-call narration; no prefix is added. Clients rely on `cinna.content_kind` / `cinna.tool_name` to identify tool parts.
+- `cinna.tool_name`, `cinna.tool_input`, and `cinna.tool_id` are present on `TextPart.metadata` only when `cinna.content_kind` is `"tool"`.
+- `cinna.tool_input` is included when the underlying SDK emits a dict of tool arguments; clients can use it to render the call without parsing the narration text.
+- `cinna.tool_id` is included when the underlying SDK emits a non-empty identifier; clients can use it to pair a tool-call part with its later tool-result event and cross-reference the persisted streaming-event trace.
+- Tool event text contains the raw tool-call narration; no prefix is added. Clients rely on `cinna.content_kind` and the additional tool metadata keys to identify and interpret tool parts.
 
 #### History Replay (GetTask)
 

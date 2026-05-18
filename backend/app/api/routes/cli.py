@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, status
 from fastapi.responses import PlainTextResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from app.api.deps import CLIContext, CLIContextDep, CLIContextWSDep, CurrentUser, SessionDep
@@ -293,6 +293,9 @@ async def get_sync_runtime(
 
 class ExecBody(BaseModel):
     command: str
+    # Wall-clock seconds the remote command may run before the env-core
+    # kills it. None → CLIService applies its default.
+    timeout: int | None = Field(default=None, ge=1, le=86400)
 
 
 @router.post("/agents/{agent_id}/exec")
@@ -321,6 +324,7 @@ async def exec_command(
         CLIService.stream_exec(
             environment=cli_ctx.environment,
             command=body.command,
+            timeout=body.timeout,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

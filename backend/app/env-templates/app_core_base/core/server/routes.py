@@ -9,7 +9,7 @@ from email.utils import formatdate
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket, status, File, UploadFile, Form
 from fastapi.responses import StreamingResponse, Response, FileResponse
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, AsyncIterator
 from pathlib import Path
 
 try:
@@ -1575,9 +1575,257 @@ async def exec_command(request: _ExecRequest) -> _ExecResponse:
 
 # ── /run command streaming ────────────────────────────────────────────────────
 
-# Module-level dict: exec_id → asyncio.subprocess.Process
-# Used by /command/interrupt/{exec_id} for SIGTERM/SIGKILL routing.
-_active_execs: dict[str, asyncio.subprocess.Process] = {}
+
+class _StreamingExec:
+    """Single shell-command execution driven by ``/command/stream``.
+
+    Owns the subprocess, the stdout/stderr drain loop, and the deadline /
+    truncation / interrupt bookkeeping. ``run()`` yields event dicts in the
+    order the route emits them; the route wraps them in SSE frames.
+
+    ``/command/interrupt/{exec_id}`` calls ``await kill()`` on the registered
+    instance — that's the only externally-triggered termination path. Internal
+    terminations (deadline expiry, output truncation) are decided inside
+    ``run()`` and don't go through ``kill()``.
+    """
+
+    _SSE_HEARTBEAT_SECONDS = 1.0
+    _POST_EOF_REAP_SECONDS = 5.0
+    _TRUNCATION_KILL_GRACE_SECONDS = 1.0
+
+    def __init__(
+        self,
+        exec_id: str,
+        command: str,
+        timeout: int,
+        max_output_bytes: int,
+    ) -> None:
+        self.exec_id = exec_id
+        self.command = command
+        self.timeout = timeout
+        self.max_output_bytes = max_output_bytes
+        self._proc: asyncio.subprocess.Process | None = None
+
+    async def kill(self) -> None:
+        """SIGTERM, then SIGKILL after 2s if still alive. Idempotent; safe
+        to call before the subprocess starts or after it has exited."""
+        proc = self._proc
+        if proc is None:
+            return
+        try:
+            proc.terminate()
+            await asyncio.sleep(2)
+            if proc.returncode is None:
+                proc.kill()
+        except ProcessLookupError:
+            pass  # already exited
+        except Exception as exc:
+            logger.warning(f"_StreamingExec.kill error for exec_id={self.exec_id}: {exc}")
+
+    async def run(self) -> AsyncIterator[dict]:
+        """Drive the command lifecycle. Yields one ``tool`` event, zero or more
+        ``tool_result_delta`` events, then exactly one terminal event
+        (``done``, ``interrupted``, or ``error``)."""
+        import time as _time
+
+        yield self._tool_event()
+
+        start_time = _time.monotonic()
+        exit_code = -1
+        timed_out = False
+        output_truncated = False
+
+        try:
+            self._proc = await asyncio.create_subprocess_shell(
+                self.command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            async for event, status in self._drain_output(start_time):
+                if event is not None:
+                    yield event
+                if status == "timed_out":
+                    timed_out = True
+                    break
+                if status == "truncated":
+                    output_truncated = True
+                    break
+
+            if timed_out:
+                await self._kill_after_timeout()
+            elif output_truncated:
+                await self._kill_after_truncation()
+                yield {"type": "interrupted", "exit_code": -1}
+                return
+            else:
+                await self._reap_after_eof()
+
+            assert self._proc is not None
+            exit_code = self._proc.returncode if self._proc.returncode is not None else -1
+
+        except Exception as exc:
+            logger.error(f"command stream subprocess error: {exc}", exc_info=True)
+            yield {
+                "type": "error",
+                "content": f"Failed to start command: {exc}",
+                "error_type": "SubprocessError",
+            }
+            return
+
+        finally:
+            # Truncation path emitted its own ``interrupted`` terminal event
+            # above and returned; no ``done`` should follow in that case.
+            if not output_truncated:
+                done_event: dict = {
+                    "type": "done",
+                    "exit_code": exit_code,
+                    "duration_seconds": round(_time.monotonic() - start_time, 2),
+                }
+                if timed_out:
+                    done_event["timed_out"] = True
+                yield done_event
+
+    # ── internals ────────────────────────────────────────────────────────────
+
+    def _tool_event(self) -> dict:
+        return {
+            "type": "tool",
+            "tool_name": "bash",
+            "content": self.exec_id,
+            "metadata": {
+                "tool_id": self.exec_id,
+                "tool_input": {"command": self.command},
+                "synthesized": True,
+            },
+        }
+
+    async def _drain_output(
+        self, start_time: float
+    ) -> AsyncIterator[tuple[dict | None, str | None]]:
+        """Yield ``(event, status)`` pairs from the merged stdout/stderr stream.
+
+        ``event`` is ``None`` when the pair carries only a status signal.
+        ``status`` is one of: ``None`` (normal chunk, keep going),
+        ``"truncated"`` (caller should stop the loop), or ``"timed_out"``
+        (deadline expired). On clean EOF on both streams the generator
+        returns without yielding a terminal pair — the caller proceeds to
+        the reap step.
+        """
+        import time as _time
+
+        assert self._proc is not None
+        output_queue: asyncio.Queue = asyncio.Queue()
+
+        async def _read_stream(stream, stream_name: str) -> None:
+            while True:
+                try:
+                    chunk = await stream.read(4096)
+                except Exception:
+                    break
+                if not chunk:
+                    break
+                await output_queue.put((stream_name, chunk.decode("utf-8", errors="replace")))
+            await output_queue.put((stream_name, None))  # EOF sentinel
+
+        read_stdout = asyncio.create_task(_read_stream(self._proc.stdout, "stdout"))
+        read_stderr = asyncio.create_task(_read_stream(self._proc.stderr, "stderr"))
+
+        deadline = _time.monotonic() + self.timeout
+        seen_eof = 0
+        total_bytes = 0
+
+        try:
+            while seen_eof < 2:
+                remaining = deadline - _time.monotonic()
+                if remaining <= 0:
+                    yield None, "timed_out"
+                    return
+                try:
+                    item = await asyncio.wait_for(
+                        output_queue.get(),
+                        timeout=min(remaining, self._SSE_HEARTBEAT_SECONDS),
+                    )
+                except asyncio.TimeoutError:
+                    # 1s cap is a deadline-check heartbeat, not EOF — keep
+                    # polling until the real timeout fires or streams close.
+                    if _time.monotonic() >= deadline:
+                        yield None, "timed_out"
+                        return
+                    continue
+
+                stream_name, data = item
+                if data is None:
+                    seen_eof += 1
+                    continue
+
+                total_bytes += len(data.encode("utf-8"))
+                if total_bytes > self.max_output_bytes:
+                    yield {
+                        "type": "tool_result_delta",
+                        "content": f"\n[...output truncated at {self.max_output_bytes // 1024} KB]",
+                        "metadata": {"tool_id": self.exec_id, "stream": "stderr"},
+                    }, "truncated"
+                    return
+
+                yield {
+                    "type": "tool_result_delta",
+                    "content": data,
+                    "metadata": {"tool_id": self.exec_id, "stream": stream_name},
+                }, None
+        finally:
+            for task in (read_stdout, read_stderr):
+                if not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+    async def _kill_after_timeout(self) -> None:
+        assert self._proc is not None
+        try:
+            self._proc.kill()
+            await self._proc.communicate()
+        except Exception:
+            pass
+
+    async def _kill_after_truncation(self) -> None:
+        assert self._proc is not None
+        try:
+            self._proc.terminate()
+            await asyncio.sleep(self._TRUNCATION_KILL_GRACE_SECONDS)
+            if self._proc.returncode is None:
+                self._proc.kill()
+            await self._proc.wait()
+        except Exception:
+            pass
+
+    async def _reap_after_eof(self) -> None:
+        """Wait briefly for the subprocess to exit after both streams hit EOF.
+        If it survives past ``_POST_EOF_REAP_SECONDS``, kill it to prevent the
+        orphan-subprocess pattern from the original bug report."""
+        assert self._proc is not None
+        if self._proc.returncode is not None:
+            return
+        try:
+            await asyncio.wait_for(self._proc.wait(), timeout=self._POST_EOF_REAP_SECONDS)
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"command stream: subprocess still running "
+                f"{self._POST_EOF_REAP_SECONDS}s after EOF, killing "
+                f"(exec_id={self.exec_id})"
+            )
+            try:
+                self._proc.kill()
+                await self._proc.wait()
+            except Exception:
+                pass
+
+
+# Registry of in-flight commands, keyed by exec_id. /command/interrupt looks
+# up the streamer here and calls .kill() on it.
+_active_execs: dict[str, _StreamingExec] = {}
 
 
 @router.post("/command/stream", dependencies=[Depends(verify_auth_token)])
@@ -1593,166 +1841,22 @@ async def stream_command(request: CommandStreamRequest):
 
     Auth: Authorization: Bearer {AGENT_AUTH_TOKEN} (same as /chat/stream).
     """
-    exec_id = request.exec_id
-    command = request.command
-    timeout = request.timeout
-    max_output_bytes = request.max_output_bytes
+    streamer = _StreamingExec(
+        exec_id=request.exec_id,
+        command=request.command,
+        timeout=request.timeout,
+        max_output_bytes=request.max_output_bytes,
+    )
+    _active_execs[request.exec_id] = streamer
 
-    async def generate():
-        import time as _time
-
-        # Emit tool invocation event immediately
-        tool_event = {
-            "type": "tool",
-            "tool_name": "bash",
-            "content": exec_id,
-            "metadata": {
-                "tool_id": exec_id,
-                "tool_input": {"command": command},
-                "synthesized": True,
-            },
-        }
-        yield f"data: {json.dumps(tool_event)}\n\n"
-
-        proc = None
-        start_time = _time.monotonic()
-        exit_code = -1
-        timed_out = False
-        interrupted = False
-        total_bytes = 0
-
+    async def to_sse():
         try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _active_execs[exec_id] = proc
-
-            # Read stdout and stderr concurrently via a shared asyncio.Queue
-            output_queue: asyncio.Queue = asyncio.Queue()
-
-            async def _read_stream(stream, stream_name: str):
-                while True:
-                    try:
-                        chunk = await stream.read(4096)
-                    except Exception:
-                        break
-                    if not chunk:
-                        break
-                    await output_queue.put((stream_name, chunk.decode("utf-8", errors="replace")))
-                await output_queue.put((stream_name, None))  # EOF sentinel
-
-            read_stdout = asyncio.create_task(_read_stream(proc.stdout, "stdout"))
-            read_stderr = asyncio.create_task(_read_stream(proc.stderr, "stderr"))
-
-            # Drain the output queue, collecting SSE lines, with overall timeout
-            sse_lines_to_yield: list[str] = []
-            deadline = _time.monotonic() + timeout
-            seen_eof = 0
-
-            while seen_eof < 2 and not interrupted:
-                remaining = deadline - _time.monotonic()
-                if remaining <= 0:
-                    timed_out = True
-                    break
-                try:
-                    item = await asyncio.wait_for(
-                        output_queue.get(),
-                        timeout=min(remaining, 1.0),
-                    )
-                except asyncio.TimeoutError:
-                    if _time.monotonic() >= deadline:
-                        timed_out = True
-                    break
-                stream_name, data = item
-                if data is None:
-                    seen_eof += 1
-                    continue
-                total_bytes += len(data.encode("utf-8"))
-                if total_bytes > max_output_bytes:
-                    trunc_event = {
-                        "type": "tool_result_delta",
-                        "content": f"\n[...output truncated at {max_output_bytes // 1024} KB]",
-                        "metadata": {"tool_id": exec_id, "stream": "stderr"},
-                    }
-                    sse_lines_to_yield.append(f"data: {json.dumps(trunc_event)}\n\n")
-                    interrupted = True
-                    break
-                chunk_event = {
-                    "type": "tool_result_delta",
-                    "content": data,
-                    "metadata": {"tool_id": exec_id, "stream": stream_name},
-                }
-                sse_lines_to_yield.append(f"data: {json.dumps(chunk_event)}\n\n")
-
-            # Yield all collected SSE lines
-            for sse_line in sse_lines_to_yield:
-                yield sse_line
-
-            # Cancel reader tasks if still running
-            for task in (read_stdout, read_stderr):
-                if not task.done():
-                    task.cancel()
-                    try:
-                        await task
-                    except (asyncio.CancelledError, Exception):
-                        pass
-
-            if timed_out:
-                try:
-                    proc.kill()
-                    await proc.communicate()
-                except Exception:
-                    pass
-
-            if interrupted:
-                # Process was truncated — send interrupt
-                try:
-                    proc.terminate()
-                    await asyncio.sleep(1)
-                    if proc.returncode is None:
-                        proc.kill()
-                    await proc.wait()
-                except Exception:
-                    pass
-                interrupted_event = {"type": "interrupted", "exit_code": -1}
-                yield f"data: {json.dumps(interrupted_event)}\n\n"
-                return
-
-            # Wait for process to exit (may already be done)
-            if proc.returncode is None:
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=5.0)
-                except asyncio.TimeoutError:
-                    pass
-
-            exit_code = proc.returncode if proc.returncode is not None else -1
-
-        except Exception as exc:
-            logger.error(f"command stream subprocess error: {exc}", exc_info=True)
-            error_event = {
-                "type": "error",
-                "content": f"Failed to start command: {exc}",
-                "error_type": "SubprocessError",
-            }
-            yield f"data: {json.dumps(error_event)}\n\n"
-            return
-
+            async for event in streamer.run():
+                yield f"data: {json.dumps(event)}\n\n"
         finally:
-            _active_execs.pop(exec_id, None)
-            duration_seconds = _time.monotonic() - start_time
-            if not interrupted:
-                done_event: dict = {
-                    "type": "done",
-                    "exit_code": exit_code,
-                    "duration_seconds": round(duration_seconds, 2),
-                }
-                if timed_out:
-                    done_event["timed_out"] = True
-                yield f"data: {json.dumps(done_event)}\n\n"
+            _active_execs.pop(request.exec_id, None)
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(to_sse(), media_type="text/event-stream")
 
 
 @router.websocket("/sync/exec")
@@ -1946,17 +2050,9 @@ async def interrupt_command(exec_id: str):
 
     Auth: Authorization: Bearer {AGENT_AUTH_TOKEN}.
     """
-    proc = _active_execs.get(exec_id)
-    if proc:
-        try:
-            proc.terminate()
-            await asyncio.sleep(2)
-            if proc.returncode is None:
-                proc.kill()
-        except ProcessLookupError:
-            pass  # Process already exited
-        except Exception as exc:
-            logger.warning(f"interrupt_command error for exec_id={exec_id}: {exc}")
-    else:
+    streamer = _active_execs.get(exec_id)
+    if streamer is None:
         logger.info(f"interrupt_command: exec_id={exec_id} not found (may have already finished)")
+        return {"status": "ok"}
+    await streamer.kill()
     return {"status": "ok"}

@@ -104,16 +104,19 @@ commands:
 
 ### Refresh Triggers
 
-The backend refreshes the CLI commands cache at four points:
+The backend refreshes the CLI commands cache at five points:
 
 1. **Environment activation** — immediately after the environment comes online (`ENVIRONMENT_ACTIVATED` event).
 2. **Post-action** — after every session stream (`STREAM_COMPLETED`, `STREAM_ERROR`, `STREAM_INTERRUPTED`) including `/run:*` command streams, and after every scheduled execution (`CRON_COMPLETED_OK`, `CRON_TRIGGER_SESSION`, `CRON_ERROR`).
 3. **After rebuild** — after a successful `/rebuild-env` operation completes.
-4. **Explicit `/run` or `/run-list`** — forces a cache refresh when the user invokes the list mode.
+4. **File-watcher signal** — the env-core watcher polls `docs/CLI_COMMANDS.yaml` (along with prompt files and `STATUS.md`) every ~5 s and fires `WORKSPACE_FILES_CHANGED` with the changed paths whenever the file stabilises after a write. The CLI commands handler treats the file's presence in `changed_files` as direct evidence the cache is stale and **bypasses the rate limit** for that fetch — same auto-sync semantics the prompt files already use.
+5. **Explicit `/run` or `/run-list`** — falls back to the cached list when invoked; the watcher-driven refresh above is the primary source of truth.
 
 ### Rate Limiting
 
-A 30-second per-environment rate limit prevents redundant fetches when multiple events fire in quick succession (e.g., a CRON event followed immediately by a STREAM_COMPLETED). The rate limit is shared with `AgentStatusService`, but they maintain independent rate-limit buckets.
+A 30-second per-environment rate limit prevents redundant fetches when multiple speculative events fire in quick succession (e.g., a CRON event followed immediately by a STREAM_COMPLETED). The rate limit is shared with `AgentStatusService`, but they maintain independent rate-limit buckets.
+
+`WORKSPACE_FILES_CHANGED` events that explicitly name `docs/CLI_COMMANDS.yaml` in `meta.changed_files` bypass this rate limit — that signal is debounced at the watcher level (≥5 s) and means the file demonstrably changed, so dropping the fetch would leave the cache stale.
 
 ### Cache Storage
 

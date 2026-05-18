@@ -44,9 +44,10 @@ The file lives in `app-data/storage/`, **not** in the bundle-owned `docs/` folde
 
 ### 6. Post-action pull after every backend-triggered agent-env action
 1. The agent-env has no outbound network access, so the backend is the only actor that knows when an in-container action just finished.
-2. Every such finish emits an event — session streams emit `STREAM_COMPLETED` / `STREAM_ERROR`; the CRON scheduler emits `CRON_COMPLETED_OK` (OK-pattern script returned "OK"), `CRON_TRIGGER_SESSION` (schedule started a session), or `CRON_ERROR` (schedule failed).
-3. `AgentStatusService.handle_post_action_event` is registered against all five events. It reads `environment_id` from the event meta and calls `refresh_after_action(env)`.
+2. Every such finish emits an event — session streams emit `STREAM_COMPLETED` / `STREAM_ERROR`; the CRON scheduler emits `CRON_COMPLETED_OK` (OK-pattern script returned "OK"), `CRON_TRIGGER_SESSION` (schedule started a session), or `CRON_ERROR` (schedule failed). The env-core file watcher also emits `WORKSPACE_FILES_CHANGED` whenever `app-data/storage/STATUS.md` stabilises after a write.
+3. `AgentStatusService.handle_post_action_event` is registered against all six events. It reads `environment_id` from the event meta and calls `refresh_after_action(env)`.
 4. `refresh_after_action` honors the 30 s per-env rate-limit so bursts collapse to a single fetch. Errors are swallowed — status tracking is best-effort.
+5. When the event names `app-data/storage/STATUS.md` in `meta.changed_files`, the handler passes `force=True` to bypass the rate limit. We have direct evidence the file changed (the watcher debounces at ≥5 s), so the de-dup heuristic that protects against speculative bursts no longer applies — mirroring the auto-sync semantics the prompt files use.
 
 ## Business Rules
 
@@ -106,7 +107,7 @@ Agent script ──writes──▶ /app/workspace/app-data/storage/STATUS.md
 - **[A2A Integration](../../application/a2a_integration/a2a_protocol/a2a_protocol.md)** — exposes the `status` skill and `agent/status` JSON-RPC method on the A2A agent card.
 - **Activity feed** — severity transitions create an entry visible in the agent's activity timeline.
 - **Event bus (outbound)** — emits `agent_status_updated` events consumed by the WebSocket bridge and frontend React Query invalidation.
-- **Event bus (inbound)** — subscribes `handle_post_action_event` to `STREAM_COMPLETED`, `STREAM_ERROR`, `CRON_COMPLETED_OK`, `CRON_TRIGGER_SESSION`, `CRON_ERROR`. The CRON events are emitted by `agent_schedule_scheduler._emit_cron_event` at every schedule-execution exit point.
+- **Event bus (inbound)** — subscribes `handle_post_action_event` to `STREAM_COMPLETED`, `STREAM_ERROR`, `CRON_COMPLETED_OK`, `CRON_TRIGGER_SESSION`, `CRON_ERROR`, and `WORKSPACE_FILES_CHANGED`. The CRON events are emitted by `agent_schedule_scheduler._emit_cron_event` at every schedule-execution exit point. `WORKSPACE_FILES_CHANGED` carries `meta.changed_files`; when the list contains `app-data/storage/STATUS.md` the handler bypasses the 30 s rate limit.
 - **App-core env template** — ships `workspace/scripts/update_status.py` (helper) which writes to `app-data/storage/STATUS.md`. No placeholder file is shipped with the bundle: the file is per-install state and the platform creates the `app-data/storage/` directory on install. No in-container watcher — the backend is the sole reader.
 - **[Agent App Data](../agent_app_data/agent_app_data.md)** — `app-data/storage/` is created by `AppDataService.get_or_create_volume` at install time and bind-mounted into the container. It survives uninstall/reinstall and is never overwritten by `apply_update`.
 - **COMPLEX_AGENT_DESIGN.md** — documents the convention for agent authors and cross-links from the OK-pattern scheduled-script section.
