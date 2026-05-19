@@ -252,20 +252,39 @@ class Settings(BaseSettings):
     UPLOAD_MAX_USER_STORAGE_GB: int = 10
     UPLOAD_RATE_LIMIT_PER_MINUTE: int = 10
 
-    # Allowed mime types (comma-separated)
+    # Allowed mime types (comma-separated). Entries may be exact mime types
+    # (e.g. ``application/pdf``) or wildcard patterns ending in ``/*``
+    # (e.g. ``text/*`` to allow any text subtype).
     UPLOAD_ALLOWED_MIME_TYPES: str = (
-        "application/pdf,text/plain,text/csv,"
-        "application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
+        # All text formats (plain, markdown, csv, html, xml, source code, etc.)
+        "text/*,"
+        # PDFs and images
+        "application/pdf,"
         "image/png,image/jpeg,image/gif,image/webp,"
+        # Archives
         "application/zip,application/x-tar,application/gzip,"
-        "application/json,text/javascript,text/html,text/x-python,"
-        "text/xml,application/xml"
+        # Structured data
+        "application/json,application/xml,"
+        # Microsoft Office (legacy + OOXML)
+        "application/msword,"
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document,"
+        "application/vnd.ms-excel,"
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
+        "application/vnd.ms-powerpoint,"
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation,"
+        # OpenDocument
+        "application/vnd.oasis.opendocument.text,"
+        "application/vnd.oasis.opendocument.spreadsheet,"
+        "application/vnd.oasis.opendocument.presentation,"
+        # Rich Text
+        "application/rtf"
     )
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def allowed_mime_types(self) -> set[str]:
-        """Parse comma-separated mime types into set"""
+        """Parse comma-separated mime types into set. Entries may be exact
+        types or wildcard patterns ending in ``/*``."""
         return set(mime.strip() for mime in self.UPLOAD_ALLOWED_MIME_TYPES.split(","))
 
     @computed_field  # type: ignore[prop-decorator]

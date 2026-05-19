@@ -153,7 +153,7 @@ This is used by the task file auto-upload feature: when an agent calls `mcp__age
 - `UPLOAD_BASE_PATH` - Storage directory (default: `/app/data/uploads`)
 - `UPLOAD_MAX_FILE_SIZE_MB` - Per-file limit (default: 100MB)
 - `UPLOAD_MAX_USER_STORAGE_GB` - User quota (default: 10GB)
-- `UPLOAD_ALLOWED_MIME_TYPES` - MIME type whitelist (PDF, CSV, images, code, etc.)
+- `UPLOAD_ALLOWED_MIME_TYPES` - MIME type whitelist; entries may be exact types (`application/pdf`) or wildcard patterns ending in `/*` (`text/*`). Defaults cover all text formats, PDFs, images, archives, JSON/XML, MS Office (legacy + OOXML), OpenDocument, and RTF
 - Computed properties: `allowed_mime_types`, `upload_max_file_size_bytes`, `upload_max_user_storage_bytes`
 
 ## Security

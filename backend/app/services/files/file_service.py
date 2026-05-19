@@ -13,6 +13,13 @@ from app.models.environments.environment import AgentEnvironment
 from app.services.files.file_storage_service import FileStorageService
 
 
+def _is_mime_type_allowed(mime_type: str, allowed: set[str]) -> bool:
+    if mime_type in allowed:
+        return True
+    type_prefix = mime_type.split("/", 1)[0] + "/*"
+    return type_prefix in allowed
+
+
 class FileService:
     """Business logic for file management"""
 
@@ -42,9 +49,10 @@ class FileService:
                 detail=f"File too large. Max size: {settings.UPLOAD_MAX_FILE_SIZE_MB}MB",
             )
 
-        # Validate mime type
+        # Validate mime type. Allowed entries may be exact (``text/plain``)
+        # or wildcard patterns ending in ``/*`` (``text/*``).
         mime_type = file.content_type or "application/octet-stream"
-        if mime_type not in settings.allowed_mime_types:
+        if not _is_mime_type_allowed(mime_type, settings.allowed_mime_types):
             raise HTTPException(
                 status_code=400, detail=f"File type not allowed: {mime_type}"
             )
