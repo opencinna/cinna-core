@@ -649,6 +649,15 @@ def delete_schedule(
     return Message(message="Schedule deleted successfully")
 
 
+_RUN_NOW_MESSAGES = {
+    "executed": "Schedule triggered successfully",
+    "env_starting": (
+        "Environment is starting; the schedule will run automatically "
+        "once it's ready."
+    ),
+}
+
+
 @router.post("/{id}/schedules/{schedule_id}/run")
 async def run_schedule_now(
     *,
@@ -657,17 +666,21 @@ async def run_schedule_now(
     id: uuid.UUID,
     schedule_id: uuid.UUID,
 ) -> Message:
-    """Manually trigger a schedule to execute immediately, identical to cron execution."""
+    """Manually trigger a schedule to execute immediately, identical to cron execution.
+
+    If the agent's environment is not running, this returns immediately with a
+    message indicating activation has been kicked off in the background; the
+    schedule will execute automatically once the environment is ready.
+    """
     try:
         AgentSchedulerService.verify_agent_access(
             session, id, current_user.id, is_superuser=current_user.is_superuser
         )
         AgentSchedulerService.get_schedule_for_agent(session, id, schedule_id)
-        await AgentSchedulerService.execute_now(session, id, schedule_id)
+        result = await AgentSchedulerService.execute_now(session, id, schedule_id)
+        return Message(message=_RUN_NOW_MESSAGES[result.action])
     except ScheduleError as e:
         _handle_schedule_error(e)
-
-    return Message(message="Schedule triggered successfully")
 
 
 @router.get("/{id}/schedules/{schedule_id}/logs", response_model=AgentScheduleLogsPublic)

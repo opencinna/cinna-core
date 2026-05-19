@@ -61,20 +61,26 @@ async def ensure_environment_running(
     stopped → start. Polls every 5 seconds up to 120 seconds for a running
     status.
 
+    The actual activation is performed via the
+    ``EnvironmentLifecycleManager`` with a fresh DB session (the passed-in
+    ``environment`` may be bound to a request-scoped session that won't
+    survive long activations).
+
     Args:
         environment: AgentEnvironment to activate.
         get_fresh_db_session: Callable returning a DB session context manager
-            (used for polling so we pick up status changes made by other
-            processes).
+            (used for activation and for polling so we pick up status changes
+            made by other processes).
 
     Returns:
         Running AgentEnvironment (refreshed from DB).
 
     Raises:
         RuntimeError: If the environment is in an error or unexpected state,
-            or if activation times out after 120 seconds.
+            the agent cannot be fetched, or activation times out after
+            120 seconds.
     """
-    from app.models import AgentEnvironment
+    from app.models import Agent, AgentEnvironment
     from app.services.environments.environment_lifecycle import (
         EnvironmentLifecycleManager,
     )
@@ -94,10 +100,41 @@ async def ensure_environment_running(
 
     if status == "suspended":
         logger.info(f"Activating suspended environment {env_id}")
-        await lifecycle.activate_suspended_environment(str(env_id))
+        with get_fresh_db_session() as fresh_session:
+            fresh_env = fresh_session.get(AgentEnvironment, env_id)
+            if not fresh_env:
+                raise RuntimeError(
+                    f"Environment {env_id} disappeared before activation"
+                )
+            fresh_agent = fresh_session.get(Agent, fresh_env.agent_id)
+            if not fresh_agent:
+                raise RuntimeError(
+                    f"Agent {fresh_env.agent_id} for environment {env_id} not found"
+                )
+            await lifecycle.activate_suspended_environment(
+                db_session=fresh_session,
+                environment=fresh_env,
+                agent=fresh_agent,
+                emit_events=True,
+            )
     elif status == "stopped":
         logger.info(f"Starting stopped environment {env_id}")
-        await lifecycle.start_environment(str(env_id))
+        with get_fresh_db_session() as fresh_session:
+            fresh_env = fresh_session.get(AgentEnvironment, env_id)
+            if not fresh_env:
+                raise RuntimeError(
+                    f"Environment {env_id} disappeared before activation"
+                )
+            fresh_agent = fresh_session.get(Agent, fresh_env.agent_id)
+            if not fresh_agent:
+                raise RuntimeError(
+                    f"Agent {fresh_env.agent_id} for environment {env_id} not found"
+                )
+            await lifecycle.start_environment(
+                db_session=fresh_session,
+                environment=fresh_env,
+                agent=fresh_agent,
+            )
     elif status in ("activating", "starting"):
         # Another process has already triggered activation — just poll
         logger.info(

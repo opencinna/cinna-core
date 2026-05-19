@@ -122,3 +122,46 @@ def delete_schedule(
     r = client.delete(_schedule_url(agent_id, schedule_id), headers=headers)
     assert r.status_code == 200, f"Delete schedule failed: {r.text}"
     return r.json()
+
+
+def run_schedule_now(
+    client: TestClient,
+    headers: dict[str, str],
+    agent_id: str,
+    schedule_id: str,
+) -> dict:
+    """Trigger a schedule to execute immediately (POST …/run).
+
+    Asserts 200 on success.  Use inline client.post() calls to test error
+    responses (400 no-env, 404 non-existent, permission errors, etc.).
+
+    Returns the parsed response body (a ``Message`` with ``message`` field).
+    """
+    r = client.post(
+        f"{_schedule_url(agent_id, schedule_id)}/run",
+        headers=headers,
+    )
+    assert r.status_code == 200, f"run_schedule_now failed: {r.text}"
+    return r.json()
+
+
+def get_schedule_logs(
+    client: TestClient,
+    headers: dict[str, str],
+    agent_id: str,
+    schedule_id: str,
+) -> list[dict]:
+    """Fetch execution logs for a schedule and return the ``data`` list.
+
+    Asserts 200 and that count matches len(data).
+    Use inline client.get() calls to test error responses.
+    """
+    r = client.get(
+        f"{_schedule_url(agent_id, schedule_id)}/logs",
+        headers=headers,
+    )
+    assert r.status_code == 200, f"get_schedule_logs failed: {r.text}"
+    body = r.json()
+    assert "data" in body and "count" in body
+    assert body["count"] == len(body["data"])
+    return body["data"]

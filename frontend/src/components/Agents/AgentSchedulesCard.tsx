@@ -452,9 +452,18 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps) {
   const runNowMutation = useMutation({
     mutationFn: (scheduleId: string) =>
       AgentsService.runScheduleNow({ id: agentId, scheduleId }),
-    onSuccess: () => {
-      showSuccessToast("Schedule triggered successfully")
+    onSuccess: (response) => {
+      // The backend returns a context-aware message — synchronous executions
+      // confirm success, while suspended/stopped envs return an
+      // "environment is starting" message so the user knows the run was
+      // deferred rather than failed.
+      showSuccessToast(response.message || "Schedule triggered successfully")
       queryClient.invalidateQueries({ queryKey })
+      // Also refresh the agent so the env-status indicator on the agent
+      // page picks up the new `activating` state when a deferred run kicks
+      // off — otherwise the user sees "starting…" toast but no visible
+      // env state change.
+      queryClient.invalidateQueries({ queryKey: ["agent", agentId] })
     },
     onError: (error: unknown) => {
       const msg =

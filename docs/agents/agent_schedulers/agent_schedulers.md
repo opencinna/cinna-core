@@ -60,6 +60,14 @@ Allows users to configure multiple automatic execution schedules per agent using
 - **Toggle**: Click power button to enable/disable without deleting the schedule
 - **Delete**: Click trash button > confirmation dialog > schedule permanently removed
 
+### Manual Execution (Run Now)
+
+1. User clicks the "Run now" (Play) button on a schedule row
+2. The backend resolves the agent's active environment status and responds immediately:
+   - **Environment running** → schedule executes synchronously; success toast shows **"Schedule triggered successfully"**
+   - **Environment suspended / stopped / activating / starting** → activation is kicked off in the background; success toast shows **"Environment is starting; the schedule will run automatically once it's ready."** The schedule executes as soon as the environment comes up
+   - **No active environment or environment in error state** → toast shows a 400 error message; no execution is attempted
+
 ### Schedule Execution (Background)
 
 1. Background scheduler polls every minute for due schedules
@@ -115,6 +123,8 @@ Both schedule types auto-activate the agent environment if it is not running:
 - `activating`/`starting` → waits until running (another process may have triggered it)
 - `error` → logs error, skips execution
 - Activation timeout: 120 seconds
+
+For **manual execution** (Run Now), the behavior differs from the cron path: instead of blocking the HTTP request for up to 120 s, the route returns immediately with a deferred-execution notification and the activation runs in a background task. The user sees the "Environment is starting" toast right away rather than waiting for the environment to come up.
 
 ### Command Execution
 

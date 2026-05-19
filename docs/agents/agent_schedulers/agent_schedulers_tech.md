@@ -97,6 +97,7 @@ All endpoints in `backend/app/api/routes/agents.py`, nested under `/api/v1/agent
 | GET | `/{id}/schedules` | List all schedules | — | `AgentSchedulesPublic` |
 | PUT | `/{id}/schedules/{schedule_id}` | Update schedule (partial) | `UpdateScheduleRequest` | `AgentSchedulePublic` |
 | DELETE | `/{id}/schedules/{schedule_id}` | Delete schedule | — | `Message` |
+| POST | `/{id}/schedules/{schedule_id}/run` | Manually trigger a schedule immediately | — | `Message` |
 | GET | `/{id}/schedules/{schedule_id}/logs` | List execution logs (last 50) | — | `AgentScheduleLogsPublic` |
 
 ### Request/Response Models
@@ -114,6 +115,11 @@ Defined in `backend/app/models/agents/agent_schedule_log.py`:
 
 - **AgentScheduleLogPublic** — All log fields for API response
 - **AgentScheduleLogsPublic** — `data: list[AgentScheduleLogPublic]`, `count: int`
+
+**Run Now response messages** (returned as `Message.message` and surfaced in the frontend success toast):
+- `"Schedule triggered successfully"` — env was running; execution completed synchronously
+- `"Environment is starting; the schedule will run automatically once it's ready."` — env was waking up; execution deferred to background
+- 400 error — no active environment, or env is in `error` state
 
 ### Route Validation
 
@@ -142,8 +148,9 @@ Create endpoint validates schedule type + command combination:
 | `get_schedule_for_agent(session, schedule_id, agent_id)` | Validates schedule belongs to agent |
 | `create_log(session, schedule_id, agent_id, ...)` | Creates immutable AgentScheduleLog entry |
 | `get_schedule_logs(session, schedule_id, limit=50)` | Returns recent logs ordered by executed_at DESC |
+| `execute_now(session, agent_id, schedule_id)` | Manually triggers a schedule. Returns `ManualRunResult(action)` — the route layer maps `action` → toast message (user-facing copy lives in the route, not the service). `action="executed"` if the environment was already running (synchronous execution). `action="env_starting"` if the environment was suspended/stopped/activating/starting — in that case a background task (`create_task_with_error_logging`) runs the module-level `_activate_env_and_run_schedule(agent_id, schedule_id)` helper which opens a fresh `DBSession(engine)`, calls `ensure_environment_running`, then dispatches through the shared `_dispatch_schedule(db, schedule, agent)` helper (used by both the sync fast path and the deferred path). Background-task failures (activation timeout / env entered error / disappeared / dispatch raised) are surfaced via an `AgentScheduleLog` row + `EventType.CRON_ERROR` event so the UI logs panel and activity feed see the same error shape a cron-poll failure would. Raises `ScheduleError(400)` if the agent has no active environment or the env is in error state; `ScheduleNotFoundError(404)` if the schedule is missing or belongs to another agent. |
 | `get_active_environment(session, agent_id)` | Thin shim; delegates to `environment_resolver.get_active_environment()` |
-| `ensure_environment_running(environment, agent, get_fresh_db_session)` | Thin shim; delegates to `environment_resolver.ensure_environment_running()`. Auto-activates suspended/stopped environments; raises on error/timeout. |
+| `ensure_environment_running(environment, get_fresh_db_session)` | Thin shim; delegates to `environment_resolver.ensure_environment_running()`. Auto-activates suspended/stopped environments; raises on error/timeout. Used by manual schedule runs (deferred path), cron-polled script triggers, and agent webhooks. |
 
 ### Background Scheduler — `backend/app/services/agents/agent_schedule_scheduler.py`
 
@@ -185,7 +192,7 @@ Create endpoint validates schedule type + command combination:
 - **Props:** `{ agentId: string }`
 - **Query:** `useQuery` with key `["agent-schedules", agentId]`, calls `AgentsService.listSchedules()`
 - **Logs query:** `useQuery` with key `["schedule-logs", scheduleId]`, calls `AgentsService.listScheduleLogs()`, fetched on-demand when logs modal opens
-- **Mutations:** create, update, toggle (`{enabled: !current}`), delete — all invalidate query key
+- **Mutations:** create, update, toggle (`{enabled: !current}`), delete — all invalidate query key; `runNowMutation` calls `POST /{id}/schedules/{schedule_id}/run` and surfaces `response.message` in the success toast (so the "starting" notification reaches the user directly)
 
 **Type Selector (create dialog step 1):**
 - Two cards: Static Prompt (FileText icon) and Script Trigger (Terminal icon, amber)

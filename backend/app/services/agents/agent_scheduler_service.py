@@ -8,7 +8,9 @@ This service:
 - Enforces agent ownership and schedule access control
 """
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 import uuid
 import pytz
 from croniter import croniter
@@ -17,6 +19,26 @@ from sqlmodel import Session, select
 from app.models import Agent, AgentSchedule
 
 logger = logging.getLogger(__name__)
+
+
+# ==================== Manual Execution Result ====================
+
+
+@dataclass
+class ManualRunResult:
+    """
+    Outcome of a manual ``execute_now`` invocation.
+
+    ``action="executed"`` — the schedule ran synchronously inside the request.
+    ``action="env_starting"`` — the agent's environment was not running and
+    activation has been kicked off in the background; the schedule will run
+    automatically once the environment becomes ready.
+
+    The route layer maps the action to a user-facing message — copy stays out
+    of the service.
+    """
+
+    action: Literal["executed", "env_starting"]
 
 
 # ==================== Domain Exceptions ====================
@@ -57,6 +79,212 @@ class InvalidCronError(ScheduleError):
 
     def __init__(self, detail: str):
         super().__init__(f"Invalid CRON string or timezone: {detail}", status_code=400)
+
+
+# ==================== Manual-Run Helpers (module-level) ====================
+#
+# Extracted from ``AgentSchedulerService.execute_now`` so the synchronous
+# fast path and the deferred (post-activation) background path share the
+# same schedule-type dispatch, and so the deferred path can be tested /
+# reasoned about without dragging the route-scoped DB session along.
+
+
+async def _dispatch_schedule(
+    db_session: Session,
+    schedule: AgentSchedule,
+    agent: Agent,
+) -> None:
+    """
+    Run a schedule once on a live environment — the post-precheck core
+    shared between the synchronous (fast) and deferred (background) paths
+    of ``execute_now``.
+
+    Branches on ``schedule.schedule_type`` and delegates to the same
+    private ``_execute_static_prompt`` / ``_execute_script_trigger``
+    helpers used by the background cron scheduler so behaviour stays in
+    lockstep.
+    """
+    from app.services.sessions.session_service import SessionService
+    from app.services.environments.agent_env_connector import agent_env_connector
+    from app.services.events.activity_service import ActivityService
+    from app.services.agents.agent_schedule_scheduler import (
+        _execute_static_prompt,
+        _execute_script_trigger,
+    )
+
+    if schedule.schedule_type == "script_trigger":
+        await _execute_script_trigger(
+            schedule=schedule,
+            agent=agent,
+            db_session=db_session,
+            session_service=SessionService,
+            activity_service=ActivityService,
+            env_connector=agent_env_connector,
+        )
+    else:
+        await _execute_static_prompt(
+            schedule=schedule,
+            agent=agent,
+            db_session=db_session,
+            session_service=SessionService,
+        )
+
+
+async def _activate_env_and_run_schedule(
+    agent_id: uuid.UUID,
+    schedule_id: uuid.UUID,
+) -> None:
+    """
+    Deferred manual-run worker.
+
+    Opens a fresh DB session (the route-scoped one is gone by now), waits
+    for the agent's environment to come up via
+    ``environment_resolver.ensure_environment_running``, then dispatches
+    the schedule via ``_dispatch_schedule``.
+
+    On either failure path (activation timeout / env entered error /
+    disappeared / dispatch raised), surfaces the failure via an
+    ``AgentScheduleLog`` row plus a ``CRON_ERROR`` event so the UI logs
+    panel and activity feed show the same failure shape a cron-poll
+    failure would — without this the user only sees the "Environment is
+    starting…" toast and has no signal that anything went wrong.
+    """
+    from app.core.db import engine
+    from sqlmodel import Session as DBSession
+    from app.services.agents.environment_resolver import (
+        ensure_environment_running,
+        get_active_environment,
+    )
+
+    with DBSession(engine) as fresh_db:
+        fresh_agent = fresh_db.get(Agent, agent_id)
+        fresh_schedule = fresh_db.get(AgentSchedule, schedule_id)
+        fresh_env = get_active_environment(fresh_db, agent_id)
+
+        if not fresh_agent or not fresh_schedule or not fresh_env:
+            logger.error(
+                "Deferred manual run aborted — missing agent/schedule/env "
+                f"(agent={agent_id}, schedule={schedule_id})"
+            )
+            # Best-effort surface: only if we still have agent + schedule.
+            if fresh_agent and fresh_schedule:
+                await _log_and_emit_manual_run_error(
+                    db_session=fresh_db,
+                    schedule=fresh_schedule,
+                    agent=fresh_agent,
+                    environment_id=None,
+                    error_message="Agent environment not found after activation request",
+                )
+            return
+
+        env_id = fresh_env.id
+
+        try:
+            await ensure_environment_running(
+                fresh_env,
+                get_fresh_db_session=lambda: DBSession(engine),
+            )
+        except RuntimeError as exc:
+            logger.error(
+                f"Deferred manual run for schedule {schedule_id}: "
+                f"environment activation failed: {exc}"
+            )
+            await _log_and_emit_manual_run_error(
+                db_session=fresh_db,
+                schedule=fresh_schedule,
+                agent=fresh_agent,
+                environment_id=env_id,
+                error_message=f"Environment activation failed: {exc}",
+            )
+            return
+
+        try:
+            await _dispatch_schedule(fresh_db, fresh_schedule, fresh_agent)
+        except Exception as exc:
+            logger.error(
+                f"Deferred manual run for schedule {schedule_id} "
+                f"failed after env activation: {exc}",
+                exc_info=True,
+            )
+            await _log_and_emit_manual_run_error(
+                db_session=fresh_db,
+                schedule=fresh_schedule,
+                agent=fresh_agent,
+                environment_id=env_id,
+                error_message=f"Schedule execution failed after env activation: {exc}",
+            )
+
+
+async def _log_and_emit_manual_run_error(
+    *,
+    db_session: Session,
+    schedule: AgentSchedule,
+    agent: Agent,
+    environment_id: "uuid.UUID | None",
+    error_message: str,
+) -> None:
+    """
+    Mirror the cron-error surface for a deferred manual-run failure.
+
+    Writes an ``AgentScheduleLog`` (status=error, schedule_type + populated
+    ``command_executed``/``prompt_used`` matching the type), then emits
+    ``EventType.CRON_ERROR`` via the existing helper. Both are best-effort:
+    any exception is swallowed and logged so a failure surfacing the error
+    doesn't itself raise.
+    """
+    from app.models.events.event import EventType
+    from app.services.agents.agent_schedule_scheduler import _emit_cron_event
+
+    schedule_type = schedule.schedule_type
+    prompt_used: str | None = None
+    command_executed: str | None = None
+    if schedule_type == "script_trigger":
+        command_executed = schedule.command
+    else:
+        # Match the cron static_prompt log shape — `_execute_static_prompt`
+        # records the resolved message (schedule.prompt or agent
+        # entrypoint), so we do the same here.
+        prompt_used = (
+            schedule.prompt
+            or agent.entrypoint_prompt
+            or "Start scheduled execution."
+        )
+
+    try:
+        AgentSchedulerService.create_log(
+            db_session,
+            schedule_id=schedule.id,
+            agent_id=agent.id,
+            schedule_type=schedule_type,
+            status="error",
+            prompt_used=prompt_used,
+            command_executed=command_executed,
+            error_message=error_message,
+        )
+    except Exception as log_exc:
+        logger.error(
+            f"Deferred manual run: failed to write error log for "
+            f"schedule {schedule.id}: {log_exc}",
+            exc_info=True,
+        )
+
+    # ``_emit_cron_event`` already swallows its own errors and never raises,
+    # but wrap defensively so any future change in its contract can't break
+    # the surrounding background task.
+    try:
+        await _emit_cron_event(
+            EventType.CRON_ERROR,
+            schedule=schedule,
+            agent=agent,
+            environment_id=environment_id,
+            error_message=error_message,
+        )
+    except Exception as ev_exc:
+        logger.error(
+            f"Deferred manual run: failed to emit CRON_ERROR event for "
+            f"schedule {schedule.id}: {ev_exc}",
+            exc_info=True,
+        )
 
 
 # ==================== Service ====================
@@ -565,52 +793,101 @@ class AgentSchedulerService:
     # ==================== Manual Execution ====================
 
     @staticmethod
-    async def execute_now(session: Session, agent_id: uuid.UUID, schedule_id: uuid.UUID) -> None:
+    async def execute_now(
+        session: Session,
+        agent_id: uuid.UUID,
+        schedule_id: uuid.UUID,
+    ) -> ManualRunResult:
         """
         Execute a schedule immediately, identical to cron execution.
+
+        Behavior depends on the agent's active environment status:
+
+        - ``running`` → execute synchronously and return ``executed``.
+        - ``suspended`` / ``stopped`` / ``activating`` / ``starting`` → kick off
+          the environment in the background and return ``env_starting``
+          immediately. The schedule will execute automatically once the
+          environment is ready.
+        - ``error`` → raise ``ScheduleError`` (400).
+        - missing active environment → raise ``ScheduleError`` (400).
 
         Args:
             session: Database session
             agent_id: Agent UUID
-            schedule_id: Schedule UUID (must belong to agent, already verified by caller)
+            schedule_id: Schedule UUID (must belong to agent)
+
+        Returns:
+            ManualRunResult describing the outcome. The route layer maps
+            ``action`` to a user-facing toast message.
 
         Raises:
-            ScheduleError: If agent is inactive or execution fails
+            ScheduleError: If the agent is inactive, has no active environment,
+                its environment is in an error state, the schedule is missing
+                or belongs to another agent, or synchronous execution fails.
         """
-        from app.services.sessions.session_service import SessionService
-        from app.services.environments.agent_env_connector import agent_env_connector
-        from app.services.events.activity_service import ActivityService
-        from app.services.agents.agent_schedule_scheduler import (
-            _execute_static_prompt,
-            _execute_script_trigger,
-        )
+        from app.services.agents.environment_resolver import get_active_environment
+        from app.utils import create_task_with_error_logging
 
         agent = session.get(Agent, agent_id)
         if not agent or not agent.is_active:
             raise ScheduleError("Agent is not active", status_code=400)
 
+        # Defensive: enforce our own preconditions so future callers (and
+        # background callers) don't have to rely on the route's
+        # ``get_schedule_for_agent`` pre-check.
         schedule = session.get(AgentSchedule, schedule_id)
+        if not schedule or schedule.agent_id != agent_id:
+            raise ScheduleNotFoundError()
 
-        try:
-            if schedule.schedule_type == "script_trigger":
-                await _execute_script_trigger(
-                    schedule=schedule,
-                    agent=agent,
-                    db_session=session,
-                    session_service=SessionService,
-                    activity_service=ActivityService,
-                    env_connector=agent_env_connector,
+        # Resolve the active environment up front so we can decide whether to
+        # run synchronously or defer activation to a background task.
+        environment = get_active_environment(session, agent_id)
+        if not environment:
+            raise ScheduleError(
+                "Agent has no active environment", status_code=400
+            )
+
+        env_status = environment.status
+
+        if env_status == "error":
+            raise ScheduleError(
+                "Agent environment is in an error state and cannot be started",
+                status_code=400,
+            )
+
+        # Fast path: env already running — execute synchronously, exactly as
+        # the cron scheduler would.
+        if env_status == "running":
+            try:
+                await _dispatch_schedule(session, schedule, agent)
+            except Exception as e:
+                logger.error(
+                    f"Manual schedule execution failed for {schedule_id}: {e}",
+                    exc_info=True,
                 )
-            else:
-                await _execute_static_prompt(
-                    schedule=schedule,
-                    agent=agent,
-                    db_session=session,
-                    session_service=SessionService,
+                raise ScheduleError(
+                    f"Schedule execution failed: {e}", status_code=500
                 )
-        except Exception as e:
-            logger.error(f"Manual schedule execution failed for {schedule_id}: {e}", exc_info=True)
-            raise ScheduleError(f"Schedule execution failed: {e}", status_code=500)
+            return ManualRunResult(action="executed")
+
+        # Deferred path: env is suspended / stopped / activating / starting.
+        # We must NOT block the HTTP request — the background task opens its
+        # own DB session (the route-scoped one will be closed by the time
+        # activation finishes).
+        if env_status not in ("suspended", "stopped", "activating", "starting"):
+            # Defensive: any unexpected status is surfaced as a 400 rather
+            # than triggering an unbounded background activation attempt.
+            raise ScheduleError(
+                f"Agent environment is in an unexpected state '{env_status}'",
+                status_code=400,
+            )
+
+        create_task_with_error_logging(
+            _activate_env_and_run_schedule(agent_id, schedule_id),
+            task_name=f"manual_run_after_activation_{schedule_id}",
+        )
+
+        return ManualRunResult(action="env_starting")
 
     # ==================== Environment Helpers ====================
     #
