@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Loader2, Bot, X, Crown } from "lucide-react"
 
@@ -85,7 +85,7 @@ export function CreateTaskDialog({
     enabled: open && !!selectedTeamId,
   })
 
-  const teamNodes = chartData?.nodes ?? []
+  const teamNodes = useMemo(() => chartData?.nodes ?? [], [chartData?.nodes])
 
   // When team changes, auto-select the team lead
   useEffect(() => {

@@ -467,7 +467,7 @@ class ChannelIngestionService:
 
         if changed:
             db.add(session)
-            db.flush()
+            db.commit()
             db.refresh(session)
 
 
