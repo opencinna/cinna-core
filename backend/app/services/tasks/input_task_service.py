@@ -505,12 +505,19 @@ class InputTaskService:
                 selected_agent_id = lead_node.agent_id
                 assigned_node_id = lead_node.id
 
+        # Inherit workspace from the assigned agent when caller did not specify one
+        user_workspace_id = data.user_workspace_id
+        if user_workspace_id is None and selected_agent_id is not None:
+            agent = db_session.get(Agent, selected_agent_id)
+            if agent is not None:
+                user_workspace_id = agent.user_workspace_id
+
         task = InputTask(
             owner_id=user_id,
             original_message=data.original_message,
             current_description=data.original_message,  # Start with same as original
             selected_agent_id=selected_agent_id,
-            user_workspace_id=data.user_workspace_id,
+            user_workspace_id=user_workspace_id,
             agent_initiated=data.agent_initiated,
             auto_execute=data.auto_execute,
             source_session_id=data.source_session_id,

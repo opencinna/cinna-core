@@ -173,6 +173,13 @@ As defense-in-depth, the backend also tracks attachment outcomes. The API return
 - When the team is changed via the UI, the frontend immediately fetches team nodes, finds the lead node (`is_lead=True`), and updates `selected_agent_id` and `assigned_node_id` to match the lead agent
 - At task creation, if `team_id` is provided but neither `selected_agent_id` nor `assigned_node_id` is set, the service layer auto-assigns the team's lead node agent
 
+### Workspace Assignment Rules
+
+- If the API caller provides `user_workspace_id`, that value is used as-is
+- If `user_workspace_id` is omitted (or `null`) and the task ends up with a `selected_agent_id` (either supplied explicitly or auto-resolved from a team lead), the task inherits the agent's `user_workspace_id`
+- If neither is provided, the task falls back to `NULL` (default workspace)
+- Agent-initiated task creation (`create_task_from_agent`) is unaffected — it continues to inherit workspace from the source session
+
 ### Subtask Rules
 
 - Only agents in a **team context** can create subtasks (requires `team_id` on parent task)
