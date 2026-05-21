@@ -127,25 +127,31 @@ Uses `SessionService` for session operations (no direct DB queries); streaming d
 ### A2A Event Mapper
 **File:** `backend/app/services/a2a/a2a_event_mapper.py`
 
-- `A2AEventMapper.map_stream_event()` - Internal streaming event to A2A event
+- `A2AEventMapper.map_stream_event()` - Internal streaming event to A2A event; handles `assistant`, `tool`, `thinking`, and `tool_result_delta` event types (mapped via `_STREAM_EVENT_TO_CONTENT_KIND`)
 - `A2AEventMapper.map_session_status_to_task_state()` - Session status to TaskState
 - `A2AEventMapper.convert_session_messages_to_a2a()` - SessionMessage list to A2A Message list
 - `A2AEventMapper._create_status_update(part_metadata=...)` - TaskStatusUpdateEvent construction; the optional `part_metadata` kwarg is attached to the embedded `TextPart` (not the `Message`) so streaming events carry content-kind metadata at part level
-- `A2AEventMapper._build_parts_for_session_message()` - Expands a stored agent `SessionMessage` into one `TextPart` per persisted streaming event, each carrying `cinna.content_kind` metadata; tool parts additionally carry `cinna.tool_name`, `cinna.tool_input` (when a dict), and `cinna.tool_id` (when non-empty) from the persisted event's `metadata`; falls back to a single TextPart from `msg.content` when no trace is stored
+- `A2AEventMapper._build_parts_for_session_message()` - Expands a stored agent `SessionMessage` into one `TextPart` per persisted streaming event, each carrying `cinna.content_kind` metadata; tool parts additionally carry `cinna.tool_name`, `cinna.tool_input` (when a dict), and `cinna.tool_id` (when non-empty) from the persisted event's `metadata`; `tool_result_delta` events are expanded into their own TextParts carrying `cinna.tool_id` and `cinna.tool_stream` metadata; falls back to a single TextPart from `msg.content` when no trace is stored
 
 #### Content-Kind Module-Level Constants
 
-Defined at module level in `backend/app/services/a2a/a2a_event_mapper.py`; import from there rather than hardcoding string literals:
+Defined at module level in `backend/app/services/a2a/a2a_event_mapper.py`; import from there rather than hardcoding string literals.
+
+`tool_result` parts pair with their originating tool-call part by `cinna.tool_id` — the same identifier that appears on the `tool`-kind TextPart when the SDK emits a non-empty value.
 
 | Constant | Value | Use |
 |----------|-------|-----|
 | `CONTENT_KIND_KEY` | `"cinna.content_kind"` | Metadata key placed on each `TextPart` |
 | `TOOL_NAME_KEY` | `"cinna.tool_name"` | Metadata key for tool name; present only on tool parts |
 | `TOOL_INPUT_KEY` | `"cinna.tool_input"` | Metadata key for structured tool arguments (JSON object); present only on tool parts when the underlying SDK emits a dict |
-| `TOOL_ID_KEY` | `"cinna.tool_id"` | Metadata key for opaque tool-call identifier string; present only on tool parts when the underlying SDK emits a non-empty value |
+| `TOOL_ID_KEY` | `"cinna.tool_id"` | Metadata key for opaque tool-call identifier string; present on tool parts when the underlying SDK emits a non-empty value, and on every tool_result part |
 | `CONTENT_KIND_TEXT` | `"text"` | Value for `assistant` events (agent final answer) |
 | `CONTENT_KIND_THINKING` | `"thinking"` | Value for `thinking` events (chain-of-thought) |
 | `CONTENT_KIND_TOOL` | `"tool"` | Value for `tool` events (tool-call narration) |
+| `CONTENT_KIND_TOOL_RESULT` | `"tool_result"` | Value for `tool_result_delta` events (CLI stdout/stderr from `/run:*` commands and LLM-side tool result chunks) |
+| `TOOL_STREAM_KEY` | `"cinna.tool_stream"` | Metadata key for stdout/stderr classification; present only on tool_result parts |
+| `TOOL_STREAM_STDOUT` | `"stdout"` | Default stream value; used when the underlying event omits a `stream` field or emits an unknown value |
+| `TOOL_STREAM_STDERR` | `"stderr"` | Stream value for stderr output |
 
 Metadata is always placed on `TextPart.metadata`, never on `Message.metadata`, because a history-replay `Message` can contain parts of mixed kinds.
 
@@ -369,4 +375,4 @@ The two feature surfaces keep their own routes, auth contexts, card builders, an
 
 ---
 
-*Last updated: 2026-04-18*
+*Last updated: 2026-05-21*

@@ -60,8 +60,13 @@ PRE_ALLOWED_TOOLS = frozenset([
 # Metadata keys to forward from streaming events to response_metadata
 _FORWARDED_METADATA_KEYS = {"model", "total_cost_usd", "claude_code_version", "duration_ms", "num_turns"}
 
-# Keys to keep when copying event metadata for storage
-_STORED_EVENT_METADATA_KEYS = {"tool_id", "tool_input", "model", "needs_approval", "tool_name"}
+# Keys to keep when copying event metadata for storage.
+# "stream" preserves the stdout/stderr discriminator on tool_result_delta
+# events so history replay (e.g. A2A GetTask) can reproduce per-chunk
+# stream classification. The command-stream path in
+# stream_command_via_agent_env already writes this key directly; including
+# it in the allowlist brings the LLM-streaming path to parity.
+_STORED_EVENT_METADATA_KEYS = {"tool_id", "tool_input", "model", "needs_approval", "tool_name", "stream"}
 
 # Non-LLM to LLM context bridging
 NON_LLM_BRIDGE_MAX_PER_BLOCK_BYTES: int = 16_384   # 16 KB per command block

@@ -3,6 +3,9 @@ A2A Event Mapper - transforms internal streaming events to A2A format.
 
 This module provides utilities for mapping internal streaming events
 (from MessageService) to A2A protocol event format for SSE streaming.
+Each emitted TextPart carries vendor-namespaced metadata identifying
+one of four content kinds: agent text, thinking, tool-call, and
+tool-result.
 
 All A2A protocol mapping logic is centralized here.
 """
@@ -26,8 +29,9 @@ logger = logging.getLogger(__name__)
 
 
 # Vendor-namespaced keys placed on each TextPart's metadata so A2A clients
-# can distinguish the agent's final text, chain-of-thought, and tool-call
-# events (all of which otherwise look like generic "agent" text).
+# can distinguish the agent's final text, chain-of-thought, tool-call
+# events, and tool-result chunks (all of which otherwise look like
+# generic "agent" text).
 CONTENT_KIND_KEY = "cinna.content_kind"
 TOOL_NAME_KEY = "cinna.tool_name"
 # Structured tool arguments (object) — surfaced on each tool TextPart so
@@ -36,15 +40,23 @@ TOOL_INPUT_KEY = "cinna.tool_input"
 # Opaque tool-call identifier — pairs each tool-call TextPart with its later
 # tool-result event and cross-references the persisted streaming-event trace.
 TOOL_ID_KEY = "cinna.tool_id"
+# Per-chunk stream discriminator for tool_result content (stdout vs stderr).
+TOOL_STREAM_KEY = "cinna.tool_stream"
 
 CONTENT_KIND_TEXT = "text"
 CONTENT_KIND_THINKING = "thinking"
 CONTENT_KIND_TOOL = "tool"
+CONTENT_KIND_TOOL_RESULT = "tool_result"
+
+# Allowed values for cinna.tool_stream
+TOOL_STREAM_STDOUT = "stdout"
+TOOL_STREAM_STDERR = "stderr"
 
 _STREAM_EVENT_TO_CONTENT_KIND = {
     "assistant": CONTENT_KIND_TEXT,
     "thinking": CONTENT_KIND_THINKING,
     "tool": CONTENT_KIND_TOOL,
+    "tool_result_delta": CONTENT_KIND_TOOL_RESULT,
 }
 
 
@@ -140,6 +152,31 @@ class A2AEventMapper:
                     part_metadata=metadata,
                 )
             return None
+
+        elif event_type == "tool_result_delta":
+            content = event.get("content", "")
+            if not content:
+                return None
+            event_metadata = event.get("metadata") or {}
+            tool_id = event_metadata.get("tool_id")
+            tool_stream = event_metadata.get("stream")
+            # Defensive: clients may switch on this value; coerce unknowns.
+            if tool_stream not in (TOOL_STREAM_STDOUT, TOOL_STREAM_STDERR):
+                tool_stream = TOOL_STREAM_STDOUT
+            metadata: dict[str, Any] = {
+                CONTENT_KIND_KEY: CONTENT_KIND_TOOL_RESULT,
+                TOOL_STREAM_KEY: tool_stream,
+            }
+            if isinstance(tool_id, str) and tool_id:
+                metadata[TOOL_ID_KEY] = tool_id
+            return A2AEventMapper._create_status_update(
+                task_id=task_id,
+                context_id=context_id,
+                state=TaskState.working,
+                final=False,
+                message=content,
+                part_metadata=metadata,
+            )
 
         elif event_type == "thinking":
             content = event.get("content", "")
@@ -354,6 +391,15 @@ class A2AEventMapper:
                 evt_tool_id = evt_meta.get("tool_id")
                 if isinstance(evt_tool_id, str) and evt_tool_id:
                     part_metadata[TOOL_ID_KEY] = evt_tool_id
+            elif content_kind == CONTENT_KIND_TOOL_RESULT:
+                evt_meta = evt.get("metadata") or {}
+                evt_tool_id = evt_meta.get("tool_id")
+                if isinstance(evt_tool_id, str) and evt_tool_id:
+                    part_metadata[TOOL_ID_KEY] = evt_tool_id
+                evt_stream = evt_meta.get("stream")
+                if evt_stream not in (TOOL_STREAM_STDOUT, TOOL_STREAM_STDERR):
+                    evt_stream = TOOL_STREAM_STDOUT
+                part_metadata[TOOL_STREAM_KEY] = evt_stream
 
             parts.append(Part(root=TextPart(text=content, metadata=part_metadata)))
 
