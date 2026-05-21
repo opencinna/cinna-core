@@ -204,7 +204,7 @@ class TestPreApprovedTools:
     def test_opencode_only_builtin_is_pre_approved(self, tool):
         assert tool in PRE_APPROVED_TOOLS, f"'{tool}' should be in PRE_APPROVED_TOOLS"
 
-    # MCP bridge tools
+    # MCP bridge tools — Claude Code form (mcp__{server}__{tool})
     @pytest.mark.parametrize("tool", [
         "mcp__knowledge__query_integration_knowledge",
         "mcp__agent_task__add_comment",
@@ -215,6 +215,19 @@ class TestPreApprovedTools:
         "mcp__agent_task__list_tasks",
     ])
     def test_mcp_bridge_tool_is_pre_approved(self, tool):
+        assert tool in PRE_APPROVED_TOOLS, f"'{tool}' should be in PRE_APPROVED_TOOLS"
+
+    # MCP bridge tools — OpenCode form ({server}_{tool})
+    @pytest.mark.parametrize("tool", [
+        "knowledge_query_integration_knowledge",
+        "agent_task_add_comment",
+        "agent_task_update_status",
+        "agent_task_create_task",
+        "agent_task_create_subtask",
+        "agent_task_get_details",
+        "agent_task_list_tasks",
+    ])
+    def test_opencode_form_mcp_bridge_tool_is_pre_approved(self, tool):
         assert tool in PRE_APPROVED_TOOLS, f"'{tool}' should be in PRE_APPROVED_TOOLS"
 
     def test_all_tools_are_lowercase(self):

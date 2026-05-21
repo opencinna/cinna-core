@@ -37,15 +37,24 @@ PRE_ALLOWED_TOOLS = frozenset([
     "killshell", "taskoutput",
     # OpenCode-only built-ins
     "list", "patch",
-    # MCP bridge tools (knowledge)
+    # MCP bridge tools (knowledge) — Claude Code form
     "mcp__knowledge__query_integration_knowledge",
-    # MCP bridge tools (agent task)
+    # MCP bridge tools (knowledge) — OpenCode form ({server}_{tool})
+    "knowledge_query_integration_knowledge",
+    # MCP bridge tools (agent task) — Claude Code form
     "mcp__agent_task__add_comment",
     "mcp__agent_task__update_status",
     "mcp__agent_task__create_task",
     "mcp__agent_task__create_subtask",
     "mcp__agent_task__get_details",
     "mcp__agent_task__list_tasks",
+    # MCP bridge tools (agent task) — OpenCode form ({server}_{tool})
+    "agent_task_add_comment",
+    "agent_task_update_status",
+    "agent_task_create_task",
+    "agent_task_create_subtask",
+    "agent_task_get_details",
+    "agent_task_list_tasks",
 ])
 
 # Metadata keys to forward from streaming events to response_metadata
