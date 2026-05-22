@@ -1,4 +1,4 @@
-import { Fingerprint, Loader2, Smartphone } from "lucide-react"
+import { Fingerprint, Loader2, ShieldCheck, Smartphone } from "lucide-react"
 import { useState } from "react"
 
 import { AddPasskeyDialog } from "@/components/UserSettings/Security/AddPasskeyDialog"
@@ -72,7 +72,10 @@ export function SecurityTab() {
         <CardHeader className="pb-3">
           <div className="flex items-start justify-between">
             <div className="space-y-1.5">
-              <CardTitle>Two-factor authentication</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-blue-500" />
+                Two-factor authentication
+              </CardTitle>
               <CardDescription>
                 {enabled && summary
                   ? summary

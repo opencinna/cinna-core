@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router"
-import { ShieldCheck, X } from "lucide-react"
+import { ShieldCheck } from "lucide-react"
 import { useEffect, useState } from "react"
 
 import { Button } from "@/components/ui/button"
@@ -54,21 +54,20 @@ export function EnableTwoFactorBanner() {
           that blocks stolen-password attacks.
         </p>
       </div>
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="flex flex-col items-center gap-2 shrink-0">
         <Button asChild size="sm">
           <Link to="/settings" hash="security">
             Set up
           </Link>
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
+        <button
+          type="button"
           onClick={handleDismiss}
+          className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
           aria-label="Dismiss two-factor authentication banner"
         >
-          <X className="h-4 w-4" />
-        </Button>
+          Dismiss
+        </button>
       </div>
     </div>
   )

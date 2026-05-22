@@ -550,10 +550,17 @@ function Dashboard() {
 
   return (
     <div className="flex flex-col h-full" key={activeWorkspaceId ?? 'default'}>
+      {/* Top-anchored nudge banner — sits at the page top border instead
+          of inside the vertically-centered content block so it doesn't
+          overlap with the agent selector. */}
+      <div className="px-6 pt-4">
+        <div className="mx-auto w-full max-w-3xl">
+          <EnableTwoFactorBanner />
+        </div>
+      </div>
       {/* Main centered content area */}
       <div className="flex-1 flex items-center justify-center p-6 overflow-auto">
         <div className="w-full max-w-3xl space-y-6">
-          <EnableTwoFactorBanner />
           {/* Agent Selector Pills */}
           <div className="space-y-2">
             <div className="flex flex-wrap gap-2 items-center">

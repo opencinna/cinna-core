@@ -1,5 +1,6 @@
 import { useGoogleLogin } from "@react-oauth/google"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { Link2 } from "lucide-react"
 import { FcGoogle } from "react-icons/fc"
 import type { GoogleCallbackRequest } from "@/client"
 import { OauthService } from "@/client"
@@ -76,7 +77,10 @@ function OAuthAccountsInner() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Connected Accounts</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+          <Link2 className="h-4 w-4 text-blue-500" />
+          Connected Accounts
+        </CardTitle>
         <CardDescription>
           Manage your OAuth account connections
         </CardDescription>
