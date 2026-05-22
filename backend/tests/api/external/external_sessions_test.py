@@ -24,7 +24,6 @@ Scenarios covered:
  20. Non-existent session id returns 404 on DELETE
 """
 import uuid
-from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import jwt as pyjwt
@@ -38,6 +37,12 @@ from tests.utils.a2a import build_streaming_request, parse_sse_events
 from tests.utils.agent import create_agent_via_api, get_agent
 from tests.utils.app_agent_route import create_admin_route, toggle_admin_assignment
 from tests.utils.background_tasks import drain_tasks
+from tests.utils.desktop_auth import (
+    exchange_code_for_tokens,
+    generate_pkce_pair,
+    get_authorization_code,
+    list_desktop_clients,
+)
 from tests.utils.identity import create_identity_binding
 from tests.utils.user import create_random_user_with_headers
 
@@ -265,21 +270,6 @@ def _extract_task_id(events: list[dict]) -> str | None:
         if tid:
             return tid
     return None
-
-
-def _make_desktop_token(user_id: str, client_id: str) -> str:
-    """Mint a desktop-style JWT that includes client_kind and external_client_id claims."""
-    payload = {
-        "sub": str(user_id),
-        "exp": datetime.now(timezone.utc) + timedelta(hours=1),
-        "client_kind": "desktop",
-        "external_client_id": str(client_id),
-    }
-    return pyjwt.encode(payload, settings.SECRET_KEY, algorithm=core_security.ALGORITHM)
-
-
-def _desktop_headers(user_id: str, client_id: str) -> dict:
-    return {"Authorization": f"Bearer {_make_desktop_token(user_id, client_id)}"}
 
 
 def _get_current_user_id(client: TestClient, headers: dict) -> str:
@@ -809,19 +799,41 @@ def test_desktop_jwt_claims_stamped_into_session_metadata(
     """
     Desktop JWT scenario:
       1. Create an agent owned by the superuser.
-      2. Issue a desktop-style JWT (with client_kind + external_client_id claims).
+      2. Obtain a desktop access token via the full OAuth + PKCE flow so the
+         backing DesktopOAuthClient row exists (required by the revocation
+         check in get_current_user).
       3. Send a streaming message via the external A2A endpoint using that JWT.
       4. Verify that GET /external/sessions returns client_kind="desktop" and
-         external_client_id matching the minted token's client_id.
+         external_client_id matching the JWT's claim.
     """
     # ── Phase 1: Create agent ─────────────────────────────────────────────
     agent = _create_agent_ready(client, superuser_token_headers)
     agent_id = agent["id"]
 
-    # ── Phase 2: Mint a desktop JWT for the superuser ─────────────────────
-    user_id = _get_current_user_id(client, superuser_token_headers)
-    fake_client_id = str(uuid.uuid4())
-    desktop_hdrs = _desktop_headers(user_id, fake_client_id)
+    # ── Phase 2: Obtain a real desktop access token ──────────────────────
+    verifier, challenge = generate_pkce_pair()
+    code = get_authorization_code(
+        client,
+        superuser_token_headers,
+        code_challenge=challenge,
+        device_name="External Attribution Device",
+    )
+    clients_list = list_desktop_clients(client, superuser_token_headers)
+    reg = next(
+        c for c in clients_list if c["device_name"] == "External Attribution Device"
+    )
+    tokens = exchange_code_for_tokens(client, reg["client_id"], code, verifier)
+    desktop_hdrs = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    # Extract the external_client_id claim (UUID PK of DesktopOAuthClient,
+    # not the public client_id string) from the access token so we can
+    # cross-check it against session_metadata below.
+    decoded = pyjwt.decode(
+        tokens["access_token"],
+        settings.SECRET_KEY,
+        algorithms=[core_security.ALGORITHM],
+    )
+    expected_external_client_id = decoded["external_client_id"]
 
     # ── Phase 3: Stream a message using the desktop JWT ───────────────────
     _stream_external_agent(client, desktop_hdrs, agent_id)
@@ -838,8 +850,8 @@ def test_desktop_jwt_claims_stamped_into_session_metadata(
     assert session.get("client_kind") == "desktop", (
         f"expected client_kind='desktop', got {session.get('client_kind')!r}"
     )
-    assert session.get("external_client_id") == fake_client_id, (
-        f"expected external_client_id={fake_client_id!r}, "
+    assert session.get("external_client_id") == expected_external_client_id, (
+        f"expected external_client_id={expected_external_client_id!r}, "
         f"got {session.get('external_client_id')!r}"
     )
 

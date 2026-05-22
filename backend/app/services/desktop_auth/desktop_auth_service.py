@@ -40,6 +40,33 @@ logger = logging.getLogger(__name__)
 _LOCALHOST_RE = re.compile(r"^http://(localhost|127\.0\.0\.1):(\d+)(/.*)?$")
 
 
+# How often `verify_active_or_raise` re-stamps `last_used_at` on the
+# `DesktopOAuthClient` row.  Throttling avoids a DB write on every
+# authenticated request while still keeping the Settings UI's "last
+# active" timestamp accurate to the minute.
+DESKTOP_LAST_USED_THROTTLE_SECONDS = 60
+
+
+class DesktopAuthError(Exception):
+    """Raised when desktop OAuth client validation fails.
+
+    Carries a ``reason`` enum so callers can decide how to surface
+    the failure (HTTP status, WS close code, log severity).  The
+    ``message`` is the user-facing description.
+
+    Reasons:
+      - ``"client_missing"``  — JWT carries ``client_kind="desktop"`` but no
+                                ``external_client_id`` claim
+      - ``"client_invalid"``  — ``external_client_id`` is not a valid UUID
+      - ``"revoked"``         — client row is missing or ``is_revoked=True``
+    """
+
+    def __init__(self, reason: str, message: str):
+        self.reason = reason
+        self.message = message
+        super().__init__(message)
+
+
 def _ensure_utc(dt: datetime) -> datetime:
     """Return a timezone-aware datetime in UTC, handling both naive and aware inputs."""
     if dt.tzinfo is None:
@@ -114,6 +141,55 @@ class DesktopAuthService:
             )
             for c in clients
         ]
+
+    @staticmethod
+    def verify_active_or_raise(
+        session: Session,
+        external_client_id: str | None,
+    ) -> DesktopOAuthClient:
+        """Verify a desktop-issued JWT's ``external_client_id`` claim.
+
+        Loads the matching ``DesktopOAuthClient`` row, rejects revoked /
+        missing / malformed clients with ``DesktopAuthError``, and stamps
+        ``last_used_at`` (throttled — see
+        ``DESKTOP_LAST_USED_THROTTLE_SECONDS``) so the Settings UI's
+        "last active" timestamp stays current without a write per request.
+
+        Called by ``get_current_user`` whenever a JWT carries
+        ``client_kind="desktop"``.  Returns the active client row so
+        callers can stamp additional metadata if they need to.
+
+        Raises:
+            DesktopAuthError: on missing / invalid / revoked client
+        """
+        if not external_client_id:
+            raise DesktopAuthError(
+                "client_missing", "Desktop client identifier missing"
+            )
+        try:
+            client_uuid = UUID(str(external_client_id))
+        except (TypeError, ValueError):
+            raise DesktopAuthError(
+                "client_invalid", "Desktop client identifier invalid"
+            )
+
+        desktop_client = session.get(DesktopOAuthClient, client_uuid)
+        if desktop_client is None or desktop_client.is_revoked:
+            raise DesktopAuthError(
+                "revoked", "Desktop session has been revoked"
+            )
+
+        now = datetime.now(UTC)
+        last_used = desktop_client.last_used_at
+        if (
+            last_used is None
+            or (now - _ensure_utc(last_used)).total_seconds()
+            >= DESKTOP_LAST_USED_THROTTLE_SECONDS
+        ):
+            desktop_client.last_used_at = now
+            session.commit()
+
+        return desktop_client
 
     @staticmethod
     def revoke_client(

@@ -50,6 +50,28 @@ def get_current_user(session: SessionDep, token: TokenDep) -> User:
         raise HTTPException(status_code=404, detail="User not found")
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
+
+    # Desktop-issued access tokens are stateless JWTs (15-min TTL) but
+    # the originating DesktopOAuthClient row can be revoked from
+    # Settings > Channels > Desktop Sessions.  Delegate to the service
+    # so revocation takes effect immediately instead of waiting for the
+    # access token to expire.
+    if payload.get("client_kind") == "desktop":
+        from app.services.desktop_auth.desktop_auth_service import (
+            DesktopAuthError,
+            DesktopAuthService,
+        )
+
+        try:
+            DesktopAuthService.verify_active_or_raise(
+                session, payload.get("external_client_id")
+            )
+        except DesktopAuthError as e:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=e.message,
+            )
+
     return user
 
 

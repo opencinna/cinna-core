@@ -134,6 +134,7 @@ All methods are `@staticmethod`:
 **Client management:**
 - `list_clients(session, user_id) -> list[DesktopOAuthClientPublic]` — Non-revoked clients for user
 - `revoke_client(session, user_id, client_id_str) -> None` — Soft-revoke + cascade revoke all tokens
+- `verify_active_or_raise(session, external_client_id) -> DesktopOAuthClient` — Used by `get_current_user` to enforce immediate revocation of desktop-issued access tokens; raises `DesktopAuthError("client_missing" | "client_invalid" | "revoked", ...)` and stamps `last_used_at` (throttled). See [Live Access Token Revocation Check](#live-access-token-revocation-check)
 
 **Consent flow:**
 - `create_auth_request(session, device_name?, platform?, app_version?, client_id?, code_challenge, redirect_uri, state) -> str` — Store pending request row; returns raw nonce
@@ -192,8 +193,26 @@ Route: `/desktop-auth/consent?request={nonce}` (file: `frontend/src/routes/deskt
 - Redirect URI restricted to loopback HTTP: `http://localhost:{1024-65535}{path}` or `http://127.0.0.1:{1024-65535}{path}`. Path is unrestricted (RFC 8252 §7.3) so apps can use `/callback`, `/oauth/callback`, etc.
 - All token values stored as SHA-256 hashes; raw values are never persisted
 - Consent nonces stored as SHA-256 hashes; raw nonce appears only in the browser URL during the consent flow
-- Access tokens are standard JWTs (same `create_access_token()` as web login) — `CurrentUser` dependency works unchanged
+- Access tokens are standard JWTs (same `create_access_token()` as web login) — `CurrentUser` dependency works unchanged, but now performs an extra `DesktopOAuthClient.is_revoked` lookup when the JWT carries `client_kind="desktop"` so disconnects propagate immediately (see [Live Access Token Revocation Check](#live-access-token-revocation-check) below)
 - `GET /authorize` is now public — authentication happens at `POST /consent` via the SPA's localStorage JWT
 - Replay detection: reusing a revoked refresh token triggers `revoke_token_family()`, revoking the entire rotation chain (RFC 9700 §4.14.2)
 - `code_challenge_method` must be `S256`; other methods rejected with 400
 - Cross-user protection: if a `client_id` is provided in the authorize request, `POST /consent` validates that the client belongs to the consenting user (HTTP 403 if not)
+
+## Live Access Token Revocation Check
+
+`backend/app/api/deps.py::get_current_user` inspects the decoded JWT payload for the `client_kind` claim. When the value equals `"desktop"`, it delegates to `DesktopAuthService.verify_active_or_raise(session, external_client_id)` which:
+
+1. Parses `external_client_id` from the JWT as a UUID — raises `DesktopAuthError("client_missing" | "client_invalid", ...)` if absent or malformed.
+2. Loads the `DesktopOAuthClient` row by PK. Missing row OR `is_revoked=True` → `DesktopAuthError("revoked", "Desktop session has been revoked")`.
+3. Throttled stamping: if `last_used_at` is `NULL` or older than `DESKTOP_LAST_USED_THROTTLE_SECONDS` (60s), sets `last_used_at = now()` and commits. The throttle keeps write amplification low for chatty clients while still giving the Settings UI a near-live "last active" timestamp.
+
+The dep catches `DesktopAuthError` and re-raises as `HTTPException(401, detail=e.message)` — the service stays HTTP-agnostic so it can be reused from WS deps or other callers later (same pattern as `CLIAuthError` / `_resolve_cli_context`).
+
+The check fires for every authenticated request from a desktop client (not just `/api/v1/external/...`), so `/api/v1/users/me`, `/api/v1/desktop-auth/userinfo`, etc. all reject revoked tokens. Web-session JWTs lack `client_kind`, so they short-circuit without the extra DB hit.
+
+Test coverage lives in `backend/tests/api/desktop_auth/test_desktop_auth.py`:
+- `test_revoked_desktop_client_blocks_access_token` — revocation invalidates `/users/me`
+- `test_revoked_desktop_client_blocks_external_a2a_endpoints` — same, for `/api/v1/external/agents`
+- `test_desktop_token_updates_last_used_at` — successful calls update the stamp
+- `test_revoked_desktop_client_rejects_userinfo` — `/desktop-auth/userinfo` is covered too

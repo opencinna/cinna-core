@@ -59,8 +59,9 @@ Desktop app silently refreshes the access token before it expires:
 2. Sees a list of all connected desktop apps (device name, platform, last used time)
 3. Clicks "Disconnect" on a device and confirms in the dialog
 4. Backend revokes the client and all its refresh tokens
-5. The next time that desktop app's access token expires and it tries to refresh, the refresh fails with `invalid_grant`
-6. Desktop app shows "Session expired, please log in again"
+5. The next API call from that desktop app — even with a still-valid (unexpired) access token — is rejected with `401 Desktop session has been revoked`, because `get_current_user` checks `DesktopOAuthClient.is_revoked` on every request whose JWT carries `client_kind="desktop"`
+6. The refresh endpoint also rejects the refresh token with `invalid_grant`
+7. Desktop app shows "Session expired, please log in again"
 
 ## Security Model
 
@@ -102,8 +103,10 @@ Only loopback HTTP URIs — `http://localhost:{port}{path}` or `http://127.0.0.1
 
 ### Integration with Existing Auth
 
-- Desktop access tokens are standard JWTs with the same structure as web session tokens
+- Desktop access tokens are standard JWTs with the same structure as web session tokens, plus two extra claims: `client_kind="desktop"` and `external_client_id=<DesktopOAuthClient.id>`
 - All existing API endpoints work transparently with desktop tokens (same `CurrentUser` dependency), including the dedicated `GET /desktop-auth/userinfo` profile endpoint
+- On every request whose JWT carries `client_kind="desktop"`, `get_current_user` performs an indexed lookup on `DesktopOAuthClient` by `external_client_id`. If the row is missing or `is_revoked=True`, the request is rejected with `401 Desktop session has been revoked` — so a "Disconnect" from Settings takes effect immediately rather than waiting up to 15 minutes for the access token to expire
+- The same lookup also stamps `last_used_at` on success (throttled to once per minute) so the Settings UI reflects recent activity
 - Google OAuth users (no password) can authenticate via the browser-based authorize flow
 
 ### 2FA and Desktop Auth

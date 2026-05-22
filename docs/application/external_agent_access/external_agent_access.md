@@ -97,6 +97,7 @@ A dedicated REST + A2A surface under `/api/v1/external/` that gives authenticate
 - On new session creation, `ExternalA2AContextHandler._stamp_new_session` writes these into `session_metadata` for all three integration types if the claims are present
 - Non-desktop tokens (web JWTs) carry no such claims; `client_kind` and `external_client_id` remain `null` in `ExternalSessionPublic`
 - Native clients can use `client_kind` / `external_client_id` from `ExternalSessionPublic` to filter or label threads by originating device
+- These same claims drive the **live revocation check** in `get_current_user`: when a desktop client is disconnected from Settings, the next `/external/...` call with its still-valid access token is rejected with `401 Desktop session has been revoked` (see [Desktop Auth — Live Access Token Revocation Check](../desktop_auth/desktop_auth_tech.md#live-access-token-revocation-check))
 
 ---
 

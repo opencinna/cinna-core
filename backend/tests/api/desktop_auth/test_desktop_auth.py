@@ -995,3 +995,177 @@ def test_authorize_is_public(client: TestClient) -> None:
         f"Expected redirect for public /authorize, got {r.status_code}: {r.text}"
     )
     assert "/desktop-auth/consent" in r.headers.get("location", "")
+
+
+# ── Test: Revoked desktop client blocks live access token ──────────────────
+
+
+def test_revoked_desktop_client_blocks_access_token(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    Revoking a desktop client must immediately invalidate its live access
+    token — not just the next refresh.
+
+      1. Obtain a desktop access token via the full consent flow
+      2. Authenticated call (GET /users/me) with that token succeeds
+      3. Revoke the client via DELETE /clients/{client_id}
+      4. The same access token now returns 401 on /users/me
+      5. A web-session JWT for the same user is unaffected
+    """
+    # ── Phase 1: Obtain a desktop access token ────────────────────────────
+    verifier, challenge = generate_pkce_pair()
+    code = get_authorization_code(
+        client,
+        superuser_token_headers,
+        code_challenge=challenge,
+        device_name="Live Revoke Device",
+    )
+    clients = list_desktop_clients(client, superuser_token_headers)
+    reg = next(c for c in clients if c["device_name"] == "Live Revoke Device")
+    client_id = reg["client_id"]
+    tokens = exchange_code_for_tokens(client, client_id, code, verifier)
+    desktop_headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    # ── Phase 2: Token works pre-revocation ───────────────────────────────
+    r_pre = client.get(
+        f"{settings.API_V1_STR}/users/me", headers=desktop_headers
+    )
+    assert r_pre.status_code == 200, (
+        f"Pre-revocation request should succeed: {r_pre.text}"
+    )
+
+    # ── Phase 3: Revoke the client ────────────────────────────────────────
+    revoke_desktop_client(client, superuser_token_headers, client_id)
+
+    # ── Phase 4: Same access token now rejected ───────────────────────────
+    r_post = client.get(
+        f"{settings.API_V1_STR}/users/me", headers=desktop_headers
+    )
+    assert r_post.status_code == 401, (
+        f"Post-revocation request should be rejected, got {r_post.status_code}: "
+        f"{r_post.text}"
+    )
+
+    # ── Phase 5: Web-session JWT for the same user still works ────────────
+    r_web = client.get(
+        f"{settings.API_V1_STR}/users/me", headers=superuser_token_headers
+    )
+    assert r_web.status_code == 200, (
+        f"Web JWT must be unaffected by desktop client revocation: {r_web.text}"
+    )
+
+
+def test_revoked_desktop_client_blocks_external_a2a_endpoints(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    The revocation check covers /api/v1/external/* surface as well —
+    listing external agents with a revoked desktop token must fail.
+    This guards against the regression where revocation only affected
+    /token refresh but not the external-agent A2A surface.
+    """
+    verifier, challenge = generate_pkce_pair()
+    code = get_authorization_code(
+        client,
+        superuser_token_headers,
+        code_challenge=challenge,
+        device_name="External Revoke Device",
+    )
+    clients = list_desktop_clients(client, superuser_token_headers)
+    reg = next(c for c in clients if c["device_name"] == "External Revoke Device")
+    client_id = reg["client_id"]
+    tokens = exchange_code_for_tokens(client, client_id, code, verifier)
+    desktop_headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    # Pre-revocation: external agents discovery succeeds
+    r_pre = client.get(
+        f"{settings.API_V1_STR}/external/agents", headers=desktop_headers
+    )
+    assert r_pre.status_code == 200, (
+        f"External agents discovery should work pre-revocation: {r_pre.text}"
+    )
+
+    # Revoke the client
+    revoke_desktop_client(client, superuser_token_headers, client_id)
+
+    # Post-revocation: same endpoint is blocked
+    r_post = client.get(
+        f"{settings.API_V1_STR}/external/agents", headers=desktop_headers
+    )
+    assert r_post.status_code == 401, (
+        f"External endpoint should reject revoked desktop token, got "
+        f"{r_post.status_code}: {r_post.text}"
+    )
+
+
+def test_desktop_token_updates_last_used_at(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    Successful authenticated calls with a desktop access token stamp
+    last_used_at on the originating DesktopOAuthClient row, visible via
+    GET /clients.
+
+    The stamp is throttled to once per minute; we only need to observe
+    that it transitions from "shortly after exchange" to "after the API
+    call" (or that it remains a non-null timestamp after a fresh
+    authenticated call).
+    """
+    verifier, challenge = generate_pkce_pair()
+    code = get_authorization_code(
+        client,
+        superuser_token_headers,
+        code_challenge=challenge,
+        device_name="LastUsed Device",
+    )
+    clients = list_desktop_clients(client, superuser_token_headers)
+    reg = next(c for c in clients if c["device_name"] == "LastUsed Device")
+    client_id = reg["client_id"]
+    tokens = exchange_code_for_tokens(client, client_id, code, verifier)
+    desktop_headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    # Authenticated request to trigger the dep
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=desktop_headers)
+    assert r.status_code == 200
+
+    # last_used_at must now be a non-null timestamp.  The /clients endpoint
+    # returns it in the public payload.
+    clients_after = list_desktop_clients(client, superuser_token_headers)
+    reg_after = next(c for c in clients_after if c["client_id"] == client_id)
+    assert reg_after["last_used_at"] is not None, (
+        "Authenticated desktop request should stamp last_used_at"
+    )
+
+
+def test_revoked_desktop_client_rejects_userinfo(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    The desktop /userinfo endpoint must also reject a revoked client's
+    live access token. /userinfo uses CurrentUser, so this is a smoke
+    test that the check applies uniformly across desktop-auth's own
+    endpoints (not just /api/v1/users/me).
+    """
+    verifier, challenge = generate_pkce_pair()
+    code = get_authorization_code(
+        client,
+        superuser_token_headers,
+        code_challenge=challenge,
+        device_name="Userinfo Revoke Device",
+    )
+    clients = list_desktop_clients(client, superuser_token_headers)
+    reg = next(c for c in clients if c["device_name"] == "Userinfo Revoke Device")
+    client_id = reg["client_id"]
+    tokens = exchange_code_for_tokens(client, client_id, code, verifier)
+    desktop_headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    assert client.get(f"{_BASE}/userinfo", headers=desktop_headers).status_code == 200
+
+    revoke_desktop_client(client, superuser_token_headers, client_id)
+
+    r_post = client.get(f"{_BASE}/userinfo", headers=desktop_headers)
+    assert r_post.status_code == 401, (
+        f"userinfo should be blocked after revocation, got {r_post.status_code}: "
+        f"{r_post.text}"
+    )
