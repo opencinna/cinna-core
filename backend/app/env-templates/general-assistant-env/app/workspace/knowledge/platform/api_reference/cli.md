@@ -76,6 +76,7 @@ Auto-generated from OpenAPI spec. Tag: `cli`
 
 **Request body** (`ExecBody`):
   - `command`: string (required)
+  - `timeout`: integer | null
 
 ---
 

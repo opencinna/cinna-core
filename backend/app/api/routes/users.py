@@ -37,11 +37,28 @@ from app.models.users.user import (
 )
 from app.services.users.role_service import RoleService
 from app.services.environments.sdk_constants import is_valid_sdk
+from app.services.users.mfa_service import MfaService
 from app.models.credentials.ai_credential import AICredentialType
 from app.services.credentials.ai_credentials_service import ai_credentials_service
 from app.utils import generate_new_account_email, send_email
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def _user_to_public(session, user: User) -> UserPublic:
+    """Build :class:`UserPublic` for ``user``, populating the derived
+    ``has_*`` flags including the 2FA factor flags.
+
+    Centralised so every endpoint that returns ``UserPublic`` reflects
+    enrolment state without each call site duplicating the query.
+    """
+    return UserPublic(
+        **user.model_dump(),
+        has_google_account=bool(user.google_id),
+        has_password=bool(user.hashed_password),
+        has_passkey=MfaService.has_passkey(session=session, user_id=user.id),
+        has_totp=MfaService.has_totp(session=session, user_id=user.id),
+    )
 
 
 @router.get(
@@ -79,7 +96,9 @@ def read_users(
     statement = statement.offset(skip).limit(limit)
     users = session.exec(statement).all()
 
-    return UsersPublic(data=users, count=count)
+    return UsersPublic(
+        data=[_user_to_public(session, u) for u in users], count=count
+    )
 
 
 @router.post(
@@ -106,7 +125,7 @@ def create_user(*, session: SessionDep, user_in: UserCreate) -> Any:
             subject=email_data.subject,
             html_content=email_data.html_content,
         )
-    return user
+    return _user_to_public(session, user)
 
 
 @router.patch("/me", response_model=UserPublic)
@@ -181,7 +200,7 @@ def update_user_me(
     session.add(current_user)
     session.commit()
     session.refresh(current_user)
-    return current_user
+    return _user_to_public(session, current_user)
 
 
 @router.patch("/me/password", response_model=Message)
@@ -251,15 +270,11 @@ async def generate_general_assistant(
 
 
 @router.get("/me", response_model=UserPublic)
-def read_user_me(current_user: CurrentUser) -> Any:
+def read_user_me(session: SessionDep, current_user: CurrentUser) -> Any:
     """
     Get current user.
     """
-    return UserPublic(
-        **current_user.model_dump(),
-        has_google_account=bool(current_user.google_id),
-        has_password=bool(current_user.hashed_password),
-    )
+    return _user_to_public(session, current_user)
 
 
 @router.get("/me/role", response_model=UserRolePublic)
@@ -305,11 +320,7 @@ async def update_user_role(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    return UserPublic(
-        **target.model_dump(),
-        has_google_account=bool(target.google_id),
-        has_password=bool(target.hashed_password),
-    )
+    return _user_to_public(session, target)
 
 
 @router.delete("/me", response_model=Message)
@@ -344,7 +355,7 @@ def register_user(session: SessionDep, user_in: UserRegister) -> Any:
             raise HTTPException(status_code=403, detail=detail)
         raise HTTPException(status_code=400, detail=detail)
 
-    return user
+    return _user_to_public(session, user)
 
 
 @router.get("/{user_id}", response_model=UserPublic)
@@ -356,13 +367,13 @@ def read_user_by_id(
     """
     user = session.get(User, user_id)
     if user == current_user:
-        return user
+        return _user_to_public(session, user)
     if not current_user.is_superuser:
         raise HTTPException(
             status_code=403,
             detail="The user doesn't have enough privileges",
         )
-    return user
+    return _user_to_public(session, user)
 
 
 @router.patch(
@@ -412,7 +423,7 @@ async def update_user(
             changed_by_user_id=current_user.id,
         )
 
-    return db_user
+    return _user_to_public(session, db_user)
 
 
 @router.delete("/{user_id}", dependencies=[Depends(get_current_active_superuser)])

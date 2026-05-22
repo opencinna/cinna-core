@@ -4,12 +4,26 @@ import { redirect, useNavigate } from "@tanstack/react-router"
 import {
   type Body_login_login_access_token as AccessToken,
   LoginService,
+  type LoginToken,
+  type MfaChallenge,
   type UserPublic,
   type UserRegister,
   UsersService,
 } from "@/client"
+import { useMfaChallenge } from "@/components/Auth/MfaChallengeContext"
 import { handleError, safeRedirectPath } from "@/utils"
 import useCustomToast from "./useCustomToast"
+
+/**
+ * Discriminated-union helper — guards the `kind` literal on the
+ * `LoginResponse` (Token | MfaChallenge) returned by `loginAccessToken`
+ * and the Google OAuth callback.
+ */
+const isMfaChallengeResponse = (
+  response: LoginToken | MfaChallenge,
+): response is MfaChallenge => {
+  return (response as MfaChallenge).kind === "mfa_challenge"
+}
 
 /**
  * Read a same-origin `?redirect=` target from the current URL, if any.
@@ -97,7 +111,8 @@ const redirectToLoginPreservingTarget = () => {
 const useAuth = () => {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { showErrorToast } = useCustomToast()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
+  const { setChallenge } = useMfaChallenge()
 
   const { data: user } = useQuery<UserPublic | null, Error>({
     queryKey: ["currentUser"],
@@ -134,6 +149,9 @@ const useAuth = () => {
     mutationFn: (data: UserRegister) =>
       UsersService.registerUser({ requestBody: data }),
     onSuccess: () => {
+      showSuccessToast(
+        "Your account has been created. You can now log in.",
+      )
       const target = readRedirectFromUrl()
       navigate({
         to: "/login",
@@ -146,17 +164,37 @@ const useAuth = () => {
     },
   })
 
-  const login = async (data: AccessToken) => {
+  /**
+   * Outcome of the first-factor login step. When `kind === "token"` the
+   * caller stores the access token and walks the post-auth redirect
+   * chain; when `kind === "mfa_challenge"` the caller stashes the
+   * challenge in `MfaChallengeContext` and navigates to `/login/mfa`.
+   */
+  type LoginOutcome =
+    | { kind: "token"; token: LoginToken }
+    | { kind: "mfa_challenge"; challenge: MfaChallenge }
+
+  const login = async (data: AccessToken): Promise<LoginOutcome> => {
     const response = await LoginService.loginAccessToken({
       formData: data,
     })
-    localStorage.setItem("access_token", response.access_token)
+    if (isMfaChallengeResponse(response)) {
+      return { kind: "mfa_challenge", challenge: response }
+    }
+    return { kind: "token", token: response }
   }
 
   const loginMutation = useMutation({
     mutationFn: login,
-    onSuccess: () => {
-      navigateToPostAuthTarget(readRedirectFromUrl())
+    onSuccess: (outcome) => {
+      const target = readRedirectFromUrl()
+      if (outcome.kind === "mfa_challenge") {
+        setChallenge(outcome.challenge, target)
+        void navigate({ to: "/login/mfa" })
+        return
+      }
+      localStorage.setItem("access_token", outcome.token.access_token)
+      navigateToPostAuthTarget(target)
     },
     onError: handleError.bind(showErrorToast),
   })
@@ -174,5 +212,11 @@ const useAuth = () => {
   }
 }
 
-export { isLoggedIn, ensureSessionValid, redirectToLoginPreservingTarget }
+export {
+  isLoggedIn,
+  ensureSessionValid,
+  redirectToLoginPreservingTarget,
+  isMfaChallengeResponse,
+  navigateToPostAuthTarget,
+}
 export default useAuth

@@ -36,6 +36,9 @@ dependencies = [
     "a2a-sdk>=0.3.22",
     "mcp[cli]>=1.26.0",
     "pyyaml>=6.0.1",
+    "webauthn>=2.3.0",
+    "pyotp>=2.9.0",
+    "qrcode[pil]>=7.4.2",
 ]
 
 [tool.uv]

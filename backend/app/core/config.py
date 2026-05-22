@@ -222,6 +222,45 @@ class Settings(BaseSettings):
     ADMIN_BULK_REBUILD_CONCURRENCY: int = 4  # Max parallel env rebuilds during bulk operation
     ADMIN_ENV_MAX_BULK_SIZE: int = 200  # Max environment IDs per bulk rebuild request
 
+    # ── Two-Factor Authentication (MFA) ────────────────────────────────
+    # Settings that govern the WebAuthn passkey + TOTP authenticator-app
+    # 2FA flows.  See ``docs/drafts/user-2fa-passkeys-totp_plan.md``.
+    MFA_CHALLENGE_TTL_SECONDS: int = 300
+    MFA_MAX_ATTEMPTS_PER_CHALLENGE: int = 5
+    MFA_RECOVERY_CODE_COUNT: int = 8
+    # 8 characters → ``XXXX-XXXX`` (clean two-block presentation in the
+    # UI).  10 produces an awkward ``XXXX-XXXX-XX`` chunking.
+    MFA_RECOVERY_CODE_LENGTH: int = 8
+    MFA_WEBAUTHN_RP_NAME: str = "Cinna"
+    # Override RP ID; when unset, falls back to ``urlparse(FRONTEND_HOST).hostname``.
+    MFA_WEBAUTHN_RP_ID: str | None = None
+    MFA_TOTP_ISSUER: str = "Cinna"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def mfa_webauthn_rp_id(self) -> str:
+        """Resolve the WebAuthn relying-party ID.
+
+        Falls back to ``FRONTEND_HOST``'s hostname when not explicitly set.
+        ``localhost`` is allowed (special-cased by browsers / py_webauthn).
+        """
+        if self.MFA_WEBAUTHN_RP_ID:
+            return self.MFA_WEBAUTHN_RP_ID
+        from urllib.parse import urlparse
+        host = urlparse(self.FRONTEND_HOST).hostname or "localhost"
+        return host
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def mfa_webauthn_expected_origin(self) -> str:
+        """Origin string used to validate WebAuthn assertions.
+
+        Strips the trailing slash from ``FRONTEND_HOST`` if present, since
+        the browser sends the bare origin (``scheme://host[:port]``) in the
+        ``clientDataJSON``.
+        """
+        return self.FRONTEND_HOST.rstrip("/")
+
     # Desktop App Authentication
     DESKTOP_AUTH_ENABLED: bool = True
     DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15

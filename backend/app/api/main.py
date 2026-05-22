@@ -37,6 +37,7 @@ from app.api.routes import (
     llm_plugins,
     login,
     mail_servers,
+    mfa,
     messages,
     oauth,
     oauth_credentials,
@@ -68,6 +69,9 @@ api_router = APIRouter()
 api_router.include_router(login.router)
 api_router.include_router(oauth.router)
 api_router.include_router(users.router)
+# MFA enrollment / management routes — must register before app_data so
+# the more-specific /users/me/mfa/* prefix wins over /users/me/* wildcards.
+api_router.include_router(mfa.router)
 api_router.include_router(app_data.router)  # Must be after users.router (shares /users/me/* prefix space)
 api_router.include_router(utils.router)
 api_router.include_router(agent_status.router)   # Must be before agents.router — /agents/status vs /agents/{id}

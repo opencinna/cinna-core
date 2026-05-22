@@ -106,6 +106,12 @@ Only loopback HTTP URIs — `http://localhost:{port}{path}` or `http://127.0.0.1
 - All existing API endpoints work transparently with desktop tokens (same `CurrentUser` dependency), including the dedicated `GET /desktop-auth/userinfo` profile endpoint
 - Google OAuth users (no password) can authenticate via the browser-based authorize flow
 
+### 2FA and Desktop Auth
+
+The desktop OAuth flow reuses the browser session: the user logs in via their browser (step 4 above), and any 2FA challenge required by the platform is satisfied during that browser login before the consent page is reached. The desktop-auth flow itself adds no extra MFA step and issues no separate challenge. As a result, a user who has 2FA enabled on their account will complete the second factor in the browser as part of normal login; the desktop app then receives a short-lived access token scoped to that already-MFA-verified session.
+
+See [Two-Factor Authentication](../user_2fa/user_2fa.md) for full 2FA details.
+
 ## Infrastructure Requirements
 
 The `/.well-known/cinna-desktop` discovery endpoint must reach the backend through the reverse proxy. Without it, the desktop app cannot validate the instance before login. See [Nginx Setup](../../infrastructure/nginx_setup.md) for the required location block and how it fits alongside the other origin-root well-known URIs.

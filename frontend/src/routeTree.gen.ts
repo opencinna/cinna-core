@@ -14,9 +14,11 @@ import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as RecoverPasswordRouteImport } from './routes/recover-password'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as LayoutRouteImport } from './routes/_layout'
+import { Route as LoginIndexRouteImport } from './routes/login/index'
 import { Route as LayoutIndexRouteImport } from './routes/_layout/index'
 import { Route as WebappWebappTokenRouteImport } from './routes/webapp/$webappToken'
 import { Route as OauthMcpConsentRouteImport } from './routes/oauth/mcp-consent'
+import { Route as LoginMfaRouteImport } from './routes/login/mfa'
 import { Route as GuestFileViewerRouteImport } from './routes/guest/file-viewer'
 import { Route as GuestGuestShareTokenRouteImport } from './routes/guest/$guestShareToken'
 import { Route as DesktopAuthConsentRouteImport } from './routes/desktop-auth/consent'
@@ -81,6 +83,11 @@ const LayoutRoute = LayoutRouteImport.update({
   id: '/_layout',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LoginIndexRoute = LoginIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => LoginRoute,
+} as any)
 const LayoutIndexRoute = LayoutIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -95,6 +102,11 @@ const OauthMcpConsentRoute = OauthMcpConsentRouteImport.update({
   id: '/oauth/mcp-consent',
   path: '/oauth/mcp-consent',
   getParentRoute: () => rootRouteImport,
+} as any)
+const LoginMfaRoute = LoginMfaRouteImport.update({
+  id: '/mfa',
+  path: '/mfa',
+  getParentRoute: () => LoginRoute,
 } as any)
 const GuestFileViewerRoute = GuestFileViewerRouteImport.update({
   id: '/guest/file-viewer',
@@ -307,7 +319,7 @@ const LayoutAdminMarketplacePluginPluginIdRoute =
   } as any)
 
 export interface FileRoutesByFullPath {
-  '/login': typeof LoginRoute
+  '/login': typeof LoginRouteWithChildren
   '/recover-password': typeof RecoverPasswordRoute
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
@@ -323,9 +335,11 @@ export interface FileRoutesByFullPath {
   '/desktop-auth/consent': typeof DesktopAuthConsentRoute
   '/guest/$guestShareToken': typeof GuestGuestShareTokenRoute
   '/guest/file-viewer': typeof GuestFileViewerRoute
+  '/login/mfa': typeof LoginMfaRoute
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
   '/webapp/$webappToken': typeof WebappWebappTokenRoute
   '/': typeof LayoutIndexRoute
+  '/login/': typeof LoginIndexRoute
   '/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/admin/users': typeof LayoutAdminUsersRoute
@@ -355,7 +369,6 @@ export interface FileRoutesByFullPath {
   '/catalog/agents/install/$bundleId': typeof LayoutCatalogAgentsInstallBundleIdRoute
 }
 export interface FileRoutesByTo {
-  '/login': typeof LoginRoute
   '/recover-password': typeof RecoverPasswordRoute
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
@@ -369,9 +382,11 @@ export interface FileRoutesByTo {
   '/desktop-auth/consent': typeof DesktopAuthConsentRoute
   '/guest/$guestShareToken': typeof GuestGuestShareTokenRoute
   '/guest/file-viewer': typeof GuestFileViewerRoute
+  '/login/mfa': typeof LoginMfaRoute
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
   '/webapp/$webappToken': typeof WebappWebappTokenRoute
   '/': typeof LayoutIndexRoute
+  '/login': typeof LoginIndexRoute
   '/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/admin/users': typeof LayoutAdminUsersRoute
@@ -403,7 +418,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_layout': typeof LayoutRouteWithChildren
-  '/login': typeof LoginRoute
+  '/login': typeof LoginRouteWithChildren
   '/recover-password': typeof RecoverPasswordRoute
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
@@ -419,9 +434,11 @@ export interface FileRoutesById {
   '/desktop-auth/consent': typeof DesktopAuthConsentRoute
   '/guest/$guestShareToken': typeof GuestGuestShareTokenRoute
   '/guest/file-viewer': typeof GuestFileViewerRoute
+  '/login/mfa': typeof LoginMfaRoute
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
   '/webapp/$webappToken': typeof WebappWebappTokenRoute
   '/_layout/': typeof LayoutIndexRoute
+  '/login/': typeof LoginIndexRoute
   '/_layout/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
   '/_layout/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/_layout/admin/users': typeof LayoutAdminUsersRoute
@@ -469,9 +486,11 @@ export interface FileRouteTypes {
     | '/desktop-auth/consent'
     | '/guest/$guestShareToken'
     | '/guest/file-viewer'
+    | '/login/mfa'
     | '/oauth/mcp-consent'
     | '/webapp/$webappToken'
     | '/'
+    | '/login/'
     | '/admin/agent-envs'
     | '/admin/marketplaces'
     | '/admin/users'
@@ -501,7 +520,6 @@ export interface FileRouteTypes {
     | '/catalog/agents/install/$bundleId'
   fileRoutesByTo: FileRoutesByTo
   to:
-    | '/login'
     | '/recover-password'
     | '/reset-password'
     | '/signup'
@@ -515,9 +533,11 @@ export interface FileRouteTypes {
     | '/desktop-auth/consent'
     | '/guest/$guestShareToken'
     | '/guest/file-viewer'
+    | '/login/mfa'
     | '/oauth/mcp-consent'
     | '/webapp/$webappToken'
     | '/'
+    | '/login'
     | '/admin/agent-envs'
     | '/admin/marketplaces'
     | '/admin/users'
@@ -564,9 +584,11 @@ export interface FileRouteTypes {
     | '/desktop-auth/consent'
     | '/guest/$guestShareToken'
     | '/guest/file-viewer'
+    | '/login/mfa'
     | '/oauth/mcp-consent'
     | '/webapp/$webappToken'
     | '/_layout/'
+    | '/login/'
     | '/_layout/admin/agent-envs'
     | '/_layout/admin/marketplaces'
     | '/_layout/admin/users'
@@ -598,7 +620,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   LayoutRoute: typeof LayoutRouteWithChildren
-  LoginRoute: typeof LoginRoute
+  LoginRoute: typeof LoginRouteWithChildren
   RecoverPasswordRoute: typeof RecoverPasswordRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
   SignupRoute: typeof SignupRoute
@@ -648,6 +670,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/login/': {
+      id: '/login/'
+      path: '/'
+      fullPath: '/login/'
+      preLoaderRoute: typeof LoginIndexRouteImport
+      parentRoute: typeof LoginRoute
+    }
     '/_layout/': {
       id: '/_layout/'
       path: '/'
@@ -668,6 +697,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/oauth/mcp-consent'
       preLoaderRoute: typeof OauthMcpConsentRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/login/mfa': {
+      id: '/login/mfa'
+      path: '/mfa'
+      fullPath: '/login/mfa'
+      preLoaderRoute: typeof LoginMfaRouteImport
+      parentRoute: typeof LoginRoute
     }
     '/guest/file-viewer': {
       id: '/guest/file-viewer'
@@ -1077,9 +1113,21 @@ const LayoutRouteChildren: LayoutRouteChildren = {
 const LayoutRouteWithChildren =
   LayoutRoute._addFileChildren(LayoutRouteChildren)
 
+interface LoginRouteChildren {
+  LoginMfaRoute: typeof LoginMfaRoute
+  LoginIndexRoute: typeof LoginIndexRoute
+}
+
+const LoginRouteChildren: LoginRouteChildren = {
+  LoginMfaRoute: LoginMfaRoute,
+  LoginIndexRoute: LoginIndexRoute,
+}
+
+const LoginRouteWithChildren = LoginRoute._addFileChildren(LoginRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   LayoutRoute: LayoutRouteWithChildren,
-  LoginRoute: LoginRoute,
+  LoginRoute: LoginRouteWithChildren,
   RecoverPasswordRoute: RecoverPasswordRoute,
   ResetPasswordRoute: ResetPasswordRoute,
   SignupRoute: SignupRoute,

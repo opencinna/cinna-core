@@ -2,9 +2,11 @@ import { useGoogleLogin } from "@react-oauth/google"
 import { useMutation } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { FcGoogle } from "react-icons/fc"
-import type { GoogleCallbackRequest } from "@/client"
+import type { GoogleCallbackRequest, LoginToken, MfaChallenge } from "@/client"
 import { OauthService } from "@/client"
+import { useMfaChallenge } from "@/components/Auth/MfaChallengeContext"
 import { Button } from "@/components/ui/button"
+import { isMfaChallengeResponse } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { safeRedirectPath } from "@/utils"
 
@@ -13,11 +15,16 @@ const GOOGLE_REDIRECT_KEY = "google_oauth_redirect"
 export function GoogleLoginButton() {
   const navigate = useNavigate()
   const { showErrorToast } = useCustomToast()
+  const { setChallenge } = useMfaChallenge()
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
 
   if (!clientId) return null
 
-  const googleLoginMutation = useMutation({
+  const googleLoginMutation = useMutation<
+    LoginToken | MfaChallenge,
+    Error,
+    string
+  >({
     mutationFn: async (code: string) => {
       const state = sessionStorage.getItem("google_oauth_state") || ""
       const requestBody: GoogleCallbackRequest = {
@@ -29,13 +36,21 @@ export function GoogleLoginButton() {
       })
     },
     onSuccess: (data) => {
-      localStorage.setItem("access_token", data.access_token)
       sessionStorage.removeItem("google_oauth_state")
       const stashed = sessionStorage.getItem(GOOGLE_REDIRECT_KEY)
       sessionStorage.removeItem(GOOGLE_REDIRECT_KEY)
       const target = safeRedirectPath(stashed)
-      if (target !== "/") {
-        window.location.assign(target)
+      const safeTarget = target === "/" ? null : target
+
+      if (isMfaChallengeResponse(data)) {
+        setChallenge(data, safeTarget)
+        void navigate({ to: "/login/mfa" })
+        return
+      }
+
+      localStorage.setItem("access_token", data.access_token)
+      if (safeTarget) {
+        window.location.assign(safeTarget)
         return
       }
       navigate({ to: "/" })

@@ -20,6 +20,34 @@ from .users.user import (
     SetPassword,
     OAuthConfig,
 )
+from .users.user_passkey import (
+    UserPasskey,
+    UserPasskeyPublic,
+    UserPasskeysPublic,
+    UserPasskeyUpdate,
+)
+from .users.user_totp_secret import (
+    UserTotpSecret,
+    TotpEnrollResponse,
+    TotpFinishRequest,
+)
+from .users.user_recovery_code import (
+    UserRecoveryCode,
+    RecoveryCodeStatus,
+    RecoveryCodesPlaintext,
+)
+from .users.user_mfa_challenge import (
+    UserMfaChallenge,
+    MfaFirstFactor,
+    MfaChallenge,
+    MfaVerifyRequest,
+    LoginToken,
+    LoginResponse,
+    MfaStatus,
+    StepUpProof,
+    PasskeyAuthOptionsRequest,
+    PasskeyAuthOptionsResponse,
+)
 from .agents.agent import (
     Agent,
     AgentCreate,
@@ -425,6 +453,16 @@ from .events.security_event import (
     CREDENTIAL_BASH_ACCESS,
     OUTPUT_REDACTED,
     CREDENTIAL_WRITE_ATTEMPT,
+    MFA_ENROLLED,
+    MFA_DISABLED,
+    MFA_CHALLENGE_ISSUED,
+    MFA_CHALLENGE_SUCCESS,
+    MFA_CHALLENGE_FAILED,
+    MFA_RECOVERY_CODE_USED,
+    MFA_RATE_LIMITED,
+    MFA_SIGN_COUNT_REGRESSION,
+    MFA_PASSKEY_INVALID_ORIGIN,
+    MFA_RECOVERY_CODES_REGENERATED,
 )
 from .users.user_dashboard import (
     UserDashboard,
@@ -550,6 +588,27 @@ __all__ = [
     "TokenPayload",
     "SetPassword",
     "OAuthConfig",
+    # Two-Factor Authentication (MFA)
+    "UserPasskey",
+    "UserPasskeyPublic",
+    "UserPasskeysPublic",
+    "UserPasskeyUpdate",
+    "UserTotpSecret",
+    "TotpEnrollResponse",
+    "TotpFinishRequest",
+    "UserRecoveryCode",
+    "RecoveryCodeStatus",
+    "RecoveryCodesPlaintext",
+    "UserMfaChallenge",
+    "MfaFirstFactor",
+    "MfaChallenge",
+    "MfaVerifyRequest",
+    "LoginToken",
+    "LoginResponse",
+    "MfaStatus",
+    "StepUpProof",
+    "PasskeyAuthOptionsRequest",
+    "PasskeyAuthOptionsResponse",
     # Agents
     "Agent",
     "AgentCreate",
@@ -909,6 +968,16 @@ __all__ = [
     "CREDENTIAL_BASH_ACCESS",
     "OUTPUT_REDACTED",
     "CREDENTIAL_WRITE_ATTEMPT",
+    "MFA_ENROLLED",
+    "MFA_DISABLED",
+    "MFA_CHALLENGE_ISSUED",
+    "MFA_CHALLENGE_SUCCESS",
+    "MFA_CHALLENGE_FAILED",
+    "MFA_RECOVERY_CODE_USED",
+    "MFA_RATE_LIMITED",
+    "MFA_SIGN_COUNT_REGRESSION",
+    "MFA_PASSKEY_INVALID_ORIGIN",
+    "MFA_RECOVERY_CODES_REGENERATED",
     # User Dashboards
     "UserDashboard",
     "UserDashboardCreate",

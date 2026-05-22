@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from enum import Enum
 from typing import List
 from pydantic import EmailStr
@@ -118,6 +119,14 @@ class User(UserBase, table=True):
     workspaces_enabled: bool = Field(default=False)
     # Per-user monotonic counter for short-code generation (TASK-1, TASK-2, ...)
     task_sequence_counter: int = Field(default=0)
+    # ── Two-Factor Authentication ────────────────────────────────────
+    # Master switch — True once the user has enrolled at least one
+    # second factor (passkey or TOTP) and has not disabled 2FA since.
+    two_factor_enabled: bool = Field(default=False)
+    # Timestamp the first factor was confirmed.
+    two_factor_enrolled_at: datetime | None = Field(default=None)
+    # Last successful second-factor verification (used by Security tab UI).
+    two_factor_last_used_at: datetime | None = Field(default=None)
     agents: List["app.models.agents.agent.Agent"] = Relationship(back_populates="owner", cascade_delete=True)
     credentials: List["app.models.credentials.credential.Credential"] = Relationship(back_populates="owner", cascade_delete=True)
 
@@ -138,6 +147,10 @@ class UserPublic(UserBase):
     default_ai_credential_building_id: uuid.UUID | None = None
     default_model_override_conversation: str | None = None
     default_model_override_building: str | None = None
+    # Two-Factor Authentication status (derived/aggregated, never the secret)
+    two_factor_enabled: bool = False
+    has_passkey: bool = False
+    has_totp: bool = False
 
 
 class UsersPublic(SQLModel):

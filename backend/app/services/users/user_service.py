@@ -1,13 +1,26 @@
 """
 User Service - Business logic for user management operations.
 """
+import json
 import secrets
+from datetime import datetime, UTC
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from app.core.security import get_password_hash, verify_password
-from app.models import User, UserCreate, UserUpdate
+from app.models import (
+    SecurityEvent,
+    SecurityEventCreate,
+    User,
+    UserCreate,
+    UserMfaChallenge,
+    UserPasskey,
+    UserRecoveryCode,
+    UserTotpSecret,
+    UserUpdate,
+)
+from app.models.events import security_event as security_event_constants
 from app.models.users.user import UserRole
 from app.services.users.auth_service import AuthService
 from app.utils import (
@@ -194,6 +207,61 @@ class UserService:
         user.hashed_password = get_password_hash(password=new_password)
         session.add(user)
         session.commit()
+
+    @staticmethod
+    def disable_all_factors(
+        *,
+        session: Session,
+        user: User,
+        reason: str = "user_initiated",
+    ) -> None:
+        """Wipe every 2FA artefact for ``user`` and flip the master flag off.
+
+        Called by ``POST /users/me/mfa/disable`` after a step-up factor
+        has already been verified, AND from ``MfaService.disable_totp`` /
+        ``MfaService.delete_passkey`` when the removed factor was the
+        user's last one (``reason="last_factor_removed"``). Removes:
+
+        - all :class:`UserPasskey` rows
+        - the :class:`UserTotpSecret` row (if any)
+        - all :class:`UserRecoveryCode` rows
+        - pending :class:`UserMfaChallenge` rows
+
+        Also writes a :data:`MFA_DISABLED` security-event row for the
+        audit trail.  Idempotent — safe to call when no factors are
+        enrolled.
+        """
+        for stmt in (
+            delete(UserPasskey).where(UserPasskey.user_id == user.id),
+            delete(UserTotpSecret).where(UserTotpSecret.user_id == user.id),
+            delete(UserRecoveryCode).where(UserRecoveryCode.user_id == user.id),
+            delete(UserMfaChallenge).where(UserMfaChallenge.user_id == user.id),
+        ):
+            session.exec(stmt)
+        user.two_factor_enabled = False
+        # We intentionally keep ``two_factor_enrolled_at`` and
+        # ``two_factor_last_used_at`` for historical reference — they
+        # are cleared on the next fresh enrollment.
+        session.add(user)
+        payload = SecurityEventCreate(
+            event_type=security_event_constants.MFA_DISABLED,
+            severity="medium",
+            details={"reason": reason},
+        )
+        session.add(
+            SecurityEvent(
+                user_id=user.id,
+                event_type=payload.event_type,
+                severity=payload.severity,
+                details=json.dumps(payload.details),
+                created_at=datetime.now(UTC),
+            )
+        )
+        session.commit()
+        # Bulk deletes don't auto-expire ORM-tracked rows. Refresh the
+        # passed-in user so any post-call read in the same request sees
+        # the updated `two_factor_enabled=False` without surprises.
+        session.refresh(user)
 
     @staticmethod
     def recover_password(*, session: Session, email: str) -> None:

@@ -1361,6 +1361,25 @@ export type ArticleListItem = {
     git_repo_id: string;
 };
 
+/**
+ * Response of ``POST /users/me/mfa/passkeys/begin``.
+ *
+ * ``options`` is the ``PublicKeyCredentialCreationOptionsJSON`` the
+ * browser feeds directly into ``navigator.credentials.create()``
+ * (via ``@simplewebauthn/browser``).  ``challenge_token`` is the opaque
+ * server-side handle the client echoes back to ``/passkeys/finish``.
+ *
+ * The two are nested rather than merged so the client can pass
+ * ``options`` straight to the WebAuthn library without accidentally
+ * leaking the server handle into the spec-defined options object.
+ */
+export type BeginPasskeyRegistrationResponse = {
+    challenge_token: string;
+    options: {
+        [key: string]: unknown;
+    };
+};
+
 export type BlockLayoutUpdate = {
     block_id: string;
     grid_x: number;
@@ -1854,6 +1873,7 @@ export type ExchangeSetupTokenBody = {
 
 export type ExecBody = {
     command: string;
+    timeout?: (number | null);
 };
 
 /**
@@ -2514,6 +2534,19 @@ export type LLMPluginMarketplaceUpdate = {
     type?: (string | null);
 };
 
+/**
+ * Discriminated alternative to ``MfaChallenge`` returned when 2FA
+ * is not required.
+ *
+ * Mirrors :class:`app.models.users.user.Token` with an explicit
+ * ``kind`` literal so the frontend can branch on a single union shape.
+ */
+export type LoginToken = {
+    kind?: "token";
+    access_token: string;
+    token_type?: string;
+};
+
 export type MailServerConfigCreate = {
     name: string;
     server_type: MailServerType;
@@ -2635,6 +2668,57 @@ export type MessagesPublic = {
     count: number;
 };
 
+/**
+ * Response when ``POST /login/access-token`` requires a second
+ * factor.
+ *
+ * ``kind`` is a literal discriminator that lets the frontend branch
+ * on a single union shape (``LoginResponse``).
+ */
+export type MfaChallenge = {
+    kind?: "mfa_challenge";
+    challenge_token: string;
+    expires_at: string;
+    allowed_methods: Array<(string)>;
+};
+
+/**
+ * Response of ``GET /users/me/mfa/status``.
+ */
+export type MfaStatus = {
+    enabled: boolean;
+    has_passkey: boolean;
+    has_totp: boolean;
+    has_recovery_codes: boolean;
+    passkey_count: number;
+    last_used_at: (string | null);
+    enrolled_at: (string | null);
+};
+
+/**
+ * Body of ``POST /login/mfa/verify``.
+ *
+ * ``method`` is one of ``"passkey"``, ``"totp"``, or ``"recovery"``.
+ * ``payload`` shape varies by method:
+ *
+ * - ``passkey`` — full WebAuthn ``AuthenticationResponseJSON`` dict
+ * - ``totp``   — ``{"code": "123456"}``
+ * - ``recovery`` — ``{"code": "xxxx-xxxx"}``
+ *
+ * Plain ``pydantic.BaseModel`` (not ``SQLModel``) so the ``Literal``
+ * constraint on ``method`` propagates into OpenAPI as an enum and the
+ * generated TypeScript client gets a string-union type.
+ */
+export type MfaVerifyRequest = {
+    challenge_token: string;
+    method: 'passkey' | 'totp' | 'recovery';
+    payload: {
+        [key: string]: unknown;
+    };
+};
+
+export type method = 'passkey' | 'totp' | 'recovery';
+
 export type NewPassword = {
     token: string;
     new_password: string;
@@ -2684,6 +2768,52 @@ export type OdooVerifyResponse = {
     success: boolean;
     message: string;
     user_id?: (number | null);
+};
+
+/**
+ * Body of ``POST /login/mfa/passkey/options``.
+ */
+export type PasskeyAuthOptionsRequest = {
+    challenge_token: string;
+};
+
+/**
+ * Response of ``POST /login/mfa/passkey/options``.
+ *
+ * Nests the WebAuthn ``PublicKeyCredentialRequestOptionsJSON`` under
+ * ``options`` so the frontend can pass it straight to
+ * ``@simplewebauthn/browser`` without our request handle leaking into
+ * the spec-defined options object.  The caller already holds
+ * ``challenge_token`` (they supplied it in the request body), so we do
+ * not echo it back.
+ */
+export type PasskeyAuthOptionsResponse = {
+    options: {
+        [key: string]: unknown;
+    };
+};
+
+/**
+ * Body of ``POST /users/me/mfa/passkeys/begin``.
+ *
+ * Currently has no fields — the nickname is supplied at ``finish``
+ * time.  Kept as a typed body so the OpenAPI shape stays stable when
+ * (if) we add fields here later (e.g. ``authenticator_attachment``
+ * preference).
+ */
+export type PasskeyBeginRequest = {
+    [key: string]: unknown;
+};
+
+/**
+ * Body of ``POST /users/me/mfa/passkeys/finish``.
+ */
+export type PasskeyFinishRequest = {
+    challenge_token: string;
+    credential: {
+        [key: string]: unknown;
+    };
+    nickname: string;
 };
 
 /**
@@ -2765,6 +2895,31 @@ export type PublishSettingsUpdate = {
     [key: string]: _CredentialOverride;
 } | null);
     ai_credentials?: (_AICredentialDraft | null);
+};
+
+/**
+ * One-shot response containing fresh plaintext recovery codes.
+ *
+ * Returned by ``POST /users/me/mfa/recovery-codes/regenerate`` and by
+ * the enrollment-finish flows that turn 2FA on for the first time.
+ */
+export type RecoveryCodesPlaintext = {
+    codes: Array<(string)>;
+    generated_at: string;
+    regenerate_warning?: boolean;
+};
+
+/**
+ * Response of ``GET /users/me/mfa/recovery-codes``.
+ *
+ * Never includes the plaintext codes — those are returned exactly
+ * once at generation/regeneration time via
+ * :class:`RecoveryCodesPlaintext`.
+ */
+export type RecoveryCodeStatus = {
+    remaining_count: number;
+    total_count: number;
+    last_regenerated_at: (string | null);
 };
 
 /**
@@ -3222,6 +3377,31 @@ export type SSHKeyUpdate = {
     name?: (string | null);
 };
 
+/**
+ * Response of ``POST /users/me/mfa/step-up/passkey/options`` —
+ * options JSON plus the ``challenge_token`` to feed into the proof.
+ */
+export type StepUpPasskeyOptions = {
+    challenge_token: string;
+    options: {
+        [key: string]: unknown;
+    };
+};
+
+/**
+ * Fresh-factor proof required to disable/weaken 2FA.
+ *
+ * Exactly one of these must be supplied — validated server-side.
+ */
+export type StepUpProof = {
+    password?: (string | null);
+    totp_code?: (string | null);
+    passkey_assertion?: ({
+    [key: string]: unknown;
+} | null);
+    passkey_challenge_token?: (string | null);
+};
+
 export type TaskAttachmentPublic = {
     id: string;
     task_id: string;
@@ -3358,17 +3538,31 @@ export type ToggleIdentityContactRequest = {
     is_enabled: boolean;
 };
 
-export type Token = {
-    access_token: string;
-    token_type?: string;
-};
-
 export type TokenResponse = {
     access_token: string;
     refresh_token: string;
     token_type?: string;
     expires_in: number;
     client_id: string;
+};
+
+/**
+ * Response of ``POST /users/me/mfa/totp/begin``.
+ *
+ * ``secret_token`` is an HMAC-signed handle that the client echoes back
+ * to ``/finish`` — the raw secret is never stored server-side until
+ * finish succeeds.
+ */
+export type TotpEnrollResponse = {
+    secret_base32: string;
+    otpauth_uri: string;
+    qr_svg_data_uri: string;
+    secret_token: string;
+};
+
+export type TotpFinishRequest = {
+    secret_token: string;
+    code: string;
 };
 
 export type UpdatePassword = {
@@ -3556,6 +3750,33 @@ export type UserInfoResponse = {
     username?: (string | null);
 };
 
+/**
+ * API-safe passkey representation — omits the raw ``credential_id``
+ * and ``public_key`` blobs.
+ */
+export type UserPasskeyPublic = {
+    id: string;
+    nickname: string;
+    transports: Array<(string)>;
+    aaguid: (string | null);
+    device_type: string;
+    backed_up: boolean;
+    created_at: string;
+    last_used_at: (string | null);
+};
+
+export type UserPasskeysPublic = {
+    data: Array<UserPasskeyPublic>;
+    count: number;
+};
+
+/**
+ * Patch request for renaming a passkey.
+ */
+export type UserPasskeyUpdate = {
+    nickname: string;
+};
+
 export type UserPublic = {
     email: string;
     is_active?: boolean;
@@ -3576,6 +3797,9 @@ export type UserPublic = {
     default_ai_credential_building_id?: (string | null);
     default_model_override_conversation?: (string | null);
     default_model_override_building?: (string | null);
+    two_factor_enabled?: boolean;
+    has_passkey?: boolean;
+    has_totp?: boolean;
 };
 
 /**
@@ -3601,6 +3825,9 @@ export type UserPublicWithAICredentials = {
     default_ai_credential_building_id?: (string | null);
     default_model_override_conversation?: (string | null);
     default_model_override_building?: (string | null);
+    two_factor_enabled?: boolean;
+    has_passkey?: boolean;
+    has_totp?: boolean;
     has_anthropic_api_key?: boolean;
     has_openai_api_key?: boolean;
     has_google_ai_api_key?: boolean;
@@ -5597,7 +5824,19 @@ export type LoginLoginAccessTokenData = {
     formData: Body_login_login_access_token;
 };
 
-export type LoginLoginAccessTokenResponse = (Token);
+export type LoginLoginAccessTokenResponse = ((LoginToken | MfaChallenge));
+
+export type LoginLoginMfaPasskeyOptionsData = {
+    requestBody: PasskeyAuthOptionsRequest;
+};
+
+export type LoginLoginMfaPasskeyOptionsResponse = (PasskeyAuthOptionsResponse);
+
+export type LoginLoginMfaVerifyData = {
+    requestBody: MfaVerifyRequest;
+};
+
+export type LoginLoginMfaVerifyResponse = (LoginToken);
 
 export type LoginTestTokenResponse = (UserPublic);
 
@@ -5794,6 +6033,69 @@ export type MessagesListSessionCommandsData = {
 
 export type MessagesListSessionCommandsResponse = (SessionCommandsPublic);
 
+export type MfaMfaStatusResponse = (MfaStatus);
+
+export type MfaListPasskeysResponse = (UserPasskeysPublic);
+
+export type MfaBeginPasskeyRegistrationData = {
+    requestBody?: (PasskeyBeginRequest | null);
+};
+
+export type MfaBeginPasskeyRegistrationResponse = (BeginPasskeyRegistrationResponse);
+
+export type MfaFinishPasskeyRegistrationData = {
+    requestBody: PasskeyFinishRequest;
+};
+
+export type MfaFinishPasskeyRegistrationResponse = ({
+    [key: string]: unknown;
+});
+
+export type MfaRenamePasskeyData = {
+    passkeyId: string;
+    requestBody: UserPasskeyUpdate;
+};
+
+export type MfaRenamePasskeyResponse = (UserPasskeyPublic);
+
+export type MfaDeletePasskeyData = {
+    passkeyId: string;
+};
+
+export type MfaDeletePasskeyResponse = (Message);
+
+export type MfaBeginTotpEnrollmentResponse = (TotpEnrollResponse);
+
+export type MfaFinishTotpEnrollmentData = {
+    requestBody: TotpFinishRequest;
+};
+
+export type MfaFinishTotpEnrollmentResponse = ({
+    [key: string]: unknown;
+});
+
+export type MfaDisableTotpData = {
+    requestBody: StepUpProof;
+};
+
+export type MfaDisableTotpResponse = (Message);
+
+export type MfaRecoveryCodesStatusResponse = (RecoveryCodeStatus);
+
+export type MfaRegenerateRecoveryCodesData = {
+    requestBody: StepUpProof;
+};
+
+export type MfaRegenerateRecoveryCodesResponse = (RecoveryCodesPlaintext);
+
+export type MfaBeginStepUpPasskeyResponse = (StepUpPasskeyOptions);
+
+export type MfaDisableTwoFactorData = {
+    requestBody: StepUpProof;
+};
+
+export type MfaDisableTwoFactorResponse = (Message);
+
 export type OauthGetOauthConfigResponse = (OAuthConfig);
 
 export type OauthGoogleAuthorizeResponse = ({
@@ -5804,7 +6106,7 @@ export type OauthGoogleCallbackData = {
     requestBody: GoogleCallbackRequest;
 };
 
-export type OauthGoogleCallbackResponse = (Token);
+export type OauthGoogleCallbackResponse = ((LoginToken | MfaChallenge));
 
 export type OauthLinkGoogleAccountEndpointData = {
     requestBody: GoogleCallbackRequest;

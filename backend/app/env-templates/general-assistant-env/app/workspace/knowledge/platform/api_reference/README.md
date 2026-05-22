@@ -41,6 +41,7 @@ Each file below documents one API domain.
 | Mail Servers | [mail_servers.md](./mail_servers.md) | 6 |
 | Mcp Connectors | [mcp_connectors.md](./mcp_connectors.md) | 5 |
 | Messages | [messages.md](./messages.md) | 5 |
+| Mfa | [mfa.md](./mfa.md) | 13 |
 | Sessions | [sessions.md](./sessions.md) | 9 |
 | Ssh Keys | [ssh_keys.md](./ssh_keys.md) | 6 |
 | Task Triggers | [task_triggers.md](./task_triggers.md) | 16 |

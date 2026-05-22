@@ -113,6 +113,10 @@ from app.services.bundles.app_data_orphan_scheduler import (
     start_scheduler as start_app_data_orphan_scheduler,
     shutdown_scheduler as shutdown_app_data_orphan_scheduler,
 )
+from app.services.users.mfa_cleanup_service import (
+    start_scheduler as start_mfa_cleanup_scheduler,
+    shutdown_scheduler as shutdown_mfa_cleanup_scheduler,
+)
 
 
 @asynccontextmanager
@@ -129,6 +133,7 @@ async def lifespan(app: FastAPI):
     start_cli_cleanup_scheduler()
     start_desktop_auth_cleanup_scheduler()
     start_app_data_orphan_scheduler()
+    start_mfa_cleanup_scheduler()
 
     # Register backend event handlers
     from app.models.events.event import EventType
@@ -299,6 +304,7 @@ async def lifespan(app: FastAPI):
     shutdown_cli_cleanup_scheduler()
     shutdown_desktop_auth_cleanup_scheduler()
     shutdown_app_data_orphan_scheduler()
+    shutdown_mfa_cleanup_scheduler()
     event_service.shutdown()
     logger.info("Application shutdown complete")
 

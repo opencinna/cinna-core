@@ -48,6 +48,7 @@ import { FileBadge } from "@/components/Chat/FileBadge"
 import { ApiKeyOnboarding } from "@/components/Onboarding/ApiKeyOnboarding"
 import { GettingStartedModal } from "@/components/Onboarding/GettingStartedModal"
 import { DashboardHeader } from "@/components/Dashboard/DashboardHeader"
+import { EnableTwoFactorBanner } from "@/components/UserSettings/Security/EnableTwoFactorBanner"
 import { APP_NAME } from "@/utils"
 
 type DashboardSearch = {
@@ -552,6 +553,7 @@ function Dashboard() {
       {/* Main centered content area */}
       <div className="flex-1 flex items-center justify-center p-6 overflow-auto">
         <div className="w-full max-w-3xl space-y-6">
+          <EnableTwoFactorBanner />
           {/* Agent Selector Pills */}
           <div className="space-y-2">
             <div className="flex flex-wrap gap-2 items-center">

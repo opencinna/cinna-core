@@ -131,6 +131,7 @@ Events are delivered incrementally. `A2AStreamEventHandler` pushes each mapped e
 | assistant | working | false | Agent text response (with message) |
 | tool | working | false | Tool execution (with message) |
 | thinking | working | false | Agent thinking (with message) |
+| tool_result_delta | working | false | Tool result chunk; carries a TextPart with `cinna.content_kind = "tool_result"`, `cinna.tool_id`, and `cinna.tool_stream` |
 | stream_completed | completed | true | Used by internal event service |
 | error | failed | true | Error occurred (with message) |
 | interrupted | canceled | true | User requested cancellation |
@@ -145,15 +146,17 @@ A2A clients can inspect `TextPart.metadata` to distinguish the three kinds of ag
 | `text` | Agent's final answer text (from `assistant` events) | — |
 | `thinking` | Chain-of-thought reasoning (from `thinking` events) | — |
 | `tool` | Tool-call narration (from `tool` events) | `cinna.tool_name` — name of the tool invoked; `cinna.tool_input` — structured tool arguments (JSON object); `cinna.tool_id` — opaque tool-call identifier string |
+| `tool_result` | Tool result output (from `tool_result_delta` events — CLI stdout/stderr from `/run:*` commands and LLM-side tool result chunks) | `cinna.tool_id` — pairs this result back to its originating `tool`-kind TextPart; `cinna.tool_stream` — `"stdout"` or `"stderr"` |
 
 - `cinna.tool_name`, `cinna.tool_input`, and `cinna.tool_id` are present on `TextPart.metadata` only when `cinna.content_kind` is `"tool"`.
 - `cinna.tool_input` is included when the underlying SDK emits a dict of tool arguments; clients can use it to render the call without parsing the narration text.
 - `cinna.tool_id` is included when the underlying SDK emits a non-empty identifier; clients can use it to pair a tool-call part with its later tool-result event and cross-reference the persisted streaming-event trace.
 - Tool event text contains the raw tool-call narration; no prefix is added. Clients rely on `cinna.content_kind` and the additional tool metadata keys to identify and interpret tool parts.
+- `cinna.tool_id` and `cinna.tool_stream` are present on `TextPart.metadata` only when `cinna.content_kind` is `"tool_result"`. `cinna.tool_stream` is always either `"stdout"` or `"stderr"`; it defaults to `"stdout"` when the underlying event omits a `stream` field, and unknown values are coerced to `"stdout"`.
 
 #### History Replay (GetTask)
 
-When a client calls `GetTask`, agent messages in `history` are returned with **multiple TextParts** — one per persisted streaming event (assistant, thinking, tool). Each part carries its own `cinna.content_kind` metadata so clients replaying the history can reconstruct the full content breakdown. Messages without a persisted streaming trace fall back to a single TextPart built from the stored message content.
+When a client calls `GetTask`, agent messages in `history` are returned with **multiple TextParts** — one per persisted streaming event (assistant, thinking, tool, tool_result). Each part carries its own `cinna.content_kind` metadata so clients replaying the history can reconstruct the full content breakdown. `tool_result_delta` events are expanded into their own TextParts with `cinna.tool_id` and `cinna.tool_stream` metadata, exactly mirroring the live-stream shape. Messages without a persisted streaming trace fall back to a single TextPart built from the stored message content.
 
 ### Environment Activation
 
@@ -229,4 +232,4 @@ A2A Event Mapper ---------> Centralized A2A protocol mapping logic
 
 ---
 
-*Last updated: 2026-04-18*
+*Last updated: 2026-05-21*

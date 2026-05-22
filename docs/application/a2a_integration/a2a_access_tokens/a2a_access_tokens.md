@@ -128,6 +128,10 @@ Token in Header --> get_a2a_auth_context() --> Decode JWT
 - **[A2A Protocol](../a2a_protocol/a2a_protocol.md)** - Access tokens are used for A2A authentication
 - **[Agent Sessions](../../agent_sessions/agent_sessions.md)** - Sessions track `access_token_id` for scope enforcement
 
+### 2FA Does Not Apply to A2A Tokens
+
+Pre-issued A2A access tokens are scoped machine credentials that authenticate independently of the owning user's web session. Enabling two-factor authentication on a user account has **no effect** on existing A2A tokens for that user's agents — those tokens continue to work as before. The 2FA challenge flow applies only to interactive login sessions (password and Google OAuth). See [Two-Factor Authentication](../../user_2fa/user_2fa.md) for details.
+
 ---
 
 *Last updated: 2026-03-02*

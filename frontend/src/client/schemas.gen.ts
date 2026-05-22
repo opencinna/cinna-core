@@ -6914,6 +6914,33 @@ export const ArticleListItemSchema = {
     description: 'Article metadata for discovery step.'
 } as const;
 
+export const BeginPasskeyRegistrationResponseSchema = {
+    properties: {
+        challenge_token: {
+            type: 'string',
+            title: 'Challenge Token'
+        },
+        options: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Options'
+        }
+    },
+    type: 'object',
+    required: ['challenge_token', 'options'],
+    title: 'BeginPasskeyRegistrationResponse',
+    description: `Response of \`\`POST /users/me/mfa/passkeys/begin\`\`.
+
+\`\`options\`\` is the \`\`PublicKeyCredentialCreationOptionsJSON\`\` the
+browser feeds directly into \`\`navigator.credentials.create()\`\`
+(via \`\`@simplewebauthn/browser\`\`).  \`\`challenge_token\`\` is the opaque
+server-side handle the client echoes back to \`\`/passkeys/finish\`\`.
+
+The two are nested rather than merged so the client can pass
+\`\`options\`\` straight to the WebAuthn library without accidentally
+leaking the server handle into the spec-defined options object.`
+} as const;
+
 export const BlockLayoutUpdateSchema = {
     properties: {
         block_id: {
@@ -8903,6 +8930,19 @@ export const ExecBodySchema = {
         command: {
             type: 'string',
             title: 'Command'
+        },
+        timeout: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    maximum: 86400,
+                    minimum: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Timeout'
         }
     },
     type: 'object',
@@ -12117,6 +12157,34 @@ export const LLMPluginMarketplacesPublicSchema = {
     description: 'List response for plugin marketplaces.'
 } as const;
 
+export const LoginTokenSchema = {
+    properties: {
+        kind: {
+            type: 'string',
+            const: 'token',
+            title: 'Kind',
+            default: 'token'
+        },
+        access_token: {
+            type: 'string',
+            title: 'Access Token'
+        },
+        token_type: {
+            type: 'string',
+            title: 'Token Type',
+            default: 'bearer'
+        }
+    },
+    type: 'object',
+    required: ['access_token'],
+    title: 'LoginToken',
+    description: `Discriminated alternative to \`\`MfaChallenge\`\` returned when 2FA
+is not required.
+
+Mirrors :class:\`app.models.users.user.Token\` with an explicit
+\`\`kind\`\` literal so the frontend can branch on a single union shape.`
+} as const;
+
 export const MCPConnectorCreateSchema = {
     properties: {
         name: {
@@ -12710,6 +12778,128 @@ export const MessagesPublicSchema = {
     title: 'MessagesPublic'
 } as const;
 
+export const MfaChallengeSchema = {
+    properties: {
+        kind: {
+            type: 'string',
+            const: 'mfa_challenge',
+            title: 'Kind',
+            default: 'mfa_challenge'
+        },
+        challenge_token: {
+            type: 'string',
+            title: 'Challenge Token'
+        },
+        expires_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Expires At'
+        },
+        allowed_methods: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Allowed Methods'
+        }
+    },
+    type: 'object',
+    required: ['challenge_token', 'expires_at', 'allowed_methods'],
+    title: 'MfaChallenge',
+    description: `Response when \`\`POST /login/access-token\`\` requires a second
+factor.
+
+\`\`kind\`\` is a literal discriminator that lets the frontend branch
+on a single union shape (\`\`LoginResponse\`\`).`
+} as const;
+
+export const MfaStatusSchema = {
+    properties: {
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled'
+        },
+        has_passkey: {
+            type: 'boolean',
+            title: 'Has Passkey'
+        },
+        has_totp: {
+            type: 'boolean',
+            title: 'Has Totp'
+        },
+        has_recovery_codes: {
+            type: 'boolean',
+            title: 'Has Recovery Codes'
+        },
+        passkey_count: {
+            type: 'integer',
+            title: 'Passkey Count'
+        },
+        last_used_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Used At'
+        },
+        enrolled_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Enrolled At'
+        }
+    },
+    type: 'object',
+    required: ['enabled', 'has_passkey', 'has_totp', 'has_recovery_codes', 'passkey_count', 'last_used_at', 'enrolled_at'],
+    title: 'MfaStatus',
+    description: 'Response of ``GET /users/me/mfa/status``.'
+} as const;
+
+export const MfaVerifyRequestSchema = {
+    properties: {
+        challenge_token: {
+            type: 'string',
+            title: 'Challenge Token'
+        },
+        method: {
+            type: 'string',
+            enum: ['passkey', 'totp', 'recovery'],
+            title: 'Method'
+        },
+        payload: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Payload'
+        }
+    },
+    type: 'object',
+    required: ['challenge_token', 'method', 'payload'],
+    title: 'MfaVerifyRequest',
+    description: `Body of \`\`POST /login/mfa/verify\`\`.
+
+\`\`method\`\` is one of \`\`"passkey"\`\`, \`\`"totp"\`\`, or \`\`"recovery"\`\`.
+\`\`payload\`\` shape varies by method:
+
+- \`\`passkey\`\` — full WebAuthn \`\`AuthenticationResponseJSON\`\` dict
+- \`\`totp\`\`   — \`\`{"code": "123456"}\`\`
+- \`\`recovery\`\` — \`\`{"code": "xxxx-xxxx"}\`\`
+
+Plain \`\`pydantic.BaseModel\`\` (not \`\`SQLModel\`\`) so the \`\`Literal\`\`
+constraint on \`\`method\`\` propagates into OpenAPI as an enum and the
+generated TypeScript client gets a string-union type.`
+} as const;
+
 export const NewPasswordSchema = {
     properties: {
         token: {
@@ -12932,6 +13122,76 @@ export const OdooVerifyResponseSchema = {
     type: 'object',
     required: ['success', 'message'],
     title: 'OdooVerifyResponse'
+} as const;
+
+export const PasskeyAuthOptionsRequestSchema = {
+    properties: {
+        challenge_token: {
+            type: 'string',
+            title: 'Challenge Token'
+        }
+    },
+    type: 'object',
+    required: ['challenge_token'],
+    title: 'PasskeyAuthOptionsRequest',
+    description: 'Body of ``POST /login/mfa/passkey/options``.'
+} as const;
+
+export const PasskeyAuthOptionsResponseSchema = {
+    properties: {
+        options: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Options'
+        }
+    },
+    type: 'object',
+    required: ['options'],
+    title: 'PasskeyAuthOptionsResponse',
+    description: `Response of \`\`POST /login/mfa/passkey/options\`\`.
+
+Nests the WebAuthn \`\`PublicKeyCredentialRequestOptionsJSON\`\` under
+\`\`options\`\` so the frontend can pass it straight to
+\`\`@simplewebauthn/browser\`\` without our request handle leaking into
+the spec-defined options object.  The caller already holds
+\`\`challenge_token\`\` (they supplied it in the request body), so we do
+not echo it back.`
+} as const;
+
+export const PasskeyBeginRequestSchema = {
+    properties: {},
+    type: 'object',
+    title: 'PasskeyBeginRequest',
+    description: `Body of \`\`POST /users/me/mfa/passkeys/begin\`\`.
+
+Currently has no fields — the nickname is supplied at \`\`finish\`\`
+time.  Kept as a typed body so the OpenAPI shape stays stable when
+(if) we add fields here later (e.g. \`\`authenticator_attachment\`\`
+preference).`
+} as const;
+
+export const PasskeyFinishRequestSchema = {
+    properties: {
+        challenge_token: {
+            type: 'string',
+            title: 'Challenge Token'
+        },
+        credential: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Credential'
+        },
+        nickname: {
+            type: 'string',
+            maxLength: 64,
+            minLength: 1,
+            title: 'Nickname'
+        }
+    },
+    type: 'object',
+    required: ['challenge_token', 'credential', 'nickname'],
+    title: 'PasskeyFinishRequest',
+    description: 'Body of ``POST /users/me/mfa/passkeys/finish``.'
 } as const;
 
 export const PendingToolsResponseSchema = {
@@ -13177,6 +13437,68 @@ preserves the existing value; sending it (even as empty) replaces it.
 - \`\`ai_credentials\`\`: pre-publish AI credential draft (see
   \`\`_AICredentialDraft\`\`). Each id, when non-null, must reference an
   \`\`AICredential\`\` owned by the publisher.`
+} as const;
+
+export const RecoveryCodeStatusSchema = {
+    properties: {
+        remaining_count: {
+            type: 'integer',
+            title: 'Remaining Count'
+        },
+        total_count: {
+            type: 'integer',
+            title: 'Total Count'
+        },
+        last_regenerated_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Regenerated At'
+        }
+    },
+    type: 'object',
+    required: ['remaining_count', 'total_count', 'last_regenerated_at'],
+    title: 'RecoveryCodeStatus',
+    description: `Response of \`\`GET /users/me/mfa/recovery-codes\`\`.
+
+Never includes the plaintext codes — those are returned exactly
+once at generation/regeneration time via
+:class:\`RecoveryCodesPlaintext\`.`
+} as const;
+
+export const RecoveryCodesPlaintextSchema = {
+    properties: {
+        codes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Codes'
+        },
+        generated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Generated At'
+        },
+        regenerate_warning: {
+            type: 'boolean',
+            title: 'Regenerate Warning',
+            default: true
+        }
+    },
+    type: 'object',
+    required: ['codes', 'generated_at'],
+    title: 'RecoveryCodesPlaintext',
+    description: `One-shot response containing fresh plaintext recovery codes.
+
+Returned by \`\`POST /users/me/mfa/recovery-codes/regenerate\`\` and by
+the enrollment-finish flows that turn 2FA on for the first time.`
 } as const;
 
 export const RefinePromptRequestSchema = {
@@ -15221,6 +15543,80 @@ export const SourceStatusSchema = {
     description: 'Status of a knowledge source.'
 } as const;
 
+export const StepUpPasskeyOptionsSchema = {
+    properties: {
+        challenge_token: {
+            type: 'string',
+            title: 'Challenge Token'
+        },
+        options: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Options'
+        }
+    },
+    type: 'object',
+    required: ['challenge_token', 'options'],
+    title: 'StepUpPasskeyOptions',
+    description: `Response of \`\`POST /users/me/mfa/step-up/passkey/options\`\` —
+options JSON plus the \`\`challenge_token\`\` to feed into the proof.`
+} as const;
+
+export const StepUpProofSchema = {
+    properties: {
+        password: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Password'
+        },
+        totp_code: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Totp Code'
+        },
+        passkey_assertion: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Passkey Assertion'
+        },
+        passkey_challenge_token: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Passkey Challenge Token'
+        }
+    },
+    type: 'object',
+    title: 'StepUpProof',
+    description: `Fresh-factor proof required to disable/weaken 2FA.
+
+Exactly one of these must be supplied — validated server-side.`
+} as const;
+
 export const TaskAttachmentPublicSchema = {
     properties: {
         id: {
@@ -16089,23 +16485,6 @@ export const ToggleIdentityContactRequestSchema = {
     title: 'ToggleIdentityContactRequest'
 } as const;
 
-export const TokenSchema = {
-    properties: {
-        access_token: {
-            type: 'string',
-            title: 'Access Token'
-        },
-        token_type: {
-            type: 'string',
-            title: 'Token Type',
-            default: 'bearer'
-        }
-    },
-    type: 'object',
-    required: ['access_token'],
-    title: 'Token'
-} as const;
-
 export const TokenResponseSchema = {
     properties: {
         access_token: {
@@ -16133,6 +16512,53 @@ export const TokenResponseSchema = {
     type: 'object',
     required: ['access_token', 'refresh_token', 'expires_in', 'client_id'],
     title: 'TokenResponse'
+} as const;
+
+export const TotpEnrollResponseSchema = {
+    properties: {
+        secret_base32: {
+            type: 'string',
+            title: 'Secret Base32'
+        },
+        otpauth_uri: {
+            type: 'string',
+            title: 'Otpauth Uri'
+        },
+        qr_svg_data_uri: {
+            type: 'string',
+            title: 'Qr Svg Data Uri'
+        },
+        secret_token: {
+            type: 'string',
+            title: 'Secret Token'
+        }
+    },
+    type: 'object',
+    required: ['secret_base32', 'otpauth_uri', 'qr_svg_data_uri', 'secret_token'],
+    title: 'TotpEnrollResponse',
+    description: `Response of \`\`POST /users/me/mfa/totp/begin\`\`.
+
+\`\`secret_token\`\` is an HMAC-signed handle that the client echoes back
+to \`\`/finish\`\` — the raw secret is never stored server-side until
+finish succeeds.`
+} as const;
+
+export const TotpFinishRequestSchema = {
+    properties: {
+        secret_token: {
+            type: 'string',
+            title: 'Secret Token'
+        },
+        code: {
+            type: 'string',
+            maxLength: 6,
+            minLength: 6,
+            title: 'Code'
+        }
+    },
+    type: 'object',
+    required: ['secret_token', 'code'],
+    title: 'TotpFinishRequest'
 } as const;
 
 export const UpdatePasswordSchema = {
@@ -17101,6 +17527,102 @@ export const UserInfoResponseSchema = {
     title: 'UserInfoResponse'
 } as const;
 
+export const UserPasskeyPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        nickname: {
+            type: 'string',
+            title: 'Nickname'
+        },
+        transports: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Transports'
+        },
+        aaguid: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Aaguid'
+        },
+        device_type: {
+            type: 'string',
+            title: 'Device Type'
+        },
+        backed_up: {
+            type: 'boolean',
+            title: 'Backed Up'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        last_used_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Used At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'nickname', 'transports', 'aaguid', 'device_type', 'backed_up', 'created_at', 'last_used_at'],
+    title: 'UserPasskeyPublic',
+    description: `API-safe passkey representation — omits the raw \`\`credential_id\`\`
+and \`\`public_key\`\` blobs.`
+} as const;
+
+export const UserPasskeyUpdateSchema = {
+    properties: {
+        nickname: {
+            type: 'string',
+            maxLength: 64,
+            minLength: 1,
+            title: 'Nickname'
+        }
+    },
+    type: 'object',
+    required: ['nickname'],
+    title: 'UserPasskeyUpdate',
+    description: 'Patch request for renaming a passkey.'
+} as const;
+
+export const UserPasskeysPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/UserPasskeyPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'UserPasskeysPublic'
+} as const;
+
 export const UserPublicSchema = {
     properties: {
         email: {
@@ -17267,6 +17789,21 @@ export const UserPublicSchema = {
                 }
             ],
             title: 'Default Model Override Building'
+        },
+        two_factor_enabled: {
+            type: 'boolean',
+            title: 'Two Factor Enabled',
+            default: false
+        },
+        has_passkey: {
+            type: 'boolean',
+            title: 'Has Passkey',
+            default: false
+        },
+        has_totp: {
+            type: 'boolean',
+            title: 'Has Totp',
+            default: false
         }
     },
     type: 'object',
@@ -17440,6 +17977,21 @@ export const UserPublicWithAICredentialsSchema = {
                 }
             ],
             title: 'Default Model Override Building'
+        },
+        two_factor_enabled: {
+            type: 'boolean',
+            title: 'Two Factor Enabled',
+            default: false
+        },
+        has_passkey: {
+            type: 'boolean',
+            title: 'Has Passkey',
+            default: false
+        },
+        has_totp: {
+            type: 'boolean',
+            title: 'Has Totp',
+            default: false
         },
         has_anthropic_api_key: {
             type: 'boolean',

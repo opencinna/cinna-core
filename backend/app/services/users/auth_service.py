@@ -2,6 +2,7 @@
 Auth Service - Business logic for authentication and OAuth operations.
 """
 import secrets
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -10,7 +11,25 @@ from sqlmodel import Session, select
 
 from app.core import security
 from app.core.config import settings
-from app.models import User
+from app.models import User, UserMfaChallenge
+
+
+@dataclass
+class LoginResult:
+    """Return value for first-factor authentication paths.
+
+    Exactly one of ``access_token`` / ``mfa_challenge`` is set; callers
+    branch on which is populated.  We deliberately keep this as a
+    server-side dataclass (not a Pydantic schema) — the route layer
+    converts it into the public ``LoginResponse`` discriminated union.
+    """
+    user: User
+    access_token: str | None = None
+    mfa_challenge: UserMfaChallenge | None = None
+
+    @property
+    def requires_mfa(self) -> bool:
+        return self.mfa_challenge is not None
 
 
 class AuthService:
@@ -267,7 +286,7 @@ class AuthService:
     @classmethod
     async def authenticate_with_google(
         cls, *, session: Session, code: str, state: str
-    ) -> tuple[User, str]:
+    ) -> LoginResult:
         """
         Complete Google OAuth authentication flow.
 
@@ -277,16 +296,14 @@ class AuthService:
         - Token verification
         - User lookup/creation/linking
 
-        Args:
-            session: Database session
-            code: Authorization code from Google
-            state: CSRF state token
-
-        Returns:
-            Tuple of (User, access_token)
+        Returns a :class:`LoginResult`.  When the user has
+        ``two_factor_enabled=True`` the result carries an
+        :class:`UserMfaChallenge` instead of an access token — the route
+        layer translates the two cases into the ``LoginResponse``
+        discriminated union.
 
         Raises:
-            ValueError: If authentication fails
+            ValueError: If authentication fails.
         """
         # Clean up state (for backwards compatibility with redirect flow)
         cls.consume_oauth_state(state)
@@ -330,10 +347,24 @@ class AuthService:
         if not user.is_active:
             raise ValueError("Inactive user")
 
+        # Branch through MFA when the user has 2FA enabled.
+        if user.two_factor_enabled:
+            # Local import keeps the service-layer dependency graph
+            # acyclic (mfa_service imports from app.models which
+            # imports nothing from auth_service).
+            from app.services.users.mfa_service import (
+                FIRST_FACTOR_GOOGLE,
+                MfaService,
+            )
+
+            challenge = MfaService.issue_challenge(
+                session=session, user=user, first_factor=FIRST_FACTOR_GOOGLE
+            )
+            return LoginResult(user=user, mfa_challenge=challenge)
+
         # Generate JWT access token
         access_token = cls.create_access_token(user.id)
-
-        return user, access_token
+        return LoginResult(user=user, access_token=access_token)
 
     @classmethod
     async def link_google_account_for_user(

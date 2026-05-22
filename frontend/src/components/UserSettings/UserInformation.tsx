@@ -31,9 +31,6 @@ import {
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
 import { LoadingButton } from "@/components/ui/loading-button"
-import ChangePassword from "@/components/UserSettings/ChangePassword"
-import SetPassword from "@/components/UserSettings/SetPassword"
-import OAuthAccounts from "@/components/UserSettings/OAuthAccounts"
 import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { cn } from "@/lib/utils"
@@ -171,12 +168,9 @@ const UserInformation = () => {
               </Form>
             </DialogContent>
             </Dialog>
-            {currentUser?.has_password ? <ChangePassword /> : <SetPassword />}
           </div>
         </CardContent>
       </Card>
-
-      <OAuthAccounts />
     </div>
   )
 }

@@ -9,6 +9,7 @@ import {
 import { useState, useEffect, useRef, createContext, useContext, type ReactNode } from "react"
 import { handleError } from "@/utils"
 import useCustomToast from "./useCustomToast"
+import { isLoggedIn } from "./useAuth"
 import { useRouter } from "@tanstack/react-router"
 
 const WORKSPACE_STORAGE_KEY = "last_user_workspace_id"
@@ -75,10 +76,14 @@ const useWorkspace = () => {
   // Workspaces-enabled preference is stored on the user profile so the
   // setting follows the user across browsers and devices. Subscribe to
   // the cached `["currentUser"]` query (populated by useAuth) so this
-  // hook re-renders when the toggle flips.
+  // hook re-renders when the toggle flips. Providing the same `queryFn`
+  // here keeps React Query happy when this hook mounts before `useAuth`
+  // (e.g. AppSidebar) — React Query dedupes by `queryKey`, so the fetch
+  // still runs only once.
   const { data: currentUser } = useQuery<UserPublic | null, Error>({
     queryKey: ["currentUser"],
-    enabled: false, // useAuth owns the fetch; we just observe the cache
+    queryFn: () => UsersService.readUserMe(),
+    enabled: isLoggedIn(),
   })
   const workspacesEnabled = currentUser?.workspaces_enabled ?? false
 

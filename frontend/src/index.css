@@ -187,6 +187,30 @@
   }
 }
 
+@keyframes shake-x {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(4px); }
+}
+.animate-shake-x {
+  animation: shake-x 0.4s ease-in-out;
+}
+@keyframes shake-slot {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  50% { transform: translateX(3px); }
+  75% { transform: translateX(-2px); }
+}
+.animate-shake-slot {
+  animation: shake-slot 0.24s ease-in-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-shake-x,
+  .animate-shake-slot { animation: none; }
+}
+
 /* Custom heading sizes - scaled down so H4 becomes H2 */
 /* These need to be outside @layer base to override Tailwind's prose utilities */
 .prose h1 {
