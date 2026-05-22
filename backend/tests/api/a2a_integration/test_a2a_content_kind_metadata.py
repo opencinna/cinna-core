@@ -13,6 +13,13 @@ Test scenarios:
      are expanded to one TextPart per streaming event, each carrying
      cinna.content_kind metadata; tool parts also carry cinna.tool_input
      and cinna.tool_id.
+  3. command_invocation SSE — /files sync command produces a completed
+     status-update frame whose TextPart metadata carries both
+     cinna.content_kind="command_result" AND cinna.command_invocation="/files".
+  4. command_invocation on /run:* tool + tool_result_delta — synthesized
+     tool and tool_result_delta events from stream_command_via_agent_env carry
+     cinna.command_invocation on both the tool part and the result chunks in
+     the live SSE stream, and history replay reproduces the same metadata.
 """
 import uuid
 from unittest.mock import patch
@@ -34,10 +41,14 @@ _CONTENT_KIND_KEY = "cinna.content_kind"
 _TOOL_NAME_KEY = "cinna.tool_name"
 _TOOL_INPUT_KEY = "cinna.tool_input"
 _TOOL_ID_KEY = "cinna.tool_id"
+_TOOL_STREAM_KEY = "cinna.tool_stream"
+_COMMAND_INVOCATION_KEY = "cinna.command_invocation"
 
 _KIND_TEXT = "text"
 _KIND_THINKING = "thinking"
 _KIND_TOOL = "tool"
+_KIND_TOOL_RESULT = "tool_result"
+_KIND_COMMAND_RESULT = "command_result"
 
 
 def _extract_parts_from_sse_event(event: dict) -> list[dict]:
@@ -433,3 +444,275 @@ def test_a2a_get_task_history_replay_content_kind_metadata(
                 f"History part with cinna.content_kind={metadata.get(_CONTENT_KIND_KEY)!r} "
                 f"must not have empty text"
             )
+
+
+def test_a2a_files_command_result_part_carries_command_invocation(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    /files sync command: the completed status-update SSE frame's TextPart
+    carries both cinna.content_kind="command_result" AND
+    cinna.command_invocation="/files".
+
+      1. Setup agent with A2A enabled and an access token
+      2. Send /files via A2A (no LLM call — purely sync platform command)
+      3. Parse SSE events; find the single completed frame
+      4. Verify the TextPart metadata has cinna.content_kind="command_result"
+      5. Verify the TextPart metadata has cinna.command_invocation="/files"
+    """
+    # ── Phase 1: Setup ────────────────────────────────────────────────────
+
+    agent, token_data = setup_a2a_agent(
+        client, superuser_token_headers, name="A2A Command Invocation Files Agent",
+    )
+    agent_id = agent["id"]
+    a2a_token = token_data["token"]
+
+    a2a_headers = {
+        "Authorization": f"Bearer {a2a_token}",
+        "Content-Type": "application/json",
+    }
+
+    # ── Phase 2: Send /files via A2A ──────────────────────────────────────
+
+    # No LLM stub needed — /files is a sync backend command that bypasses the
+    # agent-env connector entirely.
+    with patch("app.services.sessions.message_service.agent_env_connector",
+               StubAgentEnvConnector(response_text="should not be called")):
+        resp = client.post(
+            f"{settings.API_V1_STR}/a2a/{agent_id}/",
+            headers=a2a_headers,
+            json=build_streaming_request("/files"),
+        )
+        drain_tasks()
+
+    assert resp.status_code == 200, f"A2A /files request failed: {resp.text}"
+
+    events = parse_sse_events(resp.text)
+    assert len(events) >= 1, f"Expected at least one SSE event for /files, got {len(events)}"
+
+    # ── Phase 3: Find the completed frame ────────────────────────────────
+
+    completed_events = [
+        e for e in events
+        if e.get("result", {}).get("status", {}).get("state") == "completed"
+    ]
+    assert completed_events, (
+        f"Expected at least one 'completed' SSE event from /files, none found. "
+        f"Events: {events}"
+    )
+
+    # The /files command emits exactly one terminal frame.
+    completed = completed_events[0]
+    parts = _extract_parts_from_sse_event(completed)
+    assert parts, (
+        f"Expected the completed /files frame to carry a message with parts, "
+        f"got: {completed}"
+    )
+
+    # ── Phase 4 & 5: Verify content_kind + command_invocation on TextPart ─
+
+    first_part = parts[0]
+    metadata = _part_metadata(first_part)
+
+    assert metadata.get(_CONTENT_KIND_KEY) == _KIND_COMMAND_RESULT, (
+        f"Expected cinna.content_kind='command_result' on /files part, "
+        f"got: {metadata.get(_CONTENT_KIND_KEY)!r}"
+    )
+    assert metadata.get(_COMMAND_INVOCATION_KEY) == "/files", (
+        f"Expected cinna.command_invocation='/files' on /files part, "
+        f"got: {metadata.get(_COMMAND_INVOCATION_KEY)!r}"
+    )
+
+
+def test_a2a_run_command_tool_and_result_parts_carry_command_invocation(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    Mapper propagation of cinna.command_invocation through the live SSE stream
+    and GetTask history replay for events shaped like stream_command_via_agent_env
+    output (synthesized tool + tool_result_delta events carrying command_invocation).
+
+    The stub injects a pre-built event sequence that mirrors what
+    stream_command_via_agent_env emits for a /run:* command — a synthesized tool
+    event and a tool_result_delta event, both with command_invocation in metadata.
+    The inbound message text is a plain sentence (not a slash command) so it is
+    routed to the agent-env connector and the stub fires.
+
+      1. Setup agent with A2A enabled and an access token
+      2. Build a stub that emits a tool + tool_result_delta + assistant sequence,
+         each carrying command_invocation="/run:check" in metadata
+      3. Send a plain-text message so the A2A handler routes to agent-env
+      4. Verify live SSE: tool part has cinna.command_invocation="/run:check"
+      5. Verify live SSE: tool_result_delta part has cinna.command_invocation="/run:check"
+      6. Call GetTask and verify history replay preserves cinna.command_invocation
+         on both the tool part and the tool_result part
+    """
+    # ── Phase 1: Setup ────────────────────────────────────────────────────
+
+    agent, token_data = setup_a2a_agent(
+        client, superuser_token_headers, name="A2A Run Command Invocation Agent",
+    )
+    agent_id = agent["id"]
+    a2a_token = token_data["token"]
+
+    exec_id = "exec_run_check_01"
+    command_invocation = "/run:check"
+
+    # Build event sequence that mirrors stream_command_via_agent_env output:
+    # synthesized tool event → stdout chunks → assistant summary → done.
+    # The command_invocation key in each event's metadata is what the production
+    # code writes; the mapper copies it to the TextPart metadata.
+    run_events = [
+        {
+            "type": "session_created",
+            "content": "",
+            "session_id": "00000000-0000-0000-0000-000000000001",
+            "metadata": {},
+        },
+        {
+            "type": "system",
+            "subtype": "tools_init",
+            "content": "",
+            "data": {"tools": ["bash"]},
+            "metadata": {},
+        },
+        {
+            "type": "tool",
+            "tool_name": "bash",
+            "content": f"Running {command_invocation}",
+            "metadata": {
+                "tool_id": exec_id,
+                "tool_input": {"command": "uv run /app/scripts/check.py"},
+                "command_invocation": command_invocation,
+            },
+        },
+        {
+            "type": "tool_result_delta",
+            "content": "All checks passed.",
+            "metadata": {
+                "tool_id": exec_id,
+                "stream": "stdout",
+                "command_invocation": command_invocation,
+            },
+        },
+        {
+            "type": "assistant",
+            "content": "Health check completed successfully.",
+            "metadata": {},
+        },
+        {"type": "done"},
+    ]
+
+    stub = StubAgentEnvConnector(events=run_events)
+    # Use a plain-text message (not a slash command) so the A2A request handler
+    # routes to the agent-env connector and the stub fires, rather than
+    # intercepting it as a sync platform command.
+    request = build_streaming_request("Run the health check script please")
+    a2a_headers = {
+        "Authorization": f"Bearer {a2a_token}",
+        "Content-Type": "application/json",
+    }
+
+    # ── Phase 2: Stream and collect SSE events ────────────────────────────
+
+    with patch("app.services.sessions.message_service.agent_env_connector", stub):
+        resp = client.post(
+            f"{settings.API_V1_STR}/a2a/{agent_id}/",
+            headers=a2a_headers,
+            json=request,
+        )
+        drain_tasks()
+
+    assert resp.status_code == 200, f"A2A /run:check request failed: {resp.text}"
+
+    sse_events = parse_sse_events(resp.text)
+    assert len(sse_events) >= 2, (
+        f"Expected at least 2 SSE events, got {len(sse_events)}"
+    )
+    task_id = sse_events[0]["result"]["taskId"]
+
+    # ── Phase 3: Collect parts from live SSE by kind ──────────────────────
+
+    tool_sse_parts: list[dict] = []
+    tool_result_sse_parts: list[dict] = []
+
+    for event in sse_events:
+        for part in _extract_parts_from_sse_event(event):
+            meta = _part_metadata(part)
+            kind = meta.get(_CONTENT_KIND_KEY)
+            if kind == _KIND_TOOL:
+                tool_sse_parts.append(part)
+            elif kind == _KIND_TOOL_RESULT:
+                tool_result_sse_parts.append(part)
+
+    # ── Phase 4: tool part carries command_invocation ────────────────────
+
+    assert tool_sse_parts, (
+        "Expected at least one tool part in live SSE events"
+    )
+    for part in tool_sse_parts:
+        meta = _part_metadata(part)
+        assert meta.get(_COMMAND_INVOCATION_KEY) == command_invocation, (
+            f"Expected cinna.command_invocation={command_invocation!r} on SSE tool part, "
+            f"got: {meta.get(_COMMAND_INVOCATION_KEY)!r}"
+        )
+
+    # ── Phase 5: tool_result_delta part carries command_invocation ────────
+
+    assert tool_result_sse_parts, (
+        "Expected at least one tool_result part in live SSE events"
+    )
+    for part in tool_result_sse_parts:
+        meta = _part_metadata(part)
+        assert meta.get(_COMMAND_INVOCATION_KEY) == command_invocation, (
+            f"Expected cinna.command_invocation={command_invocation!r} on SSE "
+            f"tool_result part, got: {meta.get(_COMMAND_INVOCATION_KEY)!r}"
+        )
+
+    # ── Phase 6: GetTask history replay preserves command_invocation ──────
+
+    body = post_a2a_jsonrpc(client, agent_id, a2a_token, {
+        "jsonrpc": "2.0",
+        "id": "req-run-history",
+        "method": "GetTask",
+        "params": {"id": task_id},
+    })
+    assert "result" in body, f"Expected JSON-RPC result, got: {body}"
+
+    history = body["result"].get("history", [])
+    agent_msgs = [m for m in history if m.get("role") == "agent"]
+    assert agent_msgs, "Expected at least one agent message in history"
+
+    parts = agent_msgs[-1].get("parts", [])
+
+    tool_replay_parts = [
+        p for p in parts
+        if _part_metadata(p).get(_CONTENT_KIND_KEY) == _KIND_TOOL
+    ]
+    tool_result_replay_parts = [
+        p for p in parts
+        if _part_metadata(p).get(_CONTENT_KIND_KEY) == _KIND_TOOL_RESULT
+    ]
+
+    assert tool_replay_parts, (
+        "Expected at least one tool part in history replay"
+    )
+    for part in tool_replay_parts:
+        meta = _part_metadata(part)
+        assert meta.get(_COMMAND_INVOCATION_KEY) == command_invocation, (
+            f"Expected cinna.command_invocation={command_invocation!r} on replayed "
+            f"tool part, got: {meta.get(_COMMAND_INVOCATION_KEY)!r}"
+        )
+
+    assert tool_result_replay_parts, (
+        "Expected at least one tool_result part in history replay"
+    )
+    for part in tool_result_replay_parts:
+        meta = _part_metadata(part)
+        assert meta.get(_COMMAND_INVOCATION_KEY) == command_invocation, (
+            f"Expected cinna.command_invocation={command_invocation!r} on replayed "
+            f"tool_result part, got: {meta.get(_COMMAND_INVOCATION_KEY)!r}"
+        )

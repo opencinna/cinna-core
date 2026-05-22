@@ -127,13 +127,13 @@ Uses `SessionService` for session operations (no direct DB queries); streaming d
 ### A2A Event Mapper
 **File:** `backend/app/services/a2a/a2a_event_mapper.py`
 
-- `A2AEventMapper.map_stream_event()` - Internal streaming event to A2A event; handles `assistant`, `tool`, `thinking`, and `tool_result_delta` event types (mapped via `_STREAM_EVENT_TO_CONTENT_KIND`)
+- `A2AEventMapper.map_stream_event()` - Internal streaming event to A2A event; handles `assistant`, `tool`, `thinking`, and `tool_result_delta` event types (mapped via `_STREAM_EVENT_TO_CONTENT_KIND`); stamps `cinna.command_invocation` on `tool` and `tool_result_delta` parts when the event carries a slash-command invocation
 - `A2AEventMapper.map_session_status_to_task_state()` - Session status to TaskState
 - `A2AEventMapper.convert_session_messages_to_a2a()` - SessionMessage list to A2A Message list
 - `A2AEventMapper.create_status_update(part_metadata=...)` - low-level TaskStatusUpdateEvent construction; the optional `part_metadata` kwarg is attached to the embedded `TextPart` (not the `Message`) so streaming events carry content-kind metadata at part level
 - `A2AEventMapper.create_notice_event(task_id, context_id, message)` - factory for a non-final `working` status update carrying `cinna.content_kind = "notice"` (env-activation hint and other ephemeral platform notices)
-- `A2AEventMapper.create_command_result_event(task_id, context_id, message)` - factory for the terminal `completed` status update carrying `cinna.content_kind = "command_result"` (synchronous slash-command output yielded on the `command_executed` branch in place of the agent stream)
-- `A2AEventMapper._build_parts_for_session_message()` - Expands a stored agent `SessionMessage` into one `TextPart` per persisted streaming event, each carrying `cinna.content_kind` metadata; tool parts additionally carry `cinna.tool_name`, `cinna.tool_input` (when a dict), and `cinna.tool_id` (when non-empty) from the persisted event's `metadata`; `tool_result_delta` events are expanded into their own TextParts carrying `cinna.tool_id` and `cinna.tool_stream` metadata; falls back to a single TextPart from `msg.content` when no trace is stored
+- `A2AEventMapper.create_command_result_event(task_id, context_id, message)` - factory for the terminal `completed` status update carrying `cinna.content_kind = "command_result"` and `cinna.command_invocation = "<slash invocation>"` (synchronous slash-command output yielded on the `command_executed` branch in place of the agent stream)
+- `A2AEventMapper._build_parts_for_session_message()` - Expands a stored agent `SessionMessage` into one `TextPart` per persisted streaming event, each carrying `cinna.content_kind` metadata; tool parts additionally carry `cinna.tool_name`, `cinna.tool_input` (when a dict), and `cinna.tool_id` (when non-empty) from the persisted event's `metadata`; `tool_result_delta` events are expanded into their own TextParts carrying `cinna.tool_id` and `cinna.tool_stream` metadata; `cinna.command_invocation` is preserved on replay whenever the persisted event stored it (tool, tool_result, and command_result parts from slash-command invocations); falls back to a single TextPart from `msg.content` when no trace is stored
 
 #### Content-Kind Module-Level Constants
 
@@ -156,6 +156,7 @@ Defined at module level in `backend/app/services/a2a/a2a_event_mapper.py`; impor
 | `TOOL_STREAM_KEY` | `"cinna.tool_stream"` | Metadata key for stdout/stderr classification; present only on tool_result parts |
 | `TOOL_STREAM_STDOUT` | `"stdout"` | Default stream value; used when the underlying event omits a `stream` field or emits an unknown value |
 | `TOOL_STREAM_STDERR` | `"stderr"` | Stream value for stderr output |
+| `COMMAND_INVOCATION_KEY` | `"cinna.command_invocation"` | Cross-content-kind metadata key; present on `tool`, `tool_result`, and `command_result` parts when the part originated from a Cinna slash command. Value is the verbatim invocation string (e.g. `"/files"`, `"/run:rotate_status"`). Absent on LLM-initiated parts. |
 
 Metadata is always placed on `TextPart.metadata`, never on `Message.metadata`, because a history-replay `Message` can contain parts of mixed kinds.
 
@@ -379,4 +380,4 @@ The two feature surfaces keep their own routes, auth contexts, card builders, an
 
 ---
 
-*Last updated: 2026-05-21*
+*Last updated: 2026-05-22*

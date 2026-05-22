@@ -103,7 +103,7 @@ Before each LLM turn, SessionStreamProcessor prepends <prior_commands> XML
 - **[Agent Sessions](../../application/agent_sessions/agent_sessions.md)** — Commands are invoked within sessions; session state is read/modified by recovery and reset commands
 - **[Agent Environments](../agent_environments/agent_environments.md)** — `/files`, `/files-all`, and `/run:*` require a running environment
 - **[Agent File Management](../agent_file_management/agent_file_management.md)** — File listing reuses existing workspace tree API; workspace view tokens gate public file access
-- **[A2A Protocol](../../application/a2a_integration/a2a_protocol/a2a_protocol.md)** — A2A callers send commands as regular messages and receive completed tasks in response; `/run:<name>` streams via the same SSE pipeline
+- **[A2A Protocol](../../application/a2a_integration/a2a_protocol/a2a_protocol.md)** — A2A callers send commands as regular messages and receive completed tasks in response; `/run:<name>` streams via the same SSE pipeline; all command-originated TextParts carry `cinna.command_invocation` metadata with the original slash invocation, letting A2A clients distinguish slash-command output from LLM-initiated tool calls
 - **[Agent Status Tracking](agent_status_command.md)** — `/agent-status` reads `STATUS.md` from the workspace; the feature also exposes a REST endpoint and a real-time WebSocket event
 - **[CLI Commands](../../agents/cli_commands/cli_commands.md)** — `/run` and `/run:<name>` are backed by `CLI_COMMANDS.yaml`; commands surface as `cinna.run.*` A2A skills in the extended agent card
 - **[Non-LLM Context Bridging](non_llm_context_bridging_tech.md)** — Technical spec for how command output is forwarded to the next LLM turn via `<prior_commands>` XML

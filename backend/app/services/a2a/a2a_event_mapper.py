@@ -43,6 +43,13 @@ TOOL_INPUT_KEY = "cinna.tool_input"
 TOOL_ID_KEY = "cinna.tool_id"
 # Per-chunk stream discriminator for tool_result content (stdout vs stderr).
 TOOL_STREAM_KEY = "cinna.tool_stream"
+# Verbatim slash-command invocation string (e.g. "/files", "/run:check").
+# Present on TextParts produced by platform-emitted command flows — both the
+# synchronous backend-only command terminal status part and the synthesized
+# tool / tool_result parts that wrap a /run:* execution in agent-env. The
+# field's *absence* is the signal that the part originated from an LLM tool
+# call, mirroring the existing TOOL_ID_KEY pattern.
+COMMAND_INVOCATION_KEY = "cinna.command_invocation"
 
 CONTENT_KIND_TEXT = "text"
 CONTENT_KIND_THINKING = "thinking"
@@ -138,6 +145,7 @@ class A2AEventMapper:
             event_metadata = event.get("metadata") or {}
             tool_input = event_metadata.get("tool_input")
             tool_id = event_metadata.get("tool_id")
+            command_invocation = event_metadata.get("command_invocation")
             if tool_name or content:
                 metadata: dict[str, Any] = {CONTENT_KIND_KEY: CONTENT_KIND_TOOL}
                 if tool_name:
@@ -146,6 +154,8 @@ class A2AEventMapper:
                     metadata[TOOL_INPUT_KEY] = tool_input
                 if isinstance(tool_id, str) and tool_id:
                     metadata[TOOL_ID_KEY] = tool_id
+                if isinstance(command_invocation, str) and command_invocation:
+                    metadata[COMMAND_INVOCATION_KEY] = command_invocation
                 return A2AEventMapper.create_status_update(
                     task_id=task_id,
                     context_id=context_id,
@@ -163,6 +173,7 @@ class A2AEventMapper:
             event_metadata = event.get("metadata") or {}
             tool_id = event_metadata.get("tool_id")
             tool_stream = event_metadata.get("stream")
+            command_invocation = event_metadata.get("command_invocation")
             # Defensive: clients may switch on this value; coerce unknowns.
             if tool_stream not in (TOOL_STREAM_STDOUT, TOOL_STREAM_STDERR):
                 tool_stream = TOOL_STREAM_STDOUT
@@ -172,6 +183,8 @@ class A2AEventMapper:
             }
             if isinstance(tool_id, str) and tool_id:
                 metadata[TOOL_ID_KEY] = tool_id
+            if isinstance(command_invocation, str) and command_invocation:
+                metadata[COMMAND_INVOCATION_KEY] = command_invocation
             return A2AEventMapper.create_status_update(
                 task_id=task_id,
                 context_id=context_id,
@@ -242,6 +255,7 @@ class A2AEventMapper:
         task_id: str,
         context_id: str,
         message: str,
+        command_invocation: str | None = None,
     ) -> dict:
         """Build the terminal ``completed`` status update for a
         synchronous platform slash command (``cinna.content_kind =
@@ -250,14 +264,23 @@ class A2AEventMapper:
         Used on the A2A ``command_executed`` branch — the agent stream
         does not run in this case; the command's output is delivered as
         the final status event's message.
+
+        When ``command_invocation`` is a non-empty string, the verbatim
+        slash-command invocation (e.g. ``"/files"``) is forwarded on the
+        part metadata under ``COMMAND_INVOCATION_KEY`` so clients can use
+        a single uniform key across the synchronous and ``/run:*``
+        command flows.
         """
+        part_metadata: dict[str, Any] = {CONTENT_KIND_KEY: CONTENT_KIND_COMMAND_RESULT}
+        if isinstance(command_invocation, str) and command_invocation:
+            part_metadata[COMMAND_INVOCATION_KEY] = command_invocation
         return A2AEventMapper.create_status_update(
             task_id=task_id,
             context_id=context_id,
             state=TaskState.completed,
             final=True,
             message=message,
-            part_metadata={CONTENT_KIND_KEY: CONTENT_KIND_COMMAND_RESULT},
+            part_metadata=part_metadata,
         )
 
     @staticmethod
@@ -439,6 +462,9 @@ class A2AEventMapper:
                 evt_tool_id = evt_meta.get("tool_id")
                 if isinstance(evt_tool_id, str) and evt_tool_id:
                     part_metadata[TOOL_ID_KEY] = evt_tool_id
+                evt_command_invocation = evt_meta.get("command_invocation")
+                if isinstance(evt_command_invocation, str) and evt_command_invocation:
+                    part_metadata[COMMAND_INVOCATION_KEY] = evt_command_invocation
             elif content_kind == CONTENT_KIND_TOOL_RESULT:
                 evt_meta = evt.get("metadata") or {}
                 evt_tool_id = evt_meta.get("tool_id")
@@ -448,6 +474,9 @@ class A2AEventMapper:
                 if evt_stream not in (TOOL_STREAM_STDOUT, TOOL_STREAM_STDERR):
                     evt_stream = TOOL_STREAM_STDOUT
                 part_metadata[TOOL_STREAM_KEY] = evt_stream
+                evt_command_invocation = evt_meta.get("command_invocation")
+                if isinstance(evt_command_invocation, str) and evt_command_invocation:
+                    part_metadata[COMMAND_INVOCATION_KEY] = evt_command_invocation
 
             parts.append(Part(root=TextPart(text=content, metadata=part_metadata)))
 

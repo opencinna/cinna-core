@@ -66,7 +66,22 @@ _FORWARDED_METADATA_KEYS = {"model", "total_cost_usd", "claude_code_version", "d
 # stream classification. The command-stream path in
 # stream_command_via_agent_env already writes this key directly; including
 # it in the allowlist brings the LLM-streaming path to parity.
-_STORED_EVENT_METADATA_KEYS = {"tool_id", "tool_input", "model", "needs_approval", "tool_name", "stream"}
+_STORED_EVENT_METADATA_KEYS = {
+    "tool_id",
+    "tool_input",
+    "model",
+    "needs_approval",
+    "tool_name",
+    "stream",
+    # Verbatim slash-command invocation string (e.g. "/run:check") stamped on
+    # synthesized tool / tool_result_delta events emitted by
+    # ``stream_command_via_agent_env``. Required in the allowlist so the
+    # LLM-streaming persistence path (``stream_message_with_events``) also
+    # forwards the key to ``streaming_events`` — keeps the two producers
+    # symmetric and future-proofs any other source that wants to mark a
+    # tool call as command-originated for A2A history replay.
+    "command_invocation",
+}
 
 # Non-LLM to LLM context bridging
 NON_LLM_BRIDGE_MAX_PER_BLOCK_BYTES: int = 16_384   # 16 KB per command block
@@ -1890,6 +1905,12 @@ class MessageService:
                 "tool_input": {"command": resolved_command},
                 "tool_name": "bash",
                 "synthesized": True,
+                # Verbatim slash-command invocation forwarded to A2A clients
+                # under ``cinna.command_invocation`` so they can wrap this
+                # synthesized tool / tool_result_delta pair in a "Command:"
+                # header (vs an LLM-initiated bash call where this key is
+                # absent).
+                "command_invocation": command_name,
             },
         }
         streaming_events.append(tool_event)
@@ -1943,6 +1964,7 @@ class MessageService:
                         "metadata": {
                             "tool_id": exec_id,
                             "stream": "stderr",
+                            "command_invocation": command_name,
                         },
                     }
                     streaming_events.append(error_event)
@@ -1972,6 +1994,7 @@ class MessageService:
                             "metadata": {
                                 "tool_id": exec_id,
                                 "stream": "stderr",
+                                "command_invocation": command_name,
                             },
                         }
                         streaming_events.append(trunc_event)
@@ -1987,6 +2010,7 @@ class MessageService:
                         "metadata": {
                             "tool_id": exec_id,
                             "stream": raw_event.get("metadata", {}).get("stream", "stdout"),
+                            "command_invocation": command_name,
                         },
                     }
                     streaming_events.append(stored_event)

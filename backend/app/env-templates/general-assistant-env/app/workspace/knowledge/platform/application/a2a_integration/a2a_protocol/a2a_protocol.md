@@ -145,20 +145,21 @@ A2A clients can inspect `TextPart.metadata` to distinguish the different kinds o
 |----------------------------|---------|-------------------------|
 | `text` | Agent's final answer text (from `assistant` events) | — |
 | `thinking` | Chain-of-thought reasoning (from `thinking` events) | — |
-| `tool` | Tool-call narration (from `tool` events) | `cinna.tool_name` — name of the tool invoked; `cinna.tool_input` — structured tool arguments (JSON object); `cinna.tool_id` — opaque tool-call identifier string |
-| `tool_result` | Tool result output (from `tool_result_delta` events — CLI stdout/stderr from `/run:*` commands and LLM-side tool result chunks) | `cinna.tool_id` — pairs this result back to its originating `tool`-kind TextPart; `cinna.tool_stream` — `"stdout"` or `"stderr"` |
+| `tool` | Tool-call narration (from `tool` events) | `cinna.tool_name` — name of the tool invoked; `cinna.tool_input` — structured tool arguments (JSON object); `cinna.tool_id` — opaque tool-call identifier string; `cinna.command_invocation` — present only when the tool part originated from a Cinna slash command (e.g. `"/run:rotate_status"`) |
+| `tool_result` | Tool result output (from `tool_result_delta` events — CLI stdout/stderr from `/run:*` commands and LLM-side tool result chunks) | `cinna.tool_id` — pairs this result back to its originating `tool`-kind TextPart; `cinna.tool_stream` — `"stdout"` or `"stderr"`; `cinna.command_invocation` — present only when the tool_result part originated from a Cinna slash command (e.g. `"/run:rotate_status"`) |
 | `notice` | Platform-emitted informational text — not part of the agent's response. Currently used for the environment-activation hint ("Starting up the agent environment…") yielded before the agent stream begins. Notices are ephemeral: they are not persisted to message history and do not appear in `GetTask` replay. | — |
-| `command_result` | Output of a platform slash command (e.g. `/files`, `/agent-status`) executed synchronously via A2A. Carried on the terminal `completed` status event's message when the inbound request matched a slash command — the agent stream does not run in this case. Treat as plain text output produced by the platform, not by the LLM (often terminal-style / structured rather than prose). | — |
+| `command_result` | Output of a platform slash command (e.g. `/files`, `/agent-status`) executed synchronously via A2A. Carried on the terminal `completed` status event's message when the inbound request matched a slash command — the agent stream does not run in this case. Treat as plain text output produced by the platform, not by the LLM (often terminal-style / structured rather than prose). | `cinna.command_invocation` — the verbatim slash invocation the user typed (e.g. `"/files"`, `"/agent-status"`) |
 
 - `cinna.tool_name`, `cinna.tool_input`, and `cinna.tool_id` are present on `TextPart.metadata` only when `cinna.content_kind` is `"tool"`.
 - `cinna.tool_input` is included when the underlying SDK emits a dict of tool arguments; clients can use it to render the call without parsing the narration text.
 - `cinna.tool_id` is included when the underlying SDK emits a non-empty identifier; clients can use it to pair a tool-call part with its later tool-result event and cross-reference the persisted streaming-event trace.
 - Tool event text contains the raw tool-call narration; no prefix is added. Clients rely on `cinna.content_kind` and the additional tool metadata keys to identify and interpret tool parts.
 - `cinna.tool_id` and `cinna.tool_stream` are present on `TextPart.metadata` only when `cinna.content_kind` is `"tool_result"`. `cinna.tool_stream` is always either `"stdout"` or `"stderr"`; it defaults to `"stdout"` when the underlying event omits a `stream` field, and unknown values are coerced to `"stdout"`.
+- `cinna.command_invocation` is a cross-content-kind key: it appears on `tool`, `tool_result`, and `command_result` parts, but only when the part originated from a Cinna slash command. Its value is the verbatim invocation string the user typed (e.g. `"/files"`, `"/agent-status"`, `"/run:rotate_status"`, `"/run:check"`). Absence of the key means the part was LLM-initiated — the current default for all non-command tool and tool_result parts.
 
 #### History Replay (GetTask)
 
-When a client calls `GetTask`, agent messages in `history` are returned with **multiple TextParts** — one per persisted streaming event (assistant, thinking, tool, tool_result). Each part carries its own `cinna.content_kind` metadata so clients replaying the history can reconstruct the full content breakdown. `tool_result_delta` events are expanded into their own TextParts with `cinna.tool_id` and `cinna.tool_stream` metadata, exactly mirroring the live-stream shape. Messages without a persisted streaming trace fall back to a single TextPart built from the stored message content.
+When a client calls `GetTask`, agent messages in `history` are returned with **multiple TextParts** — one per persisted streaming event (assistant, thinking, tool, tool_result). Each part carries its own `cinna.content_kind` metadata so clients replaying the history can reconstruct the full content breakdown. `tool_result_delta` events are expanded into their own TextParts with `cinna.tool_id` and `cinna.tool_stream` metadata, exactly mirroring the live-stream shape. `cinna.command_invocation` is preserved through replay — replay TextParts include the key whenever the persisted streaming events stored it, so live SSE and `GetTask` history produce the same shape. Messages without a persisted streaming trace fall back to a single TextPart built from the stored message content.
 
 ### Environment Activation
 
@@ -234,4 +235,4 @@ A2A Event Mapper ---------> Centralized A2A protocol mapping logic
 
 ---
 
-*Last updated: 2026-05-21*
+*Last updated: 2026-05-22*

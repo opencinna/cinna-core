@@ -537,10 +537,16 @@ class A2ARequestHandler:
         if result["action"] == "command_executed":
             cmd_session_id = result.get("session_id", session_id)
             task_id_str = str(cmd_session_id)
+            # The inbound message text (``content``) for a synchronous
+            # platform slash command is the verbatim invocation string
+            # (e.g. "/files"). Forward it so A2A clients can render a
+            # command-styled header even on the response branch.
+            command_invocation = content.strip() if isinstance(content, str) else None
             completed_event = A2AEventMapper.create_command_result_event(
                 task_id=task_id_str,
                 context_id=task_id_str,
                 message=result.get("message", ""),
+                command_invocation=command_invocation,
             )
             yield self._format_sse_event(request_id, completed_event)
             return
