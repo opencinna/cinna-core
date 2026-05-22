@@ -328,7 +328,7 @@ class A2AStreamEventHandler:
             return
         from a2a.types import TaskState
 
-        error_event = self.event_mapper._create_status_update(
+        error_event = self.event_mapper.create_status_update(
             task_id=self.task_id,
             context_id=self.context_id,
             state=TaskState.failed,

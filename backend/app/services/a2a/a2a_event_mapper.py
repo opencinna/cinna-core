@@ -4,8 +4,8 @@ A2A Event Mapper - transforms internal streaming events to A2A format.
 This module provides utilities for mapping internal streaming events
 (from MessageService) to A2A protocol event format for SSE streaming.
 Each emitted TextPart carries vendor-namespaced metadata identifying
-one of four content kinds: agent text, thinking, tool-call, and
-tool-result.
+its content kind — agent-generated (``text``, ``thinking``, ``tool``,
+``tool_result``) or platform-generated (``notice``, ``command_result``).
 
 All A2A protocol mapping logic is centralized here.
 """
@@ -30,8 +30,9 @@ logger = logging.getLogger(__name__)
 
 # Vendor-namespaced keys placed on each TextPart's metadata so A2A clients
 # can distinguish the agent's final text, chain-of-thought, tool-call
-# events, and tool-result chunks (all of which otherwise look like
-# generic "agent" text).
+# events, tool-result chunks, and platform-emitted parts (notices and
+# synchronous slash-command output) — all of which otherwise look like
+# generic "agent" text.
 CONTENT_KIND_KEY = "cinna.content_kind"
 TOOL_NAME_KEY = "cinna.tool_name"
 # Structured tool arguments (object) — surfaced on each tool TextPart so
@@ -47,6 +48,8 @@ CONTENT_KIND_TEXT = "text"
 CONTENT_KIND_THINKING = "thinking"
 CONTENT_KIND_TOOL = "tool"
 CONTENT_KIND_TOOL_RESULT = "tool_result"
+CONTENT_KIND_NOTICE = "notice"
+CONTENT_KIND_COMMAND_RESULT = "command_result"
 
 # Allowed values for cinna.tool_stream
 TOOL_STREAM_STDOUT = "stdout"
@@ -83,7 +86,7 @@ class A2AEventMapper:
         event_type = event.get("type")
 
         if event_type == "stream_started":
-            return A2AEventMapper._create_status_update(
+            return A2AEventMapper.create_status_update(
                 task_id=task_id,
                 context_id=context_id,
                 state=TaskState.working,
@@ -93,7 +96,7 @@ class A2AEventMapper:
         elif event_type == "assistant":
             content = event.get("content", "")
             if content:
-                return A2AEventMapper._create_status_update(
+                return A2AEventMapper.create_status_update(
                     task_id=task_id,
                     context_id=context_id,
                     state=TaskState.working,
@@ -104,7 +107,7 @@ class A2AEventMapper:
             return None
 
         elif event_type == "stream_completed":
-            return A2AEventMapper._create_status_update(
+            return A2AEventMapper.create_status_update(
                 task_id=task_id,
                 context_id=context_id,
                 state=TaskState.completed,
@@ -113,7 +116,7 @@ class A2AEventMapper:
 
         elif event_type == "error":
             error_message = event.get("content", "An error occurred")
-            return A2AEventMapper._create_status_update(
+            return A2AEventMapper.create_status_update(
                 task_id=task_id,
                 context_id=context_id,
                 state=TaskState.failed,
@@ -122,7 +125,7 @@ class A2AEventMapper:
             )
 
         elif event_type == "interrupted":
-            return A2AEventMapper._create_status_update(
+            return A2AEventMapper.create_status_update(
                 task_id=task_id,
                 context_id=context_id,
                 state=TaskState.canceled,
@@ -143,7 +146,7 @@ class A2AEventMapper:
                     metadata[TOOL_INPUT_KEY] = tool_input
                 if isinstance(tool_id, str) and tool_id:
                     metadata[TOOL_ID_KEY] = tool_id
-                return A2AEventMapper._create_status_update(
+                return A2AEventMapper.create_status_update(
                     task_id=task_id,
                     context_id=context_id,
                     state=TaskState.working,
@@ -169,7 +172,7 @@ class A2AEventMapper:
             }
             if isinstance(tool_id, str) and tool_id:
                 metadata[TOOL_ID_KEY] = tool_id
-            return A2AEventMapper._create_status_update(
+            return A2AEventMapper.create_status_update(
                 task_id=task_id,
                 context_id=context_id,
                 state=TaskState.working,
@@ -181,7 +184,7 @@ class A2AEventMapper:
         elif event_type == "thinking":
             content = event.get("content", "")
             if content:
-                return A2AEventMapper._create_status_update(
+                return A2AEventMapper.create_status_update(
                     task_id=task_id,
                     context_id=context_id,
                     state=TaskState.working,
@@ -196,13 +199,13 @@ class A2AEventMapper:
             metadata = event.get("metadata") or {}
             was_interrupted = metadata.get("interrupted", False)
             if was_interrupted:
-                return A2AEventMapper._create_status_update(
+                return A2AEventMapper.create_status_update(
                     task_id=task_id,
                     context_id=context_id,
                     state=TaskState.canceled,
                     final=True,
                 )
-            return A2AEventMapper._create_status_update(
+            return A2AEventMapper.create_status_update(
                 task_id=task_id,
                 context_id=context_id,
                 state=TaskState.completed,
@@ -213,7 +216,52 @@ class A2AEventMapper:
         return None
 
     @staticmethod
-    def _create_status_update(
+    def create_notice_event(
+        task_id: str,
+        context_id: str,
+        message: str,
+    ) -> dict:
+        """Build a non-final ``working`` status update carrying a
+        platform-emitted notice (``cinna.content_kind = "notice"``).
+
+        Used for ephemeral, informational hints surfaced by the platform
+        itself (not by the agent) — e.g. the environment-activation
+        warm-up message yielded before the agent stream begins.
+        """
+        return A2AEventMapper.create_status_update(
+            task_id=task_id,
+            context_id=context_id,
+            state=TaskState.working,
+            final=False,
+            message=message,
+            part_metadata={CONTENT_KIND_KEY: CONTENT_KIND_NOTICE},
+        )
+
+    @staticmethod
+    def create_command_result_event(
+        task_id: str,
+        context_id: str,
+        message: str,
+    ) -> dict:
+        """Build the terminal ``completed`` status update for a
+        synchronous platform slash command (``cinna.content_kind =
+        "command_result"``).
+
+        Used on the A2A ``command_executed`` branch — the agent stream
+        does not run in this case; the command's output is delivered as
+        the final status event's message.
+        """
+        return A2AEventMapper.create_status_update(
+            task_id=task_id,
+            context_id=context_id,
+            state=TaskState.completed,
+            final=True,
+            message=message,
+            part_metadata={CONTENT_KIND_KEY: CONTENT_KIND_COMMAND_RESULT},
+        )
+
+    @staticmethod
+    def create_status_update(
         task_id: str,
         context_id: str,
         state: TaskState,

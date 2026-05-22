@@ -537,11 +537,9 @@ class A2ARequestHandler:
         if result["action"] == "command_executed":
             cmd_session_id = result.get("session_id", session_id)
             task_id_str = str(cmd_session_id)
-            completed_event = A2AEventMapper._create_status_update(
+            completed_event = A2AEventMapper.create_command_result_event(
                 task_id=task_id_str,
                 context_id=task_id_str,
-                state=TaskState.completed,
-                final=True,
                 message=result.get("message", ""),
             )
             yield self._format_sse_event(request_id, completed_event)
@@ -554,7 +552,7 @@ class A2ARequestHandler:
         context_id_str = str(session_id)
 
         # Yield initial working status
-        initial_event = A2AEventMapper._create_status_update(
+        initial_event = A2AEventMapper.create_status_update(
             task_id=task_id_str,
             context_id=context_id_str,
             state=TaskState.working,
@@ -569,11 +567,9 @@ class A2ARequestHandler:
                 "%s environment %s status is '%s', notifying client...",
                 self.log_prefix, self.environment.id, env_status,
             )
-            activation_event = A2AEventMapper._create_status_update(
+            activation_event = A2AEventMapper.create_notice_event(
                 task_id=task_id_str,
                 context_id=context_id_str,
-                state=TaskState.working,
-                final=False,
                 message="Starting up the agent environment, this may take a moment...",
             )
             yield self._format_sse_event(request_id, activation_event)

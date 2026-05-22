@@ -139,7 +139,7 @@ Events are delivered incrementally. `A2AStreamEventHandler` pushes each mapped e
 
 #### Content-Kind Metadata on TextParts
 
-A2A clients can inspect `TextPart.metadata` to distinguish the three kinds of agent content emitted during a stream. This metadata is placed on the `TextPart` (not on `Message`) because a single agent message can contain parts of mixed kinds.
+A2A clients can inspect `TextPart.metadata` to distinguish the different kinds of content emitted during a stream — agent-generated content (text, thinking, tool, tool_result) and platform-generated content (notice, command_result). This metadata is placed on the `TextPart` (not on `Message`) because a single agent message can contain parts of mixed kinds.
 
 | `cinna.content_kind` value | Meaning | Additional metadata keys |
 |----------------------------|---------|-------------------------|
@@ -147,6 +147,8 @@ A2A clients can inspect `TextPart.metadata` to distinguish the three kinds of ag
 | `thinking` | Chain-of-thought reasoning (from `thinking` events) | — |
 | `tool` | Tool-call narration (from `tool` events) | `cinna.tool_name` — name of the tool invoked; `cinna.tool_input` — structured tool arguments (JSON object); `cinna.tool_id` — opaque tool-call identifier string |
 | `tool_result` | Tool result output (from `tool_result_delta` events — CLI stdout/stderr from `/run:*` commands and LLM-side tool result chunks) | `cinna.tool_id` — pairs this result back to its originating `tool`-kind TextPart; `cinna.tool_stream` — `"stdout"` or `"stderr"` |
+| `notice` | Platform-emitted informational text — not part of the agent's response. Currently used for the environment-activation hint ("Starting up the agent environment…") yielded before the agent stream begins. Notices are ephemeral: they are not persisted to message history and do not appear in `GetTask` replay. | — |
+| `command_result` | Output of a platform slash command (e.g. `/files`, `/agent-status`) executed synchronously via A2A. Carried on the terminal `completed` status event's message when the inbound request matched a slash command — the agent stream does not run in this case. Treat as plain text output produced by the platform, not by the LLM (often terminal-style / structured rather than prose). | — |
 
 - `cinna.tool_name`, `cinna.tool_input`, and `cinna.tool_id` are present on `TextPart.metadata` only when `cinna.content_kind` is `"tool"`.
 - `cinna.tool_input` is included when the underlying SDK emits a dict of tool arguments; clients can use it to render the call without parsing the narration text.

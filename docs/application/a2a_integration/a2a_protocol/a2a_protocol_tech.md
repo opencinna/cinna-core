@@ -130,7 +130,9 @@ Uses `SessionService` for session operations (no direct DB queries); streaming d
 - `A2AEventMapper.map_stream_event()` - Internal streaming event to A2A event; handles `assistant`, `tool`, `thinking`, and `tool_result_delta` event types (mapped via `_STREAM_EVENT_TO_CONTENT_KIND`)
 - `A2AEventMapper.map_session_status_to_task_state()` - Session status to TaskState
 - `A2AEventMapper.convert_session_messages_to_a2a()` - SessionMessage list to A2A Message list
-- `A2AEventMapper._create_status_update(part_metadata=...)` - TaskStatusUpdateEvent construction; the optional `part_metadata` kwarg is attached to the embedded `TextPart` (not the `Message`) so streaming events carry content-kind metadata at part level
+- `A2AEventMapper.create_status_update(part_metadata=...)` - low-level TaskStatusUpdateEvent construction; the optional `part_metadata` kwarg is attached to the embedded `TextPart` (not the `Message`) so streaming events carry content-kind metadata at part level
+- `A2AEventMapper.create_notice_event(task_id, context_id, message)` - factory for a non-final `working` status update carrying `cinna.content_kind = "notice"` (env-activation hint and other ephemeral platform notices)
+- `A2AEventMapper.create_command_result_event(task_id, context_id, message)` - factory for the terminal `completed` status update carrying `cinna.content_kind = "command_result"` (synchronous slash-command output yielded on the `command_executed` branch in place of the agent stream)
 - `A2AEventMapper._build_parts_for_session_message()` - Expands a stored agent `SessionMessage` into one `TextPart` per persisted streaming event, each carrying `cinna.content_kind` metadata; tool parts additionally carry `cinna.tool_name`, `cinna.tool_input` (when a dict), and `cinna.tool_id` (when non-empty) from the persisted event's `metadata`; `tool_result_delta` events are expanded into their own TextParts carrying `cinna.tool_id` and `cinna.tool_stream` metadata; falls back to a single TextPart from `msg.content` when no trace is stored
 
 #### Content-Kind Module-Level Constants
@@ -149,6 +151,8 @@ Defined at module level in `backend/app/services/a2a/a2a_event_mapper.py`; impor
 | `CONTENT_KIND_THINKING` | `"thinking"` | Value for `thinking` events (chain-of-thought) |
 | `CONTENT_KIND_TOOL` | `"tool"` | Value for `tool` events (tool-call narration) |
 | `CONTENT_KIND_TOOL_RESULT` | `"tool_result"` | Value for `tool_result_delta` events (CLI stdout/stderr from `/run:*` commands and LLM-side tool result chunks) |
+| `CONTENT_KIND_NOTICE` | `"notice"` | Value for platform-emitted informational text — not part of the agent response. Used by the env-activation hint in `a2a_request_handler.handle_message_stream`; ephemeral (not persisted, not replayed via `GetTask`) |
+| `CONTENT_KIND_COMMAND_RESULT` | `"command_result"` | Value for the terminal `completed` status event's message when the inbound request matched a platform slash command (e.g. `/files`, `/agent-status`). Set in `a2a_request_handler.handle_message_stream` on the `command_executed` branch — the agent stream does not run in that case |
 | `TOOL_STREAM_KEY` | `"cinna.tool_stream"` | Metadata key for stdout/stderr classification; present only on tool_result parts |
 | `TOOL_STREAM_STDOUT` | `"stdout"` | Default stream value; used when the underlying event omits a `stream` field or emits an unknown value |
 | `TOOL_STREAM_STDERR` | `"stderr"` | Stream value for stderr output |
