@@ -20,6 +20,7 @@ No `recovery_pending` flag is set. No message scanning. No `initiate_stream()`.
 
 ## Business Rules
 
+- `/session-reset` sets `requires_running_environment = True` as a UX choice: the command's own DB operations do not require a running environment, but pre-waking the env removes friction on the fresh message that almost always follows a reset
 - The next message after `/session-reset` starts a completely fresh SDK session with no conversation history
 - No auto-resend is triggered regardless of whether a failed message exists
 - Contrast with `/session-recover`: reset is an explicit "clean slate" operation, not a recovery operation

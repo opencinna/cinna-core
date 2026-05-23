@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 class SessionRecoverCommandHandler(CommandHandler):
     include_in_llm_context = False  # Meta-command; recovery context injected separately
+    # Recovery typically precedes a retry, so wake the env preemptively to
+    # remove friction. The handler's own SessionService.initiate_stream call
+    # (when a resendable message is detected) still handles env-readiness on
+    # its own; this is additive, not duplicative.
+    requires_running_environment = True
     """Handler for /session-recover — recover session from lost SDK connection."""
 
     @property

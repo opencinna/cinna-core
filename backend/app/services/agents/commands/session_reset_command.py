@@ -18,6 +18,9 @@ class SessionResetCommandHandler(CommandHandler):
     """Handler for /session-reset — reset SDK session for a clean slate."""
 
     include_in_llm_context = False  # Meta-command; no content value
+    # A reset usually precedes a fresh conversation; wake the env preemptively
+    # so the next user message doesn't have to wait on activation.
+    requires_running_environment = True
 
     @property
     def name(self) -> str:

@@ -537,6 +537,21 @@ class A2ARequestHandler:
         if result["action"] == "command_executed":
             cmd_session_id = result.get("session_id", session_id)
             task_id_str = str(cmd_session_id)
+
+            # If the sync command triggered an env wakeup inside
+            # ``send_session_message``, surface the same activation notice the
+            # streaming path emits below so A2A clients get UX parity with
+            # /run:<name> and LLM messages. The flag is set by the Phase 1.5
+            # gate in session_service; we don't need to re-snapshot env
+            # status here.
+            if result.get("env_wake_initiated"):
+                activation_event = A2AEventMapper.create_notice_event(
+                    task_id=task_id_str,
+                    context_id=task_id_str,
+                    message="Starting up the agent environment, this may take a moment...",
+                )
+                yield self._format_sse_event(request_id, activation_event)
+
             # The inbound message text (``content``) for a synchronous
             # platform slash command is the verbatim invocation string
             # (e.g. "/files"). Forward it so A2A clients can render a

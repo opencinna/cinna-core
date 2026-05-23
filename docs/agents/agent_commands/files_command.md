@@ -15,7 +15,7 @@ List workspace files with clickable links, giving users and A2A clients instant 
 
 **UI user lists files:**
 1. User types `/files` in the chat
-2. Backend verifies the environment is running
+2. Backend ensures the environment is running — waking it up automatically if suspended
 3. Workspace tree is fetched from the agent environment
 4. A markdown list is returned with clickable filename links (pointing to the frontend FileViewer route)
 5. User clicks a link → opens the in-app FileViewer
@@ -29,8 +29,10 @@ List workspace files with clickable links, giving users and A2A clients instant 
 **Empty workspace:**
 - Response: "No files found in workspace"
 
-**Environment not running:**
-- Response: error message indicating the environment is not active
+**Environment not running (suspended / activating / starting):**
+- The env is woken up automatically via `ensure_environment_ready_for_streaming` (timeout: 120 s) before the handler executes; the file listing is returned once the env is ready
+- If wake-up fails within the timeout, the caller receives an error response and no DB rows are created
+- A2A streaming callers (`message/stream`) additionally receive a `notice` SSE event before the result, matching the behavior of `/run:<name>` during activation
 
 ## Business Rules
 
@@ -47,9 +49,14 @@ List workspace files with clickable links, giving users and A2A clients instant 
 /files command received
         │
         ▼
+send_session_message() Phase 1.5        ← requires_running_environment = True
+        │
+        ├── env not "running"? → ensure_environment_ready_for_streaming(timeout=120s)
+        │       failure → return action="error", stop
+        │
+        ▼
 FilesCommandHandler.execute(context, args)
         │
-        ├── Verify environment is running  (error if not)
         ├── adapter.get_workspace_tree()   (reuses existing DockerAdapter method)
         │
         ├── A2A context? (access_token_id present)
@@ -86,6 +93,6 @@ Short-lived JWTs allowing A2A clients to open agent workspace file links in a br
 
 ## Integration Points
 
-- **[Agent Environments](../agent_environments/agent_environments.md)** — Environment must be running; workspace tree fetched via `DockerAdapter`
+- **[Agent Environments](../agent_environments/agent_environments.md)** — Environment is auto-woken when not running (`requires_running_environment = True`); workspace tree fetched via `DockerAdapter`
 - **[Agent File Management](../agent_file_management/agent_file_management.md)** — Public file endpoint (`shared_workspace.py`) serves file content using workspace view tokens
 - **[A2A Protocol](../../application/a2a_integration/a2a_protocol/a2a_protocol.md)** — A2A callers receive completed tasks with the markdown file listing

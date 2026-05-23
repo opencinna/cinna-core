@@ -1143,6 +1143,77 @@ class SessionService:
         )
 
     @staticmethod
+    async def _ensure_env_for_command_handler(
+        *,
+        content: str,
+        session_id: UUID,
+        command_env_id: UUID,
+        environment_status: str | None,
+        get_fresh_db_session: callable,
+    ) -> tuple[bool, dict | None]:
+        """Wake the env for a ``requires_running_environment`` slash command.
+
+        Centralises the Phase 1.5 gate that auto-wakes a suspended/stopped
+        environment before dispatching a sync command handler (parity with
+        ``/run:<name>`` and LLM messages, which wake the env via
+        :meth:`initiate_stream`).
+
+        Reuses ``environment_status`` already resolved in Phase 1 — no fresh
+        DB read needed, since
+        :meth:`ensure_environment_ready_for_streaming` is itself a no-op when
+        the env is already running.
+
+        Args:
+            content: Raw message content (used to look up the handler).
+            session_id: Session UUID.
+            command_env_id: Environment UUID the command will execute against.
+            environment_status: Latest known status of the env (from Phase 1).
+            get_fresh_db_session: Fresh-session factory passed through to the
+                wake-up call.
+
+        Returns:
+            Tuple ``(env_was_woken, error_short_circuit_or_None)``:
+
+            - ``env_was_woken`` is True only when a wake-up was actually
+              dispatched. Callers should propagate this as
+              ``env_wake_initiated`` in the result dict so upstream channels
+              (e.g. A2A) can surface a "starting up..." notice.
+            - ``error_short_circuit_or_None`` is a dict to return immediately
+              from :meth:`send_session_message` when wake-up fails (carries an
+              ``action="error"`` + friendly message). The UI chat route maps
+              this to HTTP 500; A2A surfaces the text on its SSE error path.
+        """
+        from app.services.agents.command_service import CommandService
+        # Import commands module to ensure handlers are registered before we
+        # consult ``requires_running_environment``.
+        import app.services.agents.commands  # noqa: F401
+
+        if not CommandService.requires_running_environment(content):
+            return False, None
+        if environment_status == "running":
+            return False, None
+
+        command_name_for_lookup, _ = CommandService.parse_command(content)
+        try:
+            await SessionService.ensure_environment_ready_for_streaming(
+                session_id=session_id,
+                get_fresh_db_session=get_fresh_db_session,
+                timeout_seconds=120,
+            )
+        except (ValueError, RuntimeError) as e:
+            logger.warning(
+                f"Failed to wake environment {command_env_id} for "
+                f"command {command_name_for_lookup}: {e}"
+            )
+            return False, {
+                "action": "error",
+                "message": (
+                    f"Failed to start the agent environment: {str(e)}"
+                ),
+            }
+        return True, None
+
+    @staticmethod
     async def send_session_message(
         session_id: UUID | None,
         user_id: UUID,
@@ -1196,13 +1267,19 @@ class SessionService:
         Returns:
             dict with status information:
             {
-                "action": "streaming" | "pending" | "no_pending_messages" | "error" | "message_created",
+                "action": "streaming" | "pending" | "no_pending_messages" | "error" | "message_created" | "command_executed" | "queued",
                 "message": str,
                 "pending_count": int,
                 "files_attached": int (if files present),
                 "session_id": UUID (always included),
                 "environment_id": UUID (if initiate_streaming=False),
-                "external_session_id": str | None (if initiate_streaming=False)
+                "external_session_id": str | None (if initiate_streaming=False),
+                "env_wake_initiated": True (only present when a sync slash command
+                    triggered an auto-wake of a suspended/stopped environment;
+                    callers — notably A2A — can branch on
+                    ``result.get("env_wake_initiated")`` to emit a
+                    "starting up..." notice. Omitted when no wake-up was
+                    needed.)
             }
         """
         # Default get_fresh_db_session if not provided
@@ -1215,8 +1292,6 @@ class SessionService:
 
         # Phase 1: Get/create session and validate (collect IDs for later use)
         with get_fresh_db_session() as db:
-            from app.models import AgentEnvironment
-
             chat_session: Session | None = None
 
             # Get existing session or create new one
@@ -1289,6 +1364,30 @@ class SessionService:
                 backend_base_url=backend_base_url or "",
             )
 
+            # If this handler requires a running env and the env isn't running,
+            # auto-wake it before dispatch (parity with /run:<name>, which
+            # wakes the env via initiate_stream). On failure we short-circuit
+            # with action="error" + friendly message so the UI chat route
+            # maps it to a clean HTTP 500 with detail (see messages.py:186)
+            # and A2A's SSE error path surfaces the same text (see
+            # a2a_request_handler.py). Mirrors the file-upload wakeup
+            # failure precedent below — no DB message rows are created on
+            # this path. The ``env_wake_initiated`` flag is propagated into
+            # the result dict so upstream channels (A2A) can surface a
+            # "starting up..." notice without re-snapshotting env status.
+            env_was_woken, wakeup_error = await SessionService._ensure_env_for_command_handler(
+                content=content,
+                session_id=session_id,
+                command_env_id=command_env_id,
+                environment_status=environment_status,
+                get_fresh_db_session=get_fresh_db_session,
+            )
+            if wakeup_error is not None:
+                # Wake-up was attempted but failed; surface the same flag so
+                # callers (A2A) can correlate the error with an env wake.
+                wakeup_error["env_wake_initiated"] = True
+                return wakeup_error
+
             # Create user message (marked "sent" to skip LLM streaming for sync commands,
             # or "pending" for streaming commands that need async dispatch)
             # We execute the command first (sync path) to get result.routing.
@@ -1342,11 +1441,14 @@ class SessionService:
                         get_fresh_db_session=get_fresh_db_session,
                     )
 
-                return {
+                queued_result: dict[str, Any] = {
                     "action": "queued",
                     "session_id": session_id,
                     "pending_count": 1,
                 }
+                if env_was_woken:
+                    queued_result["env_wake_initiated"] = True
+                return queued_result
 
             # --- Synchronous command path (all other commands, including /run list mode) ---
             with get_fresh_db_session() as db:
@@ -1398,12 +1500,15 @@ class SessionService:
                         user_id=user_id,
                     )
 
-            return {
+            command_result: dict[str, Any] = {
                 "action": "command_executed",
                 "message": result.content,
                 "session_id": session_id,
                 "pending_count": 0,
             }
+            if env_was_woken:
+                command_result["env_wake_initiated"] = True
+            return command_result
 
         # Phase 2: If files attached and environment not running, wait for activation
         # This must be done BEFORE file upload because upload_files_to_agent_env

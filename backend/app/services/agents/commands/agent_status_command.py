@@ -24,6 +24,13 @@ SEVERITY_ICONS: dict[str, str] = {
 class AgentStatusCommandHandler(CommandHandler):
     """Handler for /agent-status — shows the agent's self-reported STATUS.md content."""
 
+    # Pre-wake the env so the live status fetch goes through immediately.
+    # The internal StatusUnavailableError → cached snapshot fallback below
+    # still covers adapter failures after a successful wake-up, and the
+    # "Environment is not running — showing last cached status" defensive
+    # message remains accurate as a last-resort fallback.
+    requires_running_environment = True
+
     @property
     def name(self) -> str:
         return "/agent-status"

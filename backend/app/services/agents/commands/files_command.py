@@ -77,17 +77,18 @@ async def _execute_files_listing(
     context: CommandContext,
     sections: list[str],
 ) -> CommandResult:
-    """Shared logic: get workspace tree and build markdown for given sections."""
-    # Verify environment is running
+    """Shared logic: get workspace tree and build markdown for given sections.
+
+    Note: env-readiness is gated upstream in ``SessionService.send_session_message``
+    via ``CommandHandler.requires_running_environment`` — if the environment is
+    suspended/stopped/etc., the session service wakes it (or surfaces a friendly
+    error) before this handler is dispatched. We only guard for genuinely
+    missing environments here.
+    """
     with create_session() as db:
         environment = db.get(AgentEnvironment, context.environment_id)
         if not environment:
             return CommandResult(content="Environment not found.", is_error=True)
-        if environment.status != "running":
-            return CommandResult(
-                content=f"Environment is not running (status: {environment.status}). Start the environment first.",
-                is_error=True,
-            )
 
     # Get workspace tree via adapter
     try:
@@ -151,6 +152,8 @@ async def _execute_files_listing(
 class FilesCommandHandler(CommandHandler):
     """Handler for /files — lists only the files folder."""
 
+    requires_running_environment = True
+
     @property
     def name(self) -> str:
         return "/files"
@@ -165,6 +168,8 @@ class FilesCommandHandler(CommandHandler):
 
 class FilesAllCommandHandler(CommandHandler):
     """Handler for /files-all — lists all workspace folders."""
+
+    requires_running_environment = True
 
     @property
     def name(self) -> str:

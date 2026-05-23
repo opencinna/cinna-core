@@ -46,6 +46,7 @@ class CommandHandler(ABC):
 
     streams: bool = False  # If True, handler queues a pending message instead of returning content
     include_in_llm_context: bool = True  # If False, command output is excluded from <prior_commands> block
+    requires_running_environment: bool = False  # If True, session_service will auto-wake the env before dispatch
 
     @property
     @abstractmethod
@@ -121,6 +122,21 @@ class CommandService:
     def get_handler(cls, name: str) -> "CommandHandler | None":
         """Return the handler instance for a given command name, or None if not registered."""
         return cls._handlers.get(name)
+
+    @classmethod
+    def requires_running_environment(cls, content: str) -> bool:
+        """Return True if the command in ``content`` needs a running environment.
+
+        Wraps :meth:`parse_command` + :meth:`get_handler` + the handler's
+        ``requires_running_environment`` attribute. Returns False for any input
+        that does not resolve to a registered handler — consistent with
+        :meth:`is_command` semantics (no handler ⇒ no env requirement).
+        """
+        if not cls.is_command(content):
+            return False
+        name, _ = cls.parse_command(content)
+        handler = cls._handlers.get(name)
+        return bool(handler and handler.requires_running_environment)
 
     @classmethod
     def list_handlers(cls) -> list[CommandHandler]:

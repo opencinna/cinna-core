@@ -42,11 +42,12 @@ summary: Invoice poll caught up; 0 pending items
 4. If the environment is running, the file is downloaded, parsed, and the snapshot persisted to DB
 5. Response appears instantly as a system message — no LLM call involved
 
-**Environment not running (cached fallback):**
+**Environment not running (auto-wake then fetch):**
 1. User types `/agent-status` while the environment is stopped
-2. Handler detects the environment is not running; live fetch is skipped
-3. Cached snapshot from DB is returned with a stale warning: "_Environment is not running — showing last cached status._"
-4. If no cached snapshot exists: "No STATUS.md available for this agent."
+2. `send_session_message` Phase 1.5 detects `requires_running_environment = True` and wakes the env automatically (timeout: 120 s)
+3. Once running, the handler fetches `STATUS.md` live and returns fresh status
+4. If wake-up fails or `fetch_status` fails post-wake, the handler falls back to the cached snapshot from DB with the warning: "_Environment is not running — showing last cached status._"
+5. If no cached snapshot exists: "No STATUS.md available for this agent."
 
 **Agent has never written STATUS.md:**
 - Response: "No STATUS.md available for this agent. See [COMPLEX\_AGENT\_DESIGN.md] for the expected format."
@@ -85,7 +86,7 @@ _Changed from 🔴 error_          ← only shown when a severity transition occ
 
 ## Business Rules
 
-- `/agent-status` bypasses the LLM pipeline — no streaming, no agent-env activation
+- `/agent-status` bypasses the LLM pipeline — no streaming. The handler sets `requires_running_environment = True`, so the environment is auto-woken before execution when it is not running. This gives a fresh `STATUS.md` by default. The cached-snapshot fallback inside the handler remains as a defensive last resort for cases where `fetch_status` fails post-wake (e.g. the adapter is still unreachable after wake-up).
 - The command always tries a live fetch first; falls back to cached snapshot on any error
 - A live fetch is rate-limited: at most one per environment per 30 seconds (shared lock with the `force_refresh` REST parameter and the post-action event handler)
 - Freeform files with no frontmatter are fully supported: severity is `unknown`, summary is the first non-blank body line, `reported_at` comes from the file mtime

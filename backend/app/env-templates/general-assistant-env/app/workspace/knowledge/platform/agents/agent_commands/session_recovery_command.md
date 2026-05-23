@@ -40,6 +40,7 @@ Allows users to recover a session after a lost SDK connection (e.g., after an ag
 
 ## Business Rules
 
+- `/session-recover` sets `requires_running_environment = True` as a UX choice: the command's own DB operations do not require a running environment, but pre-waking the env removes friction on the fresh message that almost always follows recovery
 - Recovery is idempotent — triggering multiple times is harmless
 - Recovery context is injected into the message content sent to agent-env only — the original DB message is never modified
 - The UI shows only the original user message; recovery context is invisible to users
