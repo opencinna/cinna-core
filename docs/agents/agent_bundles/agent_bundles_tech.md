@@ -136,6 +136,10 @@ New columns (added in Phase 2 migration):
 
 Dropped columns (Phase 2 migration): `is_clone`, `parent_agent_id`, `clone_mode` and their indexes.
 
+Unique constraints on `agent`:
+- `uq_agent_bundle_id_per_publisher` on `(owner_id, bundle_id, is_publisher_install)` — ensures a user cannot hold two publisher installs or two consumer installs of the same bundle, while allowing them to hold one of each.
+- `uq_agent_publisher_install_per_bundle` — partial unique index on `(bundle_uuid) WHERE is_publisher_install = true` — globally at most one publisher install per bundle.
+
 ## API Endpoints
 
 ### Bundle Management (`/api/v1/bundles`)
@@ -249,7 +253,7 @@ Publish flow detail:
 
 | Method | Notes |
 |--------|-------|
-| `install_bundle(session, user, bundle, request)` | Idempotent; returns existing install if present. Calls `_link_publisher_ai_credential` BEFORE the idempotent early-return so re-installs self-heal a deleted `AICredentialShare` |
+| `install_bundle(session, user, bundle, request)` | Idempotent for consumer installs — returns the existing consumer install (`is_publisher_install=False`) if one already exists for `(owner_id, bundle_uuid)`. If the caller is the bundle's publisher and only a publisher install exists (no consumer copy yet), a fresh consumer install is created. Calls `_link_publisher_ai_credential` BEFORE the idempotent early-return so re-installs self-heal a deleted `AICredentialShare` |
 | `install_bundle_for_email(session, publisher_agent_id, recipient_user_id)` | Auto-publishes on first call if bundle has no revisions |
 | `admin_install(session, target_user, bundle, request)` | Thin wrapper over install_bundle |
 | `apply_update(session, install)` | Stops env, calls `replace_bundle_content`, updates prompts + bookkeeping fields, emits event |
@@ -274,7 +278,7 @@ Install flow (`_install_from_revision`):
 3. AI credential resolution — before env creation, the resolution chain is applied for each mode: (a) `bundle.publisher_ai_credential_*_id` if non-null; (b) the installer's `request.ai_credential_selections` value; (c) `None`. `_link_publisher_ai_credential` is called first so the `AICredentialShare` row exists at env-create time when the bundle provides an AI credential
 4. `AgentEnvironment` created via `EnvironmentService.create_environment` with the resolved credential ids. The env service uses `ai_credentials_service.can_access_credential(user, cred)` (owner OR share recipient) rather than a strict `owner_id == user.id` check, so shared publisher AI credentials pass through at this step
 5. Workspace seeded from `revision.snapshot_path` via `seed_workspace_from_bundle_snapshot`
-6. `AppDataService.get_or_create_volume` called; existing orphaned volume reattached
+6. `AppDataService.get_or_create_volume` called with `catalog_type="server"` (consumer path) or `catalog_type=None` (publisher install path); existing orphaned volume reattached when the key matches
 7. `_setup_install_credentials` called — branches on `provided_by` per spec; PBP specs link the publisher's row; PBU specs create placeholders or link installer selections
 8. `_auto_create_app_mcp_route` called — creates `AppAgentRoute` + self-assignment from the revision's `router_trigger_prompt`; marks install degraded when prompt is empty
 
@@ -286,7 +290,7 @@ Install flow (`_install_from_revision`):
 | `get_for_user(session, bundle_id, user)` | Single entry; returns None if not visible |
 | `user_can_see(session, bundle, user)` | Visibility check logic |
 | `user_can_install(session, bundle, user)` | `user_can_see` AND `latest_revision_id IS NOT NULL` |
-| `_bundle_to_entry(session, bundle, user)` | Resolves a `CatalogEntryPublic` from a bundle row: reads latest revision for `latest_version` / `latest_revision_number`; reads publisher `User` row for `publisher_name` and `publisher_email`; checks the calling user's install row for `is_installed` / `user_install_id` |
+| `_bundle_to_entry(session, bundle, user)` | Resolves a `CatalogEntryPublic` from a bundle row: reads latest revision for `latest_version` / `latest_revision_number`; reads publisher `User` row for `publisher_name` and `publisher_email`; checks the calling user's **consumer** install row (`is_publisher_install=False`) for `is_installed` / `user_install_id`. The publisher's own working copy is excluded — publishers see their own bundle as installable until they perform a separate consumer install |
 | `build_install_context(session, bundle, user) -> CatalogInstallContext` | NEW (Phase 3). Runs the auto-prefill matcher per spec (see below), resolves publisher AI credential name+type summaries (no secret values), and returns `CatalogInstallContext`. Called by `GET /catalog/{bundle_id}/install-context` |
 
 ### `InstallReadinessGate` (Phase 4)
@@ -508,6 +512,8 @@ The dedicated setup-credentials route (`frontend/src/routes/_layout/agent/$agent
 | `backend/app/alembic/versions/bb2cd3e4f5a6_add_publish_settings_to_agent.py` | Adds `publish_settings` JSON column (default `{}`) to the `agent` table. `down_revision = aa1bc2d3e4f5`. No data backfill; existing rows are read as `{}` naturally. Downgrade drops the column |
 | `backend/app/alembic/versions/cc3de4f5a6b7_add_template_sharing_to_credential.py` | Adds `allow_template_sharing` boolean (default `false`) and `template_private_fields` JSON list (default `[]`) to the `credential` table. `down_revision = bb2cd3e4f5a6`. Server defaults make the column add a no-op for existing rows; downgrade drops both columns |
 | `backend/app/alembic/versions/dd4ef5a6b7c8_add_router_trigger_prompt_and_auto_managed.py` | Adds `router_trigger_prompt` text NULLABLE to both `agent` and `agent_bundle_revision`; adds `is_auto_managed` boolean (server default `false`) to `app_agent_route`. `down_revision = cc3de4f5a6b7`. No data backfill in this migration — existing rows get NULL / false naturally. A separate Phase 8 backfill script populates `router_trigger_prompt` and creates auto-routes for pre-existing **foreign** bundle installs only (`is_publisher_install=False AND bundle_uuid IS NOT NULL`) |
+| `backend/app/alembic/versions/bcab2848714f_add_catalog_type_to_app_data_volume.py` | Adds nullable `catalog_type varchar` column to `app_data_volume`; drops `uq_app_data_user_bundle` on `(user_id, bundle_id)`; adds `uq_app_data_user_bundle_catalog` on `(user_id, bundle_id, catalog_type)`. Backfill: volumes whose paired agent has `is_publisher_install=True` → `NULL`; all other bundle-linked volumes → `"server"`; orphans with no paired agent → `"server"` |
+| `backend/app/alembic/versions/ad1f9c2e4b73_scope_agent_bundle_unique_by_install_slot.py` | Replaces `uq_agent_bundle_id_per_publisher` on `(owner_id, bundle_id)` with a new constraint on `(owner_id, bundle_id, is_publisher_install)`. The partial unique index `uq_agent_publisher_install_per_bundle` is unchanged. This allows a publisher to hold both a publisher install and a consumer install of the same bundle simultaneously |
 
 ## Runtime Cross-Service Rows Created at Install Time
 

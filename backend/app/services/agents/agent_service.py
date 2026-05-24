@@ -435,13 +435,35 @@ class AgentService:
 
         # Mark the per-user app-data volume orphaned BEFORE deleting the row.
         # ``AppDataService.wipe_volume`` requires ``is_orphaned=true``, and
-        # the volume is keyed on (user_id, bundle_id) so a future reinstall
-        # of the same bundle reattaches automatically.
+        # the volume is keyed on (user_id, bundle_id, catalog_type) so a
+        # future reinstall from the same source reattaches automatically.
+        #
+        # Slot selection (must match ``_resolve_app_data_host_path``):
+        #   - consumer install (``bundle_uuid != NULL`` AND
+        #     ``is_publisher_install=False``) → ``"server"`` slot
+        #   - publisher install / unpublished standalone agent → NULL slot
+        # We MUST scope by ``catalog_type`` — both slots can coexist for
+        # the same (user, bundle), and orphaning the wrong one would strand
+        # the wrong data.
         try:
+            volume_catalog_type = agent.app_data_catalog_type
             volume = AppDataService.get_by_user_bundle(
-                session, agent.owner_id, agent.bundle_id
+                session,
+                agent.owner_id,
+                agent.bundle_id,
+                catalog_type=volume_catalog_type,
             )
-            if volume and not volume.is_orphaned:
+            if volume is None:
+                # Lookup miss after deletion is unusual — the volume should
+                # have been created on first env activation. Log a breadcrumb
+                # so on-call has something to grep if a user reports lost
+                # app-data after deleting an install.
+                logger.info(
+                    "No app-data volume found for agent %s (bundle_id=%s, "
+                    "catalog_type=%r) during delete — nothing to orphan",
+                    agent_id, agent.bundle_id, volume_catalog_type,
+                )
+            elif not volume.is_orphaned:
                 AppDataService.mark_orphaned(session, volume)
         except Exception as e:
             logger.warning(

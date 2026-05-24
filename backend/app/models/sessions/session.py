@@ -90,7 +90,10 @@ class SessionMessage(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     session_id: uuid.UUID = Field(foreign_key="session.id", ondelete="CASCADE")
-    role: str  # "user" | "agent" | "system"
+    role: str  # "user" | "agent" | "system" — "agent" (not "assistant") matches
+    # the A2A protocol's role enum so messages cross the A2A boundary without
+    # translation; SDK-style sources using "assistant" (e.g. OpenCode adapter)
+    # are mapped to "agent" on ingest.
     content: str
     sequence_number: int
     message_metadata: dict = Field(default_factory=dict, sa_column=Column(JSON))

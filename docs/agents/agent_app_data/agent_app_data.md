@@ -2,14 +2,14 @@
 
 ## Purpose
 
-Provide each user with a persistent, private storage area for every bundle they install. App Data is keyed by `(user_id, bundle_id)` and survives the install lifecycle — specifically it is **not** deleted when a user uninstalls a bundle. Reinstalling the same bundle reattaches the same App Data so runtime state (user preferences, downloaded files, cached data) carries forward across updates and reinstalls.
+Provide each user with a persistent, private storage area for every bundle they install. App Data is keyed by `(user_id, bundle_id, catalog_type)` and survives the install lifecycle — specifically it is **not** deleted when a user uninstalls a bundle. Reinstalling the same bundle reattaches the same App Data so runtime state (user preferences, downloaded files, cached data) carries forward across updates and reinstalls.
 
 ## Core Concepts
 
-- **App Data Volume** (`AppDataVolume`) — one row per `(user_id, bundle_id)` pair; backed by a bind-mounted host directory
+- **App Data Volume** (`AppDataVolume`) — one row per `(user_id, bundle_id, catalog_type)` triple; backed by a bind-mounted host directory
 - **Lifecycle independence** — the volume row and its on-disk data outlive the `Agent` (Install) row; uninstall marks it orphaned, not deleted
 - **Orphaned volume** — `is_orphaned = true`; no install currently references it. User can wipe orphaned volumes from Settings; non-orphaned volumes are protected
-- **Reattachment** — when the same bundle is reinstalled, `AppDataService.get_or_create_volume` finds the orphaned row, clears `is_orphaned`, and links the new install
+- **Reattachment** — when the same bundle is reinstalled, `AppDataService.get_or_create_volume` finds the orphaned row by matching all three fields `(user_id, bundle_id, catalog_type)`, clears `is_orphaned`, and links the new install. A consumer reinstall reattaches the previous consumer volume, not the publisher's volume
 - **Container mount point** — `/app/workspace/app-data` inside the agent's Docker environment, with three sub-directories: `storage/`, `uploads/` (the destination for all user file uploads — chat attachments, task attachments, MCP `get_file_upload_url`), `cache/`
 
 ## User Stories / Flows
@@ -17,7 +17,7 @@ Provide each user with a persistent, private storage area for every bundle they 
 ### App Data Created on First Install
 
 1. User installs a bundle for the first time
-2. `InstallService._install_from_revision` calls `AppDataService.get_or_create_volume(session, user_id, bundle_id)`
+2. `InstallService._install_from_revision` calls `AppDataService.get_or_create_volume(session, user_id, bundle_id, catalog_type)` — consumer installs pass `catalog_type="server"`; publisher installs pass `catalog_type=None`
 3. Directory `<APP_DATA_STORAGE_DIR>/<user_id>/<bundle_id>/` is created with `storage/`, `uploads/`, `cache/` sub-directories
 4. `AppDataVolume` row inserted (or reused if previously orphaned)
 5. Agent environment is started; `app-data/` is bind-mounted into the container at `/app/workspace/app-data`
@@ -33,7 +33,7 @@ Provide each user with a persistent, private storage area for every bundle they 
 ### Reinstall Reattaches App Data
 
 1. User installs the same bundle again
-2. `AppDataService.get_or_create_volume` finds the existing row by `(user_id, bundle_id)`
+2. `AppDataService.get_or_create_volume` finds the existing row by `(user_id, bundle_id, catalog_type)` — the same `catalog_type` used at first install (`"server"` for a consumer reinstall)
 3. `is_orphaned` cleared; `current_install_id` set to the new install ID
 4. Container starts with the same bind-mount — all previous data is available
 
@@ -58,7 +58,16 @@ When `InstallService.apply_update` runs:
 
 - **Owner-only access** — no admin override; admins cannot read or manage another user's app-data (matches "private profile" framing)
 - **Wipe requires orphaned status** — `AppDataService.wipe_volume` raises an error if `is_orphaned = false`. The UI hides the Wipe button for attached volumes. This prevents accidental data loss while an install is running
-- **Unique per user × bundle** — `uq_app_data_user_bundle` unique constraint on `(user_id, bundle_id)` ensures exactly one volume row per pair
+- **Unique per user × bundle × catalog_type** — `uq_app_data_user_bundle_catalog` unique constraint on `(user_id, bundle_id, catalog_type)` ensures exactly one volume row per triple. Postgres treats `NULL` values as distinct in unique constraints, which is intentional: the publisher's slot (`catalog_type=NULL`) coexists with their consumer slot (`catalog_type="server"`) without colliding
+
+### `catalog_type` field
+
+`catalog_type` is a plain nullable string column that records where an App Data volume originated:
+
+- `NULL` — publisher or owned installs that have no bundle-catalog origin (the publisher's working copy)
+- `"server"` — consumer installs sourced from this instance's catalog
+
+The column is a plain string rather than a database enum so future values (e.g. `"marketplace"`, `"remote:<host>"`) can be added without a schema change. The backfill rule for existing rows: volumes whose paired agent has `is_publisher_install=True` receive `NULL`; all other bundle-linked volumes receive `"server"`; orphaned volumes with no paired agent receive `"server"`.
 - **`bundle_id` column stores the string, not the UUID** — this keeps the row stable if the `AgentBundle` row is deleted (publisher deletes their bundle); orphaned volumes do not lose their bundle_id
 - **Directory creation on `get_or_create`** — `storage/`, `uploads/`, `cache/` are created with mode 0o755 every time the volume is touched to handle the case where a subdirectory was manually removed
 - **Size is lazy** — `size_bytes` is not updated in real-time; users trigger a recompute manually from the Settings tab

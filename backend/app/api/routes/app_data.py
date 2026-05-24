@@ -29,6 +29,7 @@ def _to_public(volume, install_name: str | None) -> AppDataVolumePublic:
     return AppDataVolumePublic(
         id=volume.id,
         bundle_id=volume.bundle_id,
+        catalog_type=volume.catalog_type,
         volume_name=volume.volume_name,
         size_bytes=volume.size_bytes,
         last_size_check_at=volume.last_size_check_at,

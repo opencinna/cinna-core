@@ -1482,13 +1482,14 @@ class EnvironmentLifecycleManager:
 
         bundle_id = getattr(agent, "bundle_id", None)
         if not bundle_id:
-            # The Phase 1 migration backfills bundle_id for every existing
-            # row and the column is NOT NULL going forward, so reaching this
-            # branch means a bug — either an agent slipped through without
-            # a bundle_id or the column got cleared. Surface it loudly so
-            # we notice in logs; fall back to a per-env scratch dir to keep
-            # the env startable while the issue is investigated.
-            logger.warning(
+            # Should never happen post-Phase-1 migration: bundle_id is
+            # backfilled for every existing row and NOT NULL going forward.
+            # Reaching here means a bug — either an agent slipped through
+            # without a bundle_id or the column got cleared. Log loud
+            # (ERROR, not WARN — this is not noise) but don't crash the
+            # env: degrade to a per-env scratch dir so the running env
+            # stays up while the issue is investigated.
+            logger.error(
                 "Agent %s has no bundle_id — using per-env fallback app-data dir. "
                 "This should not happen post-Phase-1 migration; investigate.",
                 agent.id,
@@ -1500,11 +1501,24 @@ class EnvironmentLifecycleManager:
                 return f"{settings.HOST_AGENT_ENVIRONMENTS_DIR}/{environment.id}/app-data"
             return str(fallback.absolute())
 
+        # Slot the volume by source. The rule is:
+        #   - Unpublished standalone agents (``bundle_uuid IS NULL``) and
+        #     publisher installs (``is_publisher_install=True``) share the
+        #     NULL ``catalog_type`` slot. An unpublished agent becomes a
+        #     publisher install on first publish, so reserving the NULL
+        #     slot from creation keeps the on-disk data stable across the
+        #     publish promotion.
+        #   - Consumer installs from this server's local catalog
+        #     (``bundle_uuid != NULL`` and ``is_publisher_install=False``)
+        #     go in the ``"server"`` slot. This keeps a publisher who
+        #     dogfoods their own bundle as a consumer from clobbering the
+        #     publisher install's app-data — the two volumes coexist.
         volume = AppDataService.get_or_create_volume(
             db_session,
             user_id=agent.owner_id,
             bundle_id=bundle_id,
             current_install_id=agent.id,
+            catalog_type=agent.app_data_catalog_type,
         )
         return volume.host_path
 

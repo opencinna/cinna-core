@@ -10,8 +10,13 @@ visible when:
   listed — the publisher manages from the bundle CRUD API, but having the
   publisher catch a glimpse of their own bundle in the catalog is harmless).
 
-The publisher's working install row is filtered out — publishers should not
-"install" their own bundle (the publisher install IS the local copy).
+The publisher's working install row (``is_publisher_install=True``) is the
+dev / source copy and is NOT counted as a consumer install — the catalog
+reports ``is_installed=False`` for the publisher's own bundle until they
+install it as a consumer to dogfood it. Publishers still see their own
+bundles in the catalog listing (so they can install them); the
+``is_installed`` flag and the "Open" button only flip on for the consumer
+install row.
 """
 import logging
 import uuid
@@ -136,18 +141,29 @@ class CatalogService:
                 latest_published_at = rev.published_at
                 cred_specs = rev.required_credential_specs or []
 
-        # Install count — how many distinct users currently have an install.
+        # Install count — how many distinct users currently have a consumer
+        # install. Publisher installs (the publisher's dev / source copy) are
+        # excluded so the count matches the semantics of ``is_installed``
+        # below: the catalog represents consumer installs only.
         install_count_stmt = (
             select(func.count())
             .select_from(Agent)
-            .where(Agent.bundle_uuid == bundle.id)
+            .where(
+                Agent.bundle_uuid == bundle.id,
+                Agent.is_publisher_install == False,  # noqa: E712
+            )
         )
         install_count = session.exec(install_count_stmt).one() or 0
 
-        # User's own install of this bundle (if any).
+        # User's own install of this bundle (if any). The publisher install
+        # (``is_publisher_install=True``) is the dev / source copy and is
+        # explicitly excluded — the catalog represents consumer installs,
+        # so the publisher's own bundle should report ``is_installed=False``
+        # until they install it as a consumer to dogfood it.
         user_install_stmt = select(Agent).where(
             Agent.bundle_uuid == bundle.id,
             Agent.owner_id == user.id,
+            Agent.is_publisher_install == False,  # noqa: E712
         )
         user_install = session.exec(user_install_stmt).first()
 

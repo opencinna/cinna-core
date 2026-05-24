@@ -88,13 +88,16 @@ class Agent(AgentBase, table=True):
             postgresql_where=text("is_general_assistant = true"),
             unique=True,
         ),
-        # One install per (owner, bundle_id) — both the publisher's install
-        # and any foreign install of the same bundle have a unique pair
-        # (owner_id × bundle_id). Foreign installs differ from the publisher
-        # by ``owner_id``.
+        # One install per (owner, bundle_id, slot) — the slot is
+        # ``is_publisher_install``. A user may own both a publisher
+        # install (``is_publisher_install=True``) and a separate consumer
+        # install (``is_publisher_install=False``) of the same bundle,
+        # which is how a publisher dogfoods their own published bundle.
+        # Foreign installs only ever populate the consumer slot.
         UniqueConstraint(
             "owner_id",
             "bundle_id",
+            "is_publisher_install",
             name="uq_agent_bundle_id_per_publisher",
         ),
     )
@@ -166,6 +169,17 @@ class Agent(AgentBase, table=True):
     #     }
     #   }
     publish_settings: dict = Field(default_factory=dict, sa_column=Column(JSON))
+
+    @property
+    def app_data_catalog_type(self) -> str | None:
+        """Slot policy for the per-(user, bundle) app-data volume.
+
+        NULL = publisher install / unpublished standalone agent.
+        "server" = consumer install from this server's local catalog.
+        """
+        if self.bundle_uuid is not None and not self.is_publisher_install:
+            return "server"
+        return None
 
     owner: User | None = Relationship(back_populates="agents")
     credentials: List["app.models.credentials.credential.Credential"] = Relationship(

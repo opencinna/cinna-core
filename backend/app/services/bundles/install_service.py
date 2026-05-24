@@ -92,10 +92,16 @@ class InstallService:
         if revision is None:
             raise InstallError("Bundle latest revision is missing")
 
-        # Idempotent: re-use the user's existing install if any.
+        # Idempotent: re-use the user's existing **consumer** install if
+        # any. We deliberately exclude the publisher install — installing
+        # one's own bundle as a consumer is a legitimate dogfood path
+        # that materialises a separate consumer-slot install. Without
+        # this filter the publisher would be short-circuited back into
+        # their dev / source copy.
         existing_stmt = select(Agent).where(
             Agent.bundle_uuid == bundle.id,
             Agent.owner_id == user.id,
+            Agent.is_publisher_install == False,  # noqa: E712
         )
         existing = session.exec(existing_stmt).first()
         if existing:
@@ -116,7 +122,6 @@ class InstallService:
             bundle=bundle,
             revision=revision,
             request=request,
-            is_publisher_install=False,
         )
 
     @staticmethod
@@ -187,8 +192,11 @@ class InstallService:
         bundle: AgentBundle,
         revision: AgentBundleRevision,
         request: InstallRequest | None,
-        is_publisher_install: bool,
     ) -> Agent:
+        # Always produces a consumer install (``is_publisher_install=False``).
+        # Publisher install rows are created by the publish flow's in-place
+        # promotion path (``PublishService.publish`` flips the flag on an
+        # existing Agent row), not here.
         from app.services.bundles.app_data_service import AppDataService
         from app.services.bundles.bundle_id_service import BundleIdService
         from app.services.environments.environment_service import EnvironmentService
@@ -213,7 +221,7 @@ class InstallService:
             bundle_id=bundle.bundle_id,
             bundle_uuid=bundle.id,
             installed_revision_id=revision.id,
-            is_publisher_install=is_publisher_install,
+            is_publisher_install=False,
             update_mode=bundle.default_install_mode or BundleInstallMode.MANUAL,
             last_sync_at=datetime.now(UTC),
             last_update_status="synced",
@@ -318,13 +326,22 @@ class InstallService:
                 install.id, e,
             )
 
-        # 4. Ensure / reattach app-data volume.
+        # 4. Ensure / reattach app-data volume. Slot by source so the
+        # publisher's dev / source copy (NULL slot) and a consumer install
+        # ("server" slot) of the same bundle stay separate on disk.
+        # ``EnvironmentLifecycleManager`` also lazily creates / reattaches
+        # the volume during compose generation and uses the same slot
+        # policy, so this call is mostly belt-and-braces: it guarantees the
+        # row exists even if the env never reaches compose-generation
+        # (e.g. env creation succeeded but the background build is still
+        # pending when the installer reads the install).
         try:
             AppDataService.get_or_create_volume(
                 session,
                 user_id=user.id,
                 bundle_id=install.bundle_id,
                 current_install_id=install.id,
+                catalog_type=install.app_data_catalog_type,
             )
         except Exception as e:
             logger.warning(

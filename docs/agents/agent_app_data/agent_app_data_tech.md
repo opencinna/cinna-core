@@ -30,12 +30,13 @@
 | `host_path` | varchar(1024) NOT NULL | Absolute path under `APP_DATA_STORAGE_DIR` on the host |
 | `size_bytes` | int DEFAULT 0 | Lazily updated |
 | `last_size_check_at` | timestamp | |
+| `catalog_type` | varchar NULLABLE | `NULL` for publisher/owned installs; `"server"` for installs sourced from this instance's catalog. Plain string column — no enum — so future values (`"marketplace"`, `"remote:<host>"`) can be added without a schema change |
 | `current_install_id` | UUID FK → agent ON DELETE SET NULL | Null when orphaned |
 | `is_orphaned` | bool DEFAULT false | True when no install references this volume |
 | `created_at` | timestamp | |
 | `updated_at` | timestamp | |
 
-Unique constraint: `uq_app_data_user_bundle` on `(user_id, bundle_id)`.
+Unique constraint: `uq_app_data_user_bundle_catalog` on `(user_id, bundle_id, catalog_type)`. Postgres treats `NULL` values as distinct in this constraint, so a publisher's `NULL` slot coexists with their consumer `"server"` slot without collision.
 
 Indexes: `ix_app_data_volume_user_id`, `ix_app_data_volume_bundle_id`, `ix_app_data_volume_orphaned` (partial `WHERE is_orphaned = true`).
 
@@ -69,14 +70,14 @@ updated_at: datetime
 |--------|-------|
 | `storage_root() -> Path` | `Path(settings.APP_DATA_STORAGE_DIR)` |
 | `host_storage_root() -> Path` | Uses `HOST_APP_DATA_DIR` when set (Docker-in-Docker) |
-| `host_path_for(user_id, bundle_id) -> Path` | `<host_root>/<user_id>/<bundle_id>` |
-| `container_path_for(user_id, bundle_id) -> Path` | `<storage_root>/<user_id>/<bundle_id>` |
+| `host_path_for(user_id, bundle_id, catalog_type) -> Path` | `<host_root>/<user_id>/<bundle_id>` |
+| `container_path_for(user_id, bundle_id, catalog_type) -> Path` | `<storage_root>/<user_id>/<bundle_id>` |
 | `get_by_id(session, volume_id)` | |
 | `get_for_user(session, volume_id, user_id)` | Returns None for wrong-owner (no 403 leak) |
-| `get_by_user_bundle(session, user_id, bundle_id)` | Lookup by `(user_id, bundle_id)` |
+| `get_by_user_bundle(session, user_id, bundle_id, catalog_type)` | Lookup by `(user_id, bundle_id, catalog_type)` |
 | `get_install_name(session, volume)` | Resolves linked `Agent.name` |
 | `list_user_volumes(session, user_id)` | Returns `[(volume, install_name|None)]` via outer join |
-| `get_or_create_volume(session, user_id, bundle_id, current_install_id)` | Idempotent; reuses and un-orphans existing row; creates `storage/`, `uploads/`, `cache/` |
+| `get_or_create_volume(session, user_id, bundle_id, catalog_type, current_install_id)` | Idempotent; reuses and un-orphans existing row by matching all three key fields; creates `storage/`, `uploads/`, `cache/` |
 | `mark_orphaned(session, volume)` | Sets `is_orphaned=True`, clears `current_install_id` |
 | `wipe_volume(session, volume)` | Raises ValueError if `is_orphaned=False`; best-effort `rmtree`; deletes row |
 | `recompute_size(session, volume) -> int` | `os.scandir` walk; persists result |

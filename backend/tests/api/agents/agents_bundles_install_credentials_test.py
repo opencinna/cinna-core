@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import settings
+from app.models.agents.agent import Agent
 from app.models.credentials.ai_credential_share import AICredentialShare
 from app.models.credentials.credential import Credential
 from app.models.credentials.credential_share import CredentialShare
@@ -823,28 +824,43 @@ def test_publisher_ai_credential_request_selection_ignored_when_bundle_provides(
 # ── Scenario J: Publisher AI credential — installer is publisher ──────────────
 
 
-def test_publisher_ai_credential_no_self_share_on_publisher_install(
+def test_publisher_self_install_creates_consumer_slot_without_self_share(
     client: TestClient,
     superuser_token_headers: dict[str, str],
     db: Session,
 ) -> None:
-    """J. Publisher's own agent already exists as a publisher install.
+    """J. Publisher installs their own bundle from the catalog.
+
+    The publisher's working agent row (``is_publisher_install=True``) is
+    the dev / source copy; the catalog install must materialise a
+    separate consumer install (``is_publisher_install=False``) so
+    "Open" from the catalog launches the consumer agent rather than
+    dumping the publisher into their dev copy.
+
     Setting a PBP AI credential on the bundle must NOT create a
-    AICredentialShare(publisher → publisher) row.
+    ``AICredentialShare(publisher → publisher)`` row — sharing an AI
+    credential with yourself is always a no-op, independent of the
+    install slot.
 
     Assert:
+    - A new consumer install Agent row exists (different id from the
+      publisher install, ``is_publisher_install=False``).
+    - The publisher install Agent row is preserved unchanged
+      (``is_publisher_install=True``, same id as before).
     - No AICredentialShare where shared_with_user_id == publisher_user_id.
     """
     # ── Phase 1: publish + set PBP AI credential ─────────────────────────────
     publisher_agent = create_agent_via_api(
         client, superuser_token_headers, name="InstCred-J-Publisher"
     )
+    publisher_install_id = uuid.UUID(publisher_agent["id"])
     drain_tasks()
 
     conv_ai = create_random_ai_credential(client, superuser_token_headers)
     conv_ai_id = uuid.UUID(conv_ai["id"])
 
     fresh_pub = _publish(client, superuser_token_headers, publisher_agent["id"])
+    bundle_uuid = uuid.UUID(fresh_pub["bundle_uuid"])
 
     r = client.patch(
         f"{API}/bundles/{fresh_pub['bundle_uuid']}",
@@ -861,12 +877,37 @@ def test_publisher_ai_credential_no_self_share_on_publisher_install(
     publisher_user_id_str = fresh_pub.get("owner_id")
     publisher_user_id = uuid.UUID(publisher_user_id_str)
 
-    # The catalog install for the publisher themselves (idempotent — returns existing).
-    _install(client, superuser_token_headers, fresh_pub["bundle_id"])
+    install_response = _install(
+        client, superuser_token_headers, fresh_pub["bundle_id"]
+    )
+    consumer_install_id = uuid.UUID(install_response["id"])
 
-    # ── Phase 3: verify no self-share row ─────────────────────────────────────
+    # ── Phase 3: verify a separate consumer install row was created ──────────
     db.expire_all()
 
+    assert consumer_install_id != publisher_install_id, (
+        "Publisher self-install must create a NEW agent row distinct from "
+        "the publisher install (dev copy), not reuse it."
+    )
+
+    # Both install rows must exist side-by-side for the same (owner, bundle).
+    install_rows = db.exec(
+        select(Agent).where(
+            Agent.owner_id == publisher_user_id,
+            Agent.bundle_uuid == bundle_uuid,
+        )
+    ).all()
+    by_slot = {row.is_publisher_install: row for row in install_rows}
+    assert True in by_slot, "Publisher install row was lost"
+    assert False in by_slot, "Consumer install row was not created"
+    assert by_slot[True].id == publisher_install_id, (
+        "Publisher install id changed — the dev copy must be preserved"
+    )
+    assert by_slot[False].id == consumer_install_id, (
+        "Consumer install row id mismatch"
+    )
+
+    # ── Phase 4: verify no self-share row ─────────────────────────────────────
     self_share = db.exec(
         select(AICredentialShare).where(
             AICredentialShare.ai_credential_id == conv_ai_id,

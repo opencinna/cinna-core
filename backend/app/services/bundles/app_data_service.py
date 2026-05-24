@@ -1,14 +1,21 @@
-"""AppDataService — manages per-(user, bundle) persistent storage volumes.
+"""AppDataService — manages per-(user, bundle, catalog_type) persistent storage volumes.
 
-Every published agent install (``Agent`` row) maps to exactly one
-``AppDataVolume`` row keyed by ``(user_id, bundle_id)``. The backing data lives
-on disk under ``settings.APP_DATA_STORAGE_DIR/<user>/<bundle>/`` with three
-sub-directories — ``storage/``, ``uploads/``, ``cache/`` — bind-mounted into
-the agent environment at ``/app/workspace/app-data``.
+Every agent install (``Agent`` row) maps to exactly one ``AppDataVolume``
+row keyed by ``(user_id, bundle_id, catalog_type)``. The ``catalog_type``
+discriminator separates the publisher install (``NULL`` slot — the
+publisher's dev copy) from consumer installs of the same bundle by the
+same user (``"server"`` slot today, with future values like
+``"marketplace"`` or ``"remote:<host>"`` planned). The backing data lives
+on disk under
+``settings.APP_DATA_STORAGE_DIR/<user>/<bundle>[/<catalog_type>]/`` with
+three sub-directories — ``storage/``, ``uploads/``, ``cache/`` —
+bind-mounted into the agent environment at ``/app/workspace/app-data``.
 
 Phase 1 contract:
 - ``get_or_create_volume`` — idempotent creation; reused on reinstall after
-  the row was marked orphaned.
+  the row was marked orphaned. Lookup is scoped by ``catalog_type`` so a
+  consumer reinstall reattaches the previous consumer volume rather than
+  the publisher's NULL-slot one.
 - ``wipe_volume`` — destroys row + on-disk tree; refuses while an install
   still references the volume.
 - ``recompute_size`` — walks the tree with ``os.scandir`` (cheap stat()s)
@@ -62,28 +69,73 @@ class AppDataService:
         return cls.storage_root()
 
     @classmethod
-    def host_path_for(cls, user_id: uuid.UUID, bundle_id: str) -> Path:
-        """Compute the host-side path for ``(user, bundle)``."""
-        return cls.host_storage_root() / str(user_id) / bundle_id
+    def host_path_for(
+        cls,
+        user_id: uuid.UUID,
+        bundle_id: str,
+        catalog_type: str | None = None,
+    ) -> Path:
+        """Compute the host-side path for ``(user, bundle[, catalog_type])``.
+
+        The NULL slot (publisher install) lives at the legacy
+        ``<root>/<user>/<bundle>/`` location so existing on-disk data is
+        preserved verbatim. Non-NULL slots (consumer installs) nest under a
+        ``_<catalog_type>/`` subdirectory so they cannot collide with the
+        publisher's tree.
+        """
+        base = cls.host_storage_root() / str(user_id) / bundle_id
+        if catalog_type is None:
+            return base
+        return base / f"_{cls._sanitize_slot(catalog_type)}"
 
     @classmethod
-    def container_path_for(cls, user_id: uuid.UUID, bundle_id: str) -> Path:
+    def container_path_for(
+        cls,
+        user_id: uuid.UUID,
+        bundle_id: str,
+        catalog_type: str | None = None,
+    ) -> Path:
         """Compute the backend-container-side path used for I/O."""
-        return cls.storage_root() / str(user_id) / bundle_id
+        base = cls.storage_root() / str(user_id) / bundle_id
+        if catalog_type is None:
+            return base
+        return base / f"_{cls._sanitize_slot(catalog_type)}"
 
     @staticmethod
-    def _volume_name(user_id: uuid.UUID, bundle_id: str) -> str:
+    def _sanitize_slot(catalog_type: str) -> str:
+        """Sanitize a ``catalog_type`` value for use as a path segment.
+
+        Defensive normalisation only — today's known values (``"server"``)
+        are already safe, but future values like ``"remote:host.example"``
+        carry path-unfriendly characters.
+        """
+        return _VOLUME_NAME_SAFE.sub("_", catalog_type)
+
+    @staticmethod
+    def _volume_name(
+        user_id: uuid.UUID,
+        bundle_id: str,
+        catalog_type: str | None = None,
+    ) -> str:
         """Compose a docker-volume-safe name.
 
         Dashes are fine; underscores keep PG/docker happy. The 240-char cap
-        is on the *assembled* ``appdata_<8hex>_<slug>`` string — it leaves
-        headroom under common filesystem name limits (e.g. ext4's 255-byte
-        filename limit). PG's 63-char identifier limit doesn't apply here:
-        ``volume_name`` is a Docker-volume / bind-mount name, not a SQL
-        identifier.
+        is on the *assembled* ``appdata_<8hex>_<slug>[_<catalog>]`` string —
+        it leaves headroom under common filesystem name limits (e.g. ext4's
+        255-byte filename limit). PG's 63-char identifier limit doesn't
+        apply here: ``volume_name`` is a Docker-volume / bind-mount name,
+        not a SQL identifier.
+
+        The publisher (NULL) slot keeps the legacy 3-segment name so
+        existing rows continue to match. Non-NULL slots append the
+        catalog_type so the two coexisting slots get distinct Docker
+        volume names (the ``volume_name`` column is globally unique).
         """
         slug = _VOLUME_NAME_SAFE.sub("_", bundle_id)
-        return f"appdata_{user_id.hex[:8]}_{slug}"[:240]
+        if catalog_type is None:
+            return f"appdata_{user_id.hex[:8]}_{slug}"[:240]
+        slot = AppDataService._sanitize_slot(catalog_type)
+        return f"appdata_{user_id.hex[:8]}_{slug}_{slot}"[:240]
 
     # ── Read / list ──────────────────────────────────────────────────
 
@@ -109,12 +161,25 @@ class AppDataService:
 
     @staticmethod
     def get_by_user_bundle(
-        session: Session, user_id: uuid.UUID, bundle_id: str
+        session: Session,
+        user_id: uuid.UUID,
+        bundle_id: str,
+        catalog_type: str | None = None,
     ) -> AppDataVolume | None:
+        """Lookup keyed on ``(user_id, bundle_id, catalog_type)``.
+
+        ``catalog_type`` is matched explicitly (including its ``NULL``
+        value via ``IS NULL``) — a SQL ``= NULL`` comparison would silently
+        return zero rows and break the publisher-slot path.
+        """
         stmt = select(AppDataVolume).where(
             AppDataVolume.user_id == user_id,
             AppDataVolume.bundle_id == bundle_id,
         )
+        if catalog_type is None:
+            stmt = stmt.where(AppDataVolume.catalog_type.is_(None))
+        else:
+            stmt = stmt.where(AppDataVolume.catalog_type == catalog_type)
         return session.exec(stmt).first()
 
     @staticmethod
@@ -163,33 +228,55 @@ class AppDataService:
         user_id: uuid.UUID,
         bundle_id: str,
         current_install_id: uuid.UUID | None = None,
+        catalog_type: str | None = None,
     ) -> AppDataVolume:
         """Idempotent: create the row + directory tree, or reuse if present.
 
-        Reusing an existing row clears ``is_orphaned`` and updates
+        Lookup is keyed on ``(user_id, bundle_id, catalog_type)``. Reusing
+        an existing row clears ``is_orphaned`` and updates
         ``current_install_id`` (so reinstalling reattaches the volume).
+
+        ``catalog_type`` semantics:
+          - ``None``     → publisher install (publisher's dev / source copy)
+          - ``"server"`` → consumer install from this server's local catalog
+          - other strings reserved for future sources (``"marketplace"``,
+            ``"remote:<host>"``).
+
+        For backfilled rows (existing on-disk data) the stored
+        ``host_path`` is preserved on reuse — we deliberately do **not**
+        overwrite it with the freshly computed path, otherwise a
+        configuration drift on ``HOST_APP_DATA_DIR`` would silently strand
+        users' data. New rows always store the freshly-computed path.
         """
-        existing = cls.get_by_user_bundle(session, user_id, bundle_id)
-        host_path = cls.host_path_for(user_id, bundle_id)
+        existing = cls.get_by_user_bundle(
+            session, user_id, bundle_id, catalog_type=catalog_type
+        )
 
         if existing:
-            cls._ensure_directory_tree(cls.container_path_for(user_id, bundle_id))
+            # Reuse the recorded on-disk path. ``container_path_from_volume``
+            # translates the stored ``host_path`` back to the backend's
+            # filesystem view so we ensure the directory tree at the path
+            # the row actually points at (not the freshly-computed one).
+            cls._ensure_directory_tree(cls._container_path_from_volume(existing))
             existing.is_orphaned = False
             if current_install_id is not None:
                 existing.current_install_id = current_install_id
-            existing.host_path = str(host_path)
             existing.updated_at = datetime.now(UTC)
             session.add(existing)
             session.commit()
             session.refresh(existing)
             return existing
 
-        cls._ensure_directory_tree(cls.container_path_for(user_id, bundle_id))
+        host_path = cls.host_path_for(user_id, bundle_id, catalog_type=catalog_type)
+        cls._ensure_directory_tree(
+            cls.container_path_for(user_id, bundle_id, catalog_type=catalog_type)
+        )
 
         volume = AppDataVolume(
             user_id=user_id,
             bundle_id=bundle_id,
-            volume_name=cls._volume_name(user_id, bundle_id),
+            catalog_type=catalog_type,
+            volume_name=cls._volume_name(user_id, bundle_id, catalog_type=catalog_type),
             host_path=str(host_path),
             current_install_id=current_install_id,
             is_orphaned=False,
@@ -198,8 +285,8 @@ class AppDataService:
         session.commit()
         session.refresh(volume)
         logger.info(
-            "Created AppDataVolume id=%s user=%s bundle=%s host=%s",
-            volume.id, user_id, bundle_id, host_path,
+            "Created AppDataVolume id=%s user=%s bundle=%s catalog_type=%s host=%s",
+            volume.id, user_id, bundle_id, catalog_type, host_path,
         )
         return volume
 
