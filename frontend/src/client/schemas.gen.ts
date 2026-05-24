@@ -3889,6 +3889,17 @@ export const AgentPublicSchema = {
             ],
             title: 'Installed Revision Number'
         },
+        installed_revision_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Revision Version'
+        },
         is_publisher_install: {
             type: 'boolean',
             title: 'Is Publisher Install',

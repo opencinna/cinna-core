@@ -230,6 +230,7 @@ class AgentPublic(SQLModel):
     bundle_uuid: uuid.UUID | None = None
     installed_revision_id: uuid.UUID | None = None
     installed_revision_number: int | None = None
+    installed_revision_version: str | None = None
     is_publisher_install: bool = False
     update_mode: str = "manual"
     pending_update: bool = False

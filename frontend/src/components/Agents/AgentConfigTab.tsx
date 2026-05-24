@@ -128,13 +128,7 @@ export function AgentConfigTab({
           consumer may enable/disable, run, and view logs but not edit them.
           Handovers stay owner-only — they're not bundle-propagated. */}
       {(showOperationalSettings || readOnly) && (
-        <div
-          className={
-            showOperationalSettings
-              ? "grid grid-cols-1 lg:grid-cols-2 gap-6"
-              : "grid grid-cols-1 gap-6"
-          }
-        >
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Schedules Card — read-only on foreign installs */}
           <AgentSchedulesCard agentId={agent.id} readOnly={readOnly} />
 

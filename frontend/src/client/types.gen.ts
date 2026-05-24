@@ -733,6 +733,7 @@ export type AgentPublic = {
     bundle_uuid?: (string | null);
     installed_revision_id?: (string | null);
     installed_revision_number?: (number | null);
+    installed_revision_version?: (string | null);
     is_publisher_install?: boolean;
     update_mode?: string;
     pending_update?: boolean;

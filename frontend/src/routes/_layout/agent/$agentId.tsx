@@ -100,11 +100,11 @@ function AgentDetail() {
                   </span>
                   {agent.installed_revision_number != null && (
                     <span
-                      title="Installed revision"
+                      title="Installed version"
                       className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs whitespace-nowrap opacity-50 hover:opacity-100 transition-opacity bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
                     >
                       <Tag className="h-3 w-3" />
-                      v{agent.installed_revision_number}
+                      v{agent.installed_revision_version || agent.installed_revision_number}
                     </span>
                   )}
                   {(bundle?.publisher_name || bundle?.publisher_email || bundle?.publisher_handle) && (

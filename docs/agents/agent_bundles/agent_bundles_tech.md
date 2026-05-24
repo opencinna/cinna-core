@@ -7,7 +7,7 @@
 - `backend/app/models/bundles/agent_bundle_revision.py` — `AgentBundleRevision`, `AgentBundleRevisionPublic`, `AgentBundleRevisionsPublic`, `PublishRequest`
 - `backend/app/models/bundles/bundle_access_grant.py` — `BundleAccessGrant`, `BundleAccessGrantPublic`, `BundleAccessGrantCreate`, `BundleAccessGrantsPublic`
 - `backend/app/models/bundles/catalog.py` — `CatalogEntryPublic`, `CatalogPublic`, `InstallRequest`, `AdminInstallRequest`, `AICredentialSelections` (gains `use_publisher_ai: bool = False` in Phase 3 — UI hint only, backend ignores it), `SetUpdateModeRequest`, `EditBundleIdRequest`, `CheckUpdatesResponse`, `InstallCredentialSelection` (Phase 3 — `mode` literal + optional `credential_id`), `InstallContextSpec` (Phase 3), `CatalogInstallContext` (Phase 3)
-- `backend/app/models/agents/agent.py` — `Agent` (the Install table): `bundle_id`, `bundle_uuid`, `installed_revision_id`, `is_publisher_install`, `update_mode`, `pending_update`, `pending_update_at`, `last_sync_at`, `last_update_status`
+- `backend/app/models/agents/agent.py` — `Agent` (the Install table): `bundle_id`, `bundle_uuid`, `installed_revision_id`, `is_publisher_install`, `update_mode`, `pending_update`, `pending_update_at`, `last_sync_at`, `last_update_status`. `AgentPublic` additionally exposes `installed_revision_number` (monotonic int, the revision's sequence number) and `installed_revision_version` (publisher-entered string such as `"1.0"` or `"1.2"`; nullable for legacy revisions). The agent detail page header badge renders as `v{installed_revision_version || installed_revision_number}` — preferring the human-readable string and falling back to the integer.
 
 ### Services
 - `backend/app/services/bundles/bundle_id_service.py` — `BundleIdService`

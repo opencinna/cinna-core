@@ -98,10 +98,12 @@ class AgentService:
         from app.models.bundles.agent_bundle_revision import AgentBundleRevision
 
         installed_revision_number: int | None = None
+        installed_revision_version: str | None = None
         if agent.installed_revision_id:
             rev = session.get(AgentBundleRevision, agent.installed_revision_id)
             if rev:
                 installed_revision_number = rev.revision_number
+                installed_revision_version = rev.version
 
         return AgentPublic(
             id=agent.id,
@@ -129,6 +131,7 @@ class AgentService:
             bundle_uuid=agent.bundle_uuid,
             installed_revision_id=agent.installed_revision_id,
             installed_revision_number=installed_revision_number,
+            installed_revision_version=installed_revision_version,
             is_publisher_install=agent.is_publisher_install,
             update_mode=agent.update_mode,
             pending_update=agent.pending_update,

@@ -173,10 +173,28 @@ Each static_prompt schedule can have its own prompt field:
 
 ### Cloned Agents and Scheduling
 
-- Each clone has **independent** scheduler configuration from its parent
-- Clone owners can create, edit, and delete their own schedules
-- When an agent is shared/cloned, scheduler configurations are **NOT copied** to the clone
-- When the parent pushes updates to clones, scheduler configs are **NOT synced** (only workspace files sync)
+- Standalone agents and publisher installs have full CRUD over their schedules — create, edit, delete, toggle, Run now, view logs
+
+### Bundle-propagated Schedules
+
+When an agent developer publishes a bundle, their `AgentSchedule` rows are snapshotted into the revision (see [Agent Bundles & Installs](../agent_bundles/agent_bundles.md)). When another user installs the bundle, those schedules are materialised on their install as ordinary `AgentSchedule` rows with the publisher's `enabled` state and a freshly computed `next_execution`. The background scheduler then runs them inside the consumer's own environment and sessions — no difference from the consumer's perspective.
+
+**Consumer read-only rule:** A foreign install (non-publisher consumer) cannot create, edit, or delete bundle schedules — the schedule definitions are publisher-authored. The consumer can:
+- Toggle enable/disable (Power button)
+- Run now (Play button)
+- View execution logs (Logs button)
+
+New/Edit/Delete controls are hidden in the UI and the routes enforce this server-side (see Tech details).
+
+**Apply-update merge (behavioral signature):** When the consumer applies a bundle update, schedules are reconciled using a **behavioral signature** = `(schedule_type, cron_string, command, prompt)`. Name and description are cosmetic and excluded from identity.
+
+- If the signature is unchanged: the existing row (with its `enabled` state, `next_execution`, `last_execution`, and logs) is kept; only cosmetic `name`/`description` fields are refreshed from the new revision
+- If the signature changed (different cron, command, prompt, or type): the old row is deleted and a new one is created with the publisher's `enabled` state and a recomputed `next_execution`
+- Schedules added by the publisher are created; schedules removed by the publisher are deleted
+
+**Duplicate signature limitation:** If a revision contains two schedule definitions with the same behavioral signature, the later one wins (the earlier is silently discarded).
+
+Publisher installs are unaffected — they retain full CRUD over their schedules as the source of truth for the next publish.
 
 ## Architecture Overview
 
@@ -256,6 +274,6 @@ L = Logs, E = Edit, T = Toggle enabled/disabled, D = Delete with confirmation
 - **[Agent Sessions](../../application/agent_sessions/agent_sessions.md)** — Schedule execution creates new sessions via SessionService (always for static_prompt, conditionally for script_trigger)
 - **[Agent Environments](../agent_environments/agent_environments.md)** — Script trigger executes commands inside the agent's Docker container via `/exec` endpoint; both types auto-activate environments
 - **[Agent Prompts](../agent_prompts/agent_prompts.md)** — Falls back to agent's `entrypoint_prompt` when static_prompt schedule has no custom prompt
-- **[Agent Bundles & Installs](../agent_bundles/agent_bundles.md)** — Installed agents have independent scheduler configs; schedules are not included in bundle revision snapshots and are not synced on apply-update
+- **[Agent Bundles & Installs](../agent_bundles/agent_bundles.md)** — Schedules are snapshotted into bundle revisions at publish time; materialised onto consumer installs at install time; merged on apply-update using behavioral signatures; consumers can only enable/disable and run bundle-owned schedules
 - **[Task Triggers](../../application/input_tasks/task_triggers.md)** — Separate but related feature: task-level CRON/webhook/date triggers use similar AI schedule generation
 - **[AI Functions](../../development/backend/ai_functions_development.md)** — Schedule generation uses the AI function framework with multi-provider cascade
