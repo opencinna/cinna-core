@@ -15,6 +15,7 @@
 - `backend/app/services/agents/agent_scheduler_service.py` — Schedule CRUD, CRON conversion, next execution calculation, log creation/retrieval, environment resolution shims (delegate to `environment_resolver.py`)
 - `backend/app/services/agents/agent_schedule_scheduler.py` — Background scheduler (APScheduler) that polls and executes due schedules with branching logic for schedule types
 - `backend/app/services/agents/environment_resolver.py` — Shared helpers `get_active_environment` and `ensure_environment_running`, extracted here so that [Agent Webhooks](../agent_webhooks/agent_webhooks.md) can reuse them without cross-service coupling. `AgentSchedulerService` delegates to these functions via thin wrapper methods.
+- `backend/app/services/bundles/schedule_sync.py` — Bundle schedule propagation helpers: `snapshot_schedules`, `sig`, `materialise`, and `merge` (see Bundle Propagation section below)
 
 **Agent-Env Endpoint:**
 - `backend/app/env-templates/app_core_base/core/server/routes.py` — `POST /exec` endpoint for executing shell commands inside the agent container
@@ -25,6 +26,9 @@
 **AI Function:**
 - `backend/app/agents/schedule_generator.py` — Natural language to CRON conversion via LLM
 - `backend/app/agents/prompts/schedule_generator_prompt.md` — Prompt template for CRON generation
+
+**Bundle propagation model:**
+- `backend/app/models/bundles/agent_bundle_revision.py` — `AgentBundleRevision.schedules` field (JSON list) stores the snapshot; also exposed on `AgentBundleRevisionPublic`
 
 **Migrations:**
 - `backend/app/alembic/versions/7ef8eae8f523_add_agent_schedule_table.py` — Creates `agent_schedule` table
@@ -189,7 +193,7 @@ Create endpoint validates schedule type + command combination:
 
 ### AgentSchedulesCard — `frontend/src/components/Agents/AgentSchedulesCard.tsx`
 
-- **Props:** `{ agentId: string }`
+- **Props:** `{ agentId: string, readOnly?: boolean }` — when `readOnly=true` (consumer bundle installs): New/Edit/Delete actions are hidden; Power toggle, Run now, and Logs remain. The card header shows an informational note "Managed by the bundle publisher — you can enable/disable, run, and view logs." The empty state message also adapts to distinguish "no publisher schedules" from "no schedules yet"
 - **Query:** `useQuery` with key `["agent-schedules", agentId]`, calls `AgentsService.listSchedules()`
 - **Logs query:** `useQuery` with key `["schedule-logs", scheduleId]`, calls `AgentsService.listScheduleLogs()`, fetched on-demand when logs modal opens
 - **Mutations:** create, update, toggle (`{enabled: !current}`), delete — all invalidate query key; `runNowMutation` calls `POST /{id}/schedules/{schedule_id}/run` and surfaces `response.message` in the success toast (so the "starting" notification reaches the user directly)
@@ -229,6 +233,77 @@ Create endpoint validates schedule type + command combination:
 ### Integration in AgentConfigTab — `frontend/src/components/Agents/AgentConfigTab.tsx`
 
 Renders `AgentSchedulesCard` and `AgentHandovers` in a 2-column responsive grid (`grid-cols-1 lg:grid-cols-2`).
+
+The card is rendered for foreign (bundle consumer) installs too: `AgentConfigTab` checks `showOperationalSettings || readOnly`, passing `readOnly={true}` when the agent is a non-publisher bundle install. `AgentHandovers` stays gated on `showOperationalSettings` only.
+
+## Bundle Propagation — Technical Details
+
+### Revision `schedules` field — `AgentBundleRevision`
+
+`AgentBundleRevision.schedules` is a JSON column (`list`, default `[]`). Each entry is a dict with exactly these fields snapshotted from the publisher's `AgentSchedule` rows:
+
+```json
+{
+  "name": "Daily data collection",
+  "cron_string": "0 6 * * 1-5",
+  "description": "Every weekday at 7 AM CET",
+  "prompt": "Collect today's market data",
+  "schedule_type": "static_prompt",
+  "command": null,
+  "enabled": true
+}
+```
+
+`next_execution` and `last_execution` are **never** snapshotted — they are per-install runtime state. `cron_string` is stored in UTC (same as the publisher's row). The field is exposed on `AgentBundleRevisionPublic`. Existing revisions before this feature default to `[]` (fully backward compatible).
+
+Because `schedules` is part of the manifest body that feeds `content_hash`, a schedule-only change (no file/prompt change) still produces a new `content_hash` and triggers `INSTALL_UPDATE_AVAILABLE` on foreign installs.
+
+### Schedule Sync helper — `backend/app/services/bundles/schedule_sync.py`
+
+| Function | Purpose |
+|----------|---------|
+| `snapshot_schedules(schedules)` | Projects `AgentSchedule` rows into the `{name, cron_string, description, prompt, schedule_type, command, enabled}` dict shape for the revision |
+| `sig(source)` | Returns the behavioral signature `(schedule_type, cron_string, command, prompt)` from either an `AgentSchedule` row or a snapshot dict |
+| `materialise(session, install, revision)` | Creates `AgentSchedule` rows on `install` from `revision.schedules`; called at install time; returns the count of rows created |
+| `merge(session, install, revision)` | Reconciles existing rows against the new revision using `sig()` — keeps behaviorally-unchanged rows (refreshing cosmetic fields), deletes removed/changed rows, creates new/changed definitions; commits the session |
+
+### Publish snapshot — `PublishService._collect_schedule_specs`
+
+Called from `_publish_locked` after credential spec collection. Calls `AgentSchedulerService.get_agent_schedules` on the publisher install, then delegates to `snapshot_schedules`. The result is stored in both `manifest["schedules"]` (on-disk) and `revision.schedules` (DB column).
+
+### Install materialisation — `InstallService._materialise_schedules`
+
+Called as step 7 of `_install_from_revision` (after the App MCP route step). Thin wrapper over `schedule_sync.materialise` that owns the commit. Best-effort: a failure logs a warning and marks the install `last_update_status="degraded"` but does not abort the install. The created `AgentSchedule` rows are ordinary rows — the background scheduler picks them up and executes them in the consumer's own environment and sessions with no special handling.
+
+### Apply-update merge — `InstallService.apply_update`
+
+After prompt sync and App MCP route refresh, `schedule_sync.merge(session, install, revision)` is called. Best-effort: a failure logs a warning but does not fail the update.
+
+Merge algorithm:
+1. Group new revision definitions by `sig()` into `new_by_sig`
+2. For each existing `AgentSchedule` row: if `sig(row)` is in `new_by_sig`, keep the row (preserve `enabled`, `next_execution`, `last_execution`, logs) and refresh cosmetic `name`/`description`; otherwise delete it
+3. For each remaining unconsumed definition in `new_by_sig`: create a new `AgentSchedule` with the publisher's `enabled` state and a freshly computed `next_execution`
+
+### Route guards — `backend/app/api/routes/agents.py`
+
+Two helpers enforce the read-only contract on foreign (bundle consumer) installs:
+
+```python
+def _is_foreign_install(agent: Agent) -> bool:
+    return agent.bundle_uuid is not None and not agent.is_publisher_install
+
+def _guard_foreign_schedule_write(agent: Agent) -> None:
+    if _is_foreign_install(agent):
+        raise HTTPException(status_code=403, ...)
+```
+
+| Endpoint | Foreign install | Publisher install / standalone |
+|----------|----------------|-------------------------------|
+| `POST /{id}/schedules` | 403 | Allowed |
+| `DELETE /{id}/schedules/{id}` | 403 | Allowed |
+| `PUT /{id}/schedules/{id}` | Allowed **only when** `exclude_unset` fields ⊆ `{"enabled"}`; any other set field → 403 | Full partial update allowed |
+| `POST /{id}/schedules/{id}/run` | Allowed | Allowed |
+| `GET /{id}/schedules/{id}/logs` | Allowed | Allowed |
 
 ## Configuration
 

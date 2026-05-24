@@ -74,6 +74,16 @@ class AgentBundleRevision(SQLModel, table=True):
     # List of {name, type, allow_sharing, description?} for the install wizard.
     required_credential_specs: list = Field(default_factory=list, sa_column=Column(JSON))
 
+    # Snapshot of the publisher install's ``AgentSchedule`` rows at publish
+    # time. Each entry is a behavioral + cosmetic definition:
+    # ``{name, cron_string, description, prompt, schedule_type, command,
+    # enabled}``. ``next_execution`` / ``last_execution`` are never
+    # snapshotted — they are recomputed per-install. Read by
+    # ``InstallService`` to materialise / merge ``AgentSchedule`` rows on
+    # the consumer install. Empty list ``[]`` on revisions published before
+    # this field existed (fully backward compatible).
+    schedules: list = Field(default_factory=list, sa_column=Column(JSON))
+
     # Filesystem location of the snapshot under ``BUNDLE_STORAGE_DIR``.
     snapshot_path: str = Field(max_length=1024, nullable=False)
 
@@ -111,6 +121,7 @@ class AgentBundleRevisionPublic(SQLModel):
     model_override_building: str | None = None
     model_override_conversation: str | None = None
     required_credential_specs: list = []
+    schedules: list = []
     published_by_user_id: uuid.UUID | None
     published_at: datetime
     release_notes: str | None = None

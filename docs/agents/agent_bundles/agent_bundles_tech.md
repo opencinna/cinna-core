@@ -15,6 +15,7 @@
 - `backend/app/services/bundles/exceptions.py` — `BundleError` hierarchy (`BundleNotFoundError`, `BundleAccessDeniedError`, `BundleConflictError`, `BundleValidationError`, `RevisionNotFoundError`, `RevisionInUseError`, `GrantNotFoundError`); each subclass carries an `http_status` attribute used by the route layer
 - `backend/app/services/bundles/publish_service.py` — `PublishService`
 - `backend/app/services/bundles/install_service.py` — `InstallService`, `InstallError`
+- `backend/app/services/bundles/schedule_sync.py` — `snapshot_schedules`, `sig`, `materialise`, `merge` — bundle schedule propagation helpers (publish snapshot → install materialise → apply-update merge)
 - `backend/app/services/bundles/install_readiness_gate.py` — `InstallReadinessGate`, `GateResult`, `GateMissingItem` (Phase 4)
 - `backend/app/services/bundles/catalog_service.py` — `CatalogService`
 - `backend/app/services/bundles/app_data_service.py` — `AppDataService`
@@ -96,6 +97,7 @@ Indexes: `ix_agent_bundle_publisher` on `publisher_user_id`; `ix_agent_bundle_li
 | `model_override_building` | varchar(128) | |
 | `model_override_conversation` | varchar(128) | |
 | `required_credential_specs` | JSON | `[{name, type, allow_sharing, allow_template_sharing, description, provided_by, publisher_credential_id, template_data?, template_private_fields?}]`. `provided_by` is `"user"`, `"publisher"`, or `"template"`; `publisher_credential_id` is a UUID string or null (only set when `provided_by="publisher"`); `template_data` and `template_private_fields` are present only when `provided_by="template"`. Revisions written before Phase 1 lack these fields — readers default missing keys to `"user"` / `null` / absent |
+| `schedules` | JSON | `[{name, cron_string, description, prompt, schedule_type, command, enabled}]` — snapshot of the publisher install's `AgentSchedule` rows at publish time. `next_execution`/`last_execution` are never stored; they are recomputed per-install on materialisation. Empty list `[]` on revisions created before bundle-scheduler propagation was introduced (fully backward compatible) |
 | `snapshot_path` | varchar(1024) NOT NULL | Absolute path under `BUNDLE_STORAGE_DIR` |
 | `content_hash` | varchar(64) NOT NULL | SHA-256 hex over snapshot tree + manifest |
 | `published_by_user_id` | UUID FK → user ON DELETE SET NULL | |
@@ -235,6 +237,7 @@ Unique constraints on `agent`:
 | `_collect_credential_specs(session, install)` | Reads linked `AgentCredentialLink` rows and emits the evolved per-spec shape: `{name, type, allow_sharing, allow_template_sharing, description, provided_by, publisher_credential_id, template_data?, template_private_fields?}`. Delegates `provided_by` resolution to `resolve_provided_by`. For `"template"` specs, calls `_template_payload_for` to attach `template_data` and `template_private_fields` |
 | `_template_payload_for(session, cred)` | Returns `(template_data, template_private_fields)` for a template spec. Decryption failures raise `ValueError` rather than silently shipping an empty payload. For types in `_TEMPLATE_FORCE_PRIVATE_TYPES` (OAuth + Google service account) returns `({}, [])` regardless of UI state. Strips fields named in `cred.template_private_fields`, then applies the per-type templatable allowlist `_TEMPLATE_TEMPLATABLE_FIELDS_BY_TYPE` (e.g. `ssh_key` → only `host_aliases`) so private keys / refresh tokens / generated material can never leak into the bundle revision JSON |
 | `_validate_publisher_provides(session, install)` | Called from `_publish_locked` before `_collect_credential_specs`. Walks linked credentials, resolves each via `resolve_provided_by`, and asserts the matching consent flag is set on the underlying `Credential` row (`provided_by="publisher"` requires `allow_sharing=True`; `provided_by="template"` requires `allow_template_sharing=True`). Security enforcement point: an override on a credential without the matching consent flag fails publish with a descriptive error |
+| `_collect_schedule_specs(session, install)` | Snapshots the publisher install's `AgentSchedule` rows via `schedule_sync.snapshot_schedules`. The result is stored in both `manifest["schedules"]` and `revision.schedules`. Because the schedule snapshot is part of the manifest body that feeds `content_hash`, a schedule-only change produces a new hash so foreign installs see a pending update |
 | `_validate_publisher_ai_credentials_sdk(session, install, bundle, env)` | Publish-time pre-flight. For each non-null `bundle.publisher_ai_credential_*_id`, looks up the `AICredential.type` and compares it against `env.agent_sdk_conversation` / `agent_sdk_building` via `sdk_constants.sdk_expected_credential_type`. Raises `ValueError` (mapped to 400 at the route) when a mismatch is found — last line of defence when a publisher changed either the env's SDK or the bundle's AI credential FK between `PATCH /bundles/{uuid}` validation and the publish call. No-op when `env is None` (snapshot-only publish with no workspace files) |
 | `_apply_pre_publish_ai_drafts(session, install, bundle)` | First-publish-only helper. Reads `install.publish_settings["ai_credentials"]` (the pre-publish draft set via `PATCH /agents/{id}/publish-settings` while the bundle row didn't yet exist) and writes the resolved UUIDs onto `bundle.publisher_ai_credential_*_id`. Validates ownership defensively; mismatches are logged and skipped. After this point the bundle FK columns are the source of truth and the picker writes directly to `AgentBundle` via `PATCH /bundles/{uuid}` |
 
@@ -243,8 +246,8 @@ Publish flow detail:
 2. Bundle row resolved or created (first publish). On first publish, `_apply_pre_publish_ai_drafts` transfers any pre-publish AI credential draft from `install.publish_settings["ai_credentials"]` onto the new bundle's FK columns
 3. Next `revision_number = MAX(existing) + 1`
 4. `_validate_publisher_ai_credentials_sdk(session, install, bundle, env)` pre-flight runs before any snapshot work — rejects with `ValueError` (400) if a publisher AI credential's type no longer matches the env's per-mode SDK
-5. Snapshot written to `<tmp_dir>` then renamed to `<snapshot_dir>`. The manifest's `prompts` block includes `router_trigger` from `install.router_trigger_prompt` alongside `workflow`, `entrypoint`, and `refiner`
-6. `AgentBundleRevision` row inserted with `router_trigger_prompt=install.router_trigger_prompt`
+5. Snapshot written to `<tmp_dir>` then renamed to `<snapshot_dir>`. The manifest's `prompts` block includes `router_trigger` from `install.router_trigger_prompt` alongside `workflow`, `entrypoint`, and `refiner`. `_collect_schedule_specs` snapshots the publisher install's `AgentSchedule` rows into `manifest["schedules"]`
+6. `AgentBundleRevision` row inserted with `router_trigger_prompt=install.router_trigger_prompt` and `schedules=schedule_specs`
 7. `bundle.latest_revision_id` and `install.installed_revision_id` updated
 8. `BUNDLE_PUBLISHED` event emitted
 9. `notify_installs()` called
@@ -256,7 +259,7 @@ Publish flow detail:
 | `install_bundle(session, user, bundle, request)` | Idempotent for consumer installs — returns the existing consumer install (`is_publisher_install=False`) if one already exists for `(owner_id, bundle_uuid)`. If the caller is the bundle's publisher and only a publisher install exists (no consumer copy yet), a fresh consumer install is created. Calls `_link_publisher_ai_credential` BEFORE the idempotent early-return so re-installs self-heal a deleted `AICredentialShare` |
 | `install_bundle_for_email(session, publisher_agent_id, recipient_user_id)` | Auto-publishes on first call if bundle has no revisions |
 | `admin_install(session, target_user, bundle, request)` | Thin wrapper over install_bundle |
-| `apply_update(session, install)` | Stops env, calls `replace_bundle_content`, updates prompts + bookkeeping fields, emits event |
+| `apply_update(session, install)` | Stops env, calls `replace_bundle_content`, updates prompts + bookkeeping fields, refreshes the auto-managed App MCP route, merges schedules via `schedule_sync.merge`, restarts env, emits `INSTALL_UPDATE_APPLIED` event |
 | `uninstall(session, install)` | Delegates to `AgentService.delete_agent` which handles orphaning |
 | `set_update_mode(session, install, mode)` | |
 | `check_for_updates(session, install)` | Returns `{pending_update, installed_revision_number, latest_revision_number, last_update_status, last_sync_at, update_mode}` |
@@ -269,6 +272,7 @@ Publish flow detail:
 | `update_publish_settings(session, install, *, credential_overrides, ai_credentials)` | Validates and persists a partial update to `install.publish_settings`. Both arguments are partial — `None` leaves that section untouched, a populated value replaces it. Asserts `is_publisher_install=True`, that override keys match currently-linked credential names, that each `provided_by` is `"user"`/`"publisher"`/`"template"`, that any non-null AI credential id is owned by the install owner, AND that the AI credential's `type` matches the install's env SDK provider for that mode (via `sdk_constants.sdk_expected_credential_type`). Raises `ValueError` (route maps to HTTP 400) on any validation failure. Implemented alongside `_validate_credential_overrides` and `_validate_ai_credentials_draft` helpers — the latter holds the SDK-vs-credential-type check |
 | `list_setup_credentials(session, install)` | Returns `list[SetupCredentialSummary]` for the install's user-fillable placeholder credentials (owner-owned, linked, `is_placeholder=True`). For template-materialised rows, decrypts and surfaces non-private fields under `template_prefilled_data` so the setup page can render read-only context; decryption failures fall back to an empty prefilled dict so a corrupted credential still surfaces. Backs the `GET /agents/{id}/setup-credentials` route |
 
+| `_materialise_schedules(session, install, revision)` | Thin wrapper over `schedule_sync.materialise` that creates `AgentSchedule` rows from `revision.schedules`. Called at the end of `_install_from_revision` (step 9). Best-effort — exceptions propagate to the call site which marks the install degraded |
 | `_auto_create_app_mcp_route(session, install, revision, user)` | Creates an `AppAgentRoute` + self-assignment (`activate_for_myself=True`) for the installer using `revision.router_trigger_prompt` as the trigger. Skips (and marks install `last_update_status="degraded"`) when `router_trigger_prompt` is empty. Idempotent — skips when an `is_auto_managed=True` route already exists for this agent. Exceptions are caught at the call site so install never aborts |
 | `_refresh_or_create_auto_route_on_update(session, install, revision)` | Apply-update hook. If an `is_auto_managed=True` route exists, refreshes `trigger_prompt` and `name` from the new revision. If no route exists and a manual (`is_auto_managed=False`) route is already present, does nothing. If neither exists and the revision has a trigger prompt, calls `_auto_create_app_mcp_route` |
 
@@ -281,6 +285,7 @@ Install flow (`_install_from_revision`):
 6. `AppDataService.get_or_create_volume` called with `catalog_type="server"` (consumer path) or `catalog_type=None` (publisher install path); existing orphaned volume reattached when the key matches
 7. `_setup_install_credentials` called — branches on `provided_by` per spec; PBP specs link the publisher's row; PBU specs create placeholders or link installer selections
 8. `_auto_create_app_mcp_route` called — creates `AppAgentRoute` + self-assignment from the revision's `router_trigger_prompt`; marks install degraded when prompt is empty
+9. `_materialise_schedules` called — creates `AgentSchedule` rows from `revision.schedules` via `schedule_sync.materialise`; best-effort (failure logs a warning and marks the install `last_update_status="degraded"` but does not abort the install). Created rows are ordinary `AgentSchedule` rows picked up by the background scheduler
 
 ### `CatalogService`
 
@@ -423,6 +428,17 @@ Each revision writes `manifest.json` into the snapshot directory:
       "template_private_fields": ["login", "api_token"]
     }
   ],
+  "schedules": [
+    {
+      "name": "Daily data collection",
+      "cron_string": "0 6 * * 1-5",
+      "description": "Every weekday at 7 AM CET",
+      "prompt": "Collect today's market data",
+      "schedule_type": "static_prompt",
+      "command": null,
+      "enabled": true
+    }
+  ],
   "release_notes": "Fixed off-by-one in invoice parser"
 }
 ```
@@ -514,6 +530,7 @@ The dedicated setup-credentials route (`frontend/src/routes/_layout/agent/$agent
 | `backend/app/alembic/versions/dd4ef5a6b7c8_add_router_trigger_prompt_and_auto_managed.py` | Adds `router_trigger_prompt` text NULLABLE to both `agent` and `agent_bundle_revision`; adds `is_auto_managed` boolean (server default `false`) to `app_agent_route`. `down_revision = cc3de4f5a6b7`. No data backfill in this migration — existing rows get NULL / false naturally. A separate Phase 8 backfill script populates `router_trigger_prompt` and creates auto-routes for pre-existing **foreign** bundle installs only (`is_publisher_install=False AND bundle_uuid IS NOT NULL`) |
 | `backend/app/alembic/versions/bcab2848714f_add_catalog_type_to_app_data_volume.py` | Adds nullable `catalog_type varchar` column to `app_data_volume`; drops `uq_app_data_user_bundle` on `(user_id, bundle_id)`; adds `uq_app_data_user_bundle_catalog` on `(user_id, bundle_id, catalog_type)`. Backfill: volumes whose paired agent has `is_publisher_install=True` → `NULL`; all other bundle-linked volumes → `"server"`; orphans with no paired agent → `"server"` |
 | `backend/app/alembic/versions/ad1f9c2e4b73_scope_agent_bundle_unique_by_install_slot.py` | Replaces `uq_agent_bundle_id_per_publisher` on `(owner_id, bundle_id)` with a new constraint on `(owner_id, bundle_id, is_publisher_install)`. The partial unique index `uq_agent_publisher_install_per_bundle` is unchanged. This allows a publisher to hold both a publisher install and a consumer install of the same bundle simultaneously |
+| `backend/app/alembic/versions/cd4ef5a6b7c8_add_schedules_to_agent_bundle_revision.py` | Adds `schedules JSON NOT NULL DEFAULT '[]'` column to `agent_bundle_revision`. Existing revisions are backfilled to `[]` (no schedules); fully backward compatible. Downgrade drops the column |
 
 ## Runtime Cross-Service Rows Created at Install Time
 

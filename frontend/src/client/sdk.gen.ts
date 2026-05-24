@@ -1688,6 +1688,11 @@ export class AgentsService {
     /**
      * Update Schedule
      * Update an existing schedule.
+     *
+     * On a foreign (bundle-owned) install only the ``enabled`` toggle may be
+     * changed — the schedule definition is publisher-authored. Any other set
+     * field is rejected with 403. Publisher installs and standalone agents
+     * accept the full partial update.
      * @param data The data for the request.
      * @param data.id
      * @param data.scheduleId
@@ -6917,9 +6922,16 @@ export class LoginService {
      * Login Mfa Verify
      * Verify a second-factor proof and issue the final access token.
      *
-     * Enforces a per-user soft rate limit (10 verifications per 5 minutes,
-     * see plan §4.4) before any verification work — keyed on the challenge
-     * row's owner so the limit follows the user, not the network connection.
+     * Two rate-limit layers fire before any verification work runs:
+     *
+     * * **Anonymous, per-source.** Catches token-spray probes that supply
+     * fabricated ``challenge_token`` values — these never resolve to a
+     * user and therefore can't be throttled by the per-user limit.
+     * * **Per-user (challenge owner).** Caps real verification attempts
+     * against any one account.
+     *
+     * The per-user limit follows the user (not the network connection) so
+     * it survives a NAT / proxy swap mid-flow.
      * @param data The data for the request.
      * @param data.requestBody
      * @returns LoginToken Successful Response
@@ -7809,8 +7821,10 @@ export class MfaService {
      * Delete Passkey
      * Delete an owned passkey.
      *
-     * Refuses to delete the last MFA factor while ``two_factor_enabled``
-     * is still ``True`` — the user must call ``/mfa/disable`` first.
+     * If the deleted passkey is the user's last remaining 2FA factor
+     * (no other passkeys, no TOTP), 2FA is automatically turned off via
+     * the same wipe-and-flag flow as ``POST /mfa/disable`` — the caller
+     * does not need to make a separate disable call.
      * @param data The data for the request.
      * @param data.passkeyId
      * @returns Message Successful Response
@@ -7872,6 +7886,10 @@ export class MfaService {
     /**
      * Disable Totp
      * Remove the TOTP secret.  Requires a fresh-factor proof.
+     *
+     * If TOTP is the user's last remaining 2FA factor, 2FA is
+     * automatically turned off via the same wipe-and-flag flow as
+     * ``POST /mfa/disable``.
      * @param data The data for the request.
      * @param data.requestBody
      * @returns Message Successful Response

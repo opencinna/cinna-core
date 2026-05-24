@@ -232,6 +232,11 @@ class PublishService:
             PublishService._validate_publisher_provides(session, install)
             cred_specs = PublishService._collect_credential_specs(session, install)
 
+            # Snapshot the publisher install's schedules. Feeds both the
+            # manifest (so a schedule-only change yields a new content_hash
+            # → installs see a pending update) and the revision row.
+            schedule_specs = PublishService._collect_schedule_specs(session, install)
+
             manifest = {
                 "schema_version": 1,
                 "bundle_id": install.bundle_id,
@@ -255,6 +260,7 @@ class PublishService:
                     ) if env else None,
                 },
                 "required_credential_specs": cred_specs,
+                "schedules": schedule_specs,
                 "release_notes": release_notes,
             }
             content_hash = PublishService._hash_tree_with_manifest(tmp_dir, manifest)
@@ -295,6 +301,7 @@ class PublishService:
             model_override_building=getattr(env, "model_override_building", None) if env else None,
             model_override_conversation=getattr(env, "model_override_conversation", None) if env else None,
             required_credential_specs=cred_specs,
+            schedules=schedule_specs,
             snapshot_path=str(snapshot_dir),
             content_hash=content_hash,
             published_by_user_id=publisher_user_id,
@@ -541,6 +548,28 @@ class PublishService:
                 spec["template_private_fields"] = template_private_fields
             specs.append(spec)
         return specs
+
+    @staticmethod
+    def _collect_schedule_specs(session: Session, install: Agent) -> list[dict]:
+        """Snapshot the publisher install's ``AgentSchedule`` rows.
+
+        Emits ``{name, cron_string, description, prompt, schedule_type,
+        command, enabled}`` per schedule. ``next_execution`` /
+        ``last_execution`` are deliberately excluded — they are per-install
+        runtime state recomputed when the consumer materialises the
+        schedule. ``cron_string`` is already UTC on the row.
+
+        Because the snapshot is included in the manifest body that feeds
+        ``content_hash``, a schedule-only change yields a new hash so
+        installs see a pending update.
+        """
+        from app.services.agents.agent_scheduler_service import (
+            AgentSchedulerService,
+        )
+        from app.services.bundles.schedule_sync import snapshot_schedules
+
+        schedules = AgentSchedulerService.get_agent_schedules(session, install.id)
+        return snapshot_schedules(schedules)
 
     # Credential types whose ``credential_data`` is intrinsically per-user
     # (OAuth tokens, SA JSON). Template sharing is still allowed on these

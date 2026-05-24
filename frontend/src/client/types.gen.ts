@@ -316,6 +316,7 @@ export type AgentBundleRevisionPublic = {
     model_override_building?: (string | null);
     model_override_conversation?: (string | null);
     required_credential_specs?: Array<unknown>;
+    schedules?: Array<unknown>;
     published_by_user_id: (string | null);
     published_at: string;
     release_notes?: (string | null);
@@ -1319,6 +1320,7 @@ export type AppAgentRouteUpdate = {
 export type AppDataVolumePublic = {
     id: string;
     bundle_id: string;
+    catalog_type: (string | null);
     volume_name: string;
     size_bytes: number;
     last_size_check_at: (string | null);

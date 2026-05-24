@@ -301,6 +301,14 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
 
   // ── Render ──────────────────────────────────────────────────
 
+  // Defensive guard: this tab is a publisher-only management surface.
+  // Consumer / foreign installs — including a publisher who installs their
+  // own bundle as a consumer (``is_publisher_install=false``) — must never
+  // see publish / visibility / revision controls. The route already filters
+  // the tab out for these installs; this prevents the controls from leaking
+  // if the component is ever mounted directly.
+  if (!!agent.bundle_uuid && !agent.is_publisher_install) return null
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

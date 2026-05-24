@@ -123,14 +123,23 @@ export function AgentConfigTab({
       </div>
 
       {/* Third Row: Scheduler and Handovers (side by side) */}
-      {/* Note: Scheduler and Handovers are always editable for agent owner (including clone owners) */}
-      {showOperationalSettings && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Schedules Card */}
-          <AgentSchedulesCard agentId={agent.id} />
+      {/* Schedules render for the agent owner (editable) and for foreign
+          installs (read-only): bundle publishers can ship schedules, and the
+          consumer may enable/disable, run, and view logs but not edit them.
+          Handovers stay owner-only — they're not bundle-propagated. */}
+      {(showOperationalSettings || readOnly) && (
+        <div
+          className={
+            showOperationalSettings
+              ? "grid grid-cols-1 lg:grid-cols-2 gap-6"
+              : "grid grid-cols-1 gap-6"
+          }
+        >
+          {/* Schedules Card — read-only on foreign installs */}
+          <AgentSchedulesCard agentId={agent.id} readOnly={readOnly} />
 
-          {/* Handover to Agents - always editable for agent owner (including clone owners) */}
-          <AgentHandovers agent={agent} />
+          {/* Handover to Agents — owner-only, not shown on foreign installs */}
+          {showOperationalSettings && <AgentHandovers agent={agent} />}
         </div>
       )}
 

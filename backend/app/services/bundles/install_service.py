@@ -400,7 +400,51 @@ class InstallService:
                 install.id, e,
             )
 
+        # 7. Materialise the publisher's schedules onto the install.
+        # Best-effort, mirroring the MCP-route step: a failure here logs a
+        # warning and marks the install degraded but does NOT abort the
+        # install. The created rows are ordinary ``AgentSchedule`` rows and
+        # are polled / executed by the background scheduler unchanged.
+        try:
+            InstallService._materialise_schedules(
+                session=session,
+                install=install,
+                revision=revision,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to materialise schedules for install %s: %s",
+                install.id, e,
+            )
+            try:
+                install.last_update_status = "degraded"
+                session.add(install)
+                session.commit()
+                session.refresh(install)
+            except Exception:
+                session.rollback()
+
         return install
+
+    @staticmethod
+    def _materialise_schedules(
+        *,
+        session: Session,
+        install: Agent,
+        revision: AgentBundleRevision,
+    ) -> None:
+        """Create the install's schedules from the revision snapshot.
+
+        Thin wrapper over ``schedule_sync.materialise`` that owns the commit
+        — the helper only stages rows so the install flow controls the
+        transaction boundary. Exceptions propagate to the best-effort call
+        site, which marks the install degraded.
+        """
+        from app.services.bundles import schedule_sync
+
+        created = schedule_sync.materialise(session, install, revision)
+        if created:
+            session.commit()
 
     @staticmethod
     def _auto_create_app_mcp_route(
@@ -1112,6 +1156,22 @@ class InstallService:
                 logger.warning(
                     "Failed to refresh auto-managed App MCP route for "
                     "install %s on apply-update: %s",
+                    install.id, e,
+                )
+
+            # Merge the install's schedules against the new revision.
+            # Behaviorally-unchanged schedules keep the user's enable/disable
+            # toggle (and execution history); changed / removed schedules are
+            # reinstalled / deleted. Best-effort: a failure here logs a
+            # warning but does not fail the update.
+            try:
+                from app.services.bundles import schedule_sync
+
+                schedule_sync.merge(session, install, revision)
+            except Exception as e:
+                logger.warning(
+                    "Failed to merge schedules for install %s on "
+                    "apply-update: %s",
                     install.id, e,
                 )
 

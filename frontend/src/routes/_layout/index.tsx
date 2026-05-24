@@ -302,11 +302,19 @@ function Dashboard() {
     setInputError(null)
   }, [selectedAgentId, agentsWithActiveEnv, inputMode])
 
-  // Force building mode when GA agent is selected
+  // Force building mode when GA agent is selected; force conversation mode
+  // for foreign (consumer) bundle installs — those are use-only and cannot
+  // be built, regardless of the viewer's role.
   useEffect(() => {
     const selectedAgent = agentsWithActiveEnv.find((a) => a.id === selectedAgentId)
     if (selectedAgent?.is_general_assistant && mode !== "building") {
       setMode("building")
+    } else if (
+      !!selectedAgent?.bundle_uuid &&
+      !selectedAgent?.is_publisher_install &&
+      mode !== "conversation"
+    ) {
+      setMode("conversation")
     }
   }, [selectedAgentId, agentsWithActiveEnv])
 
@@ -750,7 +758,11 @@ function Dashboard() {
                 ) : (() => {
                   const selectedAgent = agentsWithActiveEnv.find((a) => a.id === selectedAgentId)
                   const isGASelected = selectedAgent?.is_general_assistant ?? false
-                  if (isGASelected || isAgentUser) {
+                  // Foreign (consumer) bundle installs are use-only: hide the
+                  // Building-mode switch for every role, not just agent-users.
+                  const isForeignSelected =
+                    !!selectedAgent?.bundle_uuid && !selectedAgent?.is_publisher_install
+                  if (isGASelected || isAgentUser || isForeignSelected) {
                     return null
                   }
                   return (

@@ -2131,6 +2131,12 @@ export const AgentBundleRevisionPublicSchema = {
             title: 'Required Credential Specs',
             default: []
         },
+        schedules: {
+            items: {},
+            type: 'array',
+            title: 'Schedules',
+            default: []
+        },
         published_by_user_id: {
             anyOf: [
                 {
@@ -6738,6 +6744,17 @@ export const AppDataVolumePublicSchema = {
             type: 'string',
             title: 'Bundle Id'
         },
+        catalog_type: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Catalog Type'
+        },
         volume_name: {
             type: 'string',
             title: 'Volume Name'
@@ -6797,7 +6814,7 @@ export const AppDataVolumePublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'bundle_id', 'volume_name', 'size_bytes', 'last_size_check_at', 'current_install_id', 'is_orphaned', 'created_at', 'updated_at'],
+    required: ['id', 'bundle_id', 'catalog_type', 'volume_name', 'size_bytes', 'last_size_check_at', 'current_install_id', 'is_orphaned', 'created_at', 'updated_at'],
     title: 'AppDataVolumePublic',
     description: 'Response schema for ``GET /users/me/app-data``.'
 } as const;

@@ -516,6 +516,31 @@ def _handle_schedule_error(e: ScheduleError) -> None:
     raise HTTPException(status_code=e.status_code, detail=e.message)
 
 
+def _is_foreign_install(agent: Agent) -> bool:
+    """True for a consumer (bundle-owned, non-publisher) install.
+
+    Schedules on such installs are entirely publisher-authored: the
+    consumer may enable/disable, Run now, and view logs, but cannot
+    create / edit / delete the definitions. Publisher installs
+    (``is_publisher_install=True``) and standalone agents
+    (``bundle_uuid is None``) stay fully editable.
+    """
+    return agent.bundle_uuid is not None and not agent.is_publisher_install
+
+
+def _guard_foreign_schedule_write(agent: Agent) -> None:
+    """403 when mutating schedule definitions on a foreign install."""
+    if _is_foreign_install(agent):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Schedules on an installed bundle are managed by the "
+                "publisher and cannot be created or deleted. You can "
+                "enable/disable, run, and view logs."
+            ),
+        )
+
+
 @router.post("/{id}/schedules/generate", response_model=ScheduleResponse)
 def generate_schedule(
     *,
@@ -551,11 +576,14 @@ def create_schedule(
 ) -> Any:
     """Create a new schedule for agent."""
     try:
-        AgentSchedulerService.verify_agent_access(
+        agent = AgentSchedulerService.verify_agent_access(
             session, id, current_user.id, is_superuser=current_user.is_superuser
         )
     except ScheduleError as e:
         _handle_schedule_error(e)
+
+    # Bundle-owned installs are publisher-managed — no create.
+    _guard_foreign_schedule_write(agent)
 
     # Validate schedule_type + command combination
     if data.schedule_type == "script_trigger":
@@ -617,13 +645,29 @@ def update_schedule(
     schedule_id: uuid.UUID,
     data: UpdateScheduleRequest
 ) -> Any:
-    """Update an existing schedule."""
+    """Update an existing schedule.
+
+    On a foreign (bundle-owned) install only the ``enabled`` toggle may be
+    changed — the schedule definition is publisher-authored. Any other set
+    field is rejected with 403. Publisher installs and standalone agents
+    accept the full partial update.
+    """
     try:
-        AgentSchedulerService.verify_agent_access(
+        agent = AgentSchedulerService.verify_agent_access(
             session, id, current_user.id, is_superuser=current_user.is_superuser
         )
         schedule = AgentSchedulerService.get_schedule_for_agent(session, id, schedule_id)
         fields = data.model_dump(exclude_unset=True)
+
+        if _is_foreign_install(agent) and set(fields.keys()) - {"enabled"}:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Schedules on an installed bundle are managed by the "
+                    "publisher. You can only enable or disable them."
+                ),
+            )
+
         return AgentSchedulerService.update_schedule(session, schedule, **fields)
     except ScheduleError as e:
         _handle_schedule_error(e)
@@ -639,9 +683,11 @@ def delete_schedule(
 ) -> Message:
     """Delete an agent schedule."""
     try:
-        AgentSchedulerService.verify_agent_access(
+        agent = AgentSchedulerService.verify_agent_access(
             session, id, current_user.id, is_superuser=current_user.is_superuser
         )
+        # Bundle-owned installs are publisher-managed — no delete.
+        _guard_foreign_schedule_write(agent)
         schedule = AgentSchedulerService.get_schedule_for_agent(session, id, schedule_id)
         AgentSchedulerService.delete_schedule(session, schedule)
     except ScheduleError as e:

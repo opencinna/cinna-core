@@ -67,6 +67,13 @@ import {
 
 interface AgentSchedulesCardProps {
   agentId: string
+  /**
+   * When true, the schedule definitions are bundle-authored and the consumer
+   * may not create/edit/delete them. The enable/disable toggle, Run now and
+   * Logs actions remain available (the backend allows a PUT with only
+   * `{enabled}` on foreign installs).
+   */
+  readOnly?: boolean
 }
 
 type CreateStep = "type_select" | "form"
@@ -286,7 +293,10 @@ function LogDetailRow({ log }: { log: AgentScheduleLogPublic }) {
   )
 }
 
-export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps) {
+export function AgentSchedulesCard({
+  agentId,
+  readOnly = false,
+}: AgentSchedulesCardProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -613,6 +623,7 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps) {
               Schedule execution times for this agent with different prompts and cadences
             </CardDescription>
           </div>
+          {!readOnly && (
           <Dialog open={createDialogOpen} onOpenChange={handleCreateDialogClose}>
             <DialogTrigger asChild>
               <Button size="sm">
@@ -802,15 +813,23 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps) {
               )}
             </DialogContent>
           </Dialog>
+          )}
         </div>
+        {readOnly && (
+          <p className="text-xs text-muted-foreground">
+            Managed by the bundle publisher — you can enable/disable, run, and
+            view logs.
+          </p>
+        )}
       </CardHeader>
       <CardContent>
         {isLoading ? (
           <p className="text-sm text-muted-foreground">Loading...</p>
         ) : schedules.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No schedules yet. Create a Static Prompt or Script Trigger schedule
-            to automate this agent.
+            {readOnly
+              ? "No schedules. The bundle publisher hasn't shipped any schedules with this agent."
+              : "No schedules yet. Create a Static Prompt or Script Trigger schedule to automate this agent."}
           </p>
         ) : (
           <div className="space-y-1.5">
@@ -907,23 +926,25 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps) {
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6"
-                          onClick={() => handleEditOpen(schedule)}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Edit schedule
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
+                  {!readOnly && (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6"
+                            onClick={() => handleEditOpen(schedule)}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="text-xs">
+                          Edit schedule
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  )}
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -950,35 +971,37 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps) {
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 text-destructive hover:text-destructive"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Delete Schedule</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          Are you sure you want to delete &quot;{schedule.name}
-                          &quot;? This action cannot be undone.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction
-                          onClick={() => deleteMutation.mutate(schedule.id)}
-                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  {!readOnly && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 text-destructive hover:text-destructive"
                         >
-                          Delete
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete Schedule</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            Are you sure you want to delete &quot;{schedule.name}
+                            &quot;? This action cannot be undone.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => deleteMutation.mutate(schedule.id)}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          >
+                            Delete
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
                 </div>
               </div>
             ))}

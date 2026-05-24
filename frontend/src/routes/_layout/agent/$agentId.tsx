@@ -4,7 +4,7 @@ import { ArrowLeft, EllipsisVertical, Package, Sparkles, Tag, User } from "lucid
 import { useState, useEffect } from "react"
 
 import { AgentsService, BundlesService } from "@/client"
-import useRole from "@/hooks/useRole"
+import useRole, { RoleOverrideContext } from "@/hooks/useRole"
 import { useNavigationHistory } from "@/hooks/useNavigationHistory"
 import { AgentConfigTab } from "@/components/Agents/AgentConfigTab"
 import { AgentIntegrationsTab } from "@/components/Agents/AgentIntegrationsTab"
@@ -120,7 +120,7 @@ function AgentDetail() {
               ) : (
                 <p className="text-xs text-muted-foreground">
                   {agent.is_publisher_install
-                    ? "Publisher install"
+                    ? "Published Agent Configuration"
                     : "Agent Configuration"}
                 </p>
               )}
@@ -129,8 +129,12 @@ function AgentDetail() {
           {(() => {
             const isForeignInstallHdr =
               !!agent.bundle_uuid && !agent.is_publisher_install
+            // Edit / Delete are owner-of-source actions. On a consumer /
+            // foreign install (incl. a publisher's own consumer copy) the
+            // only lifecycle action is Uninstall — never Edit/Delete the
+            // bundle-sourced definition.
             const showDeveloperActions =
-              !agent.is_general_assistant && isDeveloper
+              !agent.is_general_assistant && isDeveloper && !isForeignInstallHdr
             const showUninstall = isForeignInstallHdr
             if (!showDeveloperActions && !showUninstall) return null
             return (
@@ -181,12 +185,21 @@ function AgentDetail() {
     )
   }
 
-  // Foreign install = install of a bundle published by someone else.
-  // The current user owns the install row, but the bundle content
-  // (prompts, description, etc.) was authored by the publisher, so the
-  // configuration tab must render read-only for these installs.
+  // Foreign install = a consumer install of a bundle (``bundle_uuid`` set,
+  // ``is_publisher_install=false``). This includes a publisher who installs
+  // their *own* bundle as a consumer. The bundle content (prompts,
+  // description, etc.) is publisher-authored, so the configuration tab is
+  // read-only for these installs.
   const isForeignInstall = !!agent.bundle_uuid && !agent.is_publisher_install
   const configReadOnly = isForeignInstall
+
+  // A bundle install is use-only — you install an agent to *use* it, not to
+  // build it. So a foreign install presents at the agent-user capability
+  // level for *every* role (agent-developer / admin included). This drives
+  // the tab set and operational-settings visibility here; the
+  // ``RoleOverrideContext`` below degrades role-gated sub-controls inside
+  // the tabs (Integrations, Environments) to match.
+  const effectiveAgentUser = isAgentUser || isForeignInstall
 
   const allTabs = [
     {
@@ -196,10 +209,10 @@ function AgentDetail() {
         <AgentConfigTab
           agent={agent}
           readOnly={configReadOnly}
-          // Agent-users see the simplified view (just Information +
-          // Agent Prompts). Schedules / Handovers belong to the
-          // developer-tier configuration surface.
-          showOperationalSettings={!isAgentUser}
+          // Agent-users (and any role viewing a foreign install) see the
+          // simplified view (just Information + Agent Prompts). Schedules /
+          // Handovers belong to the developer-tier configuration surface.
+          showOperationalSettings={!effectiveAgentUser}
         />
       ),
     },
@@ -211,24 +224,26 @@ function AgentDetail() {
     { value: "bundle", title: "Bundle", content: <AgentBundleTab agent={agent} /> },
   ]
 
-  // Phase 3 — agent-user view is conversation-only with one read-only
-  // peek into the agent's identity.  Visible tabs:
+  // Agent-user view (and any role viewing a foreign install) is
+  // conversation-only with one read-only peek into the agent's identity.
+  // Visible tabs:
   //   - ``configuration`` (read-only, Information + Agent Prompts only)
   //   - ``credentials``   (fill in placeholder credentials)
   //   - ``environments``  (install→chat entry point, active sessions)
-  // All other developer-tier tabs (integrations / plugins / interface /
-  // bundle) stay hidden; developer-only sub-controls inside the kept
-  // tabs are gated separately by `isDeveloper`.
+  //   - ``integrations``  (simplified — only the MCP Connectors card)
+  //   - ``interface``     (per-install cosmetic settings)
+  // The remaining developer-tier tabs (plugins / bundle) stay hidden. In
+  // particular the Bundle tab is publisher-only (publish, visibility,
+  // revisions) and the agent-user tab set excludes it, so a publisher's own
+  // consumer install never sees it either.
   let tabs = allTabs
-  if (isAgentUser) {
-    // Agent-users see the integrations tab too, but inside it only the
-    // MCP Connectors card is rendered (see ``AgentIntegrationsTab`` — it
-    // reads ``useRole`` and degrades to a single card for agent-users).
+  if (effectiveAgentUser) {
     const agentUserTabs = new Set([
       "configuration",
       "credentials",
       "environments",
       "integrations",
+      "interface",
     ])
     tabs = allTabs.filter((tab) => agentUserTabs.has(tab.value))
   } else if (agent.is_general_assistant) {
@@ -252,7 +267,11 @@ function AgentDetail() {
         {/* Update banner for installs with pending updates */}
         <UpdateAvailableBanner agent={agent} />
 
-        <HashTabs tabs={tabs} defaultTab={defaultTab} />
+        {/* Foreign (consumer) installs are use-only for every role: degrade
+            role-gated sub-controls inside the tabs to the agent-user level. */}
+        <RoleOverrideContext.Provider value={{ forceAgentUser: isForeignInstall }}>
+          <HashTabs tabs={tabs} defaultTab={defaultTab} />
+        </RoleOverrideContext.Provider>
       </div>
     </div>
   )

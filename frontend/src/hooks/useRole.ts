@@ -15,9 +15,35 @@
  * server-side, but the UI must still hide the affordances so we never
  * advertise something the user can't do.
  */
+import { createContext, useContext } from "react"
+
 import useAuth from "@/hooks/useAuth"
 
 export type UserRoleValue = "agent-user" | "agent-developer" | "admin"
+
+/**
+ * Subtree-scoped capability override.
+ *
+ * Some surfaces must present at the ``agent-user`` capability level
+ * regardless of the viewer's real role. The canonical case is a
+ * consumer / foreign **bundle install**: installing a bundle grants
+ * use-only capabilities — never build capabilities — even for
+ * agent-developers and admins (you install an agent to *use* it, you
+ * don't build someone else's bundle).
+ *
+ * The agent detail page wraps its tab content in this provider with
+ * ``forceAgentUser`` set for foreign installs; every ``useRole()`` call
+ * underneath then degrades to the agent-user view, so any role-gated
+ * sub-control (current or future) is hidden automatically without
+ * threading flags through each component.
+ */
+export interface RoleOverride {
+  forceAgentUser: boolean
+}
+
+export const RoleOverrideContext = createContext<RoleOverride>({
+  forceAgentUser: false,
+})
 
 export interface UseRoleResult {
   /** Raw role string from the current user (or null while loading). */
@@ -34,8 +60,23 @@ export interface UseRoleResult {
 
 export default function useRole(): UseRoleResult {
   const { user } = useAuth()
+  const { forceAgentUser } = useContext(RoleOverrideContext)
 
   const role = (user?.role as UserRoleValue | undefined) ?? null
+
+  // A subtree may force the capability level down to agent-user (e.g. a
+  // foreign bundle install). The raw ``role`` is still surfaced for
+  // display, but all capability predicates degrade.
+  if (forceAgentUser) {
+    return {
+      role,
+      isDeveloper: false,
+      isAgentUser: !!user,
+      isAdmin: false,
+      isLoading: !user,
+    }
+  }
+
   const isAdmin = !!user?.is_superuser || role === "admin"
   const isDeveloper = isAdmin || role === "agent-developer"
   const isAgentUser = !!user && !isDeveloper
