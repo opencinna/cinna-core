@@ -36,8 +36,15 @@ from sqlmodel import Session, select
 from app.core.config import settings
 from app.models.agents.agent import Agent
 from app.models.bundles.app_data_volume import AppDataVolume
+from app.models.users.user import User
 
 logger = logging.getLogger(__name__)
+
+# A candidate orphan directory must be untouched for at least this long before
+# the GC reclaims it. Guards against deleting a tree whose ``AppDataVolume``
+# row is being created in another in-flight request (directory written, row
+# not yet committed when the GC snapshots the DB).
+ORPHAN_DIR_GRACE = timedelta(days=1)
 
 
 # Bundle ids contain dots, dashes, and digits — all safe for directory names
@@ -333,15 +340,7 @@ class AppDataService:
                 "Uninstall the agent first."
             )
 
-        container_path = cls._container_path_from_volume(volume)
-        try:
-            if container_path.exists():
-                shutil.rmtree(container_path)
-        except OSError as e:
-            logger.error(
-                "Failed to remove app-data tree %s for volume %s: %s",
-                container_path, volume.id, e,
-            )
+        cls._best_effort_rmtree(cls._container_path_from_volume(volume))
 
         session.delete(volume)
         session.commit()
@@ -441,3 +440,143 @@ class AppDataService:
             AppDataVolume.updated_at < cutoff,
         )
         return list(session.exec(stmt).all())
+
+    # ── Filesystem garbage collection ──────────────────────────────
+
+    @classmethod
+    def find_orphan_dirs(
+        cls, session: Session, grace: timedelta = ORPHAN_DIR_GRACE
+    ) -> list[Path]:
+        """Return on-disk app-data directories with no DB representation.
+
+        Deleting a user (or a single install) drops the ``AppDataVolume``
+        rows via FK cascade, but the cascade never touches the filesystem —
+        the per-user tree under ``APP_DATA_STORAGE_DIR/<user_id>/...`` is left
+        behind. This diffs the directory tree against the DB and returns the
+        container-side paths that should be reclaimed, at two granularities:
+
+        - **User directory** (``<root>/<user_id>``) whose user no longer
+          exists → the whole tree is orphaned (the account-deletion case).
+          Top-level entries whose name is not a valid UUID are skipped, so an
+          operator-placed directory under the root is never touched.
+        - **Bundle subtree** (``<root>/<user_id>/<bundle_id>``) under a *live*
+          user that no volume row maps to. A row whose path nests deeper (the
+          ``_<catalog_type>`` consumer slot) keeps its parent bundle dir alive,
+          so a half-populated bundle dir is conservatively retained.
+
+        Directories modified within ``grace`` are skipped to avoid racing an
+        in-flight install whose volume row is not yet committed. Returns paths
+        only — it never deletes.
+
+        Queries are scoped to the user-id directories actually present on disk
+        (``WHERE id IN (...)``), so the cost tracks on-disk dirs rather than the
+        full ``user`` / ``app_data_volume`` tables.
+        """
+        root = cls.storage_root()
+        if not root.exists():
+            return []
+
+        cutoff = datetime.now(UTC).timestamp() - grace.total_seconds()
+
+        # Only UUID-named top-level dirs are candidates; scope the DB lookups
+        # to exactly those users so we never load whole tables.
+        disk_dirs = cls._iter_subdirs(root)
+        disk_uuids = [
+            uuid.UUID(d.name) for d in disk_dirs if cls._looks_like_uuid(d.name)
+        ]
+
+        live_user_ids: set[str] = set()
+        # Flatten each live volume path plus all its ancestors into one set so
+        # "a row equals or nests under this bundle dir" is an O(1) membership
+        # test (the ``_<catalog_type>`` consumer slot keeps its parent alive).
+        live_dirs: set[Path] = set()
+        if disk_uuids:
+            live_user_ids = {
+                str(uid)
+                for uid in session.exec(
+                    select(User.id).where(User.id.in_(disk_uuids))
+                ).all()
+            }
+            volumes = session.exec(
+                select(AppDataVolume).where(AppDataVolume.user_id.in_(disk_uuids))
+            ).all()
+            for v in volumes:
+                p = cls._container_path_from_volume(v)
+                live_dirs.add(p)
+                live_dirs.update(p.parents)
+
+        orphans: list[Path] = []
+        for user_dir in disk_dirs:
+            if not cls._looks_like_uuid(user_dir.name):
+                continue  # operator-placed dir under the root — never touch
+            if user_dir.name not in live_user_ids:
+                # Deleted user → the whole tree is orphaned.
+                if cls._older_than(user_dir, cutoff):
+                    orphans.append(user_dir)
+                continue
+            # Live user: reclaim bundle subtrees no volume row maps to.
+            for bundle_dir in cls._iter_subdirs(user_dir):
+                if bundle_dir in live_dirs:
+                    continue
+                if cls._older_than(bundle_dir, cutoff):
+                    orphans.append(bundle_dir)
+        return orphans
+
+    @classmethod
+    def purge_orphan_dirs(
+        cls, session: Session, grace: timedelta = ORPHAN_DIR_GRACE
+    ) -> tuple[int, int]:
+        """``rmtree`` every directory from :meth:`find_orphan_dirs`.
+
+        Best-effort: a failed removal is logged and counted, never raised.
+        Returns ``(removed_count, failed_count)``.
+        """
+        removed = failed = 0
+        for path in cls.find_orphan_dirs(session, grace=grace):
+            if cls._best_effort_rmtree(path):
+                removed += 1
+                logger.info("AppData GC removed orphaned dir: %s", path)
+            else:
+                failed += 1
+        return removed, failed
+
+    @staticmethod
+    def _best_effort_rmtree(path: Path) -> bool:
+        """Remove a directory tree, logging (not raising) on failure.
+
+        Returns ``True`` when the tree is gone afterwards (removed, or already
+        absent), ``False`` when removal failed. Shared by ``wipe_volume`` and
+        the GC so the removal+logging contract lives in one place.
+        """
+        try:
+            if path.exists():
+                shutil.rmtree(path)
+            return True
+        except OSError as e:
+            logger.error("Failed to remove app-data tree %s: %s", path, e)
+            return False
+
+    @staticmethod
+    def _iter_subdirs(path: Path) -> list[Path]:
+        """List immediate sub-directories, tolerating I/O errors."""
+        try:
+            return [p for p in path.iterdir() if p.is_dir()]
+        except OSError as e:
+            logger.warning("AppData GC: cannot list %s: %s", path, e)
+            return []
+
+    @staticmethod
+    def _looks_like_uuid(name: str) -> bool:
+        try:
+            uuid.UUID(name)
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _older_than(path: Path, cutoff_ts: float) -> bool:
+        """True when ``path``'s mtime is at/older than ``cutoff_ts`` epoch secs."""
+        try:
+            return path.stat().st_mtime <= cutoff_ts
+        except OSError:
+            return False

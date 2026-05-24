@@ -1,5 +1,5 @@
 /**
- * DesktopSessionsCard — Settings > Channels tab
+ * DesktopSessionsCard — Settings > Security tab
  *
  * Shows all desktop app clients connected to the user's account and allows
  * disconnecting (revoking) individual clients.  Follows the same card layout

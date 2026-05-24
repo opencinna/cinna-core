@@ -72,6 +72,7 @@ The column is a plain string rather than a database enum so future values (e.g. 
 - **Directory creation on `get_or_create`** — `storage/`, `uploads/`, `cache/` are created with mode 0o755 every time the volume is touched to handle the case where a subdirectory was manually removed
 - **Size is lazy** — `size_bytes` is not updated in real-time; users trigger a recompute manually from the Settings tab
 - **Daily orphan report** — a daily APScheduler job (`app_data_orphan_scheduler.py`) logs orphaned volumes older than 90 days but does NOT delete them; deletion is always user-driven
+- **On-disk GC after account/install deletion** — deleting a user (or hard-deleting an install) drops the `AppDataVolume` rows via FK cascade, but the cascade never touches the filesystem. Rather than block account deletion on a potentially slow recursive delete, an APScheduler job (`app_data_gc_scheduler.py`, every 6h) reclaims the leftover directories out-of-band: it diffs the on-disk tree against the DB and `rmtree`s any directory with no remaining DB representation — a whole `<user_id>/` tree when the user is gone, or an individual bundle subtree under a live user that no volume row maps to. Directories modified within a 1-day grace window are skipped so an in-flight install (directory written before its row commits) is never reclaimed; non-UUID top-level directories are left untouched
 
 ## Architecture Overview
 

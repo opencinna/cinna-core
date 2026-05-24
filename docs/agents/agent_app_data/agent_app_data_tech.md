@@ -8,6 +8,7 @@
 ### Service
 - `backend/app/services/bundles/app_data_service.py` — `AppDataService`
 - `backend/app/services/bundles/app_data_orphan_scheduler.py` — daily orphan reporter (APScheduler job)
+- `backend/app/services/bundles/app_data_gc_scheduler.py` — on-disk orphan GC (APScheduler job, every 6h); started/stopped in `app/main.py` lifespan
 
 ### API Route
 - `backend/app/api/routes/app_data.py` — mounted at `/api/v1/users/me/app-data`
@@ -82,6 +83,8 @@ updated_at: datetime
 | `wipe_volume(session, volume)` | Raises ValueError if `is_orphaned=False`; best-effort `rmtree`; deletes row |
 | `recompute_size(session, volume) -> int` | `os.scandir` walk; persists result |
 | `find_orphans_older_than(session, days)` | Used by the daily reporter |
+| `find_orphan_dirs(session, grace=1d) -> list[Path]` | Diffs the on-disk tree against the DB; returns container-side dirs with no DB row (deleted-user trees + bundle subtrees under live users with no matching volume). Skips dirs modified within `grace` and non-UUID top-level dirs. Read-only |
+| `purge_orphan_dirs(session, grace=1d) -> (removed, failed)` | `rmtree`s every dir from `find_orphan_dirs`; best-effort, returns counts. Called by the GC scheduler |
 
 ### Path Translation (Docker-in-Docker)
 
@@ -126,6 +129,20 @@ Non-alphanumeric/dash/dot characters in `bundle_id` are replaced with `_`. Examp
 ## Daily Orphan Reporter
 
 `app_data_orphan_scheduler.py` schedules a daily APScheduler job that calls `AppDataService.find_orphans_older_than(session, days=90)` and logs results. It does **not** delete volumes — deletion is always user-initiated via the Settings tab. The threshold of 90 days is a reporting boundary only; data is never auto-deleted.
+
+## On-Disk Orphan GC
+
+`app_data_gc_scheduler.py` schedules an APScheduler job (every `GC_INTERVAL_HOURS = 6`) that calls `AppDataService.purge_orphan_dirs(session)`. This is distinct from the orphan *reporter*: the reporter surfaces `AppDataVolume` rows flagged `is_orphaned` that still exist; the GC deletes on-disk directories that have **no row at all**.
+
+The trigger is account/install deletion: `app_data_volume.user_id` is `ON DELETE CASCADE`, so deleting a `User` removes their volume rows but leaves the `<APP_DATA_STORAGE_DIR>/<user_id>/` tree on disk. Doing the recursive delete inline in `delete_user_me` / `delete_user` could stall the request on a large workspace, so cleanup is deferred to this job.
+
+`find_orphan_dirs` first lists the UUID-named top-level dirs actually present on disk, then scopes its DB lookups to exactly those users — `select(User.id).where(User.id.in_(...))` and `select(AppDataVolume).where(AppDataVolume.user_id.in_(...))` — so cost tracks on-disk dirs rather than the full `user` / `app_data_volume` tables. Each live volume's container path (`_container_path_from_volume`) plus all of its `.parents` are flattened into one `live_dirs` set, making "a row equals or nests under this bundle dir" an O(1) membership test. It then walks the storage root:
+- **Top-level `<user_id>` dir** whose name is a UUID not in the live user set → the whole tree is an orphan (deleted user).
+- **Bundle subtree under a live user** not present in `live_dirs` → orphan. The `_<catalog_type>` consumer slot path nests under its parent bundle dir (so the parent lands in `live_dirs` via `.parents`), so a bundle dir hosting only a consumer slot is correctly retained.
+- Non-UUID top-level dirs are skipped (never an operator's stray dir gets nuked).
+- A `grace` window (`ORPHAN_DIR_GRACE = 1 day`) skips dirs whose mtime is newer than the cutoff, so an in-flight install (directory created before its row commits) is never reclaimed.
+
+`purge_orphan_dirs` removes each result via the shared `_best_effort_rmtree` helper (also used by `wipe_volume`) — failures are logged, never raised — and returns `(removed, failed)`. Unit coverage: `backend/tests/unit/test_app_data_gc.py`.
 
 ## Configuration
 

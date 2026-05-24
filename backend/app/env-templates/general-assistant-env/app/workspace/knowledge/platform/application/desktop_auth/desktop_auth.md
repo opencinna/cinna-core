@@ -55,7 +55,7 @@ Desktop app silently refreshes the access token before it expires:
 
 ### Disconnecting from Settings
 
-1. User navigates to **Settings > Channels > Desktop Sessions**
+1. User navigates to **Settings > Security > Desktop Sessions**
 2. Sees a list of all connected desktop apps (device name, platform, last used time)
 3. Clicks "Disconnect" on a device and confirms in the dialog
 4. Backend revokes the client and all its refresh tokens
@@ -121,7 +121,7 @@ The `/.well-known/cinna-desktop` discovery endpoint must reach the backend throu
 
 ## Settings UI
 
-**Settings > Channels > Desktop Sessions card** shows:
+**Settings > Security > Desktop Sessions card** shows:
 - List of connected desktop apps with device name, platform icon, app version badge, and last-used time
 - "Disconnect" button (destructive, requires confirmation) to revoke a specific device
 - Empty state with download prompt when no devices are connected

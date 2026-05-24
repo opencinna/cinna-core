@@ -39,7 +39,7 @@
 
 - `frontend/src/routes/desktop-auth/consent.tsx` — Public SPA consent page at `/desktop-auth/consent?request={nonce}`
 - `frontend/src/components/UserSettings/DesktopSessionsCard.tsx` — Connected devices list + disconnect dialog
-- `frontend/src/routes/_layout/settings.tsx` — DesktopSessionsCard added to Channels tab
+- `frontend/src/routes/_layout/settings.tsx` — DesktopSessionsCard added to Security tab
 - `frontend/src/client/sdk.gen.ts` — `DesktopAuthService` (auto-generated)
 
 ## Database Schema
