@@ -26,6 +26,7 @@ class CredentialType(str, Enum):
     GOOGLE_SERVICE_ACCOUNT = "google_service_account"
     API_TOKEN = "api_token"
     SSH_KEY = "ssh_key"
+    AGENT_API = "agent_api"
 
 
 # Shared properties for credentials

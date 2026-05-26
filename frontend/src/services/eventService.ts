@@ -67,6 +67,9 @@ export const EventTypes = {
   // Agent status events
   AGENT_STATUS_UPDATED: "agent_status_updated",
 
+  // Agent REST API build/run status change (cinna_api)
+  AGENT_API_STATUS_CHANGED: "agent_api_status_changed",
+
   // Bundle / install events (Phase 2 — Agent Bundles & Installs)
   BUNDLE_PUBLISHED: "bundle_published",                    // New revision published
   INSTALL_UPDATE_AVAILABLE: "install_update_available",    // Pending update on install

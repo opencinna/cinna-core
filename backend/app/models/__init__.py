@@ -310,6 +310,19 @@ from .a2a.agent_access_token import (
     AccessTokenScope,
     A2ATokenPayload,
 )
+from .agent_api.agent_api_token import (
+    AgentApiToken,
+    AgentApiTokenBase,
+    AgentApiTokenCreate,
+    AgentApiTokenPublic,
+    AgentApiTokenCreated,
+    AgentApiConnectedAgent,
+    AgentApiConnectionInfo,
+    AgentApiProducerConnection,
+    AgentApiProducerConnections,
+    ConnectAgentApiRequest,
+    ConnectAgentApiResponse,
+)
 from .sharing.agent_guest_share import (
     AgentGuestShare,
     AgentGuestShareBase,
@@ -846,6 +859,18 @@ __all__ = [
     "AccessTokenMode",
     "AccessTokenScope",
     "A2ATokenPayload",
+    # Agent REST API Tokens
+    "AgentApiToken",
+    "AgentApiTokenBase",
+    "AgentApiTokenCreate",
+    "AgentApiTokenPublic",
+    "AgentApiTokenCreated",
+    "AgentApiConnectedAgent",
+    "AgentApiConnectionInfo",
+    "AgentApiProducerConnection",
+    "AgentApiProducerConnections",
+    "ConnectAgentApiRequest",
+    "ConnectAgentApiResponse",
     # Agent Guest Shares
     "AgentGuestShare",
     "AgentGuestShareBase",

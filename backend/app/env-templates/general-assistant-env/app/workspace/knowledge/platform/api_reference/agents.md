@@ -84,6 +84,7 @@ Auto-generated from OpenAPI spec. Tag: `agents`
   - `example_prompts`: array | null
   - `inactivity_period_limit`: string | null
   - `webapp_enabled`: boolean | null
+  - `agent_api_enabled`: boolean | null
   - `update_mode`: string | null
   - `publish_settings`: object | null
 

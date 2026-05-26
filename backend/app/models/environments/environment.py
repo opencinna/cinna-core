@@ -50,6 +50,15 @@ class AgentEnvironment(SQLModel, table=True):
     cli_commands_parsed: list | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     cli_commands_fetched_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     cli_commands_error: str | None = Field(default=None, sa_column=Column(sa.String(256), nullable=True))
+    # Agent REST API (cinna_api) spec + policy cache. Mirrors the CLI commands
+    # cache: the harvested OpenAPI spec and the parsed policy.yaml are cached on
+    # the env row so consumers, the spec viewer, and client generation can read
+    # the contract without cold-starting a suspended producer or spawning the
+    # serving child. Refreshed on the env-core reload notification.
+    agent_api_spec_parsed: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    agent_api_spec_fetched_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    agent_api_spec_error: str | None = Field(default=None, sa_column=Column(sa.String(512), nullable=True))
+    agent_api_policy_cache: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     # CLI live sync tracking
     last_sync_activity_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     sync_active: bool = Field(default=False)

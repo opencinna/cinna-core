@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { Plus, Search } from "lucide-react"
+import { Network, Plus, Search } from "lucide-react"
 import { useMemo, useState } from "react"
 
 import {
@@ -26,6 +26,7 @@ import {
   CREDENTIAL_TYPE_GROUPS,
   type CredentialTypeOption,
 } from "@/components/Credentials/credentialTypes"
+import { ConnectAgentApiDialog } from "@/components/Credentials/ConnectAgentApiDialog"
 
 type CredentialTypeKey = CredentialType
 
@@ -38,6 +39,7 @@ const AddCredential = () => {
   const [isOpen, setIsOpen] = useState(false)
   const [query, setQuery] = useState("")
   const [pendingType, setPendingType] = useState<CredentialTypeKey | null>(null)
+  const [connectOpen, setConnectOpen] = useState(false)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -110,6 +112,8 @@ const AddCredential = () => {
   }
 
   return (
+    <>
+    <ConnectAgentApiDialog open={connectOpen} onOpenChange={setConnectOpen} />
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         <Button className="my-4">
@@ -127,7 +131,21 @@ const AddCredential = () => {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="px-6 pb-3">
+        <div className="px-6 pb-3 space-y-3">
+          <button
+            type="button"
+            onClick={() => {
+              setIsOpen(false)
+              setConnectOpen(true)
+            }}
+            className="flex w-full items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+          >
+            <Network className="h-4 w-4 shrink-0" />
+            <span>Connect Agent API</span>
+            <span className="ml-auto text-xs text-muted-foreground">
+              another agent's REST API
+            </span>
+          </button>
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
@@ -186,6 +204,7 @@ const AddCredential = () => {
         </div>
       </DialogContent>
     </Dialog>
+    </>
   )
 }
 

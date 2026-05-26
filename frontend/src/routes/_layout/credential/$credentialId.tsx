@@ -50,6 +50,7 @@ import {
 } from "@/components/Credentials/CredentialForms"
 import { CredentialSharing } from "@/components/Credentials/CredentialSharing"
 import { CredentialTemplateSharing } from "@/components/Credentials/CredentialTemplateSharing"
+import { AgentApiConnectionView } from "@/components/Credentials/AgentApiConnectionView"
 
 const formSchema = z.object({
   name: z.string().min(1, { message: "Name is required" }),
@@ -85,6 +86,8 @@ function getCredentialTypeLabel(type: string): string {
       return "API Token"
     case "ssh_key":
       return "SSH Key"
+    case "agent_api":
+      return "Agent REST API"
     default:
       return type
   }
@@ -248,6 +251,22 @@ function OwnedCredentialView({
             />
           </CardContent>
         </Card>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <CredentialSharing credential={credential} />
+          <CredentialTemplateSharing credential={credential} />
+        </div>
+      </div>
+    )
+  }
+
+  // agent_api credentials are connection records: the proxy token is managed
+  // internally, so we show the connection (producer → consumers + View Spec)
+  // instead of an editable secret form. Sharing cards stay available below.
+  if (credential.type === "agent_api") {
+    return (
+      <div className="space-y-6">
+        <AgentApiConnectionView credential={credential} />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <CredentialSharing credential={credential} />

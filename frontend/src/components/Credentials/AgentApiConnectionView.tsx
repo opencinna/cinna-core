@@ -1,0 +1,247 @@
+import { zodResolver } from "@hookform/resolvers/zod"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { ArrowRight, Bot, FileJson, Lock, Network } from "lucide-react"
+import { useEffect } from "react"
+import { useForm } from "react-hook-form"
+import { z } from "zod"
+
+import type { CredentialWithData } from "@/client"
+import { CredentialsService } from "@/client"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form"
+import { Input } from "@/components/ui/input"
+import { LoadingButton } from "@/components/ui/loading-button"
+import { Textarea } from "@/components/ui/textarea"
+import useCustomToast from "@/hooks/useCustomToast"
+import { handleError } from "@/utils"
+import { openAgentApiSpec } from "@/utils/agentApiSpec"
+import { getColorPreset } from "@/utils/colorPresets"
+
+const formSchema = z.object({
+  name: z.string().min(1, { message: "Name is required" }),
+  notes: z.string().optional(),
+})
+
+type FormData = z.infer<typeof formSchema>
+
+/**
+ * Detail view for an ``agent_api`` credential — the record that connects a
+ * consumer agent to a producer agent's REST API. The proxy token is managed
+ * internally (never shown or edited); this view surfaces the connection itself:
+ * which producer it proxies, which consumer agents are wired to it, and a
+ * "View Spec" shortcut. Deleting the credential disconnects the agents.
+ */
+export function AgentApiConnectionView({
+  credential,
+}: {
+  credential: CredentialWithData
+}) {
+  const queryClient = useQueryClient()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
+
+  const { data: connection, isLoading: connLoading } = useQuery({
+    queryKey: ["agentApiConnection", credential.id],
+    queryFn: () =>
+      CredentialsService.readAgentApiConnection({ id: credential.id }),
+  })
+
+  const producerAgentId = connection?.producer_agent_id ?? undefined
+
+  const form = useForm<FormData>({
+    resolver: zodResolver(formSchema),
+    mode: "onBlur",
+    defaultValues: { name: credential.name, notes: credential.notes ?? "" },
+  })
+
+  useEffect(() => {
+    form.reset({ name: credential.name, notes: credential.notes ?? "" })
+  }, [credential, form])
+
+  const mutation = useMutation({
+    mutationFn: (data: FormData) =>
+      CredentialsService.updateCredential({
+        id: credential.id,
+        requestBody: data,
+      }),
+    onSuccess: () => showSuccessToast("Connection updated"),
+    onError: handleError.bind(showErrorToast),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["credentials"] })
+      queryClient.invalidateQueries({ queryKey: ["credential", credential.id] })
+      queryClient.invalidateQueries({
+        queryKey: ["credential-with-data", credential.id],
+      })
+    },
+  })
+
+  const producerName =
+    connection?.producer_agent_name ||
+    (credential.credential_data?.label as string | undefined) ||
+    "Producer agent"
+  const consumers = connection?.consumer_agents ?? []
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Network className="h-5 w-5" />
+          Agent REST API connection
+        </CardTitle>
+        <CardDescription>
+          This credential connects an agent to another agent's REST API. The
+          access token is managed for you — delete this credential to
+          disconnect.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {/* Connection map: producer → consumers */}
+        <div className="rounded-lg border p-4 space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                Producer
+              </span>
+              <Badge variant="secondary" className="gap-1">
+                <Network className="h-3 w-3" />
+                {producerName}
+              </Badge>
+              {connection?.read_only && (
+                <Badge variant="outline" className="gap-1 text-xs">
+                  <Lock className="h-3 w-3" />
+                  read-only
+                </Badge>
+              )}
+            </div>
+
+            <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-medium text-muted-foreground">
+                Connected agents
+              </span>
+              {connLoading ? (
+                <span className="text-sm text-muted-foreground">Loading…</span>
+              ) : consumers.length === 0 ? (
+                <span className="text-sm text-muted-foreground">
+                  Not linked to any agent yet
+                </span>
+              ) : (
+                consumers.map((a) => {
+                  const preset = getColorPreset(a.ui_color_preset)
+                  return (
+                    <span
+                      key={a.id}
+                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${preset.badgeBg} ${preset.badgeText}`}
+                    >
+                      <Bot className="h-3 w-3" />
+                      {a.name}
+                    </span>
+                  )
+                })
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 pt-1">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!producerAgentId}
+              onClick={() =>
+                producerAgentId && openAgentApiSpec(producerAgentId)
+              }
+              title={
+                producerAgentId
+                  ? "Open the endpoints this connection exposes (rendered docs) in a new tab"
+                  : "Producer agent is no longer accessible"
+              }
+            >
+              <FileJson className="h-4 w-4 mr-1" />
+              View Spec
+            </Button>
+            {connection?.base_url && (
+              <code className="text-xs text-muted-foreground truncate">
+                {connection.base_url}
+              </code>
+            )}
+          </div>
+        </div>
+
+        {/* Editable label / notes */}
+        <Form {...form}>
+          <form
+            onSubmit={form.handleSubmit((d) => mutation.mutate(d))}
+            className="space-y-4"
+          >
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    Name <span className="text-destructive">*</span>
+                  </FormLabel>
+                  <FormControl>
+                    <Input
+                      placeholder="Connection name"
+                      type="text"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="notes"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Notes</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      placeholder="Additional notes..."
+                      className="min-h-[80px]"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            {form.formState.isDirty && (
+              <div className="flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => form.reset()}
+                  disabled={mutation.isPending}
+                >
+                  Reset
+                </Button>
+                <LoadingButton type="submit" loading={mutation.isPending}>
+                  Save Changes
+                </LoadingButton>
+              </div>
+            )}
+          </form>
+        </Form>
+      </CardContent>
+    </Card>
+  )
+}

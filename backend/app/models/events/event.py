@@ -70,6 +70,11 @@ class EventType:
     # CLI commands cache events
     CLI_COMMANDS_UPDATED = "cli_commands_updated"
 
+    # Agent REST API build/run status change — fired when the agent_api spec is
+    # re-cached (build success / failure / reload) so the owner sees boot errors
+    # live. Meta carries `agent_id`, `environment_id`, `state`, and `last_error`.
+    AGENT_API_STATUS_CHANGED = "agent_api_status_changed"
+
     # Workspace file change event — fired by env-core when workspace files
     # that the backend caches (prompts, CLI_COMMANDS.yaml, STATUS.md) change
     # and stabilise. Typically triggered by a Mutagen sync from the CLI, but

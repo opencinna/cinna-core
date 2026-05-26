@@ -37,6 +37,7 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
         self.handover_config_set: dict = {}
         self.config_set: dict = {}
         self.uploaded_files: list[File] = []
+        self.agent_api_proxy_calls: list[dict] = []
 
     # --- Lifecycle ---
 
@@ -256,3 +257,47 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
     ) -> tuple[int, bytes]:
         import json
         return 200, json.dumps({"result": "ok", "endpoint": endpoint}).encode()
+
+    # --- Agent REST API (cinna_api) ---
+
+    agent_api_state: str = "running"
+    agent_api_spec: dict | None = None
+
+    async def get_agent_api_status(self) -> dict:
+        return {
+            "state": self.agent_api_state,
+            "child_running": self.agent_api_state == "running",
+            "has_app": True,
+            "spec_available": self.agent_api_spec is not None or self.agent_api_state == "running",
+            "last_error": None,
+            "policy": {"read_only": True, "expose_spec": True},
+        }
+
+    async def get_agent_api_spec(self) -> dict:
+        if self.agent_api_spec is not None:
+            return self.agent_api_spec
+        return {
+            "openapi": "3.1.0",
+            "info": {"title": "Agent API", "version": "1.0.0"},
+            "paths": {},
+        }
+
+    async def proxy_agent_api(
+        self,
+        method: str,
+        path: str,
+        headers: dict | None = None,
+        body: bytes | None = None,
+        stream: bool = False,
+        timeout: float = 60.0,
+    ):
+        import json
+        self.agent_api_proxy_calls.append(
+            {"method": method, "path": path, "body": body, "headers": headers}
+        )
+        payload = json.dumps({"ok": True, "method": method, "path": path}).encode()
+
+        async def _stream():
+            yield payload
+
+        return 200, {"content-type": "application/json"}, _stream()

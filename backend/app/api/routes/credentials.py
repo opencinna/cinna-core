@@ -9,6 +9,7 @@ from sqlmodel import func, select
 from app.api.deps import CurrentUser, SessionDep
 from app.models.credentials.credential import CredentialType
 from app.models import (
+    AgentApiConnectionInfo,
     Credential,
     CredentialBundleUsages,
     CredentialCreate,
@@ -21,6 +22,10 @@ from app.models import (
 )
 from app.services.credentials.credentials_service import CredentialsService
 from app.services.credentials.credential_share_service import CredentialShareService
+from app.services.agent_api.agent_api_token_service import (
+    AgentApiTokenError,
+    AgentApiTokenService,
+)
 
 
 # Request/Response models for credential verification
@@ -189,6 +194,26 @@ def read_credential_with_data(
         # Service raises ValueError for not found or permission errors
         status_code = 404 if "not found" in str(e).lower() else 400
         raise HTTPException(status_code=status_code, detail=str(e))
+
+
+@router.get("/{id}/agent-api-connection", response_model=AgentApiConnectionInfo)
+def read_agent_api_connection(
+    session: SessionDep, current_user: CurrentUser, id: uuid.UUID
+) -> Any:
+    """
+    Connection details for an ``agent_api`` credential: the producer agent it
+    proxies, the consumer agents it is linked to, and the spec/base URLs.
+    Drives the credential's detail view (View Spec + connected agents).
+    """
+    try:
+        return AgentApiTokenService.get_connection_info(
+            session=session,
+            credential_id=id,
+            user_id=current_user.id,
+            is_superuser=current_user.is_superuser,
+        )
+    except AgentApiTokenError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
 
 
 @router.post("/", response_model=CredentialPublic)

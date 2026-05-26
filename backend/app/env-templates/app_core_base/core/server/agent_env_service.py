@@ -746,6 +746,15 @@ class AgentEnvService:
             summaries["webapp"] = summary
             logger.info(f"webapp: {summary.fileCount} files, {summary.totalSize} bytes")
 
+        # Include agent_api folder if it exists (cinna_api producer source)
+        agent_api_node = None
+        agent_api_path = self.workspace_dir / "agent_api"
+        if agent_api_path.exists() and agent_api_path.is_dir():
+            agent_api_node = self._build_tree_recursive(agent_api_path, self.workspace_dir)
+            summary = self._calculate_folder_summary(agent_api_node)
+            summaries["agent_api"] = summary
+            logger.info(f"agent_api: {summary.fileCount} files, {summary.totalSize} bytes")
+
         return WorkspaceTreeResponse(
             files=tree_nodes["files"],
             logs=tree_nodes["logs"],
@@ -753,6 +762,7 @@ class AgentEnvService:
             docs=tree_nodes["docs"],
             app_data=tree_nodes["app-data"],
             webapp=webapp_node,
+            agent_api=agent_api_node,
             summaries=summaries
         )
 

@@ -139,3 +139,13 @@ Auto-generated from OpenAPI spec. Tag: `environments`
 **Response:** `Message`
 
 ---
+
+## POST `/api/v1/environments/{id}/agent-api-reloaded`
+**Agent Api Reloaded**
+
+**Path parameters:**
+- `id`: uuid
+
+**Response:** `Message`
+
+---

@@ -1456,6 +1456,132 @@ async def serve_webapp_file(path: str, request: Request):
     )
 
 
+# ── Agent REST API (cinna_api) Endpoints ─────────────────────────────────────
+#
+# These front the lazily-spawned uvicorn child that serves the agent's REST API.
+# The child binds 127.0.0.1:<internal_port> and is reachable only through here.
+#   GET  /agent-api/_status       → supervisor status (no child spawn)
+#   GET  /agent-api/openapi.json  → import-only spec harvest (no child spawn)
+#   ANY  /agent-api/proxy/{path}  → spawn child if needed, then forward
+#
+# Auth: these are protected by the same AGENT_AUTH_TOKEN as the rest of env-core
+# (the backend attaches it), so only the platform proxy can reach them.
+
+try:
+    from core.cinna_api.supervisor import agent_api_supervisor as _agent_api_supervisor
+    from core.cinna_api.supervisor import BASE_URL as _AGENT_API_CHILD_BASE_URL
+    _AGENT_API_AVAILABLE = True
+except Exception as _agent_api_import_exc:  # pragma: no cover - defensive
+    _agent_api_supervisor = None  # type: ignore[assignment]
+    _AGENT_API_CHILD_BASE_URL = ""
+    _AGENT_API_AVAILABLE = False
+    logger.warning("agent_api supervisor unavailable: %s", _agent_api_import_exc)
+
+# Hop-by-hop / boundary headers that must not be forwarded verbatim to the child.
+_AGENT_API_SKIP_HEADERS = {"host", "content-length", "connection", "authorization"}
+
+
+@router.get("/agent-api/_status", dependencies=[Depends(verify_auth_token)])
+async def agent_api_status():
+    """Return the agent REST API build/run status (never spawns the child)."""
+    if not _AGENT_API_AVAILABLE:
+        return {"state": "error", "child_running": False, "has_app": False,
+                "spec_available": False, "last_error": "agent_api supervisor unavailable"}
+    return await _agent_api_supervisor.get_status()
+
+
+@router.get("/agent-api/openapi.json", dependencies=[Depends(verify_auth_token)])
+async def agent_api_openapi():
+    """
+    Return the harvested OpenAPI spec (import-only — no serving child spawned).
+
+    Runs a short-lived one-shot subprocess that imports the agent's modules and
+    calls ``app.openapi()``. A bad import surfaces as a 502 with the captured
+    traceback so the owner sees boot failures without a request to the API.
+    """
+    if not _AGENT_API_AVAILABLE:
+        raise HTTPException(status_code=503, detail="agent_api supervisor unavailable")
+    try:
+        spec = await _agent_api_supervisor.harvest_spec()
+        return spec
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.api_route(
+    "/agent-api/proxy/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+    dependencies=[Depends(verify_auth_token)],
+)
+async def agent_api_proxy(path: str, request: Request):
+    """
+    Forward an HTTP request to the agent's API child, spawning it on first call.
+
+    If the child cannot become healthy within the supervisor's budget, returns
+    503 + Retry-After so the caller can retry (same contract as a suspended
+    container).
+    """
+    if not _AGENT_API_AVAILABLE:
+        raise HTTPException(status_code=503, detail="agent_api supervisor unavailable")
+    if not _HTTPX_AVAILABLE:
+        raise HTTPException(status_code=503, detail="httpx unavailable in env-core")
+
+    # Lazily spawn + health-check the child.
+    healthy = await _agent_api_supervisor.ensure_running()
+    if not healthy:
+        return Response(
+            content=json.dumps({"detail": "Agent API is starting", "error": _agent_api_supervisor.boot_error}),
+            status_code=503,
+            media_type="application/json",
+            headers={"Retry-After": "2"},
+        )
+
+    _agent_api_supervisor.mark_activity()
+
+    # Build forwarded headers (drop boundary headers, keep Content-Type etc).
+    fwd_headers = {}
+    for k, v in request.headers.items():
+        if k.lower() in _AGENT_API_SKIP_HEADERS:
+            continue
+        fwd_headers[k] = v
+
+    body = await request.body()
+    target_url = f"{_AGENT_API_CHILD_BASE_URL}/{path}"
+
+    try:
+        client = _httpx.AsyncClient(timeout=60.0)
+        upstream_req = client.build_request(
+            request.method,
+            target_url,
+            headers=fwd_headers,
+            params=dict(request.query_params),
+            content=body if body else None,
+        )
+        upstream = await client.send(upstream_req, stream=True)
+    except Exception as e:
+        logger.error("agent_api proxy to child failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"Agent API child error: {e}")
+
+    resp_headers = {}
+    for h in ("content-type", "cache-control", "content-length"):
+        if h in upstream.headers:
+            resp_headers[h] = upstream.headers[h]
+
+    async def _passthrough():
+        try:
+            async for chunk in upstream.aiter_bytes(chunk_size=65536):
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    return StreamingResponse(
+        _passthrough(),
+        status_code=upstream.status_code,
+        headers=resp_headers,
+    )
+
+
 # ── Shell command execution endpoint ─────────────────────────────────────────
 
 

@@ -393,3 +393,31 @@ async def prompt_file_changed(
         path_id=id,
         changed_files=None,
     )
+
+
+@router.post("/{id}/agent-api-reloaded")
+async def agent_api_reloaded(
+    id: uuid.UUID,
+    env: _EnvFromAgentAuth,
+) -> Message:
+    """
+    Callback from an agent environment after its agent REST API child reloads
+    (uvicorn ``--reload`` picked up an ``agent_api/`` change) or after a boot
+    error. Triggers a fresh import-only spec + policy re-harvest so the cached
+    spec on the env row stays in sync and the owner sees boot errors without
+    making a request.
+
+    This is intentionally a dedicated endpoint rather than reusing the
+    workspace-files mtime watcher (plan §3.4): the watcher tracks a fixed file
+    list and notifies the backend for prompt / CLI-command refreshes, whereas
+    the agent_api reload is driven by uvicorn's own reloader.
+
+    Auth: AGENT_AUTH_TOKEN bearer + X-Agent-Env-Id environment header (internal only).
+    """
+    if env.id != id:
+        raise HTTPException(status_code=403, detail="Environment ID mismatch")
+    from app.services.agent_api.agent_api_service import AgentApiService
+
+    # Best-effort: re-harvest + re-cache the spec in its own session.
+    await AgentApiService.refresh_spec_cache(env.id)
+    return Message(message="Agent API spec re-cache triggered")

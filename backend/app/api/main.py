@@ -4,6 +4,8 @@ from app.api.routes import (
     a2a,
     access_tokens,
     admin_environments,
+    agent_api,
+    agent_api_public,
     agent_app_mcp_routes,
     agent_status,
     agent_webhooks,
@@ -80,6 +82,8 @@ api_router.include_router(installs.router)  # Bundle install actions on /agents/
 api_router.include_router(bundles.router)
 api_router.include_router(catalog.router)
 api_router.include_router(agent_webhooks.router)
+api_router.include_router(agent_api.router)  # /agents/{id}/agent-api/* (owner preview + tokens)
+api_router.include_router(agent_api_public.router)  # /agent-api/{id}/* (consumer, token auth)
 api_router.include_router(agentic_teams.router)
 api_router.include_router(access_tokens.router)
 api_router.include_router(guest_shares.router)

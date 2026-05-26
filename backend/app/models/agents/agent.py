@@ -54,6 +54,7 @@ class AgentUpdate(SQLModel):
     example_prompts: list[str] | None = None
     inactivity_period_limit: str | None = None
     webapp_enabled: bool | None = None
+    agent_api_enabled: bool | None = None
     # Install owners can update update mode for bundle updates
     update_mode: str | None = None  # "automatic" | "manual"
     # Publisher override map (Phase 5). Only meaningful on the publisher
@@ -143,6 +144,7 @@ class Agent(AgentBase, table=True):
     example_prompts: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     inactivity_period_limit: str | None = Field(default=None)  # None="10min" | "2_days" | "1_week" | "1_month" | "always_on"
     webapp_enabled: bool = Field(default=False)  # Whether webapp feature is active
+    agent_api_enabled: bool = Field(default=False)  # Whether the agent REST API (cinna_api) feature is active
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -217,6 +219,7 @@ class AgentPublic(SQLModel):
     example_prompts: list[str] = []
     inactivity_period_limit: str | None = None
     webapp_enabled: bool = False
+    agent_api_enabled: bool = False
     created_at: datetime
     updated_at: datetime
     owner_id: uuid.UUID

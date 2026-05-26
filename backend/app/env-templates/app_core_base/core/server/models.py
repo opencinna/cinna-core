@@ -83,6 +83,7 @@ class WorkspaceTreeResponse(BaseModel):
     docs: FileNode
     app_data: FileNode
     webapp: FileNode | None = None
+    agent_api: FileNode | None = None
     summaries: dict[str, FolderSummary]
 
 

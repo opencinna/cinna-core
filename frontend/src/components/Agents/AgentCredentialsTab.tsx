@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { AlertTriangle, ExternalLink, Plus, Unlink, Users } from "lucide-react"
+import { AlertTriangle, ExternalLink, Network, Plus, Unlink, Users } from "lucide-react"
 import { useState, useMemo } from "react"
+
+import { ConnectAgentApiDialog } from "@/components/Credentials/ConnectAgentApiDialog"
 
 import { AgentsService, CredentialsService } from "@/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -83,6 +85,7 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const { workspaceFilter } = useWorkspace()
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
+  const [isConnectOpen, setIsConnectOpen] = useState(false)
   const [selectedCredentialId, setSelectedCredentialId] = useState<
     string | undefined
   >(undefined)
@@ -229,6 +232,25 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
               Manage credentials that this agent can access.
             </CardDescription>
           </div>
+          <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setIsConnectOpen(true)}
+          >
+            <Network className="mr-2 h-4 w-4" />
+            Connect Agent API
+          </Button>
+          <ConnectAgentApiDialog
+            open={isConnectOpen}
+            onOpenChange={setIsConnectOpen}
+            defaultConsumerAgentId={agentId}
+            onConnected={() =>
+              queryClient.invalidateQueries({
+                queryKey: ["agent-credentials", agentId],
+              })
+            }
+          />
           <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
             <DialogTrigger asChild>
               <Button size="sm">
@@ -296,6 +318,7 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+          </div>
         </div>
       </CardHeader>
       <CardContent>

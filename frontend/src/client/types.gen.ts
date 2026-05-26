@@ -272,6 +272,53 @@ export type AgentAccessTokenUpdate = {
 };
 
 /**
+ * A consumer agent that has the agent_api credential linked to it.
+ */
+export type AgentApiConnectedAgent = {
+    id: string;
+    name: string;
+    ui_color_preset?: (string | null);
+};
+
+/**
+ * What an ``agent_api`` credential connects to — surfaced on the credential
+ * detail page. ``producer_agent_name`` is best-effort (None if the producer
+ * agent is no longer accessible); ``consumer_agents`` are the agents the
+ * credential is currently linked to.
+ */
+export type AgentApiConnectionInfo = {
+    producer_agent_id: (string | null);
+    producer_agent_name: (string | null);
+    base_url: string;
+    spec_url: string;
+    read_only: boolean;
+    consumer_agents: Array<AgentApiConnectedAgent>;
+};
+
+/**
+ * One connection to a producer agent's API — surfaced on the producer's
+ * "Agent REST API" card (where the token list used to be). Each connection is
+ * one token (``token_id``) and, normally, the ``agent_api`` credential it
+ * backs plus the consumer agents that credential is linked to. Legacy tokens
+ * may have no credential (``credential_id`` is None) — they still expose
+ * ``token_id`` so they can be disconnected.
+ */
+export type AgentApiProducerConnection = {
+    token_id: string;
+    credential_id: (string | null);
+    credential_name: (string | null);
+    token_prefix: string;
+    read_only: boolean;
+    consumer_agents: Array<AgentApiConnectedAgent>;
+    created_at: string;
+};
+
+export type AgentApiProducerConnections = {
+    data: Array<AgentApiProducerConnection>;
+    count: number;
+};
+
+/**
  * Response schema for ``GET /bundles/...``.
  */
 export type AgentBundlePublic = {
@@ -725,6 +772,7 @@ export type AgentPublic = {
     example_prompts?: Array<(string)>;
     inactivity_period_limit?: (string | null);
     webapp_enabled?: boolean;
+    agent_api_enabled?: boolean;
     created_at: string;
     updated_at: string;
     owner_id: string;
@@ -908,6 +956,7 @@ export type AgentUpdate = {
     example_prompts?: (Array<(string)> | null);
     inactivity_period_limit?: (string | null);
     webapp_enabled?: (boolean | null);
+    agent_api_enabled?: (boolean | null);
     update_mode?: (string | null);
     publish_settings?: ({
     [key: string]: unknown;
@@ -1574,6 +1623,31 @@ export type CLITokensPublic = {
     count: number;
 };
 
+/**
+ * Request to wire a consumer to a producer's REST API in one action.
+ *
+ * Mints an ``agent_api`` token on the producer, creates an ``agent_api``
+ * credential pre-filled with {base_url, token, spec_url, label,
+ * producer_agent_id}, and optionally links it to a consumer agent.
+ */
+export type ConnectAgentApiRequest = {
+    credential_label?: (string | null);
+    read_only_override?: boolean;
+    consumer_agent_id?: (string | null);
+};
+
+/**
+ * Result of the connect helper — IDs of what it created/linked.
+ */
+export type ConnectAgentApiResponse = {
+    credential_id: string;
+    token_id: string;
+    token_prefix: string;
+    base_url: string;
+    spec_url: string;
+    linked_consumer_agent_id?: (string | null);
+};
+
 export type ConsentApproveResponse = {
     redirect_url: string;
 };
@@ -1731,7 +1805,7 @@ export type CredentialsPublic = {
     count: number;
 };
 
-export type CredentialType = 'email_imap' | 'email_smtp' | 'odoo' | 'gmail_oauth' | 'gmail_oauth_readonly' | 'gdrive_oauth' | 'gdrive_oauth_readonly' | 'gcalendar_oauth' | 'gcalendar_oauth_readonly' | 'google_service_account' | 'api_token' | 'ssh_key';
+export type CredentialType = 'email_imap' | 'email_smtp' | 'odoo' | 'gmail_oauth' | 'gmail_oauth_readonly' | 'gdrive_oauth' | 'gdrive_oauth_readonly' | 'gcalendar_oauth' | 'gcalendar_oauth_readonly' | 'google_service_account' | 'api_token' | 'ssh_key' | 'agent_api';
 
 export type CredentialUpdate = {
     name?: (string | null);
@@ -4123,6 +4197,50 @@ export type AdminEnvironmentsRebuildSingleEnvironmentData = {
 
 export type AdminEnvironmentsRebuildSingleEnvironmentResponse = (Message);
 
+export type AgentApiGetAgentApiStatusData = {
+    agentId: string;
+};
+
+export type AgentApiGetAgentApiStatusResponse = (unknown);
+
+export type AgentApiRefreshAgentApiStatusData = {
+    agentId: string;
+};
+
+export type AgentApiRefreshAgentApiStatusResponse = (unknown);
+
+export type AgentApiGetAgentApiSpecData = {
+    agentId: string;
+};
+
+export type AgentApiGetAgentApiSpecResponse = (unknown);
+
+export type AgentApiConnectAgentApiData = {
+    agentId: string;
+    requestBody: ConnectAgentApiRequest;
+};
+
+export type AgentApiConnectAgentApiResponse = (ConnectAgentApiResponse);
+
+export type AgentApiListAgentApiConnectionsData = {
+    agentId: string;
+};
+
+export type AgentApiListAgentApiConnectionsResponse = (AgentApiProducerConnections);
+
+export type AgentApiDeleteAgentApiConnectionData = {
+    agentId: string;
+    tokenId: string;
+};
+
+export type AgentApiDeleteAgentApiConnectionResponse = (Message);
+
+export type AgentApiPublicConsumerSpecData = {
+    agentId: string;
+};
+
+export type AgentApiPublicConsumerSpecResponse = (unknown);
+
 export type AgentAppMcpRoutesListAgentAppMcpRoutesData = {
     agentId: string;
 };
@@ -4992,6 +5110,12 @@ export type CredentialsReadCredentialWithDataData = {
 
 export type CredentialsReadCredentialWithDataResponse = (CredentialWithData);
 
+export type CredentialsReadAgentApiConnectionData = {
+    id: string;
+};
+
+export type CredentialsReadAgentApiConnectionResponse = (AgentApiConnectionInfo);
+
 export type CredentialsListCredentialBundleUsagesData = {
     id: string;
 };
@@ -5334,6 +5458,14 @@ export type EnvironmentsPromptFileChangedData = {
 };
 
 export type EnvironmentsPromptFileChangedResponse = (Message);
+
+export type EnvironmentsAgentApiReloadedData = {
+    authorization?: (string | null);
+    id: string;
+    xAgentEnvId?: (string | null);
+};
+
+export type EnvironmentsAgentApiReloadedResponse = (Message);
 
 export type EventsBroadcastEventData = {
     requestBody: EventBroadcast;

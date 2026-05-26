@@ -1101,6 +1101,129 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
             logger.error(f"Failed to call webapp API {endpoint}: {e}")
             raise Exception(f"Failed to call webapp API: {e}")
 
+    # === Agent REST API (cinna_api) Methods ===
+
+    async def get_agent_api_status(self) -> dict:
+        """Get the agent REST API build/run status from env-core."""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/agent-api/_status",
+                    headers=self._get_headers(),
+                    timeout=10.0,
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to get agent-api status: {e}")
+            raise Exception(f"Failed to get agent-api status: {e}")
+
+    async def get_agent_api_spec(self) -> dict:
+        """
+        Harvest the agent REST API OpenAPI spec from env-core (import-only).
+
+        env-core builds the spec by importing the agent's ``agent_api/`` modules
+        and calling ``app.openapi()`` — it never spawns the serving child. The
+        returned dict is the raw OpenAPI document.
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/agent-api/openapi.json",
+                    headers=self._get_headers(),
+                    timeout=30.0,  # import + openapi() can take a moment on first call
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to get agent-api spec: {e}")
+            raise Exception(f"Failed to get agent-api spec: {e}")
+
+    async def proxy_agent_api(
+        self,
+        method: str,
+        path: str,
+        headers: dict | None = None,
+        body: bytes | None = None,
+        stream: bool = False,
+        timeout: float = 60.0,
+    ) -> tuple[int, dict, bytes] | tuple[int, dict, AsyncIterator[bytes]]:
+        """
+        Proxy an arbitrary HTTP request to the agent's REST API child via env-core.
+
+        env-core spawns the localhost-only serving child on first call, waits for
+        health, then forwards. Supports multipart request bodies (passed through
+        as raw bytes with the caller's Content-Type) and streaming responses.
+
+        Args:
+            method: HTTP verb (GET, POST, ...).
+            path: Sub-path under the agent API (e.g. "orders" or "orders/42").
+            headers: Request headers to forward (Content-Type, Accept, etc.).
+            body: Raw request body bytes (None for bodyless verbs).
+            stream: When True, returns an async byte iterator for the response body
+                    and the caller is responsible for draining it.
+            timeout: Per-request timeout in seconds.
+
+        Returns:
+            ``(status_code, response_headers, body_bytes)`` when ``stream=False``,
+            or ``(status_code, response_headers, async_byte_iterator)`` when
+            ``stream=True``.
+        """
+        import urllib.parse
+
+        encoded_path = urllib.parse.quote(path, safe="/")
+        url = f"{self.base_url}/agent-api/proxy/{encoded_path}"
+
+        # Merge auth header with caller-supplied headers. The auth token is for
+        # the env-core boundary; the agent's own app does not see it.
+        fwd_headers = self._get_headers()
+        if headers:
+            # Drop hop-by-hop / host headers that must not be forwarded verbatim.
+            _SKIP = {"host", "content-length", "connection", "authorization"}
+            for k, v in headers.items():
+                if k.lower() in _SKIP:
+                    continue
+                fwd_headers[k] = v
+
+        if not stream:
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.request(
+                        method,
+                        url,
+                        headers=fwd_headers,
+                        content=body,
+                        timeout=timeout,
+                    )
+                    resp_headers = {}
+                    for h in ("content-type", "cache-control", "content-length", "retry-after"):
+                        if h in response.headers:
+                            resp_headers[h] = response.headers[h]
+                    return response.status_code, resp_headers, response.content
+            except httpx.HTTPError as e:
+                logger.error(f"Failed to proxy agent-api {method} {path}: {e}")
+                raise Exception(f"Failed to proxy agent-api request: {e}")
+
+        # Streaming passthrough — keep the client + response open until drained.
+        client = httpx.AsyncClient(timeout=timeout)
+        request = client.build_request(method, url, headers=fwd_headers, content=body)
+        response = await client.send(request, stream=True)
+
+        resp_headers = {}
+        for h in ("content-type", "cache-control", "content-length", "retry-after"):
+            if h in response.headers:
+                resp_headers[h] = response.headers[h]
+
+        async def _stream() -> AsyncIterator[bytes]:
+            try:
+                async for chunk in response.aiter_bytes(chunk_size=65536):
+                    yield chunk
+            finally:
+                await response.aclose()
+                await client.aclose()
+
+        return response.status_code, resp_headers, _stream()
+
     # === SQLite Database Methods ===
 
     async def get_database_tables(self, path: str) -> list[dict]:

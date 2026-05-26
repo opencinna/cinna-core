@@ -2098,6 +2098,7 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
             "app/workspace/credentials",
             "app/workspace/plugins",
             "app/workspace/webapp",
+            "app/workspace/agent_api",
         ]
 
         # Single files to copy

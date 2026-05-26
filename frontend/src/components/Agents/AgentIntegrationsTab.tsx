@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input"
 import useAuth from "@/hooks/useAuth"
 import useRole from "@/hooks/useRole"
 import { AccessTokensCard } from "./AccessTokensCard"
+import { AgentRestApiCard } from "./AgentRestApiCard"
 import { EmailIntegrationCard } from "./EmailIntegrationCard"
 import { GuestShareCard } from "./GuestShareCard"
 import { McpConnectorsCard } from "./McpConnectorsCard"
@@ -168,6 +169,9 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
 
         {/* Webapp Share Links Card */}
         <WebappShareCard agentId={agent.id} webappEnabled={agent.webapp_enabled ?? false} />
+
+        {/* Agent REST API Card (cinna_api producer side) */}
+        <AgentRestApiCard agentId={agent.id} agentApiEnabled={agent.agent_api_enabled ?? false} />
 
         {/* Email Integration Card — only for the publisher install (or
             unpublished agents). Foreign installs of a published bundle

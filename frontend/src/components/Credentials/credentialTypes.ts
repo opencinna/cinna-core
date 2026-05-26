@@ -12,6 +12,7 @@ import {
   Key,
   KeyRound,
   Mail,
+  Network,
   Send,
   ShieldCheck,
   type LucideIcon,
@@ -163,6 +164,20 @@ export interface CredentialTypeMeta {
   badgeClass: string
 }
 
+// Display-only credential types — rendered (icon/label/badge) when present but
+// NOT offered in the "Add Credential" picker. ``agent_api`` credentials are
+// created by the "Connect Agent API" helper (which mints the proxy token and
+// wires the connection), never by hand.
+const DISPLAY_ONLY_META: CredentialTypeMeta[] = [
+  {
+    type: "agent_api",
+    label: "Agent REST API",
+    icon: Network,
+    badgeClass:
+      "bg-teal-50 text-teal-900 border-teal-200 hover:bg-teal-100 dark:bg-teal-950/40 dark:text-teal-100 dark:border-teal-900 dark:hover:bg-teal-900/40",
+  },
+]
+
 const META_BY_TYPE: Map<string, CredentialTypeMeta> = (() => {
   const map = new Map<string, CredentialTypeMeta>()
   for (const group of CREDENTIAL_TYPE_GROUPS) {
@@ -174,6 +189,9 @@ const META_BY_TYPE: Map<string, CredentialTypeMeta> = (() => {
         badgeClass: group.badgeClass,
       })
     }
+  }
+  for (const meta of DISPLAY_ONLY_META) {
+    map.set(meta.type as string, meta)
   }
   return map
 })()

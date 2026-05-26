@@ -1,4 +1,4 @@
-import { FileText, FileCode, ScrollText, BookOpen, Database, ChevronDown, Maximize2, Minimize2, KeyRound, Globe, ExternalLink } from "lucide-react"
+import { FileText, FileCode, ScrollText, BookOpen, Database, ChevronDown, Maximize2, Minimize2, KeyRound, Globe, ExternalLink, Network } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -16,6 +16,7 @@ interface TabHeaderProps {
   hideCredentials?: boolean
   webappUrl?: string | null
   hasWebapp?: boolean
+  hasAgentApi?: boolean
 }
 
 const TAB_LABELS: Record<string, string> = {
@@ -26,9 +27,10 @@ const TAB_LABELS: Record<string, string> = {
   app_data: "Application Data",
   credentials: "Credentials",
   webapp: "Web App",
+  agent_api: "Agent API",
 }
 
-export function TabHeader({ activeTab, onTabChange, isWidePanelMode, onToggleWidePanel, hideCredentials, webappUrl, hasWebapp }: TabHeaderProps) {
+export function TabHeader({ activeTab, onTabChange, isWidePanelMode, onToggleWidePanel, hideCredentials, webappUrl, hasWebapp, hasAgentApi }: TabHeaderProps) {
   const menuLabel = TAB_LABELS[activeTab] || "Files"
 
   return (
@@ -79,6 +81,12 @@ export function TabHeader({ activeTab, onTabChange, isWidePanelMode, onToggleWid
               <DropdownMenuItem onClick={() => onTabChange("webapp")}>
                 <Globe className="h-4 w-4 mr-2" />
                 Web App Files
+              </DropdownMenuItem>
+            )}
+            {hasAgentApi && (
+              <DropdownMenuItem onClick={() => onTabChange("agent_api")}>
+                <Network className="h-4 w-4 mr-2" />
+                Agent API Files
               </DropdownMenuItem>
             )}
             {webappUrl && (

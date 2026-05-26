@@ -57,6 +57,9 @@ class CredentialsService:
         # AGENT_ENV_ALLOWED_FIELDS whitelist below, but redaction protects us if a
         # future change accidentally leaks them into the README render.
         "ssh_key": ["private_key", "passphrase"],
+        # agent_api: the proxy token is the secret; base_url/spec_url are safe to
+        # show in clear (the consumer agent needs to know where to call).
+        "agent_api": ["token"],
     }
 
     # WHITELIST: Fields that ARE allowed to be exposed to agent environment
@@ -125,6 +128,12 @@ class CredentialsService:
         # and passphrase travel on the sibling `ssh_keys` bundle (written directly
         # into ~/.ssh/ inside the container) and MUST NEVER be whitelisted here.
         "ssh_key": ["public_key", "fingerprint", "key_type", "host_aliases"],
+
+        # agent_api: the consumer agent's scripts need base_url + token to call the
+        # producer's proxy, plus spec_url to fetch the contract. producer_agent_id
+        # and label are informational. The token is redacted in the README render
+        # (SENSITIVE_FIELDS) but IS synced to credentials.json so scripts can use it.
+        "agent_api": ["base_url", "spec_url", "token", "label", "producer_agent_id"],
     }
 
     @staticmethod

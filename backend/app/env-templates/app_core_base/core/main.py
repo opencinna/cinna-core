@@ -152,17 +152,70 @@ async def _workspace_files_watcher() -> None:
                 logger.warning(f"Workspace-files-changed callback failed (non-fatal): {exc}")
 
 
+async def _agent_api_reload_watcher() -> None:
+    """
+    Watch ``/app/workspace/agent_api/`` for changes and notify the backend so it
+    re-harvests + re-caches the OpenAPI spec.
+
+    This is intentionally SEPARATE from ``_workspace_files_watcher`` (plan §3.4):
+    that watcher tracks a fixed file list to refresh prompts / CLI commands. This
+    one tracks the whole agent_api directory tree purely to drive the agent_api
+    spec re-cache. The serving child (when running) hot-reloads via uvicorn's own
+    ``--reload``; this watcher only handles the backend re-cache notification,
+    which must work even when no child is running (lazy spawn).
+    """
+    try:
+        from core.cinna_api.supervisor import agent_api_supervisor, AGENT_API_DIR
+    except Exception as exc:
+        logger.warning("agent_api reload watcher disabled: %s", exc)
+        return
+
+    def _dir_signature() -> tuple:
+        """Coarse signature of the agent_api tree (paths + mtimes)."""
+        try:
+            if not AGENT_API_DIR.is_dir():
+                return ()
+            entries = []
+            for p in sorted(AGENT_API_DIR.rglob("*.py")):
+                try:
+                    entries.append((str(p), p.stat().st_mtime))
+                except FileNotFoundError:
+                    continue
+            return tuple(entries)
+        except Exception:
+            return ()
+
+    prev = _dir_signature()
+    logger.info("Agent API reload watcher started")
+
+    while True:
+        await asyncio.sleep(_POLL_INTERVAL)
+        current = _dir_signature()
+        if current != prev:
+            prev = current
+            logger.info("agent_api/ changed — notifying backend to re-cache spec")
+            await agent_api_supervisor.notify_backend_reload()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start background tasks on startup; cancel them on shutdown."""
     watcher_task = asyncio.create_task(_workspace_files_watcher())
+    agent_api_watcher_task = asyncio.create_task(_agent_api_reload_watcher())
     try:
         yield
     finally:
-        watcher_task.cancel()
+        for task in (watcher_task, agent_api_watcher_task):
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        # Stop the lazily-spawned agent API child if it is running.
         try:
-            await watcher_task
-        except asyncio.CancelledError:
+            from core.cinna_api.supervisor import agent_api_supervisor
+            await agent_api_supervisor.shutdown()
+        except Exception:
             pass
 
 

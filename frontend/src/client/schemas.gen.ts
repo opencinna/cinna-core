@@ -1849,6 +1849,170 @@ export const AgentAccessTokensPublicSchema = {
     title: 'AgentAccessTokensPublic'
 } as const;
 
+export const AgentApiConnectedAgentSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        ui_color_preset: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ui Color Preset'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name'],
+    title: 'AgentApiConnectedAgent',
+    description: 'A consumer agent that has the agent_api credential linked to it.'
+} as const;
+
+export const AgentApiConnectionInfoSchema = {
+    properties: {
+        producer_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Producer Agent Id'
+        },
+        producer_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Producer Agent Name'
+        },
+        base_url: {
+            type: 'string',
+            title: 'Base Url'
+        },
+        spec_url: {
+            type: 'string',
+            title: 'Spec Url'
+        },
+        read_only: {
+            type: 'boolean',
+            title: 'Read Only'
+        },
+        consumer_agents: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiConnectedAgent'
+            },
+            type: 'array',
+            title: 'Consumer Agents'
+        }
+    },
+    type: 'object',
+    required: ['producer_agent_id', 'producer_agent_name', 'base_url', 'spec_url', 'read_only', 'consumer_agents'],
+    title: 'AgentApiConnectionInfo',
+    description: `What an \`\`agent_api\`\` credential connects to — surfaced on the credential
+detail page. \`\`producer_agent_name\`\` is best-effort (None if the producer
+agent is no longer accessible); \`\`consumer_agents\`\` are the agents the
+credential is currently linked to.`
+} as const;
+
+export const AgentApiProducerConnectionSchema = {
+    properties: {
+        token_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Token Id'
+        },
+        credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credential Id'
+        },
+        credential_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credential Name'
+        },
+        token_prefix: {
+            type: 'string',
+            title: 'Token Prefix'
+        },
+        read_only: {
+            type: 'boolean',
+            title: 'Read Only'
+        },
+        consumer_agents: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiConnectedAgent'
+            },
+            type: 'array',
+            title: 'Consumer Agents'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        }
+    },
+    type: 'object',
+    required: ['token_id', 'credential_id', 'credential_name', 'token_prefix', 'read_only', 'consumer_agents', 'created_at'],
+    title: 'AgentApiProducerConnection',
+    description: `One connection to a producer agent's API — surfaced on the producer's
+"Agent REST API" card (where the token list used to be). Each connection is
+one token (\`\`token_id\`\`) and, normally, the \`\`agent_api\`\` credential it
+backs plus the consumer agents that credential is linked to. Legacy tokens
+may have no credential (\`\`credential_id\`\` is None) — they still expose
+\`\`token_id\`\` so they can be disconnected.`
+} as const;
+
+export const AgentApiProducerConnectionsSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiProducerConnection'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AgentApiProducerConnections'
+} as const;
+
 export const AgentBundlePublicSchema = {
     properties: {
         id: {
@@ -3823,6 +3987,11 @@ export const AgentPublicSchema = {
             title: 'Webapp Enabled',
             default: false
         },
+        agent_api_enabled: {
+            type: 'boolean',
+            title: 'Agent Api Enabled',
+            default: false
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -4821,6 +4990,17 @@ export const AgentUpdateSchema = {
                 }
             ],
             title: 'Webapp Enabled'
+        },
+        agent_api_enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Api Enabled'
         },
         update_mode: {
             anyOf: [
@@ -7770,6 +7950,90 @@ export const CheckUpdatesResponseSchema = {
     description: 'Response of ``POST /agents/{agent_id}/check-updates``.'
 } as const;
 
+export const ConnectAgentApiRequestSchema = {
+    properties: {
+        credential_label: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credential Label'
+        },
+        read_only_override: {
+            type: 'boolean',
+            title: 'Read Only Override',
+            default: false
+        },
+        consumer_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Consumer Agent Id'
+        }
+    },
+    type: 'object',
+    title: 'ConnectAgentApiRequest',
+    description: `Request to wire a consumer to a producer's REST API in one action.
+
+Mints an \`\`agent_api\`\` token on the producer, creates an \`\`agent_api\`\`
+credential pre-filled with {base_url, token, spec_url, label,
+producer_agent_id}, and optionally links it to a consumer agent.`
+} as const;
+
+export const ConnectAgentApiResponseSchema = {
+    properties: {
+        credential_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Credential Id'
+        },
+        token_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Token Id'
+        },
+        token_prefix: {
+            type: 'string',
+            title: 'Token Prefix'
+        },
+        base_url: {
+            type: 'string',
+            title: 'Base Url'
+        },
+        spec_url: {
+            type: 'string',
+            title: 'Spec Url'
+        },
+        linked_consumer_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Linked Consumer Agent Id'
+        }
+    },
+    type: 'object',
+    required: ['credential_id', 'token_id', 'token_prefix', 'base_url', 'spec_url'],
+    title: 'ConnectAgentApiResponse',
+    description: 'Result of the connect helper — IDs of what it created/linked.'
+} as const;
+
 export const ConsentApproveResponseSchema = {
     properties: {
         redirect_url: {
@@ -8357,7 +8621,7 @@ export const CredentialSharesPublicSchema = {
 
 export const CredentialTypeSchema = {
     type: 'string',
-    enum: ['email_imap', 'email_smtp', 'odoo', 'gmail_oauth', 'gmail_oauth_readonly', 'gdrive_oauth', 'gdrive_oauth_readonly', 'gcalendar_oauth', 'gcalendar_oauth_readonly', 'google_service_account', 'api_token', 'ssh_key'],
+    enum: ['email_imap', 'email_smtp', 'odoo', 'gmail_oauth', 'gmail_oauth_readonly', 'gdrive_oauth', 'gdrive_oauth_readonly', 'gcalendar_oauth', 'gcalendar_oauth_readonly', 'google_service_account', 'api_token', 'ssh_key', 'agent_api'],
     title: 'CredentialType'
 } as const;
 

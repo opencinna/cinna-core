@@ -133,6 +133,16 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
 
 ---
 
+## GET `/api/v1/credentials/{id}/agent-api-connection`
+**Read Agent Api Connection**
+
+**Path parameters:**
+- `id`: uuid
+
+**Response:** `AgentApiConnectionInfo`
+
+---
+
 ## GET `/api/v1/credentials/{id}/bundles`
 **List Credential Bundle Usages**
 

@@ -22,6 +22,7 @@ interface WorkspaceTreeResponse {
   docs?: FileNode
   app_data?: FileNode
   webapp?: FileNode | null
+  agent_api?: FileNode | null
 }
 
 // Default SDK identifier
@@ -269,6 +270,7 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
   const docsData: TreeItem[] = workspaceData?.docs ? [convertFileNodeToTreeItem(workspaceData.docs)] : []
   const appDataData: TreeItem[] = workspaceData?.app_data ? [convertFileNodeToTreeItem(workspaceData.app_data)] : []
   const webappData: TreeItem[] = workspaceData?.webapp ? [convertFileNodeToTreeItem(workspaceData.webapp)] : []
+  const agentApiData: TreeItem[] = workspaceData?.agent_api ? [convertFileNodeToTreeItem(workspaceData.agent_api)] : []
 
   return (
     <div className={`absolute top-0 right-0 h-full bg-background border-l border-border shadow-lg z-10 flex flex-col transition-all duration-200 ${isWidePanelMode ? 'w-[768px]' : 'w-96'}`}>
@@ -281,6 +283,7 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
           hideCredentials={isGuest}
           webappUrl={webappPreviewUrl}
           hasWebapp={!!workspaceData?.webapp}
+          hasAgentApi={!!workspaceData?.agent_api}
         />
 
         {/* Credentials tab - separate from workspace tabs */}
@@ -374,6 +377,20 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
                   onToggleFolder={handleToggleFolder}
                   onDownload={handleDownload}
                   pathPrefix="webapp"
+                  envId={environmentId}
+                  databaseTables={databaseTables}
+                  onFetchDatabaseTables={handleFetchDatabaseTables}
+                  isGuest={isGuest}
+                />
+              )}
+              {agentApiData.length > 0 && (
+                <WorkspaceTabContent
+                  value="agent_api"
+                  data={agentApiData}
+                  expandedFolders={expandedFolders}
+                  onToggleFolder={handleToggleFolder}
+                  onDownload={handleDownload}
+                  pathPrefix="agent_api"
                   envId={environmentId}
                   databaseTables={databaseTables}
                   onFetchDatabaseTables={handleFetchDatabaseTables}
