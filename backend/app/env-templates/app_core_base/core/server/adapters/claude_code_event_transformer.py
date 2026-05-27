@@ -113,6 +113,12 @@ class ClaudeCodeEventTransformer:
 
         For ToolUseBlock, returns a TOOL_USE event immediately (first tool wins).
         For text/thinking, accumulates and returns as ASSISTANT or THINKING.
+
+        Synthetic assistant messages (``model == "<synthetic>"``) are emitted by
+        the Claude Code CLI itself — not the model — to surface error conditions
+        such as "Invalid API key · Please run /login" or "Credit balance is too
+        low". These are translated to ERROR events so they are handled as failures
+        instead of being shown to the user as if the agent had replied.
         """
         from claude_agent_sdk import (
             TextBlock,
@@ -120,6 +126,22 @@ class ClaudeCodeEventTransformer:
             ToolResultBlock,
             ThinkingBlock,
         )
+
+        if getattr(message_obj, "model", None) == "<synthetic>":
+            text_parts = [
+                block.text for block in message_obj.content
+                if isinstance(block, TextBlock) and block.text
+            ]
+            error_text = _humanize_error_text("\n".join(text_parts))
+            logger.warning(
+                f"Synthetic assistant message treated as error: {error_text}"
+            )
+            return SDKEvent(
+                type=SDKEventType.ERROR,
+                content=error_text or "The agent runtime reported an error.",
+                session_id=session_id,
+                error_type="agent_runtime_error",
+            )
 
         content_parts = []
         event_type = SDKEventType.ASSISTANT
@@ -168,27 +190,57 @@ class ClaudeCodeEventTransformer:
     def _handle_result_message(
         message_obj, session_id: str, interrupt_initiated: bool,
     ) -> SDKEvent:
-        """Handle ResultMessage — detect interrupts, emit DONE or INTERRUPTED."""
+        """Handle ResultMessage — emit INTERRUPTED, ERROR, or DONE.
+
+        Precedence matters:
+        1. A user-initiated interrupt (``error_during_execution`` while an
+           interrupt was requested) → INTERRUPTED.
+        2. Otherwise, ``is_error`` true → ERROR. Claude Code reports API/result
+           level failures (invalid/expired key, billing, max-turns) via
+           ``is_error`` — sometimes even with ``subtype == "success"``. Without
+           this branch the run is silently reported as a successful DONE.
+        3. Otherwise → DONE.
+        """
+        metadata = {
+            "subtype": message_obj.subtype,
+            "duration_ms": message_obj.duration_ms,
+            "is_error": message_obj.is_error,
+            "num_turns": message_obj.num_turns,
+            "total_cost_usd": message_obj.total_cost_usd,
+            "session_id": message_obj.session_id,
+        }
+
         is_interrupted = (
             interrupt_initiated
             and message_obj.subtype == "error_during_execution"
         )
-
         if is_interrupted:
             logger.info("Detected interrupted session from ResultMessage")
+            return SDKEvent(
+                type=SDKEventType.INTERRUPTED,
+                content="Request interrupted by user",
+                session_id=session_id,
+                metadata=metadata,
+            )
+
+        if getattr(message_obj, "is_error", False):
+            error_text = _extract_result_error_text(message_obj)
+            logger.warning(
+                f"ResultMessage reported error (subtype={message_obj.subtype}): {error_text}"
+            )
+            return SDKEvent(
+                type=SDKEventType.ERROR,
+                content=error_text,
+                session_id=session_id,
+                error_type=f"result_error:{message_obj.subtype}",
+                metadata=metadata,
+            )
 
         return SDKEvent(
-            type=SDKEventType.INTERRUPTED if is_interrupted else SDKEventType.DONE,
-            content="Request interrupted by user" if is_interrupted else "",
+            type=SDKEventType.DONE,
+            content="",
             session_id=session_id,
-            metadata={
-                "subtype": message_obj.subtype,
-                "duration_ms": message_obj.duration_ms,
-                "is_error": message_obj.is_error,
-                "num_turns": message_obj.num_turns,
-                "total_cost_usd": message_obj.total_cost_usd,
-                "session_id": message_obj.session_id,
-            },
+            metadata=metadata,
         )
 
     @staticmethod
@@ -208,6 +260,44 @@ class ClaudeCodeEventTransformer:
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
+def _humanize_error_text(text: str) -> str:
+    """Map raw Claude Code error strings to platform-appropriate guidance.
+
+    The SDK's synthetic/result error text references CLI concepts (e.g.
+    "Please run /login") that don't exist in this platform, so we surface
+    clearer, actionable messages for the well-known cases and pass everything
+    else through unchanged.
+    """
+    raw = (text or "").strip()
+    lowered = raw.lower()
+
+    if "invalid api key" in lowered or "please run /login" in lowered:
+        return (
+            "The AI provider rejected the request: the API key is invalid or "
+            "expired. Update the environment's AI credential and try again."
+        )
+    if "credit balance is too low" in lowered:
+        return (
+            "The AI provider rejected the request: the account's credit "
+            "balance is too low."
+        )
+    return raw
+
+
+def _extract_result_error_text(message_obj) -> str:
+    """Best-effort human-readable error text from an errored ResultMessage."""
+    result_text = getattr(message_obj, "result", None)
+    if result_text and str(result_text).strip():
+        return _humanize_error_text(str(result_text))
+
+    subtype = getattr(message_obj, "subtype", None) or "unknown_error"
+    subtype_messages = {
+        "error_max_turns": "The agent stopped: it reached the maximum number of turns.",
+        "error_during_execution": "The agent stopped due to an error during execution.",
+    }
+    return subtype_messages.get(subtype, f"The agent run failed ({subtype}).")
+
 
 def _format_tool_input(tool_input) -> str:
     """Format tool input for display, truncating to 200 chars."""

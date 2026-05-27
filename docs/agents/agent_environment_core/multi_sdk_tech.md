@@ -203,8 +203,8 @@ Stateful translator from raw Claude Agent SDK messages to `SDKEvent` objects. Mi
 
 - `translate(message_obj, session_id, interrupt_initiated)` — maps Claude SDK message types to `SDKEvent`
 - `_handle_system_message()` — skips `init` subtype; forwards other system events
-- `_handle_assistant_message()` — extracts `TextBlock`, `ThinkingBlock`, `ToolUseBlock`; normalizes tool names via `tool_name_registry`
-- `_handle_result_message()` — emits `DONE` or `INTERRUPTED` based on subtype and interrupt flag
+- `_handle_assistant_message()` — extracts `TextBlock`, `ThinkingBlock`, `ToolUseBlock`; normalizes tool names via `tool_name_registry`. **Synthetic messages** (`model == "<synthetic>"`, emitted by the CLI for failures like "Invalid API key · Please run /login") are translated to `ERROR` events (not normal `ASSISTANT` replies), with the raw text humanized via `_humanize_error_text()`
+- `_handle_result_message()` — emits `INTERRUPTED` (user interrupt), `ERROR`, or `DONE`, in that precedence. A `ResultMessage` with `is_error=True` maps to `ERROR` **even when `subtype == "success"`** (Claude Code reports invalid/expired key, billing, and max-turns failures this way); without this the run would otherwise be reported as a silent `DONE`. Error text comes from `_extract_result_error_text()`
 - `_handle_user_message()` — forwards interrupt notifications, skips other user messages
 
 ### OpenCodeAdapter (`adapters/opencode_sdk_adapter.py`)

@@ -271,6 +271,41 @@ MSG_RESULT_INTERRUPTED = ResultMessage(
     total_cost_usd=0.005,
 )
 
+# -- ResultMessage: is_error=True with "success" subtype --------------------
+# Mirrors the real invalid-API-key log: subtype="success" but is_error=True
+# and the SDK error text in `result`.
+
+MSG_RESULT_ERROR_SUCCESS_SUBTYPE = ResultMessage(
+    subtype="success",
+    session_id=SESSION_ID,
+    duration_ms=82,
+    is_error=True,
+    num_turns=1,
+    total_cost_usd=0.0,
+    result="Invalid API key · Please run /login",
+)
+
+# -- ResultMessage: max turns error -----------------------------------------
+
+MSG_RESULT_MAX_TURNS = ResultMessage(
+    subtype="error_max_turns",
+    session_id=SESSION_ID,
+    duration_ms=12000,
+    is_error=True,
+    num_turns=10,
+    total_cost_usd=0.05,
+    result="",
+)
+
+# -- AssistantMessage: synthetic error (invalid API key) --------------------
+# The CLI emits this (model="<synthetic>") instead of a real model response
+# when the API key is rejected.
+
+MSG_ASSISTANT_SYNTHETIC_ERROR = AssistantMessage(
+    content=[TextBlock(text="Invalid API key · Please run /login")],
+    model="<synthetic>",
+)
+
 # -- UserMessage: interrupt notification ------------------------------------
 
 MSG_USER_INTERRUPT = UserMessage(
@@ -333,6 +368,18 @@ class TestAssistantMessage:
         assert result.session_id == SESSION_ID
         assert "2 + 2 = **4**" in result.content
         assert result.metadata["model"] == "claude-haiku-4-5-20251001"
+
+    def test_synthetic_message_produces_error_event(self, transformer):
+        """Synthetic assistant messages (model="<synthetic>") carry SDK error
+        text and must produce an ERROR event, not a normal ASSISTANT reply."""
+        result = transformer.translate(MSG_ASSISTANT_SYNTHETIC_ERROR, SESSION_ID)
+        assert result is not None
+        assert result.type == SDKEventType.ERROR
+        assert result.session_id == SESSION_ID
+        assert result.error_type == "agent_runtime_error"
+        # The raw "/login" CLI hint is humanized away
+        assert "/login" not in result.content
+        assert "api key" in result.content.lower()
 
     def test_thinking_block_produces_thinking_event(self, transformer):
         """ThinkingBlock should produce a THINKING event."""
@@ -421,11 +468,32 @@ class TestResultMessage:
         assert result.type == SDKEventType.DONE
         assert result.metadata["num_turns"] == 2
 
-    def test_interrupt_without_flag_emits_done(self, transformer):
-        """error_during_execution without interrupt flag should still be DONE."""
+    def test_error_during_execution_without_interrupt_emits_error(self, transformer):
+        """error_during_execution + is_error WITHOUT interrupt flag is a genuine
+        failure and should produce an ERROR event (not a silent DONE)."""
         result = transformer.translate(MSG_RESULT_INTERRUPTED, SESSION_ID)
-        assert result.type == SDKEventType.DONE
+        assert result.type == SDKEventType.ERROR
         assert result.metadata["is_error"] is True
+        assert result.error_type == "result_error:error_during_execution"
+
+    def test_is_error_with_success_subtype_emits_error(self, transformer):
+        """ResultMessage with is_error=True must emit ERROR even when the
+        subtype is "success" (the invalid-API-key case from real logs)."""
+        result = transformer.translate(MSG_RESULT_ERROR_SUCCESS_SUBTYPE, SESSION_ID)
+        assert result.type == SDKEventType.ERROR
+        assert result.session_id == SESSION_ID
+        assert result.metadata["is_error"] is True
+        assert result.metadata["subtype"] == "success"
+        # Raw "Invalid API key · Please run /login" is humanized (no CLI /login ref)
+        assert "/login" not in result.content
+        assert "api key" in result.content.lower()
+
+    def test_max_turns_error_emits_error(self, transformer):
+        """error_max_turns with is_error should emit ERROR with descriptive text."""
+        result = transformer.translate(MSG_RESULT_MAX_TURNS, SESSION_ID)
+        assert result.type == SDKEventType.ERROR
+        assert "maximum number of turns" in result.content.lower()
+        assert result.error_type == "result_error:error_max_turns"
 
     def test_interrupt_with_flag_emits_interrupted(self, transformer):
         """error_during_execution WITH interrupt flag should produce INTERRUPTED."""
@@ -660,6 +728,33 @@ class TestConversationReplay:
 
         # INTERRUPTED should be last
         assert events[-1].type == SDKEventType.INTERRUPTED
+
+    def test_invalid_api_key_session(self, transformer):
+        """Replay the real invalid-API-key session: init (skipped) ->
+        synthetic assistant error -> errored result.
+
+        Both the synthetic assistant message and the is_error result produce
+        ERROR events; the backend short-circuits on the first one. The critical
+        property is that NO assistant/done event is emitted (which is what
+        previously made the failure look like a successful reply)."""
+        messages = [
+            MSG_SYSTEM_INIT,
+            MSG_ASSISTANT_SYNTHETIC_ERROR,
+            MSG_RESULT_ERROR_SUCCESS_SUBTYPE,
+        ]
+
+        events = []
+        for msg in messages:
+            event = transformer.translate(msg, SESSION_ID)
+            if event is not None:
+                events.append(event)
+
+        types = [e.type for e in events]
+        # No normal ASSISTANT text, no DONE — only ERROR events
+        assert SDKEventType.ASSISTANT not in types
+        assert SDKEventType.DONE not in types
+        assert all(t == SDKEventType.ERROR for t in types)
+        assert len(events) == 2  # synthetic assistant + result, both errors
 
     def test_multi_tool_conversation(self, transformer):
         """Multiple sequential tool calls in one conversation."""
