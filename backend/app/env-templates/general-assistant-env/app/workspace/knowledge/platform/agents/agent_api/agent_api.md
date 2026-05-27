@@ -108,6 +108,8 @@ Typed function parameters, `Query(le=, ge=, regex=)` constraints, and Pydantic `
    token, so B immediately loses access.
 ```
 
+> **Public vs. container URL.** The `base_url`/`spec_url` shown in the UI is the **public** proxy address (built from `FRONTEND_HOST`, e.g. `https://app.example.com/...` or `http://localhost:5173/...` in dev). The copy written into the consumer's `credentials.json` is **rewritten to the container-reachable backend origin** (`AGENT_ENV_BACKEND_URL`, e.g. `http://backend:8000/...`) — because inside the container the public host is not the backend (`localhost` is the container itself). The agent's code always uses the synced value; only the host differs, the path is identical. See [agent_api_tech.md](agent_api_tech.md#url-rewrite-on-env-sync-_rewrite_agent_api_urls_for_env).
+
 ---
 
 ## Token Model
@@ -204,4 +206,4 @@ Deliberately deferred. The open question (plan §6.2): should a bundle ship **on
 
 ---
 
-*Last updated: 2026-05-26*
+*Last updated: 2026-05-27*

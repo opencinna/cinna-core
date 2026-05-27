@@ -204,6 +204,12 @@ class Settings(BaseSettings):
     # Docker Network
     DOCKER_NETWORK_NAME: str = "agent-bridge"
 
+    # Container-reachable backend origin (Docker network service name).
+    # Injected into each agent env's .env as BACKEND_URL, and used to rewrite
+    # agent_api proxy URLs so consumer containers call the backend over the
+    # internal network instead of the public FRONTEND_HOST.
+    AGENT_ENV_BACKEND_URL: str = "http://backend:8000"
+
     # Agent Authentication
     # Token for backend to authenticate with agent containers
     AGENT_AUTH_TOKEN: str = secrets.token_urlsafe(32)

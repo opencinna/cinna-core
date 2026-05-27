@@ -38,12 +38,14 @@ Business rules tested:
   23. Deleting the agent_api credential disconnects (cascade-deletes the token → 401)
 """
 import uuid
+from urllib.parse import urlsplit
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models import AgentEnvironment
+from app.services.credentials.credentials_service import CredentialsService
 from app.services.environments.environment_service import EnvironmentService
 from tests.stubs.environment_adapter_stub import EnvironmentTestAdapter
 from tests.utils.agent import create_agent_via_api, update_agent
@@ -1282,6 +1284,63 @@ def test_agent_api_credential_syncs_to_consumer_agent(
     assert any(
         c.get("id") == cred_id for c in linked_creds
     ), f"Credential not found in agent credentials: {linked_creds}"
+
+
+def test_agent_api_urls_rewritten_to_internal_backend_for_env_sync(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    """
+    The stored agent_api credential holds the PUBLIC proxy URL (built from
+    FRONTEND_HOST), but when prepared for an agent environment the host is
+    rewritten to the container-reachable backend origin (AGENT_ENV_BACKEND_URL),
+    preserving the /api/v1/agent-api/{id}[/openapi.json] path. Without this a
+    consumer container calling base_url (e.g. http://localhost:5173 in local
+    dev) would fail — localhost is the container itself, not the backend.
+    """
+    # Producer with API enabled + a consumer agent linked via the connect helper.
+    producer = _setup_api_agent(client, superuser_token_headers, name="Rewrite Producer")
+    producer_id = producer["id"]
+    consumer = create_agent_via_api(client, superuser_token_headers, name="Rewrite Consumer")
+    drain_tasks()
+    consumer_id = consumer["id"]
+
+    token = _mint_token(
+        client,
+        superuser_token_headers,
+        producer_id,
+        label="rewrite",
+        consumer_agent_id=consumer_id,
+    )
+    stored_base_url = token["base_url"]  # public URL from the connect response
+    stored_spec_url = token["spec_url"]
+
+    # Prepare creds for the consumer env → agent_api URLs rewritten to internal backend.
+    prepared = CredentialsService.prepare_credentials_for_environment(
+        db, uuid.UUID(consumer_id)
+    )
+    api_creds = [c for c in prepared["credentials_json"] if c["type"] == "agent_api"]
+    assert len(api_creds) == 1, f"expected one synced agent_api cred, got {api_creds}"
+    synced = api_creds[0]["credential_data"]
+
+    internal_netloc = urlsplit(settings.AGENT_ENV_BACKEND_URL).netloc
+    # Host swapped to the container-reachable backend ...
+    assert urlsplit(synced["base_url"]).netloc == internal_netloc
+    assert urlsplit(synced["spec_url"]).netloc == internal_netloc
+    # ... path preserved (still targets this producer + the spec endpoint).
+    assert urlsplit(synced["base_url"]).path == urlsplit(stored_base_url).path
+    assert producer_id in synced["base_url"]
+    assert synced["spec_url"].endswith("/openapi.json")
+    # Token unchanged by the rewrite.
+    assert synced["token"] == token["token"]
+
+    # The STORED credential keeps the public URL (UI display is unaffected).
+    cred = get_credential_with_data(
+        client, superuser_token_headers, token["credential_id"]
+    )
+    assert cred["credential_data"]["base_url"] == stored_base_url
+    assert cred["credential_data"]["spec_url"] == stored_spec_url
 
 
 # ── G. Connect helper ─────────────────────────────────────────────────────────

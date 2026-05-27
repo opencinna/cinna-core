@@ -6,8 +6,10 @@ import json
 import copy
 import logging
 import re
+from urllib.parse import urlsplit, urlunsplit
 from sqlmodel import Session, select
 from sqlalchemy import func as func_sql
+from app.core.config import settings
 from app.core.security import encrypt_field, decrypt_field
 from app.core.ssh_key_utils import (
     calculate_fingerprint,
@@ -547,6 +549,48 @@ class CredentialsService:
             "project_id": credential_data.get("project_id", ""),
             "client_email": credential_data.get("client_email", ""),
         }
+
+    @staticmethod
+    def _rewrite_agent_api_urls_for_env(credential_data: dict) -> dict:
+        """
+        Rewrite agent_api proxy URLs to the container-reachable backend origin.
+
+        The stored credential holds the PUBLIC proxy URL (built from
+        ``FRONTEND_HOST`` by ``AgentApiTokenService.build_base_url``) so the UI
+        can show a human-clickable address. But a consumer agent reads
+        ``base_url`` from ``credentials.json`` and calls it from INSIDE its
+        Docker container, where the public host (e.g. ``http://localhost:5173``
+        in local dev, or the public domain in prod) is not the backend:
+        ``localhost`` is the container itself, and the public domain may not be
+        resolvable/routable from the agent network.
+
+        The container reaches the backend on the internal Docker network at
+        ``settings.AGENT_ENV_BACKEND_URL`` (the same value injected as
+        ``BACKEND_URL`` into the env's ``.env``). This must be an ORIGIN
+        (scheme://host[:port]); we swap only the scheme+host (netloc),
+        preserving the ``/api/v1/agent-api/{id}[/openapi.json]`` path, so the
+        rewrite is correct regardless of which public host minted the URL.
+
+        If the setting is misconfigured (no host), we leave the stored URL
+        untouched and warn rather than emit a broken ``:///...`` URL.
+        """
+        rewritten = copy.deepcopy(credential_data)
+        internal = urlsplit(settings.AGENT_ENV_BACKEND_URL.rstrip("/"))
+        if not internal.netloc:
+            logger.warning(
+                "AGENT_ENV_BACKEND_URL (%r) has no host; skipping agent_api URL rewrite",
+                settings.AGENT_ENV_BACKEND_URL,
+            )
+            return rewritten
+        for field in ("base_url", "spec_url"):
+            value = rewritten.get(field)
+            if not value:
+                continue
+            parts = urlsplit(value)
+            rewritten[field] = urlunsplit(
+                (internal.scheme, internal.netloc, parts.path, parts.query, parts.fragment)
+            )
+        return rewritten
 
     @staticmethod
     def filter_credential_data_for_agent_env(credential_type: str, credential_data: dict) -> dict:
@@ -1105,6 +1149,17 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                     cred["id"],
                     blob.get("fingerprint", ""),
                     blob.get("key_type", ""),
+                )
+
+        # Rewrite agent_api proxy URLs to the container-reachable backend origin.
+        # The stored credential keeps the PUBLIC URL (for UI display); inside the
+        # container the consumer must call the backend over the internal Docker
+        # network, not the public FRONTEND_HOST. Done before filtering so the
+        # whitelist (base_url/spec_url) and the README both carry the rewritten URL.
+        for cred in credentials:
+            if cred["type"] == "agent_api" and cred.get("credential_data"):
+                cred["credential_data"] = CredentialsService._rewrite_agent_api_urls_for_env(
+                    cred["credential_data"]
                 )
 
         # Filter out sensitive fields that should never be exposed to agent environment

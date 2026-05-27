@@ -24,6 +24,7 @@ import hashlib
 import json
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -162,9 +163,12 @@ class AgentApiSupervisor:
 
         # Use the isolated venv's interpreter for the harvest too, so the
         # import-only harvest can import the agent's extra deps. Zero-install
-        # falls back to the base interpreter. A venv-install failure here is
+        # falls back to env-core's own interpreter (``sys.executable``) — NOT a
+        # bare ``python`` on PATH, which on this base image resolves to a
+        # different interpreter that lacks fastapi/pydantic (env-core runs from
+        # ``/app/.venv`` via ``fastapi run``). A venv-install failure here is
         # recorded as the boot error and surfaced to the owner.
-        python_cmd = "python"
+        python_cmd = sys.executable
         try:
             venv_python = await self._ensure_venv()
         except Exception as exc:
@@ -237,7 +241,14 @@ class AgentApiSupervisor:
         # failure we record the boot error and bail — the child is NOT spawned,
         # so a broken requirements file surfaces as an error state rather than a
         # crashing child.
-        uvicorn_cmd = ["uvicorn"]
+        #
+        # Zero-install default runs uvicorn via env-core's own interpreter
+        # (``sys.executable``), NOT a bare ``uvicorn``/``python`` on PATH: on
+        # this base image env-core runs from ``/app/.venv`` (via ``fastapi
+        # run``) and a bare ``uvicorn`` is not on PATH while the default
+        # ``python`` lacks fastapi — so a bare command crashes the child (502 →
+        # consumer sees 503).
+        uvicorn_cmd = [sys.executable, "-m", "uvicorn"]
         try:
             venv_python = await self._ensure_venv()
         except Exception as exc:  # defensive — never let venv setup crash env-core

@@ -23,7 +23,8 @@
 - `backend/app/services/agent_api/agent_api_token_service.py` — `AgentApiTokenService`
 - `backend/app/services/environments/adapters/docker_adapter.py` — `get_agent_api_status()`, `get_agent_api_spec()`, `proxy_agent_api()`
 - `backend/app/services/environments/environment_lifecycle.py` — `agent_api/` added to `dirs_to_copy`
-- `backend/app/services/credentials/credentials_service.py` — `AGENT_ENV_ALLOWED_FIELDS["agent_api"]` + `SENSITIVE_FIELDS["agent_api"]`
+- `backend/app/services/credentials/credentials_service.py` — `AGENT_ENV_ALLOWED_FIELDS["agent_api"]` + `SENSITIVE_FIELDS["agent_api"]` + `_rewrite_agent_api_urls_for_env()` (swaps the stored public URL host for `AGENT_ENV_BACKEND_URL` on env sync)
+- `backend/app/core/config.py` — `AGENT_ENV_BACKEND_URL` (container-reachable backend origin; also the env's `BACKEND_URL`)
 
 ### Backend — Migrations
 
@@ -121,6 +122,14 @@ Indexes: unique on `token_hash`; btree on `agent_id`; btree on `credential_id`.
 ### `SENSITIVE_FIELDS["agent_api"]`
 
 `["token"]` — the proxy token is redacted (`***REDACTED***`) when the platform writes `README.md` / credential summaries injected into the agent's building prompt. `base_url` and `spec_url` are shown in clear (they are safe to display; the consumer needs to know where to call).
+
+### URL rewrite on env sync (`_rewrite_agent_api_urls_for_env`)
+
+The credential **stores** the public proxy URL (`{FRONTEND_HOST}/api/v1/agent-api/{id}`, built by `AgentApiTokenService.build_base_url`) so the UI shows a human-clickable address. But a consumer agent reads `base_url` from `credentials.json` and calls it **from inside its Docker container**, where the public host is not the backend — `http://localhost:5173` (local dev) resolves to the container itself, and the public domain may not be routable from the agent network.
+
+`prepare_credentials_for_environment` therefore rewrites `agent_api` `base_url`/`spec_url` **before filtering**: it swaps only the scheme+host (netloc) to `settings.AGENT_ENV_BACKEND_URL` (the same value injected as `BACKEND_URL` into the env's `.env`), preserving the `/api/v1/agent-api/{id}[/openapi.json]` path. The rewrite happens only on the env-synced copy (and the matching README) — the stored credential and the credential detail UI keep the public URL. Both write paths (initial env creation in `environment_lifecycle.py` and `sync_credentials_to_agent_environments`) flow through `prepare_credentials_for_environment`, so every `credentials.json` write is covered.
+
+`AGENT_ENV_BACKEND_URL` (config.py, default `http://backend:8000`) is the single source of truth for the container-reachable backend origin, used both here and as the env's `BACKEND_URL`.
 
 ---
 
@@ -272,6 +281,7 @@ Discovery (`discovery.py`, `build_app(base_url)`): env-core imports every `*.py`
 - **Import-only spec harvest:** `harvest_spec()` runs `python -m core.cinna_api.harvest` in a short-lived subprocess (timeout `HARVEST_TIMEOUT=30s`). This imports the agent modules and calls `app.openapi()` WITHOUT spawning the serving child, then writes a single JSON object to stdout (`{"ok": true, "spec": …}` or `{"ok": false, "error": …, "traceback": …}`); the supervisor `json.loads` it. `harvest.py` wraps the build+`openapi()` in `contextlib.redirect_stdout(sys.stderr)` so any agent `print`, library logging, or warning (e.g. FastAPI's "Duplicate Operation ID") goes to stderr and can **never** corrupt the stdout JSON channel — the prior cause of the cryptic "spec harvest produced no JSON. stderr: …" failure. The final JSON is written to the saved real stdout. Errors are captured in `_boot_error`.
 - **Reload notification:** after a child restart or harvest, `notify_backend_reload()` posts to `{BACKEND_URL}/api/v1/environments/{ENV_ID}/agent-api-reloaded` so the backend re-harvests and re-caches the spec (and emits `AGENT_API_STATUS_CHANGED`).
 - **Optional isolated venv:** if `agent_api/requirements.txt` exists, `_ensure_venv()` creates `agent_api/.venv` via `uv venv --system-site-packages` and installs deps with `uv pip install -r requirements.txt`. Install timeout: `VENV_INSTALL_TIMEOUT=180s`. A requirements hash marker (`agent_api/.venv/.cinna_req_sha256`) skips reinstall when the file is unchanged. Zero-install (no requirements.txt) is the MVP fast path.
+  - **Interpreter for harvest + child:** when there is no requirements venv, both the harvest subprocess and the uvicorn child run under **`sys.executable`** (env-core's own interpreter), NOT a bare `python`/`uvicorn` from `PATH`. On the agent base image env-core runs from `/app/.venv` (via `fastapi run`), so a bare `uvicorn` is not on `PATH` and the default `/usr/local/bin/python` lacks fastapi — a bare command crashes the child, env-core returns `502`, and the consumer sees `503`. Using `sys.executable` guarantees the child/harvest share env-core's deps.
 
 ### Env-Core Routes (`server/routes.py`)
 
@@ -367,4 +377,4 @@ Event `meta` payload:
 
 ---
 
-*Last updated: 2026-05-26*
+*Last updated: 2026-05-27*
