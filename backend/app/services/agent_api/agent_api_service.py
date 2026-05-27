@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 import yaml
 from sqlmodel import Session
 
+from app.core.db import create_session
 from app.models import Agent, AgentEnvironment
 
 if TYPE_CHECKING:
@@ -51,6 +52,20 @@ HOP_DEPTH_HEADER = "x-cinna-agent-api-hop-depth"     # nested-call counter
 MAX_HOP_DEPTH = 4                                     # reject beyond N nested calls
 DEFAULT_DEADLINE_MS = 60_000                          # 60 s top-level budget
 HOP_DEADLINE_SHRINK_MS = 1_000                        # subtract per hop
+
+# Cold-start grace window. When a consumer hits a suspended/stopped producer
+# env, we kick off activation and block the request for up to this long waiting
+# for the container to come up, then forward the call — so the first call after
+# an idle period just takes a little longer instead of failing. Container starts
+# are usually fast; if activation fails or exceeds the budget we return a proper
+# 503 (the consumer retries, by which point the env is typically already up).
+ACTIVATION_WAIT_SECONDS = 10.0
+ACTIVATION_POLL_INTERVAL = 0.5                        # status re-check cadence
+
+# Env statuses that a consumer request can wake on its own — a suspended or
+# stopped producer env is auto-activated; any other non-running status
+# (creating / error / unknown) is not something we kick off here.
+WAKEABLE_ENV_STATUSES = ("suspended", "stopped")
 
 # In-process sliding-window rate-limit state: token_id -> list[monotonic ts].
 # A backstop, not the primary defence (the deadline + hop-depth limit are). This
@@ -227,15 +242,17 @@ class AgentApiService:
         session.commit()
 
     @staticmethod
-    async def auto_activate_if_suspended(
+    async def auto_activate_if_wakeable(
         session: Session,
         agent: Agent,
         environment: AgentEnvironment | None,
     ) -> dict:
         """
         Return a readiness status dict for the producer env, auto-activating it
-        when suspended. Reuses the webapp auto-activation path so consumers get
-        the same ``activating`` → ``running`` semantics.
+        when suspended or stopped. Reuses ``EnvironmentService.activate_environment``
+        (which internally starts the container, handling both the suspended and
+        stopped cases) so consumers get the same ``activating`` → ``running``
+        semantics as a chat message.
 
         Returns a dict with ``status`` (running | activating | error) and a
         human-readable ``message``.
@@ -249,7 +266,7 @@ class AgentApiService:
         if environment.status in ("creating", "starting", "activating"):
             return {"status": "activating", "message": "Producer environment is starting"}
 
-        if environment.status == "suspended":
+        if environment.status in WAKEABLE_ENV_STATUSES:
             try:
                 await EnvironmentService.activate_environment(
                     session, agent.id, environment.id
@@ -273,10 +290,18 @@ class AgentApiService:
         Resolve + auto-activate the producer's env on the PRODUCER's behalf.
 
         The token's owner is the producer, so we resolve as that owner and the
-        webapp env-selection rule applies unchanged. If the env exists but is not
-        running, kick off auto-activation and raise ``AgentApiNotRunningError``
-        (the consumer is expected to retry — same contract as a suspended
-        container).
+        webapp env-selection rule applies unchanged.
+
+        - **Fast path:** the env is already running → return it immediately.
+        - **Cold path:** the env is suspended / stopped / mid-activation → kick
+          off activation and block up to ``ACTIVATION_WAIT_SECONDS`` for it to
+          come up, then return the now-running env so the caller can forward the
+          request. The consumer's first call after an idle period just takes a
+          little longer; subsequent calls hit the fast path.
+
+        Raises ``AgentApiNotRunningError`` (503) only when activation errors out
+        or the env is still not running after the grace window — the consumer
+        retries, by which point the env is typically already up.
         """
         try:
             _agent, environment = AgentApiService.resolve_producer_environment(
@@ -288,15 +313,82 @@ class AgentApiService:
             )
             return environment
         except AgentApiNotRunningError:
-            environment = None
-            if agent.active_environment_id:
-                environment = session.get(AgentEnvironment, agent.active_environment_id)
-            status = await AgentApiService.auto_activate_if_suspended(
-                session, agent, environment
-            )
+            pass
+
+        environment = None
+        if agent.active_environment_id:
+            environment = session.get(AgentEnvironment, agent.active_environment_id)
+        if environment is None:
+            raise AgentApiNotRunningError("No active environment")
+
+        # Kick off activation (handles suspended / stopped / already in-progress).
+        status = await AgentApiService.auto_activate_if_wakeable(
+            session, agent, environment
+        )
+        if status["status"] == "running":
+            return environment
+        if status["status"] == "error":
             raise AgentApiNotRunningError(
-                status.get("message", "Producer environment is starting")
+                status.get("message", "Producer environment is not running")
             )
+
+        # status == "activating" → block briefly for the container to come up.
+        return await AgentApiService._wait_for_running_env(session, environment.id)
+
+    @staticmethod
+    async def _wait_for_running_env(
+        session: Session,
+        environment_id: uuid.UUID,
+    ) -> AgentEnvironment:
+        """
+        Block until the env reaches ``running`` (up to ``ACTIVATION_WAIT_SECONDS``).
+
+        Each poll reads the status through a short-lived ``create_session()`` —
+        a fresh session per iteration — for two reasons: (1) it does not pin the
+        request's pooled connection across the ``asyncio.sleep`` (the connection
+        is released before each wait, so concurrent cold starts can't starve the
+        pool), and (2) background activation commits its status transitions in
+        its own session, which a fresh read observes. This mirrors
+        ``SessionService._wait_for_environment_ready``. The status is checked
+        once before the first sleep, so an already-ready env returns without a
+        polling delay. On success the now-running env is re-read into the
+        caller's ``session`` (and ``refresh``ed) so ``update_last_activity`` and
+        the adapter lookup operate on a bound, fresh instance.
+
+        Raises ``AgentApiNotRunningError`` (503) if activation fails (env →
+        ``error``) or the grace window elapses before the env is running — the
+        consumer retries, by which point the env is typically up.
+        """
+        import asyncio
+        import time
+
+        deadline = time.monotonic() + ACTIVATION_WAIT_SECONDS
+        while True:
+            with create_session() as poll_db:
+                env = poll_db.get(AgentEnvironment, environment_id)
+                if env is None:
+                    raise AgentApiNotRunningError("Producer environment no longer exists")
+                status = env.status
+                status_message = env.status_message
+
+            if status == "running":
+                break
+            if status == "error":
+                raise AgentApiNotRunningError(
+                    status_message or "Producer environment failed to start"
+                )
+            if time.monotonic() >= deadline:
+                raise AgentApiNotRunningError(
+                    "Producer environment is still starting; retry shortly"
+                )
+            await asyncio.sleep(ACTIVATION_POLL_INTERVAL)
+
+        # Re-bind the running env to the request session for the caller.
+        env = session.get(AgentEnvironment, environment_id)
+        if env is None:
+            raise AgentApiNotRunningError("Producer environment no longer exists")
+        session.refresh(env)
+        return env
 
     @staticmethod
     async def authorize_consumer_request(

@@ -67,7 +67,7 @@ Chain: `aa11 → aa22 → aa33 → aa44`. These migrations were authored togethe
 
 ### Tests
 
-- `backend/tests/api/agents/agents_agent_api_test.py` — 26 scenario-based API tests (see test coverage section below)
+- `backend/tests/api/agents/agents_agent_api_test.py` — 31 scenario-based API tests (see test coverage section below)
 
 ---
 
@@ -177,8 +177,9 @@ Agent disabled or not found → `404` (no existence leak). Invalid/revoked token
 **Environment resolution:**
 - `resolve_producer_environment(session, agent_id, user_id, is_superuser, require_agent_api_enabled)` — delegates to `WebappService.resolve_agent_environment()` verbatim (same env-selection rule, stable across blue-green swap/rebuild), then re-checks `agent_api_enabled`. Raises `AgentApiNotFoundError` (404), `AgentApiDisabledError` (400), `AgentApiNotRunningError` (503).
 - `resolve_agent_only(session, agent_id, user_id, is_superuser)` — resolves + ownership-checks the agent without requiring a running env. Used by `_status`.
-- `resolve_running_producer_env(session, agent)` — resolves on behalf of the producer owner; auto-activates a suspended env and raises `AgentApiNotRunningError` (consumer retries).
-- `authorize_consumer_request(session, agent, token, method, path, body_size, incoming_headers)` → `(environment, hop_headers)` — orchestrates: load cached policy → enforce it → compute request-loop headers → resolve+activate env. Policy enforcement runs BEFORE env resolution so a 405/413/429 never wakes a suspended env.
+- `resolve_running_producer_env(session, agent)` — resolves on behalf of the producer owner. **Fast path:** env running → return it. **Cold path:** env suspended/stopped/mid-activation → kick off activation and **block up to `ACTIVATION_WAIT_SECONDS` (10s)** for the container to come up, then return the now-running env so the call is forwarded (the consumer's first call after idle just takes a little longer; subsequent calls hit the fast path). Raises `AgentApiNotRunningError` (503) only when activation errors or the env is still not running after the grace window (consumer retries — by then the env is typically up).
+- `_wait_for_running_env(session, environment_id)` — polls the env status every `ACTIVATION_POLL_INTERVAL` (0.5s) until `running`. Each poll reads through a **short-lived `create_session()`** (fresh session per iteration) — this releases the connection before each `asyncio.sleep` (so concurrent cold starts can't pin/starve the pool) and observes the background activation task's commits (it runs in its own session). Mirrors `SessionService._wait_for_environment_ready`. Status is checked once *before* the first sleep, so an already-ready env returns with no polling delay; on success the env is re-read + `refresh`ed into the request `session` for the caller. Raises `AgentApiNotRunningError` (503) on `error` status or when the 10s budget elapses.
+- `authorize_consumer_request(session, agent, token, method, path, body_size, incoming_headers)` → `(environment, hop_headers)` — orchestrates: load cached policy → enforce it → compute request-loop headers → resolve + auto-activate-and-wait for env. Policy enforcement runs BEFORE env resolution so a 405/413/429 never wakes a suspended env.
 
 **Status and spec:**
 - `get_status(session, agent, environment)` → `dict` — reports `state` of `disabled` | `not_running` | `running` | `error`, spec availability, last error, policy summary. Never spawns the serving child.
@@ -188,7 +189,7 @@ Agent disabled or not found → `404` (no existence leak). Invalid/revoked token
 
 **Keep-alive and activation:**
 - `update_last_activity(session, environment)` — bumps `last_activity_at` so the suspension scheduler respects active API consumers, exactly like the webapp.
-- `auto_activate_if_suspended(session, agent, environment)` → `dict` — reuses `EnvironmentService.activate_environment()`; returns `{status: activating|running|error, message}`.
+- `auto_activate_if_wakeable(session, agent, environment)` → `dict` — kicks off activation for an env in any `WAKEABLE_ENV_STATUSES` (`"suspended"`, `"stopped"`) via `EnvironmentService.activate_environment()` (which internally starts the container for both cases); returns `{status: activating|running|error, message}`. `creating`/`starting`/`activating` report `activating` without re-kicking; any other status reports `error`.
 
 **Policy:**
 - `load_policy(session, environment, force_refresh)` → `dict` — fetches `agent_api/policy.yaml` via the adapter, parses it, caches on `agent_api_policy_cache`. Missing file → `DEFAULT_POLICY`. Parse error → `FAIL_CLOSED_POLICY` (deny-all).
@@ -214,6 +215,9 @@ Agent disabled or not found → `404` (no existence leak). Invalid/revoked token
 - `MAX_HOP_DEPTH = 4`
 - `DEFAULT_DEADLINE_MS = 60_000`
 - `HOP_DEADLINE_SHRINK_MS = 1_000`
+- `ACTIVATION_WAIT_SECONDS = 10.0` — cold-start grace window: how long a consumer request blocks waiting for a suspended/stopped producer env to come up before returning 503
+- `ACTIVATION_POLL_INTERVAL = 0.5` — env-status re-check cadence during the cold-start wait
+- `WAKEABLE_ENV_STATUSES = ("suspended", "stopped")` — env statuses a consumer request will auto-activate
 - `DEFAULT_POLICY` — `{read_only: true, auth: required, max_body_bytes: 10MB, rate_limit: "60/min", expose_spec: true, allowed_paths: ["*"]}`
 - `FAIL_CLOSED_POLICY` — deny-all (`allowed_methods: []`, `rate_limit: "0/min"`, `expose_spec: false`, `allowed_paths: []`)
 
@@ -351,7 +355,7 @@ Event `meta` payload:
 
 ## Test Coverage
 
-`backend/tests/api/agents/agents_agent_api_test.py` — 26 scenario-based API tests. Tokens are minted via the connect helper (the raw token is read back from the created credential's data, exactly as a consumer obtains it); "revoke" = delete the credential. Covered:
+`backend/tests/api/agents/agents_agent_api_test.py` — 31 scenario-based API tests. Tokens are minted via the connect helper (the raw token is read back from the created credential's data, exactly as a consumer obtains it); "revoke" = delete the credential. Covered:
 
 - Toggle gates routes (404 when disabled); `_status` reports `disabled` regardless
 - Connect mints a token + creates an `agent_api` credential (prefix + base_url + spec_url); raw token readable only from the credential's decrypted data
@@ -365,6 +369,10 @@ Event `meta` payload:
 - Spec passthrough reflects stubbed live app spec
 - Owner proxy passthrough GET + auto-activates suspended env
 - Consumer proxy GET passthrough succeeds
+- Cold start: consumer call to a **suspended** producer env auto-activates, waits up to the grace window, then forwards (200)
+- Cold start: consumer call to a **stopped** producer env auto-activates too (parity with suspended)
+- Cold start: activation failure (env → `error`) → consumer gets 503
+- Cold start: env still not running after the grace window → consumer gets 503
 - `agent_api` credential whitelist exposes correct fields; `token` is redacted in README
 - `agent_api` credential syncs into consumer container
 - Connect helper blocked when `agent_api_enabled=false` (400); requires producer ownership (404)

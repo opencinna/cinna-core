@@ -101,8 +101,12 @@ Typed function parameters, `Query(le=, ge=, regex=)` constraints, and Pydantic `
 5. Agent B reads base_url + token from credentials.json,
    fetches {base_url}/openapi.json to discover the API,
    and calls endpoints with Bearer token.
-   The proxy validates, enforces policy, auto-activates A's env,
-   and forwards to A's child app.
+   The proxy validates, enforces policy, and resolves A's env. If A's env is
+   suspended or stopped (idle), the proxy auto-activates it and waits up to 10s
+   for it to come up, then forwards the call — so B's first call after an idle
+   period just takes a little longer, and the rest are fast. If A's env fails to
+   start, or is still booting after 10s, B gets a 503 and retries (by which
+   point A's env is typically already running).
 6. To disconnect, delete the agent_api credential (from the producer card's
    connection list or the credential detail page). This cascade-deletes the
    token, so B immediately loses access.

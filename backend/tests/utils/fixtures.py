@@ -41,6 +41,7 @@ CREATE_SESSION_TARGETS_AGENT = CREATE_SESSION_TARGETS_BASE + [
     "app.services.tasks.input_task_service.create_session",
     "app.services.agents.commands.files_command.create_session",
     "app.services.events.activity_service.create_session",
+    "app.services.agent_api.agent_api_service.create_session",
 ]
 
 BACKGROUND_TASK_TARGETS_BASE = [

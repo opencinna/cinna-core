@@ -36,6 +36,10 @@ Business rules tested:
   21. Ownership guard: non-owner cannot connect / read connection → 404
   22. Connection-info endpoint reports producer + consumers + read_only
   23. Deleting the agent_api credential disconnects (cascade-deletes the token → 401)
+  24. Cold start: consumer call to a SUSPENDED producer env auto-activates, waits, forwards (200)
+  25. Cold start: consumer call to a STOPPED producer env auto-activates too (parity)
+  26. Cold start: activation failure (env → error) → consumer gets 503
+  27. Cold start: env still not running after the grace window → consumer gets 503
 """
 import uuid
 from urllib.parse import urlsplit
@@ -48,7 +52,7 @@ from app.models import AgentEnvironment
 from app.services.credentials.credentials_service import CredentialsService
 from app.services.environments.environment_service import EnvironmentService
 from tests.stubs.environment_adapter_stub import EnvironmentTestAdapter
-from tests.utils.agent import create_agent_via_api, update_agent
+from tests.utils.agent import create_agent_via_api, get_agent, update_agent
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.credential import (
     get_credential_with_data,
@@ -1596,3 +1600,206 @@ def test_owner_routes_unauthenticated_rejected(
     ).status_code in (401, 403)
     assert client.get(_status_url(agent_id)).status_code in (401, 403)
     assert client.get(_owner_spec_url(agent_id)).status_code in (401, 403)
+
+
+# ── K. Cold-start auto-wake (consumer call to a suspended/stopped producer) ──
+#
+# When a consumer calls a producer whose env is suspended or stopped, the proxy
+# kicks off activation and blocks up to ACTIVATION_WAIT_SECONDS for it to come
+# up, then forwards the call — so the first call after idle just takes a little
+# longer and subsequent calls are fast. Activation failure or exceeding the
+# grace window returns 503.
+#
+# In the test harness the request shares the per-test ``db`` session (see
+# conftest), so we set the producer env status directly on it and patch
+# EnvironmentService.activate_environment to flip the status the way the real
+# background activation task would (committing on the same session).
+
+
+def _producer_env_id(client, headers, agent_id: str) -> uuid.UUID:
+    """Resolve the producer agent's active environment id."""
+    agent = get_agent(client, headers, agent_id)
+    return uuid.UUID(agent["active_environment_id"])
+
+
+def _set_env_status(db: Session, env_id: uuid.UUID, status: str, message: str | None = None) -> None:
+    env = db.get(AgentEnvironment, env_id)
+    assert env is not None, f"env {env_id} not found in test db"
+    env.status = status
+    if message is not None:
+        env.status_message = message
+    db.add(env)
+    db.commit()
+
+
+def _activate_stub(target_status: str, message: str | None = None, calls: list | None = None):
+    """Build a replacement for EnvironmentService.activate_environment that flips
+    the env to ``target_status`` on the passed session (mimics the background
+    activation task) and records that it was called."""
+
+    async def _fake(session, agent_id, env_id):
+        if calls is not None:
+            calls.append((agent_id, env_id))
+        env = session.get(AgentEnvironment, env_id)
+        env.status = target_status
+        if message is not None:
+            env.status_message = message
+        session.add(env)
+        session.commit()
+        return env
+
+    return _fake
+
+
+def test_consumer_proxy_auto_wakes_suspended_env(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+    monkeypatch,
+) -> None:
+    """Suspended producer env → proxy auto-activates, waits, then forwards (200)."""
+    agent = _setup_api_agent(client, superuser_token_headers, name="Wake Suspended Agent")
+    agent_id = agent["id"]
+    token = _mint_token(client, superuser_token_headers, agent_id, label="wake-suspended")
+    env_id = _producer_env_id(client, superuser_token_headers, agent_id)
+
+    _set_env_status(db, env_id, "suspended")
+
+    activate_calls: list = []
+    monkeypatch.setattr(
+        EnvironmentService,
+        "activate_environment",
+        _activate_stub("running", calls=activate_calls),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_api.agent_api_service.ACTIVATION_POLL_INTERVAL", 0.1
+    )
+
+    persistent = EnvironmentTestAdapter()
+    lm = EnvironmentService._lifecycle_manager
+    original_get_adapter = lm.get_adapter
+    lm.get_adapter = lambda env: persistent
+    try:
+        r = client.get(
+            _consumer_proxy_url(agent_id, "orders"),
+            headers=_bearer_headers(token["token"]),
+        )
+        assert r.status_code == 200, r.text
+        assert r.json().get("method") == "GET"
+        # Auto-activation was actually triggered (env wasn't already running).
+        assert len(activate_calls) == 1
+        # And the call was forwarded to the now-running env.
+        assert len(persistent.agent_api_proxy_calls) == 1
+    finally:
+        lm.get_adapter = original_get_adapter
+
+
+def test_consumer_proxy_auto_wakes_stopped_env(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+    monkeypatch,
+) -> None:
+    """Stopped producer env → proxy auto-activates it too (parity with suspended)."""
+    agent = _setup_api_agent(client, superuser_token_headers, name="Wake Stopped Agent")
+    agent_id = agent["id"]
+    token = _mint_token(client, superuser_token_headers, agent_id, label="wake-stopped")
+    env_id = _producer_env_id(client, superuser_token_headers, agent_id)
+
+    _set_env_status(db, env_id, "stopped")
+
+    activate_calls: list = []
+    monkeypatch.setattr(
+        EnvironmentService,
+        "activate_environment",
+        _activate_stub("running", calls=activate_calls),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_api.agent_api_service.ACTIVATION_POLL_INTERVAL", 0.1
+    )
+
+    persistent = EnvironmentTestAdapter()
+    lm = EnvironmentService._lifecycle_manager
+    original_get_adapter = lm.get_adapter
+    lm.get_adapter = lambda env: persistent
+    try:
+        r = client.get(
+            _consumer_proxy_url(agent_id, "orders"),
+            headers=_bearer_headers(token["token"]),
+        )
+        assert r.status_code == 200, r.text
+        assert len(activate_calls) == 1
+        assert len(persistent.agent_api_proxy_calls) == 1
+    finally:
+        lm.get_adapter = original_get_adapter
+
+
+def test_consumer_proxy_activation_failure_returns_503(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+    monkeypatch,
+) -> None:
+    """Producer env transitions to ``error`` during activation → consumer gets 503."""
+    agent = _setup_api_agent(client, superuser_token_headers, name="Wake Fail Agent")
+    agent_id = agent["id"]
+    token = _mint_token(client, superuser_token_headers, agent_id, label="wake-fail")
+    env_id = _producer_env_id(client, superuser_token_headers, agent_id)
+
+    _set_env_status(db, env_id, "suspended")
+
+    monkeypatch.setattr(
+        EnvironmentService,
+        "activate_environment",
+        _activate_stub("error", message="Container failed to boot"),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_api.agent_api_service.ACTIVATION_POLL_INTERVAL", 0.1
+    )
+
+    r = client.get(
+        _consumer_proxy_url(agent_id, "orders"),
+        headers=_bearer_headers(token["token"]),
+    )
+    assert r.status_code == 503, r.text
+    assert "Container failed to boot" in r.json().get("detail", "")
+
+
+def test_consumer_proxy_activation_timeout_returns_503(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+    monkeypatch,
+) -> None:
+    """Env never reaches ``running`` within the grace window → consumer gets 503.
+
+    Mirrors the production contract: the first call holds for the budget while
+    the env is still booting, then returns 503; the consumer retries.
+    """
+    agent = _setup_api_agent(client, superuser_token_headers, name="Wake Timeout Agent")
+    agent_id = agent["id"]
+    token = _mint_token(client, superuser_token_headers, agent_id, label="wake-timeout")
+    env_id = _producer_env_id(client, superuser_token_headers, agent_id)
+
+    _set_env_status(db, env_id, "suspended")
+
+    # Activation kicks off but the container is still "starting" when the budget
+    # elapses. Shrink the window so the test is fast.
+    monkeypatch.setattr(
+        EnvironmentService,
+        "activate_environment",
+        _activate_stub("starting"),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_api.agent_api_service.ACTIVATION_WAIT_SECONDS", 0.6
+    )
+    monkeypatch.setattr(
+        "app.services.agent_api.agent_api_service.ACTIVATION_POLL_INTERVAL", 0.1
+    )
+
+    r = client.get(
+        _consumer_proxy_url(agent_id, "orders"),
+        headers=_bearer_headers(token["token"]),
+    )
+    assert r.status_code == 503, r.text
+    assert "still starting" in r.json().get("detail", "")
