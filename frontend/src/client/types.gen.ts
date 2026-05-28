@@ -2801,6 +2801,17 @@ export type NewPassword = {
     new_password: string;
 };
 
+export type NotificationSettingItem = {
+    notification_type: string;
+    label: string;
+    description: string;
+    email_enabled: boolean;
+};
+
+export type NotificationSettingsPublic = {
+    data: Array<NotificationSettingItem>;
+};
+
 export type OAuthAuthorizeResponse = {
     authorization_url: string;
     state: string;
@@ -3825,6 +3836,10 @@ export type UserInfoResponse = {
     email: string;
     full_name?: (string | null);
     username?: (string | null);
+};
+
+export type UserNotificationSettingUpdate = {
+    email_enabled: boolean;
 };
 
 /**
@@ -6230,6 +6245,15 @@ export type MfaDisableTwoFactorData = {
 };
 
 export type MfaDisableTwoFactorResponse = (Message);
+
+export type NotificationSettingsReadNotificationSettingsResponse = (NotificationSettingsPublic);
+
+export type NotificationSettingsUpdateNotificationSettingData = {
+    notificationType: string;
+    requestBody: UserNotificationSettingUpdate;
+};
+
+export type NotificationSettingsUpdateNotificationSettingResponse = (NotificationSettingItem);
 
 export type OauthGetOauthConfigResponse = (OAuthConfig);
 

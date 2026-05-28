@@ -290,6 +290,14 @@ async def lifespan(app: FastAPI):
     )
 
     logger.info("Registered backend event handlers (EnvironmentService, ActivityService, SessionService, InputTaskService, EmailSendingService)")
+
+    # Availability check for the platform email sender.
+    if not settings.emails_enabled:
+        logger.warning(
+            "Email sending disabled: SMTP_HOST / EMAILS_FROM_EMAIL not set. "
+            "Password reset and system notifications will be skipped."
+        )
+
     logger.info("Application startup complete")
 
     # MCP registry manages per-connector session manager lifecycles.

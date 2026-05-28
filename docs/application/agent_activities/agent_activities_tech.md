@@ -99,7 +99,7 @@ All business logic is in `ActivityService` — routes are thin controllers that 
 **Streaming Lifecycle Methods:**
 - `create_session_running_activity()` — Creates running activity with `input_task_id=session.source_task_id`, emits `ACTIVITY_CREATED`
 - `delete_session_running_activity()` — Deletes running activity, emits `ACTIVITY_DELETED`
-- `create_error_activity()` — Creates error activity with truncated message; includes `input_task_id=session.source_task_id`
+- `create_error_activity()` — Creates error activity with truncated message; includes `input_task_id=session.source_task_id`; also calls `_notify_session_error()` to dispatch the generic `session_error` system notification to the session owner (see [System Notifications tech](../system_notifications/system_notifications_tech.md))
 - `create_completion_activities()` — Creates `session_completed` + optional `questions_asked` with `input_task_id=session.source_task_id`. Skips if session has `result_state` set or status is `"error"`
 - `transition_running_to_completion()` — Deletes running, creates completion activities
 - `transition_running_to_error()` — Deletes running, creates error activity
@@ -109,7 +109,7 @@ All business logic is in `ActivityService` — routes are thin controllers that 
 - `handle_stream_completed()` — `STREAM_COMPLETED` → always creates completion; `is_read=True` when user connected, `is_read=False` when disconnected
 - `handle_stream_error()` — `STREAM_ERROR` → delete running + create `error_occurred` (with `input_task_id`)
 - `handle_stream_interrupted()` — `STREAM_INTERRUPTED` → delete running
-- `handle_session_state_updated()` — `SESSION_STATE_UPDATED` → delete running + create state-specific activity with agent summary and `input_task_id`
+- `handle_session_state_updated()` — `SESSION_STATE_UPDATED` → delete running + create state-specific activity with agent summary and `input_task_id`; when `state="error"`, also calls `_notify_session_error()` to dispatch the `session_error` system notification (see [System Notifications tech](../system_notifications/system_notifications_tech.md))
 - `handle_task_created()` — `TASK_CREATED` → create `email_task_incoming` (email tasks only)
 - `handle_task_status_changed()` — `TASK_STATUS_UPDATED` → task lifecycle activities for ALL tasks + email task activity lifecycle. Reads both `new_status`/`to_status` and `source_agent_id`/`changed_by_agent_id` from event meta (dual-format support). Falls back to `task.selected_agent_id` when no agent in event meta
 

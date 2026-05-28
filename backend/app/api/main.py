@@ -41,6 +41,7 @@ from app.api.routes import (
     mail_servers,
     mfa,
     messages,
+    notification_settings,
     oauth,
     oauth_credentials,
     private,
@@ -99,6 +100,7 @@ api_router.include_router(messages.router)
 api_router.include_router(workspace.router)
 api_router.include_router(user_dashboards.router)
 api_router.include_router(user_workspaces.router)
+api_router.include_router(notification_settings.router)
 api_router.include_router(activities.router)
 api_router.include_router(security_events.router)
 api_router.include_router(events.router)

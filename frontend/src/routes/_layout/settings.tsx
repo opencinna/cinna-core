@@ -8,6 +8,7 @@ import { AppAgentRoutesCard } from "@/components/UserSettings/AppAgentRoutesCard
 import { DesktopSessionsCard } from "@/components/UserSettings/DesktopSessionsCard"
 import { IdentityServerCard } from "@/components/UserSettings/IdentityServerCard"
 import { MailServerSettings } from "@/components/UserSettings/MailServerSettings"
+import { NotificationSettings } from "@/components/UserSettings/NotificationSettings"
 import OAuthAccounts from "@/components/UserSettings/OAuthAccounts"
 import PasswordCard from "@/components/UserSettings/PasswordCard"
 import { SecurityTab } from "@/components/UserSettings/Security/SecurityTab"
@@ -51,7 +52,16 @@ function UserSettings() {
   }
 
   const tabs: TabConfig[] = [
-    { value: "my-profile", title: "My profile", content: <UserInformation /> },
+    {
+      value: "my-profile",
+      title: "My profile",
+      content: (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <UserInformation />
+          <NotificationSettings />
+        </div>
+      ),
+    },
     {
       value: "security",
       title: "Security",

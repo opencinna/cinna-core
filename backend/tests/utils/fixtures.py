@@ -57,6 +57,8 @@ BACKGROUND_TASK_TARGETS_FULL = BACKGROUND_TASK_TARGETS_BASE + [
     "app.utils.create_task_with_error_logging",
     # Route-level import of create_task_with_error_logging (used by auto-execute on task create)
     "app.api.routes.input_tasks.create_task_with_error_logging",
+    # Notification service offloads the blocking SMTP send via this target.
+    "app.services.notifications.notification_service.create_task_with_error_logging",
 ]
 
 

@@ -611,11 +611,71 @@ class ActivityService:
                 }
             )
 
+            # Dispatch the generic session-error notification to the owner.
+            await ActivityService._notify_session_error(
+                db_session=db_session,
+                chat_session=chat_session,
+                agent_id=agent_id,
+                user_id=user_id,
+                error_text=error_message,
+            )
+
             return activity
 
         except Exception as e:
             logger.error(f"Failed to create error activity for session {session_id}: {e}", exc_info=True)
             return None
+
+    @staticmethod
+    async def _notify_session_error(
+        db_session: DBSession,
+        chat_session: "Session",
+        agent_id: UUID | None,
+        user_id: UUID,
+        error_text: str | None,
+    ) -> None:
+        """Build context and dispatch the SESSION_ERROR system notification.
+
+        Failure-isolated: a notification error must never affect activity
+        creation. The recipient is always the session owner (``user_id``).
+        """
+        try:
+            from app.core.config import settings
+            from app.services.notifications.notification_catalog import (
+                NotificationType,
+            )
+            from app.services.notifications.notification_service import (
+                SystemNotificationService,
+            )
+
+            agent_name = "your agent"
+            if agent_id:
+                agent = db_session.get(Agent, agent_id)
+                if agent and agent.name:
+                    agent_name = agent.name
+
+            session_id = chat_session.id
+            context = {
+                "project_name": settings.PROJECT_NAME,
+                "agent_name": agent_name,
+                "session_title": chat_session.title or "Untitled session",
+                "session_id": str(session_id),
+                "error_text": error_text or "Session encountered an error",
+                "link": f"{settings.FRONTEND_HOST}/sessions/{session_id}",
+            }
+
+            await SystemNotificationService.notify(
+                db_session,
+                user_id=user_id,
+                notification_type=NotificationType.SESSION_ERROR,
+                context=context,
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to dispatch session-error notification for "
+                f"session {chat_session.id}: {e}",
+                exc_info=True,
+            )
 
     @staticmethod
     async def create_completion_activities(
@@ -1052,6 +1112,17 @@ class ActivityService:
                         "state": state,
                     }
                 )
+
+                # Agent-declared error: dispatch the session-error notification
+                # to the owner (recipient is always the session owner).
+                if state == "error":
+                    await ActivityService._notify_session_error(
+                        db_session=db,
+                        chat_session=chat_session,
+                        agent_id=agent_id,
+                        user_id=chat_session.user_id,
+                        error_text=summary,
+                    )
 
             logger.info(f"[Event Handler] Created '{activity_type}' activity for session {session_id} (state={state})")
 

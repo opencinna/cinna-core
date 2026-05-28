@@ -13210,6 +13210,45 @@ export const NewPasswordSchema = {
     title: 'NewPassword'
 } as const;
 
+export const NotificationSettingItemSchema = {
+    properties: {
+        notification_type: {
+            type: 'string',
+            title: 'Notification Type'
+        },
+        label: {
+            type: 'string',
+            title: 'Label'
+        },
+        description: {
+            type: 'string',
+            title: 'Description'
+        },
+        email_enabled: {
+            type: 'boolean',
+            title: 'Email Enabled'
+        }
+    },
+    type: 'object',
+    required: ['notification_type', 'label', 'description', 'email_enabled'],
+    title: 'NotificationSettingItem'
+} as const;
+
+export const NotificationSettingsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/NotificationSettingItem'
+            },
+            type: 'array',
+            title: 'Data'
+        }
+    },
+    type: 'object',
+    required: ['data'],
+    title: 'NotificationSettingsPublic'
+} as const;
+
 export const OAuthAuthorizeResponseSchema = {
     properties: {
         authorization_url: {
@@ -17817,6 +17856,18 @@ export const UserInfoResponseSchema = {
     type: 'object',
     required: ['sub', 'email'],
     title: 'UserInfoResponse'
+} as const;
+
+export const UserNotificationSettingUpdateSchema = {
+    properties: {
+        email_enabled: {
+            type: 'boolean',
+            title: 'Email Enabled'
+        }
+    },
+    type: 'object',
+    required: ['email_enabled'],
+    title: 'UserNotificationSettingUpdate'
 } as const;
 
 export const UserPasskeyPublicSchema = {

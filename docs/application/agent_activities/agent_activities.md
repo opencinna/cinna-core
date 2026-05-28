@@ -136,6 +136,7 @@ Activities are created/managed by event handlers registered at app startup:
 - [Streaming](../realtime_events/frontend_backend_agentenv_streaming.md) - `MessageService` emits streaming events that trigger activity creation
 - [Agent Environments](../../agents/agent_environments/agent_environments.md) - Activities resolve agent_id through environment lookup
 - [Agent Handover](../../agents/agent_handover/agent_handover.md) - Direct handovers create target-agent sessions that generate the full session activity lifecycle (running → completed/error), notifying target agent owners of delegated work
+- [System Notifications](../system_notifications/system_notifications.md) - Creating an `error_occurred` activity is the trigger point for the `session_error` system notification. Both error paths (`create_error_activity()` for stream errors and `handle_session_state_updated()` for agent-declared errors) call `ActivityService._notify_session_error()` after the activity is persisted. The notification is a failure-isolated side-effect; the activity is created and the `ACTIVITY_CREATED` event is emitted regardless of whether the notification succeeds.
 
 ## Sidebar Layout
 

@@ -91,13 +91,12 @@ const UserInformation = () => {
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>User Information</CardTitle>
-          <CardDescription>Manage your personal details</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+    <Card>
+      <CardHeader>
+        <CardTitle>User Information</CardTitle>
+        <CardDescription>Manage your personal details</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
           <div className="grid grid-cols-[100px_1fr] items-center gap-x-3 gap-y-4">
             <span className="text-sm font-medium text-right">Username</span>
             <p className={cn("truncate", !currentUser?.username && "text-muted-foreground")}>
@@ -169,9 +168,8 @@ const UserInformation = () => {
             </DialogContent>
             </Dialog>
           </div>
-        </CardContent>
-      </Card>
-    </div>
+      </CardContent>
+    </Card>
   )
 }
 

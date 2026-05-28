@@ -580,6 +580,12 @@ from .bundles.app_data_volume import (
     AppDataVolumePublic,
     AppDataVolumesPublic,
 )
+from .notifications.user_notification_setting import (
+    UserNotificationSetting,
+    UserNotificationSettingUpdate,
+    NotificationSettingItem,
+    NotificationSettingsPublic,
+)
 
 __all__ = [
     # Core
@@ -1080,4 +1086,9 @@ __all__ = [
     "AppDataVolume",
     "AppDataVolumePublic",
     "AppDataVolumesPublic",
+    # System Notifications
+    "UserNotificationSetting",
+    "UserNotificationSettingUpdate",
+    "NotificationSettingItem",
+    "NotificationSettingsPublic",
 ]
