@@ -441,6 +441,163 @@ def test_all_three_sections_coexist(
 
 
 # ---------------------------------------------------------------------------
+# Scenario: cinna.mcp descriptor mirrored in the discovery payload
+# ---------------------------------------------------------------------------
+
+
+def test_discovery_mcp_descriptor_for_personal_agent(
+    client: TestClient,
+    superuser_token_headers: dict,
+) -> None:
+    """
+    A personal agent target carries a populated `mcp` descriptor:
+      1. version == 1, tool_name derived from name
+      2. input_schema omits context_id (desktop is stateful)
+      3. capabilities.files is True, resources is False
+    """
+    agent = create_agent_via_api(
+        client, superuser_token_headers, name="Discovery MCP Agent"
+    )
+    agent_id = agent["id"]
+
+    targets = _list_external_agents(client, superuser_token_headers)
+    target = next(
+        t for t in _targets_by_type(targets, "agent") if t["target_id"] == agent_id
+    )
+
+    mcp = target["mcp"]
+    assert mcp is not None, "Personal agent target must carry an mcp descriptor"
+    assert mcp["version"] == 1
+    assert mcp["tool_name"] == "discovery_mcp_agent"
+    assert mcp["display_name"] == "Discovery MCP Agent"
+    assert "context_id" not in mcp["input_schema"]["properties"]
+    assert mcp["capabilities"]["files"] is True
+    assert mcp["capabilities"]["resources"] is False
+
+
+def test_discovery_mcp_slugs_are_unique_across_response(
+    client: TestClient,
+    superuser_token_headers: dict,
+) -> None:
+    """
+    Two agents with the same name get distinct, deterministic tool_name slugs:
+      1. Create two agents with identical names
+      2. Both carry an mcp descriptor
+      3. Their tool_name slugs differ (deconflicted by agent id)
+      4. Slugs are unique across all targets in the response
+    """
+    a1 = create_agent_via_api(client, superuser_token_headers, name="Twin Agent")
+    a2 = create_agent_via_api(client, superuser_token_headers, name="Twin Agent")
+
+    targets = _list_external_agents(client, superuser_token_headers)
+    agent_targets = _targets_by_type(targets, "agent")
+
+    t1 = next(t for t in agent_targets if t["target_id"] == a1["id"])
+    t2 = next(t for t in agent_targets if t["target_id"] == a2["id"])
+
+    slug1 = t1["mcp"]["tool_name"]
+    slug2 = t2["mcp"]["tool_name"]
+    assert slug1 != slug2, (
+        f"Same-name agents must get distinct slugs, both were {slug1!r}"
+    )
+    # Both should be a deconflicted variant of the shared base slug.
+    assert slug1.startswith("twin_agent")
+    assert slug2.startswith("twin_agent")
+
+    # Determinism: a second fetch yields identical slugs.
+    targets_again = _list_external_agents(client, superuser_token_headers)
+    again = {t["target_id"]: t["mcp"]["tool_name"] for t in targets_again if t["mcp"]}
+    assert again[a1["id"]] == slug1
+    assert again[a2["id"]] == slug2
+
+    # All descriptor slugs across the whole response are unique.
+    all_slugs = [t["mcp"]["tool_name"] for t in targets if t.get("mcp")]
+    assert len(all_slugs) == len(set(all_slugs)), (
+        f"Tool slugs must be unique across the response, got {all_slugs}"
+    )
+
+
+def test_discovery_mcp_for_shared_route_uses_route_identity(
+    client: TestClient,
+    superuser_token_headers: dict,
+) -> None:
+    """A shared-route target's mcp descriptor uses the ROUTE's name/trigger prompt.
+
+    The route name is deliberately distinct from the underlying agent name so
+    this catches descriptor identity divergence: the descriptor's display_name
+    and tool_name must reflect the route name (matching the card path), not the
+    underlying agent name. Mirrors the card test
+    test_route_card_cinna_mcp_uses_route_identity.
+    """
+    caller, caller_headers = create_random_user_with_headers(client)
+    caller_id = caller["id"]
+
+    owner_agent = create_agent_via_api(
+        client, superuser_token_headers, name="Underlying Route Agent"
+    )
+    route = create_admin_route(
+        client,
+        superuser_token_headers,
+        agent_id=owner_agent["id"],
+        name="Discovery Route Display Name",
+        trigger_prompt="Route trigger summary",
+        assigned_user_ids=[caller_id],
+        auto_enable_for_users=True,
+    )
+    route_id = route["id"]
+
+    targets = _list_external_agents(client, caller_headers)
+    route_target = next(
+        t for t in _targets_by_type(targets, "app_mcp_route")
+        if t["target_id"] == route_id
+    )
+
+    mcp = route_target["mcp"]
+    assert mcp is not None, "Shared-route target must carry an mcp descriptor"
+    assert mcp["description"] == "Route trigger summary"
+    # Descriptor identity must come from the route, not the underlying agent.
+    assert mcp["display_name"] == "Discovery Route Display Name", (
+        f"display_name should be the route name, got {mcp['display_name']!r}"
+    )
+    assert mcp["tool_name"] == "discovery_route_display_name", (
+        f"tool_name should derive from the route name, got {mcp['tool_name']!r}"
+    )
+
+
+def test_discovery_mcp_absent_for_identity_contact(
+    client: TestClient,
+    superuser_token_headers: dict,
+) -> None:
+    """Identity contacts are person-level and carry no single-tool mcp descriptor."""
+    caller, caller_headers = create_random_user_with_headers(client)
+    caller_id = caller["id"]
+
+    owner, owner_headers = create_random_user_with_headers(client)
+    owner_id = owner["id"]
+    _promote_to_developer(client, superuser_token_headers, owner_id)
+    _ensure_user_can_create_agents(client, owner_headers)
+    owner_agent = create_agent_via_api(
+        client, owner_headers, name="Identity MCP Agent"
+    )
+    create_identity_binding(
+        client,
+        owner_headers,
+        agent_id=owner_agent["id"],
+        trigger_prompt="Do identity things",
+        assigned_user_ids=[caller_id],
+    )
+    toggle_identity_contact(client, caller_headers, owner_id=owner_id, is_enabled=True)
+
+    targets = _list_external_agents(client, caller_headers)
+    identity_target = next(
+        t for t in _targets_by_type(targets, "identity") if t["target_id"] == owner_id
+    )
+    assert identity_target["mcp"] is None, (
+        "Identity contacts expose agents via card skills, not a single mcp tool"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Helpers for workspace filter tests
 # ---------------------------------------------------------------------------
 

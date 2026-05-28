@@ -180,6 +180,43 @@ def test_route_card_reflects_route_name_and_description(
         assert "/api/v1/external/a2a/agent/" not in url
 
 
+def test_route_card_cinna_mcp_uses_route_identity(
+    client: TestClient,
+    superuser_token_headers: dict,
+) -> None:
+    """The route card's cinna.mcp descriptor reflects the route identity.
+
+    The descriptor must use the route's name as display_name and the route's
+    trigger_prompt as description — not the raw underlying agent's name.
+    """
+    caller, caller_headers = create_random_user_with_headers(client)
+    _, route, _ = _setup_route(
+        client,
+        superuser_token_headers,
+        caller_id=caller["id"],
+        agent_name="Raw Underlying Agent",
+        trigger_prompt="Route-level trigger prompt",
+        route_name="Route Display Name",
+    )
+    route_id = route["id"]
+
+    status, card = _get_route_card(client, caller_headers, route_id)
+    assert status == 200 and card is not None
+
+    extensions = (card.get("capabilities") or {}).get("extensions") or []
+    params = next(
+        (e.get("params") for e in extensions if e.get("uri") == "urn:cinna:mcp"),
+        None,
+    )
+    assert params is not None, "Route card must carry the urn:cinna:mcp descriptor"
+
+    assert params["display_name"] == "Route Display Name"
+    assert params["description"] == "Route-level trigger prompt"
+    assert params["tool_name"] == "route_display_name", (
+        f"Slug should derive from the route name, got {params['tool_name']!r}"
+    )
+
+
 def test_route_card_v03_protocol(
     client: TestClient,
     superuser_token_headers: dict,

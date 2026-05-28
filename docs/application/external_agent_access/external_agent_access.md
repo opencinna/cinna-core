@@ -31,8 +31,9 @@ A dedicated REST + A2A surface under `/api/v1/external/` that gives authenticate
 
 1. Client calls `GET /api/v1/external/agents` (optionally with `?workspace_id=` to scope to one workspace)
 2. Response contains a `targets` list in three ordered sections: personal agents → MCP shared agents → identity contacts
-3. Each target includes `name`, `description`, `entrypoint_prompt`, `example_prompts`, `agent_card_url`, and `protocol_versions`
+3. Each target includes `name`, `description`, `entrypoint_prompt`, `example_prompts`, `agent_card_url`, `protocol_versions`, and `mcp` (the `cinna.mcp` descriptor — see [cinna.mcp descriptor](./cinna_mcp_descriptor.md))
 4. Client renders the list with prompt-example chips; tapping an agent opens a new conversation
+5. Cinna Desktop uses the `mcp` field to wrap each agent as an emulated MCP tool without re-fetching individual cards; `mcp` is `null` for `identity` targets
 
 ### Chatting with a Personal Agent
 
@@ -135,7 +136,8 @@ DELETE /api/v1/external/sessions/{id}     ExternalSessionService.hide_session_fo
 - **[App MCP Server](../app_mcp_server/app_mcp_server.md)** — `AppAgentRoute` and `AppAgentRouteAssignment` models used for the shared-route target type; `ExternalA2ARequestHandler` calls `AppAgentRouteService.get_effective_routes_for_user` to re-verify access
 - **[Identity MCP Server](../identity_mcp_server/identity_mcp_server.md)** — `IdentityAgentBinding`, `IdentityBindingAssignment`, and Stage-2 routing used for the identity target type; `IdentityRoutingService.route_within_identity` picks the agent on the first message
 - **[Agent Sessions](../agent_sessions/agent_sessions.md)** — the `Session` model, `session_metadata` JSON column, `integration_type` field, and `caller_id`/`identity_caller_id` fields that the external surface stamps and reads
+- **[`cinna.mcp` Descriptor](./cinna_mcp_descriptor.md)** — the `mcp` field on each discovery target and the `urn:cinna:mcp` card extension that let Cinna Desktop wrap agents as emulated MCP tools
 
 ---
 
-*Last updated: 2026-04-18 — added agent_id de-duplication across the personal/shared sections*
+*Last updated: 2026-05-28 — added cinna.mcp descriptor delivery channel and integration point*

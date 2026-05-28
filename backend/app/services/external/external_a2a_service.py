@@ -150,6 +150,12 @@ class ExternalA2AService:
         card_dict = A2AService.get_agent_card_dict(
             agent, environment, request_base_url,
             url_override=external_url, protocol=protocol,
+            # The cinna.mcp descriptor must reflect the shared-route identity, not
+            # the raw underlying agent, so the desktop tool is named/described from
+            # the route the caller actually sees.
+            mcp_tool_name=A2AService.slugify_tool_name(route.name),
+            mcp_display_name=route.name,
+            mcp_description=route.trigger_prompt,
         )
 
         # Override name / description with route-specific values so the caller

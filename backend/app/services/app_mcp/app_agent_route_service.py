@@ -47,6 +47,11 @@ class EffectiveRoute:
     trigger_prompt: str
     message_patterns: str | None
     source: str  # "admin" | "user" | "identity"
+    # The route's own display name (AppAgentRoute.name). Distinct from
+    # ``agent_name`` (the underlying agent's name). Empty for personal
+    # (UserAppAgentRoute) and identity routes, which have no separate route name;
+    # consumers should fall back to ``agent_name`` in that case.
+    name: str = ""
     # Identity-specific fields (only set when source == "identity")
     identity_owner_id: uuid.UUID | None = None
     identity_owner_name: str | None = None
@@ -466,6 +471,7 @@ class AppAgentRouteService:
                     route_id=route.id,
                     agent_id=route.agent_id,
                     agent_name=agent_name,
+                    name=route.name,
                     session_mode=route.session_mode,
                     trigger_prompt=route.trigger_prompt,
                     message_patterns=route.message_patterns,

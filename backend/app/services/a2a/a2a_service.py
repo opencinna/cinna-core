@@ -5,7 +5,8 @@ This module provides services for generating A2A-compliant AgentCards
 from internal Agent models, enabling agent discovery via the A2A protocol.
 """
 import logging
-from typing import Literal
+import re
+from typing import Any, Literal
 from uuid import UUID
 
 from a2a.types import (
@@ -17,11 +18,22 @@ from a2a.types import (
     SecurityScheme,
 )
 
+from app.mcp.tool_contracts import (
+    SEND_MESSAGE_DESKTOP_DESCRIPTION,
+    SEND_MESSAGE_TOOL_NAME,
+    build_send_message_input_schema,
+)
 from app.models import Agent
 from app.models.environments.environment import AgentEnvironment
 from app.services.a2a.a2a_v1_adapter import A2AV1Adapter
 
 logger = logging.getLogger(__name__)
+
+# URI identifying the cinna.mcp descriptor extension on the A2A agent card.
+CINNA_MCP_EXTENSION_URI = "urn:cinna:mcp"
+
+# Version of the cinna.mcp descriptor contract (bump on breaking shape changes).
+CINNA_MCP_DESCRIPTOR_VERSION = 1
 
 
 class A2AService:
@@ -90,6 +102,145 @@ class A2AService:
         )
 
     @staticmethod
+    def _build_run_command_descriptors(
+        environment: AgentEnvironment | None,
+    ) -> list[dict[str, Any]]:
+        """Build the descriptor ``run_commands[]`` array from cached CLI commands.
+
+        Same source as the ``cinna.run.*`` skills (``cli_commands_parsed``), but
+        shaped for the desktop's tool wrapper: ``{name, description, invocation}``
+        where ``invocation`` is the ``/run:<name>`` slash command the desktop
+        forwards as a message.
+        """
+        if not environment or not environment.cli_commands_parsed:
+            return []
+        commands: list[dict[str, Any]] = []
+        for cmd in environment.cli_commands_parsed:
+            try:
+                name = cmd.get("name", "")
+                if not name:
+                    continue
+                entry: dict[str, Any] = {
+                    "name": name,
+                    "invocation": f"/run:{name}",
+                }
+                # Omit description entirely when absent — the descriptor lives
+                # inside AgentExtension.params (a plain dict), and the card's
+                # model_dump(exclude_none=True) does not recurse into it, so a
+                # None here would serialize as "description": null.
+                description = cmd.get("description")
+                if description:
+                    entry["description"] = description
+                commands.append(entry)
+            except Exception as e:  # noqa: BLE001 — defensive: one bad entry must not break the card
+                logger.warning(f"Failed to build run command descriptor for {cmd}: {e}")
+        return commands
+
+    # Max length of a generated tool-name slug (keeps tool names ergonomic for
+    # the desktop orchestrator's tool list).
+    _TOOL_NAME_MAX_LENGTH = 48
+
+    @staticmethod
+    def slugify_tool_name(name: str | None) -> str:
+        """Convert an agent/route name into a stable MCP tool-name slug.
+
+        Lowercases, replaces any run of non ``[a-z0-9]`` characters with a single
+        underscore, strips leading/trailing underscores, and caps the length.
+        Falls back to ``"agent"`` when the input yields an empty slug.
+        """
+        slug = re.sub(r"[^a-z0-9]+", "_", (name or "").lower())
+        slug = slug.strip("_")
+        slug = slug[: A2AService._TOOL_NAME_MAX_LENGTH].rstrip("_")
+        return slug or "agent"
+
+    @staticmethod
+    def deconflict_tool_name(base_slug: str, discriminator: UUID | str) -> str:
+        """Append a deterministic discriminator to a colliding base slug.
+
+        The discriminator is derived from a stable identifier (e.g. ``agent.id``
+        or ``bundle_id``) so the same agent always resolves to the same suffixed
+        slug regardless of ordering. Uses the first 8 hex chars of the
+        identifier, keeping the combined result within the length cap.
+        """
+        token = str(discriminator).replace("-", "")[:8]
+        trimmed = base_slug[: A2AService._TOOL_NAME_MAX_LENGTH - len(token) - 1].rstrip("_")
+        trimmed = trimmed or "agent"
+        return f"{trimmed}_{token}"
+
+    @staticmethod
+    def build_cinna_mcp_descriptor(
+        agent: Agent,
+        environment: AgentEnvironment | None,
+        *,
+        tool_name: str,
+        display_name: str | None = None,
+        description: str | None = None,
+    ) -> dict[str, Any]:
+        """Build the ``cinna.mcp`` descriptor for wrapping an agent as an MCP tool.
+
+        Single source of truth for the descriptor shape consumed verbatim by the
+        Cinna Desktop app (see ``urn:cinna:mcp`` on the external A2A card and the
+        ``mcp`` field on the discovery payload).
+
+        The descriptor reuses the canonical ``send_message`` tool contract
+        (``app/mcp/tool_contracts.py``) so this surface cannot drift from the
+        per-agent MCP connector. Unlike the connector's variant, the desktop
+        ``input_schema`` omits ``context_id`` — the desktop is stateful and
+        injects conversation continuity itself.
+
+        Args:
+            agent: The Agent model instance.
+            environment: The agent's active environment (optional). Drives the
+                ``run_commands`` capability and the ``run_commands[]`` array.
+            tool_name: Stable, deconflicted slug used as the tool name. Computed
+                by the caller across the user's full reachable set.
+            display_name: Human-readable name. Defaults to ``agent.name``. The
+                route-card builder passes the route's name here.
+            description: Override for the tool description. Defaults to a
+                generated description folding in ``router_trigger_prompt``. The
+                route-card builder passes the route's trigger prompt here.
+
+        Returns:
+            A JSON-serializable descriptor dict.
+        """
+        resolved_display_name = display_name or agent.name
+
+        if description is not None:
+            resolved_description = description
+        else:
+            resolved_description = SEND_MESSAGE_DESKTOP_DESCRIPTION
+            # Fold in the "when to call me" routing summary so the desktop's
+            # orchestrator LLM can route to this tool. router_trigger_prompt is
+            # purpose-built for routing; agent.description is the fallback.
+            routing_summary = agent.router_trigger_prompt or agent.description
+            if routing_summary:
+                resolved_description = f"{resolved_description}\n\n{routing_summary}"
+
+        run_commands = A2AService._build_run_command_descriptors(environment)
+
+        return {
+            "version": CINNA_MCP_DESCRIPTOR_VERSION,
+            "tool_name": tool_name,
+            "display_name": resolved_display_name,
+            "description": resolved_description,
+            "input_schema": build_send_message_input_schema(include_context_id=False),
+            "capabilities": {
+                # Universal upload capability — get_file_upload_url is registered
+                # unconditionally for every connector (see app/mcp/tools.py), so
+                # files are always available regardless of agent configuration.
+                "files": True,
+                # No static per-agent resource flag exists; workspace resources
+                # are listed dynamically and are out of scope for v1.
+                "resources": False,
+                "run_commands": bool(run_commands),
+            },
+            "example_prompts": (
+                list(agent.example_prompts) if agent.example_prompts else []
+            ),
+            "run_commands": run_commands,
+        }
+
+    @staticmethod
     def build_public_agent_card(
         agent: Agent,
         base_url: str,
@@ -145,6 +296,10 @@ class A2AService:
         environment: AgentEnvironment | None,
         base_url: str,
         url_override: str | None = None,
+        *,
+        mcp_tool_name: str | None = None,
+        mcp_display_name: str | None = None,
+        mcp_description: str | None = None,
     ) -> AgentCard:
         """
         Build a full (extended) A2A AgentCard from internal Agent model.
@@ -158,6 +313,14 @@ class A2AService:
             base_url: The base URL for the A2A endpoints
             url_override: If provided, use this URL instead of deriving from base_url.
                           Used by versioned endpoints (e.g. v0.3) to set their own URL.
+            mcp_tool_name: Stable, deconflicted slug for the cinna.mcp descriptor.
+                When omitted, a slug is derived from the agent name (callers that
+                see the user's full reachable set — e.g. the external catalog —
+                pass a pre-deconflicted slug).
+            mcp_display_name: Display name override for the cinna.mcp descriptor.
+                The route card passes the route's name.
+            mcp_description: Description override for the cinna.mcp descriptor.
+                The route card passes the route's trigger prompt.
 
         Returns:
             Full AgentCard compliant with A2A protocol
@@ -189,6 +352,27 @@ class A2AService:
                 description=f"Powered by {sdk_type} SDK",
                 required=False,
             ))
+
+        # Attach the cinna.mcp descriptor (how to wrap this agent as an emulated
+        # MCP tool for Cinna Desktop). Carried in capabilities.extensions[] — the
+        # only top-level slot the v1.0 outbound adapter preserves (the AgentCard
+        # model has no top-level metadata field).
+        tool_name = mcp_tool_name or A2AService.slugify_tool_name(agent.name)
+        extensions.append(AgentExtension(
+            uri=CINNA_MCP_EXTENSION_URI,
+            description=(
+                "Descriptor for wrapping this agent as an emulated MCP tool "
+                "(Cinna Desktop)."
+            ),
+            params=A2AService.build_cinna_mcp_descriptor(
+                agent,
+                environment,
+                tool_name=tool_name,
+                display_name=mcp_display_name,
+                description=mcp_description,
+            ),
+            required=False,
+        ))
 
         # Get version from a2a_config
         version = "1.0.0"
@@ -234,6 +418,10 @@ class A2AService:
         base_url: str,
         url_override: str | None = None,
         protocol: Literal["v1.0", "v0.3"] = "v0.3",
+        *,
+        mcp_tool_name: str | None = None,
+        mcp_display_name: str | None = None,
+        mcp_description: str | None = None,
     ) -> dict:
         """
         Get full (extended) AgentCard as a dictionary for JSON serialization.
@@ -247,11 +435,22 @@ class A2AService:
                 "v0.3" (default), returns the library-native card. Callers that
                 need to overwrite ``supportedInterfaces`` for a custom URL
                 namespace (e.g. ExternalA2AService) do so after this call.
+            mcp_tool_name: Stable, deconflicted slug for the cinna.mcp descriptor.
+            mcp_display_name: Display name override for the cinna.mcp descriptor.
+            mcp_description: Description override for the cinna.mcp descriptor.
 
         Returns:
             Dictionary representation of full AgentCard
         """
-        card = A2AService.build_agent_card(agent, environment, base_url, url_override=url_override)
+        card = A2AService.build_agent_card(
+            agent,
+            environment,
+            base_url,
+            url_override=url_override,
+            mcp_tool_name=mcp_tool_name,
+            mcp_display_name=mcp_display_name,
+            mcp_description=mcp_description,
+        )
         card_dict = card.model_dump(by_alias=True, exclude_none=True)
         return A2AService.apply_protocol(card_dict, protocol)
 

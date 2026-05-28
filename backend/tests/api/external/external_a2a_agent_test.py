@@ -200,6 +200,63 @@ def test_external_agent_card_v1_format(
     assert "supportedInterfaces" in wk_card
 
 
+def _find_mcp_extension(card: dict) -> dict | None:
+    """Return the urn:cinna:mcp extension params from a card, or None."""
+    extensions = (card.get("capabilities") or {}).get("extensions") or []
+    for ext in extensions:
+        if ext.get("uri") == "urn:cinna:mcp":
+            return ext.get("params")
+    return None
+
+
+def test_external_agent_card_carries_cinna_mcp_descriptor(
+    client: TestClient,
+    superuser_token_headers: dict,
+) -> None:
+    """
+    The cinna.mcp descriptor rides on capabilities.extensions[] of the agent card:
+      1. v1.0 card has urn:cinna:mcp extension with a well-formed descriptor
+      2. v0.3 card has the same descriptor (v1.0 adapter does not strip it)
+      3. The descriptor input_schema omits context_id (desktop is stateful)
+      4. The pre-existing urn:cinna:sdk: extension is still present (regression)
+    """
+    agent = _create_su_agent(client, superuser_token_headers, "MCP Descriptor Agent")
+    agent_id = agent["id"]
+
+    for protocol in (None, "v0.3"):  # None == default v1.0
+        card = _get_external_agent_card(
+            client, superuser_token_headers, agent_id, protocol=protocol
+        )
+        params = _find_mcp_extension(card)
+        assert params is not None, (
+            f"urn:cinna:mcp extension missing for protocol={protocol!r}"
+        )
+
+        # Contract shape
+        assert params["version"] == 1
+        assert params["tool_name"], "tool_name must be a non-empty slug"
+        assert params["display_name"] == "MCP Descriptor Agent"
+        assert "description" in params
+        assert set(params["capabilities"]) == {"files", "resources", "run_commands"}
+        assert params["capabilities"]["files"] is True
+        assert params["capabilities"]["resources"] is False
+        assert isinstance(params["example_prompts"], list)
+        assert isinstance(params["run_commands"], list)
+
+        # input_schema omits context_id — desktop is stateful
+        props = params["input_schema"]["properties"]
+        assert "message" in props
+        assert "context_id" not in props
+
+        # Regression: the SDK extension is still present
+        ext_uris = [
+            e["uri"] for e in (card.get("capabilities") or {}).get("extensions", [])
+        ]
+        assert any(u.startswith("urn:cinna:sdk:") for u in ext_uris), (
+            f"urn:cinna:sdk: extension missing for protocol={protocol!r}: {ext_uris}"
+        )
+
+
 def test_external_agent_card_works_without_a2a_enabled(
     client: TestClient,
     superuser_token_headers: dict,

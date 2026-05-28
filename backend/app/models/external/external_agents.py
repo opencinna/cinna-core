@@ -35,6 +35,12 @@ class ExternalTargetPublic(BaseModel):
     agent_card_url: str
     protocol_versions: list[str] = ["1.0", "0.3.0"]
     metadata: dict[str, Any] = {}
+    # cinna.mcp descriptor — mirror of the capabilities.extensions[] entry on the
+    # A2A card (uri "urn:cinna:mcp"). Lets native clients (Cinna Desktop) wrap
+    # this target as an emulated MCP tool from the refresh-friendly discovery
+    # payload without re-fetching every card. The card remains the source of
+    # truth; this is the cache. None when no descriptor could be built.
+    mcp: dict[str, Any] | None = None
 
 
 class ExternalAgentListResponse(BaseModel):

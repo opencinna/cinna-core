@@ -18,6 +18,7 @@ from app.core.db import create_session
 from app.services.mcp.mcp_connector_service import MCPConnectorService
 from app.services.mcp.mcp_errors import MCPError
 from app.mcp.request_handler import MCPRequestHandler
+from app.mcp.tool_contracts import SEND_MESSAGE_DESCRIPTION, SEND_MESSAGE_TOOL_NAME
 from app.mcp.upload_token import create_file_upload_token
 from app.mcp.context_vars import mcp_connector_id_var, mcp_session_id_var, mcp_authenticated_user_id_var
 
@@ -154,15 +155,8 @@ def register_mcp_tools(server) -> None:
     from mcp.server.fastmcp.server import Context
 
     @server.tool(
-        name="send_message",
-        description=(
-            "Send a message to the AI agent and receive a response. "
-            "The agent can use tools, write code, and perform tasks based on your message.\n\n"
-            "Returns a JSON object with 'response' and 'context_id' fields. "
-            "IMPORTANT: Always pass back the 'context_id' from the previous response "
-            "to maintain conversation continuity. On the first message in a new conversation, "
-            "pass an empty string for context_id."
-        ),
+        name=SEND_MESSAGE_TOOL_NAME,
+        description=SEND_MESSAGE_DESCRIPTION,
     )
     async def send_message(message: str, context_id: str = "", ctx: Context = None) -> str:
         result = await handle_send_message(message, context_id, ctx)
