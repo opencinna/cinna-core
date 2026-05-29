@@ -1,11 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { AlertTriangle, ExternalLink, Network, Plus, Unlink, Users } from "lucide-react"
+import {
+  AlertTriangle,
+  ExternalLink,
+  Network,
+  Plus,
+  Search,
+  Unlink,
+  Users,
+} from "lucide-react"
 import { useState, useMemo } from "react"
 
 import { ConnectAgentApiDialog } from "@/components/Credentials/ConnectAgentApiDialog"
 
-import { AgentsService, CredentialsService } from "@/client"
+import {
+  AgentsService,
+  CredentialsService,
+  type CredentialType,
+} from "@/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -25,13 +37,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { Input } from "@/components/ui/input"
 import {
   Table,
   TableBody,
@@ -41,43 +47,17 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { LoadingButton } from "@/components/ui/loading-button"
+import {
+  CREDENTIAL_TYPE_GROUPS,
+  getCredentialTypeMeta,
+} from "@/components/Credentials/credentialTypes"
 import useCustomToast from "@/hooks/useCustomToast"
 import useWorkspace from "@/hooks/useWorkspace"
+import { cn } from "@/lib/utils"
 import { handleError } from "@/utils"
 
 interface AgentCredentialsTabProps {
   agentId: string
-}
-
-function getCredentialTypeLabel(type: string): string {
-  switch (type) {
-    case "email_imap":
-      return "Email (IMAP)"
-    case "email_smtp":
-      return "Email (SMTP)"
-    case "odoo":
-      return "Odoo"
-    case "gmail_oauth":
-      return "Gmail OAuth"
-    case "gmail_oauth_readonly":
-      return "Gmail OAuth (Read-Only)"
-    case "gdrive_oauth":
-      return "Google Drive OAuth"
-    case "gdrive_oauth_readonly":
-      return "Google Drive OAuth (Read-Only)"
-    case "gcalendar_oauth":
-      return "Google Calendar OAuth"
-    case "gcalendar_oauth_readonly":
-      return "Google Calendar OAuth (Read-Only)"
-    case "google_service_account":
-      return "Google Service Account"
-    case "api_token":
-      return "API Token"
-    case "ssh_key":
-      return "SSH Key"
-    default:
-      return type
-  }
 }
 
 export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
@@ -89,6 +69,7 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
   const [selectedCredentialId, setSelectedCredentialId] = useState<
     string | undefined
   >(undefined)
+  const [credentialQuery, setCredentialQuery] = useState("")
 
   // Fetch agent credentials
   const {
@@ -156,6 +137,46 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
     (cred) => !agentCredentials.some((ac) => ac.id === cred.id)
   )
 
+  type AvailableCredential = (typeof availableCredentials)[number]
+
+  // Apply the search filter (by credential name and type label) before grouping
+  const filteredCredentials = useMemo(() => {
+    const q = credentialQuery.trim().toLowerCase()
+    if (!q) return availableCredentials
+    return availableCredentials.filter((cred) => {
+      const typeLabel = getCredentialTypeMeta(cred.type).label
+      return `${cred.name} ${typeLabel}`.toLowerCase().includes(q)
+    })
+  }, [availableCredentials, credentialQuery])
+
+  // Group the filtered credentials by their type's registry group. Any
+  // credential whose type is not part of a registered group (e.g. agent_api)
+  // is collected into a trailing "Other" group so nothing is dropped.
+  const groupedCredentials = useMemo(() => {
+    const assigned = new Set<string>()
+    const groups: { key: string; label: string; items: AvailableCredential[] }[] =
+      []
+
+    for (const group of CREDENTIAL_TYPE_GROUPS) {
+      const groupTypes = new Set(group.options.map((opt) => opt.type))
+      const items = filteredCredentials.filter((cred) => {
+        if (!groupTypes.has(cred.type as CredentialType)) return false
+        assigned.add(cred.id)
+        return true
+      })
+      if (items.length > 0) {
+        groups.push({ key: group.key, label: group.label, items })
+      }
+    }
+
+    const other = filteredCredentials.filter((cred) => !assigned.has(cred.id))
+    if (other.length > 0) {
+      groups.push({ key: "__other", label: "Other", items: other })
+    }
+
+    return groups
+  }, [filteredCredentials])
+
   // Add credential mutation
   const addMutation = useMutation({
     mutationFn: (credentialId: string) =>
@@ -167,6 +188,7 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
       showSuccessToast("Credential added successfully")
       setIsAddDialogOpen(false)
       setSelectedCredentialId(undefined)
+      setCredentialQuery("")
     },
     onError: handleError.bind(showErrorToast),
     onSettled: () => {
@@ -251,14 +273,23 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
               })
             }
           />
-          <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+          <Dialog
+            open={isAddDialogOpen}
+            onOpenChange={(open) => {
+              setIsAddDialogOpen(open)
+              if (!open) {
+                setSelectedCredentialId(undefined)
+                setCredentialQuery("")
+              }
+            }}
+          >
             <DialogTrigger asChild>
               <Button size="sm">
                 <Plus className="mr-2 h-4 w-4" />
                 Add Credential
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="sm:max-w-xl">
               <DialogHeader>
                 <DialogTitle>Add Credential to Agent</DialogTitle>
                 <DialogDescription>
@@ -273,29 +304,77 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
                     credentials yet.
                   </p>
                 ) : (
-                  <Select
-                    value={selectedCredentialId}
-                    onValueChange={setSelectedCredentialId}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select a credential" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableCredentials.map((credential) => (
-                        <SelectItem key={credential.id} value={credential.id}>
-                          <div className="flex items-center gap-2">
-                            <span>{credential.name} ({getCredentialTypeLabel(credential.type)})</span>
-                            {credential.isSharedWithMe && (
-                              <span className="text-xs text-blue-600 flex items-center gap-1">
-                                <Users className="h-3 w-3" />
-                                from {credential.ownerEmail}
-                              </span>
-                            )}
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="space-y-3">
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        autoFocus
+                        placeholder="Search credentials…"
+                        value={credentialQuery}
+                        onChange={(e) => setCredentialQuery(e.target.value)}
+                        className="pl-9"
+                      />
+                    </div>
+                    <div className="max-h-[50vh] overflow-y-auto">
+                      {groupedCredentials.length === 0 ? (
+                        <p className="py-6 text-center text-sm text-muted-foreground">
+                          No credentials match "{credentialQuery}"
+                        </p>
+                      ) : (
+                        <div className="space-y-4">
+                          {groupedCredentials.map((group) => (
+                            <div key={group.key}>
+                              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                {group.label}
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {group.items.map((credential) => {
+                                  const meta = getCredentialTypeMeta(
+                                    credential.type,
+                                  )
+                                  const Icon = meta.icon
+                                  const isSelected =
+                                    credential.id === selectedCredentialId
+                                  return (
+                                    <button
+                                      key={credential.id}
+                                      type="button"
+                                      onClick={() =>
+                                        setSelectedCredentialId(credential.id)
+                                      }
+                                      title={
+                                        credential.isSharedWithMe &&
+                                        credential.ownerEmail
+                                          ? `Shared by ${credential.ownerEmail}`
+                                          : undefined
+                                      }
+                                      className={cn(
+                                        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
+                                        meta.badgeClass,
+                                        isSelected &&
+                                          "ring-2 ring-current ring-offset-2 ring-offset-background",
+                                      )}
+                                    >
+                                      <Icon className="h-3.5 w-3.5 shrink-0" />
+                                      <span>{credential.name}</span>
+                                      {credential.isSharedWithMe && (
+                                        <span className="ml-1 inline-flex items-center gap-1 text-xs opacity-70">
+                                          <Users className="h-3 w-3 shrink-0" />
+                                          <span className="max-w-[12ch] truncate">
+                                            from {credential.ownerEmail}
+                                          </span>
+                                        </span>
+                                      )}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
               <DialogFooter>
@@ -304,6 +383,7 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
                   onClick={() => {
                     setIsAddDialogOpen(false)
                     setSelectedCredentialId(undefined)
+                    setCredentialQuery("")
                   }}
                 >
                   Cancel
@@ -404,7 +484,7 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
                   </TableCell>
                   <TableCell>
                     <Badge variant="secondary">
-                      {getCredentialTypeLabel(credential.type)}
+                      {getCredentialTypeMeta(credential.type).label}
                     </Badge>
                   </TableCell>
                   <TableCell>
