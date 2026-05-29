@@ -189,11 +189,19 @@ function OwnedCredentialView({
   })
 
   useEffect(() => {
-    form.reset({
-      name: credential.name,
-      notes: credential.notes ?? "",
-      credential_data: credential.credential_data ?? {},
-    })
+    // Re-hydrate from the server only when the user has no unsaved edits.
+    // The sharing cards (notably "Share as Template") invalidate the
+    // credential-with-data query, which re-runs this effect. Without the
+    // dirty guard that background refetch would reset a half-filled,
+    // not-yet-saved form (e.g. a freshly created Odoo credential whose URL
+    // was typed but not saved), making it look like the fields were wiped.
+    if (!form.formState.isDirty) {
+      form.reset({
+        name: credential.name,
+        notes: credential.notes ?? "",
+        credential_data: credential.credential_data ?? {},
+      })
+    }
   }, [credential, form])
 
   useEffect(() => {
@@ -205,8 +213,12 @@ function OwnedCredentialView({
   const mutation = useMutation({
     mutationFn: (data: FormData) =>
       CredentialsService.updateCredential({ id: credentialId, requestBody: data }),
-    onSuccess: () => {
+    onSuccess: (_res, variables) => {
       showSuccessToast("Credential updated successfully")
+      // Mark the form pristine after a save so the credential-with-data
+      // refetch (triggered below) re-hydrates instead of being skipped by
+      // the dirty guard, and so the Save/Reset buttons hide.
+      form.reset(variables)
     },
     onError: handleError.bind(showErrorToast),
     onSettled: () => {
