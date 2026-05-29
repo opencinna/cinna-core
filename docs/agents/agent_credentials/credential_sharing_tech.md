@@ -4,7 +4,7 @@
 
 ### Backend - Models
 - `backend/app/models/credentials/credential_share.py` - CredentialShare table model, CredentialSharePublic, CredentialShareCreate, SharedCredentialPublic response models
-- `backend/app/models/credentials/credential.py` - Adds `allow_sharing` and `allow_template_sharing` fields to CredentialBase, `template_private_fields` (JSON list[str]) to Credential / CredentialCreate / CredentialUpdate / CredentialPublic; `share_count`, `is_shared`, `owner_email` on CredentialPublic; `CredentialAffectedAgent` (id, name); `CredentialDeletionImpact` (tier, affected_own_agents, direct_share_count, bundle_pbp_usages, active_install_count)
+- `backend/app/models/credentials/credential.py` - Adds `allow_sharing` and `allow_template_sharing` fields to CredentialBase, `template_private_fields` (JSON list[str]) to Credential / CredentialCreate / CredentialUpdate / CredentialPublic; `share_count`, `is_shared`, `owner_email` on CredentialPublic; `CredentialAffectedAgent` (id, name, ui_color_preset); `CredentialDeletionImpact` (tier, affected_own_agents, direct_share_count, bundle_usages, bundle_pbp_usages, active_install_count)
 - `backend/app/models/credentials/ai_credential.py` - `AICredentialBundleUsage` (bundle_uuid, bundle_id, display_name, publisher_install_id, used_for_conversation, used_for_building); `AICredentialDeletionImpact` (tier, bundle_usages)
 
 ### Backend - Services
@@ -111,7 +111,7 @@ Each entry the publish flow emits:
 - `link_credential_to_agent()` - Allows linking shared credentials (not just owned)
 - `update_credential()` - Persists `allow_template_sharing` + `template_private_fields`; flips `is_placeholder=False` only when `check_credential_completeness == "complete"` (so partial fills on template placeholders keep the gate engaged); rejects non-`list[str]` `template_private_fields` payloads
 - `check_credential_completeness()` - Per-type required-field check the placeholder-flip relies on
-- `get_deletion_impact(session, credential_id, requester_id)` - Classifies deletion blast radius into Tier 0 / 1 / 2. Owner-only: raises `ValueError("Credential not found")` for missing or non-owned rows (route maps to 404). Composes three signals: (1) own agents via `get_affected_agents`; (2) direct share count via `CredentialShareService.get_share_count_for_credential`; (3) PBP bundle usages filtered from `list_bundle_usages`. The `active_install_count` is scoped to foreign installs of the PBP bundle(s) only — direct-share linkers are excluded so they are not double-counted with `direct_share_count`. Tier 2 requires both PBP usage AND `active_install_count > 0`.
+- `get_deletion_impact(session, credential_id, requester_id)` - Classifies deletion blast radius into Tier 0 / 1 / 2. Owner-only: raises `ValueError("Credential not found")` for missing or non-owned rows (route maps to 404). Composes three signals: (1) own agents via `get_affected_agents` (each row includes `ui_color_preset` for badge rendering); (2) direct share count via `CredentialShareService.get_share_count_for_credential`; (3) all bundle usages via `list_bundle_usages` (any provisioning mode). The full `list_bundle_usages` result is returned as `bundle_usages` (informational, all modes); the `"publisher"`-mode subset is returned separately as `bundle_pbp_usages` and is the sole driver of the Tier-2 block. The `active_install_count` is scoped to foreign installs of the PBP bundle(s) only — direct-share linkers are excluded so they are not double-counted with `direct_share_count`. Tier 2 requires both PBP usage AND `active_install_count > 0`.
 - `delete_credential(session, credential_id, owner_id, force=False)` - Raises `CredentialInUseError` (HTTP 409) at Tier 2 unless `force=True`. The error carries the full `CredentialDeletionImpact` so the route can serialise it as the 409 body without a second lookup.
 - `list_bundle_usages(*, credential_id, requester_id)` - Owner-only listing of bundles whose publisher install links this credential. Resolves each entry's `provided_by` via `PublishService.resolve_provided_by` so the projection matches what the publish-time spec collector would emit. Raises `ValueError("Credential not found")` for missing or non-owned rows (route maps to 404 to avoid leaking existence). Backs `GET /credentials/{id}/bundles`
 
@@ -151,9 +151,10 @@ Each entry the publish flow emits:
 ### DeleteCredential (`frontend/src/components/Credentials/DeleteCredential.tsx`)
 - Service credential delete dialog used from the credential detail page and credential card dropdown menu
 - Fetches `GET /credentials/{id}/deletion-impact` (query key `["credential-deletion-impact", id]`) when the dialog opens
-- Tier 0: lists affected own agents by name if any
+- Tier 0: lists affected own agents as colored badge chips (`ui_color_preset` from `CredentialAffectedAgent` → `getColorPreset()`) with a Bot icon, one chip per agent
 - Tier 1: shows a destructive alert "N users will lose access to this credential immediately"
-- Tier 2: shows a destructive alert describing the broken installs, lists affected bundles with "Open" links to the publisher install's Bundle tab, and replaces the "Delete" button with "Force delete & break installs" (passes `force=true`)
+- Tier 2: shows a destructive alert describing the broken installs, lists affected bundles from `bundle_pbp_usages` with "Open" links to the publisher install's Bundle tab, and replaces the "Delete" button with "Force delete & break installs" (passes `force=true`)
+- All tiers: when `bundle_usages` (all-modes) is non-empty, a "Used in bundles" section is rendered below the tier-specific alert showing every bundle the credential belongs to, with its provisioning-mode label (`Shared with installers` / `Template` / `User-provided`) and an "Open" deep-link; this is informational and does not change tier/block logic
 - On a 409 race (a non-forced delete that comes back 409 mid-dialog): invalidates the impact query and shows an inline error toast instead of a generic error
 
 ### DeleteAICredentialDialog (`frontend/src/components/UserSettings/DeleteAICredentialDialog.tsx`)
@@ -202,7 +203,8 @@ Each entry the publish flow emits:
 
 ### AgentCredentialsTab (`frontend/src/components/Agents/AgentCredentialsTab.tsx`)
 - Fetches both owned credentials and credentials shared with user
-- Shows "Shared" indicator in credential selection dropdown
+- "Add Credential" modal replaced the legacy text dropdown with a searchable, credential-type-grouped badge picker (icon + credential name per badge) backed by `CREDENTIAL_TYPE_GROUPS` and `getCredentialTypeMeta` from `frontend/src/components/Credentials/credentialTypes.ts`
+- Shows "Shared" indicator (owner email tooltip) in the badge picker
 - Displays "Shared" badge in table for linked shared credentials
 
 ## State Management

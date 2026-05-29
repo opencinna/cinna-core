@@ -119,6 +119,9 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
 **Path parameters:**
 - `id`: uuid
 
+**Query parameters:**
+- `force`: boolean, default: `False`
+
 **Response:** `Message`
 
 ---
@@ -140,6 +143,16 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
 - `id`: uuid
 
 **Response:** `AgentApiConnectionInfo`
+
+---
+
+## GET `/api/v1/credentials/{id}/deletion-impact`
+**Get Credential Deletion Impact**
+
+**Path parameters:**
+- `id`: uuid
+
+**Response:** `CredentialDeletionImpact`
 
 ---
 

@@ -98,6 +98,8 @@ Important scoping: `active_install_count` in the impact payload is restricted to
 
 PBT (template) installs materialise an independent copy of the credential owned by the installer — they are unaffected by deletion of the publisher's original row and do not count toward Tier 2.
 
+**Bundle membership disclosure (all tiers / all modes).** In addition to the Tier-2 PBP block, `CredentialDeletionImpact` carries a `bundle_usages` field that lists every bundle whose publisher install links the credential, regardless of provisioning mode (`publisher`, `template`, or `user`). This field is purely informational — it does not affect the tier classification or block logic. The delete dialog always shows a "Used in bundles" section when `bundle_usages` is non-empty, so a credential that is template-provided (PBT) or user-provided (PBU) in a bundle, or publisher-provided with zero active installs, is now disclosed to the owner even when the deletion would otherwise proceed without a block. The `bundle_pbp_usages` field remains the subset that exclusively drives the Tier-2 block and install-count accounting.
+
 AI credentials (LLM provider keys) follow the same 409 / force pattern but have only **Tier 0** and **Tier 2**. Tier 2 for AI credentials means the credential is referenced by a published bundle as a publisher-provided AI credential (`publisher_ai_credential_conversation_id` / `publisher_ai_credential_building_id`). There is no Tier 1 (no direct AI credential shares). A forced delete nulls the FK via `ON DELETE SET NULL`, degrading the bundle back to "user provides". The force button reads "Force delete & degrade bundles".
 
 ### Constraints

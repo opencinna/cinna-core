@@ -22,7 +22,7 @@
 - `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` - Loads credentials README for prompt
 
 ### Frontend
-- `frontend/src/components/Agents/AgentCredentialsTab.tsx` - Link/unlink credentials to agents; now also surfaces incomplete credential state: a top-of-card amber `Alert` when one or more linked credentials have `is_placeholder=true` or `status === "incomplete"`, and a per-row "Setup needed" badge next to the credential name. The credential name is a link to `/credential/$credentialId` (the standard edit page) — clicking it is the fix entry point
+- `frontend/src/components/Agents/AgentCredentialsTab.tsx` - Link/unlink credentials to agents; now also surfaces incomplete credential state: a top-of-card amber `Alert` when one or more linked credentials have `is_placeholder=true` or `status === "incomplete"`, and a per-row "Setup needed" badge next to the credential name. The credential name is a link to `/credential/$credentialId` (the standard edit page) — clicking it is the fix entry point. The "Add Credential" modal uses a searchable, credential-type-grouped badge picker (icon + name per badge) backed by `CREDENTIAL_TYPE_GROUPS` and `getCredentialTypeMeta` from `frontend/src/components/Credentials/credentialTypes.ts`
 - `frontend/src/components/Credentials/` - Full credential management UI (create, edit, delete, share)
 - `frontend/src/components/Credentials/CredentialForms/ApiTokenCredentialForm.tsx` - API token template form
 - `frontend/src/components/Credentials/CredentialForms/OAuthCredentialForm.tsx` - OAuth flow handler

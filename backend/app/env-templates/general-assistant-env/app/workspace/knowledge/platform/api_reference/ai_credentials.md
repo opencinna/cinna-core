@@ -65,7 +65,20 @@ Auto-generated from OpenAPI spec. Tag: `ai-credentials`
 **Path parameters:**
 - `credential_id`: uuid
 
+**Query parameters:**
+- `force`: boolean, default: `False`
+
 **Response:** `Message`
+
+---
+
+## GET `/api/v1/ai-credentials/{credential_id}/deletion-impact`
+**Get Ai Credential Deletion Impact**
+
+**Path parameters:**
+- `credential_id`: uuid
+
+**Response:** `AICredentialDeletionImpact`
 
 ---
 

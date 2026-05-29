@@ -18,13 +18,13 @@ Each file below documents one API domain.
 | Agent Webhooks | [agent_webhooks.md](./agent_webhooks.md) | 8 |
 | Agentic Teams | [agentic_teams.md](./agentic_teams.md) | 18 |
 | Agents | [agents.md](./agents.md) | 36 |
-| Ai Credentials | [ai_credentials.md](./ai_credentials.md) | 8 |
+| Ai Credentials | [ai_credentials.md](./ai_credentials.md) | 9 |
 | App Agent Routes | [app_agent_routes.md](./app_agent_routes.md) | 7 |
 | App Data | [app_data.md](./app_data.md) | 3 |
 | Bundles | [bundles.md](./bundles.md) | 9 |
 | Catalog | [catalog.md](./catalog.md) | 5 |
 | Cli | [cli.md](./cli.md) | 10 |
-| Credentials | [credentials.md](./credentials.md) | 18 |
+| Credentials | [credentials.md](./credentials.md) | 19 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
 | Email Integration | [email_integration.md](./email_integration.md) | 6 |
 | Environments | [environments.md](./environments.md) | 14 |
