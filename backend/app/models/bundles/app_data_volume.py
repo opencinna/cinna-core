@@ -25,8 +25,8 @@ the row stays stable across bundle row deletion.
 import uuid
 from datetime import datetime, UTC
 
-from sqlmodel import Field, SQLModel
-from sqlalchemy import UniqueConstraint, Index, text
+from sqlmodel import Field, SQLModel, Column
+from sqlalchemy import UniqueConstraint, Index, BigInteger, text
 
 
 class AppDataVolume(SQLModel, table=True):
@@ -71,7 +71,10 @@ class AppDataVolume(SQLModel, table=True):
     host_path: str = Field(max_length=1024, nullable=False)
 
     # Lazy size accounting (recomputed on demand by the API)
-    size_bytes: int = Field(default=0)
+    size_bytes: int = Field(
+        default=0,
+        sa_column=Column(BigInteger, nullable=False, server_default=text("0")),
+    )
     last_size_check_at: datetime | None = Field(default=None)
 
     # Lifecycle

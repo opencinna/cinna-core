@@ -2,6 +2,7 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+from sqlalchemy import DateTime
 from sqlmodel import Field, SQLModel
 
 
@@ -30,6 +31,10 @@ class DesktopAuthRequest(SQLModel, table=True):
     state: str = Field(max_length=255)
     is_used: bool = Field(default=False)
     expires_at: datetime = Field(
+        sa_type=DateTime(timezone=True),
         sa_column_kwargs={"index": True},
     )
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        sa_type=DateTime(timezone=True),
+    )

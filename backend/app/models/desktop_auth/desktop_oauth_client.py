@@ -2,6 +2,7 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+from sqlalchemy import DateTime
 from sqlmodel import Field, SQLModel
 
 
@@ -25,8 +26,13 @@ class DesktopOAuthClient(DesktopOAuthClientBase, table=True):
         sa_column_kwargs={"index": True},
     )
     is_revoked: bool = Field(default=False)
-    last_used_at: datetime | None = Field(default=None, nullable=True)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    last_used_at: datetime | None = Field(
+        default=None, nullable=True, sa_type=DateTime(timezone=True)
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        sa_type=DateTime(timezone=True),
+    )
 
 
 class DesktopOAuthClientCreate(SQLModel):

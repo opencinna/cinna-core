@@ -38,7 +38,12 @@ class SMTPConnector:
             try:
                 conn.quit()
             except Exception:
-                pass
+                # quit() can raise before closing the socket (e.g. a broken
+                # connection); fall back to close() so the socket is released.
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
 
 # Module-level default instance

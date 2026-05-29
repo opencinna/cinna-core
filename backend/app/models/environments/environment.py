@@ -7,6 +7,13 @@ import sqlalchemy as sa
 
 class AgentEnvironment(SQLModel, table=True):
     __tablename__ = "agent_environment"
+    __table_args__ = (
+        sa.Index(
+            "ix_agent_environment_sync_active",
+            "sync_active",
+            postgresql_where=sa.text("sync_active = TRUE"),
+        ),
+    )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     agent_id: uuid.UUID = Field(foreign_key="agent.id", ondelete="CASCADE")

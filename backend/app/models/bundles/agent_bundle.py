@@ -14,8 +14,8 @@ new immutable ``AgentBundleRevision`` snapshot.
 import uuid
 from datetime import datetime, UTC
 
-from sqlmodel import Field, SQLModel
-from sqlalchemy import Index, text
+from sqlmodel import Field, SQLModel, Column
+from sqlalchemy import Index, UniqueConstraint, text, Text
 
 
 # Default install/update mode constants. Mirror ``UpdateMode`` on Agent for
@@ -36,7 +36,7 @@ class BundleInstallMode:
 class AgentBundleBase(SQLModel):
     """Shared fields for AgentBundle CRUD + responses."""
     display_name: str = Field(min_length=1, max_length=255)
-    description: str | None = None
+    description: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     is_listed: bool = False
     visibility: str = Field(default=BundleVisibility.PRIVATE, max_length=32)
     default_install_mode: str = Field(default=BundleInstallMode.MANUAL, max_length=32)
@@ -47,6 +47,7 @@ class AgentBundle(AgentBundleBase, table=True):
 
     __tablename__ = "agent_bundle"
     __table_args__ = (
+        UniqueConstraint("bundle_id", name="uq_agent_bundle_bundle_id"),
         Index("ix_agent_bundle_publisher", "publisher_user_id"),
         Index(
             "ix_agent_bundle_listed_visibility",
@@ -60,7 +61,7 @@ class AgentBundle(AgentBundleBase, table=True):
 
     # Reverse-DNS bundle identifier — globally unique on this instance.
     # Stable across re-publishes; immutable once any revision exists.
-    bundle_id: str = Field(max_length=255, nullable=False, unique=True, index=True)
+    bundle_id: str = Field(max_length=255, nullable=False)
 
     # Publisher cannot be deleted while their bundles exist (RESTRICT).
     publisher_user_id: uuid.UUID = Field(

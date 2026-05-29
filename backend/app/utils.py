@@ -100,8 +100,16 @@ def send_email(
         smtp_options["user"] = settings.SMTP_USER
     if settings.SMTP_PASSWORD:
         smtp_options["password"] = settings.SMTP_PASSWORD
-    response = message.send(to=email_to, smtp=smtp_options)
-    logger.info(f"send email result: {response}")
+    # Manage the SMTP backend explicitly instead of letting Message.send pull
+    # one from the internal pool — the pooled backend keeps its socket open for
+    # reuse and leaks it (ResourceWarning) until GC. Closing in a finally
+    # guarantees the connection is released after every send.
+    smtp_backend = emails.backend.SMTPBackend(**smtp_options)
+    try:
+        response = message.send(to=email_to, smtp=smtp_backend)
+        logger.info(f"send email result: {response}")
+    finally:
+        smtp_backend.close()
 
 
 def generate_test_email(email_to: str) -> EmailData:

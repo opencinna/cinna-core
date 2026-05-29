@@ -139,6 +139,7 @@ class MailServerService:
 
     @staticmethod
     def _test_imap(server: MailServerConfig, password: str) -> str:
+        conn = None
         try:
             context = ssl.create_default_context()
             if server.encryption_type in (EncryptionType.SSL, EncryptionType.TLS):
@@ -149,15 +150,24 @@ class MailServerService:
                     conn.starttls(ssl_context=context)
 
             conn.login(server.username, password)
-            conn.logout()
             return "IMAP connection successful"
         except imaplib.IMAP4.error as e:
             raise ValueError(f"IMAP authentication failed: {e}")
         except Exception as e:
             raise ValueError(f"IMAP connection failed: {e}")
+        finally:
+            if conn is not None:
+                try:
+                    conn.logout()
+                except Exception:
+                    try:
+                        conn.shutdown()
+                    except Exception:
+                        pass
 
     @staticmethod
     def _test_smtp(server: MailServerConfig, password: str) -> str:
+        conn = None
         try:
             context = ssl.create_default_context()
             if server.encryption_type in (EncryptionType.SSL, EncryptionType.TLS):
@@ -168,12 +178,20 @@ class MailServerService:
                     conn.starttls(context=context)
 
             conn.login(server.username, password)
-            conn.quit()
             return "SMTP connection successful"
         except smtplib.SMTPAuthenticationError as e:
             raise ValueError(f"SMTP authentication failed: {e}")
         except Exception as e:
             raise ValueError(f"SMTP connection failed: {e}")
+        finally:
+            if conn is not None:
+                try:
+                    conn.quit()
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
     @staticmethod
     def _to_public(server: MailServerConfig) -> MailServerConfigPublic:

@@ -170,7 +170,10 @@ class Agent(AgentBase, table=True):
     #       "<spec_name>": {"provided_by": "user" | "publisher"}
     #     }
     #   }
-    publish_settings: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    publish_settings: dict = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False, server_default=text("'{}'::json")),
+    )
 
     @property
     def app_data_catalog_type(self) -> str | None:

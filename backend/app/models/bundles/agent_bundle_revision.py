@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, UTC
 
 from sqlmodel import Field, SQLModel, Column
-from sqlalchemy import JSON, Index, UniqueConstraint, Text
+from sqlalchemy import JSON, Index, UniqueConstraint, Text, text
 
 
 class AgentBundleRevision(SQLModel, table=True):
@@ -53,7 +53,10 @@ class AgentBundleRevision(SQLModel, table=True):
 
     # Manifest mirrors what's written to ``manifest.json`` on disk so the
     # API can answer "what's in this revision" without reading the file.
-    manifest: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    manifest: dict = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False, server_default=text("'{}'::json")),
+    )
 
     # Prompts copied from the publisher install at publish time.
     workflow_prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
@@ -72,7 +75,10 @@ class AgentBundleRevision(SQLModel, table=True):
     model_override_conversation: str | None = Field(default=None, max_length=128)
 
     # List of {name, type, allow_sharing, description?} for the install wizard.
-    required_credential_specs: list = Field(default_factory=list, sa_column=Column(JSON))
+    required_credential_specs: list = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default=text("'[]'::json")),
+    )
 
     # Snapshot of the publisher install's ``AgentSchedule`` rows at publish
     # time. Each entry is a behavioral + cosmetic definition:
@@ -82,7 +88,10 @@ class AgentBundleRevision(SQLModel, table=True):
     # ``InstallService`` to materialise / merge ``AgentSchedule`` rows on
     # the consumer install. Empty list ``[]`` on revisions published before
     # this field existed (fully backward compatible).
-    schedules: list = Field(default_factory=list, sa_column=Column(JSON))
+    schedules: list = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default=text("'[]'::json")),
+    )
 
     # Filesystem location of the snapshot under ``BUNDLE_STORAGE_DIR``.
     snapshot_path: str = Field(max_length=1024, nullable=False)
