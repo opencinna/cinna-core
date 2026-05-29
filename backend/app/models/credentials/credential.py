@@ -233,3 +233,45 @@ class CredentialBundleUsage(SQLModel):
 class CredentialBundleUsages(SQLModel):
     data: list[CredentialBundleUsage]
     count: int
+
+
+class CredentialAffectedAgent(SQLModel):
+    """An agent owned by the requester that links the credential."""
+
+    id: uuid.UUID
+    name: str
+    ui_color_preset: str | None = None
+
+
+class CredentialDeletionImpact(SQLModel):
+    """Blast-radius classification for deleting a credential.
+
+    ``tier`` grades the deletion impact:
+
+    - ``0`` (self-only): the credential is only used by the requester's own
+      agents; no direct shares, no publisher-provided (PBP) usage in a
+      published bundle. Deletion is allowed.
+    - ``1`` (direct shares): direct ``CredentialShare`` rows exist but the
+      credential is not PBP in any published bundle. Deletion is allowed with
+      a warning (recipients lose access immediately).
+    - ``2`` (PBP in published bundle with ≥1 active foreign install): deleting
+      breaks other users' installs. Blocked by default (HTTP 409); the owner
+      may force the deletion via ``force=true``.
+
+    ``bundle_usages`` is every bundle whose publisher install links this
+    credential, in any provisioning mode (``publisher``/``template``/``user``).
+    It is shown informationally so the UI can always tell the user the
+    credential is part of a bundle, regardless of tier.
+
+    ``bundle_pbp_usages`` is the PBP subset (``provided_by == "publisher"``)
+    that drives the Tier-2 block and lets the UI deep-link to each affected
+    bundle. ``active_install_count`` is the number of foreign installs
+    (non-publisher) that link the credential.
+    """
+
+    tier: int
+    affected_own_agents: list[CredentialAffectedAgent] = []
+    direct_share_count: int = 0
+    bundle_usages: list[CredentialBundleUsage] = []
+    bundle_pbp_usages: list[CredentialBundleUsage] = []
+    active_install_count: int = 0

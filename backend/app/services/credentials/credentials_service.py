@@ -32,6 +32,24 @@ logger = logging.getLogger(__name__)
 _SSH_HOST_ALIAS_RE = re.compile(r"^[A-Za-z0-9_.\-*?\[\]]+$")
 
 
+class CredentialInUseError(Exception):
+    """Raised when a credential cannot be deleted because doing so would
+    break other users' bundle installs (Tier 2 deletion impact).
+
+    The route maps this to HTTP 409 and serialises ``impact`` into the
+    response ``detail`` so the frontend can render the affected bundles
+    and install counts. The owner can override the block by passing
+    ``force=True`` to :meth:`CredentialsService.delete_credential`.
+    """
+
+    def __init__(self, impact: "CredentialDeletionImpact") -> None:
+        self.impact = impact
+        super().__init__(
+            "Credential is provided by the publisher in a published bundle "
+            "with active installs and cannot be deleted without force."
+        )
+
+
 class CredentialsService:
     """
     Service for managing credentials and syncing them to agent environments.
@@ -1352,11 +1370,122 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         return credential
 
     @staticmethod
+    def get_deletion_impact(
+        session: Session,
+        credential_id: uuid.UUID,
+        requester_id: uuid.UUID,
+    ) -> "CredentialDeletionImpact":
+        """Classify the blast radius of deleting a credential.
+
+        Composes three existing signals — affected agents
+        (:meth:`get_affected_agents`), direct ``CredentialShare`` count, and
+        bundle PBP usages (:meth:`list_bundle_usages` filtered to
+        ``provided_by == "publisher"``) — into a graduated tier:
+
+        - Tier 0 (self-only): only own agents; no shares; no PBP published-bundle
+          usage.
+        - Tier 1 (direct shares): shares exist but no PBP published-bundle usage.
+        - Tier 2 (PBP in published bundle with ≥1 active foreign install).
+
+        Owner-only: raises ``ValueError("Credential not found")`` when the
+        credential does not exist OR the requester is not the owner — matching
+        :meth:`list_bundle_usages` so we don't leak credential existence.
+        """
+        from app.models import (
+            CredentialAffectedAgent,
+            CredentialDeletionImpact,
+        )
+
+        credential = session.get(Credential, credential_id)
+        if not credential or credential.owner_id != requester_id:
+            raise ValueError("Credential not found")
+
+        # Own agents that link this credential.
+        affected_agent_ids = CredentialsService.get_affected_agents(
+            session, credential_id
+        )
+        affected_own_agents: list[CredentialAffectedAgent] = []
+        if affected_agent_ids:
+            agent_rows = session.exec(
+                select(Agent.id, Agent.name, Agent.ui_color_preset).where(
+                    Agent.id.in_(affected_agent_ids),
+                    Agent.owner_id == requester_id,
+                )
+            ).all()
+            affected_own_agents = [
+                CredentialAffectedAgent(
+                    id=agent_id, name=name, ui_color_preset=ui_color_preset
+                )
+                for agent_id, name, ui_color_preset in agent_rows
+            ]
+
+        # Direct shares granted to other users.
+        from app.services.credentials.credential_share_service import (
+            CredentialShareService,
+        )
+
+        direct_share_count = CredentialShareService.get_share_count_for_credential(
+            session=session, credential_id=credential_id
+        )
+
+        # All bundle usages (any provisioning mode) for this credential. The
+        # full list is returned informationally; the PBP subset drives the
+        # Tier-2 block below.
+        all_usages = CredentialsService.list_bundle_usages(
+            session=session,
+            credential_id=credential_id,
+            requester_id=requester_id,
+        )
+        bundle_pbp_usages = [
+            usage for usage in all_usages if usage.provided_by == "publisher"
+        ]
+
+        # Active foreign installs of the PBP bundle(s) that link this
+        # credential. We MUST scope to the PBP bundle uuids — not just "any
+        # foreign agent linking this credential" — because direct-share
+        # recipients also link the publisher's live row to their own agents
+        # (see ``link_credential_to_agent``). Counting those would conflate
+        # share-linkers with genuine bundle installs and could over-block at
+        # Tier 2. Joining through ``Agent.bundle_uuid IN (<pbp bundle uuids>)``
+        # restricts the count to real PBP bundle installs, matching the UI copy.
+        pbp_bundle_uuids = [usage.bundle_uuid for usage in bundle_pbp_usages]
+        active_install_count = 0
+        if pbp_bundle_uuids:
+            active_install_count = session.exec(
+                select(func_sql.count())
+                .select_from(AgentCredentialLink)
+                .join(Agent, Agent.id == AgentCredentialLink.agent_id)
+                .where(
+                    AgentCredentialLink.credential_id == credential_id,
+                    Agent.is_publisher_install == False,  # noqa: E712
+                    Agent.owner_id != requester_id,
+                    Agent.bundle_uuid.in_(pbp_bundle_uuids),
+                )
+            ).one()
+
+        if bundle_pbp_usages and active_install_count > 0:
+            tier = 2
+        elif direct_share_count > 0:
+            tier = 1
+        else:
+            tier = 0
+
+        return CredentialDeletionImpact(
+            tier=tier,
+            affected_own_agents=affected_own_agents,
+            direct_share_count=direct_share_count,
+            bundle_usages=all_usages,
+            bundle_pbp_usages=bundle_pbp_usages,
+            active_install_count=active_install_count,
+        )
+
+    @staticmethod
     async def delete_credential(
         session: Session,
         credential_id: uuid.UUID,
         owner_id: uuid.UUID,
-        is_superuser: bool = False
+        is_superuser: bool = False,
+        force: bool = False,
     ):
         """
         Delete a credential with authorization checks.
@@ -1369,9 +1498,14 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             credential_id: Credential ID to delete
             owner_id: User ID making the request
             is_superuser: Whether the user is a superuser
+            force: When True, bypass the Tier 2 deletion-impact block (the
+                owner explicitly accepts breaking other users' bundle installs)
 
         Raises:
             ValueError: If credential not found or permission denied
+            CredentialInUseError: If the credential is publisher-provided in a
+                published bundle with active foreign installs and ``force`` is
+                False (the route maps this to HTTP 409)
         """
         # Verify credential exists and user owns it
         # Credentials are always private - only owner can access
@@ -1380,6 +1514,17 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             raise ValueError("Credential not found")
         if credential.owner_id != owner_id:
             raise ValueError("Not enough permissions")
+
+        # Blast-radius gate: block Tier 2 deletions (PBP in a published bundle
+        # with ≥1 active foreign install) unless the owner forces it.
+        if not force:
+            impact = CredentialsService.get_deletion_impact(
+                session=session,
+                credential_id=credential_id,
+                requester_id=owner_id,
+            )
+            if impact.tier == 2:
+                raise CredentialInUseError(impact)
 
         # Get affected agents BEFORE deletion (links will be cascade deleted)
         affected_agent_ids = CredentialsService.get_affected_agents(session, credential_id)

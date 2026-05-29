@@ -153,6 +153,19 @@ export function CredentialSharing({ credential }: CredentialSharingProps) {
       CredentialsService.listCredentialBundleUsages({ id: credential.id }),
   })
 
+  // Deletion-impact also covers the disable-sharing blast radius: when this
+  // credential is publisher-provided (PBP) in published bundles, disabling
+  // sharing revokes the publisher shares and breaks those installs — the same
+  // class of impact as a delete. Surfaced in the disable-sharing dialog.
+  const { data: deletionImpact } = useQuery({
+    queryKey: ["credential-deletion-impact", credential.id],
+    queryFn: () =>
+      CredentialsService.getCredentialDeletionImpact({ id: credential.id }),
+    // Only fetch when the disable-sharing dialog is open. Shares the cache
+    // key with the delete dialog so either entry point warms the same data.
+    enabled: isDisableDialogOpen,
+  })
+
   const shareForm = useForm<ShareFormData>({
     resolver: zodResolver(shareSchema),
     defaultValues: {
@@ -389,6 +402,63 @@ export function CredentialSharing({ credential }: CredentialSharingProps) {
                 immediately. This action cannot be undone.
               </AlertDescription>
             </Alert>
+            {(() => {
+              const pbpUsages = (deletionImpact?.bundle_pbp_usages ?? [])
+              const activeInstalls = deletionImpact?.active_install_count ?? 0
+              if (pbpUsages.length === 0) return null
+              return (
+                <div className="space-y-2 pt-1">
+                  <Alert variant="destructive">
+                    <Box className="h-4 w-4" />
+                    <AlertTitle>This breaks published bundles</AlertTitle>
+                    <AlertDescription>
+                      This credential is provided by the publisher in{" "}
+                      {pbpUsages.length} published bundle
+                      {pbpUsages.length !== 1 ? "s" : ""}
+                      {activeInstalls > 0 && (
+                        <>
+                          {" "}with {activeInstalls} active install
+                          {activeInstalls !== 1 ? "s" : ""}
+                        </>
+                      )}
+                      . Disabling sharing will leave those installs without their
+                      publisher-provided credentials.
+                    </AlertDescription>
+                  </Alert>
+                  <ul className="space-y-1.5">
+                    {pbpUsages.map((usage) => (
+                      <li
+                        key={usage.bundle_uuid}
+                        className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Box className="h-4 w-4 text-muted-foreground shrink-0" />
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium truncate">
+                              {usage.display_name}
+                            </div>
+                            <div className="text-xs text-muted-foreground truncate font-mono">
+                              {usage.bundle_id}
+                            </div>
+                          </div>
+                        </div>
+                        {usage.publisher_install_id && (
+                          <Button asChild variant="outline" size="sm">
+                            <Link
+                              to="/agent/$agentId"
+                              params={{ agentId: usage.publisher_install_id }}
+                              hash="bundle"
+                            >
+                              Open
+                            </Link>
+                          </Button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )
+            })()}
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsDisableDialogOpen(false)}>
                 Cancel

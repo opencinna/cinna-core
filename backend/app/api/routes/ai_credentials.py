@@ -6,7 +6,7 @@ CRUD endpoints for managing named AI credentials.
 import uuid
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from app.api.deps import CurrentUser, SessionDep
 from app.models import Message
@@ -15,9 +15,13 @@ from app.models.credentials.ai_credential import (
     AICredentialUpdate,
     AICredentialPublic,
     AICredentialsPublic,
+    AICredentialDeletionImpact,
     AffectedEnvironmentsPublic,
 )
-from app.services.credentials.ai_credentials_service import ai_credentials_service
+from app.services.credentials.ai_credentials_service import (
+    ai_credentials_service,
+    AICredentialInUseError,
+)
 
 router = APIRouter(prefix="/ai-credentials", tags=["ai-credentials"])
 
@@ -88,14 +92,44 @@ def update_ai_credential(
     )
 
 
+@router.get(
+    "/{credential_id}/deletion-impact",
+    response_model=AICredentialDeletionImpact,
+)
+def get_ai_credential_deletion_impact(
+    session: SessionDep, current_user: CurrentUser, credential_id: uuid.UUID
+) -> Any:
+    """Classify the blast radius of deleting this AI credential.
+
+    Returns Tier 2 (with affected bundles) when one or more published bundles
+    reference it as a publisher-provided AI credential, otherwise Tier 0.
+    """
+    return ai_credentials_service.get_deletion_impact(
+        session, credential_id, current_user.id
+    )
+
+
 @router.delete("/{credential_id}")
 def delete_ai_credential(
-    session: SessionDep, current_user: CurrentUser, credential_id: uuid.UUID
+    session: SessionDep,
+    current_user: CurrentUser,
+    credential_id: uuid.UUID,
+    force: bool = False,
 ) -> Message:
     """
     Delete an AI credential.
+
+    Blocked with HTTP 409 when one or more published bundles reference it as a
+    publisher-provided AI credential, unless ``force`` is passed.
     """
-    ai_credentials_service.delete_credential(session, credential_id, current_user.id)
+    try:
+        ai_credentials_service.delete_credential(
+            session, credential_id, current_user.id, force=force
+        )
+    except AICredentialInUseError as e:
+        raise HTTPException(
+            status_code=409, detail=e.impact.model_dump(mode="json")
+        )
     return Message(message="AI credential deleted successfully")
 
 

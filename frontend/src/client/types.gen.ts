@@ -1160,6 +1160,23 @@ export type AgentWebhookUpdate = {
 };
 
 /**
+ * One bundle that references this AI credential as a publisher-provided
+ * conversation and/or building credential.
+ *
+ * ``publisher_install_id`` is the publisher install's ``Agent.id`` so the
+ * frontend can deep-link into the agent's Bundle tab (the platform has no
+ * standalone ``/bundles/{uuid}`` route).
+ */
+export type AICredentialBundleUsage = {
+    bundle_uuid: string;
+    bundle_id: string;
+    display_name: string;
+    publisher_install_id?: (string | null);
+    used_for_conversation?: boolean;
+    used_for_building?: boolean;
+};
+
+/**
  * Create AI credential with sensitive data
  */
 export type AICredentialCreate = {
@@ -1169,6 +1186,26 @@ export type AICredentialCreate = {
     api_key: string;
     base_url?: (string | null);
     model?: (string | null);
+};
+
+/**
+ * Blast-radius classification for deleting an AI credential.
+ *
+ * Deleting a publisher AI credential nulls the bundle's
+ * ``publisher_ai_credential_*_id`` FK via ``ON DELETE SET NULL``, silently
+ * degrading affected bundles to "user provides". ``tier`` grades the impact:
+ *
+ * - ``0`` — no published bundle references this credential; deletion is safe.
+ * - ``2`` — one or more bundles reference it as a publisher-provided AI
+ * credential; deletion is blocked (HTTP 409) unless ``force=true``.
+ *
+ * (There is no Tier 1 for AI credentials: direct AI-credential shares are
+ * materialised from bundle PBP wiring, so the bundle reference is the
+ * meaningful blast radius.)
+ */
+export type AICredentialDeletionImpact = {
+    tier: number;
+    bundle_usages?: Array<AICredentialBundleUsage>;
 };
 
 /**
@@ -1712,6 +1749,15 @@ export type CreateScheduleRequest = {
 };
 
 /**
+ * An agent owned by the requester that links the credential.
+ */
+export type CredentialAffectedAgent = {
+    id: string;
+    name: string;
+    ui_color_preset?: (string | null);
+};
+
+/**
  * One bundle that uses this credential.
  *
  * ``publisher_install_id`` is the publisher install's ``Agent.id`` —
@@ -1749,6 +1795,40 @@ export type CredentialCreate = {
 } | null);
     user_workspace_id?: (string | null);
     template_private_fields?: (Array<(string)> | null);
+};
+
+/**
+ * Blast-radius classification for deleting a credential.
+ *
+ * ``tier`` grades the deletion impact:
+ *
+ * - ``0`` (self-only): the credential is only used by the requester's own
+ * agents; no direct shares, no publisher-provided (PBP) usage in a
+ * published bundle. Deletion is allowed.
+ * - ``1`` (direct shares): direct ``CredentialShare`` rows exist but the
+ * credential is not PBP in any published bundle. Deletion is allowed with
+ * a warning (recipients lose access immediately).
+ * - ``2`` (PBP in published bundle with ≥1 active foreign install): deleting
+ * breaks other users' installs. Blocked by default (HTTP 409); the owner
+ * may force the deletion via ``force=true``.
+ *
+ * ``bundle_usages`` is every bundle whose publisher install links this
+ * credential, in any provisioning mode (``publisher``/``template``/``user``).
+ * It is shown informationally so the UI can always tell the user the
+ * credential is part of a bundle, regardless of tier.
+ *
+ * ``bundle_pbp_usages`` is the PBP subset (``provided_by == "publisher"``)
+ * that drives the Tier-2 block and lets the UI deep-link to each affected
+ * bundle. ``active_install_count`` is the number of foreign installs
+ * (non-publisher) that link the credential.
+ */
+export type CredentialDeletionImpact = {
+    tier: number;
+    affected_own_agents?: Array<CredentialAffectedAgent>;
+    direct_share_count?: number;
+    bundle_usages?: Array<CredentialBundleUsage>;
+    bundle_pbp_usages?: Array<CredentialBundleUsage>;
+    active_install_count?: number;
 };
 
 export type CredentialPublic = {
@@ -2056,6 +2136,9 @@ export type ExternalTargetPublic = {
     metadata?: {
         [key: string]: unknown;
     };
+    mcp?: ({
+    [key: string]: unknown;
+} | null);
 };
 
 export type target_type = 'agent' | 'app_mcp_route' | 'identity';
@@ -4835,9 +4918,16 @@ export type AiCredentialsUpdateAiCredentialResponse = (AICredentialPublic);
 
 export type AiCredentialsDeleteAiCredentialData = {
     credentialId: string;
+    force?: boolean;
 };
 
 export type AiCredentialsDeleteAiCredentialResponse = (Message);
+
+export type AiCredentialsGetAiCredentialDeletionImpactData = {
+    credentialId: string;
+};
+
+export type AiCredentialsGetAiCredentialDeletionImpactResponse = (AICredentialDeletionImpact);
 
 export type AiCredentialsSetAiCredentialDefaultData = {
     credentialId: string;
@@ -5114,6 +5204,7 @@ export type CredentialsUpdateCredentialData = {
 export type CredentialsUpdateCredentialResponse = (CredentialPublic);
 
 export type CredentialsDeleteCredentialData = {
+    force?: boolean;
     id: string;
 };
 
@@ -5130,6 +5221,12 @@ export type CredentialsReadAgentApiConnectionData = {
 };
 
 export type CredentialsReadAgentApiConnectionResponse = (AgentApiConnectionInfo);
+
+export type CredentialsGetCredentialDeletionImpactData = {
+    id: string;
+};
+
+export type CredentialsGetCredentialDeletionImpactResponse = (CredentialDeletionImpact);
 
 export type CredentialsListCredentialBundleUsagesData = {
     id: string;

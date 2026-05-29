@@ -12,6 +12,7 @@ from app.models import (
     AgentApiConnectionInfo,
     Credential,
     CredentialBundleUsages,
+    CredentialDeletionImpact,
     CredentialCreate,
     CredentialPublic,
     CredentialsPublic,
@@ -20,7 +21,10 @@ from app.models import (
     Message,
     UserWorkspace,
 )
-from app.services.credentials.credentials_service import CredentialsService
+from app.services.credentials.credentials_service import (
+    CredentialsService,
+    CredentialInUseError,
+)
 from app.services.credentials.credential_share_service import CredentialShareService
 from app.services.agent_api.agent_api_token_service import (
     AgentApiTokenError,
@@ -310,26 +314,61 @@ async def update_credential(
         raise HTTPException(status_code=status_code, detail=str(e))
 
 
+@router.get("/{id}/deletion-impact", response_model=CredentialDeletionImpact)
+def get_credential_deletion_impact(
+    session: SessionDep, current_user: CurrentUser, id: uuid.UUID
+) -> Any:
+    """Classify the blast radius of deleting this credential.
+
+    Returns a graduated impact tier (0 self-only, 1 direct shares, 2 PBP in a
+    published bundle with active foreign installs) plus the supporting detail
+    (own agents, share count, affected bundles, active install count). The
+    frontend renders tier-specific delete confirmation UI; Tier 2 blocks the
+    normal delete and offers a force escape hatch.
+
+    Returns 404 when the credential does not exist or the requester does not
+    own it.
+    """
+    try:
+        return CredentialsService.get_deletion_impact(
+            session=session, credential_id=id, requester_id=current_user.id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.delete("/{id}")
 async def delete_credential(
     session: SessionDep,
     current_user: CurrentUser,
-    id: uuid.UUID
+    id: uuid.UUID,
+    force: bool = False,
 ) -> Message:
     """
     Delete a credential.
 
     This will trigger automatic sync to all running environments of agents
     that had this credential linked.
+
+    Blocked with HTTP 409 when the credential is publisher-provided in a
+    published bundle with active foreign installs (Tier 2), unless ``force`` is
+    passed — in which case the owner explicitly accepts breaking those installs.
     """
     try:
         await CredentialsService.delete_credential(
             session=session,
             credential_id=id,
             owner_id=current_user.id,
-            is_superuser=current_user.is_superuser
+            is_superuser=current_user.is_superuser,
+            force=force,
         )
         return Message(message="Credential deleted successfully")
+    except CredentialInUseError as e:
+        # Tier 2 block: surface the structured impact so the frontend can
+        # render affected bundles + install counts and offer force delete.
+        raise HTTPException(
+            status_code=409, detail=e.impact.model_dump(mode="json")
+        )
     except ValueError as e:
         # Service raises ValueError for not found or permission errors
         status_code = 404 if "not found" in str(e).lower() else 400

@@ -30,6 +30,7 @@ import {
 import useCustomToast from "@/hooks/useCustomToast"
 import { AICredentialDialog } from "./AICredentialDialog"
 import { AffectedEnvironmentsDialog } from "./AffectedEnvironmentsDialog"
+import { DeleteAICredentialDialog } from "./DeleteAICredentialDialog"
 
 // SDK Engine options
 const SDK_ENGINE_OPTIONS = [
@@ -334,6 +335,11 @@ export function AICredentialsSettings() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingCredential, setEditingCredential] = useState<AICredentialPublic | null>(null)
 
+  // Delete confirmation dialog state
+  const [deletingCredential, setDeletingCredential] =
+    useState<AICredentialPublic | null>(null)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+
   // Affected environments dialog state
   const [showAffectedDialog, setShowAffectedDialog] = useState(false)
   const [affectedCredentialId, setAffectedCredentialId] = useState<string | null>(null)
@@ -397,20 +403,6 @@ export function AICredentialsSettings() {
     setModelOverrideConversation(status.default_model_override_conversation ?? "")
     setModelOverrideBuilding(status.default_model_override_building ?? "")
   }, [status])
-
-  // Delete credential mutation
-  const deleteMutation = useMutation({
-    mutationFn: (credentialId: string) =>
-      AiCredentialsService.deleteAiCredential({ credentialId }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["aiCredentialsList"] })
-      queryClient.invalidateQueries({ queryKey: ["aiCredentialsStatus"] })
-      showSuccessToast("AI credential deleted successfully")
-    },
-    onError: () => {
-      showErrorToast("Failed to delete AI credential")
-    },
-  })
 
   // Set default mutation
   const setDefaultMutation = useMutation({
@@ -659,8 +651,10 @@ export function AICredentialsSettings() {
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7"
-                        onClick={() => deleteMutation.mutate(cred.id)}
-                        disabled={deleteMutation.isPending}
+                        onClick={() => {
+                          setDeletingCredential(cred)
+                          setDeleteDialogOpen(true)
+                        }}
                       >
                         <Trash2 className="h-3.5 w-3.5 text-destructive" />
                       </Button>
@@ -911,6 +905,16 @@ export function AICredentialsSettings() {
           credentialName={affectedCredentialName}
         />
       )}
+
+      {/* Delete confirmation with bundle-impact gate */}
+      <DeleteAICredentialDialog
+        credential={deletingCredential}
+        open={deleteDialogOpen}
+        onOpenChange={(open) => {
+          setDeleteDialogOpen(open)
+          if (!open) setDeletingCredential(null)
+        }}
+      />
     </div>
   )
 }

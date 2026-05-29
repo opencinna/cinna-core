@@ -34,6 +34,24 @@ from app.models.users.user import User, AIServiceCredentials, AIServiceCredentia
 logger = logging.getLogger(__name__)
 
 
+class AICredentialInUseError(Exception):
+    """Raised when an AI credential cannot be deleted because one or more
+    published bundles reference it as a publisher-provided AI credential.
+
+    Deleting it would null the bundle's ``publisher_ai_credential_*_id`` FK
+    (``ON DELETE SET NULL``), silently degrading those bundles back to
+    "user provides". The route maps this to HTTP 409 and serialises
+    ``impact`` into ``detail``. The owner can override via ``force=True``.
+    """
+
+    def __init__(self, impact: "AICredentialDeletionImpact") -> None:
+        self.impact = impact
+        super().__init__(
+            "AI credential is provided by the publisher in one or more "
+            "published bundles and cannot be deleted without force."
+        )
+
+
 class AICredentialsService:
     """Service for managing AI credentials"""
 
@@ -166,11 +184,104 @@ class AICredentialsService:
         logger.info(f"Updated AI credential {credential_id}")
         return self._to_public(credential, session)
 
-    def delete_credential(
+    def _get_owned_credential_or_404(
         self, session: Session, credential_id: uuid.UUID, user_id: uuid.UUID
+    ) -> AICredential:
+        """Fetch an owned AI credential, returning 404 for missing OR not-owned.
+
+        The shared :meth:`get_credential` raises 403 for non-owners; other
+        callers depend on that. The owner-only deletion paths instead use this
+        helper so they don't leak credential existence via a 403 — matching the
+        service-credential side, which returns 404 for both cases.
+        """
+        credential = session.get(AICredential, credential_id)
+        if not credential or credential.owner_id != user_id:
+            raise HTTPException(status_code=404, detail="AI credential not found")
+        return credential
+
+    def get_deletion_impact(
+        self, session: Session, credential_id: uuid.UUID, user_id: uuid.UUID
+    ) -> "AICredentialDeletionImpact":
+        """Classify the blast radius of deleting an AI credential.
+
+        Detects published bundles whose
+        ``publisher_ai_credential_conversation_id`` /
+        ``publisher_ai_credential_building_id`` reference this credential.
+        Any such reference makes deletion Tier 2 (blocked unless forced),
+        since deleting nulls the FK and degrades the bundle to "user provides".
+
+        Owner-only: raises 404 if the credential does not exist OR is not owned
+        by ``user_id`` (no existence leak — mirrors the service-credential side).
+        """
+        from app.models import (
+            AICredentialBundleUsage,
+            AICredentialDeletionImpact,
+        )
+        from app.models.bundles.agent_bundle import AgentBundle
+        from app.models.agents.agent import Agent
+
+        # Ownership / existence check (404 for missing or not-owned).
+        self._get_owned_credential_or_404(session, credential_id, user_id)
+
+        stmt = select(AgentBundle).where(
+            (AgentBundle.publisher_ai_credential_conversation_id == credential_id)
+            | (AgentBundle.publisher_ai_credential_building_id == credential_id)
+        )
+        bundles = session.exec(stmt).all()
+
+        usages: list[AICredentialBundleUsage] = []
+        for bundle in bundles:
+            publisher_install = session.exec(
+                select(Agent.id).where(
+                    Agent.bundle_uuid == bundle.id,
+                    Agent.is_publisher_install == True,  # noqa: E712
+                )
+            ).first()
+            usages.append(
+                AICredentialBundleUsage(
+                    bundle_uuid=bundle.id,
+                    bundle_id=bundle.bundle_id,
+                    display_name=bundle.display_name,
+                    publisher_install_id=publisher_install,
+                    used_for_conversation=(
+                        bundle.publisher_ai_credential_conversation_id
+                        == credential_id
+                    ),
+                    used_for_building=(
+                        bundle.publisher_ai_credential_building_id
+                        == credential_id
+                    ),
+                )
+            )
+
+        return AICredentialDeletionImpact(
+            tier=2 if usages else 0,
+            bundle_usages=usages,
+        )
+
+    def delete_credential(
+        self,
+        session: Session,
+        credential_id: uuid.UUID,
+        user_id: uuid.UUID,
+        force: bool = False,
     ) -> None:
-        """Delete an AI credential"""
-        credential = self.get_credential(session, credential_id, user_id)
+        """Delete an AI credential.
+
+        Blocked with :class:`AICredentialInUseError` (HTTP 409) when one or
+        more published bundles reference this credential as a
+        publisher-provided AI credential, unless ``force`` is passed.
+
+        Owner-only: returns 404 for missing or not-owned (no existence leak).
+        """
+        credential = self._get_owned_credential_or_404(
+            session, credential_id, user_id
+        )
+
+        if not force:
+            impact = self.get_deletion_impact(session, credential_id, user_id)
+            if impact.tier == 2:
+                raise AICredentialInUseError(impact)
 
         was_default = credential.is_default
         cred_type = credential.type

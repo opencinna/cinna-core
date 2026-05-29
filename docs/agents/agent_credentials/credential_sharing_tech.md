@@ -4,7 +4,8 @@
 
 ### Backend - Models
 - `backend/app/models/credentials/credential_share.py` - CredentialShare table model, CredentialSharePublic, CredentialShareCreate, SharedCredentialPublic response models
-- `backend/app/models/credentials/credential.py` - Adds `allow_sharing` and `allow_template_sharing` fields to CredentialBase, `template_private_fields` (JSON list[str]) to Credential / CredentialCreate / CredentialUpdate / CredentialPublic; `share_count`, `is_shared`, `owner_email` on CredentialPublic
+- `backend/app/models/credentials/credential.py` - Adds `allow_sharing` and `allow_template_sharing` fields to CredentialBase, `template_private_fields` (JSON list[str]) to Credential / CredentialCreate / CredentialUpdate / CredentialPublic; `share_count`, `is_shared`, `owner_email` on CredentialPublic; `CredentialAffectedAgent` (id, name); `CredentialDeletionImpact` (tier, affected_own_agents, direct_share_count, bundle_pbp_usages, active_install_count)
+- `backend/app/models/credentials/ai_credential.py` - `AICredentialBundleUsage` (bundle_uuid, bundle_id, display_name, publisher_install_id, used_for_conversation, used_for_building); `AICredentialDeletionImpact` (tier, bundle_usages)
 
 ### Backend - Services
 - `backend/app/services/credentials/credential_share_service.py` - Core direct-sharing logic: share, revoke, toggle, access checks
@@ -80,8 +81,14 @@ Each entry the publish flow emits:
 
 ### Updated Credential Endpoints (`backend/app/api/routes/credentials.py`)
 - `GET /api/v1/credentials/{id}` - Allows viewing if user owns OR has share (returns `is_shared=true` for shared)
+- `GET /api/v1/credentials/{id}/deletion-impact` - Returns a `CredentialDeletionImpact` classifying the blast radius of deleting this credential (Tier 0 / 1 / 2). Owner-only; returns 404 when the credential does not exist or the requester is not the owner (no existence leak).
+- `DELETE /api/v1/credentials/{id}?force=` - Deletes the credential. Blocked with HTTP 409 at Tier 2 (PBP in a published bundle with active foreign installs) unless `force=true` is passed; Tier 0 and Tier 1 always proceed. The 409 body is the serialised `CredentialDeletionImpact` so the frontend can render affected bundles and offer force delete.
 - `GET /api/v1/credentials/{id}/bundles` - Lists bundles whose publisher install has this credential linked; each entry resolves `provided_by` via `_resolve_provided_by_for_usage()` (override map → consent-flag inference) so the frontend can split usages between the Sharing and Share-as-Template cards
 - All endpoints return `share_count`, `is_shared`, `owner_email`, `allow_template_sharing`, `template_private_fields` in CredentialPublic response via `_credential_to_public()` helper
+
+### AI Credential Deletion-Impact Endpoints (`backend/app/api/routes/ai_credentials.py`)
+- `GET /api/v1/ai-credentials/{credential_id}/deletion-impact` - Returns an `AICredentialDeletionImpact` classifying the blast radius (Tier 0 or Tier 2 only). Owner-only; 404 for missing or not-owned.
+- `DELETE /api/v1/ai-credentials/{credential_id}?force=` - Deletes the AI credential. Blocked with HTTP 409 at Tier 2 unless `force=true`; the 409 body is the serialised `AICredentialDeletionImpact`.
 
 ### Install Setup Endpoints (`backend/app/api/routes/installs.py`)
 - `PATCH /api/v1/agents/{id}/publish-settings` - Accepts `provided_by` ∈ {`"user"`, `"publisher"`, `"template"`} per linked credential
@@ -104,7 +111,14 @@ Each entry the publish flow emits:
 - `link_credential_to_agent()` - Allows linking shared credentials (not just owned)
 - `update_credential()` - Persists `allow_template_sharing` + `template_private_fields`; flips `is_placeholder=False` only when `check_credential_completeness == "complete"` (so partial fills on template placeholders keep the gate engaged); rejects non-`list[str]` `template_private_fields` payloads
 - `check_credential_completeness()` - Per-type required-field check the placeholder-flip relies on
+- `get_deletion_impact(session, credential_id, requester_id)` - Classifies deletion blast radius into Tier 0 / 1 / 2. Owner-only: raises `ValueError("Credential not found")` for missing or non-owned rows (route maps to 404). Composes three signals: (1) own agents via `get_affected_agents`; (2) direct share count via `CredentialShareService.get_share_count_for_credential`; (3) PBP bundle usages filtered from `list_bundle_usages`. The `active_install_count` is scoped to foreign installs of the PBP bundle(s) only — direct-share linkers are excluded so they are not double-counted with `direct_share_count`. Tier 2 requires both PBP usage AND `active_install_count > 0`.
+- `delete_credential(session, credential_id, owner_id, force=False)` - Raises `CredentialInUseError` (HTTP 409) at Tier 2 unless `force=True`. The error carries the full `CredentialDeletionImpact` so the route can serialise it as the 409 body without a second lookup.
 - `list_bundle_usages(*, credential_id, requester_id)` - Owner-only listing of bundles whose publisher install links this credential. Resolves each entry's `provided_by` via `PublishService.resolve_provided_by` so the projection matches what the publish-time spec collector would emit. Raises `ValueError("Credential not found")` for missing or non-owned rows (route maps to 404 to avoid leaking existence). Backs `GET /credentials/{id}/bundles`
+
+### AICredentialsService (`backend/app/services/credentials/ai_credentials_service.py`)
+- `get_deletion_impact(session, credential_id, user_id)` - Tier 0 or Tier 2 for AI credentials. Tier 2 when any `AgentBundle` has `publisher_ai_credential_conversation_id` or `publisher_ai_credential_building_id` pointing at this credential. Owner-only (404 for missing or not-owned) via `_get_owned_credential_or_404`.
+- `delete_credential(session, credential_id, user_id, force=False)` - Raises `AICredentialInUseError` at Tier 2 unless `force=True`. On forced delete, PostgreSQL `ON DELETE SET NULL` nulls the bundle FKs, degrading affected bundles to "user provides".
+- `_get_owned_credential_or_404(session, credential_id, user_id)` - Returns 404 (not 403) when the credential exists but is not owned by `user_id`, preventing existence leaks on owner-only deletion paths. The general `get_credential` still returns 403 for non-owners; only the deletion paths use this stricter helper.
 
 ### PublishService (`backend/app/services/bundles/publish_service.py`)
 - `resolve_provided_by(credential, publisher_install)` - Public static method that is the single source of truth for `provided_by` resolution. Order: publisher override → `allow_sharing` → `allow_template_sharing` → `"user"`. Used by both publish-time spec emission and `CredentialsService.list_bundle_usages` so the two paths cannot disagree
@@ -130,9 +144,23 @@ Each entry the publish flow emits:
 - Direct-sharing toggle in the CardHeader corner (matches `EmailIntegrationCard` / `WebappShareCard` pattern); body collapses when disabled
 - "Share" button opens dialog with email input form
 - List of current shares with revoke buttons
-- Confirmation dialog when disabling sharing with active shares
+- Confirmation dialog when disabling sharing with active shares. The dialog also fetches `GET /credentials/{id}/deletion-impact` (shared query key `["credential-deletion-impact", id]`) when open; when the credential is PBP in published bundles, the dialog shows a destructive alert listing the affected bundles and install count so the publisher can see the blast radius before confirming.
 - "Used in Bundles" block listing usages where `provided_by="publisher"`; each entry deep-links to `/agent/{publisher_install_id}#bundle`
 - Early-returns `null` when `useRole().isAgentUser` is true, so the entire card is hidden from `agent-user` accounts
+
+### DeleteCredential (`frontend/src/components/Credentials/DeleteCredential.tsx`)
+- Service credential delete dialog used from the credential detail page and credential card dropdown menu
+- Fetches `GET /credentials/{id}/deletion-impact` (query key `["credential-deletion-impact", id]`) when the dialog opens
+- Tier 0: lists affected own agents by name if any
+- Tier 1: shows a destructive alert "N users will lose access to this credential immediately"
+- Tier 2: shows a destructive alert describing the broken installs, lists affected bundles with "Open" links to the publisher install's Bundle tab, and replaces the "Delete" button with "Force delete & break installs" (passes `force=true`)
+- On a 409 race (a non-forced delete that comes back 409 mid-dialog): invalidates the impact query and shows an inline error toast instead of a generic error
+
+### DeleteAICredentialDialog (`frontend/src/components/UserSettings/DeleteAICredentialDialog.tsx`)
+- AI credential delete dialog used from Settings → AI Credentials
+- Fetches `GET /ai-credentials/{id}/deletion-impact` (query key `["ai-credential-deletion-impact", id]`) when open
+- Tier 2 only (no Tier 1 path): shows a destructive alert describing bundle degradation, lists affected bundles (with conversation/building usage line), and shows "Force delete & degrade bundles" button (passes `force=true`)
+- Tier 0: no extra warning, standard delete confirmation
 
 ### CredentialTemplateSharing (`frontend/src/components/Credentials/CredentialTemplateSharing.tsx`)
 - Template-sharing toggle in the CardHeader corner; body collapses when disabled
@@ -185,6 +213,8 @@ Each entry the publish flow emits:
 - `["credential-with-data", credentialId]` - Decrypted credential payload (used by template-sharing UI to read field schema)
 - `["credential-shares", credentialId]` - Shares for a credential
 - `["credential-bundle-usages", credentialId]` - `GET /credentials/{id}/bundles` response, filtered client-side by `provided_by` for each card
+- `["credential-deletion-impact", credentialId]` - `GET /credentials/{id}/deletion-impact` response; shared between `DeleteCredential` and the disable-sharing dialog in `CredentialSharing` so either entry point warms the same cache
+- `["ai-credential-deletion-impact", credentialId]` - `GET /ai-credentials/{id}/deletion-impact` response; used by `DeleteAICredentialDialog`
 - `["credentials-shared-with-me"]` - Credentials shared with current user
 - `["agent", agentId, "setup-status"]` / `["agent", agentId, "setup-credentials"]` - Driven by the install setup page
 
@@ -204,6 +234,8 @@ Each entry the publish flow emits:
 - Template publish requires `allow_template_sharing=true` (enforced by `PublishService._validate_publisher_provides`)
 - Cannot share with non-existent users, yourself, or create duplicates
 - `update_credential` rejects malformed `template_private_fields` payloads (must be `list[str]`)
+- `CredentialInUseError` — raised by `CredentialsService.delete_credential` at Tier 2; carries `impact: CredentialDeletionImpact`. The route maps it to HTTP 409 and serialises `impact.model_dump(mode="json")` as the response `detail`.
+- `AICredentialInUseError` — raised by `AICredentialsService.delete_credential` at Tier 2; carries `impact: AICredentialDeletionImpact`. Same HTTP 409 mapping.
 
 ### Access Control
 - `CredentialShareService.can_user_access_credential()` - Returns true if owner OR has share

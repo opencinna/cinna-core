@@ -26,8 +26,8 @@ Enables users to share their credentials with other users, allowing recipients t
 
 1. Owner revokes a specific share from the credential's sharing management panel
 2. Alternatively, owner disables sharing entirely (`allow_sharing=false`)
-3. Disabling sharing immediately revokes ALL existing shares (destructive, with confirmation)
-4. Deleting a credential cascades to delete all its shares
+3. Disabling sharing immediately revokes ALL existing shares (destructive, with confirmation). When the credential is publisher-provided (PBP) in published bundles, the disable-sharing dialog also surfaces the blast-radius data (same `GET /credentials/{id}/deletion-impact` cache as the delete dialog) so the publisher can see which bundles and installs will break before confirming.
+4. Deleting a credential is **blast-radius-gated** (see Deletion Impact Gate below).
 
 ### Template Sharing (bundle context)
 
@@ -84,6 +84,22 @@ Validation (enforced by `PublishService._validate_publisher_provides` before sna
 | `allow_sharing=true` | Credential can be shared with users | Share with user, Disable sharing |
 | Shared | CredentialShare record exists for a recipient | Revoke share |
 
+### Deletion Impact Gate
+
+Deleting a service credential now goes through a graduated blast-radius check. Before performing the delete the service calls `get_deletion_impact`, which classifies the operation into one of three tiers:
+
+| Tier | Condition | Outcome |
+|------|-----------|---------|
+| **0** (self-only) | Credential linked only to owner's own agents; no `CredentialShare` rows; not PBP in a published bundle with foreign installs | Delete proceeds. UI lists affected own agents. |
+| **1** (direct shares) | At least one `CredentialShare` exists, but the credential is not PBP in a published bundle with active foreign installs | Delete proceeds with a warning: "N users will lose access immediately." |
+| **2** (PBP in published bundle, active installs) | Credential is publisher-provided in a published bundle AND has at least one active foreign install | Non-forced `DELETE` returns **HTTP 409** with the structured `CredentialDeletionImpact` payload. The owner can pass `?force=true` to override. The UI shows the affected bundles, the install count, and a "Force delete & break installs" button. On force-delete the affected installs degrade to `publisher_broken` state at runtime (the `InstallReadinessGate` detects the missing PBP credential). |
+
+Important scoping: `active_install_count` in the impact payload is restricted to installs of the PBP bundle(s). Direct-share recipients who have linked the same `Credential` row to their own agents are counted in `direct_share_count` (Tier 1), not `active_install_count`, so the two tiers cannot over-count each other.
+
+PBT (template) installs materialise an independent copy of the credential owned by the installer — they are unaffected by deletion of the publisher's original row and do not count toward Tier 2.
+
+AI credentials (LLM provider keys) follow the same 409 / force pattern but have only **Tier 0** and **Tier 2**. Tier 2 for AI credentials means the credential is referenced by a published bundle as a publisher-provided AI credential (`publisher_ai_credential_conversation_id` / `publisher_ai_credential_building_id`). There is no Tier 1 (no direct AI credential shares). A forced delete nulls the FK via `ON DELETE SET NULL`, degrading the bundle back to "user provides". The force button reads "Force delete & degrade bundles".
+
 ### Constraints
 
 - Cannot share credentials with `allow_sharing=false`
@@ -91,7 +107,7 @@ Validation (enforced by `PublishService._validate_publisher_provides` before sna
 - Cannot create duplicate shares (same credential + same user)
 - Cannot share with non-existent users
 - Disabling `allow_sharing` immediately revokes ALL existing shares
-- Deleting credential cascades to delete all shares
+- Deleting a credential cascades to delete all shares (after passing the blast-radius gate described above)
 - Private fields (from `template_private_fields`) are never stored in the bundle revision JSON; `PublishService._template_payload_for` strips them before writing `template_data` to the manifest
 
 ### Access Model

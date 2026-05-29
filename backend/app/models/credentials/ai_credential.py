@@ -133,3 +133,40 @@ class AffectedEnvironmentsPublic(SQLModel):
     environments: list[AffectedEnvironmentPublic]
     shared_with_users: list[SharedUserPublic]
     count: int
+
+
+class AICredentialBundleUsage(SQLModel):
+    """One bundle that references this AI credential as a publisher-provided
+    conversation and/or building credential.
+
+    ``publisher_install_id`` is the publisher install's ``Agent.id`` so the
+    frontend can deep-link into the agent's Bundle tab (the platform has no
+    standalone ``/bundles/{uuid}`` route).
+    """
+
+    bundle_uuid: uuid.UUID
+    bundle_id: str
+    display_name: str
+    publisher_install_id: uuid.UUID | None = None
+    used_for_conversation: bool = False
+    used_for_building: bool = False
+
+
+class AICredentialDeletionImpact(SQLModel):
+    """Blast-radius classification for deleting an AI credential.
+
+    Deleting a publisher AI credential nulls the bundle's
+    ``publisher_ai_credential_*_id`` FK via ``ON DELETE SET NULL``, silently
+    degrading affected bundles to "user provides". ``tier`` grades the impact:
+
+    - ``0`` — no published bundle references this credential; deletion is safe.
+    - ``2`` — one or more bundles reference it as a publisher-provided AI
+      credential; deletion is blocked (HTTP 409) unless ``force=true``.
+
+    (There is no Tier 1 for AI credentials: direct AI-credential shares are
+    materialised from bundle PBP wiring, so the bundle reference is the
+    meaningful blast radius.)
+    """
+
+    tier: int
+    bundle_usages: list[AICredentialBundleUsage] = []
