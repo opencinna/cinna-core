@@ -54,7 +54,7 @@ All business logic is in `ActivityService` — routes are thin controllers that 
 |--------|------|---------|
 | `POST /activities/` | Create activity (validates agent/session ownership) |
 | `GET /activities/` | List activities. Params: `agent_id`, `user_workspace_id`, `include_archived` (bool, default false), `skip`, `limit`, `order_desc`. Joins Agent, Session, InputTask for extended fields |
-| `POST /activities/archive-logs` | Archive all non-active log activities (`action_required=""`, type≠`session_running`). Returns `{"archived_count": N}` |
+| `POST /activities/archive-logs` | Archive all log activities except live ones (type≠`session_running`); includes action-required activities. Returns `{"archived_count": N}` |
 | `GET /activities/stats` | Returns `unread_count` and `action_required_count` (both exclude archived) |
 | `PATCH /activities/{id}` | Update activity (mark as read). Emits `ACTIVITY_UPDATED` WebSocket event. Async |
 | `POST /activities/mark-read` | Batch mark activities as read. Emits `ACTIVITY_UPDATED` for each. Async |
@@ -88,7 +88,7 @@ All business logic is in `ActivityService` — routes are thin controllers that 
 - `list_user_activities_extended()` — Joins Activity + Agent + Session + InputTask. Supports `include_archived` flag (default False). Returns `ActivitiesPublicExtended` with `task_short_code` and `task_title` fields
 
 **Archive:**
-- `archive_logs()` — Marks `is_archived=True` and `is_read=True` for all activities where `action_required==""` and `activity_type != "session_running"`. Returns count archived
+- `archive_logs()` — Marks `is_archived=True` and `is_read=True` for all activities where `activity_type != "session_running"` (action-required activities included; only live `session_running` excluded). Returns count archived
 
 **Session/Task Lookup Methods:**
 - `find_activity_by_session_and_type()` — Find by session_id + activity_type (latest)

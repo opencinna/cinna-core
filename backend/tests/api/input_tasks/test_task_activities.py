@@ -341,8 +341,9 @@ def test_archive_logs_and_filtering(
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
-    archive_logs endpoint marks non-active log activities as archived; is_archived
-    filtering hides them from the default list but exposes them via include_archived=true.
+    archive_logs endpoint marks log activities (including action-required ones) as
+    archived; is_archived filtering hides them from the default list but exposes them
+    via include_archived=true. Only live session_running activities are excluded.
 
       Phase A: Create a plain log activity (action_required="")
       Phase B: Create an action-required activity (action_required="task_action_required")
@@ -350,7 +351,7 @@ def test_archive_logs_and_filtering(
       Phase D: Call POST /activities/archive-logs — verify archived_count >= 1
       Phase E: Plain log activity no longer in default list
       Phase F: Plain log activity IS present in include_archived=true list
-      Phase G: Action-required activity is still in default list (never archived)
+      Phase G: Action-required activity is ALSO archived (gone from default list)
       Phase H: Stats endpoint excludes the archived activity from unread_count
     """
     headers = superuser_token_headers
@@ -413,11 +414,17 @@ def test_archive_logs_and_filtering(
     assert archived_activity["is_archived"] is True
     assert archived_activity["is_read"] is True  # archive-logs also marks as read
 
-    # ── Phase G: Action-required activity still in default list ──────────────
+    # ── Phase G: Action-required activity is ALSO archived ────────────────────
     default_ids_after2 = [a["id"] for a in _get_activities(client, headers)]
-    assert action_id in default_ids_after2, (
-        "Action-required activity must NOT be archived by archive-logs"
+    assert action_id not in default_ids_after2, (
+        "Action-required activity should now be archived by archive-logs"
     )
+    # And it must be retrievable with include_archived=true, flagged archived
+    r = client.get(f"{_ACTIVITIES_BASE}/", headers=headers, params={"include_archived": "true"})
+    assert r.status_code == 200
+    archived_action = next(a for a in r.json()["data"] if a["id"] == action_id)
+    assert archived_action["is_archived"] is True
+    assert archived_action["is_read"] is True
 
     # ── Phase H: Stats exclude archived activities ────────────────────────────
     # The plain activity was unread before archiving — after archiving it must not

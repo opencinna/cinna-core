@@ -43,7 +43,7 @@ Activities are a persistent notification/logging system that tracks important sy
 
 **5. Archive Logs**
 1. User wants to clean up the Logs section without deleting history
-2. User clicks "Archive Logs" — all non-active log activities (empty `action_required`, not `session_running`) are marked `is_archived=true` and `is_read=true`
+2. User clicks "Archive Logs" — all log activities except live `session_running` ones (including action-required ones such as "Answers required") are marked `is_archived=true` and `is_read=true`
 3. Main Activities page no longer shows archived entries
 4. User can view full history (including archived) via the All Logs page (`/activities/all`)
 
@@ -59,7 +59,7 @@ Activities are a persistent notification/logging system that tracks important sy
 - **Workspace inheritance**: Activity inherits `user_workspace_id` from its linked session, task, or agent
 - **Result state priority**: When agent declares `result_state` via session state tool, the generic `session_completed` activity is skipped in favor of the more meaningful state-specific activity
 - **Archive vs. delete**: `archive_logs` never deletes — it only hides. Archived activities are excluded from stats and the default list, but retrievable via `include_archived=true`
-- **Archive scope**: Only activities where `action_required == ""` and `activity_type != "session_running"` are eligible for archiving
+- **Archive scope**: All activities except live `session_running` ones are eligible for archiving — action-required activities (e.g. `answers_required`) are archived too; only `activity_type == "session_running"` is excluded
 - **Stats exclude archived**: `unread_count` and `action_required_count` in the stats endpoint always exclude `is_archived=true` activities
 - **Session activities carry task link**: When a session was started from an input task, all session lifecycle activities (`session_running`, `session_completed`, `error_occurred`, etc.) are linked to that task via `input_task_id`
 - **Task lifecycle agent fallback**: Task lifecycle activities use `source_agent_id` from the event if present; otherwise fall back to `task.selected_agent_id` so `agent_id` is always populated when a task has an assigned agent

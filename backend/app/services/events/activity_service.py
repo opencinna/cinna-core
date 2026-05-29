@@ -243,16 +243,17 @@ class ActivityService:
 
     @staticmethod
     def archive_logs(db_session: DBSession, user_id: UUID) -> int:
-        """Archive non-active log activities.
+        """Archive log activities.
 
-        Marks activities as archived where action_required is empty and
-        activity_type is not 'session_running'. Returns count archived.
+        Marks activities as archived where activity_type is not
+        'session_running'. Action-required activities (e.g. 'answers_required')
+        are archived too — only live 'session_running' activities are excluded.
+        Returns count archived.
         """
         statement = select(Activity).where(
             and_(
                 Activity.user_id == user_id,
                 Activity.is_archived == False,
-                Activity.action_required == "",
                 Activity.activity_type != "session_running",
             )
         )
