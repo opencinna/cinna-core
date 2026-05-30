@@ -351,7 +351,9 @@ def test_delete_ai_credential_other_user(
         f"{settings.API_V1_STR}/ai-credentials/{cred['id']}",
         headers=other_headers,
     )
-    assert r.status_code == 403
+    # Delete is owner-only and returns 404 (not 403) for non-owners to avoid
+    # leaking credential existence — see _get_owned_credential_or_404.
+    assert r.status_code == 404
 
     # Verify it still exists
     get_ai_credential(client, superuser_token_headers, cred["id"])
