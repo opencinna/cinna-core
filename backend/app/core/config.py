@@ -272,6 +272,17 @@ class Settings(BaseSettings):
     DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     DESKTOP_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
+    # App Sync (native-client data sync — zero-knowledge document store)
+    # Limits and quotas are enforced on CIPHERTEXT bytes (the server never
+    # sees plaintext). See docs/drafts/desktop-mobile-data-sync_plan.md §4.4.
+    APP_SYNC_MAX_PAYLOAD_BYTES: int = 1024 * 1024  # 1 MiB per record
+    APP_SYNC_MAX_RECORDS_PER_PUSH: int = 500
+    APP_SYNC_MAX_PULL_LIMIT: int = 500  # pull pagination ceiling (independent of push batch)
+    APP_SYNC_QUOTA_BYTES: int = 256 * 1024 * 1024  # 256 MiB per user
+    APP_SYNC_QUOTA_RECORDS: int = 50_000
+    APP_SYNC_TOMBSTONE_RETENTION_DAYS: int = 180
+    APP_SYNC_PAIRING_TTL_SECONDS: int = 300  # 5 minutes
+
     # Run Command Execution Settings
     RUN_COMMAND_TIMEOUT_SECONDS: int = 300
     RUN_COMMAND_MAX_OUTPUT_BYTES: int = 262144  # 256 KB

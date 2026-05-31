@@ -574,6 +574,40 @@ from .desktop_auth.desktop_oauth_client import (
 from .desktop_auth.desktop_refresh_token import DesktopRefreshToken
 from .desktop_auth.desktop_auth_code import DesktopAuthCode
 from .desktop_auth.desktop_auth_request import DesktopAuthRequest
+from .app_sync.app_sync_record import AppSyncRecord
+from .app_sync.app_sync_state import AppSyncState
+from .app_sync.app_sync_device import (
+    AppSyncDevice,
+    AppSyncDeviceCreate,
+    AppSyncDevicePublic,
+)
+from .app_sync.app_sync_key_envelope import (
+    AppSyncKeyEnvelope,
+    AppSyncKeyEnvelopeCreate,
+    AppSyncKeyEnvelopePublic,
+)
+from .app_sync.app_sync_pairing import (
+    AppSyncPairing,
+    PairingStartRequest,
+    PairingStartResponse,
+    PairingStatusPublic,
+    PairingCompleteRequest,
+)
+from .app_sync.app_sync_schemas import (
+    SyncRecordUpsert,
+    SyncRecordPublic,
+    SyncPushResult,
+    SyncRequest,
+    PullRequest,
+    PushRequest,
+    WipeRequest,
+    SyncResponse,
+    SyncStatePublic,
+    EncryptionStatePublic,
+    KeyEnvelopeInput,
+    DeviceInput,
+    EncryptionInitRequest,
+)
 from .external.external_agents import (
     ExternalTargetPublic,
     ExternalAgentListResponse,
@@ -1086,6 +1120,33 @@ __all__ = [
     "DesktopRefreshToken",
     "DesktopAuthCode",
     "DesktopAuthRequest",
+    # App Sync
+    "AppSyncRecord",
+    "AppSyncState",
+    "AppSyncDevice",
+    "AppSyncDeviceCreate",
+    "AppSyncDevicePublic",
+    "AppSyncKeyEnvelope",
+    "AppSyncKeyEnvelopeCreate",
+    "AppSyncKeyEnvelopePublic",
+    "AppSyncPairing",
+    "PairingStartRequest",
+    "PairingStartResponse",
+    "PairingStatusPublic",
+    "PairingCompleteRequest",
+    "SyncRecordUpsert",
+    "SyncRecordPublic",
+    "SyncPushResult",
+    "SyncRequest",
+    "PullRequest",
+    "PushRequest",
+    "WipeRequest",
+    "SyncResponse",
+    "SyncStatePublic",
+    "EncryptionStatePublic",
+    "KeyEnvelopeInput",
+    "DeviceInput",
+    "EncryptionInitRequest",
     # External Agent Access API
     "ExternalTargetPublic",
     "ExternalAgentListResponse",

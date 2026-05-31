@@ -1423,6 +1423,29 @@ export type AppDataVolumesPublic = {
     count: number;
 };
 
+export type AppSyncDevicePublic = {
+    id: string;
+    device_label: string;
+    public_key: string;
+    external_client_id?: (string | null);
+    is_revoked: boolean;
+    created_at: string;
+    last_seen_at?: (string | null);
+};
+
+export type AppSyncKeyEnvelopePublic = {
+    id: string;
+    wrap_method: string;
+    umk_version: number;
+    wrapped_key: string;
+    kdf?: (string | null);
+    kdf_params?: ({
+    [key: string]: unknown;
+} | null);
+    device_id?: (string | null);
+    created_at: string;
+};
+
 /**
  * Full article content for retrieval step.
  */
@@ -1948,6 +1971,12 @@ export type DesktopOAuthClientPublic = {
     is_revoked: boolean;
 };
 
+export type DeviceInput = {
+    device_label: string;
+    public_key: string;
+    external_client_id?: (string | null);
+};
+
 /**
  * Public schema for discoverable knowledge sources (read-only admin view).
  */
@@ -1977,6 +2006,19 @@ export type EmailAccessMode = 'open' | 'restricted';
 export type EmailCloneShareMode = 'user' | 'builder';
 
 export type EmailProcessAs = 'new_session' | 'new_task';
+
+export type EncryptionInitRequest = {
+    device: DeviceInput;
+    envelopes?: Array<KeyEnvelopeInput>;
+};
+
+export type EncryptionStatePublic = {
+    initialized: boolean;
+    active_umk_version: number;
+    has_recovery: boolean;
+    has_passphrase: boolean;
+    devices?: Array<AppSyncDevicePublic>;
+};
 
 export type EncryptionType = 'ssl' | 'tls' | 'starttls' | 'none';
 
@@ -2551,6 +2593,19 @@ export type InstallRequest = {
     ai_credential_selections?: (AICredentialSelections | null);
 };
 
+export type KeyEnvelopeInput = {
+    wrap_method: 'device' | 'recovery' | 'passphrase';
+    umk_version?: number;
+    wrapped_key: string;
+    kdf?: (string | null);
+    kdf_params?: ({
+    [key: string]: unknown;
+} | null);
+    device_id?: (string | null);
+};
+
+export type wrap_method = 'device' | 'recovery' | 'passphrase';
+
 /**
  * Public schema for knowledge article.
  */
@@ -2941,6 +2996,28 @@ export type OdooVerifyResponse = {
     user_id?: (number | null);
 };
 
+export type PairingCompleteRequest = {
+    sealed_umk: string;
+};
+
+export type PairingStartRequest = {
+    new_device_pubkey: string;
+    device_label?: (string | null);
+};
+
+export type PairingStartResponse = {
+    pairing_code: string;
+    expires_at: string;
+};
+
+export type PairingStatusPublic = {
+    new_device_pubkey: string;
+    device_label?: (string | null);
+    status: string;
+    sealed_umk?: (string | null);
+    expires_at: string;
+};
+
 /**
  * Body of ``POST /login/mfa/passkey/options``.
  */
@@ -3066,6 +3143,16 @@ export type PublishSettingsUpdate = {
     [key: string]: _CredentialOverride;
 } | null);
     ai_credentials?: (_AICredentialDraft | null);
+};
+
+export type PullRequest = {
+    cursor?: number;
+    collections?: (Array<(string)> | null);
+    limit?: number;
+};
+
+export type PushRequest = {
+    changes?: Array<SyncRecordUpsert>;
 };
 
 /**
@@ -3571,6 +3658,64 @@ export type StepUpProof = {
     [key: string]: unknown;
 } | null);
     passkey_challenge_token?: (string | null);
+};
+
+export type SyncPushResult = {
+    collection: string;
+    client_entity_id: string;
+    status: 'applied' | 'conflict' | 'unchanged' | 'rejected';
+    seq: number;
+    server_record?: (SyncRecordPublic | null);
+};
+
+export type status2 = 'applied' | 'conflict' | 'unchanged' | 'rejected';
+
+export type SyncRecordPublic = {
+    collection: string;
+    client_entity_id: string;
+    payload_ciphertext?: (string | null);
+    enc_umk_version: number;
+    deleted: boolean;
+    seq: number;
+    server_updated_at: string;
+    last_writer_client_id?: (string | null);
+};
+
+export type SyncRecordUpsert = {
+    collection: string;
+    client_entity_id: string;
+    payload_ciphertext?: (string | null);
+    enc_umk_version?: number;
+    content_fingerprint?: (string | null);
+    deleted?: boolean;
+    client_updated_at: string;
+    base_seq?: (number | null);
+};
+
+export type SyncRequest = {
+    cursor?: number;
+    changes?: Array<SyncRecordUpsert>;
+    collections?: (Array<(string)> | null);
+    limit?: number;
+};
+
+export type SyncResponse = {
+    applied?: Array<SyncPushResult>;
+    changes?: Array<SyncRecordPublic>;
+    next_cursor: number;
+    has_more: boolean;
+    server_time: string;
+};
+
+export type SyncStatePublic = {
+    cursor: number;
+    total_records: number;
+    total_bytes: number;
+    quota_bytes: number;
+    quota_records: number;
+    collection_counts?: {
+        [key: string]: (number);
+    };
 };
 
 export type TaskAttachmentPublic = {
@@ -4100,6 +4245,10 @@ export type WebappDataApiRequest = {
 
 export type WebappShareAuthRequest = {
     security_code?: (string | null);
+};
+
+export type WipeRequest = {
+    collections?: (Array<(string)> | null);
 };
 
 /**
@@ -4995,6 +5144,91 @@ export type AppDataWipeAppDataVolumeData = {
 };
 
 export type AppDataWipeAppDataVolumeResponse = (void);
+
+export type AppSyncSyncData = {
+    requestBody: SyncRequest;
+};
+
+export type AppSyncSyncResponse = (SyncResponse);
+
+export type AppSyncWipeData = {
+    requestBody?: (WipeRequest | null);
+};
+
+export type AppSyncWipeResponse = (Message);
+
+export type AppSyncPullData = {
+    requestBody: PullRequest;
+};
+
+export type AppSyncPullResponse = (SyncResponse);
+
+export type AppSyncPushData = {
+    requestBody: PushRequest;
+};
+
+export type AppSyncPushResponse = (SyncResponse);
+
+export type AppSyncGetStateResponse = (SyncStatePublic);
+
+export type AppSyncGetEncryptionResponse = (EncryptionStatePublic);
+
+export type AppSyncInitEncryptionData = {
+    requestBody: EncryptionInitRequest;
+};
+
+export type AppSyncInitEncryptionResponse = (EncryptionStatePublic);
+
+export type AppSyncListKeysData = {
+    umkVersion?: (number | null);
+};
+
+export type AppSyncListKeysResponse = (Array<AppSyncKeyEnvelopePublic>);
+
+export type AppSyncAddKeyData = {
+    requestBody: KeyEnvelopeInput;
+};
+
+export type AppSyncAddKeyResponse = (AppSyncKeyEnvelopePublic);
+
+export type AppSyncDeleteKeyData = {
+    envelopeId: string;
+};
+
+export type AppSyncDeleteKeyResponse = (Message);
+
+export type AppSyncListDevicesResponse = (Array<AppSyncDevicePublic>);
+
+export type AppSyncRegisterDeviceData = {
+    requestBody: DeviceInput;
+};
+
+export type AppSyncRegisterDeviceResponse = (AppSyncDevicePublic);
+
+export type AppSyncRevokeDeviceData = {
+    deviceId: string;
+};
+
+export type AppSyncRevokeDeviceResponse = (Message);
+
+export type AppSyncPairingStartData = {
+    requestBody: PairingStartRequest;
+};
+
+export type AppSyncPairingStartResponse = (PairingStartResponse);
+
+export type AppSyncPairingGetData = {
+    code: string;
+};
+
+export type AppSyncPairingGetResponse = (PairingStatusPublic);
+
+export type AppSyncPairingCompleteData = {
+    code: string;
+    requestBody: PairingCompleteRequest;
+};
+
+export type AppSyncPairingCompleteResponse = (Message);
 
 export type BundlesListBundlesResponse = (AgentBundlesPublic);
 

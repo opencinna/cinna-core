@@ -7111,6 +7111,125 @@ export const AppDataVolumesPublicSchema = {
     title: 'AppDataVolumesPublic'
 } as const;
 
+export const AppSyncDevicePublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        device_label: {
+            type: 'string',
+            title: 'Device Label'
+        },
+        public_key: {
+            type: 'string',
+            title: 'Public Key'
+        },
+        external_client_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'External Client Id'
+        },
+        is_revoked: {
+            type: 'boolean',
+            title: 'Is Revoked'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        last_seen_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Seen At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'device_label', 'public_key', 'is_revoked', 'created_at'],
+    title: 'AppSyncDevicePublic'
+} as const;
+
+export const AppSyncKeyEnvelopePublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        wrap_method: {
+            type: 'string',
+            title: 'Wrap Method'
+        },
+        umk_version: {
+            type: 'integer',
+            title: 'Umk Version'
+        },
+        wrapped_key: {
+            type: 'string',
+            title: 'Wrapped Key'
+        },
+        kdf: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Kdf'
+        },
+        kdf_params: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Kdf Params'
+        },
+        device_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Device Id'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'wrap_method', 'umk_version', 'wrapped_key', 'created_at'],
+    title: 'AppSyncKeyEnvelopePublic'
+} as const;
+
 export const ArticleContentSchema = {
     properties: {
         id: {
@@ -9169,6 +9288,34 @@ export const DesktopOAuthClientPublicSchema = {
     title: 'DesktopOAuthClientPublic'
 } as const;
 
+export const DeviceInputSchema = {
+    properties: {
+        device_label: {
+            type: 'string',
+            title: 'Device Label'
+        },
+        public_key: {
+            type: 'string',
+            title: 'Public Key'
+        },
+        external_client_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'External Client Id'
+        }
+    },
+    type: 'object',
+    required: ['device_label', 'public_key'],
+    title: 'DeviceInput'
+} as const;
+
 export const DiscoverableSourcePublicSchema = {
     properties: {
         id: {
@@ -9251,6 +9398,55 @@ export const EmailProcessAsSchema = {
     type: 'string',
     enum: ['new_session', 'new_task'],
     title: 'EmailProcessAs'
+} as const;
+
+export const EncryptionInitRequestSchema = {
+    properties: {
+        device: {
+            '$ref': '#/components/schemas/DeviceInput'
+        },
+        envelopes: {
+            items: {
+                '$ref': '#/components/schemas/KeyEnvelopeInput'
+            },
+            type: 'array',
+            title: 'Envelopes'
+        }
+    },
+    type: 'object',
+    required: ['device'],
+    title: 'EncryptionInitRequest'
+} as const;
+
+export const EncryptionStatePublicSchema = {
+    properties: {
+        initialized: {
+            type: 'boolean',
+            title: 'Initialized'
+        },
+        active_umk_version: {
+            type: 'integer',
+            title: 'Active Umk Version'
+        },
+        has_recovery: {
+            type: 'boolean',
+            title: 'Has Recovery'
+        },
+        has_passphrase: {
+            type: 'boolean',
+            title: 'Has Passphrase'
+        },
+        devices: {
+            items: {
+                '$ref': '#/components/schemas/AppSyncDevicePublic'
+            },
+            type: 'array',
+            title: 'Devices'
+        }
+    },
+    type: 'object',
+    required: ['initialized', 'active_umk_version', 'has_recovery', 'has_passphrase'],
+    title: 'EncryptionStatePublic'
 } as const;
 
 export const EncryptionTypeSchema = {
@@ -11978,6 +12174,63 @@ along with the install-time shim. Only the typed
 :class:\`InstallCredentialSelection\` shape is accepted now.`
 } as const;
 
+export const KeyEnvelopeInputSchema = {
+    properties: {
+        wrap_method: {
+            type: 'string',
+            enum: ['device', 'recovery', 'passphrase'],
+            title: 'Wrap Method'
+        },
+        umk_version: {
+            type: 'integer',
+            title: 'Umk Version',
+            default: 1
+        },
+        wrapped_key: {
+            type: 'string',
+            title: 'Wrapped Key'
+        },
+        kdf: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Kdf'
+        },
+        kdf_params: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Kdf Params'
+        },
+        device_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Device Id'
+        }
+    },
+    type: 'object',
+    required: ['wrap_method', 'wrapped_key'],
+    title: 'KeyEnvelopeInput'
+} as const;
+
 export const KnowledgeArticlePublicSchema = {
     properties: {
         id: {
@@ -13647,6 +13900,101 @@ export const OdooVerifyResponseSchema = {
     title: 'OdooVerifyResponse'
 } as const;
 
+export const PairingCompleteRequestSchema = {
+    properties: {
+        sealed_umk: {
+            type: 'string',
+            title: 'Sealed Umk'
+        }
+    },
+    type: 'object',
+    required: ['sealed_umk'],
+    title: 'PairingCompleteRequest'
+} as const;
+
+export const PairingStartRequestSchema = {
+    properties: {
+        new_device_pubkey: {
+            type: 'string',
+            title: 'New Device Pubkey'
+        },
+        device_label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Device Label'
+        }
+    },
+    type: 'object',
+    required: ['new_device_pubkey'],
+    title: 'PairingStartRequest'
+} as const;
+
+export const PairingStartResponseSchema = {
+    properties: {
+        pairing_code: {
+            type: 'string',
+            title: 'Pairing Code'
+        },
+        expires_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Expires At'
+        }
+    },
+    type: 'object',
+    required: ['pairing_code', 'expires_at'],
+    title: 'PairingStartResponse'
+} as const;
+
+export const PairingStatusPublicSchema = {
+    properties: {
+        new_device_pubkey: {
+            type: 'string',
+            title: 'New Device Pubkey'
+        },
+        device_label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Device Label'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        sealed_umk: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Sealed Umk'
+        },
+        expires_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Expires At'
+        }
+    },
+    type: 'object',
+    required: ['new_device_pubkey', 'status', 'expires_at'],
+    title: 'PairingStatusPublic'
+} as const;
+
 export const PasskeyAuthOptionsRequestSchema = {
     properties: {
         challenge_token: {
@@ -13960,6 +14308,51 @@ preserves the existing value; sending it (even as empty) replaces it.
 - \`\`ai_credentials\`\`: pre-publish AI credential draft (see
   \`\`_AICredentialDraft\`\`). Each id, when non-null, must reference an
   \`\`AICredential\`\` owned by the publisher.`
+} as const;
+
+export const PullRequestSchema = {
+    properties: {
+        cursor: {
+            type: 'integer',
+            title: 'Cursor',
+            default: 0
+        },
+        collections: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Collections'
+        },
+        limit: {
+            type: 'integer',
+            title: 'Limit',
+            default: 500
+        }
+    },
+    type: 'object',
+    title: 'PullRequest'
+} as const;
+
+export const PushRequestSchema = {
+    properties: {
+        changes: {
+            items: {
+                '$ref': '#/components/schemas/SyncRecordUpsert'
+            },
+            type: 'array',
+            title: 'Changes'
+        }
+    },
+    type: 'object',
+    title: 'PushRequest'
 } as const;
 
 export const RecoveryCodeStatusSchema = {
@@ -16138,6 +16531,268 @@ export const StepUpProofSchema = {
     description: `Fresh-factor proof required to disable/weaken 2FA.
 
 Exactly one of these must be supplied — validated server-side.`
+} as const;
+
+export const SyncPushResultSchema = {
+    properties: {
+        collection: {
+            type: 'string',
+            title: 'Collection'
+        },
+        client_entity_id: {
+            type: 'string',
+            title: 'Client Entity Id'
+        },
+        status: {
+            type: 'string',
+            enum: ['applied', 'conflict', 'unchanged', 'rejected'],
+            title: 'Status'
+        },
+        seq: {
+            type: 'integer',
+            title: 'Seq'
+        },
+        server_record: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/SyncRecordPublic'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        }
+    },
+    type: 'object',
+    required: ['collection', 'client_entity_id', 'status', 'seq'],
+    title: 'SyncPushResult'
+} as const;
+
+export const SyncRecordPublicSchema = {
+    properties: {
+        collection: {
+            type: 'string',
+            title: 'Collection'
+        },
+        client_entity_id: {
+            type: 'string',
+            title: 'Client Entity Id'
+        },
+        payload_ciphertext: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Payload Ciphertext'
+        },
+        enc_umk_version: {
+            type: 'integer',
+            title: 'Enc Umk Version'
+        },
+        deleted: {
+            type: 'boolean',
+            title: 'Deleted'
+        },
+        seq: {
+            type: 'integer',
+            title: 'Seq'
+        },
+        server_updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Server Updated At'
+        },
+        last_writer_client_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Writer Client Id'
+        }
+    },
+    type: 'object',
+    required: ['collection', 'client_entity_id', 'enc_umk_version', 'deleted', 'seq', 'server_updated_at'],
+    title: 'SyncRecordPublic'
+} as const;
+
+export const SyncRecordUpsertSchema = {
+    properties: {
+        collection: {
+            type: 'string',
+            title: 'Collection'
+        },
+        client_entity_id: {
+            type: 'string',
+            title: 'Client Entity Id'
+        },
+        payload_ciphertext: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Payload Ciphertext'
+        },
+        enc_umk_version: {
+            type: 'integer',
+            title: 'Enc Umk Version',
+            default: 1
+        },
+        content_fingerprint: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Content Fingerprint'
+        },
+        deleted: {
+            type: 'boolean',
+            title: 'Deleted',
+            default: false
+        },
+        client_updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Client Updated At'
+        },
+        base_seq: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Seq'
+        }
+    },
+    type: 'object',
+    required: ['collection', 'client_entity_id', 'client_updated_at'],
+    title: 'SyncRecordUpsert'
+} as const;
+
+export const SyncRequestSchema = {
+    properties: {
+        cursor: {
+            type: 'integer',
+            title: 'Cursor',
+            default: 0
+        },
+        changes: {
+            items: {
+                '$ref': '#/components/schemas/SyncRecordUpsert'
+            },
+            type: 'array',
+            title: 'Changes'
+        },
+        collections: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Collections'
+        },
+        limit: {
+            type: 'integer',
+            title: 'Limit',
+            default: 500
+        }
+    },
+    type: 'object',
+    title: 'SyncRequest'
+} as const;
+
+export const SyncResponseSchema = {
+    properties: {
+        applied: {
+            items: {
+                '$ref': '#/components/schemas/SyncPushResult'
+            },
+            type: 'array',
+            title: 'Applied'
+        },
+        changes: {
+            items: {
+                '$ref': '#/components/schemas/SyncRecordPublic'
+            },
+            type: 'array',
+            title: 'Changes'
+        },
+        next_cursor: {
+            type: 'integer',
+            title: 'Next Cursor'
+        },
+        has_more: {
+            type: 'boolean',
+            title: 'Has More'
+        },
+        server_time: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Server Time'
+        }
+    },
+    type: 'object',
+    required: ['next_cursor', 'has_more', 'server_time'],
+    title: 'SyncResponse'
+} as const;
+
+export const SyncStatePublicSchema = {
+    properties: {
+        cursor: {
+            type: 'integer',
+            title: 'Cursor'
+        },
+        total_records: {
+            type: 'integer',
+            title: 'Total Records'
+        },
+        total_bytes: {
+            type: 'integer',
+            title: 'Total Bytes'
+        },
+        quota_bytes: {
+            type: 'integer',
+            title: 'Quota Bytes'
+        },
+        quota_records: {
+            type: 'integer',
+            title: 'Quota Records'
+        },
+        collection_counts: {
+            additionalProperties: {
+                type: 'integer'
+            },
+            type: 'object',
+            title: 'Collection Counts'
+        }
+    },
+    type: 'object',
+    required: ['cursor', 'total_records', 'total_bytes', 'quota_bytes', 'quota_records'],
+    title: 'SyncStatePublic'
 } as const;
 
 export const TaskAttachmentPublicSchema = {
@@ -19059,6 +19714,27 @@ export const WebappShareAuthRequestSchema = {
     },
     type: 'object',
     title: 'WebappShareAuthRequest'
+} as const;
+
+export const WipeRequestSchema = {
+    properties: {
+        collections: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Collections'
+        }
+    },
+    type: 'object',
+    title: 'WipeRequest'
 } as const;
 
 export const WorkspaceAccessTypeSchema = {

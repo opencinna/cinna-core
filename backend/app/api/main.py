@@ -11,6 +11,7 @@ from app.api.routes import (
     agent_webhooks,
     app_agent_routes,
     app_data,
+    app_sync,
     bundles,
     catalog,
     cli,
@@ -134,6 +135,7 @@ api_router.include_router(identity.router)
 api_router.include_router(identity_contacts.router)
 api_router.include_router(cli.router)
 api_router.include_router(desktop_auth.router)
+api_router.include_router(app_sync.router)
 api_router.include_router(external_agents.router)
 api_router.include_router(external_a2a.router)
 
