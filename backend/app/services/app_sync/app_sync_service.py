@@ -6,14 +6,13 @@ are stored verbatim and returned verbatim. Conflict resolution (LWW) runs on
 cleartext metadata only (``client_updated_at`` + ``seq``); the no-op
 short-circuit compares the client-supplied ``content_fingerprint`` for equality.
 
-See docs/drafts/desktop-mobile-data-sync_plan.md (§4, §5, §12).
+See docs/application/app_sync/app_sync_tech.md.
 """
 from __future__ import annotations
 
 import hashlib
 import re
 import secrets
-import uuid
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -46,6 +45,14 @@ from app.models.app_sync.app_sync_schemas import (
 from app.models.app_sync.app_sync_state import AppSyncState
 
 _COLLECTION_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+# client_entity_id is an opaque, client-generated stable id (UUID, nanoid, …).
+# Shape allowlist: URL-safe, length-bounded — accepts UUIDs (36 chars) and
+# nanoids (21 chars, A-Za-z0-9_-); excludes whitespace, slashes, path
+# traversal, control chars, and absurd lengths. Fits VARCHAR(128).
+_CLIENT_ENTITY_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+# Footgun-blocker: a pure-digits id is the device-local autoincrement-rowid
+# mistake. UUIDs and nanoids both contain non-digit chars, so neither matches.
+_BARE_INTEGER_RE = re.compile(r"^\d+$")
 _CLOCK_SKEW_CEILING = timedelta(hours=24)
 
 
@@ -206,13 +213,18 @@ class AppSyncService:
             raise InvalidPayloadError(
                 f"Invalid collection name '{change.collection}'"
             )
-        # client_entity_id must be a well-formed UUID (the cross-device
-        # collision footgun-blocker, §3.5 / §4.4).
-        try:
-            uuid.UUID(str(change.client_entity_id))
-        except (ValueError, AttributeError, TypeError):
+        # client_entity_id must be a well-formed opaque client id — URL-safe,
+        # 8–128 chars (accepts UUIDs and nanoids), and not a bare integer (the
+        # cross-device collision footgun-blocker, §3.5 / §4.4).
+        if not _CLIENT_ENTITY_ID_RE.match(str(change.client_entity_id)):
             raise InvalidPayloadError(
-                f"client_entity_id '{change.client_entity_id}' is not a valid UUID"
+                f"client_entity_id '{change.client_entity_id}' is not a "
+                "well-formed opaque client id"
+            )
+        if _BARE_INTEGER_RE.match(str(change.client_entity_id)):
+            raise InvalidPayloadError(
+                f"client_entity_id '{change.client_entity_id}' must not be a "
+                "bare integer (device-local rowid)"
             )
 
         if change.deleted:

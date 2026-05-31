@@ -16,7 +16,7 @@ Key behaviors covered (per §14 checklist):
   7. Tombstone propagation
   8. LWW conflict resolution
   9. Idempotent re-push
-  10. Cross-device identity (two UUIDs → two rows; non-UUID → 422)
+  10. Cross-device identity (nanoid + UUID accepted; bare integer / malformed → 422)
   11. Ownership isolation (user A vs user B)
   12. Limits (payload > max → 413; batch > max → 422; quota → 413)
   13. Pagination (has_more + cursor advancement)
@@ -496,56 +496,121 @@ def test_delta_pull_tombstone_lww_idempotency(
 
 
 # ---------------------------------------------------------------------------
-# Scenario 7: Cross-device identity + UUID validation
+# Scenario 7: Cross-device identity + opaque entity-id validation
 # ---------------------------------------------------------------------------
 
 
-def test_cross_device_identity_and_uuid_validation(
+def test_cross_device_identity_and_entity_id_validation(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
     """
-    Entity identity rules:
-      1. Two different UUID client_entity_ids → two distinct rows
-      2. Non-UUID client_entity_id → 422 (footgun-blocker, §3.5)
-      3. Integer string as entity_id → 422
-      4. Both UUIDs appear in pull results as distinct records
+    Opaque client entity-id rules (spec §4 / app-sync-client-id-format-fix.md):
+
+    Accepted: any ^[A-Za-z0-9_-]{8,128}$ that is NOT a bare integer.
+    This covers both UUIDs (36 chars with hyphens) and nanoids (21 chars,
+    A-Za-z0-9_- alphabet). Both shapes are globally-unique by construction.
+
+    Rejected (422): bare integers (device-local rowid footgun), empty strings,
+    values longer than 128 chars, values containing '/', spaces, or control chars.
+
+      1. Push with a 21-char nanoid → applied; ciphertext pulled back byte-identical
+      2. Push with a UUIDv4 → applied (UUID shape still accepted)
+      3. Two different nanoids in the same collection → two distinct rows, no clobber
+      4. UUID and nanoid rows both appear in pull results as separate entities
+      5. Bare integer entity_id ("12345", "5") → 422 (footgun-blocker preserved)
+      6. Malformed ids rejected: empty string, >128 chars, value with '/', value with space
     """
     headers = superuser_token_headers
     init_encryption(client, headers)
 
+    # A canonical 21-char nanoid (alphabet A-Za-z0-9_-, same as nanoid default)
+    nanoid_a = "V1StGXR8_Z5jdHi6B-myT"
+    nanoid_b = "K9wQpLmN3rX7sFg2tYv0Z"
     uuid_a = str(uuid.uuid4())
-    uuid_b = str(uuid.uuid4())
 
-    # ── Phase 1: Push two distinct UUIDs in the same collection ───────────
-    result = push(
+    # ── Phase 1: Nanoid accepted → applied; ciphertext returned byte-identical ─
+    nanoid_content = "nanoid-entity-content"
+    original_ciphertext = make_ciphertext(nanoid_content)
+    nanoid_record = make_record_upsert(
+        collection="note",
+        client_entity_id=nanoid_a,
+        content=nanoid_content,
+    )
+    nanoid_record["payload_ciphertext"] = original_ciphertext  # fix to a known value for exact comparison
+    result_nanoid = push(client, headers, changes=[nanoid_record])
+    assert result_nanoid["applied"][0]["status"] == "applied", (
+        f"Nanoid entity_id should be accepted: {result_nanoid}"
+    )
+
+    pull_result = pull(client, headers, cursor=0)
+    returned_nanoid = next(
+        (r for r in pull_result["changes"] if r["client_entity_id"] == nanoid_a),
+        None,
+    )
+    assert returned_nanoid is not None, "Nanoid-keyed record not found in pull response"
+    assert returned_nanoid["payload_ciphertext"] == original_ciphertext, (
+        "Server returned mutated ciphertext for nanoid-keyed record"
+    )
+
+    # ── Phase 2: UUID still accepted ──────────────────────────────────────
+    result_uuid = push(
         client,
         headers,
         changes=[
-            make_record_upsert(collection="note", client_entity_id=uuid_a, content="Entity A"),
-            make_record_upsert(collection="note", client_entity_id=uuid_b, content="Entity B"),
+            make_record_upsert(collection="note", client_entity_id=uuid_a, content="uuid-entity")
         ],
     )
-    statuses = [r["status"] for r in result["applied"]]
-    assert statuses == ["applied", "applied"], f"Both should be applied: {statuses}"
+    assert result_uuid["applied"][0]["status"] == "applied", (
+        f"UUID entity_id should be accepted: {result_uuid}"
+    )
 
-    # ── Phase 2: Both appear in pull as distinct rows ──────────────────────
-    pull_result = pull(client, headers, cursor=0)
-    ids = {r["client_entity_id"] for r in pull_result["changes"]}
-    assert uuid_a in ids
-    assert uuid_b in ids
-    assert len([r for r in pull_result["changes"] if r["collection"] == "note"]) == 2
+    # ── Phase 3: Two different nanoids → two distinct rows, no clobber ────
+    result_two = push(
+        client,
+        headers,
+        changes=[
+            make_record_upsert(collection="note", client_entity_id=nanoid_b, content="nanoid-B"),
+        ],
+    )
+    assert result_two["applied"][0]["status"] == "applied", (
+        f"Second nanoid should be applied as a new row: {result_two}"
+    )
 
-    # ── Phase 3: Non-UUID entity id → 422 ─────────────────────────────────
-    bad_record = make_record_upsert(collection="note", content="bad id")
-    bad_record["client_entity_id"] = "not-a-uuid"
-    r = client.post(f"{_BASE}/push", headers=headers, json={"changes": [bad_record]})
-    assert r.status_code == 422, f"Expected 422 for non-UUID entity_id, got {r.status_code}"
+    # ── Phase 4: All three entities appear as distinct rows in pull ────────
+    pull_all = pull(client, headers, cursor=0)
+    ids_in_pull = {r["client_entity_id"] for r in pull_all["changes"]}
+    assert nanoid_a in ids_in_pull, "First nanoid not found after push"
+    assert nanoid_b in ids_in_pull, "Second nanoid not found after push"
+    assert uuid_a in ids_in_pull, "UUID entity not found after push"
+    # All three are separate rows — none clobbered any other
+    note_rows = [r for r in pull_all["changes"] if r["collection"] == "note"]
+    assert len(note_rows) == 3, (
+        f"Expected 3 distinct note rows (nanoid_a, nanoid_b, uuid_a), got {len(note_rows)}"
+    )
 
-    # ── Phase 4: Integer string as entity_id → 422 ────────────────────────
-    int_record = make_record_upsert(collection="note", content="integer id")
-    int_record["client_entity_id"] = "12345"
-    r = client.post(f"{_BASE}/push", headers=headers, json={"changes": [int_record]})
-    assert r.status_code == 422, f"Expected 422 for integer entity_id, got {r.status_code}"
+    # ── Phase 5: Bare integer entity_ids → 422 (footgun-blocker preserved) ─
+    for bare_int in ("12345", "5"):
+        int_record = make_record_upsert(collection="note", content="integer id")
+        int_record["client_entity_id"] = bare_int
+        r = client.post(f"{_BASE}/push", headers=headers, json={"changes": [int_record]})
+        assert r.status_code == 422, (
+            f"Expected 422 for bare-integer entity_id {bare_int!r}, got {r.status_code}"
+        )
+
+    # ── Phase 6: Malformed ids → 422 ──────────────────────────────────────
+    malformed_cases: list[tuple[str, str]] = [
+        ("", "empty string"),
+        ("a" * 129, "exceeds 128 chars"),
+        ("some/path/id", "contains forward slash"),
+        ("has a space", "contains a space"),
+    ]
+    for bad_id, reason in malformed_cases:
+        bad_record = make_record_upsert(collection="note", content="bad id")
+        bad_record["client_entity_id"] = bad_id
+        r = client.post(f"{_BASE}/push", headers=headers, json={"changes": [bad_record]})
+        assert r.status_code == 422, (
+            f"Expected 422 for malformed entity_id ({reason}: {bad_id[:40]!r}), got {r.status_code}"
+        )
 
 
 # ---------------------------------------------------------------------------

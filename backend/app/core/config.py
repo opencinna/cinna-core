@@ -278,7 +278,7 @@ class Settings(BaseSettings):
 
     # App Sync (native-client data sync — zero-knowledge document store)
     # Limits and quotas are enforced on CIPHERTEXT bytes (the server never
-    # sees plaintext). See docs/drafts/desktop-mobile-data-sync_plan.md §4.4.
+    # sees plaintext). See docs/application/app_sync/app_sync_tech.md.
     APP_SYNC_MAX_PAYLOAD_BYTES: int = 1024 * 1024  # 1 MiB per record
     APP_SYNC_MAX_RECORDS_PER_PUSH: int = 500
     APP_SYNC_MAX_PULL_LIMIT: int = 500  # pull pagination ceiling (independent of push batch)

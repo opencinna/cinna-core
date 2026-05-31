@@ -88,11 +88,11 @@ When the existing row wins, the result is `status='conflict'` and `server_record
 
 ## Entity Identity Across Devices
 
-The sync identity of an entity is `client_entity_id`, which is a **client-generated globally-unique UUID (v4)**, minted once at creation on whichever device and carried forever. It must never be a device-local autoincrement integer or rowid — if it were, two devices would independently create a note with local id `5`, both push `client_entity_id = "5"`, and LWW would silently destroy one device's data.
+The sync identity of an entity is `client_entity_id`, which is a client-generated globally-unique **opaque id** (a UUID or a nanoid — any URL-safe, stable, collision-free client id), minted once at creation on whichever device and carried forever. It must never be a device-local autoincrement integer or rowid — if it were, two devices would independently create a note with local id `5`, both push `client_entity_id = "5"`, and LWW would silently destroy one device's data.
 
-The server validates that `client_entity_id` is a well-formed UUID string and rejects anything else with `422`. This is a deliberate footgun-blocker.
+The server validates that `client_entity_id` is a well-formed opaque client id — URL-safe `[A-Za-z0-9_-]`, 8–128 chars, and **not** a bare integer (the device-local-rowid footgun); UUIDs and nanoids both qualify; anything else → `422`. This is a deliberate footgun-blocker.
 
-All cross-references between synced entities inside a payload (e.g. a note's `folderId`) must also use these UUIDs, not local foreign keys, so parent-child links are valid on every device.
+All cross-references between synced entities inside a payload (e.g. a note's `folderId`) must also use these ids, not local foreign keys, so parent-child links are valid on every device.
 
 ---
 
@@ -186,7 +186,7 @@ After a device is revoked, the client should rotate the UMK: generate UMK v(n+1)
 | Single record ciphertext exceeds 1 MiB | `413` with `{client_entity_id, payload_bytes, max_payload_bytes}` |
 | Push batch exceeds 500 records | `422` |
 | Per-user quota exceeded | `413` with `{total_bytes, quota_bytes, total_records, quota_records}` |
-| Non-UUID `client_entity_id` | `422` (footgun-blocker) |
+| Malformed or bare-integer `client_entity_id` | `422` (footgun-blocker) |
 | Missing `payload_ciphertext` / `content_fingerprint` on non-tombstone | `422` |
 | Device / envelope / pairing not found (or owned by another user) | `404` |
 | Desktop device revoked mid-sync | `401 Desktop session has been revoked` (existing `get_current_user` check) |

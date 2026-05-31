@@ -41,7 +41,7 @@ One row per synced entity. Payload is client-encrypted ciphertext; the server ne
 | `id` | UUID | PK | Server-side surrogate key |
 | `user_id` | UUID | FK → `user.id` ON DELETE CASCADE, indexed | Owning account; account deletion cascades |
 | `collection` | VARCHAR(64) | NOT NULL | e.g. `note`, `job`, `note_folder`; `^[a-z][a-z0-9_]{0,63}$`; unknown-but-valid names accepted |
-| `client_entity_id` | VARCHAR(128) | NOT NULL | Client-generated UUID (validated server-side); stable cross-device identity |
+| `client_entity_id` | VARCHAR(128) | NOT NULL | Client-generated opaque id — UUID or nanoid; `^[A-Za-z0-9_-]{8,128}$` and not a bare integer; validated server-side; stable cross-device identity |
 | `seq` | BIGINT | NOT NULL | Per-user monotonic sequence; the sync cursor |
 | `payload_ciphertext` | TEXT | nullable | Client AEAD envelope, stored verbatim; `NULL` for tombstones |
 | `enc_umk_version` | INTEGER | NOT NULL, default 1 | UMK generation this ciphertext uses; allows mixed versions during key rotation |
@@ -255,7 +255,7 @@ All endpoints are under prefix `/api/v1/app-sync`, tag `"App Sync"`, require `Cu
 Status codes for sync verbs:
 - `409` — push before E2E initialised
 - `413` — single record exceeds `APP_SYNC_MAX_PAYLOAD_BYTES` or quota exceeded (structured `detail`)
-- `422` — batch exceeds `APP_SYNC_MAX_RECORDS_PER_PUSH`, non-UUID `client_entity_id`, malformed/missing ciphertext or fingerprint
+- `422` — batch exceeds `APP_SYNC_MAX_RECORDS_PER_PUSH`, malformed or bare-integer `client_entity_id`, malformed/missing ciphertext or fingerprint
 
 ### Encryption / Key Management
 
@@ -298,7 +298,7 @@ AppSyncError(Exception)           # base, HTTP 400
   PayloadTooLargeError             # 413; carries {client_entity_id, payload_bytes, max_payload_bytes}
   QuotaExceededError               # 413; carries {total_bytes, quota_bytes, total_records, quota_records}
   BatchTooLargeError               # 422
-  InvalidPayloadError              # 422 (malformed ciphertext / missing fingerprint / bad collection name / non-UUID entity id)
+  InvalidPayloadError              # 422 (malformed ciphertext / missing fingerprint / bad collection name / malformed / bare-integer entity id)
   E2ENotInitializedError           # 409 (push before init)
   E2EAlreadyInitializedError       # 409 (init called again)
   NotFoundError                    # 404 (device / envelope / pairing not found or wrong owner)
@@ -459,7 +459,7 @@ The `content_fingerprint` column is compared only for equality (`==`) in the no-
 
 | Check | Rejection | Notes |
 |-------|-----------|-------|
-| `client_entity_id` is a valid UUID string | `422 InvalidPayloadError` | Cross-device collision footgun-blocker (§3.5) |
+| `client_entity_id` matches `^[A-Za-z0-9_-]{8,128}$` and is not a bare integer (`^\d+$`) | `422 InvalidPayloadError` | Cross-device collision footgun-blocker (§3.5) |
 | `collection` matches `^[a-z][a-z0-9_]{0,63}$` | `422 InvalidPayloadError` | Unknown-but-valid names accepted (forward compatible) |
 | Non-tombstone must have `payload_ciphertext` | `422 InvalidPayloadError` | — |
 | Non-tombstone must have `content_fingerprint` | `422 InvalidPayloadError` | — |
