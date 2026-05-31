@@ -190,7 +190,7 @@ Route: `/desktop-auth/consent?request={nonce}` (file: `frontend/src/routes/deskt
 
 ## Security Notes
 
-- Redirect URI restricted to loopback HTTP: `http://localhost:{1024-65535}{path}` or `http://127.0.0.1:{1024-65535}{path}`. Path is unrestricted (RFC 8252 §7.3) so apps can use `/callback`, `/oauth/callback`, etc.
+- Redirect URI validation (`_validate_redirect_uri`) accepts three native-client forms per RFC 8252: (1) **loopback HTTP** `http://localhost:{1024-65535}{path}` / `http://127.0.0.1:{1024-65535}{path}` — desktop, path unrestricted (§7.3); (2) **mobile app scheme** `cinna-mobile://...` (`_APP_SCHEME_RE`) — private-use URI scheme (§7.1), accepted in all environments; (3) **Expo Go dev** `exp://{host}:{port}/...` (`_EXPO_DEV_RE`) — accepted only when `settings.ENVIRONMENT != "production"`. Anything else → HTTP 400 `invalid_redirect_uri`. The same validation runs at both `authorize` and `create_authorization_code` call sites; token exchange compares the presented `redirect_uri` against the stored one by exact string match (`auth_code.redirect_uri != redirect_uri`).
 - All token values stored as SHA-256 hashes; raw values are never persisted
 - Consent nonces stored as SHA-256 hashes; raw nonce appears only in the browser URL during the consent flow
 - Access tokens are standard JWTs (same `create_access_token()` as web login) — `CurrentUser` dependency works unchanged, but now performs an extra `DesktopOAuthClient.is_revoked` lookup when the JWT carries `client_kind="desktop"` so disconnects propagate immediately (see [Live Access Token Revocation Check](#live-access-token-revocation-check) below)

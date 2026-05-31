@@ -19,6 +19,7 @@ import uuid
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
@@ -698,11 +699,13 @@ def test_redirect_uri_validation(client: TestClient) -> None:
         assert r.status_code == 400, f"Expected 400 for URI {bad_uri!r}, got {r.status_code}"
 
     # Valid URIs should produce a redirect. Path is unrestricted per RFC 8252 §7.3.
+    # The mobile app's private-use scheme (RFC 8252 §7.1) is accepted in all envs.
     valid_uris = [
         "http://localhost:19836/callback",
         "http://127.0.0.1:19836/callback",
         "http://127.0.0.1:53484/oauth/callback",
         "http://localhost:12345/",
+        "cinna-mobile://oauth/callback",
     ]
     for good_uri in valid_uris:
         _v, c = generate_pkce_pair()
@@ -720,6 +723,53 @@ def test_redirect_uri_validation(client: TestClient) -> None:
         assert r.status_code in (302, 307), (
             f"Expected redirect for valid URI {good_uri!r}, got {r.status_code}"
         )
+
+
+# ── Test: Native redirect URI schemes (mobile app + Expo Go dev) ─────────────
+
+
+@pytest.mark.parametrize(
+    "environment, redirect_uri, accepted",
+    [
+        # Mobile app private-use scheme — accepted in every environment.
+        ("production", "cinna-mobile://oauth/callback", True),
+        ("staging", "cinna-mobile://oauth/callback", True),
+        ("local", "cinna-mobile://oauth/callback", True),
+        # Expo Go dev redirect — accepted only outside production.
+        ("local", "exp://192.168.1.5:8081/--/oauth/callback", True),
+        ("staging", "exp://192.168.1.5:8081/--/oauth/callback", True),
+        ("production", "exp://192.168.1.5:8081/--/oauth/callback", False),
+        # Arbitrary https redirect — always rejected.
+        ("production", "https://evil.example/cb", False),
+        ("local", "https://evil.example/cb", False),
+    ],
+)
+def test_native_redirect_uri_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    environment: str,
+    redirect_uri: str,
+    accepted: bool,
+) -> None:
+    """`_validate_redirect_uri` accepts native-client schemes with env gating.
+
+    - `cinna-mobile://` (the app's private-use scheme) is safe in all envs.
+    - `exp://` (Expo Go's dev redirect) is accepted in non-production only.
+    - Anything else is rejected everywhere.
+    """
+    from app.services.desktop_auth.desktop_auth_service import (
+        _validate_redirect_uri,
+    )
+
+    monkeypatch.setattr(settings, "ENVIRONMENT", environment)
+
+    if accepted:
+        # Should not raise.
+        _validate_redirect_uri(redirect_uri)
+    else:
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_redirect_uri(redirect_uri)
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "invalid_redirect_uri"
 
 
 # ── Test: Unsupported grant type ─────────────────────────────────────────────

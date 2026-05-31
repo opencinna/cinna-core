@@ -33,11 +33,19 @@ from app.services.desktop_auth.desktop_auth_crypto import (
 
 logger = logging.getLogger(__name__)
 
-# Only localhost (127.0.0.1 / localhost) with an explicit port is accepted.
-# Per RFC 8252 §7.3 (native app OAuth BCP), loopback redirect URIs may use any
-# path — the security boundary is the loopback host + per-port binding, not the
-# path. Accept any path starting with "/".
+# Desktop loopback redirect (RFC 8252 §7.3, native app OAuth BCP): localhost /
+# 127.0.0.1 with an explicit port. Loopback redirect URIs may use any path — the
+# security boundary is the loopback host + per-port binding, not the path. Accept
+# any path starting with "/".
 _LOCALHOST_RE = re.compile(r"^http://(localhost|127\.0\.0\.1):(\d+)(/.*)?$")
+
+# Mobile native redirect (RFC 8252 §7.1, private-use URI scheme): the Cinna
+# Mobile app's own scheme. Fixed + tied to the installed app, so safe everywhere.
+_APP_SCHEME_RE = re.compile(r"^cinna-mobile://[^\s]*$")
+
+# Expo Go development redirect: exp://<dev-host>:<port>/--/oauth/callback. Host/
+# port are the developer's Metro server and vary per machine — non-production only.
+_EXPO_DEV_RE = re.compile(r"^exp://[^/\s]+(/.*)?$")
 
 
 # How often `verify_active_or_raise` re-stamps `last_used_at` on the
@@ -75,13 +83,27 @@ def _ensure_utc(dt: datetime) -> datetime:
 
 
 def _validate_redirect_uri(redirect_uri: str) -> None:
-    """Raise HTTP 400 if the redirect_uri is not a valid localhost callback."""
+    """Raise HTTP 400 if the redirect_uri is not an accepted native-client callback.
+
+    Accepts:
+      - Desktop loopback:  http://127.0.0.1:<port>/...  /  http://localhost:<port>/...
+      - Mobile app scheme: cinna-mobile://...           (all environments)
+      - Expo Go dev:       exp://...                    (non-production only)
+    """
     m = _LOCALHOST_RE.match(redirect_uri)
-    if not m:
-        raise HTTPException(status_code=400, detail="invalid_redirect_uri")
-    port = int(m.group(2))
-    if not (1024 <= port <= 65535):
-        raise HTTPException(status_code=400, detail="invalid_redirect_uri")
+    if m:
+        port = int(m.group(2))
+        if not (1024 <= port <= 65535):
+            raise HTTPException(status_code=400, detail="invalid_redirect_uri")
+        return
+
+    if _APP_SCHEME_RE.match(redirect_uri):
+        return
+
+    if settings.ENVIRONMENT != "production" and _EXPO_DEV_RE.match(redirect_uri):
+        return
+
+    raise HTTPException(status_code=400, detail="invalid_redirect_uri")
 
 
 class DesktopAuthService:

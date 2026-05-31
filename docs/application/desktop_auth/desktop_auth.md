@@ -91,7 +91,13 @@ Desktop apps are public clients — they cannot store a client secret. PKCE prev
 
 ### Redirect URI Validation
 
-Only loopback HTTP URIs — `http://localhost:{port}{path}` or `http://127.0.0.1:{port}{path}` — are accepted. Port must be in the range 1024–65535. Path is unrestricted per RFC 8252 §7.3 (native-app OAuth BCP): the security boundary is the loopback host + the desktop app's per-port binding, so only the legitimate app receives the code. This prevents open redirect attacks without constraining the app's local callback route (e.g. `/callback`, `/oauth/callback`).
+Three native-client redirect forms are accepted, all per RFC 8252 (native-app OAuth BCP):
+
+- **Desktop loopback** (RFC 8252 §7.3) — `http://localhost:{port}{path}` or `http://127.0.0.1:{port}{path}`, port in the range 1024–65535. Path is unrestricted: the security boundary is the loopback host + the desktop app's per-port binding, so only the legitimate app receives the code (the local callback route may be `/callback`, `/oauth/callback`, etc.).
+- **Mobile app scheme** (RFC 8252 §7.1, private-use URI scheme) — `cinna-mobile://...`. Fixed and tied to the installed app, so it is accepted in **all environments** (this is the production mobile redirect; phones cannot run a loopback listener).
+- **Expo Go dev redirect** — `exp://{dev-host}:{port}/--/oauth/callback`. The host/port are a developer's Metro server and vary per machine, so this form is accepted in **non-production only** (`settings.ENVIRONMENT != "production"`). PKCE (S256) already protects the code; gating to non-production is defense-in-depth so the broad `exp://` host pattern never reaches production.
+
+Everything else (e.g. arbitrary `https://` URIs) is rejected with HTTP 400 `invalid_redirect_uri`, preventing open-redirect attacks. The redirect URI presented at token exchange must exactly match the one stored with the auth code.
 
 ### Consent Page Security
 
