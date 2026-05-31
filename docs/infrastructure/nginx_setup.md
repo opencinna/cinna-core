@@ -61,6 +61,12 @@ Present only in the production reverse proxy. In local dev the SPA calls the bac
 **Why at origin root:** The Cinna Desktop app fetches `https://{instance}/.well-known/cinna-desktop` before the user logs in to verify the instance and learn its OAuth URLs. It has no knowledge of API prefixes yet.
 **Upstream:** backend.
 
+### `/.well-known/cinna-app`
+
+**Feature:** Cinna Mobile instance discovery (parallel `/app-auth` surface) — see [Desktop App Authentication](../application/desktop_auth/desktop_auth.md).
+**Why at origin root:** Same rationale as `cinna-desktop` — the Cinna Mobile app fetches `https://{instance}/.well-known/cinna-app` before login to learn the `/app-auth` OAuth URLs, with no knowledge of API prefixes yet.
+**Upstream:** backend.
+
 ### `/agent-hooks/`
 
 **Feature:** Agent Webhooks public execution endpoint — see [Agent Webhooks](../agents/agent_webhooks/agent_webhooks.md).

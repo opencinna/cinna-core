@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { z } from "zod"
 import { ensureSessionValid } from "@/hooks/useAuth"
-import { DesktopAuthService } from "@/client"
+import { AppAuthService } from "@/client"
 import { NativeAuthConsentPage } from "@/components/Auth/NativeAuthConsentPage"
 import { APP_NAME } from "@/utils"
 
@@ -9,11 +9,11 @@ const searchSchema = z.object({
   request: z.string(),
 })
 
-export const Route = createFileRoute("/desktop-auth/consent")({
-  component: DesktopAuthConsentPage,
+export const Route = createFileRoute("/app-auth/consent")({
+  component: AppAuthConsentPage,
   validateSearch: searchSchema,
   beforeLoad: async ({ search }) => {
-    const returnTo = `/desktop-auth/consent?request=${encodeURIComponent(search.request)}`
+    const returnTo = `/app-auth/consent?request=${encodeURIComponent(search.request)}`
     await ensureSessionValid(returnTo)
   },
   head: () => ({
@@ -21,15 +21,15 @@ export const Route = createFileRoute("/desktop-auth/consent")({
   }),
 })
 
-function DesktopAuthConsentPage() {
+function AppAuthConsentPage() {
   const { request: nonce } = Route.useSearch()
   return (
     <NativeAuthConsentPage
       nonce={nonce}
-      queryKeyPrefix="desktop-auth-request"
-      getRequest={(nonce) => DesktopAuthService.getAuthRequest({ nonce })}
+      queryKeyPrefix="app-auth-request"
+      getRequest={(nonce) => AppAuthService.getAppAuthRequest({ nonce })}
       submitConsent={(nonce, action) =>
-        DesktopAuthService.consent({
+        AppAuthService.appConsent({
           requestBody: { request_nonce: nonce, action },
         })
       }

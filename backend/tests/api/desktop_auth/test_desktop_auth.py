@@ -19,7 +19,6 @@ import uuid
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
@@ -154,7 +153,21 @@ def test_get_auth_request_metadata(
     assert data["platform"] == "linux"
     assert data["app_version"] == "3.0.0"
     assert data["client_id"] is None  # lazy registration
+    assert data["client_kind"] == "desktop"  # loopback redirect → desktop
     assert "expires_at" in data
+
+    # ── Phase 1b: A mobile redirect classifies the request as "mobile" ────
+    _v_m, challenge_m = generate_pkce_pair()
+    nonce_mobile = initiate_authorize(
+        client,
+        code_challenge=challenge_m,
+        redirect_uri="cinna-mobile://oauth/callback",
+        device_name="Test Phone",
+        platform="ios",
+    )
+    r_mobile = client.get(f"{_BASE}/requests/{nonce_mobile}")
+    assert r_mobile.status_code == 200, r_mobile.text
+    assert r_mobile.json()["client_kind"] == "mobile"
 
     # ── Phase 2: Unknown nonce → 404 ─────────────────────────────────────
     r_unknown = client.get(f"{_BASE}/requests/totallyfakenonce1234567890abcdef12")
@@ -745,31 +758,42 @@ def test_redirect_uri_validation(client: TestClient) -> None:
     ],
 )
 def test_native_redirect_uri_validation(
+    client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     environment: str,
     redirect_uri: str,
     accepted: bool,
 ) -> None:
-    """`_validate_redirect_uri` accepts native-client schemes with env gating.
+    """The authorize endpoint accepts native-client schemes with env gating.
 
     - `cinna-mobile://` (the app's private-use scheme) is safe in all envs.
     - `exp://` (Expo Go's dev redirect) is accepted in non-production only.
     - Anything else is rejected everywhere.
     """
-    from app.services.desktop_auth.desktop_auth_service import (
-        _validate_redirect_uri,
-    )
-
     monkeypatch.setattr(settings, "ENVIRONMENT", environment)
 
+    _verifier, challenge = generate_pkce_pair()
+    r = client.get(
+        f"{_BASE}/authorize",
+        params={
+            "redirect_uri": redirect_uri,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "state": "test",
+            "device_name": "Test Device",
+        },
+        follow_redirects=False,
+    )
+
     if accepted:
-        # Should not raise.
-        _validate_redirect_uri(redirect_uri)
+        assert r.status_code in (302, 307), (
+            f"Expected redirect for {redirect_uri!r} in {environment}, got {r.status_code}"
+        )
     else:
-        with pytest.raises(HTTPException) as exc_info:
-            _validate_redirect_uri(redirect_uri)
-        assert exc_info.value.status_code == 400
-        assert exc_info.value.detail == "invalid_redirect_uri"
+        assert r.status_code == 400, (
+            f"Expected 400 for {redirect_uri!r} in {environment}, got {r.status_code}"
+        )
+        assert r.json()["detail"] == "invalid_redirect_uri"
 
 
 # ── Test: Unsupported grant type ─────────────────────────────────────────────

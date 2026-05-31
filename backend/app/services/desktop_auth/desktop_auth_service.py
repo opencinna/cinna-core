@@ -82,6 +82,19 @@ def _ensure_utc(dt: datetime) -> datetime:
     return dt.astimezone(UTC)
 
 
+def _client_kind_for_redirect_uri(redirect_uri: str) -> str:
+    """Classify a (already validated) redirect_uri as "mobile" or "desktop".
+
+    Used purely for consent-screen display copy — the redirect_uri itself stays
+    secret, only this derived label is exposed. Mobile native redirects use the
+    app's private-use scheme (``cinna-mobile://``) or Expo Go's ``exp://`` dev
+    scheme; everything else (loopback HTTP) is the desktop app.
+    """
+    if _APP_SCHEME_RE.match(redirect_uri) or _EXPO_DEV_RE.match(redirect_uri):
+        return "mobile"
+    return "desktop"
+
+
 def _validate_redirect_uri(redirect_uri: str) -> None:
     """Raise HTTP 400 if the redirect_uri is not an accepted native-client callback.
 
@@ -300,6 +313,7 @@ class DesktopAuthService:
             "platform": record.platform,
             "app_version": record.app_version,
             "client_id": record.client_id,
+            "client_kind": _client_kind_for_redirect_uri(record.redirect_uri),
             "expires_at": record.expires_at.isoformat(),
         }
 

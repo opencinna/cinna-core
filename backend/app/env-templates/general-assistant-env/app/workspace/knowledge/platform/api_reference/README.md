@@ -21,6 +21,7 @@ Each file below documents one API domain.
 | Agents | [agents.md](./agents.md) | 36 |
 | Ai Credentials | [ai_credentials.md](./ai_credentials.md) | 9 |
 | App Agent Routes | [app_agent_routes.md](./app_agent_routes.md) | 7 |
+| App Auth | [app_auth.md](./app_auth.md) | 9 |
 | App Data | [app_data.md](./app_data.md) | 3 |
 | Bundles | [bundles.md](./bundles.md) | 9 |
 | Catalog | [catalog.md](./catalog.md) | 5 |

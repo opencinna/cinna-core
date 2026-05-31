@@ -6,11 +6,17 @@ Server-side OAuth 2.0 + PKCE infrastructure that allows the Cinna Desktop applic
 
 The flow uses a **consent-page pattern** (mirroring the MCP OAuth flow) so that the `/authorize` endpoint works correctly behind nginx that only proxies `/api`, `/mcp`, and `/.well-known/*`. Because the JWT lives in localStorage, it cannot be sent in a browser navigation. Instead, the public `/authorize` endpoint stores the request by nonce and redirects to the SPA consent page, which uses its localStorage JWT to call the authenticated `/consent` endpoint.
 
+### Mobile clients — the parallel `/app-auth` surface
+
+Cinna Mobile uses the **same flow** through a parallel route namespace mounted at `/api/v1/app-auth/*` (discovered via `/.well-known/cinna-app`), with its own consent page at `/app-auth/consent`. This surface is a thin namespace over the **same backing service, storage tables, and token logic** as `/desktop-auth` — it is not an independent stack. The only differences are the URL prefix and the consent-page redirect target; a consent request, client, code, or token is interchangeable across the two surfaces. Desktop clients keep using `/desktop-auth` unchanged. The mobile app's redirect URIs are native private-use schemes rather than loopback (see [Redirect URI Validation](#redirect-uri-validation)), and the consent screen reflects the client kind ("Cinna Mobile" vs "Cinna Desktop") via the backend-derived `client_kind`. Gated by `APP_AUTH_ENABLED`.
+
 ## Core Capabilities
 
-- **Instance discovery** — User provides a domain (e.g. `my-company.cinna.io`) or selects "Cloud" (`opencinna.io`); desktop app validates the instance via `/.well-known/cinna-desktop`
+- **Instance discovery** — User provides a domain (e.g. `my-company.cinna.io`) or selects "Cloud" (`opencinna.io`); the client validates the instance via `/.well-known/cinna-desktop` (desktop) or `/.well-known/cinna-app` (mobile)
 - **Browser-based consent flow** — Standard OAuth 2.0 authorization code flow with PKCE (RFC 7636 + RFC 8252), routed through a frontend consent page
-- **Lazy client registration** — Desktop apps do not need to pre-register; a new `DesktopOAuthClient` is created automatically on first consent approval
+- **Parallel mobile surface** — Cinna Mobile authenticates through `/app-auth/*` (mirror of `/desktop-auth/*`) backed by the same service and storage; only the URL namespace and native redirect schemes differ
+- **Client-kind-aware consent** — The consent screen renders "Cinna Mobile" vs "Cinna Desktop" copy/icon based on the `client_kind` the backend derives from the redirect URI scheme
+- **Lazy client registration** — Native apps do not need to pre-register; a new `DesktopOAuthClient` is created automatically on first consent approval
 - **Token pair** — Short-lived access token (15 min) + long-lived refresh token (30 days)
 - **Silent refresh** — Desktop app renews access tokens without user interaction
 - **Multi-instance** — User can be logged into multiple instances simultaneously
@@ -91,7 +97,13 @@ Desktop apps are public clients — they cannot store a client secret. PKCE prev
 
 ### Redirect URI Validation
 
-Only loopback HTTP URIs — `http://localhost:{port}{path}` or `http://127.0.0.1:{port}{path}` — are accepted. Port must be in the range 1024–65535. Path is unrestricted per RFC 8252 §7.3 (native-app OAuth BCP): the security boundary is the loopback host + the desktop app's per-port binding, so only the legitimate app receives the code. This prevents open redirect attacks without constraining the app's local callback route (e.g. `/callback`, `/oauth/callback`).
+Three native-client redirect forms are accepted, all per RFC 8252 (native-app OAuth BCP):
+
+- **Desktop loopback** (RFC 8252 §7.3) — `http://localhost:{port}{path}` or `http://127.0.0.1:{port}{path}`, port in the range 1024–65535. Path is unrestricted: the security boundary is the loopback host + the desktop app's per-port binding, so only the legitimate app receives the code (the local callback route may be `/callback`, `/oauth/callback`, etc.).
+- **Mobile app scheme** (RFC 8252 §7.1, private-use URI scheme) — `cinna-mobile://...`. Fixed and tied to the installed app, so it is accepted in **all environments** (this is the production mobile redirect; phones cannot run a loopback listener).
+- **Expo Go dev redirect** — `exp://{dev-host}:{port}/--/oauth/callback`. The host/port are a developer's Metro server and vary per machine, so this form is accepted in **non-production only** (`settings.ENVIRONMENT != "production"`). PKCE (S256) already protects the code; gating to non-production is defense-in-depth so the broad `exp://` host pattern never reaches production.
+
+Everything else (e.g. arbitrary `https://` URIs) is rejected with HTTP 400 `invalid_redirect_uri`, preventing open-redirect attacks. The redirect URI presented at token exchange must exactly match the one stored with the auth code.
 
 ### Consent Page Security
 
@@ -117,7 +129,7 @@ See [Two-Factor Authentication](../user_2fa/user_2fa.md) for full 2FA details.
 
 ## Infrastructure Requirements
 
-The `/.well-known/cinna-desktop` discovery endpoint must reach the backend through the reverse proxy. Without it, the desktop app cannot validate the instance before login. See [Nginx Setup](../../infrastructure/nginx_setup.md) for the required location block and how it fits alongside the other origin-root well-known URIs.
+The `/.well-known/cinna-desktop` (desktop) and `/.well-known/cinna-app` (mobile) discovery endpoints must reach the backend through the reverse proxy. Without them, the native apps cannot validate the instance before login. See [Nginx Setup](../../infrastructure/nginx_setup.md) for the required location blocks and how they fit alongside the other origin-root well-known URIs.
 
 ## Settings UI
 

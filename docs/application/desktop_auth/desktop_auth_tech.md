@@ -12,8 +12,9 @@
 
 ### Backend — Routes
 
-- `backend/app/api/routes/desktop_auth.py` — All OAuth endpoints under `/desktop-auth` prefix
-- `backend/app/main.py` — `/.well-known/cinna-desktop` endpoint registered at app level (not under `/api/v1`)
+- `backend/app/api/routes/desktop_auth.py` — All OAuth endpoints under `/desktop-auth` prefix; also defines the shared request/response models (`ConsentRequest`, `ConsentResponse`, `TokenRequest`, `TokenResponse`, `UserInfoResponse`, `RevokeRequest`) and the `_parse_token_request` helper reused by the app surface
+- `backend/app/api/routes/app_auth.py` — **Parallel mobile surface** under `/app-auth` prefix (tag `app-auth`). Mirrors every desktop endpoint but delegates to the same `DesktopAuthService` and reuses the desktop route's shared models/helpers; the only behavioural difference is that `authorize` redirects to `/app-auth/consent`. No new tables — writes to the same `desktop_*` store.
+- `backend/app/main.py` — `/.well-known/cinna-desktop` and `/.well-known/cinna-app` discovery endpoints registered at app level (not under `/api/v1`)
 
 ### Backend — Services
 
@@ -23,7 +24,7 @@
 
 ### Backend — Configuration
 
-- `backend/app/core/config.py` — `DESKTOP_AUTH_ENABLED`, `DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES`, `DESKTOP_REFRESH_TOKEN_EXPIRE_DAYS`
+- `backend/app/core/config.py` — `DESKTOP_AUTH_ENABLED`, `DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES`, `DESKTOP_REFRESH_TOKEN_EXPIRE_DAYS`, `APP_AUTH_ENABLED` (mobile surface toggle; token lifetimes are shared with desktop)
 
 ### Backend — Migrations
 
@@ -32,15 +33,18 @@
 
 ### Backend — Tests
 
-- `backend/tests/api/desktop_auth/test_desktop_auth.py` — 17 scenario-based integration tests covering full consent flow
+- `backend/tests/api/desktop_auth/test_desktop_auth.py` — Scenario-based integration tests covering the full consent flow, redirect-URI validation (incl. native mobile schemes + env gating), and `client_kind` metadata
+- `backend/tests/api/app_auth/test_app_auth.py` — Parallel-surface tests: `/.well-known/cinna-app` discovery, full mobile PKCE flow, `client_kind="mobile"` metadata, redirect validation, refresh rotation, and cross-surface token interoperability (app token works on `/desktop-auth/userinfo`)
 - `backend/tests/utils/desktop_auth.py` — Test helpers: PKCE pair generation, consent flow steps, token exchange
 
 ### Frontend
 
-- `frontend/src/routes/desktop-auth/consent.tsx` — Public SPA consent page at `/desktop-auth/consent?request={nonce}`
+- `frontend/src/components/Auth/NativeAuthConsentPage.tsx` — Shared consent screen component for both native surfaces; parameterized by the service endpoints (`getRequest`/`submitConsent`) and renders "Cinna Mobile" vs "Cinna Desktop" copy from `client_kind`
+- `frontend/src/routes/desktop-auth/consent.tsx` — Public SPA consent page at `/desktop-auth/consent?request={nonce}` (thin wrapper around `NativeAuthConsentPage` wired to `DesktopAuthService`)
+- `frontend/src/routes/app-auth/consent.tsx` — Public SPA consent page at `/app-auth/consent?request={nonce}` (wrapper wired to `AppAuthService`)
 - `frontend/src/components/UserSettings/DesktopSessionsCard.tsx` — Connected devices list + disconnect dialog
 - `frontend/src/routes/_layout/settings.tsx` — DesktopSessionsCard added to Security tab
-- `frontend/src/client/sdk.gen.ts` — `DesktopAuthService` (auto-generated)
+- `frontend/src/client/sdk.gen.ts` — `DesktopAuthService` + `AppAuthService` (auto-generated)
 
 ## Database Schema
 
@@ -109,6 +113,7 @@
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/.well-known/cinna-desktop` | Instance metadata: `instance_name`, `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `version`, `desktop_auth_enabled` — field names follow RFC 8414 (OAuth 2.0 Authorization Server Metadata) |
+| GET | `/.well-known/cinna-app` | Same shape as `cinna-desktop` but `authorization_endpoint`/`token_endpoint`/`userinfo_endpoint` point at `/api/v1/app-auth/*`, plus `app_auth_enabled`. Used by Cinna Mobile for instance discovery |
 
 ### OAuth Flow (under `/api/v1/desktop-auth`)
 
@@ -124,6 +129,10 @@
 | POST | `/revoke` | CurrentUser | Revoke client or specific refresh token |
 
 Note: `POST /clients` (explicit client registration) has been removed. Clients are created lazily on first consent approval.
+
+### OAuth Flow (under `/api/v1/app-auth`)
+
+The same eight endpoints exist under `/api/v1/app-auth` (tag `app-auth`) with identical contracts — they delegate to the same `DesktopAuthService` and share the `desktop_*` tables. The only difference: `GET /app-auth/authorize` redirects the browser to `/app-auth/consent` instead of `/desktop-auth/consent`. Because storage is shared, a token minted on either surface is accepted by either `/userinfo`, and a client registered through one is listed by the other.
 
 ## Services & Key Methods
 

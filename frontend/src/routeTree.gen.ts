@@ -23,6 +23,7 @@ import { Route as GuestFileViewerRouteImport } from './routes/guest/file-viewer'
 import { Route as GuestGuestShareTokenRouteImport } from './routes/guest/$guestShareToken'
 import { Route as DesktopAuthConsentRouteImport } from './routes/desktop-auth/consent'
 import { Route as DashboardFullscreenDashboardIdRouteImport } from './routes/dashboard-fullscreen/$dashboardId'
+import { Route as AppAuthConsentRouteImport } from './routes/app-auth/consent'
 import { Route as AgentApiSpecAgentIdRouteImport } from './routes/agent-api-spec/$agentId'
 import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
 import { Route as LayoutSessionsRouteImport } from './routes/_layout/sessions'
@@ -130,6 +131,11 @@ const DashboardFullscreenDashboardIdRoute =
     path: '/dashboard-fullscreen/$dashboardId',
     getParentRoute: () => rootRouteImport,
   } as any)
+const AppAuthConsentRoute = AppAuthConsentRouteImport.update({
+  id: '/app-auth/consent',
+  path: '/app-auth/consent',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AgentApiSpecAgentIdRoute = AgentApiSpecAgentIdRouteImport.update({
   id: '/agent-api-spec/$agentId',
   path: '/agent-api-spec/$agentId',
@@ -338,6 +344,7 @@ export interface FileRoutesByFullPath {
   '/sessions': typeof LayoutSessionsRouteWithChildren
   '/settings': typeof LayoutSettingsRoute
   '/agent-api-spec/$agentId': typeof AgentApiSpecAgentIdRoute
+  '/app-auth/consent': typeof AppAuthConsentRoute
   '/dashboard-fullscreen/$dashboardId': typeof DashboardFullscreenDashboardIdRoute
   '/desktop-auth/consent': typeof DesktopAuthConsentRoute
   '/guest/$guestShareToken': typeof GuestGuestShareTokenRoute
@@ -386,6 +393,7 @@ export interface FileRoutesByTo {
   '/knowledge-sources': typeof LayoutKnowledgeSourcesRoute
   '/settings': typeof LayoutSettingsRoute
   '/agent-api-spec/$agentId': typeof AgentApiSpecAgentIdRoute
+  '/app-auth/consent': typeof AppAuthConsentRoute
   '/dashboard-fullscreen/$dashboardId': typeof DashboardFullscreenDashboardIdRoute
   '/desktop-auth/consent': typeof DesktopAuthConsentRoute
   '/guest/$guestShareToken': typeof GuestGuestShareTokenRoute
@@ -439,6 +447,7 @@ export interface FileRoutesById {
   '/_layout/sessions': typeof LayoutSessionsRouteWithChildren
   '/_layout/settings': typeof LayoutSettingsRoute
   '/agent-api-spec/$agentId': typeof AgentApiSpecAgentIdRoute
+  '/app-auth/consent': typeof AppAuthConsentRoute
   '/dashboard-fullscreen/$dashboardId': typeof DashboardFullscreenDashboardIdRoute
   '/desktop-auth/consent': typeof DesktopAuthConsentRoute
   '/guest/$guestShareToken': typeof GuestGuestShareTokenRoute
@@ -492,6 +501,7 @@ export interface FileRouteTypes {
     | '/sessions'
     | '/settings'
     | '/agent-api-spec/$agentId'
+    | '/app-auth/consent'
     | '/dashboard-fullscreen/$dashboardId'
     | '/desktop-auth/consent'
     | '/guest/$guestShareToken'
@@ -540,6 +550,7 @@ export interface FileRouteTypes {
     | '/knowledge-sources'
     | '/settings'
     | '/agent-api-spec/$agentId'
+    | '/app-auth/consent'
     | '/dashboard-fullscreen/$dashboardId'
     | '/desktop-auth/consent'
     | '/guest/$guestShareToken'
@@ -592,6 +603,7 @@ export interface FileRouteTypes {
     | '/_layout/sessions'
     | '/_layout/settings'
     | '/agent-api-spec/$agentId'
+    | '/app-auth/consent'
     | '/dashboard-fullscreen/$dashboardId'
     | '/desktop-auth/consent'
     | '/guest/$guestShareToken'
@@ -637,6 +649,7 @@ export interface RootRouteChildren {
   ResetPasswordRoute: typeof ResetPasswordRoute
   SignupRoute: typeof SignupRoute
   AgentApiSpecAgentIdRoute: typeof AgentApiSpecAgentIdRoute
+  AppAuthConsentRoute: typeof AppAuthConsentRoute
   DashboardFullscreenDashboardIdRoute: typeof DashboardFullscreenDashboardIdRoute
   DesktopAuthConsentRoute: typeof DesktopAuthConsentRoute
   GuestGuestShareTokenRoute: typeof GuestGuestShareTokenRoute
@@ -744,6 +757,13 @@ declare module '@tanstack/react-router' {
       path: '/dashboard-fullscreen/$dashboardId'
       fullPath: '/dashboard-fullscreen/$dashboardId'
       preLoaderRoute: typeof DashboardFullscreenDashboardIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/app-auth/consent': {
+      id: '/app-auth/consent'
+      path: '/app-auth/consent'
+      fullPath: '/app-auth/consent'
+      preLoaderRoute: typeof AppAuthConsentRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/agent-api-spec/$agentId': {
@@ -1152,6 +1172,7 @@ const rootRouteChildren: RootRouteChildren = {
   ResetPasswordRoute: ResetPasswordRoute,
   SignupRoute: SignupRoute,
   AgentApiSpecAgentIdRoute: AgentApiSpecAgentIdRoute,
+  AppAuthConsentRoute: AppAuthConsentRoute,
   DashboardFullscreenDashboardIdRoute: DashboardFullscreenDashboardIdRoute,
   DesktopAuthConsentRoute: DesktopAuthConsentRoute,
   GuestGuestShareTokenRoute: GuestGuestShareTokenRoute,

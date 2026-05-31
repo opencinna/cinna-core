@@ -6,11 +6,17 @@ Server-side OAuth 2.0 + PKCE infrastructure that allows the Cinna Desktop applic
 
 The flow uses a **consent-page pattern** (mirroring the MCP OAuth flow) so that the `/authorize` endpoint works correctly behind nginx that only proxies `/api`, `/mcp`, and `/.well-known/*`. Because the JWT lives in localStorage, it cannot be sent in a browser navigation. Instead, the public `/authorize` endpoint stores the request by nonce and redirects to the SPA consent page, which uses its localStorage JWT to call the authenticated `/consent` endpoint.
 
+### Mobile clients — the parallel `/app-auth` surface
+
+Cinna Mobile uses the **same flow** through a parallel route namespace mounted at `/api/v1/app-auth/*` (discovered via `/.well-known/cinna-app`), with its own consent page at `/app-auth/consent`. This surface is a thin namespace over the **same backing service, storage tables, and token logic** as `/desktop-auth` — it is not an independent stack. The only differences are the URL prefix and the consent-page redirect target; a consent request, client, code, or token is interchangeable across the two surfaces. Desktop clients keep using `/desktop-auth` unchanged. The mobile app's redirect URIs are native private-use schemes rather than loopback (see [Redirect URI Validation](#redirect-uri-validation)), and the consent screen reflects the client kind ("Cinna Mobile" vs "Cinna Desktop") via the backend-derived `client_kind`. Gated by `APP_AUTH_ENABLED`.
+
 ## Core Capabilities
 
-- **Instance discovery** — User provides a domain (e.g. `my-company.cinna.io`) or selects "Cloud" (`opencinna.io`); desktop app validates the instance via `/.well-known/cinna-desktop`
+- **Instance discovery** — User provides a domain (e.g. `my-company.cinna.io`) or selects "Cloud" (`opencinna.io`); the client validates the instance via `/.well-known/cinna-desktop` (desktop) or `/.well-known/cinna-app` (mobile)
 - **Browser-based consent flow** — Standard OAuth 2.0 authorization code flow with PKCE (RFC 7636 + RFC 8252), routed through a frontend consent page
-- **Lazy client registration** — Desktop apps do not need to pre-register; a new `DesktopOAuthClient` is created automatically on first consent approval
+- **Parallel mobile surface** — Cinna Mobile authenticates through `/app-auth/*` (mirror of `/desktop-auth/*`) backed by the same service and storage; only the URL namespace and native redirect schemes differ
+- **Client-kind-aware consent** — The consent screen renders "Cinna Mobile" vs "Cinna Desktop" copy/icon based on the `client_kind` the backend derives from the redirect URI scheme
+- **Lazy client registration** — Native apps do not need to pre-register; a new `DesktopOAuthClient` is created automatically on first consent approval
 - **Token pair** — Short-lived access token (15 min) + long-lived refresh token (30 days)
 - **Silent refresh** — Desktop app renews access tokens without user interaction
 - **Multi-instance** — User can be logged into multiple instances simultaneously
@@ -123,7 +129,7 @@ See [Two-Factor Authentication](../user_2fa/user_2fa.md) for full 2FA details.
 
 ## Infrastructure Requirements
 
-The `/.well-known/cinna-desktop` discovery endpoint must reach the backend through the reverse proxy. Without it, the desktop app cannot validate the instance before login. See [Nginx Setup](../../infrastructure/nginx_setup.md) for the required location block and how it fits alongside the other origin-root well-known URIs.
+The `/.well-known/cinna-desktop` (desktop) and `/.well-known/cinna-app` (mobile) discovery endpoints must reach the backend through the reverse proxy. Without them, the native apps cannot validate the instance before login. See [Nginx Setup](../../infrastructure/nginx_setup.md) for the required location blocks and how they fit alongside the other origin-root well-known URIs.
 
 ## Settings UI
 

@@ -71,6 +71,29 @@ def cinna_desktop_discovery() -> dict:
     }
 
 
+_app_wellknown_router = _APIRouter(tags=["app-auth"])
+
+
+@_app_wellknown_router.get("/.well-known/cinna-app")
+def cinna_app_discovery() -> dict:
+    """Return instance metadata for Cinna Mobile app discovery.
+
+    Mirrors /.well-known/cinna-desktop but points at the parallel /app-auth
+    surface. Endpoint field names follow RFC 8414 (OAuth 2.0 Authorization
+    Server Metadata): ``authorization_endpoint``, ``token_endpoint``,
+    ``userinfo_endpoint``.
+    """
+    base = f"{settings.FRONTEND_HOST}{settings.API_V1_STR}/app-auth"
+    return {
+        "instance_name": settings.PROJECT_NAME,
+        "authorization_endpoint": f"{base}/authorize",
+        "token_endpoint": f"{base}/token",
+        "userinfo_endpoint": f"{base}/userinfo",
+        "version": "1.0",
+        "app_auth_enabled": settings.APP_AUTH_ENABLED,
+    }
+
+
 # Startup and shutdown imports
 from app.services.events.event_service import event_service
 from app.services.files.file_cleanup_scheduler import (
@@ -356,6 +379,8 @@ app.include_router(cli_setup_router)
 
 # Desktop app instance discovery (RFC 8615 /.well-known/ path, no /api/v1 prefix)
 app.include_router(_desktop_wellknown_router)
+# Mobile app instance discovery (parallel /app-auth surface)
+app.include_router(_app_wellknown_router)
 
 # RFC 9728 Protected Resource Metadata (must be at root level)
 app.include_router(mcp_wellknown_router)

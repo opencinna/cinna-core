@@ -5131,6 +5131,55 @@ export type AppAgentRoutesRemoveUserAssignmentData = {
 
 export type AppAgentRoutesRemoveUserAssignmentResponse = (Message);
 
+export type AppAuthListAppClientsResponse = (Array<DesktopOAuthClientPublic>);
+
+export type AppAuthRevokeAppClientData = {
+    clientId: string;
+};
+
+export type AppAuthRevokeAppClientResponse = (void);
+
+export type AppAuthAuthorizeData = {
+    appVersion?: (string | null);
+    clientId?: (string | null);
+    codeChallenge: string;
+    codeChallengeMethod?: string;
+    deviceName?: (string | null);
+    platform?: (string | null);
+    redirectUri: string;
+    state: string;
+};
+
+export type AppAuthAuthorizeResponse = (unknown);
+
+export type AppAuthGetAppAuthRequestData = {
+    nonce: string;
+};
+
+export type AppAuthGetAppAuthRequestResponse = ({
+    [key: string]: unknown;
+});
+
+export type AppAuthAppConsentData = {
+    requestBody: ConsentRequest;
+};
+
+export type AppAuthAppConsentResponse = (ConsentResponse);
+
+export type AppAuthTokenEndpointResponse = (TokenResponse);
+
+export type AppAuthUserinfoResponse = (UserInfoResponse);
+
+export type AppAuthRevokeData = {
+    requestBody: RevokeRequest;
+};
+
+export type AppAuthRevokeResponse = (void);
+
+export type AppAuthCinnaAppDiscoveryResponse = ({
+    [key: string]: unknown;
+});
+
 export type AppDataListAppDataVolumesResponse = (AppDataVolumesPublic);
 
 export type AppDataRecomputeAppDataSizeData = {

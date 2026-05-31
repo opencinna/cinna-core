@@ -272,6 +272,10 @@ class Settings(BaseSettings):
     DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     DESKTOP_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
+    # Mobile App Authentication (parallel /app-auth surface, shared backing).
+    # Token lifetimes are shared with the desktop flow (same DesktopAuthService).
+    APP_AUTH_ENABLED: bool = True
+
     # App Sync (native-client data sync — zero-knowledge document store)
     # Limits and quotas are enforced on CIPHERTEXT bytes (the server never
     # sees plaintext). See docs/drafts/desktop-mobile-data-sync_plan.md §4.4.
