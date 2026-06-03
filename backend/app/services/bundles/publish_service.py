@@ -539,6 +539,7 @@ class PublishService:
                     if publisher_credential_id is not None
                     else None
                 ),
+                "service_uri": cred.service_uri,
             }
             if provided_by == "template":
                 template_data, template_private_fields = (

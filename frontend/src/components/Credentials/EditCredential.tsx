@@ -33,6 +33,7 @@ import {
 const formSchema = z.object({
   name: z.string().min(1, { message: "Name is required" }),
   notes: z.string().optional(),
+  service_uri: z.string().optional(),
   credential_data: z.record(z.string(), z.any()).optional(),
 })
 
@@ -61,6 +62,7 @@ const EditCredential = ({ credential, onSuccess }: EditCredentialProps) => {
     defaultValues: {
       name: credential.name,
       notes: credential.notes ?? undefined,
+      service_uri: credential.service_uri ?? undefined,
       credential_data: {},
     },
   })
@@ -70,6 +72,7 @@ const EditCredential = ({ credential, onSuccess }: EditCredentialProps) => {
       form.reset({
         name: credentialWithData.name,
         notes: credentialWithData.notes ?? undefined,
+        service_uri: credentialWithData.service_uri ?? undefined,
         credential_data: credentialWithData.credential_data,
       })
     }

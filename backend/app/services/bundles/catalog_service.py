@@ -281,6 +281,17 @@ class CatalogService:
             suggested_id: uuid.UUID | None = None
             suggested_name: str | None = None
 
+            # A publisher-marked-private service_uri is treated as not-shared:
+            # it is neither used for matching nor shown to the installer,
+            # mirroring _materialise_template_credential's gating. Only PBT
+            # specs ever populate template_private_fields, so PBU/publisher
+            # specs keep their full service_uri (empty list → unchanged).
+            effective_service_uri = (
+                None
+                if "service_uri" in parsed.template_private_fields
+                else parsed.service_uri
+            )
+
             if (
                 parsed.provided_by == "publisher"
                 and parsed.publisher_credential_id is not None
@@ -313,6 +324,7 @@ class CatalogService:
                         credential_type=parsed.type,
                         template_data=parsed.template_data,
                         template_private_fields=parsed.template_private_fields,
+                        service_uri=effective_service_uri,
                     )
                 else:
                     match = CredentialsService.find_match_for_spec(
@@ -320,6 +332,7 @@ class CatalogService:
                         user_id=user.id,
                         name=parsed.name,
                         credential_type=parsed.type,
+                        service_uri=effective_service_uri,
                     )
                 if match is not None:
                     suggested_id = match.id
@@ -335,6 +348,7 @@ class CatalogService:
                     suggested_credential_id=suggested_id,
                     suggested_credential_name=suggested_name,
                     template_private_fields=parsed.template_private_fields,
+                    service_uri=effective_service_uri,
                 )
             )
 

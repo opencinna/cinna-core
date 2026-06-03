@@ -55,6 +55,7 @@ import { AgentApiConnectionView } from "@/components/Credentials/AgentApiConnect
 const formSchema = z.object({
   name: z.string().min(1, { message: "Name is required" }),
   notes: z.string().optional(),
+  service_uri: z.string().optional(),
   credential_data: z.object({}).passthrough().optional(),
 })
 
@@ -184,6 +185,7 @@ function OwnedCredentialView({
     defaultValues: {
       name: credential.name,
       notes: credential.notes ?? "",
+      service_uri: credential.service_uri ?? "",
       credential_data: credential.credential_data ?? {},
     },
   })
@@ -199,6 +201,7 @@ function OwnedCredentialView({
       form.reset({
         name: credential.name,
         notes: credential.notes ?? "",
+        service_uri: credential.service_uri ?? "",
         credential_data: credential.credential_data ?? {},
       })
     }

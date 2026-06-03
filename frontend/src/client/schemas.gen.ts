@@ -8601,6 +8601,17 @@ export const CredentialCreateSchema = {
             title: 'Allow Template Sharing',
             default: false
         },
+        service_uri: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Uri'
+        },
         credential_data: {
             anyOf: [
                 {
@@ -8745,6 +8756,17 @@ export const CredentialPublicSchema = {
             type: 'boolean',
             title: 'Allow Template Sharing',
             default: false
+        },
+        service_uri: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Uri'
         },
         id: {
             type: 'string',
@@ -8997,6 +9019,17 @@ export const CredentialUpdateSchema = {
                 }
             ],
             title: 'Template Private Fields'
+        },
+        service_uri: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Uri'
         }
     },
     type: 'object',
@@ -9034,6 +9067,17 @@ export const CredentialWithDataSchema = {
             type: 'boolean',
             title: 'Allow Template Sharing',
             default: false
+        },
+        service_uri: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Uri'
         },
         id: {
             type: 'string',
@@ -12077,6 +12121,17 @@ export const InstallContextSpecSchema = {
             type: 'array',
             title: 'Template Private Fields',
             default: []
+        },
+        service_uri: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Uri'
         }
     },
     type: 'object',

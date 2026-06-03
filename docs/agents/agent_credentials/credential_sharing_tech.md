@@ -4,7 +4,7 @@
 
 ### Backend - Models
 - `backend/app/models/credentials/credential_share.py` - CredentialShare table model, CredentialSharePublic, CredentialShareCreate, SharedCredentialPublic response models
-- `backend/app/models/credentials/credential.py` - Adds `allow_sharing` and `allow_template_sharing` fields to CredentialBase, `template_private_fields` (JSON list[str]) to Credential / CredentialCreate / CredentialUpdate / CredentialPublic; `share_count`, `is_shared`, `owner_email` on CredentialPublic; `CredentialAffectedAgent` (id, name, ui_color_preset); `CredentialDeletionImpact` (tier, affected_own_agents, direct_share_count, bundle_usages, bundle_pbp_usages, active_install_count)
+- `backend/app/models/credentials/credential.py` - Adds `allow_sharing` and `allow_template_sharing` fields to CredentialBase, `template_private_fields` (JSON list[str]) to Credential / CredentialCreate / CredentialUpdate / CredentialPublic; `service_uri: str | None` to `CredentialBase` (flows through `CredentialCreate`, `CredentialPublic`, and the DB model automatically) and to `CredentialUpdate` (editable, nullable); not sensitive — appears in `CredentialPublic` without redaction; `share_count`, `is_shared`, `owner_email` on CredentialPublic; `CredentialAffectedAgent` (id, name, ui_color_preset); `CredentialDeletionImpact` (tier, affected_own_agents, direct_share_count, bundle_usages, bundle_pbp_usages, active_install_count)
 - `backend/app/models/credentials/ai_credential.py` - `AICredentialBundleUsage` (bundle_uuid, bundle_id, display_name, publisher_install_id, used_for_conversation, used_for_building); `AICredentialDeletionImpact` (tier, bundle_usages)
 
 ### Backend - Services
@@ -24,8 +24,10 @@
 - `frontend/src/components/Credentials/CredentialTemplateSharing.tsx` - "Share as Template" toggle, per-field private/template checkboxes (with form labels mirrored from `CredentialFields/`), force-private message for OAuth + service account, "Used in Bundles" block filtered to `provided_by="template"` usages
 - `frontend/src/components/Credentials/SharedWithMeCredentials.tsx` - "Shared with Me" credential list with owner email and share date
 - `frontend/src/components/Credentials/CredentialCard.tsx` - "Shareable" badge, user count badge for active shares
+- `frontend/src/components/Credentials/CredentialFields/ApiTokenFields.tsx` - optional `service_uri` field for `api_token` credentials; helper text: "Audience/slot id shared across all per-user tokens for the same bundle; not secret."
+- `frontend/src/components/Credentials/CredentialForms/GenericCredentialForm.tsx` / `EditCredential.tsx` - optional `service_uri` field surfaced for `api_token` (and optionally `agent_api`) credentials; not surfaced for other types
 - `frontend/src/components/Agents/CredentialProvisioningSection.tsx` - Per-spec `User provides` / `Embedded (shared)` / `Template (defaults + private)` dropdown on the publisher install's Bundle tab
-- `frontend/src/components/Install/InstallServiceCredentialItem.tsx` - Renders the spec's `provided_by` badge + body; `TemplateProvidedBody` lists the private fields the installer will need to fill in
+- `frontend/src/components/Install/InstallServiceCredentialItem.tsx` - Renders the spec's `provided_by` badge + body; `TemplateProvidedBody` lists the private fields the installer will need to fill in; optionally renders the spec's `service_uri` (informational, so the installer understands why a differently-named credential was auto-suggested)
 - `frontend/src/components/Install/InstallSetupForm.tsx` - `initialChoiceForSpec` returns `"skip"` for template specs (the install service short-circuits into the template branch)
 
 ### Frontend - Routes
@@ -37,6 +39,7 @@
 ### Migrations
 - `backend/app/alembic/versions/g7b8c9d0e1f2_add_credential_sharing.py` - `allow_sharing` column on credential table, new `credential_shares` table
 - `backend/app/alembic/versions/cc3de4f5a6b7_add_template_sharing_to_credential.py` - `allow_template_sharing` (boolean, default `false`) and `template_private_fields` (JSON list, default `[]`) on credential table
+- `backend/app/alembic/versions/3f8f2a2e7f23_add_credential_service_uri.py` - `service_uri` (TEXT, nullable) column on credential table; partial btree index `ix_credential_service_uri (service_uri) WHERE service_uri IS NOT NULL`. All existing rows backfill to NULL (legacy behavior unchanged). Downgrade drops the index then the column
 
 ### Router Registration
 - `backend/app/api/main.py` - Added `credential_shares.router` import and registration
@@ -50,7 +53,9 @@
 - `allow_sharing` (boolean, default false) — direct-sharing consent flag
 - `allow_template_sharing` (boolean, default false) — template-sharing consent flag (independent from `allow_sharing`)
 - `template_private_fields` (JSON, default `[]`) — list of `credential_data` field names that must be supplied per-installer; only stored, never inferred
+- `service_uri` (TEXT, nullable, default NULL) — plaintext audience/slot id used by the Tier 0a/0b matcher. NULL = legacy behavior, no change in matching. Non-secret; included in `CredentialPublic` without redaction. Added in migration `3f8f2a2e7f23`
 - Index: `ix_credential_allow_sharing` (partial index for shareable credentials)
+- Index: `ix_credential_service_uri` — partial btree on `(service_uri) WHERE service_uri IS NOT NULL`; keeps the index small since the vast majority of rows will remain NULL
 
 ### New Table: `credential_shares`
 - `id` (UUID, PK)
@@ -69,6 +74,7 @@ Each entry the publish flow emits:
 - `publisher_credential_id` — populated only when `provided_by="publisher"`
 - `template_data` — non-private credential_data values; only present when `provided_by="template"`
 - `template_private_fields` — list of fields the installer must supply; only present when `provided_by="template"`
+- `service_uri` — optional plaintext slot id; only present when the publisher's linked credential has a non-null `service_uri`. Steers the Tier 0a/0b matcher at install time. Never secret; coalesces to `None` when missing from old revision JSON (backward compatible)
 
 ## API Endpoints
 
@@ -109,8 +115,9 @@ Each entry the publish flow emits:
 
 ### CredentialsService (`backend/app/services/credentials/credentials_service.py`)
 - `link_credential_to_agent()` - Allows linking shared credentials (not just owned)
-- `update_credential()` - Persists `allow_template_sharing` + `template_private_fields`; flips `is_placeholder=False` only when `check_credential_completeness == "complete"` (so partial fills on template placeholders keep the gate engaged); rejects non-`list[str]` `template_private_fields` payloads
+- `update_credential()` - Persists `allow_template_sharing` + `template_private_fields`; flips `is_placeholder=False` only when `check_credential_completeness == "complete"` (so partial fills on template placeholders keep the gate engaged); rejects non-`list[str]` `template_private_fields` payloads; also persists `service_uri` (editable, nullable)
 - `check_credential_completeness()` - Per-type required-field check the placeholder-flip relies on
+- `find_match_for_spec(session, user_id, spec_name, spec_type, *, service_uri=None, ...)` — install-time auto-prefill matcher. Full precedence order when `service_uri` is a non-empty string: **(Tier 0a)** owned credential with matching `service_uri` + `type` (newest by `id desc`); **(Tier 0b)** shared credential (via `CredentialShare`) with matching `service_uri` + `type`; these tiers short-circuit even the PBT value-anchor check. When `service_uri` is `None` or empty, Tiers 0a/0b are bypassed and the remaining tiers run unchanged. Remaining tiers: (1) owned name+type; (2) shared name+type; (3) type-only fallback (PBU only); PBT value-anchor runs after name tiers for PBT specs
 - `get_deletion_impact(session, credential_id, requester_id)` - Classifies deletion blast radius into Tier 0 / 1 / 2. Owner-only: raises `ValueError("Credential not found")` for missing or non-owned rows (route maps to 404). Composes three signals: (1) own agents via `get_affected_agents` (each row includes `ui_color_preset` for badge rendering); (2) direct share count via `CredentialShareService.get_share_count_for_credential`; (3) all bundle usages via `list_bundle_usages` (any provisioning mode). The full `list_bundle_usages` result is returned as `bundle_usages` (informational, all modes); the `"publisher"`-mode subset is returned separately as `bundle_pbp_usages` and is the sole driver of the Tier-2 block. The `active_install_count` is scoped to foreign installs of the PBP bundle(s) only — direct-share linkers are excluded so they are not double-counted with `direct_share_count`. Tier 2 requires both PBP usage AND `active_install_count > 0`.
 - `delete_credential(session, credential_id, owner_id, force=False)` - Raises `CredentialInUseError` (HTTP 409) at Tier 2 unless `force=True`. The error carries the full `CredentialDeletionImpact` so the route can serialise it as the 409 body without a second lookup.
 - `list_bundle_usages(*, credential_id, requester_id)` - Owner-only listing of bundles whose publisher install links this credential. Resolves each entry's `provided_by` via `PublishService.resolve_provided_by` so the projection matches what the publish-time spec collector would emit. Raises `ValueError("Credential not found")` for missing or non-owned rows (route maps to 404 to avoid leaking existence). Backs `GET /credentials/{id}/bundles`

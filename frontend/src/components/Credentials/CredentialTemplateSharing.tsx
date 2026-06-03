@@ -125,13 +125,28 @@ const FIELD_LABELS_BY_TYPE: Record<string, Record<string, string>> = {
     api_token_type: "API Token Type",
     api_token_template: "API Token Template",
     api_token: "API Token",
+    service_uri: "Service URI",
   },
   ssh_key: {
     host_aliases: "Host Aliases",
   },
 }
 
+// ``service_uri`` is a top-level Credential column (a non-secret slot id),
+// NOT a ``credential_data`` field, so it is deliberately kept out of
+// FIELDS_BY_TYPE (which mirrors the credential_data source of truth). It is
+// appended as an extra toggleable row only for credential types where the
+// slot id is meaningful. The toggle persists through the same
+// ``template_private_fields`` mechanism — when present, the backend leaves
+// service_uri blank on the installer's row (installer provides); when absent
+// it copies the publisher's value as a shared default.
+const SERVICE_URI_TYPES = new Set<string>(["api_token", "agent_api"])
+
 function labelForField(type: string, field: string): string {
+  // service_uri is appended as an extra row for SERVICE_URI_TYPES and may
+  // not have a per-type label entry (e.g. agent_api) — give it a stable,
+  // human-readable label everywhere.
+  if (field === "service_uri") return "Service URI"
   return FIELD_LABELS_BY_TYPE[type]?.[field] ?? field
 }
 
@@ -173,6 +188,15 @@ export function CredentialTemplateSharing({
     credential.type,
     credential.credential_data as Record<string, unknown> | undefined,
   )
+
+  // Field rows the publisher can toggle private/shared. This is the
+  // credential_data fields plus the top-level ``service_uri`` slot id for
+  // types where it applies. service_uri defaults to shared (it is not in
+  // DEFAULT_PRIVATE_FIELDS_BY_TYPE) and persists through the same
+  // template_private_fields list as any other field name.
+  const displayFieldNames = SERVICE_URI_TYPES.has(credential.type)
+    ? [...fieldNames, "service_uri"]
+    : fieldNames
 
   // Bundles whose publisher install has this credential linked AND
   // resolved as ``provided_by="template"``. Filtered client-side so the
@@ -306,7 +330,7 @@ export function CredentialTemplateSharing({
                 template defaults.
               </p>
             </div>
-            {fieldNames.length > 0 && privateFields.length === 0 && (
+            {displayFieldNames.length > 0 && privateFields.length === 0 && (
               <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-900 p-3 text-xs text-amber-800 dark:text-amber-200 flex items-start gap-2">
                 <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
                 <div>
@@ -316,7 +340,7 @@ export function CredentialTemplateSharing({
                 </div>
               </div>
             )}
-            {fieldNames.length === 0 ? (
+            {displayFieldNames.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 No fields detected on this credential yet. Save the
                 credential first, then come back to choose which fields
@@ -324,7 +348,7 @@ export function CredentialTemplateSharing({
               </p>
             ) : (
               <ul className="space-y-2">
-                {fieldNames.map((field) => {
+                {displayFieldNames.map((field) => {
                   const isPrivate = privateFields.includes(field)
                   return (
                     <li

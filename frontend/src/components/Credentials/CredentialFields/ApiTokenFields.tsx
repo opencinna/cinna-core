@@ -15,6 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { ServiceUriField } from "@/components/Credentials/CredentialFields/ServiceUriField"
 
 interface ApiTokenFieldsProps {
   control: Control<any>
@@ -128,6 +129,7 @@ export function ApiTokenFields({ control, watch }: ApiTokenFieldsProps) {
             </FormItem>
           )}
         />
+        <ServiceUriField control={control} />
       </div>
     </div>
   )

@@ -141,6 +141,15 @@ export function InstallServiceCredentialItem({
             <Badge variant="outline" className="font-normal">
               {spec.name}
             </Badge>
+            {spec.service_uri && (
+              <Badge
+                variant="outline"
+                className="font-normal font-mono"
+                title="Audience/slot id — matches the per-user token shared for this bundle"
+              >
+                {spec.service_uri}
+              </Badge>
+            )}
             <span className="truncate">{summary}</span>
           </div>
         </div>

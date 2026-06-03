@@ -25,6 +25,7 @@ class ParsedCredentialSpec:
     publisher_credential_id: uuid.UUID | None
     template_data: dict
     template_private_fields: list[str]
+    service_uri: str | None
 
     @property
     def non_private_template_data(self) -> dict:
@@ -81,6 +82,10 @@ def parse_credential_spec(spec: object) -> ParsedCredentialSpec | None:
     description_raw = spec.get("description")
     description = description_raw if isinstance(description_raw, str) else None
 
+    # Non-secret audience/slot id. Old revision JSON has no key → None (I5).
+    service_uri_raw = spec.get("service_uri")
+    service_uri = service_uri_raw if isinstance(service_uri_raw, str) else None
+
     return ParsedCredentialSpec(
         name=name,
         type=type_str,
@@ -89,4 +94,5 @@ def parse_credential_spec(spec: object) -> ParsedCredentialSpec | None:
         publisher_credential_id=publisher_credential_id,
         template_data=template_data,
         template_private_fields=template_private_fields,
+        service_uri=service_uri,
     )

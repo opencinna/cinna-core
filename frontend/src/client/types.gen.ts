@@ -1813,6 +1813,7 @@ export type CredentialCreate = {
     notes?: (string | null);
     allow_sharing?: boolean;
     allow_template_sharing?: boolean;
+    service_uri?: (string | null);
     credential_data?: ({
     [key: string]: unknown;
 } | null);
@@ -1860,6 +1861,7 @@ export type CredentialPublic = {
     notes?: (string | null);
     allow_sharing?: boolean;
     allow_template_sharing?: boolean;
+    service_uri?: (string | null);
     id: string;
     owner_id: string;
     user_workspace_id: (string | null);
@@ -1919,6 +1921,7 @@ export type CredentialUpdate = {
     allow_sharing?: (boolean | null);
     allow_template_sharing?: (boolean | null);
     template_private_fields?: (Array<(string)> | null);
+    service_uri?: (string | null);
 };
 
 export type CredentialWithData = {
@@ -1927,6 +1930,7 @@ export type CredentialWithData = {
     notes?: (string | null);
     allow_sharing?: boolean;
     allow_template_sharing?: boolean;
+    service_uri?: (string | null);
     id: string;
     owner_id: string;
     user_workspace_id: (string | null);
@@ -2550,6 +2554,7 @@ export type InstallContextSpec = {
     suggested_credential_id?: (string | null);
     suggested_credential_name?: (string | null);
     template_private_fields?: Array<(string)>;
+    service_uri?: (string | null);
 };
 
 export type provided_by = 'user' | 'publisher' | 'template';

@@ -131,6 +131,9 @@ class InstallContextSpec(BaseModel):
     suggested_credential_id: uuid.UUID | None = None
     suggested_credential_name: str | None = None
     template_private_fields: list[str] = []
+    # Non-secret audience/slot id mirrored from the spec (informational — lets
+    # the install screen explain why a differently-named credential matched).
+    service_uri: str | None = None
 
 
 class InstallContextAIPublisherSummaries(BaseModel):

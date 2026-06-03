@@ -76,6 +76,7 @@ def _credential_to_public(
         notes=credential.notes,
         allow_sharing=credential.allow_sharing,
         allow_template_sharing=credential.allow_template_sharing,
+        service_uri=credential.service_uri,
         template_private_fields=list(credential.template_private_fields or []),
         owner_id=credential.owner_id,
         user_workspace_id=credential.user_workspace_id,

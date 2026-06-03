@@ -827,14 +827,30 @@ class InstallService:
             # the user-branch fall-through creates the placeholder.
             if mode == "use_existing" and selected_credential_id:
                 selected = session.get(Credential, selected_credential_id)
-                if selected and selected.owner_id == install.owner_id:
-                    session.add(AgentCredentialLink(
-                        agent_id=install.id,
-                        credential_id=selected.id,
-                    ))
-                    continue
+                # Accept the credential when the installer owns it OR when it has
+                # been explicitly shared with them (CredentialShare row exists).
+                # The latter covers the per-user-scoped second-token flow where
+                # the publisher pre-shares a slot-tagged credential before install.
+                if selected:
+                    installer_owns = selected.owner_id == install.owner_id
+                    installer_has_share = False
+                    if not installer_owns:
+                        from app.models.credentials.credential_share import CredentialShare
+                        installer_has_share = session.exec(
+                            select(CredentialShare).where(
+                                CredentialShare.credential_id == selected.id,
+                                CredentialShare.shared_with_user_id == install.owner_id,
+                            )
+                        ).first() is not None
+                    if installer_owns or installer_has_share:
+                        session.add(AgentCredentialLink(
+                            agent_id=install.id,
+                            credential_id=selected.id,
+                        ))
+                        continue
                 logger.warning(
-                    "Credential %s not owned by install owner %s — falling back to placeholder",
+                    "Credential %s not owned by or shared with install owner %s "
+                    "— falling back to placeholder",
                     selected_credential_id, install.owner_id,
                 )
 
@@ -891,6 +907,9 @@ class InstallService:
             requires an explicit toggle)
           - ``template_private_fields`` mirrored onto the installer's row
             so the setup page can highlight which fields are still empty
+          - ``service_uri`` (a non-secret slot id) copied from the spec like
+            a non-private template field, unless the publisher marked it
+            private via ``template_private_fields``
 
         Returns ``True`` on success; ``False`` if the spec lacks a usable
         type so the caller falls back to the regular placeholder path.
@@ -903,6 +922,16 @@ class InstallService:
         except ValueError:
             return False
 
+        # service_uri is a non-secret slot id, not a credential_data field.
+        # Copy it as a shared template default unless the publisher listed
+        # "service_uri" in template_private_fields (installer provides),
+        # mirroring how non_private_template_data strips private fields.
+        service_uri = (
+            None
+            if "service_uri" in parsed.template_private_fields
+            else parsed.service_uri
+        )
+
         cred = Credential(
             owner_id=install.owner_id,
             name=name,
@@ -913,6 +942,7 @@ class InstallService:
             allow_sharing=False,
             allow_template_sharing=False,
             template_private_fields=parsed.template_private_fields,
+            service_uri=service_uri,
         )
         session.add(cred)
         session.flush()

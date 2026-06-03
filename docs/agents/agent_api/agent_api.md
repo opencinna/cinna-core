@@ -187,7 +187,7 @@ The `agent_api` connection credential appears in the Credentials page and Agent 
 
 - **[Agent Environment Data Management](../agent_environment_data_management/agent_environment_data_management.md)** — `agent_api/` is added to `dirs_to_copy` in `copy_workspace_between_environments()`, so it ships with environment cloning and syncing.
 
-- **[Agent Bundles](../agent_bundles/agent_bundles.md)** — `agent_api_enabled` and `agent_api/` workspace content can be snapshotted into a revision, so a published bundle can ship a working producer API. Bundle publisher-provided `agent_api` credentials are **not yet implemented** (see Known Gaps below).
+- **[Agent Bundles](../agent_bundles/agent_bundles.md)** — `agent_api_enabled` and `agent_api/` workspace content can be snapshotted into a revision, so a published bundle can ship a working producer API. Publisher-provided `agent_api` credentials use the **one-shared-token model**: the publisher enables `allow_sharing=True` on the connection credential, marks it `provided_by="publisher"`, and the existing PBP pipeline delivers `{base_url, token}` to every installer's container at install time. Per-install token isolation remains future work (see Known Gaps). For per-user-scoped access, pair the PBP connection credential with a PBU per-user `api_token` second credential using `service_uri` to steer the install-time auto-match — see [Credential Sharing — `service_uri` Slot ID](../agent_credentials/credential_sharing.md#service_uri-slot-id-and-the-per-user-token-pattern) and [Agent Bundles — Two-credential pattern](../agent_bundles/agent_bundles.md).
 
 - **[Realtime Events](../../application/realtime_events/event_bus_system.md)** — `AGENT_API_STATUS_CHANGED` event is emitted after a spec reload or boot error so the owner's Integrations tab updates live without polling.
 
@@ -195,9 +195,18 @@ The `agent_api` connection credential appears in the Credentials page and Agent 
 
 ## Known Gaps and Future Work
 
-### Bundle Publisher-Provided `agent_api` Credentials (Not Implemented)
+### Bundle Publisher-Provided `agent_api` Credentials — Supported (One-Shared-Token Model)
 
-Deliberately deferred. The open question (plan §6.2): should a bundle ship **one shared token** (simple, but no per-install revocation and the publisher's single env serves all installs' traffic) or **mint a token per install** (isolatable, but scales all consumer traffic through the publisher's env)? This is the same foreign-install-guard tension in the bundle propagation model. Do not ship publisher-mode `agent_api` credentials until that decision and the "who owns the env serving N foreign installs" question are resolved.
+Publisher-provided `agent_api` credentials in bundles are supported using the **one-shared-token model**. The publisher enables `allow_sharing=True` on an `agent_api` connection credential, marks it `provided_by="publisher"` in the Credential provisioning panel, publishes the bundle, and the existing PBP pipeline delivers a single `{base_url, token}` to every installer's container.
+
+Accepted trade-offs with this model:
+- **Shared rate-limit budget**: all installers' calls draw from the single token's per-token rate limit configured in the producer's `policy.yaml`.
+- **Single producer environment**: all installer traffic routes through the publisher's one producer environment. The publisher must keep it running and scaled for the aggregate load.
+- **No per-install revocation via token**: revoking the `CredentialShare` for a specific installer removes their access to the connection credential, but the token value itself is not per-install. Revoking the `CredentialShare` cuts that installer's PBP link and the runtime gate switches them to `publisher_broken`.
+
+**Per-install token isolation** (minting a distinct token per installer, enabling per-install rate limits and independent revocation) remains future work.
+
+For bundles that need per-user authority on top of the shared connection, pair the PBP connection credential with a PBU per-user `api_token` second credential stamped with a `service_uri` slot id. The install-time matcher auto-suggests the correct pre-shared per-user token even when its name differs from the spec. See [Credential Sharing — `service_uri` Slot ID](../agent_credentials/credential_sharing.md#service_uri-slot-id-and-the-per-user-token-pattern) for the full two-credential pattern and ordering constraint.
 
 ### Out of Scope (§12 of the original plan)
 
@@ -210,4 +219,4 @@ Deliberately deferred. The open question (plan §6.2): should a bundle ship **on
 
 ---
 
-*Last updated: 2026-05-27*
+*Last updated: 2026-06-02*

@@ -1283,6 +1283,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             notes=credential_in.notes,
             allow_sharing=credential_in.allow_sharing,
             allow_template_sharing=credential_in.allow_template_sharing,
+            service_uri=credential_in.service_uri,
             template_private_fields=template_private_fields,
             encrypted_data=encrypted_data,
             owner_id=owner_id,
@@ -1584,6 +1585,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             "notes": credential.notes,
             "allow_sharing": credential.allow_sharing,
             "allow_template_sharing": credential.allow_template_sharing,
+            "service_uri": credential.service_uri,
             "template_private_fields": list(credential.template_private_fields or []),
             "owner_id": credential.owner_id,
             "user_workspace_id": credential.user_workspace_id,
@@ -1600,6 +1602,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         fall_back_to_type_only: bool = True,
         template_data: dict | None = None,
         template_private_fields: list[str] | None = None,
+        service_uri: str | None = None,
     ) -> Credential | None:
         """Suggest an existing credential matching the spec for the user.
 
@@ -1607,7 +1610,25 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         ``suggested_credential_id`` on each spec on the install screen.
         Suggestion-only — never auto-commits.
 
-        Match precedence (default / PBU path, ``template_data is None``):
+        Match precedence:
+          0a. ``service_uri`` tier — owned: when ``service_uri`` is a
+              non-empty string, ``owner_id == user_id``, exact type match,
+              and ``Credential.service_uri == service_uri``. Returns the
+              newest by descending ``id``.
+          0b. ``service_uri`` tier — shared: same predicate joined through
+              ``CredentialShare`` (``shared_with_user_id == user_id``).
+
+          The ``service_uri`` tier runs FIRST and short-circuits — even on
+          the PBT path (``template_data is not None``). A slot-id match wins
+          over name matching and over PBT value-anchoring (OQ1, resolved
+          YES): the publisher explicitly stamped both the spec and each
+          per-user token with the same ``service_uri``, so it is the
+          stronger, intentional signal. The token value still gates access
+          server-side at runtime (I2). When ``service_uri`` is ``None`` or
+          empty, the function is byte-for-byte equivalent to its prior
+          behavior (I5) and falls through to the tiers below.
+
+        Default / PBU path (``template_data is None``):
           1. Owned + case-insensitive name match + exact type match.
           2. Shared + case-insensitive name match + exact type match.
           3. Type-only fallback (when ``fall_back_to_type_only=True``): if
@@ -1630,7 +1651,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
           type-only hit must not silently auto-link a user credential
           pointing at a different URL/database than the publisher's
           template specifies. Candidates whose data fails to decrypt are
-          skipped rather than raising.
+          skipped rather than raising. NOTE: the ``service_uri`` tier above
+          takes precedence over this value-anchor check (OQ1).
 
         Returns ``None`` when no match is found.
         """
@@ -1645,6 +1667,42 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             type_enum = CredentialType(credential_type)
         except ValueError:
             return None
+
+        # ── Tier 0: service_uri (audience/slot id) ──────────────────────
+        # Top precedence and short-circuiting — even for PBT (OQ1). Only
+        # engaged when service_uri is a non-empty string; otherwise the
+        # legacy tiers below run unchanged (I5).
+        if service_uri:
+            owned_uri_stmt = (
+                select(Credential)
+                .where(
+                    Credential.owner_id == user_id,
+                    Credential.type == type_enum,
+                    Credential.service_uri == service_uri,
+                )
+                .order_by(Credential.id.desc())
+            )
+            owned_uri_match = session.exec(owned_uri_stmt).first()
+            if owned_uri_match is not None:
+                return owned_uri_match
+
+            shared_uri_stmt = (
+                select(Credential)
+                .join(
+                    CredentialShare,
+                    CredentialShare.credential_id == Credential.id,
+                )
+                .where(
+                    CredentialShare.shared_with_user_id == user_id,
+                    Credential.type == type_enum,
+                    Credential.service_uri == service_uri,
+                )
+                .order_by(Credential.id.desc())
+            )
+            shared_uri_match = session.exec(shared_uri_stmt).first()
+            if shared_uri_match is not None:
+                return shared_uri_match
+            # No service_uri match → fall through to the legacy tiers.
 
         pbt_strict = template_data is not None
         private_keys = set(template_private_fields or [])

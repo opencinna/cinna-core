@@ -36,6 +36,12 @@ class CredentialBase(SQLModel):
     notes: str | None = Field(default=None)
     allow_sharing: bool = Field(default=False)  # Whether this credential can be shared with other users
     allow_template_sharing: bool = Field(default=False)  # Whether this credential can be shared as a template (non-private fields are copied as defaults; the installer must supply the private ones)
+    # Non-secret audience/slot id (I4). When set, the bundle publisher stamps
+    # the same value on the linked spec credential AND every per-user token for
+    # the same slot; their names and token values differ. Steers the install-time
+    # auto-prefill matcher (top-precedence tier) without carrying any authority
+    # itself — plaintext, never encrypted, never redacted. NULL = legacy behavior.
+    service_uri: str | None = Field(default=None)
 
 
 # Type-specific credential data models (for validation)
@@ -125,6 +131,7 @@ class CredentialUpdate(SQLModel):
     allow_sharing: bool | None = None  # Update sharing permission
     allow_template_sharing: bool | None = None  # Toggle template-sharing
     template_private_fields: list[str] | None = None  # Fields the installer must supply when installing a bundle that uses this credential as a template
+    service_uri: str | None = None  # Editable non-secret audience/slot id (I4)
 
 
 # Database model
@@ -140,6 +147,13 @@ class Credential(CredentialBase, table=True):
             "ix_credential_placeholder",
             "is_placeholder",
             postgresql_where=text("is_placeholder = true"),
+        ),
+        # Partial index for the service_uri matcher tier — the vast majority of
+        # rows have NULL service_uri, so a partial index stays small.
+        Index(
+            "ix_credential_service_uri",
+            "service_uri",
+            postgresql_where=text("service_uri IS NOT NULL"),
         ),
         # Named foreign key for placeholder_source_id
         ForeignKeyConstraint(
