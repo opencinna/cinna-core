@@ -645,7 +645,16 @@ class AppSyncService:
         *,
         data: EncryptionInitRequest,
     ) -> EncryptionStatePublic:
-        """First device only — register the device + initial envelopes, set v1."""
+        """First device only — register the device + initial envelopes.
+
+        Computes the next UMK generation server-authoritatively: one past the
+        highest ``enc_umk_version`` any of the user's records have *ever* used
+        (live or tombstoned). On a never-initialized account this is 1; after a
+        ``reset_encryption`` that left stale v1 records behind it is 2, etc.
+        Generation numbers are never reused while records still carry them,
+        which would otherwise let a new device mistake stale ciphertext for
+        decryptable-under-current data (the AEAD AAD binds to ``umk_version``).
+        """
         # Lock the state row so two concurrent inits can't both pass the gate.
         # Mirrors push()'s under-lock E2E check.
         state = AppSyncService._lock_state(session, user.id)
@@ -658,6 +667,15 @@ class AppSyncService:
             raise InvalidPayloadError("A device envelope is required at init")
         if not any(e.wrap_method == "recovery" for e in data.envelopes):
             raise InvalidPayloadError("A recovery envelope is required at init")
+
+        # Highest generation any record (live or tombstoned) ever used; the new
+        # UMK takes the next number so it can't collide with surviving records.
+        max_record_version = session.exec(
+            select(func.max(AppSyncRecord.enc_umk_version)).where(
+                AppSyncRecord.user_id == user.id
+            )
+        ).one()
+        new_version = (max_record_version or 0) + 1
 
         device = AppSyncService._create_device(session, user.id, data.device)
 
@@ -672,10 +690,61 @@ class AppSyncService:
                         "A device envelope's device_id must reference the device "
                         "registered in this init request"
                     )
-            AppSyncService._create_envelope(session, user.id, env, device_id=device_id)
+            # The server is authoritative on the generation label — stamp every
+            # envelope at new_version so they agree with active_umk_version (and
+            # so get_encryption_state's umk_version-filtered methods query finds
+            # them). The wrapped key unwraps regardless of the label.
+            AppSyncService._create_envelope(
+                session,
+                user.id,
+                env,
+                device_id=device_id,
+                umk_version=new_version,
+            )
 
-        state.active_umk_version = 1
+        state.active_umk_version = new_version
         state.e2e_initialized_at = datetime.now(UTC)
+        state.updated_at = datetime.now(UTC)
+        session.add(state)
+        session.commit()
+        return AppSyncService.get_encryption_state(session, user)
+
+    @staticmethod
+    def reset_encryption(session: Session, user) -> EncryptionStatePublic:
+        """Tear E2E back down so the account can be set up fresh ("first device"
+        again).
+
+        Deletes every key envelope, every device, and any pending pairing relay
+        rows, then sets ``active_umk_version`` back to 0 so ``init_encryption``
+        is allowed again and ``get_encryption_state`` reports ``initialized =
+        False``. Device rows are **hard-deleted** here (full teardown), in
+        contrast to single-device ``revoke_device`` which soft-marks
+        ``is_revoked=True`` and keeps the row for the audit/UI device list.
+        The record log / seq cursor are deliberately left intact —
+        callers tombstone records separately via ``wipe`` (``DELETE /``); the
+        old ciphertext is undecryptable under the next generation's key anyway.
+
+        Idempotent: a no-op (still returns the state) when E2E was never set up.
+        """
+        state = AppSyncService._lock_state(session, user.id)
+
+        for env in session.exec(
+            select(AppSyncKeyEnvelope).where(AppSyncKeyEnvelope.user_id == user.id)
+        ).all():
+            session.delete(env)
+
+        for device in session.exec(
+            select(AppSyncDevice).where(AppSyncDevice.user_id == user.id)
+        ).all():
+            session.delete(device)
+
+        for pairing in session.exec(
+            select(AppSyncPairing).where(AppSyncPairing.user_id == user.id)
+        ).all():
+            session.delete(pairing)
+
+        state.active_umk_version = 0
+        state.e2e_initialized_at = None
         state.updated_at = datetime.now(UTC)
         session.add(state)
         session.commit()
@@ -884,11 +953,14 @@ class AppSyncService:
         data: KeyEnvelopeInput,
         *,
         device_id: UUID | None,
+        umk_version: int | None = None,
     ) -> AppSyncKeyEnvelope:
+        # Callers may override the generation label (e.g. init_encryption, where
+        # the server is authoritative on which UMK generation this is).
         env = AppSyncKeyEnvelope(
             user_id=user_id,
             wrap_method=data.wrap_method,
-            umk_version=data.umk_version,
+            umk_version=data.umk_version if umk_version is None else umk_version,
             wrapped_key=data.wrapped_key,
             kdf=data.kdf,
             kdf_params=data.kdf_params,

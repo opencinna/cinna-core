@@ -157,6 +157,18 @@ def init_encryption(
         _handle_service_error(e)
 
 
+@router.delete("/encryption", response_model=EncryptionStatePublic)
+def reset_encryption(
+    *, session: SessionDep, current_user: CurrentUser
+) -> EncryptionStatePublic:
+    """Tear E2E back down (delete envelopes/devices, set v0) so the account can
+    be set up fresh. Pairs with ``DELETE /`` (wipe records) for a full reset."""
+    try:
+        return AppSyncService.reset_encryption(session, current_user)
+    except AppSyncError as e:
+        _handle_service_error(e)
+
+
 @router.get("/keys", response_model=list[AppSyncKeyEnvelopePublic])
 def list_keys(
     *,

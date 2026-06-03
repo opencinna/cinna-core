@@ -262,7 +262,8 @@ Status codes for sync verbs:
 | Method | Path | Body | Response | Description |
 |--------|------|------|----------|-------------|
 | `GET` | `/encryption` | — | `EncryptionStatePublic` | Init state, active version, available methods, non-revoked devices |
-| `POST` | `/encryption/init` | `EncryptionInitRequest` | `EncryptionStatePublic` | First device only: register device + initial envelopes, set `active_umk_version=1`. Serialised under `_lock_state()`. `409` if already initialised. `422` if `device` or `recovery` envelope is absent |
+| `POST` | `/encryption/init` | `EncryptionInitRequest` | `EncryptionStatePublic` | First device only: register device + initial envelopes; version assigned server-authoritatively (see service method notes). Serialised under `_lock_state()`. `409` if already initialised. `422` if `device` or `recovery` envelope is absent |
+| `DELETE` | `/encryption` | — | `EncryptionStatePublic` | Reset E2E: hard-delete all envelopes, all devices, and pending pairing rows; set `active_umk_version=0`. Idempotent — always returns `200`. Wraps `AppSyncService.reset_encryption` via `_handle_service_error`. |
 | `GET` | `/keys` | — | `list[AppSyncKeyEnvelopePublic]` | List envelopes; optional `?umk_version=` filter |
 | `POST` | `/keys` | `KeyEnvelopeInput` | `AppSyncKeyEnvelopePublic` | Add or replace a wrapped UMK envelope (upsert on natural key) |
 | `DELETE` | `/keys/{envelope_id}` | — | `Message` | Remove a wrapped UMK envelope. `404` if not found or owned by another user |
@@ -381,8 +382,22 @@ AppSyncService.init_encryption(session, user, *, data: EncryptionInitRequest) ->
     # under the lock and raises E2EAlreadyInitializedError (409) if non-zero.
     # Requires at least one device envelope AND at least one recovery envelope;
     # raises InvalidPayloadError (422) if either is absent.
-    # Creates the device row then the envelopes; sets active_umk_version=1
-    # and e2e_initialized_at.
+    # Server-authoritative monotonic version: queries MAX(enc_umk_version) over
+    # all of the user's records (live and tombstoned); new_version = (max or 0) + 1.
+    # First-ever init (no records) → version 1. Reinit after reset_encryption that
+    # left records → version 2 (or higher). All envelopes are stamped at new_version
+    # regardless of the umk_version field the client submitted. Sets
+    # active_umk_version = new_version and e2e_initialized_at.
+AppSyncService.reset_encryption(session, user) -> EncryptionStatePublic
+    # Acquires _lock_state() (SELECT ... FOR UPDATE).
+    # Hard-deletes every AppSyncKeyEnvelope for the user.
+    # Hard-deletes every AppSyncDevice for the user (full teardown; compare
+    # revoke_device which soft-marks is_revoked=True and keeps the row).
+    # Hard-deletes any AppSyncPairing rows for the user.
+    # Sets active_umk_version=0 and e2e_initialized_at=None.
+    # Does NOT touch app_sync_record rows or state.current_seq — records are
+    # tombstoned separately via wipe() (DELETE /). Idempotent: safe when E2E
+    # was never initialised (still returns un-initialized EncryptionStatePublic).
 AppSyncService.list_envelopes(session, user, *, umk_version) -> list[AppSyncKeyEnvelopePublic]
 AppSyncService.add_envelope(session, user, *, data) -> AppSyncKeyEnvelopePublic
     # Upserts on (user_id, wrap_method, umk_version, device_id) unique key.
@@ -479,4 +494,4 @@ The web SPA does not consume these endpoints (the server cannot decrypt the cont
 
 ---
 
-*Last updated: 2026-05-31*
+*Last updated: 2026-06-03*

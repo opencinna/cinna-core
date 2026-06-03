@@ -5227,6 +5227,8 @@ export type AppSyncGetStateResponse = (SyncStatePublic);
 
 export type AppSyncGetEncryptionResponse = (EncryptionStatePublic);
 
+export type AppSyncResetEncryptionResponse = (EncryptionStatePublic);
+
 export type AppSyncInitEncryptionData = {
     requestBody: EncryptionInitRequest;
 };

@@ -172,6 +172,35 @@ Offered at setup for users who prefer typing a memorised phrase. `KEK_pw = Argon
 
 After a device is revoked, the client should rotate the UMK: generate UMK v(n+1), re-wrap it for all surviving unlock methods (`POST /keys`), bump `active_umk_version`, then lazily re-encrypt records (re-pushing rows with `enc_umk_version = n+1`). The server tolerates mixed `enc_umk_version` during the sweep — each record self-describes its generation. Rotation protects future confidentiality only; a revoked device already saw the old data.
 
+### Monotonic UMK Generation on Init
+
+`POST /encryption/init` does not hardcode the new UMK generation to version 1. Instead, the server computes `new_version = (max enc_umk_version over all of the user's records, live and tombstoned) + 1` and stamps the new envelopes and `active_umk_version` at that number.
+
+Why: `reset_encryption` (see below) deliberately leaves `app_sync_record` rows intact. If init always assigned version 1, a new device pairing in after a reset would see the surviving stale v1 records and — because the AEAD AAD binds `umk_version` — attempt to decrypt them with the new key, failing silently or raising spurious errors. Generating a strictly higher version number ensures the new UMK occupies a generation no surviving record carries.
+
+Consequences:
+- **First-ever init** (no records exist for the account) → generation **1** (unchanged from prior behaviour).
+- **Reinit after a reset that left records behind** → generation **2** (or higher). Old records become a stale dead generation and are ignored by any device using the new key.
+- The version is **server-authoritative**: the client submits envelopes without a `umk_version` field; the server overwrites the version label on all envelopes before persisting. The client learns the assigned generation from `active_umk_version` in the init response.
+
+### Encryption Reset (`DELETE /encryption`)
+
+`DELETE /api/v1/app-sync/encryption` tears E2E back down so the account can be re-initialised as the "first device" again. It:
+
+- Hard-deletes every `app_sync_key_envelope` row for the user.
+- Hard-deletes every `app_sync_device` row for the user (compare `DELETE /devices/{device_id}`, which soft-marks `is_revoked=True` and keeps the row for the audit/trusted-devices UI — the full reset does a clean sweep).
+- Hard-deletes any pending `app_sync_pairing` relay rows.
+- Sets `active_umk_version = 0` and `e2e_initialized_at = None` on `app_sync_state`.
+
+**Records are deliberately retained.** The `app_sync_record` rows and the seq cursor in `app_sync_state` are untouched. The old ciphertext is undecryptable under the next generation's key (AEAD AAD binds `umk_version`), so the stale blobs cause no confusion. A full account reset is a deliberate two-step:
+
+1. `DELETE /api/v1/app-sync/encryption` — drops all keys and devices, allows re-init.
+2. `DELETE /api/v1/app-sync` — tombstones all records, resets quota counters.
+
+**Idempotent:** safe to call when E2E was never initialised. Returns the (un-initialized) `EncryptionStatePublic` with `initialized=False`, `active_umk_version=0`, `devices=[]`.
+
+**No step-up gate.** The endpoint requires only the standard `CurrentUser` authentication — there is intentionally no server-side confirmation challenge. The native client owns the confirmation UX (destructive-action prompt before calling the endpoint). This is a deliberate design decision, not an oversight.
+
 ---
 
 ## Error Handling
@@ -181,6 +210,7 @@ After a device is revoked, the client should rotate the UMK: generate UMK v(n+1)
 | Push before E2E initialised (`active_umk_version == 0`) | `409` |
 | `POST /encryption/init` when already initialised | `409` |
 | `POST /encryption/init` without a `device` envelope or without a `recovery` envelope | `422` |
+| `DELETE /encryption` (reset) — any state, including never-initialised | `200` (idempotent; always succeeds) |
 | `POST /pairing/{code}/complete` when status is not `pending` | `409` |
 | Pairing request expired or not found | `410` (expired) / `404` (not found) |
 | Single record ciphertext exceeds 1 MiB | `413` with `{client_entity_id, payload_bytes, max_payload_bytes}` |
@@ -200,6 +230,7 @@ There is no cinna-core SPA UI for browsing sync content — the server cannot de
 - Sync storage usage from `GET /api/v1/app-sync/state`
 - A trusted-devices list from `GET /api/v1/app-sync/devices` with per-device revoke
 - A confirm-gated "Delete synced data" button (`DELETE /api/v1/app-sync`)
+- A confirm-gated "Reset encryption / start over" action that calls `DELETE /api/v1/app-sync/encryption` (drops all key envelopes and devices, restores first-device state) followed by `DELETE /api/v1/app-sync` (wipes records). Both steps are required for a complete account reset; the native client owns the confirmation UX.
 
 All user-facing sync feedback (progress, conflicts, "storage full", "enter your recovery key") lives in the native client, not in the SPA.
 
@@ -214,4 +245,4 @@ All user-facing sync feedback (progress, conflicts, "storage full", "enter your 
 
 ---
 
-*Last updated: 2026-05-31*
+*Last updated: 2026-06-03*

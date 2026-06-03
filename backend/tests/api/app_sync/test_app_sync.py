@@ -54,6 +54,7 @@ from tests.utils.app_sync import (
     pull,
     push,
     register_device,
+    reset_encryption,
     revoke_device,
     sync,
     wipe,
@@ -910,6 +911,138 @@ def test_wipe(
     assert state_after_scoped["total_records"] == 1
     assert state_after_scoped["collection_counts"].get("note", 0) == 0
     assert state_after_scoped["collection_counts"].get("job", 0) == 1
+
+
+def test_reset_encryption(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    DELETE /encryption returns the account to the un-initialized "first device"
+    state so it can be set up fresh, and the reinit generation monotonically bumps
+    past any records that survived the reset:
+      1. Init E2E (v1), register a 2nd device, add a passphrase envelope, push a row
+         at enc_umk_version=1.
+      2. DELETE /encryption → initialized=False, active_umk_version=0, devices=[].
+      3. GET /encryption confirms; GET /keys is empty.
+      4. Re-init is allowed again (no 409) and creates a new generation v2 because
+         the v1 record is still present — reusing v1 would cause silent decrypt
+         failures (new UMK ≠ key that encrypted the surviving ciphertext).
+      5. New generation's envelopes are at v2; old v1 envelopes were wiped by reset.
+      6. GET /encryption reports active_umk_version=2 and initialized=True.
+      7. Pre-reset v1 record is still pullable and carries enc_umk_version=1 —
+         it belongs to the dead generation, distinct from the new active one.
+      8. Reset is idempotent (a second call still 200 / un-initialized).
+    """
+    headers = superuser_token_headers
+
+    enc = init_encryption(client, headers, device_label="Device A")
+    assert enc["initialized"] is True
+    assert enc["active_umk_version"] == 1
+    assert len(enc["devices"]) == 1
+
+    register_device(client, headers, label="Device B")
+    add_key(client, headers, envelope=make_envelope_input("passphrase"))
+
+    # Push a record at v1 — this is the record that survives the reset and
+    # forces the reinit to pick generation v2.
+    entity_id = str(uuid.uuid4())
+    push(
+        client,
+        headers,
+        changes=[
+            make_record_upsert(
+                collection="note",
+                client_entity_id=entity_id,
+                content="n",
+                enc_umk_version=1,
+            )
+        ],
+    )
+
+    # ── Phase 2: Reset → un-initialized ───────────────────────────────────
+    state = reset_encryption(client, headers)
+    assert state["initialized"] is False
+    assert state["active_umk_version"] == 0
+    assert state["devices"] == []
+
+    # ── Phase 3: GET /encryption confirms; GET /keys is empty ─────────────
+    assert get_encryption(client, headers)["initialized"] is False
+    assert list_keys(client, headers) == []
+
+    # ── Phase 4: Fresh init allowed again (no 409), new generation v2 ─────
+    # Because a v1 record survived the reset, init_encryption bumps to v2
+    # rather than reusing v1 — reusing v1 would let a new device mistake
+    # stale ciphertext for decryptable-under-current-key data.
+    reinit = init_encryption(client, headers, device_label="Device A again")
+    assert reinit["initialized"] is True
+    assert reinit["active_umk_version"] == 2  # monotonic bump past surviving v1 record
+    assert len(reinit["devices"]) == 1
+
+    # ── Phase 5: New generation's envelopes are at v2; v1 envelopes gone ──
+    keys_v2 = list_keys(client, headers, umk_version=2)
+    assert len(keys_v2) >= 2, "Reinit should create at least a device + recovery envelope at v2"
+    wrap_methods_v2 = {k["wrap_method"] for k in keys_v2}
+    assert "device" in wrap_methods_v2
+    assert "recovery" in wrap_methods_v2
+
+    keys_v1 = list_keys(client, headers, umk_version=1)
+    assert keys_v1 == [], "Old v1 envelopes should have been deleted by reset"
+
+    # ── Phase 6: GET /encryption reports the new active generation ─────────
+    enc_after = get_encryption(client, headers)
+    assert enc_after["active_umk_version"] == 2
+    assert enc_after["initialized"] is True
+
+    # ── Phase 7: Pre-reset v1 record is still pullable as a stale generation
+    # Records are intentionally retained across reset — only envelopes and
+    # devices are torn down. The surviving record still carries enc_umk_version=1
+    # which is the dead generation; the client knows it cannot decrypt them with
+    # the new UMK.
+    pull_result = pull(client, headers, cursor=0)
+    v1_records = [r for r in pull_result["changes"] if r["client_entity_id"] == entity_id]
+    assert len(v1_records) == 1, "Pre-reset record should still be pullable after reinit"
+    assert v1_records[0]["enc_umk_version"] == 1, (
+        "Pre-reset record should carry enc_umk_version=1 (the dead generation)"
+    )
+
+    # ── Phase 8: Idempotent ────────────────────────────────────────────────
+    reset_encryption(client, headers)
+    again = reset_encryption(client, headers)
+    assert again["initialized"] is False
+
+
+def test_reinit_after_reset_with_no_records_stays_v1(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    Regression: when no records were ever pushed, a reset+reinit must NOT drift
+    to v2. The version bump is only warranted when stale records survive.
+
+    Story:
+      1. Init E2E (no records pushed) → active_umk_version=1.
+      2. DELETE /encryption → active_umk_version=0.
+      3. Re-init → active_umk_version=1 again (no surviving records to bump past).
+    """
+    headers = superuser_token_headers
+
+    # ── Phase 1: First init → v1 ──────────────────────────────────────────
+    enc = init_encryption(client, headers, device_label="Only Device")
+    assert enc["active_umk_version"] == 1
+    assert enc["initialized"] is True
+
+    # No records pushed — account is clean.
+
+    # ── Phase 2: Reset → un-initialized ───────────────────────────────────
+    reset_result = reset_encryption(client, headers)
+    assert reset_result["initialized"] is False
+    assert reset_result["active_umk_version"] == 0
+
+    # ── Phase 3: Reinit → still v1 (no records survived to force a bump) ──
+    reinit = init_encryption(client, headers, device_label="Only Device")
+    assert reinit["initialized"] is True
+    assert reinit["active_umk_version"] == 1, (
+        "Empty accounts must reinit at v1 — no surviving records warrant a bump"
+    )
 
 
 # ---------------------------------------------------------------------------

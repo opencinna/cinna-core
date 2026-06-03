@@ -235,6 +235,19 @@ def get_encryption(
     return r.json()
 
 
+def reset_encryption(
+    client: TestClient,
+    headers: dict[str, str],
+    expect_status: int = 200,
+) -> dict:
+    """DELETE /app-sync/encryption."""
+    r = client.request("DELETE", f"{_BASE}/encryption", headers=headers)
+    assert r.status_code == expect_status, (
+        f"reset_encryption expected {expect_status}, got {r.status_code}: {r.text}"
+    )
+    return r.json()
+
+
 def list_keys(
     client: TestClient,
     headers: dict[str, str],
