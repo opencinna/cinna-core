@@ -496,26 +496,82 @@ class EnvironmentService:
                 bag["openai_compatible_base_url"] = ai_credentials.openai_compatible_base_url or bag["openai_compatible_base_url"]
                 bag["openai_compatible_model"] = ai_credentials.openai_compatible_model or bag["openai_compatible_model"]
 
-            # Override with named default credentials if configured per-mode
-            if user.default_ai_credential_conversation_id:
-                conv_default_cred = ai_credentials_service.get_credential_for_use(
-                    session, user.default_ai_credential_conversation_id, user.id
+            # Override with named default credentials if configured per-mode.
+            # A per-mode default whose actual type doesn't match the env's chosen
+            # SDK (e.g. a default conversation OpenAI credential paired with a
+            # claude-code/anthropic env) must NOT be stored or applied — that
+            # would mis-file an OpenAI key into the anthropic slot and write it as
+            # ANTHROPIC_API_KEY. In that case fall back to the SDK's expected
+            # default credential, mirroring the explicit-credential path below.
+            cred_type = SDK_TO_CREDENTIAL_TYPE.get(sdk_conversation)
+            if cred_type and user.default_ai_credential_conversation_id:
+                conv_default_obj = session.get(
+                    AICredential, user.default_ai_credential_conversation_id
                 )
-                if conv_default_cred:
-                    cred_type = SDK_TO_CREDENTIAL_TYPE.get(sdk_conversation)
-                    if cred_type:
+                if conv_default_obj and is_credential_compatible_with_sdk(
+                    sdk_conversation, conv_default_obj.type
+                ):
+                    conv_default_cred = ai_credentials_service.get_credential_for_use(
+                        session, user.default_ai_credential_conversation_id, user.id
+                    )
+                    if conv_default_cred:
                         apply_credential_to_bag(bag, cred_type, conv_default_cred)
                         conversation_ai_credential_id = user.default_ai_credential_conversation_id
+                else:
+                    logger.warning(
+                        "Per-mode default conversation credential %s "
+                        "(type=%s) is incompatible with SDK '%s' (expects %s); "
+                        "falling back to the SDK's default credential.",
+                        user.default_ai_credential_conversation_id,
+                        getattr(conv_default_obj, "type", None),
+                        sdk_conversation,
+                        sdk_expected_credential_type(sdk_conversation),
+                    )
+            # If no compatible per-mode default was applied, fall back to the
+            # user's default credential for the SDK's expected type (mirrors the
+            # explicit path's fallback — the bag is filled but no credential id is
+            # persisted, so rebuild re-resolves the typed default).
+            if cred_type and conversation_ai_credential_id is None:
+                default_cred = ai_credentials_service.get_default_for_type(session, user.id, cred_type)
+                if default_cred:
+                    apply_credential_to_bag(bag, cred_type, ai_credentials_service.decrypt_credential(default_cred))
 
-            if user.default_ai_credential_building_id and sdk_building:
-                build_default_cred = ai_credentials_service.get_credential_for_use(
-                    session, user.default_ai_credential_building_id, user.id
+            cred_type = SDK_TO_CREDENTIAL_TYPE.get(sdk_building) if sdk_building else None
+            if cred_type and user.default_ai_credential_building_id:
+                build_default_obj = session.get(
+                    AICredential, user.default_ai_credential_building_id
                 )
-                if build_default_cred:
-                    cred_type = SDK_TO_CREDENTIAL_TYPE.get(sdk_building)
-                    if cred_type:
+                if build_default_obj and is_credential_compatible_with_sdk(
+                    sdk_building, build_default_obj.type
+                ):
+                    build_default_cred = ai_credentials_service.get_credential_for_use(
+                        session, user.default_ai_credential_building_id, user.id
+                    )
+                    if build_default_cred:
                         apply_credential_to_bag(bag, cred_type, build_default_cred)
                         building_ai_credential_id = user.default_ai_credential_building_id
+                else:
+                    logger.warning(
+                        "Per-mode default building credential %s "
+                        "(type=%s) is incompatible with SDK '%s' (expects %s); "
+                        "falling back to the SDK's default credential.",
+                        user.default_ai_credential_building_id,
+                        getattr(build_default_obj, "type", None),
+                        sdk_building,
+                        sdk_expected_credential_type(sdk_building),
+                    )
+            # Fall back to the user's default credential for the building SDK's
+            # expected type if no compatible per-mode default was applied. Skip
+            # when building shares the conversation SDK and a conversation default
+            # was already filled — same key, same slot (mirrors the explicit path).
+            if (
+                cred_type
+                and building_ai_credential_id is None
+                and (sdk_building != sdk_conversation or conversation_ai_credential_id is None)
+            ):
+                default_cred = ai_credentials_service.get_default_for_type(session, user.id, cred_type)
+                if default_cred:
+                    apply_credential_to_bag(bag, cred_type, ai_credentials_service.decrypt_credential(default_cred))
 
             # Validate required credentials for each SDK
             for sdk in {sdk_conversation, sdk_building}:
