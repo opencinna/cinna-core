@@ -45,11 +45,16 @@ from tests.utils.app_sync import (
     list_devices,
     list_keys,
     make_ciphertext,
+    make_commitment,
     make_envelope_input,
     make_fingerprint,
+    make_nonce,
     make_record_upsert,
-    pairing_complete,
+    pairing_complete_by_id,
     pairing_get,
+    pairing_inbox,
+    pairing_reveal,
+    pairing_set_sealer_nonce,
     pairing_start,
     pull,
     push,
@@ -259,14 +264,16 @@ def test_pairing_relay_lifecycle(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
     """
-    QR device pairing blind relay (§12.6a):
-      1. Joining device: POST /pairing/start → pairing_code
-      2. Existing device: GET /pairing/{code} → status=pending, sealed_umk=null
-      3. Existing device: POST /pairing/{code}/complete {sealed_umk}
-      4. Joining device: GET /pairing/{code} → status=completed, sealed_umk present
-      5. Second GET by joining device → status=consumed, sealed_umk=None (single-use)
-      6. POST /pairing/{code}/complete on a consumed pairing → 409
-      7. Non-existent pairing code → 404
+    QR device pairing relay — hardened commit-then-reveal protocol (§12.6a):
+      1. Joining device: POST /pairing/start {pubkey, commitment} → pairing_code
+      2. Joining device polls: GET /pairing/{code} → status=pending, sealed_umk=null
+      3. Sealer: GET /pairing/inbox → discovers row; POST /pairing/inbox/{id}/sealer-nonce
+      4. Joining device: GET /pairing/{code} → status=sealer_nonce_set, sealer_nonce present
+      5. Joining device: POST /pairing/{code}/reveal {joiner_nonce} → revealed
+      6. Sealer: POST /pairing/inbox/{id}/complete {sealed_umk} → completed
+      7. Joining device: GET /pairing/{code} → status=completed, sealed_umk present
+      8. Second GET by joining device → status=consumed, sealed_umk=None (single-use)
+      9. Non-existent pairing code → 404
     """
     headers = superuser_token_headers
 
@@ -274,40 +281,57 @@ def test_pairing_relay_lifecycle(
 
     # ── Phase 1: Joining device starts pairing ─────────────────────────────
     epk = base64.b64encode(b"ephemeral-pubkey-new-device-00000").decode()
-    start_resp = pairing_start(client, headers, new_device_pubkey=epk, device_label="New Phone")
+    nonce_j = make_nonce("lifecycle-joiner-nonce")
+    commitment = make_commitment(epk, nonce_j)
+    start_resp = pairing_start(
+        client, headers,
+        new_device_pubkey=epk,
+        commitment=commitment,
+        device_label="New Phone",
+    )
     code = start_resp["pairing_code"]
     assert code, "Expected a pairing code"
     assert "expires_at" in start_resp
 
-    # ── Phase 2: Joining device polls before existing device completes ─────
+    # ── Phase 2: Joining device polls before sealer sets nonce ─────────────
     status_resp = pairing_get(client, headers, code=code)
     assert status_resp["status"] == "pending"
     assert status_resp["sealed_umk"] is None
+    assert status_resp["sealer_nonce"] is None
     assert status_resp["new_device_pubkey"] == epk
 
-    # ── Phase 3: Existing device completes the pairing ────────────────────
-    sealed = base64.b64encode(b"sealed-umk-encrypted-for-new-device").decode()
-    pairing_complete(client, headers, code=code, sealed_umk=sealed)
+    # ── Phase 3: Sealer discovers row in inbox and posts sealer-nonce ──────
+    inbox = pairing_inbox(client, headers)
+    row = next((item for item in inbox if item.get("device_label") == "New Phone"), None)
+    assert row is not None, "Sealer inbox must contain the pending pairing row"
+    pairing_id = row["id"]
 
-    # ── Phase 4: Joining device fetches the sealed UMK ────────────────────
+    sealer_nonce = make_nonce("lifecycle-sealer-nonce")
+    pairing_set_sealer_nonce(client, headers, pairing_id=pairing_id, sealer_nonce=sealer_nonce)
+
+    # ── Phase 4: Joining device now sees sealer_nonce ─────────────────────
+    status_resp2 = pairing_get(client, headers, code=code)
+    assert status_resp2["status"] == "sealer_nonce_set"
+    assert status_resp2["sealer_nonce"] == sealer_nonce
+
+    # ── Phase 5: Joining device reveals joiner nonce ──────────────────────
+    pairing_reveal(client, headers, code=code, joiner_nonce=nonce_j)
+
+    # ── Phase 6: Sealer completes the pairing ────────────────────────────
+    sealed = base64.b64encode(b"sealed-umk-encrypted-for-new-device").decode()
+    pairing_complete_by_id(client, headers, pairing_id=pairing_id, sealed_umk=sealed)
+
+    # ── Phase 7: Joining device fetches the sealed UMK ────────────────────
     completed_resp = pairing_get(client, headers, code=code)
     assert completed_resp["status"] == "completed"
     assert completed_resp["sealed_umk"] == sealed
 
-    # ── Phase 5: Second fetch → consumed, sealed_umk=None (single-use) ────
+    # ── Phase 8: Second fetch → consumed, sealed_umk=None (single-use) ────
     consumed_resp = pairing_get(client, headers, code=code)
     assert consumed_resp["status"] == "consumed"
     assert consumed_resp["sealed_umk"] is None
 
-    # ── Phase 6: Existing device tries to complete again → 409 ────────────
-    r = client.post(
-        f"{_BASE}/pairing/{code}/complete",
-        headers=headers,
-        json={"sealed_umk": sealed},
-    )
-    assert r.status_code == 409, f"Expected 409 on re-complete, got {r.status_code}"
-
-    # ── Phase 7: Non-existent pairing code → 404 ──────────────────────────
+    # ── Phase 9: Non-existent pairing code → 404 ──────────────────────────
     r = client.get(f"{_BASE}/pairing/nonexistent-code-000", headers=headers)
     assert r.status_code == 404
 

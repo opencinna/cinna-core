@@ -27,6 +27,8 @@ from app.models.app_sync.app_sync_key_envelope import (
 )
 from app.models.app_sync.app_sync_pairing import (
     AppSyncPairing,
+    PairingInboxDetail,
+    PairingInboxItem,
     PairingStartResponse,
     PairingStatusPublic,
 )
@@ -843,12 +845,16 @@ class AppSyncService:
 
     # ── Pairing relay (§12.6) ─────────────────────────────────────────────
 
+    # Terminal states: never surfaced in the inbox, never transitionable.
+    _PAIRING_TERMINAL = ("completed", "consumed", "expired")
+
     @staticmethod
     def pairing_start(
         session: Session,
         user,
         *,
         new_device_pubkey: str,
+        commitment: str,
         device_label: str | None,
     ) -> PairingStartResponse:
         code = secrets.token_urlsafe(24)
@@ -859,6 +865,7 @@ class AppSyncService:
             user_id=user.id,
             pairing_code_hash=AppSyncService._hash_code(code),
             new_device_pubkey=new_device_pubkey,
+            commitment=commitment,
             device_label=device_label,
             status="pending",
             expires_at=expires_at,
@@ -887,21 +894,108 @@ class AppSyncService:
             new_device_pubkey=pairing.new_device_pubkey,
             device_label=pairing.device_label,
             status=status,
+            sealer_nonce=pairing.sealer_nonce,
             sealed_umk=sealed_umk,
             expires_at=pairing.expires_at,
         )
 
     @staticmethod
-    def pairing_complete(
-        session: Session, user, *, code: str, sealed_umk: str
+    def pairing_reveal(
+        session: Session, user, *, code: str, joiner_nonce: str
     ) -> None:
+        """Joiner reveals its nonce last (keyed by code). Requires `sealer_nonce_set`."""
         pairing = AppSyncService._load_pairing(session, user.id, code)
+        if pairing.status != "sealer_nonce_set":
+            raise PairingError(
+                "Pairing request is not awaiting the joiner reveal", status_code=409
+            )
+        pairing.joiner_nonce = joiner_nonce
+        pairing.status = "revealed"
+        session.add(pairing)
+        session.commit()
+
+    # ── Sealer-facing (keyed by row id, discovered via the inbox) ─────────
+
+    @staticmethod
+    def pairing_inbox(session: Session, user) -> list[PairingInboxItem]:
+        """List the caller's own non-terminal pairing rows (discovery metadata only)."""
+        rows = session.exec(
+            select(AppSyncPairing).where(
+                AppSyncPairing.user_id == user.id,
+                AppSyncPairing.status.not_in(AppSyncService._PAIRING_TERMINAL),  # type: ignore[attr-defined]
+            )
+        ).all()
+        now = datetime.now(UTC)
+        items: list[PairingInboxItem] = []
+        dirty = False
+        for pairing in rows:
+            expires_at = pairing.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
+            if expires_at < now:
+                # Lazily flip TTL-expired rows; never surface them.
+                pairing.status = "expired"
+                session.add(pairing)
+                dirty = True
+                continue
+            items.append(
+                PairingInboxItem(
+                    id=pairing.id,
+                    device_label=pairing.device_label,
+                    status=pairing.status,
+                    expires_at=pairing.expires_at,
+                )
+            )
+        if dirty:
+            session.commit()
+        return items
+
+    @staticmethod
+    def pairing_inbox_get(
+        session: Session, user, *, pairing_id: UUID
+    ) -> PairingInboxDetail:
+        """Sealer reads one of its own rows (never includes sealed_umk)."""
+        pairing = AppSyncService._load_pairing_by_id(session, user.id, pairing_id)
+        return PairingInboxDetail(
+            new_device_pubkey=pairing.new_device_pubkey,
+            commitment=pairing.commitment,
+            sealer_nonce=pairing.sealer_nonce,
+            joiner_nonce=pairing.joiner_nonce,
+            status=pairing.status,
+            expires_at=pairing.expires_at,
+        )
+
+    @staticmethod
+    def pairing_set_sealer_nonce(
+        session: Session, user, *, pairing_id: UUID, sealer_nonce: str
+    ) -> None:
+        """Sealer posts its nonce. Requires `pending`."""
+        pairing = AppSyncService._load_pairing_by_id(session, user.id, pairing_id)
         if pairing.status != "pending":
-            raise PairingError("Pairing request is no longer pending", status_code=409)
+            raise PairingError(
+                "Pairing request is not awaiting the sealer nonce", status_code=409
+            )
+        pairing.sealer_nonce = sealer_nonce
+        pairing.status = "sealer_nonce_set"
+        session.add(pairing)
+        session.commit()
+
+    @staticmethod
+    def pairing_complete_by_id(
+        session: Session, user, *, pairing_id: UUID, sealed_umk: str
+    ) -> None:
+        """Sealer posts the sealed UMK. Requires `revealed`."""
+        pairing = AppSyncService._load_pairing_by_id(session, user.id, pairing_id)
+        if pairing.status != "revealed":
+            raise PairingError(
+                "Pairing request is not ready to complete", status_code=409
+            )
         pairing.sealed_umk = sealed_umk
         pairing.status = "completed"
         session.add(pairing)
         session.commit()
+
+    # ── Loaders ───────────────────────────────────────────────────────────
 
     @staticmethod
     def _load_pairing(session: Session, user_id: UUID, code: str) -> AppSyncPairing:
@@ -912,6 +1006,21 @@ class AppSyncService:
                 AppSyncPairing.pairing_code_hash == code_hash,
             )
         ).first()
+        return AppSyncService._enforce_pairing_ttl(session, pairing)
+
+    @staticmethod
+    def _load_pairing_by_id(
+        session: Session, user_id: UUID, pairing_id: UUID
+    ) -> AppSyncPairing:
+        pairing = session.get(AppSyncPairing, pairing_id)
+        if pairing is not None and pairing.user_id != user_id:
+            pairing = None  # not owned — treat as not found (no existence leak)
+        return AppSyncService._enforce_pairing_ttl(session, pairing)
+
+    @staticmethod
+    def _enforce_pairing_ttl(
+        session: Session, pairing: AppSyncPairing | None
+    ) -> AppSyncPairing:
         if pairing is None:
             raise NotFoundError("Pairing request not found")
         expires_at = pairing.expires_at

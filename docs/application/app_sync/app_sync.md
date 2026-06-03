@@ -150,13 +150,27 @@ Until an account's E2E is initialised (`app_sync_state.active_umk_version == 0`)
 
 ### Cross-Device Key Sharing
 
-#### QR Device Pairing (primary — zero typing)
+#### Device Pairing (primary — commit-then-reveal protocol)
 
-The joining device generates an ephemeral X25519 keypair and calls `POST /pairing/start` to create a short-lived relay row; the server returns a one-time pairing code. The joining device renders a QR carrying `{pairing_code, ephemeral_public_key}`. An existing unlocked device scans the QR, seals the UMK to the ephemeral public key (`crypto_box_seal`), and calls `POST /pairing/{code}/complete`. The joining device polls `GET /pairing/{code}`, receives the sealed blob, and opens it with its ephemeral private key. The server relays ciphertext sealed to a key whose private half never existed on the server.
+The pairing flow uses a **commit-then-reveal** handshake that makes the 6-digit SAS grind-proof even against a fully malicious relay. The server is a dumb relay throughout: it stores and forwards opaque strings and never verifies the commitment.
 
-The pairing row has a 5-minute TTL and is consumed after the joining device retrieves the `sealed_umk` (single-use delivery).
+**Participants:**
+- **Joiner** — the new device, addressed by the secret `code`.
+- **Sealer** — an existing trusted, unlocked device. It discovers pending requests via the inbox surface (auto-discovery; no manual code transfer required) or by code entry.
 
-Camera-less fallback (two desktops): the joining device shows a short human pairing code; the user types it into the existing device. Both devices display a short authentication string (derived from `hash(ephemeral_pubkey ‖ pairing_code)`) for the user to compare, guarding against a server-substituted key.
+**Protocol sequence:**
+
+1. Joiner generates an ephemeral X25519 keypair and a 16-byte random `nonce_J`, then computes `commitment = blake2b(pubkey_J ‖ nonce_J, 32 bytes)`. It posts `{new_device_pubkey, commitment, device_label}` to `POST /pairing/start` and receives a `pairing_code`.
+2. Sealer discovers the request from `GET /pairing/inbox` (the backend returns its own non-terminal rows: `id, device_label, status, expires_at`). The user opts in to verify. The sealer fetches the detail from `GET /pairing/inbox/{id}` (returns `new_device_pubkey, commitment, status, expires_at` — no secrets yet) and generates its own 16-byte random `nonce_S`, then posts it to `POST /pairing/inbox/{id}/sealer-nonce`. The relay row advances to `sealer_nonce_set`.
+3. Joiner polls `GET /pairing/{code}`. Once `sealer_nonce` is set, the joiner computes `SAS = trunc6(blake2b(pubkey_J ‖ nonce_J ‖ nonce_S))` and reveals `nonce_J` to the relay via `POST /pairing/{code}/reveal`. The relay row advances to `revealed`.
+4. Sealer polls `GET /pairing/inbox/{id}`. Once `joiner_nonce` is present, it verifies `commitment == blake2b(pubkey_J ‖ joiner_nonce)` — if the check fails it aborts without showing a SAS (tamper auto-detected). On success it computes the same SAS and the user enters/confirms the 6-digit code. The sealer seals the UMK to `pubkey_J` and posts `{sealed_umk}` to `POST /pairing/inbox/{id}/complete`. The relay row advances to `completed`.
+5. Joiner polls `GET /pairing/{code}`, receives `sealed_umk`, and opens it with its ephemeral private key. The row is marked `consumed` (single-use delivery).
+
+**Why this is grind-proof:** the relay must commit a substitute `(pubkey_evil, nonce_evil)` toward the sealer before `nonce_S` exists. Once `nonce_S` is public, the sealer-side SAS is fixed. To match it on the joiner side, the relay would have to grind `nonce_J` — but at that moment `nonce_J` is still hidden inside the commitment. No grindable handle remains; the attacker is reduced to a blind 1-in-10⁶ guess.
+
+**Auto-discovery:** a trusted, active, unlocked device can poll `GET /pairing/inbox` for its own pending pairing requests. The backend returns only discovery metadata (`id, device_label, status, expires_at`) — no pubkeys, nonces, or sealed UMK. The full detail for a specific row is fetched separately from `GET /pairing/inbox/{id}`. Whether and how clients surface this polling is a client-side concern (Priority 4 in the hardening plan); the backend inbox endpoints are the supported discovery surface.
+
+The pairing row has a 5-minute TTL and expires at any non-terminal state if unused.
 
 #### Recovery Key (mandatory offline backup)
 
@@ -211,7 +225,9 @@ Consequences:
 | `POST /encryption/init` when already initialised | `409` |
 | `POST /encryption/init` without a `device` envelope or without a `recovery` envelope | `422` |
 | `DELETE /encryption` (reset) — any state, including never-initialised | `200` (idempotent; always succeeds) |
-| `POST /pairing/{code}/complete` when status is not `pending` | `409` |
+| `POST /pairing/{code}/reveal` when status is not `sealer_nonce_set` | `409` |
+| `POST /pairing/inbox/{id}/sealer-nonce` when status is not `pending` | `409` |
+| `POST /pairing/inbox/{id}/complete` when status is not `revealed` | `409` |
 | Pairing request expired or not found | `410` (expired) / `404` (not found) |
 | Single record ciphertext exceeds 1 MiB | `413` with `{client_entity_id, payload_bytes, max_payload_bytes}` |
 | Push batch exceeds 500 records | `422` |

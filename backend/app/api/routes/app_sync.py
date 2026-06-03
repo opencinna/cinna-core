@@ -20,6 +20,10 @@ from app.models import (
     KeyEnvelopeInput,
     Message,
     PairingCompleteRequest,
+    PairingInboxDetail,
+    PairingInboxItem,
+    PairingRevealRequest,
+    PairingSealerNonceRequest,
     PairingStartRequest,
     PairingStartResponse,
     PairingStatusPublic,
@@ -267,10 +271,85 @@ def pairing_start(
             session,
             current_user,
             new_device_pubkey=body.new_device_pubkey,
+            commitment=body.commitment,
             device_label=body.device_label,
         )
     except AppSyncError as e:
         _handle_service_error(e)
+
+
+# ── Sealer-facing inbox (keyed by row id) ────────────────────────────────
+# IMPORTANT: these static `/pairing/inbox...` routes MUST be declared BEFORE
+# the parametrized `/pairing/{code}` routes below — FastAPI matches in
+# declaration order, so otherwise "inbox" would be captured as a {code}.
+
+
+@router.get("/pairing/inbox", response_model=list[PairingInboxItem])
+def pairing_inbox(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> list[PairingInboxItem]:
+    """Trusted device discovers its own pending pairing requests (metadata only)."""
+    try:
+        return AppSyncService.pairing_inbox(session, current_user)
+    except AppSyncError as e:
+        _handle_service_error(e)
+
+
+@router.get("/pairing/inbox/{pairing_id}", response_model=PairingInboxDetail)
+def pairing_inbox_get(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    pairing_id: uuid.UUID,
+) -> PairingInboxDetail:
+    """Sealer reads pubkey/commitment/nonces for one of its own rows."""
+    try:
+        return AppSyncService.pairing_inbox_get(
+            session, current_user, pairing_id=pairing_id
+        )
+    except AppSyncError as e:
+        _handle_service_error(e)
+
+
+@router.post("/pairing/inbox/{pairing_id}/sealer-nonce", response_model=Message)
+def pairing_set_sealer_nonce(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    pairing_id: uuid.UUID,
+    body: PairingSealerNonceRequest,
+) -> Message:
+    """Sealer posts its nonce (pending → sealer_nonce_set)."""
+    try:
+        AppSyncService.pairing_set_sealer_nonce(
+            session, current_user, pairing_id=pairing_id, sealer_nonce=body.sealer_nonce
+        )
+    except AppSyncError as e:
+        _handle_service_error(e)
+    return Message(message="Sealer nonce set")
+
+
+@router.post("/pairing/inbox/{pairing_id}/complete", response_model=Message)
+def pairing_complete_by_id(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    pairing_id: uuid.UUID,
+    body: PairingCompleteRequest,
+) -> Message:
+    """Sealer posts the UMK sealed to the joining device (revealed → completed)."""
+    try:
+        AppSyncService.pairing_complete_by_id(
+            session, current_user, pairing_id=pairing_id, sealed_umk=body.sealed_umk
+        )
+    except AppSyncError as e:
+        _handle_service_error(e)
+    return Message(message="Pairing completed")
+
+
+# ── Joiner-facing (keyed by the secret code) ─────────────────────────────
 
 
 @router.get("/pairing/{code}", response_model=PairingStatusPublic)
@@ -280,26 +359,26 @@ def pairing_get(
     current_user: CurrentUser,
     code: str,
 ) -> PairingStatusPublic:
-    """Joining device polls for the sealed UMK."""
+    """Joining device polls for the sealer nonce, then the sealed UMK."""
     try:
         return AppSyncService.pairing_get(session, current_user, code=code)
     except AppSyncError as e:
         _handle_service_error(e)
 
 
-@router.post("/pairing/{code}/complete", response_model=Message)
-def pairing_complete(
+@router.post("/pairing/{code}/reveal", response_model=Message)
+def pairing_reveal(
     *,
     session: SessionDep,
     current_user: CurrentUser,
     code: str,
-    body: PairingCompleteRequest,
+    body: PairingRevealRequest,
 ) -> Message:
-    """Existing unlocked device posts the UMK sealed to the joining device."""
+    """Joiner reveals its nonce last (sealer_nonce_set → revealed)."""
     try:
-        AppSyncService.pairing_complete(
-            session, current_user, code=code, sealed_umk=body.sealed_umk
+        AppSyncService.pairing_reveal(
+            session, current_user, code=code, joiner_nonce=body.joiner_nonce
         )
     except AppSyncError as e:
         _handle_service_error(e)
-    return Message(message="Pairing completed")
+    return Message(message="Joiner nonce revealed")

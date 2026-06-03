@@ -592,6 +592,10 @@ from .app_sync.app_sync_pairing import (
     PairingStartResponse,
     PairingStatusPublic,
     PairingCompleteRequest,
+    PairingSealerNonceRequest,
+    PairingRevealRequest,
+    PairingInboxItem,
+    PairingInboxDetail,
 )
 from .app_sync.app_sync_schemas import (
     SyncRecordUpsert,
@@ -1134,6 +1138,10 @@ __all__ = [
     "PairingStartResponse",
     "PairingStatusPublic",
     "PairingCompleteRequest",
+    "PairingSealerNonceRequest",
+    "PairingRevealRequest",
+    "PairingInboxItem",
+    "PairingInboxDetail",
     "SyncRecordUpsert",
     "SyncRecordPublic",
     "SyncPushResult",

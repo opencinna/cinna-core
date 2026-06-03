@@ -343,21 +343,44 @@ def revoke_device(
     return r.json()
 
 
+def make_commitment(pubkey: str = "", nonce: str = "") -> str:
+    """Return a realistic base64 commitment string (simulates H(pubkey ‖ nonce_J))."""
+    # The server never parses or verifies this — it's opaque relay material.
+    # We build a deterministic but realistic-looking 32-byte base64 value.
+    import hashlib
+    raw = hashlib.blake2b((pubkey + "|" + nonce).encode(), digest_size=32).digest()
+    return base64.b64encode(raw).decode()
+
+
+def make_nonce(seed: str = "nonce") -> str:
+    """Return a realistic base64 nonce string (simulates 16 random bytes)."""
+    import hashlib
+    raw = hashlib.sha256(seed.encode()).digest()[:16]
+    return base64.b64encode(raw).decode()
+
+
 def pairing_start(
     client: TestClient,
     headers: dict[str, str],
     *,
     new_device_pubkey: str | None = None,
+    commitment: str | None = None,
     device_label: str = "New Device",
     expect_status: int = 200,
 ) -> dict:
     """POST /app-sync/pairing/start."""
     if new_device_pubkey is None:
         new_device_pubkey = base64.b64encode(b"ephemeral-pubkey" + b"x" * 16).decode()
+    if commitment is None:
+        commitment = make_commitment(new_device_pubkey, make_nonce("default-nonce-J"))
     r = client.post(
         f"{_BASE}/pairing/start",
         headers=headers,
-        json={"new_device_pubkey": new_device_pubkey, "device_label": device_label},
+        json={
+            "new_device_pubkey": new_device_pubkey,
+            "commitment": commitment,
+            "device_label": device_label,
+        },
     )
     assert r.status_code == expect_status, (
         f"pairing_start expected {expect_status}, got {r.status_code}: {r.text}"
@@ -388,7 +411,7 @@ def pairing_complete(
     sealed_umk: str | None = None,
     expect_status: int = 200,
 ) -> dict:
-    """POST /app-sync/pairing/{code}/complete."""
+    """POST /app-sync/pairing/{code}/complete (REMOVED in hardened protocol — returns 404/405)."""
     if sealed_umk is None:
         sealed_umk = base64.b64encode(b"sealed-umk-data-for-new-device").decode()
     r = client.post(
@@ -398,5 +421,99 @@ def pairing_complete(
     )
     assert r.status_code == expect_status, (
         f"pairing_complete expected {expect_status}, got {r.status_code}: {r.text}"
+    )
+    return r.json()
+
+
+def pairing_reveal(
+    client: TestClient,
+    headers: dict[str, str],
+    *,
+    code: str,
+    joiner_nonce: str | None = None,
+    expect_status: int = 200,
+) -> dict:
+    """POST /app-sync/pairing/{code}/reveal."""
+    if joiner_nonce is None:
+        joiner_nonce = make_nonce("default-joiner-reveal")
+    r = client.post(
+        f"{_BASE}/pairing/{code}/reveal",
+        headers=headers,
+        json={"joiner_nonce": joiner_nonce},
+    )
+    assert r.status_code == expect_status, (
+        f"pairing_reveal expected {expect_status}, got {r.status_code}: {r.text}"
+    )
+    return r.json()
+
+
+def pairing_inbox(
+    client: TestClient,
+    headers: dict[str, str],
+    expect_status: int = 200,
+) -> list:
+    """GET /app-sync/pairing/inbox."""
+    r = client.get(f"{_BASE}/pairing/inbox", headers=headers)
+    assert r.status_code == expect_status, (
+        f"pairing_inbox expected {expect_status}, got {r.status_code}: {r.text}"
+    )
+    return r.json()
+
+
+def pairing_inbox_get(
+    client: TestClient,
+    headers: dict[str, str],
+    *,
+    pairing_id: str,
+    expect_status: int = 200,
+) -> dict:
+    """GET /app-sync/pairing/inbox/{id}."""
+    r = client.get(f"{_BASE}/pairing/inbox/{pairing_id}", headers=headers)
+    assert r.status_code == expect_status, (
+        f"pairing_inbox_get expected {expect_status}, got {r.status_code}: {r.text}"
+    )
+    return r.json()
+
+
+def pairing_set_sealer_nonce(
+    client: TestClient,
+    headers: dict[str, str],
+    *,
+    pairing_id: str,
+    sealer_nonce: str | None = None,
+    expect_status: int = 200,
+) -> dict:
+    """POST /app-sync/pairing/inbox/{id}/sealer-nonce."""
+    if sealer_nonce is None:
+        sealer_nonce = make_nonce("default-sealer-nonce")
+    r = client.post(
+        f"{_BASE}/pairing/inbox/{pairing_id}/sealer-nonce",
+        headers=headers,
+        json={"sealer_nonce": sealer_nonce},
+    )
+    assert r.status_code == expect_status, (
+        f"pairing_set_sealer_nonce expected {expect_status}, got {r.status_code}: {r.text}"
+    )
+    return r.json()
+
+
+def pairing_complete_by_id(
+    client: TestClient,
+    headers: dict[str, str],
+    *,
+    pairing_id: str,
+    sealed_umk: str | None = None,
+    expect_status: int = 200,
+) -> dict:
+    """POST /app-sync/pairing/inbox/{id}/complete."""
+    if sealed_umk is None:
+        sealed_umk = base64.b64encode(b"sealed-umk-data-for-new-device-via-id").decode()
+    r = client.post(
+        f"{_BASE}/pairing/inbox/{pairing_id}/complete",
+        headers=headers,
+        json={"sealed_umk": sealed_umk},
+    )
+    assert r.status_code == expect_status, (
+        f"pairing_complete_by_id expected {expect_status}, got {r.status_code}: {r.text}"
     )
     return r.json()
