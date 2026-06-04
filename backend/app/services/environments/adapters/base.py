@@ -243,12 +243,18 @@ class EnvironmentAdapter(ABC):
     # === Configuration Management ===
 
     @abstractmethod
-    async def get_agent_prompts(self) -> dict[str, str | None]:
+    async def get_agent_prompts(self) -> dict[str, object]:
         """
-        Get agent prompts from docs files.
+        Get agent prompts from docs files, plus per-file mtimes.
 
         Returns:
-            Dictionary with 'workflow_prompt' and 'entrypoint_prompt' keys
+            Dictionary with:
+            - 'workflow_prompt', 'entrypoint_prompt', 'refiner_prompt':
+              ``str | None`` content
+            - 'mtimes': ``dict[str, float | None]`` keyed by the same prompt
+              field names — POSIX mtimes of the backing files, or ``None`` when
+              the file is missing or the env-core does not report mtimes
+              (backward compatible — older env-cores omit them).
         """
         pass
 

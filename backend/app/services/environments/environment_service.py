@@ -11,7 +11,15 @@ from app.models import AgentEnvironment, AgentEnvironmentCreate, AgentEnvironmen
 from app.models.credentials.ai_credential import AICredential, AICredentialType
 from app.core.db import engine, create_session
 from app.utils import create_task_with_error_logging
+from datetime import timedelta
 from .environment_lifecycle import EnvironmentLifecycleManager
+from .prompt_sync import (
+    PROMPT_FIELDS,
+    ReconcileAction,
+    PULL_ACTIONS,
+    PUSH_ACTIONS,
+    content_hash,
+)
 from app.services.credentials.ai_credentials_service import ai_credentials_service
 from .sdk_constants import (
     SDK_ANTHROPIC,
@@ -32,6 +40,28 @@ from .sdk_constants import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Bound the env-side mtime used in the prompt-sync LWW tiebreak so a container
+# clock far in the future cannot force env to always win (mirrors App Sync's
+# clock-skew clamp).
+_PROMPT_CLOCK_SKEW_CEILING = timedelta(hours=24)
+
+
+class ReconcileResult:
+    """Small summary of one ``reconcile_agent_prompts`` pass (for logging/tests)."""
+
+    def __init__(self) -> None:
+        self.pulled: list[str] = []          # fields written DB-side
+        self.pushed: list[str] = []          # fields written env-side
+        self.conflicts: list[str] = []       # fields resolved via LWW
+        self.noops: list[str] = []           # fields unchanged
+        self.success: bool = True
+
+    def __repr__(self) -> str:
+        return (
+            f"ReconcileResult(success={self.success}, pulled={self.pulled}, "
+            f"pushed={self.pushed}, conflicts={self.conflicts}, noops={self.noops})"
+        )
 
 
 class AgentEnvironmentError(Exception):
@@ -969,6 +999,182 @@ class EnvironmentService:
     # === Prompt Sync Operations ===
 
     @staticmethod
+    def _clamp_env_mtime(mtime: float | None) -> datetime | None:
+        """Convert a POSIX mtime to a tz-aware UTC datetime, clamped for skew.
+
+        Returns ``None`` when no mtime was reported (older env-core). A mtime
+        more than the skew ceiling in the future is clamped to now+ceiling so a
+        runaway container clock cannot force the env side to win the LWW.
+        """
+        if mtime is None:
+            return None
+        try:
+            ts = datetime.fromtimestamp(mtime, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
+        ceiling = datetime.now(UTC) + _PROMPT_CLOCK_SKEW_CEILING
+        return ts if ts <= ceiling else ceiling
+
+    @staticmethod
+    async def reconcile_agent_prompts(
+        session: Session,
+        environment: AgentEnvironment,
+        agent: Agent,
+        *,
+        prefer: str | None = None,
+    ) -> ReconcileResult:
+        """Three-way reconcile of the bidirectional prompts between DB and env.
+
+        For each of ``workflow_prompt`` / ``entrypoint_prompt`` /
+        ``refiner_prompt`` this compares the DB content, the env file content,
+        and the per-environment last-synced baseline hash, then applies the
+        decision (NOOP / PULL / PUSH / SEED_* / CONFLICT_* via LWW). DB-side
+        changes bump the matching ``*_updated_at`` clock and, for
+        ``workflow_prompt``, trigger the usual A2A-skills/description side-effects.
+        Every reconciled field's baseline is healed to the new common ancestor.
+
+        On any DB-side change (PULL/CONFLICT_PULL/SEED_PULL) an ``AGENT_UPDATED``
+        event is emitted to the agent owner so the UI can refresh.
+
+        ``prefer="db"`` forces SEED semantics — the DB content wins for every
+        field and the baseline is reset to the DB hashes (used by first-setup
+        and bundle apply-update so reconcile does not immediately pull stale env
+        files back).
+
+        Best-effort: never raises into the caller (lifecycle/start paths); on
+        failure it logs and returns a result with ``success=False``.
+        """
+        from app.services.agents.agent_service import AgentService
+
+        result = ReconcileResult()
+        try:
+            lifecycle_manager = EnvironmentService.get_lifecycle_manager()
+            adapter = lifecycle_manager.get_adapter(environment)
+
+            prompts = await adapter.get_agent_prompts()
+            mtimes = prompts.get("mtimes") or {}
+
+            env_writes: dict[str, str | None] = {}
+            changed_fields: list[str] = []
+            now = datetime.now(UTC)
+
+            for field, _filename in PROMPT_FIELDS:
+                db_content = getattr(agent, field)
+                env_content = prompts.get(field)
+                base_hash = getattr(environment, f"{field}_synced_hash")
+                db_ts = getattr(agent, f"{field}_updated_at")
+                env_ts = EnvironmentService._clamp_env_mtime(mtimes.get(field))
+
+                if prefer == "db":
+                    # Force DB-authoritative seed: push DB content (if any) and
+                    # reset the baseline to the DB hash. No env→DB pulls.
+                    action = ReconcileAction.SEED_PUSH
+                else:
+                    from .prompt_sync import decide
+                    action = decide(db_content, env_content, base_hash, db_ts, env_ts)
+
+                if action in PULL_ACTIONS:
+                    # env → DB
+                    new_content = env_content
+                    setattr(agent, field, new_content)
+                    setattr(agent, f"{field}_updated_at", now)
+                    if field == "workflow_prompt" and new_content:
+                        AgentService.handle_workflow_prompt_change(
+                            agent=agent,
+                            new_workflow_prompt=new_content,
+                            trigger_description_update=True,
+                            user_id=agent.owner_id,
+                        )
+                    changed_fields.append(field)
+                    if action == ReconcileAction.CONFLICT_PULL:
+                        result.conflicts.append(field)
+                        logger.warning(
+                            "prompt-sync CONFLICT for agent %s field %s on env %s: "
+                            "both sides diverged, env wins (LWW). db_hash=%s env_hash=%s",
+                            agent.id, field, environment.id,
+                            content_hash(db_content), content_hash(env_content),
+                        )
+                    result.pulled.append(field)
+                    setattr(environment, f"{field}_synced_hash", content_hash(new_content))
+
+                elif action in PUSH_ACTIONS:
+                    # DB → env (only push fields with content; an empty DB side
+                    # under prefer="db" leaves the env file untouched).
+                    if db_content:
+                        env_writes[field] = db_content
+                        result.pushed.append(field)
+                    if action == ReconcileAction.CONFLICT_PUSH:
+                        result.conflicts.append(field)
+                        logger.warning(
+                            "prompt-sync CONFLICT for agent %s field %s on env %s: "
+                            "both sides diverged, DB wins (LWW). db_hash=%s env_hash=%s",
+                            agent.id, field, environment.id,
+                            content_hash(db_content), content_hash(env_content),
+                        )
+                    setattr(environment, f"{field}_synced_hash", content_hash(db_content))
+
+                else:  # NOOP — heal baseline to the shared hash.
+                    result.noops.append(field)
+                    setattr(environment, f"{field}_synced_hash", content_hash(db_content))
+
+            # Apply env writes in a single call (only fields needing a push).
+            if env_writes:
+                await adapter.set_agent_prompts(**env_writes)
+
+            session.add(agent)
+            session.add(environment)
+            session.commit()
+            session.refresh(agent)
+            session.refresh(environment)
+
+            if changed_fields:
+                logger.info(
+                    "prompt-sync reconcile applied DB changes for agent %s: %s",
+                    agent.id, changed_fields,
+                )
+                await EnvironmentService._emit_agent_updated(
+                    environment, agent, changed_fields
+                )
+
+            return result
+
+        except Exception as e:
+            logger.error(
+                "Failed to reconcile agent prompts for env %s / agent %s: %s",
+                environment.id, agent.id, e, exc_info=True,
+            )
+            result.success = False
+            return result
+
+    @staticmethod
+    async def _emit_agent_updated(
+        environment: AgentEnvironment,
+        agent: Agent,
+        changed_fields: list[str],
+    ) -> None:
+        """Emit ``AGENT_UPDATED`` to the owner after an env→DB prompt pull.
+
+        Lets the frontend invalidate its agent queries so the Prompts cards
+        re-render with the pulled content. Best-effort: failures are swallowed.
+        """
+        try:
+            from app.services.events.event_service import event_service
+            from app.models.events.event import EventType
+
+            await event_service.emit_event(
+                event_type=EventType.AGENT_UPDATED,
+                model_id=agent.id,
+                user_id=agent.owner_id,
+                meta={
+                    "agent_id": str(agent.id),
+                    "environment_id": str(environment.id),
+                    "changed_fields": changed_fields,
+                },
+            )
+        except Exception as e:
+            logger.debug("Failed to emit AGENT_UPDATED for agent %s: %s", agent.id, e)
+
+    @staticmethod
     async def sync_agent_prompts_from_environment(
         session: Session,
         environment: AgentEnvironment,
@@ -1048,19 +1254,26 @@ class EnvironmentService:
         environment: AgentEnvironment,
         workflow_prompt: str | None = None,
         entrypoint_prompt: str | None = None,
-        refiner_prompt: str | None = None
+        refiner_prompt: str | None = None,
+        session: Session | None = None,
     ) -> bool:
         """
-        Sync agent prompts from backend to environment docs files.
+        Force-push agent prompts from backend to environment docs files.
 
-        This should be called when user manually edits prompts in the backend UI
-        to ensure the environment has the latest versions.
+        This is the deliberate "force DB→env" escape hatch — the manual
+        ``POST /agents/{id}/sync-prompts`` button and explicit UI saves. User
+        intent is unambiguous (DB wins), so it overwrites the env files and
+        **resets the per-environment baselines to the pushed DB hashes** so the
+        next three-way reconcile does not echo the now-overwritten env content
+        back as an env-side change.
 
         Args:
             environment: Agent environment instance
             workflow_prompt: Updated workflow prompt content (None to skip)
             entrypoint_prompt: Updated entrypoint prompt content (None to skip)
             refiner_prompt: Updated refiner prompt content (None to skip)
+            session: Optional DB session — when provided, the matching baselines
+                are reset so reconcile stays consistent after the force-push.
 
         Returns:
             True if sync successful
@@ -1076,7 +1289,22 @@ class EnvironmentService:
                 refiner_prompt=refiner_prompt
             )
 
-            logger.info(f"Synced agent prompts to environment {environment.id}")
+            # Reset baselines to the pushed content so the next reconcile sees
+            # the env as already-in-sync (no spurious pull-back).
+            if session is not None:
+                pushed = {
+                    "workflow_prompt": workflow_prompt,
+                    "entrypoint_prompt": entrypoint_prompt,
+                    "refiner_prompt": refiner_prompt,
+                }
+                for field, content in pushed.items():
+                    if content is not None:
+                        setattr(environment, f"{field}_synced_hash", content_hash(content))
+                session.add(environment)
+                session.commit()
+                session.refresh(environment)
+
+            logger.info(f"Force-pushed agent prompts to environment {environment.id}")
             return True
 
         except Exception as e:
@@ -1121,17 +1349,20 @@ class EnvironmentService:
                     logger.warning(f"Environment {environment_id} or agent {agent_id} not found")
                     return
 
-                # Sync prompts from environment to agent
-                success = await EnvironmentService.sync_agent_prompts_from_environment(
+                # Reconcile prompts between environment and agent (three-way
+                # merge — never blindly overwrites either side).
+                reconcile_result = await EnvironmentService.reconcile_agent_prompts(
                     session=session,
                     environment=environment,
-                    agent=agent
+                    agent=agent,
                 )
 
-                if success:
-                    logger.info(f"Successfully synced agent prompts after building session")
+                if reconcile_result.success:
+                    logger.info(
+                        f"Reconciled agent prompts after building session: {reconcile_result}"
+                    )
                 else:
-                    logger.warning(f"Failed to sync agent prompts after building session")
+                    logger.warning(f"Failed to reconcile agent prompts after building session")
 
         except Exception as e:
             logger.error(f"Error in handle_stream_completed_event: {e}", exc_info=True)
@@ -1208,7 +1439,7 @@ class EnvironmentService:
                     )
                     return
 
-                await EnvironmentService.sync_agent_prompts_from_environment(
+                await EnvironmentService.reconcile_agent_prompts(
                     session=session,
                     environment=environment,
                     agent=agent,

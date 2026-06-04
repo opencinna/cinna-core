@@ -262,15 +262,36 @@ class EnvironmentLifecycleManager:
         """
         adapter = self.get_adapter(environment)
 
-        # Set prompts in docs files
+        # Reconcile prompts between DB and env (three-way merge — never blindly
+        # overwrites either side, so an edit made inside the env via cinna-cli
+        # survives a restart instead of being clobbered). Covers all three
+        # prompts including refiner_prompt.
         environment.status_message = "Syncing agent prompts..."
         db_session.add(environment)
         db_session.commit()
 
-        await adapter.set_agent_prompts(
-            workflow_prompt=agent.workflow_prompt,
-            entrypoint_prompt=agent.entrypoint_prompt
+        from app.services.environments.environment_service import EnvironmentService
+        await EnvironmentService.reconcile_agent_prompts(
+            db_session, environment, agent
         )
+
+        # Refresh the pull-only caches (STATUS.md, CLI_COMMANDS.yaml) so they are
+        # current at activation rather than waiting for the first action. Each is
+        # best-effort and env→DB only — a failed pull must never block env start.
+        from app.services.agents.agent_status_service import AgentStatusService
+        from app.services.agents.cli_commands_service import CLICommandsService
+        try:
+            await AgentStatusService.refresh_after_action(
+                environment, db_session=db_session, force=True
+            )
+        except Exception as e:
+            logger.debug(f"Status refresh during start sweep failed for env {environment.id}: {e}")
+        try:
+            await CLICommandsService.refresh_after_action(
+                environment, db_session=db_session, force=True
+            )
+        except Exception as e:
+            logger.debug(f"CLI commands refresh during start sweep failed for env {environment.id}: {e}")
 
         # Sync credentials to environment
         environment.status_message = "Syncing credentials..."
@@ -409,6 +430,16 @@ class EnvironmentLifecycleManager:
         db_session.commit()
 
         await adapter.install_system_packages()
+
+        # Seed the prompt-sync baselines for this brand-new container: the DB is
+        # authoritative at first setup, so push DB prompts and initialise the
+        # per-environment baseline hashes. Subsequent reconciles are full
+        # three-way. Best-effort — reconcile never raises into the lifecycle.
+        from app.services.environments.environment_service import EnvironmentService
+        await EnvironmentService.reconcile_agent_prompts(
+            db_session, environment, agent, prefer="db"
+        )
+
         logger.debug(f"New container setup completed for environment {environment.id}")
 
     async def start_environment(

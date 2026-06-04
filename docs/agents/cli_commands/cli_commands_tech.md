@@ -190,26 +190,21 @@ Bulk-marks all pre-deploy command system messages with `forwarded_to_llm_at` to 
 
 **File:** `backend/app/main.py`
 
-```python
-from app.services.agents.cli_commands_service import CLICommandsService
+Handler registrations are now driven by the **Synced Workspace File Registry** (`backend/app/services/environments/synced_files.py`) rather than hand-listed blocks. For the `"cli_commands"` pull-only entry (`docs/CLI_COMMANDS.yaml`), the registry loop registers `CLICommandsService.handle_post_action_event` against all 7 post-action events:
 
-event_service.register_handler(
-    event_type=EventType.ENVIRONMENT_ACTIVATED,
-    handler=CLICommandsService.handle_post_action_event,
-)
-for _event_type in (
+```python
+_POST_ACTION_EVENTS = (
+    EventType.ENVIRONMENT_ACTIVATED,
     EventType.STREAM_COMPLETED,
     EventType.STREAM_ERROR,
     EventType.CRON_COMPLETED_OK,
     EventType.CRON_TRIGGER_SESSION,
     EventType.CRON_ERROR,
     EventType.WORKSPACE_FILES_CHANGED,
-):
-    event_service.register_handler(
-        event_type=_event_type,
-        handler=CLICommandsService.handle_post_action_event,
-    )
+)
 ```
+
+The event set is identical to before for CLI commands. The new pattern is that the set is shared with `AgentStatusService.handle_post_action_event` for the `"status"` pull-only entry — both pull-only files are registered in the same loop.
 
 `handle_post_action_event` reads `meta.changed_files` (populated by `WORKSPACE_FILES_CHANGED` from the env-core file watcher) and passes `force=True` to `refresh_after_action` when `docs/CLI_COMMANDS.yaml` is in the list. This bypasses the 30 s rate limit for that fetch — direct evidence that the cache is stale outweighs the de-dup heuristic. <!-- nocheck -->
 
@@ -263,6 +258,16 @@ with create_db_session() as db:
 - Dynamic command rows (where `resolved_command != null`) are wrapped with `<Tooltip>` showing the shell command in a `<code>` element truncated at 120 characters
 - Accessibility: dynamic rows gain `aria-describedby="cmd-tooltip-{name}"` pointing to a hidden `<span>` with the resolved command
 - Unavailable dynamic commands do not show the tooltip
+
+**File:** `frontend/src/services/eventService.ts`
+
+- `EventTypes.CLI_COMMANDS_UPDATED: "cli_commands_updated"` — added to the registry so `MessageInput.tsx` (and any other subscriber) can reference the canonical name
+
+**File:** `frontend/src/components/Chat/MessageInput.tsx`
+
+- Subscribes to `EventTypes.CLI_COMMANDS_UPDATED`
+- On receipt, invalidates `["sessionCommands", sessionId]` so the slash-command autocomplete popup fetches the updated command list immediately — no page reload required
+- Scoped by `agent_id` / `environment_id` from the event meta so updates from unrelated agents do not trigger refetches
 
 ---
 

@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { ArrowLeft, EllipsisVertical, Package, Sparkles, Tag, User } from "lucide-react"
 import { useState, useEffect } from "react"
@@ -27,6 +27,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { usePageHeader } from "@/routes/_layout"
+import { eventService, EventTypes } from "@/services/eventService"
 
 export const Route = createFileRoute("/_layout/agent/$agentId")({
   component: AgentDetail,
@@ -38,6 +39,7 @@ function AgentDetail() {
   const { setHeaderContent } = usePageHeader()
   const { isDeveloper, isAgentUser } = useRole()
   const [menuOpen, setMenuOpen] = useState(false)
+  const queryClient = useQueryClient()
 
   const {
     data: agent,
@@ -51,6 +53,25 @@ function AgentDetail() {
     refetchOnWindowFocus: true,
     staleTime: 0,
   })
+
+  // Live-refresh the agent config (Workflow/Entrypoint/Refiner prompt cards)
+  // when the backend pulls prompt changes from the environment into the DB.
+  // The backend emits AGENT_UPDATED to the owner on every env→DB prompt pull.
+  // Scope by agent_id so an unrelated agent's pull doesn't refetch this one.
+  useEffect(() => {
+    if (!agentId) return
+
+    const subId = eventService.subscribe(EventTypes.AGENT_UPDATED, (event) => {
+      const eventAgentId = event.meta?.agent_id ?? event.model_id
+      if (eventAgentId && eventAgentId !== agentId) return
+      queryClient.invalidateQueries({ queryKey: ["agent", agentId] })
+      queryClient.invalidateQueries({ queryKey: ["agents"] })
+    })
+
+    return () => {
+      eventService.unsubscribe(subId)
+    }
+  }, [agentId, queryClient])
 
   const isForeignInstallHeader = !!agent?.bundle_uuid && !agent?.is_publisher_install
   const { data: bundle } = useQuery({

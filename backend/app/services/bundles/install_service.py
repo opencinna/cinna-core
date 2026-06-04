@@ -1157,11 +1157,27 @@ class InstallService:
 
             if env is not None:
                 replace_bundle_content(Path(revision.snapshot_path), env.id)
+                # The snapshot just overwrote the env prompt files with the new
+                # revision content. Reset the prompt-sync baselines to None so
+                # the reconcile that runs on the next env start treats the DB as
+                # authoritative (SEED_PUSH) and does NOT pull the freshly-applied
+                # env files back as a stale env-side change, reverting the update.
+                env.workflow_prompt_synced_hash = None
+                env.entrypoint_prompt_synced_hash = None
+                env.refiner_prompt_synced_hash = None
+                session.add(env)
 
             install.workflow_prompt = revision.workflow_prompt
             install.entrypoint_prompt = revision.entrypoint_prompt
             install.refiner_prompt = revision.refiner_prompt
             install.router_trigger_prompt = revision.router_trigger_prompt
+            # The DB just authoritatively changed — bump the per-prompt logical
+            # clocks so the prompt-sync reconcile treats the revision content as
+            # the newest DB-side edit (out-ranking any stale env mtime in LWW).
+            prompt_now = datetime.now(UTC)
+            install.workflow_prompt_updated_at = prompt_now
+            install.entrypoint_prompt_updated_at = prompt_now
+            install.refiner_prompt_updated_at = prompt_now
             install.installed_revision_id = revision.id
             install.last_sync_at = datetime.now(UTC)
             install.last_update_status = "synced"

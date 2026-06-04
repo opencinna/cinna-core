@@ -169,58 +169,66 @@ async def lifespan(app: FastAPI):
     from app.services.events.activity_service import ActivityService
     from app.services.sessions.session_service import SessionService
 
-    # Environment service handlers
-    event_service.register_handler(
-        event_type=EventType.STREAM_COMPLETED,
-        handler=EnvironmentService.handle_stream_completed_event
+    # --- Synced Workspace File Registry-driven event wiring ---
+    #
+    # All auto-synced workspace files are declared once in
+    # ``app.services.environments.synced_files.SYNCED_FILES``. We derive the
+    # handler registrations from that registry so adding a synced file is a
+    # one-line change there (no hand-editing several blocks here):
+    #   - bidirectional entries  → EnvironmentService reconcile handlers
+    #   - pull_only entries       → their cache-refresh post-action handler
+    from app.services.environments.synced_files import (
+        bidirectional_files,
+        pull_only_files,
     )
-    # Prompt resync after a watched-file change (e.g., Mutagen sync from the CLI)
-    event_service.register_handler(
-        event_type=EventType.WORKSPACE_FILES_CHANGED,
-        handler=EnvironmentService.handle_workspace_files_changed_event
-    )
-
-    # Agent status service: pull STATUS.md after every backend-triggered
-    # action that touched the agent-env — session streams AND scheduler
-    # executions. One handler covers both because they all carry
-    # `environment_id` in meta. Rate-limit inside refresh_after_action
-    # dedupes when multiple events fire within 30 s (e.g.,
-    # CRON_TRIGGER_SESSION quickly followed by STREAM_COMPLETED).
     from app.services.agents.agent_status_service import AgentStatusService
-    for _event_type in (
-        EventType.STREAM_COMPLETED,
-        EventType.STREAM_ERROR,
-        EventType.CRON_COMPLETED_OK,
-        EventType.CRON_TRIGGER_SESSION,
-        EventType.CRON_ERROR,
-        EventType.WORKSPACE_FILES_CHANGED,
-    ):
+    from app.services.agents.cli_commands_service import CLICommandsService
+
+    # Bidirectional prompt files: reconcile after a building session completes
+    # (STREAM_COMPLETED) and after a watched-file change (WORKSPACE_FILES_CHANGED,
+    # e.g. a Mutagen sync from the CLI). Both reconcile handlers are env⇄DB.
+    if bidirectional_files():
         event_service.register_handler(
-            event_type=_event_type,
-            handler=AgentStatusService.handle_post_action_event,
+            event_type=EventType.STREAM_COMPLETED,
+            handler=EnvironmentService.handle_stream_completed_event,
+        )
+        event_service.register_handler(
+            event_type=EventType.WORKSPACE_FILES_CHANGED,
+            handler=EnvironmentService.handle_workspace_files_changed_event,
         )
 
-    # CLI commands service: pull CLI_COMMANDS.yaml after every backend-triggered action
-    # (env activation, session streams, scheduler executions). Same 5 post-action events
-    # as AgentStatusService, plus ENVIRONMENT_ACTIVATED for initial fetch on env start
-    # and WORKSPACE_FILES_CHANGED for Mutagen-sync-triggered refreshes.
-    from app.services.agents.cli_commands_service import CLICommandsService
-    event_service.register_handler(
-        event_type=EventType.ENVIRONMENT_ACTIVATED,
-        handler=CLICommandsService.handle_post_action_event,
-    )
-    for _event_type in (
+    # Pull-only env-authoritative caches: refresh after every backend-triggered
+    # action that touched the agent-env. The full post-action event set now
+    # INCLUDES ``ENVIRONMENT_ACTIVATED`` for every pull-only file — this closes
+    # Gap 1 (STATUS.md was previously not pulled on activation; CLI commands
+    # already was). Per-env rate limiting inside refresh_after_action dedupes
+    # bursts. Each event carries ``environment_id`` in meta.
+    _POST_ACTION_EVENTS = (
+        EventType.ENVIRONMENT_ACTIVATED,
         EventType.STREAM_COMPLETED,
         EventType.STREAM_ERROR,
         EventType.CRON_COMPLETED_OK,
         EventType.CRON_TRIGGER_SESSION,
         EventType.CRON_ERROR,
         EventType.WORKSPACE_FILES_CHANGED,
-    ):
-        event_service.register_handler(
-            event_type=_event_type,
-            handler=CLICommandsService.handle_post_action_event,
-        )
+    )
+    _PULL_ONLY_HANDLERS = {
+        "status": AgentStatusService.handle_post_action_event,
+        "cli_commands": CLICommandsService.handle_post_action_event,
+    }
+    for synced_file in pull_only_files():
+        handler = _PULL_ONLY_HANDLERS.get(synced_file.key)
+        if handler is None:
+            logger.warning(
+                "No post-action handler registered for pull-only synced file %r",
+                synced_file.key,
+            )
+            continue
+        for _event_type in _POST_ACTION_EVENTS:
+            event_service.register_handler(
+                event_type=_event_type,
+                handler=handler,
+            )
 
     # Activity service handlers for streaming lifecycle
     event_service.register_handler(

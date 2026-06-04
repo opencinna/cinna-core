@@ -66,6 +66,13 @@ class AgentEnvironment(SQLModel, table=True):
     agent_api_spec_fetched_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     agent_api_spec_error: str | None = Field(default=None, sa_column=Column(sa.String(512), nullable=True))
     agent_api_policy_cache: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    # Prompt-sync reconcile baselines — the per-environment common-ancestor
+    # hash for each bidirectional prompt (the git-merge-base for the three-way
+    # reconcile). SHA-256 hex of the last-reconciled normalised content.
+    # ``None`` = never reconciled (seeding rule applies; DB wins if non-empty).
+    workflow_prompt_synced_hash: str | None = Field(default=None, sa_column=Column(sa.String(64), nullable=True))
+    entrypoint_prompt_synced_hash: str | None = Field(default=None, sa_column=Column(sa.String(64), nullable=True))
+    refiner_prompt_synced_hash: str | None = Field(default=None, sa_column=Column(sa.String(64), nullable=True))
     # CLI live sync tracking
     last_sync_activity_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     sync_active: bool = Field(default=False)

@@ -189,10 +189,12 @@ def on_startup():
 
 When chat streaming occurs, `MessageService` emits events at each stage:
 - `STREAM_STARTED` → `ActivityService` creates "session_running" activity
-- `STREAM_COMPLETED` → `ActivityService` manages completion, `EnvironmentService` syncs prompts (building mode), `CLICommandsService` refreshes CLI commands cache, `AgentStatusService` pulls STATUS.md
+- `STREAM_COMPLETED` → `ActivityService` manages completion; `EnvironmentService.handle_stream_completed_event` runs the three-way prompt reconcile (building mode); `CLICommandsService.handle_post_action_event` refreshes CLI commands cache; `AgentStatusService.handle_post_action_event` pulls STATUS.md
 - `STREAM_ERROR` → `ActivityService` creates error activity; post-action handlers refresh caches
 - `STREAM_INTERRUPTED` → `ActivityService` cleans up running activity
-- `WORKSPACE_FILES_CHANGED` → env-core fires when watched workspace files (prompts under `docs/`, `docs/CLI_COMMANDS.yaml`, `app-data/storage/STATUS.md`) stabilise after a Mutagen sync; the same three post-action handlers (`EnvironmentService.handle_workspace_files_changed_event`, `CLICommandsService.handle_post_action_event`, `AgentStatusService.handle_post_action_event`) run
+- `WORKSPACE_FILES_CHANGED` → env-core fires when watched workspace files stabilise after a write (Mutagen sync, cinna-cli edit, or agent in-container write). The five watched files are declared in the **Synced Workspace File Registry** (`backend/app/services/environments/synced_files.py`): `docs/WORKFLOW_PROMPT.md`, `docs/ENTRYPOINT_PROMPT.md`, `docs/REFINER_PROMPT.md` (bidirectional), `docs/CLI_COMMANDS.yaml`, `app-data/storage/STATUS.md` (pull-only). `EnvironmentService.handle_workspace_files_changed_event` runs the reconcile for prompt files; `CLICommandsService.handle_post_action_event` and `AgentStatusService.handle_post_action_event` refresh the pull-only caches
+- `ENVIRONMENT_ACTIVATED` → `SessionService.handle_environment_activated` (process pending messages); `CLICommandsService.handle_post_action_event`; `AgentStatusService.handle_post_action_event` — the last two were previously only registered against stream/CRON events; adding `ENVIRONMENT_ACTIVATED` closes the gap where STATUS.md was not pulled when an environment started without any immediately following action
+- `AGENT_UPDATED` → emitted by `EnvironmentService.reconcile_agent_prompts` to the agent owner on every DB-side prompt change (PULL / CONFLICT_PULL / SEED_PULL). Frontend agent detail route subscribes and invalidates `["agent", agentId]` / `["agents"]` so the Prompts cards re-render with pulled content. DB→env pushes and NOOPs do not emit this event
 
 **Example Use Case**: Todo Progress Tracking
 

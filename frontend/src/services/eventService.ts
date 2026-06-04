@@ -67,6 +67,9 @@ export const EventTypes = {
   // Agent status events
   AGENT_STATUS_UPDATED: "agent_status_updated",
 
+  // CLI commands refreshed (env→backend cache of /run:* slash commands)
+  CLI_COMMANDS_UPDATED: "cli_commands_updated",
+
   // Agent REST API build/run status change (cinna_api)
   AGENT_API_STATUS_CHANGED: "agent_api_status_changed",
 

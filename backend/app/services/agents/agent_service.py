@@ -354,13 +354,23 @@ class AgentService:
 
         agent.sqlmodel_update(update_dict)
 
+        # Bump the per-prompt logical clock for each prompt field that actually
+        # changed in this update. This is the DB-side LWW tiebreaker for the
+        # prompt-sync reconcile — a UI edit must out-rank a stale env mtime.
+        prompt_fields = {"workflow_prompt", "entrypoint_prompt", "refiner_prompt"}
+        now = datetime.now(UTC)
+        changed_prompt_fields = update_dict.keys() & prompt_fields
+        for field in changed_prompt_fields:
+            setattr(agent, f"{field}_updated_at", now)
+
         session.add(agent)
         session.commit()
         session.refresh(agent)
 
-        # Sync prompts to active environment if any prompt fields were updated
-        prompt_fields = {"workflow_prompt", "entrypoint_prompt", "refiner_prompt"}
-        if update_dict.keys() & prompt_fields and agent.active_environment_id:
+        # An explicit UI save is unambiguous DB intent → force-push to the active
+        # environment and reset the baselines so a concurrent env edit is
+        # intentionally overridden (and not echoed back on the next reconcile).
+        if changed_prompt_fields and agent.active_environment_id:
             environment = session.get(AgentEnvironment, agent.active_environment_id)
             if environment and environment.status == "running":
                 try:
@@ -369,6 +379,7 @@ class AgentService:
                         workflow_prompt=agent.workflow_prompt,
                         entrypoint_prompt=agent.entrypoint_prompt,
                         refiner_prompt=agent.refiner_prompt,
+                        session=session,
                     )
                 except Exception as e:
                     logger.warning(f"Failed to sync prompts to environment after agent update: {e}")

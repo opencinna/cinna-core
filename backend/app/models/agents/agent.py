@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, UTC
 from typing import List
 from sqlmodel import Field, Relationship, SQLModel, Column
-from sqlalchemy import JSON, Index, text, Text, UniqueConstraint
+from sqlalchemy import JSON, Index, text, Text, UniqueConstraint, DateTime
 
 from app.models.users.user import User
 from app.models.credentials.link_models import AgentCredentialLink
@@ -147,6 +147,21 @@ class Agent(AgentBase, table=True):
     agent_api_enabled: bool = Field(default=False)  # Whether the agent REST API (cinna_api) feature is active
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    # Per-prompt logical clocks — the LWW tiebreaker for the DB side of the
+    # prompt-sync reconcile. Bumped whenever the corresponding DB prompt content
+    # changes (UI edit, env→DB pull, bundle apply-update). Nullable so existing
+    # rows backfill cleanly; ``None`` is treated as "-∞" (oldest) in the
+    # tiebreak, which makes a populated env mtime win (preserve the env edit).
+    workflow_prompt_updated_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    entrypoint_prompt_updated_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    refiner_prompt_updated_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
 
     # Update preferences (for installs of published bundles)
     update_mode: str = Field(default="manual")  # "automatic" | "manual"

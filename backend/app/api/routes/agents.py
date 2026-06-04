@@ -280,7 +280,8 @@ async def sync_agent_prompts(
             environment=environment,
             workflow_prompt=agent.workflow_prompt,
             entrypoint_prompt=agent.entrypoint_prompt,
-            refiner_prompt=agent.refiner_prompt
+            refiner_prompt=agent.refiner_prompt,
+            session=session,
         )
         return Message(message="Agent prompts synced to environment successfully")
     except Exception as e:

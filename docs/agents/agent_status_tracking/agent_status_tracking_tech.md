@@ -17,7 +17,7 @@
 - `backend/app/services/environments/environment_status_scheduler.py` — container health check only (no longer pulls STATUS.md)
 - `backend/app/services/environments/adapters/base.py` — `fetch_workspace_item_with_meta()` + `WorkspaceItemMeta` dataclass
 - `backend/app/services/environments/adapters/docker_adapter.py` — single-GET implementation that parses `Last-Modified` / `Content-Length` / `Content-Type` headers before streaming the body
-- `backend/app/main.py` — registers `handle_post_action_event` against `STREAM_COMPLETED`, `STREAM_ERROR`, `CRON_COMPLETED_OK`, `CRON_TRIGGER_SESSION`, `CRON_ERROR`, and `WORKSPACE_FILES_CHANGED`
+- `backend/app/main.py` — handler registrations are now derived from `synced_files.SYNCED_FILES` (the Synced Workspace File Registry). For the `"status"` pull-only entry, `AgentStatusService.handle_post_action_event` is registered against `ENVIRONMENT_ACTIVATED`, `STREAM_COMPLETED`, `STREAM_ERROR`, `CRON_COMPLETED_OK`, `CRON_TRIGGER_SESSION`, `CRON_ERROR`, and `WORKSPACE_FILES_CHANGED` (7 events — `ENVIRONMENT_ACTIVATED` is the new addition that closes the "STATUS.md not pulled at activation" gap)
 
 **Routes**
 - `backend/app/api/routes/agent_status.py` — public `router` with `GET /agents/status` and `GET /agents/{agent_id}/status`

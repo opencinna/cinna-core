@@ -82,6 +82,33 @@ class AgentEnvService:
 
         return workflow_prompt, entrypoint_prompt, refiner_prompt
 
+    def get_agent_prompt_mtimes(self) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+        """
+        Get the POSIX mtimes of the prompt docs files.
+
+        Used by the backend prompt-sync reconcile as the env-side logical clock
+        for the LWW conflict tiebreak. Missing files report ``None``.
+
+        Returns:
+            Tuple of (workflow_mtime, entrypoint_mtime, refiner_mtime)
+        """
+        return (
+            self._read_prompt_mtime("WORKFLOW_PROMPT.md"),
+            self._read_prompt_mtime("ENTRYPOINT_PROMPT.md"),
+            self._read_prompt_mtime("REFINER_PROMPT.md"),
+        )
+
+    def _read_prompt_mtime(self, filename: str) -> Optional[float]:
+        """Return the POSIX mtime of a prompt file, or None if it doesn't exist."""
+        file_path = self.docs_dir / filename
+        try:
+            if not file_path.exists():
+                return None
+            return file_path.stat().st_mtime
+        except Exception as e:
+            logger.debug(f"Failed to stat {filename}: {e}")
+            return None
+
     def update_agent_prompts(
         self,
         workflow_prompt: Optional[str] = None,

@@ -360,12 +360,15 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
         except Exception:
             return "error"
 
-    async def get_agent_prompts(self) -> dict[str, str | None]:
+    async def get_agent_prompts(self) -> dict[str, object]:
         """
-        Get agent prompts from docs files.
+        Get agent prompts from docs files, plus per-file mtimes.
 
         Returns:
-            Dictionary with 'workflow_prompt', 'entrypoint_prompt', and 'refiner_prompt' keys
+            Dictionary with 'workflow_prompt', 'entrypoint_prompt', and
+            'refiner_prompt' content keys, and a 'mtimes' dict keyed by the same
+            field names (POSIX mtime floats, or None when the file is missing or
+            the env-core predates mtime reporting).
         """
         try:
             async with httpx.AsyncClient() as client:
@@ -376,10 +379,18 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
                 )
                 response.raise_for_status()
                 data = response.json()
+                # Per-file mtimes are additive/optional: older env-cores omit
+                # the *_mtime keys, in which case they read as None here.
+                mtimes: dict[str, float | None] = {
+                    "workflow_prompt": data.get("workflow_prompt_mtime"),
+                    "entrypoint_prompt": data.get("entrypoint_prompt_mtime"),
+                    "refiner_prompt": data.get("refiner_prompt_mtime"),
+                }
                 return {
                     "workflow_prompt": data.get("workflow_prompt"),
                     "entrypoint_prompt": data.get("entrypoint_prompt"),
-                    "refiner_prompt": data.get("refiner_prompt")
+                    "refiner_prompt": data.get("refiner_prompt"),
+                    "mtimes": mtimes,
                 }
         except httpx.HTTPError as e:
             logger.error(f"Failed to get agent prompts: {e}")

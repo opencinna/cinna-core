@@ -105,7 +105,7 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | Feature | Description | Docs |
 |---------|-------------|------|
 | agent_environments | Docker container architecture, build layers, workspace isolation, multi-image templates | [business logic](agents/agent_environments/agent_environments.md) \| [tech](agents/agent_environments/agent_environments_tech.md) \| [multi-image](agents/agent_environments/agent_multi_image_environments.md) \| [credential rebuild](agents/agent_environments/affected_environments_rebuild.md) \| [sdk session persistence](agents/agent_environments/sdk_session_persistence.md) |
-| agent_prompts | System prompt construction for building and conversation modes | [business logic](agents/agent_prompts/agent_prompts.md) \| [tech](agents/agent_prompts/agent_prompts_tech.md) |
+| agent_prompts | System prompt construction for building and conversation modes; three bidirectional prompt docs (workflow/entrypoint/refiner) use three-way reconcile + LWW tiebreak between DB and env-container; pull-only caches (STATUS.md, CLI_COMMANDS.yaml) unified under the Synced Workspace File Registry | [business logic](agents/agent_prompts/agent_prompts.md) \| [tech](agents/agent_prompts/agent_prompts_tech.md) |
 | agent_commands | Slash commands in agent sessions — `/files`, `/session-recover`, `/session-reset`, `/rebuild-env`, `/agent-status`, and the `/run:*` family — with autocomplete popup UI. Command output with `include_in_llm_context=True` is forwarded to the next LLM turn via a `<prior_commands>` XML block | [business logic](agents/agent_commands/agent_commands.md) \| [tech](agents/agent_commands/agent_commands_tech.md) \| [files](agents/agent_commands/files_command.md) \| [recovery](agents/agent_commands/session_recovery_command.md) \| [reset](agents/agent_commands/session_reset_command.md) \| [rebuild-env](agents/agent_commands/rebuild_env_command.md) \| [autocomplete](agents/agent_commands/slash_command_autocomplete.md) \| [agent-status](agents/agent_commands/agent_status_command.md) \| [non-llm context bridging tech](agents/agent_commands/non_llm_context_bridging_tech.md) |
 | agent_plugins | Plugin marketplace integration, capability loading | [business logic](agents/agent_plugins/agent_plugins.md) \| [tech](agents/agent_plugins/agent_plugins_tech.md) |
 | agent_schedulers | Multi-schedule CRON execution with natural language input, two schedule types (static prompt, script trigger), and execution logging | [business logic](agents/agent_schedulers/agent_schedulers.md) \| [tech](agents/agent_schedulers/agent_schedulers_tech.md) |
@@ -225,4 +225,4 @@ User ──→ Frontend (React) ──→ Backend API (FastAPI) ──→ Servic
 
 ---
 
-*Last updated: 2026-06-03* <!-- app-sync-pairing-hardening -->
+*Last updated: 2026-06-03* <!-- prompt-sync-reconciliation -->

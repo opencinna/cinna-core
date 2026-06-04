@@ -601,11 +601,15 @@ async def get_agent_prompts() -> AgentPromptsResponse:
     workflow should operate in conversation mode.
     """
     workflow_prompt, entrypoint_prompt, refiner_prompt = agent_env_service.get_agent_prompts()
+    workflow_mtime, entrypoint_mtime, refiner_mtime = agent_env_service.get_agent_prompt_mtimes()
 
     return AgentPromptsResponse(
         workflow_prompt=workflow_prompt,
         entrypoint_prompt=entrypoint_prompt,
-        refiner_prompt=refiner_prompt
+        refiner_prompt=refiner_prompt,
+        workflow_prompt_mtime=workflow_mtime,
+        entrypoint_prompt_mtime=entrypoint_mtime,
+        refiner_prompt_mtime=refiner_mtime,
     )
 
 

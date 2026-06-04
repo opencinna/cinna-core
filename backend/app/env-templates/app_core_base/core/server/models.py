@@ -16,6 +16,11 @@ class AgentPromptsResponse(BaseModel):
     workflow_prompt: str | None = None
     entrypoint_prompt: str | None = None
     refiner_prompt: str | None = None
+    # Per-file POSIX mtimes — additive/optional so older backends ignore them
+    # and newer env-cores populate them for the prompt-sync reconcile tiebreak.
+    workflow_prompt_mtime: float | None = None
+    entrypoint_prompt_mtime: float | None = None
+    refiner_prompt_mtime: float | None = None
 
 
 class AgentPromptsUpdate(BaseModel):

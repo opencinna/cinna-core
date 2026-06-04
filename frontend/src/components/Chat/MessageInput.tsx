@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, KeyboardEvent, forwardRef, DragEvent } from "react"
-import { useQuery, useMutation } from "@tanstack/react-query"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { eventService, EventTypes } from "@/services/eventService"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -65,6 +66,7 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
     const [showCommandPopup, setShowCommandPopup] = useState(false)
     const [selectedCommandIndex, setSelectedCommandIndex] = useState(-1)
     const { showErrorToast } = useCustomToast()
+    const queryClient = useQueryClient()
 
     const { data: commandsData } = useQuery({
       queryKey: ["sessionCommands", sessionId],
@@ -72,6 +74,29 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
       enabled: !!sessionId && showCommandPopup,
       staleTime: 30_000,
     })
+
+    // Live-refresh the /run:* slash command list when the backend re-caches
+    // CLI commands from the environment. Scope by agent_id so an unrelated
+    // agent's refresh doesn't invalidate this session's command list.
+    useEffect(() => {
+      if (!sessionId) return
+
+      const subId = eventService.subscribe(
+        EventTypes.CLI_COMMANDS_UPDATED,
+        (event) => {
+          if (agentId && event.meta?.agent_id && event.meta.agent_id !== agentId) {
+            return
+          }
+          queryClient.invalidateQueries({
+            queryKey: ["sessionCommands", sessionId],
+          })
+        },
+      )
+
+      return () => {
+        eventService.unsubscribe(subId)
+      }
+    }, [sessionId, agentId, queryClient])
 
     const filteredCommands = useMemo<SessionCommandPublic[]>(() => {
       if (!commandsData?.commands || !message.startsWith("/")) return []

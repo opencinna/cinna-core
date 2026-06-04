@@ -32,6 +32,9 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
         self.delete_calls: int = 0
         self.rebuild_calls: list[dict] = []
         self.prompts_set: dict = {}
+        # Per-field mtimes (float POSIX timestamps) returned by get_agent_prompts.
+        # Set this in tests to simulate env-side logical clocks for LWW decisions.
+        self.prompt_mtimes: dict[str, float | None] = {}
         self.credentials_set: list = []
         self.plugins_set: dict = {}
         self.handover_config_set: dict = {}
@@ -90,12 +93,18 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
 
     # --- Configuration ---
 
-    async def get_agent_prompts(self) -> dict[str, str | None]:
-        return self.prompts_set or {
+    async def get_agent_prompts(self) -> dict:
+        base = self.prompts_set or {
             "workflow_prompt": None,
             "entrypoint_prompt": None,
             "refiner_prompt": None,
         }
+        result = dict(base)
+        # Include mtimes dict so the reconcile orchestrator can use env-side
+        # logical clocks for LWW decisions. An empty dict is fine (all fields
+        # will get env_ts=None, which is treated as MIN timestamp).
+        result["mtimes"] = dict(self.prompt_mtimes)
+        return result
 
     async def set_agent_prompts(
         self,
