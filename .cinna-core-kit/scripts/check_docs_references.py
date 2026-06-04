@@ -285,6 +285,14 @@ def main():
         if os.path.isfile(claude_md):
             md_files.append(claude_md)
 
+        # Also include CAPABILITIES_AGENT.md at project root (the LLM-facing
+        # capability guide that references docs/ feature pages). Cross-repo links
+        # (e.g. cinna-desktop) must be written as absolute http(s) URLs so the
+        # checker skips them — only repo-relative docs/ paths are verified.
+        capabilities_md = os.path.join(project_root, "CAPABILITIES_AGENT.md")
+        if os.path.isfile(capabilities_md):
+            md_files.append(capabilities_md)
+
         # Also include all .md files under backend/tests/
         tests_dir = os.path.join(project_root, "backend", "tests")
         if os.path.isdir(tests_dir):
