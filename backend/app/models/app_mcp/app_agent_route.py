@@ -114,6 +114,11 @@ class AppAgentRouteAssignmentPublic(SQLModel):
     id: uuid.UUID
     route_id: uuid.UUID
     user_id: uuid.UUID
+    # Assigned user's display info, resolved at serialization time so the
+    # frontend picker can render pill labels without loading the full user
+    # list (parity with IdentityBindingAssignmentPublic).
+    user_email: str | None = None
+    user_full_name: str | None = None
     is_enabled: bool
     created_at: datetime
 

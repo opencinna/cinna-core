@@ -7,8 +7,12 @@
 - `backend/app/models/credentials/credential.py` - Adds `allow_sharing` and `allow_template_sharing` fields to CredentialBase, `template_private_fields` (JSON list[str]) to Credential / CredentialCreate / CredentialUpdate / CredentialPublic; `service_uri: str | None` to `CredentialBase` (flows through `CredentialCreate`, `CredentialPublic`, and the DB model automatically) and to `CredentialUpdate` (editable, nullable); not sensitive — appears in `CredentialPublic` without redaction; `share_count`, `is_shared`, `owner_email` on CredentialPublic; `CredentialAffectedAgent` (id, name, ui_color_preset); `CredentialDeletionImpact` (tier, affected_own_agents, direct_share_count, bundle_usages, bundle_pbp_usages, active_install_count)
 - `backend/app/models/credentials/ai_credential.py` - `AICredentialBundleUsage` (bundle_uuid, bundle_id, display_name, publisher_install_id, used_for_conversation, used_for_building); `AICredentialDeletionImpact` (tier, bundle_usages)
 
+### Backend - Models (user search picker)
+- `backend/app/models/users/user.py` - `UserSearchResult` (id / email / full_name) and `UsersSearchPublic` (data + count) — minimal projection returned by `GET /users/search` for the sharing pickers; re-exported from `models/__init__.py`
+
 ### Backend - Services
 - `backend/app/services/credentials/credential_share_service.py` - Core direct-sharing logic: share, revoke, toggle, access checks
+- `backend/app/services/users/user_service.py` - `search_users(session, query, exclude_user_id, limit)` — case-insensitive substring match on `email` / `full_name` over active users, ordered by email, excludes the requester; backs `GET /users/search`
 - `backend/app/services/credentials/credentials_service.py` - `link_credential_to_agent()` accepts shared credentials; `update_credential()` flips `is_placeholder=False` only when `check_credential_completeness == "complete"` (load-bearing for the template setup flow)
 - `backend/app/services/bundles/publish_service.py` - `_collect_credential_specs`, `_validate_publisher_provides`, `_template_payload_for` produce/validate `provided_by="template"` specs with `template_data` + `template_private_fields`
 - `backend/app/services/bundles/install_service.py` - `_setup_install_credentials` template branch + `_materialise_template_credential` create the installer-owned placeholder pre-seeded with template defaults
@@ -78,8 +82,8 @@ Each entry the publish flow emits:
 
 ## API Endpoints
 
-### Credential Sharing (`backend/app/api/routes/credential_shares.py`)
-- `POST /api/v1/credentials/{credential_id}/shares` - Share credential with user by email
+### User Search for Sharing Pickers (`backend/app/api/routes/users.py`)
+- `GET /api/v1/users/search?q=&limit=` - Case-insensitive substring search on `email` / `full_name` for the sharing pickers. Available to **any authenticated user** (not superuser-gated like `GET /users/`), so non-admin owners (agent-developers) can find recipients. Returns a minimal `UsersSearchPublic` projection (`UserSearchResult`: id / email / full_name only) — never the full `UserPublic` payload. Requires `q` of at least 2 characters (shorter → empty list); `limit` clamped to 1-25; excludes the requester. Declared **before** `GET /users/{user_id}` so the literal `/search` path is matched first. Backed by `UserService.search_users`.
 - `GET /api/v1/credentials/{credential_id}/shares` - List all shares for a credential
 - `DELETE /api/v1/credentials/{credential_id}/shares/{share_id}` - Revoke specific share
 - `GET /api/v1/credentials/shared-with-me` - Get credentials shared with current user
@@ -149,8 +153,8 @@ Each entry the publish flow emits:
 
 ### CredentialSharing (`frontend/src/components/Credentials/CredentialSharing.tsx`)
 - Direct-sharing toggle in the CardHeader corner (matches `EmailIntegrationCard` / `WebappShareCard` pattern); body collapses when disabled
-- "Share" button opens dialog with email input form
-- List of current shares with revoke buttons
+- Sharing UI is the shared **`UserAllowlistPicker`** (pill UX, same as MCP route / identity / bundle-grant sharing) rendered inline when sharing is enabled — no separate "Share" dialog or row-style shares list. `selected` is the existing `CredentialShare` rows mapped to `{ id: share.id, userId: share.shared_with_user_id, fallbackLabel: share.shared_with_email }`; `onAdd(u)` shares via `shareMutation` (by `u.email`), `onRemove(item)` revokes by `item.id`. The picker searches server-side via `GET /users/search` (key `["user-search", q]`) and excludes already-selected users by `userId`. See [User Selector Pattern](../../development/frontend/user_selector_pattern.md).
+- **Counter freshness:** the share / revoke / disable mutations all invalidate `["credential-with-data", id]` in addition to `["credential", id]` and `["credentials"]` (via the shared `invalidateShareCaches()` helper). The detail page's "Shared with N users" header reads `share_count` from the `credential-with-data` query, so without this invalidation the counter went stale until a full reload (the root cause of the "counter doesn't update right away" bug — fixed with invalidation, not a websocket event, since the share originates from the same client viewing the counter).
 - Confirmation dialog when disabling sharing with active shares. The dialog also fetches `GET /credentials/{id}/deletion-impact` (shared query key `["credential-deletion-impact", id]`) when open; when the credential is PBP in published bundles, the dialog shows a destructive alert listing the affected bundles and install count so the publisher can see the blast radius before confirming.
 - "Used in Bundles" block listing usages where `provided_by="publisher"`; each entry deep-links to `/agent/{publisher_install_id}#bundle`
 - Early-returns `null` when `useRole().isAgentUser` is true, so the entire card is hidden from `agent-user` accounts
@@ -225,6 +229,7 @@ Each entry the publish flow emits:
 - `["credential-deletion-impact", credentialId]` - `GET /credentials/{id}/deletion-impact` response; shared between `DeleteCredential` and the disable-sharing dialog in `CredentialSharing` so either entry point warms the same cache
 - `["ai-credential-deletion-impact", credentialId]` - `GET /ai-credentials/{id}/deletion-impact` response; used by `DeleteAICredentialDialog`
 - `["credentials-shared-with-me"]` - Credentials shared with current user
+- `["user-search", query]` - `GET /users/search` results for the share dialog's user picker; enabled only when the dialog is open and the trimmed query is ≥2 chars
 - `["agent", agentId, "setup-status"]` / `["agent", agentId, "setup-credentials"]` - Driven by the install setup page
 
 ### Mutations

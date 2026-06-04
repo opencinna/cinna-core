@@ -1355,6 +1355,8 @@ export type AppAgentRouteAssignmentPublic = {
     id: string;
     route_id: string;
     user_id: string;
+    user_email?: (string | null);
+    user_full_name?: (string | null);
     is_enabled: boolean;
     created_at: string;
 };
@@ -4216,8 +4218,27 @@ export type UserRoleUpdate = {
     role: string;
 };
 
+/**
+ * Minimal user projection for sharing pickers.
+ *
+ * Exposes only the fields a picker needs (id, name, email) and nothing
+ * else. Returned by ``GET /users/search`` to any authenticated user so
+ * that non-admin owners (e.g. agent-developers) can find people to share
+ * credentials with without exposing the full ``UserPublic`` payload.
+ */
+export type UserSearchResult = {
+    id: string;
+    email: string;
+    full_name?: (string | null);
+};
+
 export type UsersPublic = {
     data: Array<UserPublic>;
+    count: number;
+};
+
+export type UsersSearchPublic = {
+    data: Array<UserSearchResult>;
     count: number;
 };
 
@@ -7133,6 +7154,13 @@ export type UsersCreateUserData = {
 };
 
 export type UsersCreateUserResponse = (UserPublic);
+
+export type UsersSearchUsersData = {
+    limit?: number;
+    q: string;
+};
+
+export type UsersSearchUsersResponse = (UsersSearchPublic);
 
 export type UsersReadUserMeResponse = (UserPublic);
 

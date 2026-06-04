@@ -30,6 +30,17 @@ Auto-generated from OpenAPI spec. Tag: `users`
 
 ---
 
+## GET `/api/v1/users/search`
+**Search Users**
+
+**Query parameters:**
+- `q`: string (required)
+- `limit`: integer, default: `10`
+
+**Response:** `UsersSearchPublic`
+
+---
+
 ## GET `/api/v1/users/me`
 **Read User Me**
 

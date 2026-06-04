@@ -196,6 +196,8 @@ updated_at: datetime
 assignments: list[AppAgentRouteAssignmentPublic]
 ```
 
+`AppAgentRouteAssignmentPublic` carries `user_id` plus resolved display info `user_email` / `user_full_name` (nullable) so the shared `UserAllowlistPicker` can render pills without a separate user lookup (parity with `IdentityBindingAssignmentPublic`). Populated by `_assignment_to_public()` in `app_agent_route_service.py`; when serialising a route's full assignment list, `_assignments_to_public()` batch-resolves all assigned users in a single query to avoid an N+1 lookup.
+
 ### `RouteConflictMatch` / `RouteConflictResponse`
 
 Returned by `GET /api/v1/agents/{agent_id}/app-mcp-routes/conflicts`. Used by the install page to surface a non-blocking toast when the auto-created route's trigger prompt is similar to an existing effective route.
@@ -296,10 +298,8 @@ Handles both direct MCP connector management and App MCP Server route management
 **App MCP form specifics:**
 - Route name defaults to the agent's name when the form opens
 - "Activate for Myself" switch (default ON): auto-adds the creator as an assigned user with `is_enabled=True`
-- User search/select fetches from `GET /api/v1/users` (enabled only when App MCP form step is open); current user is excluded from the dropdown (use "Activate for Myself" instead)
 - "Make Active for Users" (`auto_enable_for_users`): rendered for all users but `disabled={!isAdmin}`; non-admins see a disabled toggle with a tooltip explanation
-- Assigned users displayed as removable pills
-- The route **edit** dialog uses the shared `UserAllowlistPicker` (`frontend/src/components/Common/UserAllowlistPicker.tsx`) for the "Shared with Users" section — same pill + search-dropdown UX, with `["users-list"]` React Query cache shared with bundle access grants
+- Both the create-step and **edit** dialog "Shared with Users" sections use the shared `UserAllowlistPicker` (`frontend/src/components/Common/UserAllowlistPicker.tsx`) — see [User Selector Pattern](../../development/frontend/user_selector_pattern.md). It searches server-side via `GET /users/search` (key `["user-search", q]`, works for non-admin agent-developers), not the admin-only `["users-list"]`/`GET /users/`; the current user is excluded server-side (use "Activate for Myself" instead). Edit-dialog pills resolve labels from the assignment's `user_email`/`user_full_name` (populated by `_assignment_to_public()`); create-step state is a `UserAllowlistSelectedItem[]` mapped to `assigned_user_ids` on submit
 
 **Card body unified list:**
 - Direct connectors section (existing)

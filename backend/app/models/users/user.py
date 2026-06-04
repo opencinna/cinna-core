@@ -158,6 +158,24 @@ class UsersPublic(SQLModel):
     count: int
 
 
+class UserSearchResult(SQLModel):
+    """Minimal user projection for sharing pickers.
+
+    Exposes only the fields a picker needs (id, name, email) and nothing
+    else. Returned by ``GET /users/search`` to any authenticated user so
+    that non-admin owners (e.g. agent-developers) can find people to share
+    credentials with without exposing the full ``UserPublic`` payload.
+    """
+    id: uuid.UUID
+    email: EmailStr
+    full_name: str | None = None
+
+
+class UsersSearchPublic(SQLModel):
+    data: list[UserSearchResult]
+    count: int
+
+
 class UserRolePublic(SQLModel):
     """Response for ``GET /users/me/role``."""
     role: str

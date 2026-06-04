@@ -205,6 +205,7 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 |---------|-------------|------|
 | backend_patterns | SQLModel patterns, routes, services, CRUD, migrations | [reference](development/backend/backend_development_llm.md) |
 | frontend_patterns | Component patterns, hooks, TanStack conventions | [reference](development/frontend/frontend_development_llm.md) |
+| user_selector_pattern | Shared user-picker (`UserAllowlistPicker`) + `GET /users/search` endpoint used by credential sharing, App MCP / identity assignments, and bundle access grants | [reference](development/frontend/user_selector_pattern.md) |
 | ai_functions | LLM utility development, multi-provider cascade fallback | [reference](development/backend/ai_functions_development.md) |
 | security | Credentials whitelist, encryption at rest, access control | [reference](development/security/security.md) <!-- nocheck --> |
 

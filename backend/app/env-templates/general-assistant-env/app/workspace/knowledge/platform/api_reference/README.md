@@ -53,7 +53,7 @@ Each file below documents one API domain.
 | Tasks | [tasks.md](./tasks.md) | 26 |
 | User App Agent Routes | [user_app_agent_routes.md](./user_app_agent_routes.md) | 5 |
 | User Workspaces | [user_workspaces.md](./user_workspaces.md) | 5 |
-| Users | [users.md](./users.md) | 18 |
+| Users | [users.md](./users.md) | 19 |
 | Webapp | [webapp.md](./webapp.md) | 4 |
 | Webapp Chat | [webapp_chat.md](./webapp_chat.md) | 6 |
 | Webapp Interface Config | [webapp_interface_config.md](./webapp_interface_config.md) | 2 |

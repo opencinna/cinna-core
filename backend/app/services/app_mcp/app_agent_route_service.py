@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, UTC
 
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session as DBSession, select
+from sqlmodel import Session as DBSession, col, select
 
 from app.models import Agent, User
 from app.models.app_mcp.app_agent_route import (
@@ -69,6 +69,49 @@ def _get_agent_name(db_session: DBSession, agent_id: uuid.UUID) -> str:
     return agent.name if agent else ""
 
 
+def _assignment_to_public(
+    db_session: DBSession,
+    a: AppAgentRouteAssignment,
+    user: User | None = None,
+) -> AppAgentRouteAssignmentPublic:
+    """Serialize a route assignment, resolving the assigned user's display
+    info (email / name) so the frontend picker can render pill labels
+    without loading the full user list.
+
+    Pass ``user`` when it has already been fetched (e.g. by
+    ``_assignments_to_public`` for a batch) to avoid a per-row lookup;
+    otherwise the user is resolved here."""
+    if user is None:
+        user = db_session.get(User, a.user_id)
+    return AppAgentRouteAssignmentPublic(
+        id=a.id,
+        route_id=a.route_id,
+        user_id=a.user_id,
+        user_email=user.email if user else None,
+        user_full_name=(user.full_name if user else None),
+        is_enabled=a.is_enabled,
+        created_at=a.created_at,
+    )
+
+
+def _assignments_to_public(
+    db_session: DBSession, assignments: list[AppAgentRouteAssignment]
+) -> list[AppAgentRouteAssignmentPublic]:
+    """Serialize a list of assignments, batch-resolving the assigned users
+    in a single query to avoid an N+1 lookup per assignment."""
+    user_ids = {a.user_id for a in assignments}
+    users = (
+        db_session.exec(select(User).where(col(User.id).in_(user_ids))).all()
+        if user_ids
+        else []
+    )
+    users_by_id = {u.id: u for u in users}
+    return [
+        _assignment_to_public(db_session, a, user=users_by_id.get(a.user_id))
+        for a in assignments
+    ]
+
+
 def _route_to_public(
     db_session: DBSession,
     route: AppAgentRoute,
@@ -90,16 +133,9 @@ def _route_to_public(
         stmt = select(AppAgentRouteAssignment).where(
             AppAgentRouteAssignment.route_id == route.id
         )
-        assignments = [
-            AppAgentRouteAssignmentPublic(
-                id=a.id,
-                route_id=a.route_id,
-                user_id=a.user_id,
-                is_enabled=a.is_enabled,
-                created_at=a.created_at,
-            )
-            for a in db_session.exec(stmt).all()
-        ]
+        assignments = _assignments_to_public(
+            db_session, list(db_session.exec(stmt).all())
+        )
     return AppAgentRoutePublic(
         id=route.id,
         name=route.name,
@@ -394,17 +430,8 @@ class AppAgentRouteService:
         db_session.commit()
 
         # Return all current assignments
-        all_assignments = db_session.exec(existing_stmt).all()
-        return [
-            AppAgentRouteAssignmentPublic(
-                id=a.id,
-                route_id=a.route_id,
-                user_id=a.user_id,
-                is_enabled=a.is_enabled,
-                created_at=a.created_at,
-            )
-            for a in all_assignments
-        ]
+        all_assignments = list(db_session.exec(existing_stmt).all())
+        return _assignments_to_public(db_session, all_assignments)
 
     @staticmethod
     def remove_assignment(
@@ -775,13 +802,7 @@ class AppAgentRouteService:
         db_session.add(assignment)
         db_session.commit()
         db_session.refresh(assignment)
-        return AppAgentRouteAssignmentPublic(
-            id=assignment.id,
-            route_id=assignment.route_id,
-            user_id=assignment.user_id,
-            is_enabled=assignment.is_enabled,
-            created_at=assignment.created_at,
-        )
+        return _assignment_to_public(db_session, assignment)
 
     @staticmethod
     def _build_identity_prompt_examples(

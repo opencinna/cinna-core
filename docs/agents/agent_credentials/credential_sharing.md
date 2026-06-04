@@ -17,7 +17,7 @@ Enables users to share their credentials with other users, allowing recipients t
 ### Sharing a Credential (direct / full sharing)
 
 1. Credential owner enables sharing on a credential (`allow_sharing=true`)
-2. Owner shares credential with another user by entering their email
+2. Owner searches for the recipient by name or email in the inline user picker (the shared `UserAllowlistPicker`, same pill UX as MCP / identity / bundle-grant sharing) and selects them to share immediately; existing recipients appear as removable pills. The picker is backed by `GET /users/search`, a lightweight authenticated endpoint (id / email / full_name only) available to non-admin owners — not the admin-only `GET /users/`. Users the credential is already shared with are filtered out of the results.
 3. Recipient sees credential in "Shared with Me" section of the Credentials page
 4. Recipient can link shared credential to their agents via the Agent Credentials tab
 5. Shared credential functions identically to owned credentials in agent environments

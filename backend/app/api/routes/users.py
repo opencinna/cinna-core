@@ -23,6 +23,8 @@ from app.models import (
     UserRolePublic,
     UserRoleUpdate,
     UsersPublic,
+    UserSearchResult,
+    UsersSearchPublic,
     UserUpdate,
     UserUpdateMe,
 )
@@ -99,6 +101,40 @@ def read_users(
     return UsersPublic(
         data=[_user_to_public(session, u) for u in users], count=count
     )
+
+
+@router.get("/search", response_model=UsersSearchPublic)
+def search_users(
+    session: SessionDep,
+    current_user: CurrentUser,
+    q: str,
+    limit: int = 10,
+) -> Any:
+    """
+    Search users by email or name for sharing pickers.
+
+    Available to any authenticated user — returns a minimal projection
+    (``id``, ``email``, ``full_name``) only, so it does not leak the full
+    ``UserPublic`` payload. The current user is excluded from results.
+    Requires a query of at least 2 characters; shorter queries return an
+    empty list. ``limit`` is clamped to the range 1-25.
+    """
+    limit = max(1, min(limit, 25))
+    term = (q or "").strip()
+    if len(term) < 2:
+        return UsersSearchPublic(data=[], count=0)
+
+    users = UserService.search_users(
+        session=session,
+        query=term,
+        exclude_user_id=current_user.id,
+        limit=limit,
+    )
+    results = [
+        UserSearchResult(id=u.id, email=u.email, full_name=u.full_name)
+        for u in users
+    ]
+    return UsersSearchPublic(data=results, count=len(results))
 
 
 @router.post(

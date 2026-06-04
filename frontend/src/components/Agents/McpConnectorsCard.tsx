@@ -14,10 +14,12 @@ import {
 } from "lucide-react"
 import { useState } from "react"
 
-import { UsersService } from "@/client"
 import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
-import { UserAllowlistPicker } from "@/components/Common/UserAllowlistPicker"
+import {
+  UserAllowlistPicker,
+  type UserAllowlistSelectedItem,
+} from "@/components/Common/UserAllowlistPicker"
 import {
   Card,
   CardContent,
@@ -97,6 +99,8 @@ interface McpConnector {
 interface AppMcpRouteAssignment {
   id: string
   user_id: string
+  user_email?: string | null
+  user_full_name?: string | null
   is_enabled: boolean
   route_id: string
   created_at: string
@@ -117,12 +121,6 @@ interface AppMcpRoute {
   agent_owner_email: string
   created_by: string
   assignments: AppMcpRouteAssignment[]
-}
-
-interface UserItem {
-  id: string
-  email: string
-  full_name: string | null
 }
 
 interface IdentityAgentBinding {
@@ -184,8 +182,9 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
   const [appMcpMessagePatterns, setAppMcpMessagePatterns] = useState("")
   const [appMcpActivateForMyself, setAppMcpActivateForMyself] = useState(true)
   const [appMcpAutoEnable, setAppMcpAutoEnable] = useState(false)
-  const [appMcpAssignedUserIds, setAppMcpAssignedUserIds] = useState<string[]>([])
-  const [appMcpUserSearchQuery, setAppMcpUserSearchQuery] = useState("")
+  const [appMcpAssignedUsers, setAppMcpAssignedUsers] = useState<
+    UserAllowlistSelectedItem[]
+  >([])
 
   // Edit App MCP route state
   const [editRouteDialogOpen, setEditRouteDialogOpen] = useState(false)
@@ -203,8 +202,9 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
   const [appMcpPromptExamples, setAppMcpPromptExamples] = useState("")
   const [editRoutePromptExamples, setEditRoutePromptExamples] = useState("")
   const [identityPromptExamples, setIdentityPromptExamples] = useState("")
-  const [identityAssignedUserIds, setIdentityAssignedUserIds] = useState<string[]>([])
-  const [identityUserSearchQuery, setIdentityUserSearchQuery] = useState("")
+  const [identityAssignedUsers, setIdentityAssignedUsers] = useState<
+    UserAllowlistSelectedItem[]
+  >([])
 
   // Edit Identity Binding state
   const [editIdentityDialogOpen, setEditIdentityDialogOpen] = useState(false)
@@ -212,7 +212,6 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
   const [editIdentityMessagePatterns, setEditIdentityMessagePatterns] = useState("")
   const [editIdentityPromptExamples, setEditIdentityPromptExamples] = useState("")
   const [editIdentitySessionMode, setEditIdentitySessionMode] = useState("conversation")
-  const [editIdentityUserSearchQuery, setEditIdentityUserSearchQuery] = useState("")
 
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -260,48 +259,12 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
 
   const existingIdentityBinding = identityBindings.find((b) => b.agent_id === agentId) ?? null
 
-  // Users list for assignment — only fetched when the App MCP form step is open
-  const { data: usersData } = useQuery({
-    queryKey: ["users-list"],
-    queryFn: () => UsersService.readUsers({ limit: 200 }),
-    enabled:
-      (createDialogOpen && createStep === "form" && (createType === "app_mcp" || createType === "identity_mcp")) ||
-      editRouteDialogOpen ||
-      editIdentityDialogOpen,
-    staleTime: 30000,
-  })
-
-  const allUsers: UserItem[] = ((usersData as { data?: UserItem[] })?.data ?? [])
-  const filteredUsers = allUsers.filter(
-    (u) =>
-      u.id !== currentUser?.id &&
-      !appMcpAssignedUserIds.includes(u.id) &&
-      (u.email.toLowerCase().includes(appMcpUserSearchQuery.toLowerCase()) ||
-        (u.full_name ?? "").toLowerCase().includes(appMcpUserSearchQuery.toLowerCase()))
-  )
-
-  const identityFilteredUsers = allUsers.filter(
-    (u) =>
-      u.id !== currentUser?.id &&
-      !identityAssignedUserIds.includes(u.id) &&
-      (u.email.toLowerCase().includes(identityUserSearchQuery.toLowerCase()) ||
-        (u.full_name ?? "").toLowerCase().includes(identityUserSearchQuery.toLowerCase()))
-  )
-
   // Use live query data for assignments so add/remove updates immediately
   const editRouteLive = editingRoute ? appMcpRoutes.find((r) => r.id === editingRoute.id) ?? editingRoute : null
   const editRouteAssignments = editRouteLive?.assignments ?? []
 
-  // Edit Identity Binding: live data + filtered user picker
+  // Edit Identity Binding: live assignments (carry target_user_name/email)
   const editIdentityAssignments = existingIdentityBinding?.assignments ?? []
-  const editIdentityAssignedUserIds = editIdentityAssignments.map((a) => a.target_user_id)
-  const editIdentityFilteredUsers = allUsers.filter(
-    (u) =>
-      u.id !== currentUser?.id &&
-      !editIdentityAssignedUserIds.includes(u.id) &&
-      (u.email.toLowerCase().includes(editIdentityUserSearchQuery.toLowerCase()) ||
-        (u.full_name ?? "").toLowerCase().includes(editIdentityUserSearchQuery.toLowerCase()))
-  )
 
   const connectors = connectorData?.data ?? []
   const mcpServerBaseUrl = connectorData?.mcp_server_base_url ?? null
@@ -694,15 +657,13 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
       setAppMcpMessagePatterns("")
       setAppMcpActivateForMyself(true)
       setAppMcpAutoEnable(false)
-      setAppMcpAssignedUserIds([])
-      setAppMcpUserSearchQuery("")
+      setAppMcpAssignedUsers([])
       setIdentitySessionMode("conversation")
       setIdentityTriggerPrompt("")
       setIdentityMessagePatterns("")
       setAppMcpPromptExamples("")
       setIdentityPromptExamples("")
-      setIdentityAssignedUserIds([])
-      setIdentityUserSearchQuery("")
+      setIdentityAssignedUsers([])
     }
   }
 
@@ -721,7 +682,7 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
       message_patterns: identityMessagePatterns.trim() || null,
       prompt_examples: identityPromptExamples.trim() || null,
       session_mode: identitySessionMode,
-      assigned_user_ids: identityAssignedUserIds,
+      assigned_user_ids: identityAssignedUsers.map((s) => s.userId),
     })
   }
 
@@ -742,7 +703,7 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
       message_patterns: appMcpMessagePatterns || null,
       prompt_examples: appMcpPromptExamples.trim() || null,
       auto_enable_for_users: appMcpAutoEnable,
-      assigned_user_ids: appMcpAssignedUserIds,
+      assigned_user_ids: appMcpAssignedUsers.map((s) => s.userId),
       activate_for_myself: appMcpActivateForMyself,
     })
   }
@@ -785,7 +746,6 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
     setEditIdentityMessagePatterns(binding.message_patterns ?? "")
     setEditIdentityPromptExamples(binding.prompt_examples ?? "")
     setEditIdentitySessionMode(binding.session_mode)
-    setEditIdentityUserSearchQuery("")
     setEditIdentityDialogOpen(true)
   }
 
@@ -1108,61 +1068,40 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                         </div>
 
                         <div className="space-y-2">
-                          <Label className="flex items-center gap-2">
-                            <Users className="h-4 w-4" />
-                            Share with Users
-                          </Label>
-                          <Input
-                            placeholder="Search users..."
-                            value={identityUserSearchQuery}
-                            onChange={(e) => setIdentityUserSearchQuery(e.target.value)}
+                          <UserAllowlistPicker
+                            enabled={
+                              createDialogOpen &&
+                              createStep === "form" &&
+                              createType === "identity_mcp"
+                            }
+                            selected={identityAssignedUsers}
+                            onAdd={(u) =>
+                              setIdentityAssignedUsers((prev) =>
+                                prev.some((s) => s.userId === u.id)
+                                  ? prev
+                                  : [
+                                      ...prev,
+                                      {
+                                        id: u.id,
+                                        userId: u.id,
+                                        fallbackLabel: u.full_name || u.email,
+                                      },
+                                    ]
+                              )
+                            }
+                            onRemove={(item) =>
+                              setIdentityAssignedUsers((prev) =>
+                                prev.filter((s) => s.userId !== item.userId)
+                              )
+                            }
+                            label={
+                              <Label className="flex items-center gap-2">
+                                <Users className="h-4 w-4" />
+                                Share with Users
+                              </Label>
+                            }
+                            searchPlaceholder="Search users..."
                           />
-                          {identityUserSearchQuery && identityFilteredUsers.length > 0 && (
-                            <div className="border rounded-md divide-y max-h-36 overflow-y-auto">
-                              {identityFilteredUsers.slice(0, 8).map((u) => (
-                                <button
-                                  key={u.id}
-                                  type="button"
-                                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent transition-colors"
-                                  onClick={() => {
-                                    setIdentityAssignedUserIds((prev) => [...prev, u.id])
-                                    setIdentityUserSearchQuery("")
-                                  }}
-                                >
-                                  <span className="font-medium">{u.full_name || u.email}</span>
-                                  {u.full_name && (
-                                    <span className="text-muted-foreground text-xs">{u.email}</span>
-                                  )}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                          {identityAssignedUserIds.length > 0 && (
-                            <div className="flex flex-wrap gap-1.5 mt-1">
-                              {identityAssignedUserIds.map((userId) => {
-                                const u = allUsers.find((usr) => usr.id === userId)
-                                return (
-                                  <span
-                                    key={userId}
-                                    className="flex items-center gap-1 bg-secondary text-secondary-foreground text-xs px-2 py-1 rounded-full"
-                                  >
-                                    {u?.full_name || u?.email || userId}
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setIdentityAssignedUserIds((prev) =>
-                                          prev.filter((id) => id !== userId)
-                                        )
-                                      }
-                                      className="hover:text-destructive transition-colors"
-                                    >
-                                      <X className="h-3 w-3" />
-                                    </button>
-                                  </span>
-                                )
-                              })}
-                            </div>
-                          )}
                           <p className="text-xs text-muted-foreground">
                             View and manage all identity settings in{" "}
                             <a
@@ -1286,61 +1225,40 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                     </div>
 
                     <div className="space-y-2">
-                      <Label className="flex items-center gap-2">
-                        <Users className="h-4 w-4" />
-                        Share with Users
-                      </Label>
-                      <Input
-                        placeholder="Search users..."
-                        value={appMcpUserSearchQuery}
-                        onChange={(e) => setAppMcpUserSearchQuery(e.target.value)}
+                      <UserAllowlistPicker
+                        enabled={
+                          createDialogOpen &&
+                          createStep === "form" &&
+                          createType === "app_mcp"
+                        }
+                        selected={appMcpAssignedUsers}
+                        onAdd={(u) =>
+                          setAppMcpAssignedUsers((prev) =>
+                            prev.some((s) => s.userId === u.id)
+                              ? prev
+                              : [
+                                  ...prev,
+                                  {
+                                    id: u.id,
+                                    userId: u.id,
+                                    fallbackLabel: u.full_name || u.email,
+                                  },
+                                ]
+                          )
+                        }
+                        onRemove={(item) =>
+                          setAppMcpAssignedUsers((prev) =>
+                            prev.filter((s) => s.userId !== item.userId)
+                          )
+                        }
+                        label={
+                          <Label className="flex items-center gap-2">
+                            <Users className="h-4 w-4" />
+                            Share with Users
+                          </Label>
+                        }
+                        searchPlaceholder="Search users..."
                       />
-                      {appMcpUserSearchQuery && filteredUsers.length > 0 && (
-                        <div className="border rounded-md divide-y max-h-36 overflow-y-auto">
-                          {filteredUsers.slice(0, 8).map((u) => (
-                            <button
-                              key={u.id}
-                              type="button"
-                              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent transition-colors"
-                              onClick={() => {
-                                setAppMcpAssignedUserIds((prev) => [...prev, u.id])
-                                setAppMcpUserSearchQuery("")
-                              }}
-                            >
-                              <span className="font-medium">{u.full_name || u.email}</span>
-                              {u.full_name && (
-                                <span className="text-muted-foreground text-xs">{u.email}</span>
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      {appMcpAssignedUserIds.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 mt-1">
-                          {appMcpAssignedUserIds.map((userId) => {
-                            const u = allUsers.find((usr) => usr.id === userId)
-                            return (
-                              <span
-                                key={userId}
-                                className="flex items-center gap-1 bg-secondary text-secondary-foreground text-xs px-2 py-1 rounded-full"
-                              >
-                                {u?.full_name || u?.email || userId}
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setAppMcpAssignedUserIds((prev) =>
-                                      prev.filter((id) => id !== userId)
-                                    )
-                                  }
-                                  className="hover:text-destructive transition-colors"
-                                >
-                                  <X className="h-3 w-3" />
-                                </button>
-                              </span>
-                            )
-                          })}
-                        </div>
-                      )}
                     </div>
 
                     <div className="flex items-center justify-between py-1">
@@ -1965,6 +1883,7 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
               selected={editRouteAssignments.map((a) => ({
                 id: a.id,
                 userId: a.user_id,
+                fallbackLabel: a.user_full_name || a.user_email || undefined,
               }))}
               onAdd={(u) => {
                 if (editingRoute) {
@@ -2100,68 +2019,38 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
 
             <Separator />
 
-            <div className="space-y-2">
-              <Label className="flex items-center gap-2">
-                <Users className="h-4 w-4" />
-                Shared with Users
-              </Label>
-              {editIdentityAssignments.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {editIdentityAssignments.map((assignment) => (
-                    <span
-                      key={assignment.id}
-                      className="flex items-center gap-1 bg-secondary text-secondary-foreground text-xs px-2 py-1 rounded-full"
-                    >
-                      {assignment.target_user_name || assignment.target_user_email}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          existingIdentityBinding &&
-                          removeIdentityAssignmentMutation.mutate({
-                            bindingId: existingIdentityBinding.id,
-                            userId: assignment.target_user_id,
-                          })
-                        }
-                        className="hover:text-destructive transition-colors"
-                        disabled={removeIdentityAssignmentMutation.isPending}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-              <Input
-                placeholder="Search users to add..."
-                value={editIdentityUserSearchQuery}
-                onChange={(e) => setEditIdentityUserSearchQuery(e.target.value)}
-              />
-              {editIdentityUserSearchQuery && editIdentityFilteredUsers.length > 0 && (
-                <div className="border rounded-md divide-y max-h-36 overflow-y-auto">
-                  {editIdentityFilteredUsers.slice(0, 8).map((u) => (
-                    <button
-                      key={u.id}
-                      type="button"
-                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent transition-colors"
-                      onClick={() => {
-                        if (existingIdentityBinding) {
-                          addIdentityAssignmentMutation.mutate({
-                            bindingId: existingIdentityBinding.id,
-                            userIds: [u.id],
-                          })
-                        }
-                        setEditIdentityUserSearchQuery("")
-                      }}
-                    >
-                      <span className="font-medium">{u.full_name || u.email}</span>
-                      {u.full_name && (
-                        <span className="text-muted-foreground text-xs">{u.email}</span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <UserAllowlistPicker
+              enabled={editIdentityDialogOpen}
+              selected={editIdentityAssignments.map((a) => ({
+                id: a.id,
+                userId: a.target_user_id,
+                fallbackLabel: a.target_user_name || a.target_user_email || undefined,
+              }))}
+              onAdd={(u) => {
+                if (existingIdentityBinding) {
+                  addIdentityAssignmentMutation.mutate({
+                    bindingId: existingIdentityBinding.id,
+                    userIds: [u.id],
+                  })
+                }
+              }}
+              onRemove={(item) => {
+                if (existingIdentityBinding) {
+                  removeIdentityAssignmentMutation.mutate({
+                    bindingId: existingIdentityBinding.id,
+                    userId: item.userId,
+                  })
+                }
+              }}
+              isRemoving={removeIdentityAssignmentMutation.isPending}
+              label={
+                <Label className="flex items-center gap-2">
+                  <Users className="h-4 w-4" />
+                  Shared with Users
+                </Label>
+              }
+              searchPlaceholder="Search users to add..."
+            />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditIdentityDialogOpen(false)}>

@@ -3,10 +3,12 @@ User Service - Business logic for user management operations.
 """
 import json
 import secrets
+import uuid
 from datetime import datetime, UTC
 from typing import Any
 
-from sqlmodel import Session, delete, select
+from sqlalchemy import or_
+from sqlmodel import Session, col, delete, func, select
 
 from app.core.security import get_password_hash, verify_password
 from app.models import (
@@ -91,6 +93,47 @@ class UserService:
         """Look up a user by email address."""
         statement = select(User).where(User.email == email)
         return session.exec(statement).first()
+
+    @staticmethod
+    def search_users(
+        *,
+        session: Session,
+        query: str,
+        exclude_user_id: uuid.UUID | None = None,
+        limit: int = 10,
+    ) -> list[User]:
+        """Case-insensitive substring search on email / full_name.
+
+        Backs the sharing pickers' ``GET /users/search`` endpoint. Returns
+        active users only, ordered by email, optionally excluding the
+        requester. Callers should enforce a minimum query length before
+        calling — an empty/whitespace query returns no results.
+        """
+        term = (query or "").strip()
+        if not term:
+            return []
+        # Escape LIKE wildcards so a user typing "%" or "_" matches those
+        # literal characters rather than acting as a wildcard.
+        safe = (
+            term.lower()
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        pattern = f"%{safe}%"
+        statement = select(User).where(
+            User.is_active == True,  # noqa: E712
+            or_(
+                func.lower(User.email).like(pattern, escape="\\"),
+                func.lower(func.coalesce(User.full_name, "")).like(
+                    pattern, escape="\\"
+                ),
+            ),
+        )
+        if exclude_user_id is not None:
+            statement = statement.where(User.id != exclude_user_id)
+        statement = statement.order_by(col(User.email)).limit(limit)
+        return list(session.exec(statement).all())
 
     @staticmethod
     def authenticate(*, session: Session, email: str, password: str) -> User | None:

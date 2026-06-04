@@ -1,13 +1,10 @@
-import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { Box, Share2, Trash2, Users, AlertTriangle } from "lucide-react"
+import { Box, Share2, AlertTriangle } from "lucide-react"
 import { useEffect, useState } from "react"
-import { useForm } from "react-hook-form"
-import { z } from "zod"
 
 import { CredentialsService } from "@/client"
-import type { CredentialPublic, CredentialSharePublic } from "@/client"
+import type { CredentialPublic } from "@/client"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -23,23 +20,16 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog"
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form"
-import { Input } from "@/components/ui/input"
-import { LoadingButton } from "@/components/ui/loading-button"
 import {
   Alert,
   AlertDescription,
   AlertTitle,
 } from "@/components/ui/alert"
+import {
+  UserAllowlistPicker,
+  type UserAllowlistSelectedItem,
+} from "@/components/Common/UserAllowlistPicker"
 import useCustomToast from "@/hooks/useCustomToast"
 import useRole from "@/hooks/useRole"
 import { handleError } from "@/utils"
@@ -48,88 +38,10 @@ interface CredentialSharingProps {
   credential: CredentialPublic
 }
 
-const shareSchema = z.object({
-  shared_with_email: z.string().email({ message: "Please enter a valid email address" }),
-})
-
-type ShareFormData = z.infer<typeof shareSchema>
-
-function SharesList({
-  credentialId,
-  shares,
-  isLoading,
-}: {
-  credentialId: string
-  shares: CredentialSharePublic[]
-  isLoading: boolean
-}) {
-  const queryClient = useQueryClient()
-  const { showSuccessToast, showErrorToast } = useCustomToast()
-
-  const revokeMutation = useMutation({
-    mutationFn: (shareId: string) =>
-      CredentialsService.revokeCredentialShare({
-        credentialId,
-        shareId,
-      }),
-    onSuccess: () => {
-      showSuccessToast("Share revoked successfully")
-      queryClient.invalidateQueries({ queryKey: ["credential-shares", credentialId] })
-      queryClient.invalidateQueries({ queryKey: ["credentials"] })
-      queryClient.invalidateQueries({ queryKey: ["credential", credentialId] })
-    },
-    onError: handleError.bind(showErrorToast),
-  })
-
-  if (isLoading) {
-    return <div className="text-sm text-muted-foreground">Loading shares...</div>
-  }
-
-  if (shares.length === 0) {
-    return (
-      <div className="text-sm text-muted-foreground py-4 text-center">
-        This credential is not shared with anyone yet.
-      </div>
-    )
-  }
-
-  return (
-    <div className="space-y-2">
-      {shares.map((share) => (
-        <div
-          key={share.id}
-          className="flex items-center justify-between p-3 rounded-lg border bg-muted/30"
-        >
-          <div className="flex items-center gap-3">
-            <div className="rounded-full bg-primary/10 p-2">
-              <Users className="h-4 w-4 text-primary" />
-            </div>
-            <div>
-              <div className="text-sm font-medium">{share.shared_with_email}</div>
-              <div className="text-xs text-muted-foreground">
-                Shared {new Date(share.shared_at).toLocaleDateString()}
-              </div>
-            </div>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => revokeMutation.mutate(share.id)}
-            disabled={revokeMutation.isPending}
-          >
-            <Trash2 className="h-4 w-4 text-destructive" />
-          </Button>
-        </div>
-      ))}
-    </div>
-  )
-}
-
 export function CredentialSharing({ credential }: CredentialSharingProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const { isAgentUser } = useRole()
-  const [isShareDialogOpen, setIsShareDialogOpen] = useState(false)
   const [isDisableDialogOpen, setIsDisableDialogOpen] = useState(false)
   const [allowSharing, setAllowSharing] = useState(credential.allow_sharing ?? false)
 
@@ -138,7 +50,7 @@ export function CredentialSharing({ credential }: CredentialSharingProps) {
     setAllowSharing(credential.allow_sharing ?? false)
   }, [credential.allow_sharing])
 
-  const { data: sharesData, isLoading: sharesLoading } = useQuery({
+  const { data: sharesData } = useQuery({
     queryKey: ["credential-shares", credential.id],
     queryFn: () => CredentialsService.getCredentialShares({ credentialId: credential.id }),
     enabled: allowSharing,
@@ -166,26 +78,37 @@ export function CredentialSharing({ credential }: CredentialSharingProps) {
     enabled: isDisableDialogOpen,
   })
 
-  const shareForm = useForm<ShareFormData>({
-    resolver: zodResolver(shareSchema),
-    defaultValues: {
-      shared_with_email: "",
-    },
-  })
+  // Invalidate every cache that carries this credential's share_count so the
+  // "Shared with N users" header and card badge update immediately.
+  const invalidateShareCaches = () => {
+    queryClient.invalidateQueries({ queryKey: ["credential-shares", credential.id] })
+    queryClient.invalidateQueries({ queryKey: ["credentials"] })
+    queryClient.invalidateQueries({ queryKey: ["credential", credential.id] })
+    queryClient.invalidateQueries({ queryKey: ["credential-with-data", credential.id] })
+  }
 
   const shareMutation = useMutation({
-    mutationFn: (data: ShareFormData) =>
+    mutationFn: (email: string) =>
       CredentialsService.shareCredential({
         credentialId: credential.id,
-        requestBody: data,
+        requestBody: { shared_with_email: email },
       }),
     onSuccess: () => {
       showSuccessToast("Credential shared successfully")
-      shareForm.reset()
-      setIsShareDialogOpen(false)
-      queryClient.invalidateQueries({ queryKey: ["credential-shares", credential.id] })
-      queryClient.invalidateQueries({ queryKey: ["credentials"] })
-      queryClient.invalidateQueries({ queryKey: ["credential", credential.id] })
+      invalidateShareCaches()
+    },
+    onError: handleError.bind(showErrorToast),
+  })
+
+  const revokeMutation = useMutation({
+    mutationFn: (shareId: string) =>
+      CredentialsService.revokeCredentialShare({
+        credentialId: credential.id,
+        shareId,
+      }),
+    onSuccess: () => {
+      showSuccessToast("Share revoked successfully")
+      invalidateShareCaches()
     },
     onError: handleError.bind(showErrorToast),
   })
@@ -204,15 +127,20 @@ export function CredentialSharing({ credential }: CredentialSharingProps) {
           : "Sharing disabled. All shares have been revoked."
       )
       setIsDisableDialogOpen(false)
-      queryClient.invalidateQueries({ queryKey: ["credentials"] })
-      queryClient.invalidateQueries({ queryKey: ["credential", credential.id] })
-      queryClient.invalidateQueries({ queryKey: ["credential-shares", credential.id] })
+      invalidateShareCaches()
     },
     onError: handleError.bind(showErrorToast),
   })
 
   const shares = sharesData?.data ?? []
   const shareCount = credential.share_count ?? 0
+
+  // Map existing shares into the shared picker's selected-pill model.
+  const selectedShares: UserAllowlistSelectedItem[] = shares.map((s) => ({
+    id: s.id, // share id — revoke endpoint key
+    userId: s.shared_with_user_id,
+    fallbackLabel: s.shared_with_email,
+  }))
 
   if (isAgentUser) {
     return null
@@ -267,73 +195,25 @@ export function CredentialSharing({ credential }: CredentialSharingProps) {
       </CardHeader>
       <CardContent className="space-y-4">
         {allowSharing && (
-          <>
-            <div className="flex items-center justify-between">
-              <h4 className="text-sm font-medium">
-                Shared with {shareCount} user{shareCount !== 1 ? "s" : ""}
-              </h4>
-              <Dialog open={isShareDialogOpen} onOpenChange={setIsShareDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button variant="outline" size="sm">
-                    <Share2 className="mr-2 h-4 w-4" />
-                    Share
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Share Credential</DialogTitle>
-                    <DialogDescription>
-                      Enter the email address of the user you want to share this credential with.
-                      They will be able to use this credential in their agents but won't see the
-                      actual credentials values.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <Form {...shareForm}>
-                    <form
-                      onSubmit={shareForm.handleSubmit((data) => shareMutation.mutate(data))}
-                      className="space-y-4"
-                    >
-                      <FormField
-                        control={shareForm.control}
-                        name="shared_with_email"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Email Address</FormLabel>
-                            <FormControl>
-                              <Input
-                                placeholder="user@example.com"
-                                type="email"
-                                {...field}
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                      <DialogFooter>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => setIsShareDialogOpen(false)}
-                        >
-                          Cancel
-                        </Button>
-                        <LoadingButton type="submit" loading={shareMutation.isPending}>
-                          Share
-                        </LoadingButton>
-                      </DialogFooter>
-                    </form>
-                  </Form>
-                </DialogContent>
-              </Dialog>
-            </div>
-
-            <SharesList
-              credentialId={credential.id}
-              shares={shares}
-              isLoading={sharesLoading}
+          <div className="space-y-3">
+            <h4 className="text-sm font-medium">
+              Shared with {shareCount} user{shareCount !== 1 ? "s" : ""}
+            </h4>
+            <UserAllowlistPicker
+              label={null}
+              selected={selectedShares}
+              onAdd={(u) => shareMutation.mutate(u.email)}
+              onRemove={(item) => revokeMutation.mutate(item.id)}
+              isAdding={shareMutation.isPending}
+              isRemoving={revokeMutation.isPending}
+              searchPlaceholder="Search users by name or email..."
+              emptyHint="This credential is not shared with anyone yet."
             />
-          </>
+            <p className="text-xs text-muted-foreground">
+              Recipients can use this credential in their agents but won't see
+              the actual credential values.
+            </p>
+          </div>
         )}
 
         {(() => {

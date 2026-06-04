@@ -1,10 +1,9 @@
 import type { ReactNode } from "react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Users, X } from "lucide-react"
+import { Loader2, Users, X } from "lucide-react"
 
 import { UsersService } from "@/client"
-import useAuth from "@/hooks/useAuth"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
@@ -19,11 +18,11 @@ export interface UserAllowlistSelectedItem {
   // ``onRemove`` so the caller can hit the right delete endpoint.
   id: string
   // The underlying ``user.id`` — used to filter selected users out of the
-  // search results and to look up display info from the live users list.
+  // search results.
   userId: string
-  // Fallback label when the user isn't in the loaded users list (e.g. soft-
-  // deleted user). The component prefers ``full_name``/``email`` from the
-  // users query when available.
+  // Display label for the pill. Required for a good label since the component
+  // no longer loads the full user list — pass the user's name or email.
+  // Falls back to the raw id when omitted.
   fallbackLabel?: string
 }
 
@@ -33,15 +32,16 @@ interface UserAllowlistPickerProps {
   onRemove: (item: UserAllowlistSelectedItem) => void
   isAdding?: boolean
   isRemoving?: boolean
-  excludeSelf?: boolean
   searchPlaceholder?: string
   emptyHint?: string
   // Override the default "Shared with" header (icon + label). Pass ``null``
   // to hide the header entirely.
   label?: ReactNode | null
-  // Gate the users-list fetch (e.g. only fetch when picker is visible).
+  // Gate the user-search fetch (e.g. only fetch when picker is visible).
   enabled?: boolean
 }
+
+const MIN_QUERY_LENGTH = 2
 
 export function UserAllowlistPicker({
   selected,
@@ -49,32 +49,45 @@ export function UserAllowlistPicker({
   onRemove,
   isAdding,
   isRemoving,
-  excludeSelf = true,
   searchPlaceholder = "Search users to add...",
   emptyHint,
   label,
   enabled = true,
 }: UserAllowlistPickerProps) {
-  const { user: currentUser } = useAuth()
   const [query, setQuery] = useState("")
+  const trimmedQuery = query.trim()
 
-  const { data: usersData } = useQuery({
-    queryKey: ["users-list"],
-    queryFn: () => UsersService.readUsers({ limit: 200 }),
-    enabled,
+  // Debounce the query so we don't fire a request on every keystroke once
+  // past the minimum length; the search only runs ~250ms after typing stops.
+  const [debouncedQuery, setDebouncedQuery] = useState(trimmedQuery)
+  useEffect(() => {
+    const handle = setTimeout(() => setDebouncedQuery(trimmedQuery), 250)
+    return () => clearTimeout(handle)
+  }, [trimmedQuery])
+
+  // Server-side search via GET /users/search — available to any authenticated
+  // user (unlike the admin-only GET /users/), so non-admin owners can find
+  // recipients. The current user is excluded server-side.
+  const { data: searchData, isFetching: isSearching } = useQuery({
+    queryKey: ["user-search", debouncedQuery],
+    queryFn: () => UsersService.searchUsers({ q: debouncedQuery, limit: 10 }),
+    enabled: enabled && debouncedQuery.length >= MIN_QUERY_LENGTH,
     staleTime: 30000,
   })
-  const allUsers: UserItem[] =
-    ((usersData as { data?: UserItem[] })?.data ?? [])
 
-  const selectedUserIds = selected.map((s) => s.userId)
-  const filteredUsers = allUsers.filter(
-    (u) =>
-      (!excludeSelf || u.id !== currentUser?.id) &&
-      !selectedUserIds.includes(u.id) &&
-      (u.email.toLowerCase().includes(query.toLowerCase()) ||
-        (u.full_name ?? "").toLowerCase().includes(query.toLowerCase())),
-  )
+  const selectedUserIds = new Set(selected.map((s) => s.userId))
+  const results: UserItem[] = (searchData?.data ?? [])
+    .map((u) => ({ id: u.id, email: u.email, full_name: u.full_name ?? null }))
+    .filter((u) => !selectedUserIds.has(u.id))
+
+  // While the debounce hasn't caught up to what's typed (or the request is
+  // in flight / hasn't produced data yet) we're still "searching" — without
+  // this, the gap between keystroke and fetch flashes "No matching users".
+  const isDebouncePending = trimmedQuery !== debouncedQuery
+  const isLoading =
+    isDebouncePending ||
+    isSearching ||
+    (debouncedQuery.length >= MIN_QUERY_LENGTH && searchData === undefined)
 
   const headerNode =
     label === null
@@ -91,61 +104,71 @@ export function UserAllowlistPicker({
       {headerNode}
       {selected.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          {selected.map((item) => {
-            const u = allUsers.find((usr) => usr.id === item.userId)
-            const display =
-              u?.full_name || u?.email || item.fallbackLabel || item.userId
-            return (
-              <span
-                key={item.id}
-                className="flex items-center gap-1 bg-secondary text-secondary-foreground text-xs px-2 py-1 rounded-full"
-              >
-                {display}
-                <button
-                  type="button"
-                  onClick={() => onRemove(item)}
-                  className="hover:text-destructive transition-colors"
-                  disabled={isRemoving}
-                  aria-label="Remove user"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            )
-          })}
-        </div>
-      )}
-      <Input
-        placeholder={searchPlaceholder}
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        disabled={isAdding}
-      />
-      {query && filteredUsers.length > 0 && (
-        <div className="border rounded-md divide-y max-h-36 overflow-y-auto">
-          {filteredUsers.slice(0, 8).map((u) => (
-            <button
-              key={u.id}
-              type="button"
-              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent transition-colors"
-              onClick={() => {
-                onAdd(u)
-                setQuery("")
-              }}
-              disabled={isAdding}
+          {selected.map((item) => (
+            <span
+              key={item.id}
+              className="flex items-center gap-1 bg-secondary text-secondary-foreground text-xs px-2 py-1 rounded-full"
             >
-              <span className="font-medium">{u.full_name || u.email}</span>
-              {u.full_name && (
-                <span className="text-muted-foreground text-xs">{u.email}</span>
-              )}
-            </button>
+              {item.fallbackLabel || "Unknown user"}
+              <button
+                type="button"
+                onClick={() => onRemove(item)}
+                className="hover:text-destructive transition-colors"
+                disabled={isRemoving}
+                aria-label="Remove user"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
           ))}
         </div>
       )}
-      {query && filteredUsers.length === 0 && (
-        <p className="text-xs text-muted-foreground">No matching users.</p>
-      )}
-      {selected.length === 0 && !query && emptyHint && (
+      {/* Relative wrapper so the results render as an absolute popover
+          overlaying content below the input — keeps the host layout (e.g. a
+          settings card) from jumping in height as the user types. */}
+      <div className="relative">
+        <Input
+          placeholder={searchPlaceholder}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          disabled={isAdding}
+        />
+        {trimmedQuery.length >= MIN_QUERY_LENGTH && (
+          <div className="absolute left-0 right-0 top-full z-50 mt-1 rounded-md border bg-popover text-popover-foreground shadow-md">
+            {isLoading ? (
+              <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Searching...
+              </div>
+            ) : results.length > 0 ? (
+              <div className="divide-y max-h-36 overflow-y-auto">
+                {results.map((u) => (
+                  <button
+                    key={u.id}
+                    type="button"
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent transition-colors"
+                    onClick={() => {
+                      onAdd(u)
+                      setQuery("")
+                    }}
+                    disabled={isAdding}
+                  >
+                    <span className="font-medium">{u.full_name || u.email}</span>
+                    {u.full_name && (
+                      <span className="text-muted-foreground text-xs">{u.email}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="px-3 py-2 text-xs text-muted-foreground">
+                No matching users.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+      {selected.length === 0 && !trimmedQuery && emptyHint && (
         <p className="text-xs text-muted-foreground">{emptyHint}</p>
       )}
     </div>

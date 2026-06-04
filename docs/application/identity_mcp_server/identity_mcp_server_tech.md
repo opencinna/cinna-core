@@ -319,20 +319,20 @@ Owner-only card. Loads from `["identity-bindings"]` query key via `GET /api/v1/i
 
 **State:**
 - `expandedBindings: Set<string>` — which binding rows show user assignments
-- Inline add form state (agent selector, trigger prompt, message patterns, session mode, assigned user IDs, user search query)
+- Add form state (agent selector, trigger prompt, message patterns, session mode) plus assigned users as a `UserAllowlistSelectedItem[]`
 - Edit dialog state (mirrors add form fields for the selected binding)
 
 **Queries:**
 - `["identity-bindings"]` — binding list with assignments
 - `["agents-for-identity"]` — owner's agents (lazy, only when add form is open); filters out already-bound agents
-- `["users-list"]` — all platform users (lazy, only when add form or edit dialog open); filters out current user
+- User selection uses the shared `UserAllowlistPicker` → `["user-search", q]` via `GET /users/search` (works for non-admin owners); no full user-list fetch. See [User Selector Pattern](../../development/frontend/user_selector_pattern.md)
 
 **Mutations:** `createBindingMutation`, `updateBindingMutation`, `deleteBindingMutation`, `toggleBindingMutation`, `assignUsersMutation`, `removeAssignmentMutation` — all invalidate `["identity-bindings"]`.
 
 **UI:**
 - Each binding row: session mode icon (Wrench for building, MessageCircle for conversation), agent name, trigger prompt (truncated), active/inactive badge
 - Row controls: expand chevron, active toggle switch, edit button, delete (AlertDialog)
-- Expanded section: user assignment pills with remove buttons; inline user search for add/edit
+- Expanded section: user assignment pills with remove buttons (rendered by the shared `UserAllowlistPicker`); pill labels come from the assignment's `target_user_name`/`target_user_email`
 
 ### `AppAgentRoutesCard.tsx` (Settings > Channels, "Identity Contacts" section)
 
@@ -342,7 +342,7 @@ Each row shows: owner name, owner email, per-person enable/disable toggle. Toggl
 
 ### `McpConnectorsCard.tsx` (Agent > Integrations tab)
 
-Extended with a third option in the type selector step of the creation dialog: "Identity MCP Server Integration". Selecting this shows a form that creates an identity binding for the current agent, with trigger prompt, session mode, and user picker — equivalent to the add form in `IdentityServerCard.tsx`.
+Extended with a third option in the type selector step of the creation dialog: "Identity MCP Server Integration". Selecting this shows a form that creates an identity binding for the current agent, with trigger prompt, session mode, and the shared `UserAllowlistPicker` — equivalent to the add form in `IdentityServerCard.tsx`.
 
 ### Session Header Label
 
@@ -355,4 +355,4 @@ For sessions with `integration_type = "identity_mcp"`, the session header shows:
 | `["identity-bindings"]` | `GET /api/v1/identity/bindings/` | Identity owner |
 | `["identity-contacts"]` | `GET /api/v1/users/me/identity-contacts/` | Target user (caller) |
 | `["agents-for-identity"]` | `GET /api/v1/agents/?limit=200` | Identity owner (lazy) |
-| `["users-list"]` | `UsersService.readUsers()` | Identity owner (lazy) |
+| `["user-search", q]` | `GET /api/v1/users/search` (via shared `UserAllowlistPicker`) | Any authenticated user |

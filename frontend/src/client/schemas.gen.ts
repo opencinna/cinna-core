@@ -6759,6 +6759,28 @@ export const AppAgentRouteAssignmentPublicSchema = {
             format: 'uuid',
             title: 'User Id'
         },
+        user_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Email'
+        },
+        user_full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Full Name'
+        },
         is_enabled: {
             type: 'boolean',
             title: 'Is Enabled'
@@ -19497,6 +19519,41 @@ export const UserRoleUpdateSchema = {
     description: 'Request body for ``PATCH /users/{user_id}/role`` — admin only.'
 } as const;
 
+export const UserSearchResultSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        email: {
+            type: 'string',
+            format: 'email',
+            title: 'Email'
+        },
+        full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Full Name'
+        }
+    },
+    type: 'object',
+    required: ['id', 'email'],
+    title: 'UserSearchResult',
+    description: `Minimal user projection for sharing pickers.
+
+Exposes only the fields a picker needs (id, name, email) and nothing
+else. Returned by \`\`GET /users/search\`\` to any authenticated user so
+that non-admin owners (e.g. agent-developers) can find people to share
+credentials with without exposing the full \`\`UserPublic\`\` payload.`
+} as const;
+
 export const UserUpdateSchema = {
     properties: {
         email: {
@@ -19872,6 +19929,25 @@ export const UsersPublicSchema = {
     type: 'object',
     required: ['data', 'count'],
     title: 'UsersPublic'
+} as const;
+
+export const UsersSearchPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/UserSearchResult'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'UsersSearchPublic'
 } as const;
 
 export const ValidationErrorSchema = {

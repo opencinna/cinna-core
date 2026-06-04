@@ -18,8 +18,6 @@ import {
 } from "lucide-react"
 import { useState } from "react"
 
-import { UsersService } from "@/client"
-import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import {
   Card,
@@ -31,7 +29,6 @@ import {
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -66,6 +63,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { UserAllowlistPicker } from "@/components/Common/UserAllowlistPicker"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 
@@ -106,18 +104,11 @@ interface IdentityAgentBinding {
   assignments: IdentityBindingAssignment[]
 }
 
-interface UserItem {
-  id: string
-  email: string
-  full_name: string | null
-}
-
 // ---------------------------------------------------------------------------
 // IdentityServerCard
 // ---------------------------------------------------------------------------
 
 export function IdentityServerCard() {
-  const { user: currentUser } = useAuth()
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
@@ -131,7 +122,6 @@ export function IdentityServerCard() {
   const [editMessagePatterns, setEditMessagePatterns] = useState("")
   const [editSessionMode, setEditSessionMode] = useState("conversation")
   const [editPromptExamples, setEditPromptExamples] = useState("")
-  const [editUserSearchQuery, setEditUserSearchQuery] = useState("")
 
   // ---------------------------------------------------------------------------
   // Queries
@@ -148,29 +138,11 @@ export function IdentityServerCard() {
     },
   })
 
-  // Users for assignment picker (edit dialog)
-  const { data: usersData } = useQuery({
-    queryKey: ["users-list"],
-    queryFn: () => UsersService.readUsers({ limit: 200 }),
-    enabled: editDialogOpen,
-    staleTime: 30000,
-  })
-
-  const allUsers: UserItem[] = ((usersData as { data?: UserItem[] })?.data ?? [])
-  const otherUsers = allUsers.filter((u) => u.id !== currentUser?.id)
-
   // Edit dialog: live binding data for real-time assignment updates
   const editBindingLive = editingBinding
     ? bindings.find((b) => b.id === editingBinding.id) ?? editingBinding
     : null
   const editAssignments = editBindingLive?.assignments ?? []
-  const editAssignedUserIds = editAssignments.map((a) => a.target_user_id)
-  const editFilteredUsers = otherUsers.filter(
-    (u) =>
-      !editAssignedUserIds.includes(u.id) &&
-      (u.email.toLowerCase().includes(editUserSearchQuery.toLowerCase()) ||
-        (u.full_name ?? "").toLowerCase().includes(editUserSearchQuery.toLowerCase()))
-  )
 
   // ---------------------------------------------------------------------------
   // Mutations
@@ -310,7 +282,6 @@ export function IdentityServerCard() {
     setEditMessagePatterns(binding.message_patterns ?? "")
     setEditPromptExamples(binding.prompt_examples ?? "")
     setEditSessionMode(binding.session_mode)
-    setEditUserSearchQuery("")
     setEditDialogOpen(true)
   }
 
@@ -620,66 +591,39 @@ export function IdentityServerCard() {
 
             {/* User assignments */}
             <div className="space-y-2">
-              <Label className="flex items-center gap-2">
-                <Users className="h-4 w-4" />
-                Shared with Users
-              </Label>
-              {editAssignments.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {editAssignments.map((assignment) => (
-                    <span
-                      key={assignment.id}
-                      className="flex items-center gap-1 bg-secondary text-secondary-foreground text-xs px-2 py-1 rounded-full"
-                    >
-                      {assignment.target_user_name || assignment.target_user_email}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          editingBinding &&
-                          removeAssignmentMutation.mutate({
-                            bindingId: editingBinding.id,
-                            userId: assignment.target_user_id,
-                          })
-                        }
-                        className="hover:text-destructive transition-colors"
-                        disabled={removeAssignmentMutation.isPending}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-              <Input
-                placeholder="Search users to add..."
-                value={editUserSearchQuery}
-                onChange={(e) => setEditUserSearchQuery(e.target.value)}
+              <UserAllowlistPicker
+                enabled={editDialogOpen}
+                selected={editAssignments.map((a) => ({
+                  id: a.id,
+                  userId: a.target_user_id,
+                  fallbackLabel:
+                    a.target_user_name || a.target_user_email || undefined,
+                }))}
+                onAdd={(u) => {
+                  if (editingBinding) {
+                    assignUsersMutation.mutate({
+                      bindingId: editingBinding.id,
+                      userIds: [u.id],
+                    })
+                  }
+                }}
+                onRemove={(item) => {
+                  if (editingBinding) {
+                    removeAssignmentMutation.mutate({
+                      bindingId: editingBinding.id,
+                      userId: item.userId,
+                    })
+                  }
+                }}
+                isRemoving={removeAssignmentMutation.isPending}
+                label={
+                  <Label className="flex items-center gap-2">
+                    <Users className="h-4 w-4" />
+                    Shared with Users
+                  </Label>
+                }
+                searchPlaceholder="Search users to add..."
               />
-              {editUserSearchQuery && editFilteredUsers.length > 0 && (
-                <div className="border rounded-md divide-y max-h-36 overflow-y-auto">
-                  {editFilteredUsers.slice(0, 8).map((u) => (
-                    <button
-                      key={u.id}
-                      type="button"
-                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent transition-colors"
-                      onClick={() => {
-                        if (editingBinding) {
-                          assignUsersMutation.mutate({
-                            bindingId: editingBinding.id,
-                            userIds: [u.id],
-                          })
-                        }
-                        setEditUserSearchQuery("")
-                      }}
-                    >
-                      <span className="font-medium">{u.full_name || u.email}</span>
-                      {u.full_name && (
-                        <span className="text-muted-foreground text-xs">{u.email}</span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
           <DialogFooter>
