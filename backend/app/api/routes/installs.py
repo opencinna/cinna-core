@@ -18,6 +18,7 @@ from app.models.bundles.agent_bundle_revision import (
     PublishRequest,
 )
 from app.models.bundles.catalog import (
+    BundleCredentialDrift,
     CheckUpdatesResponse,
     EditBundleIdRequest,
     SetUpdateModeRequest,
@@ -338,6 +339,38 @@ def list_setup_credentials(
     """
     install = _resolve_install_owned(session, agent_id, current_user)
     return InstallService.list_setup_credentials(session=session, install=install)
+
+
+@router.get(
+    "/{agent_id}/bundle-credential-drift",
+    response_model=BundleCredentialDrift,
+    dependencies=[Depends(require_developer)],
+)
+def get_bundle_credential_drift(
+    agent_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> BundleCredentialDrift:
+    """Report live-vs-published ``provided_by`` drift for the publisher install.
+
+    Powers the "republish to apply" hint on the bundle tab: when the
+    publisher changes a credential's sharing mode after the last publish,
+    installers keep receiving the previously published setting until the
+    bundle is republished. Returns ``stale=False`` with an empty list when
+    nothing has drifted (or the install has never published).
+
+    Publisher-install owner-only. Returns 404 (not 403) for non-owners and
+    for installs that are not publisher installs, to avoid leaking the
+    existence of a bundle to non-publishers.
+    """
+    install = session.get(Agent, agent_id)
+    if (
+        install is None
+        or (install.owner_id != current_user.id and not current_user.is_superuser)
+        or not install.is_publisher_install
+    ):
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return PublishService.compute_credential_spec_drift(session, install)
 
 
 @router.put(

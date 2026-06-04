@@ -192,6 +192,32 @@ class AgentApiTokenService:
 
         label = data.credential_label or f"{agent.name} API"
 
+        # Derive the credential's workspace so it lands in the same workspace
+        # group as the agent it belongs to (Automatic Credentials grouping).
+        # Consumer-first: the credential is configured on and synced into the
+        # consumer's containers, so the consumer's workspace is the strongest
+        # ownership signal. Fall back to the producer's workspace when the
+        # connect is made from the global picker (no consumer). NULL (default
+        # workspace) when neither agent carries a workspace — unchanged behavior.
+        #
+        # The consumer agent is validated UP FRONT with the same authority
+        # check used at link time. This both (a) avoids stamping the credential
+        # with a workspace from an agent the caller doesn't own, and (b) fails
+        # before any token/credential is minted, so a non-owned
+        # ``consumer_agent_id`` can never leave an orphaned credential behind.
+        workspace_id: uuid.UUID | None = agent.user_workspace_id
+        if data.consumer_agent_id is not None:
+            consumer_agent = session.get(Agent, data.consumer_agent_id)
+            if consumer_agent is None:
+                raise AgentApiTokenError(
+                    "Consumer agent not found", status_code=404
+                )
+            if not is_superuser and consumer_agent.owner_id != user_id:
+                raise AgentApiTokenError(
+                    "You do not own the consumer agent", status_code=403
+                )
+            workspace_id = consumer_agent.user_workspace_id
+
         # 1. Mint the token (returns value once + base_url + spec_url).
         created = AgentApiTokenService.create_token(
             session,
@@ -212,6 +238,7 @@ class AgentApiTokenService:
                 type=CredentialType.AGENT_API,
                 notes=f"Proxy to agent {producer_agent_id} REST API",
                 allow_sharing=False,
+                user_workspace_id=workspace_id,
                 credential_data={
                     "base_url": created.base_url,
                     "spec_url": created.spec_url,

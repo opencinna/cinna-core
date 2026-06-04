@@ -101,6 +101,16 @@ Auto-generated from OpenAPI spec. Tag: `installs`
 
 ---
 
+## GET `/api/v1/agents/{agent_id}/bundle-credential-drift`
+**Get Bundle Credential Drift**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Response:** `BundleCredentialDrift`
+
+---
+
 ## PUT `/api/v1/agents/{agent_id}/setup-credentials/{credential_id}`
 **Update Setup Credential**
 

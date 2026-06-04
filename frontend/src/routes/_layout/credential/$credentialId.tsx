@@ -276,17 +276,17 @@ function OwnedCredentialView({
   }
 
   // agent_api credentials are connection records: the proxy token is managed
-  // internally, so we show the connection (producer → consumers + View Spec)
-  // instead of an editable secret form. Sharing cards stay available below.
+  // internally, so we never render an editable secret form. Name + notes are
+  // edited inside AgentApiConnectionView (its own metadata-only save). The
+  // connection panel (producer → consumers + View Spec) is read-only. Sharing
+  // stays. Template sharing is hidden — there are no user-fillable private
+  // fields for a connection credential.
   if (credential.type === "agent_api") {
     return (
       <div className="space-y-6">
         <AgentApiConnectionView credential={credential} />
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <CredentialSharing credential={credential} />
-          <CredentialTemplateSharing credential={credential} />
-        </div>
+        <CredentialSharing credential={credential} />
       </div>
     )
   }

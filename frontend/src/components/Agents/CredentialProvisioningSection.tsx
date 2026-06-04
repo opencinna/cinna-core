@@ -58,12 +58,15 @@ import {
   sdkExpectedCredentialType,
 } from "@/components/Environments/EnvironmentConfigForm"
 
+import {
+  providedByLabel,
+  type ProvidedBy,
+} from "@/components/Credentials/providedByLabel"
+
 interface CredentialProvisioningSectionProps {
   agent: AgentPublic
   bundle: AgentBundlePublic | undefined
 }
-
-type ProvidedBy = "user" | "publisher" | "template"
 
 export function CredentialProvisioningSection({
   agent,
@@ -85,6 +88,32 @@ export function CredentialProvisioningSection({
     queryFn: () => AiCredentialsService.listAiCredentials(),
     enabled: agent.is_publisher_install,
   })
+
+  // Live-vs-published ``provided_by`` drift. Installers receive the value
+  // frozen into the latest published revision; this screen recomputes it
+  // live. When they diverge (the publisher changed sharing after publishing)
+  // we surface a "republish to apply" hint per drifted credential.
+  const { data: drift } = useQuery({
+    queryKey: ["bundle-credential-drift", agent.id],
+    queryFn: () =>
+      InstallsService.getBundleCredentialDrift({ agentId: agent.id }),
+    enabled: agent.is_publisher_install,
+  })
+
+  const driftByName = useMemo<
+    Record<string, { live: ProvidedBy; snapshot: ProvidedBy }>
+  >(() => {
+    const out: Record<string, { live: ProvidedBy; snapshot: ProvidedBy }> = {}
+    for (const d of drift?.drift ?? []) {
+      if (d.drifted) {
+        out[d.name] = {
+          live: d.live_provided_by,
+          snapshot: d.snapshot_provided_by,
+        }
+      }
+    }
+    return out
+  }, [drift])
 
   const { data: environment } = useQuery({
     queryKey: ["environment", agent.active_environment_id],
@@ -215,6 +244,9 @@ export function CredentialProvisioningSection({
       showSuccessToast("Credential override saved")
       queryClient.invalidateQueries({ queryKey: ["agent", agent.id] })
       queryClient.invalidateQueries({ queryKey: ["bundles"] })
+      queryClient.invalidateQueries({
+        queryKey: ["bundle-credential-drift", agent.id],
+      })
     },
     onError: (e: any) => {
       showErrorToast(e?.body?.detail || "Failed to save credential override")
@@ -320,6 +352,7 @@ export function CredentialProvisioningSection({
         ) : (
           linkedCredentials.map((cred) => {
             const value = valueFor(cred)
+            const rowDrift = driftByName[cred.name]
             return (
               <div
                 key={cred.id}
@@ -345,6 +378,16 @@ export function CredentialProvisioningSection({
                       </span>
                     )}
                   </div>
+                  {rowDrift && (
+                    <div className="text-xs flex items-start gap-1.5 text-amber-700 dark:text-amber-300 max-w-md">
+                      <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+                      <span>
+                        Installers still receive the previously published
+                        setting ({providedByLabel(rowDrift.snapshot)}). Republish
+                        the bundle to apply "{providedByLabel(rowDrift.live)}".
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <Select
                   value={value}
@@ -364,12 +407,14 @@ export function CredentialProvisioningSection({
                     >
                       Embedded (shared)
                     </SelectItem>
-                    <SelectItem
-                      value="template"
-                      disabled={!cred.allow_template_sharing}
-                    >
-                      Template (defaults + private)
-                    </SelectItem>
+                    {cred.type !== "agent_api" && (
+                      <SelectItem
+                        value="template"
+                        disabled={!cred.allow_template_sharing}
+                      >
+                        Template (defaults + private)
+                      </SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>

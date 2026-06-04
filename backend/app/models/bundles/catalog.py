@@ -242,3 +242,32 @@ class SetupCredentialSummary(BaseModel):
     description: str | None = None
     template_private_fields: list[str] = []
     template_prefilled_data: dict = {}
+
+
+class CredentialSpecDrift(BaseModel):
+    """One linked credential's ``provided_by`` live-vs-snapshot comparison.
+
+    The publisher install's bundle tab recomputes ``provided_by`` live from
+    each credential's current ``allow_sharing`` / override, while installers
+    receive the value frozen into the latest published revision's
+    ``required_credential_specs``. When the publisher changes a credential's
+    sharing mode after publishing, the two diverge until they republish.
+    This row surfaces that gap so the UI can prompt a republish.
+    """
+    name: str
+    type: str
+    live_provided_by: Literal["user", "publisher", "template"]
+    snapshot_provided_by: Literal["user", "publisher", "template"]
+    drifted: bool
+
+
+class BundleCredentialDrift(BaseModel):
+    """Response of ``GET /agents/{agent_id}/bundle-credential-drift``.
+
+    ``stale`` is ``True`` when any linked credential's live ``provided_by``
+    differs from the latest published revision's snapshot. An install that
+    has never been published (no latest revision) reports ``stale=False``
+    with an empty ``drift`` list — there is nothing to be stale against.
+    """
+    stale: bool
+    drift: list[CredentialSpecDrift] = []

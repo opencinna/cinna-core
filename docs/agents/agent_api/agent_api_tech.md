@@ -35,7 +35,9 @@
 | `aa33agentapi03` | `aa33agentapi03_add_agent_api_token_table.py` | Creates `agent_api_token` table, including the `credential_id` FK (`ON DELETE CASCADE`) + its index (see schema below) |
 | `aa44agentapi04` | `aa44agentapi04_add_agent_api_to_credential_type_enum.py` | `ALTER TYPE credentialtype ADD VALUE IF NOT EXISTS 'AGENT_API'` (non-transactional, mirrors prior enum migrations) |
 
-Chain: `aa11 → aa22 → aa33 → aa44`. These migrations were authored together and never released; `aa33` was edited in place to carry `credential_id` (no separate migration). A fresh `alembic upgrade head` yields the current schema.
+| `c7e2a9f4b1d8` | `c7e2a9f4b1d8_backfill_agent_api_credential_workspace.py` | **Data-only backfill** for Automatic Credentials grouping. Sets `user_workspace_id` on legacy `agent_api` credentials where it is currently `NULL` and the credential is linked to exactly one agent that carries a non-null workspace. Leaves `NULL` when the link is ambiguous (zero links, multiple links, or linked agent is in the default workspace). Downgrade is a no-op. Credentials that were already `NULL` and stay `NULL` appear in the Automatic Credentials section only under the default-workspace / unfiltered view — correct grouping, no data loss. |
+
+Chain: `aa11 → aa22 → aa33 → aa44`. These migrations were authored together and never released; `aa33` was edited in place to carry `credential_id` (no separate migration). `c7e2a9f4b1d8` is a later, independent data-only migration. A fresh `alembic upgrade head` yields the current schema.
 
 ### Env-Core (inside container)
 
@@ -61,7 +63,8 @@ Chain: `aa11 → aa22 → aa33 → aa44`. These migrations were authored togethe
 - `frontend/src/components/Credentials/AddCredential.tsx` — "Connect Agent API" entry point in the add-credential picker
 - `frontend/src/components/Agents/AgentCredentialsTab.tsx` — per-agent "Connect Agent API" button (passes the consumer agent id)
 - `frontend/src/components/Credentials/credentialTypes.ts` — `agent_api` display-only type meta (icon/label/badge); not offered in the manual picker
-- `frontend/src/routes/_layout/credential/$credentialId.tsx` — `agent_api` branch renders `AgentApiConnectionView` + sharing cards
+- `frontend/src/routes/_layout/credential/$credentialId.tsx` — `agent_api` branch renders three stacked cards: (1) **Basic Information** card — editable `name` and `notes` fields only, wired to `onSubmitMetadataOnly` which calls `updateCredential` with `{name, notes}` (never the proxy token); (2) `AgentApiConnectionView` — read-only connection panel (producer/consumers/View Spec); (3) `CredentialSharing`. `CredentialTemplateSharing` is **not rendered** for `agent_api` credentials — template sharing is meaningless for a connection credential that has no user-fillable private fields. Note: `AgentApiConnectionView.tsx` itself also contains an embedded name/notes form used when the connection view is rendered in contexts other than the owned credential detail page; on the detail route the `$credentialId.tsx`-level Basic Information card takes precedence.
+- `frontend/src/routes/_layout/credentials.tsx` — partitions the single `["credentials", workspaceFilter]` query result into two sections: **My Credentials** (`type !== "agent_api"`) and **Automatic Credentials** (`type === "agent_api"`). The Automatic Credentials section is hidden when empty; when visible it shows the same `CredentialGrid` component with a one-line explainer ("Connections created by 'Connect Agent API'. Manage name, notes, and sharing here."). Workspace filter applies automatically because the query is shared and agent_api credentials are now workspace-stamped at connect time.
 - `frontend/src/components/Agents/AgentEnvironmentsTab.tsx` — `agent_api_enabled` toggle
 - `frontend/src/components/Environment/EnvironmentPanel.tsx` — "Agent API" tab in the workspace file tree
 
@@ -227,7 +230,11 @@ Agent disabled or not found → `404` (no existence leak). Invalid/revoked token
 - `build_spec_url(agent_id)` → `{base_url}/openapi.json`
 - `create_token(session, agent_id, user_id, data, is_superuser)` → `AgentApiTokenCreated` — internal mint: `secrets.token_urlsafe(32)` value, SHA256 hash, 8-char prefix; never expires. Called only by `connect_agent_api` (not exposed via a route).
 - `validate_token(session, agent_id, token_value)` → `AgentApiToken | None` — hash lookup, active check, bumps `last_used_at`.
-- `connect_agent_api(session, producer_agent_id, user_id, data, is_superuser)` → `ConnectAgentApiResponse` — mints token + creates the `agent_api` credential + back-fills `token.credential_id` so the token is bound to the credential (cascade) + optionally links the credential to a consumer agent. Raises `AgentApiTokenError(400)` if `agent_api_enabled=false`.
+- `connect_agent_api(session, producer_agent_id, user_id, data, is_superuser)` → `ConnectAgentApiResponse` — mints token + creates the `agent_api` credential stamped with `user_workspace_id` (see workspace derivation rule below) + back-fills `token.credential_id` so the token is bound to the credential (cascade) + optionally links the credential to a consumer agent. Raises `AgentApiTokenError(400)` if `agent_api_enabled=false`.
+
+  **Workspace derivation rule (consumer-first):** the `user_workspace_id` on the created credential is derived as follows: (1) if `data.consumer_agent_id` is provided, use the consumer agent's `user_workspace_id`; (2) otherwise use the producer agent's `user_workspace_id`; (3) if neither agent has a workspace, the credential's `user_workspace_id` stays `NULL` (default workspace, unchanged from pre-feature behaviour). The credential is created with `allow_sharing=False` — the owner enables sharing explicitly afterwards.
+
+  **Consumer agent ownership validated up front:** when `data.consumer_agent_id` is provided, the service immediately looks it up (`session.get(Agent, consumer_agent_id)`). If the agent does not exist it raises `AgentApiTokenError(404, "Consumer agent not found")`; if it exists but the caller does not own it (and is not superuser) it raises `AgentApiTokenError(403, "You do not own the consumer agent")`. This check runs **before** any token or credential is minted, so a rejected request leaves no orphaned credential behind.
 - `get_connection_info(session, credential_id, user_id, is_superuser)` → `AgentApiConnectionInfo` — decrypts the credential, resolves the producer agent name, reads `read_only` from the bound token, and lists linked consumer agents (with `ui_color_preset`). Owner-only (404 otherwise). Drives the credential detail page.
 - `list_producer_connections(session, agent_id, user_id, is_superuser)` → `list[AgentApiProducerConnection]` — one entry per token on this producer, each with its credential name + linked consumer agents (with `ui_color_preset`). Drives the producer card's Connections list.
 - `delete_producer_connection(session, agent_id, token_id, user_id, is_superuser)` — disconnect: deletes the bound credential via `CredentialsService.delete_credential` (cascade-deletes the token + triggers the credential-removed sync), or deletes an orphaned token directly. Owner-only.
@@ -385,4 +392,4 @@ Event `meta` payload:
 
 ---
 
-*Last updated: 2026-05-27*
+*Last updated: 2026-06-04*

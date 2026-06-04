@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
-import { Key } from "lucide-react"
+import { Key, Link2 } from "lucide-react"
 import { useEffect } from "react"
 
-import { CredentialsService } from "@/client"
+import { CredentialsService, type CredentialPublic } from "@/client"
 import AddCredential from "@/components/Credentials/AddCredential"
 import { CredentialCard } from "@/components/Credentials/CredentialCard"
 import { SharedWithMeCredentials } from "@/components/Credentials/SharedWithMeCredentials"
@@ -23,7 +23,17 @@ export const Route = createFileRoute("/_layout/credentials")({
   }),
 })
 
-function CredentialsGrid() {
+function CredentialGrid({ credentials }: { credentials: CredentialPublic[] }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 auto-rows-fr">
+      {credentials.map((credential) => (
+        <CredentialCard key={credential.id} credential={credential} />
+      ))}
+    </div>
+  )
+}
+
+function CredentialSections() {
   const { workspaceFilter } = useWorkspace()
 
   const { data, isLoading, error } = useQuery({
@@ -55,26 +65,52 @@ function CredentialsGrid() {
 
   const credentials = data?.data || []
 
-  if (credentials.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center text-center py-12">
-        <div className="rounded-full bg-muted p-4 mb-4">
-          <Key className="h-8 w-8 text-muted-foreground" />
-        </div>
-        <h3 className="text-lg font-semibold">
-          You don't have any credentials yet
-        </h3>
-        <p className="text-muted-foreground">Add a new credential to get started</p>
-      </div>
-    )
-  }
+  // "Automatic Credentials" are connection records auto-created by the
+  // "Connect Agent API" helper (type === "agent_api"). Grouping is derived
+  // from the type — no new column / query param. Everything else is "My
+  // Credentials".
+  const automatic = credentials.filter((c) => c.type === "agent_api")
+  const mine = credentials.filter((c) => c.type !== "agent_api")
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 auto-rows-fr">
-      {credentials.map((credential) => (
-        <CredentialCard key={credential.id} credential={credential} />
-      ))}
-    </div>
+    <>
+      {/* My Credentials */}
+      <div className="space-y-4">
+        <h2 className="text-lg font-semibold">My Credentials</h2>
+        {mine.length === 0 ? (
+          <div className="flex flex-col items-center justify-center text-center py-12">
+            <div className="rounded-full bg-muted p-4 mb-4">
+              <Key className="h-8 w-8 text-muted-foreground" />
+            </div>
+            <h3 className="text-lg font-semibold">
+              You don't have any credentials yet
+            </h3>
+            <p className="text-muted-foreground">
+              Add a new credential to get started
+            </p>
+          </div>
+        ) : (
+          <CredentialGrid credentials={mine} />
+        )}
+      </div>
+
+      {/* Automatic Credentials — only shown when at least one exists */}
+      {automatic.length > 0 && (
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Link2 className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-lg font-semibold">Automatic Credentials</h2>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Connections created by "Connect Agent API". Manage name, notes,
+              and sharing here.
+            </p>
+          </div>
+          <CredentialGrid credentials={automatic} />
+        </div>
+      )}
+    </>
   )
 }
 
@@ -98,11 +134,9 @@ function Credentials() {
   return (
     <div className="p-6 md:p-8 overflow-y-auto">
       <div className="mx-auto max-w-7xl space-y-8">
-        {/* My Credentials */}
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold">My Credentials</h2>
-          <CredentialsGrid key={activeWorkspaceId ?? 'default'} />
-        </div>
+        {/* My + Automatic Credentials share one fetch; remount on workspace
+            change to reset the underlying query state. */}
+        <CredentialSections key={activeWorkspaceId ?? "default"} />
 
         {/* Shared With Me */}
         <SharedWithMeCredentials />

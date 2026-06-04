@@ -151,6 +151,10 @@ Connecting is a single action, surfaced from the **consumer** agent's Credential
 
 The caller must own the producer agent (or be a superuser). The resulting credential is created with `allow_sharing=False` by default; the owner enables sharing afterwards. When invoked from the global picker with no consumer agent, the credential is created unlinked (it shows as "Not linked to an agent" on the producer card until linked).
 
+**Workspace home.** The connection credential is stamped with a `user_workspace_id` at connect time so it groups under the same workspace as the agent it belongs to (instead of always landing in the default workspace). Consumer-first: when a consumer agent is given, the credential inherits *that* agent's workspace (it is configured on and synced into the consumer's containers); from the global picker with no consumer, it inherits the producer's workspace. If neither agent has a workspace it stays in the default workspace. The workspace does not follow a later re-link to an agent in a different workspace (grouping convenience, not an auth boundary). Legacy connections created before this change have no workspace stamp; an optional one-off backfill stamps those that are linked to exactly one workspaced agent.
+
+**Global Credentials view.** `agent_api` connections appear under a dedicated **"Automatic Credentials"** section in `/credentials` (derived from `type == agent_api`, no stored flag), separate from "My Credentials". Their detail page lets you edit **name and notes** (the proxy token is still never shown), keeps the **Sharing** card, and **omits the Template-sharing** card — a connection has no user-fillable private fields, so it can never be template-provided.
+
 ---
 
 ## UI States

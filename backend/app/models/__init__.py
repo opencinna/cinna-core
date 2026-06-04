@@ -149,6 +149,8 @@ from .bundles.catalog import (
     InstallContextSpec,
     InstallContextAIPublisherSummaries,
     InstallContextPublisherSummary,
+    CredentialSpecDrift,
+    BundleCredentialDrift,
 )
 from .environments.environment import (
     AgentEnvironment,
@@ -766,6 +768,8 @@ __all__ = [
     "InstallContextSpec",
     "InstallContextAIPublisherSummaries",
     "InstallContextPublisherSummary",
+    "CredentialSpecDrift",
+    "BundleCredentialDrift",
     # Environments
     "AgentEnvironment",
     "AgentEnvironmentCreate",

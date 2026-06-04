@@ -15,7 +15,7 @@
  * revision afterwards).
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { AlertCircle, Check, Copy, Plus, Trash2 } from "lucide-react"
+import { AlertCircle, AlertTriangle, Check, Copy, Plus, Trash2 } from "lucide-react"
 import { useEffect, useState } from "react"
 
 import {
@@ -26,6 +26,7 @@ import {
 } from "@/client"
 import useCustomToast from "@/hooks/useCustomToast"
 import { CredentialProvisioningSection } from "@/components/Agents/CredentialProvisioningSection"
+import { providedByLabel } from "@/components/Credentials/providedByLabel"
 import { UserAllowlistPicker } from "@/components/Common/UserAllowlistPicker"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -132,6 +133,16 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
     enabled: !!agent.bundle_uuid,
   })
 
+  // Credential-sharing drift — live vs the latest published snapshot. Drives
+  // a "republish to apply" nudge in the Revisions card (mirrors the per-row
+  // hint in CredentialProvisioningSection).
+  const { data: credentialDrift } = useQuery({
+    queryKey: ["bundle-credential-drift", agent.id],
+    queryFn: () =>
+      InstallsService.getBundleCredentialDrift({ agentId: agent.id }),
+    enabled: agent.is_publisher_install && !!agent.bundle_uuid,
+  })
+
   // Grants (only fetched when visibility is "users").
   const { data: grants } = useQuery({
     queryKey: ["bundles", agent.bundle_uuid, "grants"],
@@ -141,6 +152,12 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
       }),
     enabled: !!agent.bundle_uuid && bundle?.visibility === "users",
   })
+
+  const driftedCredentials = (credentialDrift?.drift ?? []).filter(
+    (d) => d.drifted,
+  )
+  const showDriftWarning =
+    isPublished && credentialDrift?.stale === true && driftedCredentials.length > 0
 
   const recentRevisions = (revisions?.data ?? []).slice(0, REVISIONS_LIMIT)
   const totalRevisions = revisions?.data?.length ?? 0
@@ -452,6 +469,31 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
+            {/* Credential-sharing drift — a republish nudge when the live
+                sharing model differs from the latest published snapshot. */}
+            {showDriftWarning && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-900/60 dark:bg-amber-950/30 px-3 py-2 space-y-1">
+                <div className="flex items-center gap-2 text-amber-800 dark:text-amber-300">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  <span className="text-sm font-medium">
+                    Republish to apply credential sharing changes
+                  </span>
+                </div>
+                <ul className="space-y-0.5 pl-6 list-disc">
+                  {driftedCredentials.map((d) => (
+                    <li
+                      key={d.name}
+                      className="text-xs text-amber-700 dark:text-amber-300"
+                    >
+                      Credentials {d.name} sharing differs from the latest
+                      published bundle (bundle:{" "}
+                      {providedByLabel(d.snapshot_provided_by)})
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {/* Bundle ID — locked, shown only after first publish. */}
             {isPublished && (
               <div className="flex items-center gap-2 px-3 py-2 border rounded-lg bg-muted/30">

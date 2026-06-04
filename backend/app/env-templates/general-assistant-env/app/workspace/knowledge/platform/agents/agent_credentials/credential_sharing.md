@@ -122,6 +122,14 @@ Validation (enforced by `PublishService._validate_publisher_provides` before sna
 - A spec resolved as `"publisher"` requires `allow_sharing=True` on the underlying `Credential` row
 - A spec resolved as `"template"` requires `allow_template_sharing=True` on the underlying `Credential` row
 
+### `provided_by` is frozen at publish — republish to change it
+
+`provided_by` is snapshotted into the revision's `required_credential_specs` at publish time and is **immutable** for that revision. Installers read the snapshot verbatim. The Bundle tab's credential-provisioning panel, by contrast, recomputes `provided_by` **live** from the credential's current `allow_sharing` / override — so the instant the publisher toggles sharing, the panel shows the new mode even though no new revision exists yet.
+
+This is the expected source of a publish-vs-live divergence: a publisher who enables sharing (or changes the override) **after** the last publish sees the panel say "Embedded (shared)" while installers still receive the previously published `"user"` spec. The platform surfaces this gap rather than silently mutating the revision: `GET /agents/{agent_id}/bundle-credential-drift` (publisher-install owner-only, 404 leak-safe) returns a per-credential `live_provided_by` vs `snapshot_provided_by` diff, and the provisioning panel renders an amber **"republish to apply"** hint on each drifted row. Republishing writes a fresh snapshot and clears the drift. Because the drift computation reuses the same `resolve_provided_by` (live) and `parse_credential_spec` (snapshot) as publish/install, the hint can never disagree with what installers actually receive.
+
+`agent_api` connection credentials are the common trigger for this, because the "Connect Agent API" helper always creates them with `allow_sharing=False` and the publisher enables sharing afterwards. They can be `"publisher"` (PBP) or `"user"`, but never `"template"` — a connection has no user-fillable private fields, and the provisioning panel omits the Template option for `agent_api`.
+
 ### Direct Sharing States
 
 | State | Description | Transitions |

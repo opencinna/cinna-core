@@ -28,6 +28,7 @@ import shutil
 import uuid
 from datetime import datetime, UTC
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlmodel import Session, select
 from sqlalchemy import func
@@ -42,6 +43,9 @@ from app.models.credentials.credential import Credential
 from app.models.credentials.link_models import AgentCredentialLink
 from app.services.bundles.bundle_service import BundleService
 from app.services.credentials.credentials_service import CredentialsService
+
+if TYPE_CHECKING:
+    from app.models.bundles.catalog import BundleCredentialDrift
 
 logger = logging.getLogger(__name__)
 
@@ -549,6 +553,103 @@ class PublishService:
                 spec["template_private_fields"] = template_private_fields
             specs.append(spec)
         return specs
+
+    @staticmethod
+    def compute_credential_spec_drift(
+        session: Session, install: Agent
+    ) -> "BundleCredentialDrift":
+        """Diff each linked credential's live vs published ``provided_by``.
+
+        The bundle tab recomputes ``provided_by`` live from the credential's
+        current ``allow_sharing`` / override, but installers receive the value
+        frozen into the latest published revision's
+        ``required_credential_specs``. The two diverge whenever the publisher
+        changes a credential's sharing mode after the last publish. This
+        surfaces that gap so the UI can prompt a republish.
+
+        Live resolution reuses :meth:`resolve_provided_by`; the snapshot side
+        reuses :func:`parse_credential_spec`, so the comparison can never
+        disagree with what publish actually writes / what install actually
+        reads. A credential added or removed relative to the snapshot is
+        reported as drifted.
+
+        Returns an empty, non-stale result when the install is not a publisher
+        install or has never published a revision (nothing to be stale
+        against).
+        """
+        from app.models.bundles.catalog import (
+            BundleCredentialDrift,
+            CredentialSpecDrift,
+        )
+        from app.services.bundles.credential_spec import parse_credential_spec
+
+        if not install.is_publisher_install or install.bundle_uuid is None:
+            return BundleCredentialDrift(stale=False, drift=[])
+
+        bundle = session.get(AgentBundle, install.bundle_uuid)
+        revision = (
+            BundleService.latest_revision(session, bundle) if bundle else None
+        )
+        if revision is None:
+            return BundleCredentialDrift(stale=False, drift=[])
+
+        # Snapshot side: index the latest revision's specs by credential name.
+        snapshot_by_name: dict[str, str] = {}
+        for raw_spec in revision.required_credential_specs or []:
+            parsed = parse_credential_spec(raw_spec)
+            if parsed is not None:
+                snapshot_by_name[parsed.name] = parsed.provided_by
+
+        # Live side: recompute provided_by for every currently linked cred.
+        # ``name`` is the spec key (it keys both the snapshot index and
+        # ``resolve_provided_by``'s override lookup), so dedupe by name — a
+        # duplicate link or two same-named credentials must not yield two rows.
+        stmt = select(AgentCredentialLink).where(
+            AgentCredentialLink.agent_id == install.id
+        )
+        links = list(session.exec(stmt).all())
+
+        drift: list[CredentialSpecDrift] = []
+        live_names: set[str] = set()
+        for link in links:
+            cred = session.get(Credential, link.credential_id)
+            if cred is None:
+                continue
+            if cred.name in live_names:
+                continue
+            live_names.add(cred.name)
+            live = PublishService.resolve_provided_by(cred, install)
+            # A credential newly linked since the last publish has no snapshot
+            # entry — installers don't receive it at all, so treat it as
+            # "user" (the install-side default) and flag the drift.
+            snapshot = snapshot_by_name.get(cred.name, "user")
+            drift.append(
+                CredentialSpecDrift(
+                    name=cred.name,
+                    type=(
+                        cred.type.value
+                        if hasattr(cred.type, "value")
+                        else str(cred.type)
+                    ),
+                    live_provided_by=live,
+                    snapshot_provided_by=snapshot,
+                    drifted=(live != snapshot)
+                    or cred.name not in snapshot_by_name,
+                )
+            )
+
+        # Credentials present in the snapshot but no longer linked are also
+        # drift — installers still receive a spec the publisher has removed.
+        # We do NOT emit a per-row entry for them (there is no live credential
+        # to render, so a row would carry an empty ``type`` the UI can't show);
+        # instead they still flip ``stale`` so the publisher is nudged to
+        # republish.
+        removed_in_snapshot = bool(set(snapshot_by_name) - live_names)
+
+        return BundleCredentialDrift(
+            stale=removed_in_snapshot or any(d.drifted for d in drift),
+            drift=drift,
+        )
 
     @staticmethod
     def _collect_schedule_specs(session: Session, install: Agent) -> list[dict]:
