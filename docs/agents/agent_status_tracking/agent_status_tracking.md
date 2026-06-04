@@ -15,6 +15,8 @@ The file lives in `app-data/storage/`, **not** in the bundle-owned `docs/` folde
 - **Severity transition** — when the parsed severity differs from the previous fetch. Transitions emit a WebSocket event and create an activity-feed entry.
 - **Reported-at source** — `frontmatter` (timestamp came from YAML), `file_mtime` (fallback to file modification time), or `null`.
 - **Status refresh command** — an optional shell command (or `/run:<name>` CLI command reference) stored on the agent that runs inside the container immediately before any live/forced status fetch. Lets the agent update `STATUS.md` on demand before the platform reads it. Configured via the **Integrations tab > Agent status card**; default value is `/run:status`. Non-blocking: failures emit a transient warning that is surfaced in the status response but never block the STATUS.md read.
+- **Force refresh (single entrypoint)** — every user-initiated refresh (UI Refresh button, REST `?force_refresh=true`, A2A `agent/status` force, `/agent-status` command) goes through one service method, `AgentStatusService.force_refresh_status`. It wakes a suspended environment, runs the pre-command, fetches `STATUS.md`, and on any failure returns the cached snapshot with the warning attached — it never raises. This replaces the per-caller try/fetch/fallback that used to be copy-pasted across the three surfaces.
+- **Suspended-env auto-resume** — on a force path, if the agent's environment is `suspended` (auto-stopped for inactivity), the platform activates it first (the same `activate_suspended_environment` wake-up used by message-send / CLI / sessions) so the pre-command and `STATUS.md` read run against a live container instead of silently serving a stale cache. Best-effort: a wake-up failure falls through to the existing "environment not running" warning + cached snapshot.
 - **Refresh command warning** — a transient, non-persisted string attached to force/live fetch results when the pre-command did not run cleanly (missing `/run:` reference, non-zero exit, timeout, env down). Always `null` on cache-only snapshots. Exposed on `AgentStatusPublic.refresh_command_warning`, the A2A `agent/status` result, and in the `/agent-status` slash command output.
 
 ## User Stories / Flows
@@ -40,13 +42,13 @@ The file lives in `app-data/storage/`, **not** in the bundle-owned `docs/` folde
 3. Owner edits the **Status refresh command** input — either a raw shell/Python command or `/run:<name>` referencing a command declared in `CLI_COMMANDS.yaml`. Default is `/run:status`.
 4. Owner clicks **Save**; the value is persisted via `PATCH /agents/{id}` (field: `status_refresh_command`).
 5. A **Reset to default** button restores `/run:status` without saving.
-6. Clicking **Refresh** immediately triggers a force refresh (which runs the configured pre-command). Any warning from the pre-command appears in a backend-authoritative amber banner above the command input.
+6. Clicking **Refresh** immediately triggers a force refresh: if the environment is suspended it is woken first, then the configured pre-command runs and `STATUS.md` is re-read. Any warning from the pre-command appears in a backend-authoritative amber banner above the command input.
 7. The card is not shown to users with the `agent-user` role.
 
 ### 5. External monitor polls REST
 1. External agent calls `GET /api/v1/agents/{id}/status` with a bearer token (user JWT, A2A token, or desktop auth).
 2. Receives the structured `AgentStatusPublic` snapshot including `refresh_command_warning` when applicable.
-3. Optional `?force_refresh=true` bypasses the cache (rate-limited per environment) and runs the configured pre-command before reading STATUS.md.
+3. Optional `?force_refresh=true` bypasses the cache, wakes the environment if it is suspended, and runs the configured pre-command before reading STATUS.md. (The REST surface does not rate-limit force refresh — user-initiated refreshes always fetch; the per-env 30 s limit governs background/event pulls and the A2A force path.)
 
 ### 6. A2A peer queries status
 1. Peer calls JSON-RPC method `agent/status` against `/api/v1/a2a/{agent_id}/`.
@@ -77,7 +79,8 @@ The file lives in `app-data/storage/`, **not** in the bundle-owned `docs/` folde
 - **Timestamp resolution** — frontmatter `timestamp` wins when valid; otherwise the file's mtime; otherwise `null`. The chosen source is exposed as `reported_at_source`.
 - **Severity transitions are first-class** — first-ever fetch counts as a transition from `null`. Transitions update `prev_severity` + `severity_changed_at`, emit `agent_status_updated`, and create an activity-feed entry.
 - **Rate limit on force-refresh** — one live fetch per environment per 30 s. REST returns `429`; the slash command silently serves cached data.
-- **Status refresh command runs only on live/force paths** — the pre-command executes before the file read exclusively on `GET /agents/{id}/status?force_refresh=true`, A2A `agent/status` (force), and the `/agent-status` slash command. Post-action background refreshes, `refresh_after_action`, and the agents-list batch endpoint never run the pre-command.
+- **Status refresh command runs only on live/force paths** — the pre-command executes before the file read exclusively on `GET /agents/{id}/status?force_refresh=true`, A2A `agent/status` (force), and the `/agent-status` slash command. All three go through the single `force_refresh_status` service entrypoint. Post-action background refreshes, `refresh_after_action`, and the agents-list batch endpoint never run the pre-command.
+- **Force paths wake a suspended env; background paths do not** — `force_refresh_status` activates a `suspended` environment before running the pre-command/fetch, so a forced refresh updates a sleeping install instead of returning stale cache. Only `suspended` envs are woken (a heavier `stopped`/`error` start is never triggered by a status poll). Event-driven/post-action pulls (`run_refresh_command=False`) never wake an env — they only read whatever is already running.
 - **Pre-command resolution: `/run:<name>` references** — the name is looked up in `AgentEnvironment.cli_commands_parsed` (the cached CLI_COMMANDS.yaml list). If the name is not found, a transient warning is returned and execution is skipped; the STATUS.md read still proceeds. Blank/`None` command means deliberate opt-out — no warning is generated.
 - **Pre-command is non-blocking** — env down, non-zero exit, timeout (120 s), connect error, or unexpected error all produce a warning string instead of blocking the STATUS.md fetch. Warnings never include stdout/stderr to prevent leakage into public-ish status surfaces.
 - **Refresh command warning is transient** — never persisted to the DB. Present only on live/force fetch results; always `null` on cached snapshots.
@@ -95,8 +98,12 @@ Agent script ──writes──▶ /app/workspace/app-data/storage/STATUS.md
               ┌───────────────┴───────────────┐
               │     AgentStatusService        │
               │  ┌─────────────────────────┐  │
+              │  │ force_refresh_status    │  │  ← single force entrypoint
+              │  │  └ wraps fetch_status,  │  │    (UI / REST / A2A / cmd)
+              │  │    falls back to cache  │  │    never raises
               │  │ fetch_status            │  │
               │  │  ├ [run_refresh_command]│  │  ← force/live paths only
+              │  │  │   _ensure_environment_running│ ← wakes suspended env
               │  │  │   _run_refresh_command│ │
               │  │  │   _resolve_run_command│ │  ← /run:<name> → CLI_COMMANDS.yaml
               │  │  ├ adapter.fetch_..._with_meta
@@ -136,7 +143,7 @@ Agent script ──writes──▶ /app/workspace/app-data/storage/STATUS.md
 
 - **[Agent Commands](../agent_commands/agent_commands.md)** — registers the `/agent-status` slash command via `CommandService`. Full command spec in [`agent_status_command.md`](../agent_commands/agent_status_command.md). The slash command is one of the three live/force paths that run the pre-command.
 - **[CLI Commands](../cli_commands/cli_commands.md)** — the status refresh command can reference a named CLI command via `/run:<name>`, resolved against `AgentEnvironment.cli_commands_parsed` (the cached `CLI_COMMANDS.yaml` list). A missing `/run:` reference emits a transient warning and skips execution; the STATUS.md read still proceeds.
-- **[Agent Environments](../agent_environment_core/agent_environment_core.md)** — extends the workspace adapter with `fetch_workspace_item_with_meta()`. `AgentEnvConnector().exec_command()` is used to run the pre-command (the same non-streaming exec path the scheduler uses).
+- **[Agent Environments](../agent_environment_core/agent_environment_core.md)** — extends the workspace adapter with `fetch_workspace_item_with_meta()`. `AgentEnvConnector().exec_command()` is used to run the pre-command (the same non-streaming exec path the scheduler uses). On force paths a suspended env is first woken via `EnvironmentLifecycleManager.activate_suspended_environment()` — the same wake-up message-send / CLI / sessions use; activation rotates the env auth token, so the refreshed `status`/`config` are copied back onto the in-memory env before the pre-command/fetch.
 - **[A2A Integration](../../application/a2a_integration/a2a_protocol/a2a_protocol.md)** — exposes the `status` skill and `agent/status` JSON-RPC method on the A2A agent card. A2A force paths run the pre-command; `refresh_command_warning` is included in the result dict.
 - **[Agent Management](../../application/agent_management/agent_management.md)** — the `status_refresh_command` field is part of `AgentUpdate` and `AgentPublic`; the Integrations tab hosts the `AgentStatusCard` where owners view the current snapshot and configure the command. Card is hidden for `agent-user` role visitors.
 - **Activity feed** — severity transitions create an entry visible in the agent's activity timeline.

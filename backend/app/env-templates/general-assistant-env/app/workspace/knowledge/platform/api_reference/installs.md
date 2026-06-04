@@ -115,6 +115,7 @@ Auto-generated from OpenAPI spec. Tag: `installs`
   - `allow_sharing`: boolean | null
   - `allow_template_sharing`: boolean | null
   - `template_private_fields`: array | null
+  - `service_uri`: string | null
 
 **Response:** `CredentialPublic`
 

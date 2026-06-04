@@ -57,6 +57,52 @@ Template sharing is designed for bundle publishers who want to pre-configure par
 
 The installer can choose `mode="use_existing"` on the install form. `_setup_install_credentials` detects this and skips template materialisation — linking the existing credential directly.
 
+## `service_uri` Slot ID and the Per-User Token Pattern
+
+### What `service_uri` is
+
+`service_uri` is a plaintext, non-secret **audience/slot identifier** stored on a `Credential` row. The publisher stamps the same `service_uri` value onto both the connection credential that all installers share and onto each per-user token credential they pre-share with individual installers. Because the credentials have different human names, the existing name-based matcher cannot link them automatically — `service_uri` solves this by giving the matcher a stable, name-independent slot to key on.
+
+Format is an opaque publisher-chosen string. Convention is a URI-like discriminator, for example `agent-b://company-scope-token`. The value is never encrypted, never carries authority, and does not gate access — authority lives in the token value itself, validated server-side inside the producer agent.
+
+### Install-time Auto-Prefill Matcher — Full Precedence Order
+
+`CredentialsService.find_match_for_spec` tries tiers in order and returns on the first hit:
+
+| Tier | Name | What it matches | Notes |
+|------|------|-----------------|-------|
+| **0a** | `service_uri` — owned | Installer owns a credential where `type == spec.type AND service_uri == spec.service_uri` | Newest by `id desc` when multiple match |
+| **0b** | `service_uri` — shared | A `CredentialShare` grants the installer access to a credential where `type == spec.type AND service_uri == spec.service_uri` | Newest by `id desc` when multiple match |
+| **1** | Owned name + type | Case-insensitive `(lower(name), type)` match on owned credentials | |
+| **2** | Shared name + type | Same match through `CredentialShare` | |
+| **3** | Type-only fallback (PBU only) | Exactly one owned credential of the right type, any name | Not attempted for PBT specs |
+| **PBT value anchor** | (PBT path) | Non-private field values equal `template_data` exactly | Runs after name tiers, only for PBT specs |
+
+Tiers 0a and 0b short-circuit the entire chain — they win even over the PBT value-anchor check (OQ1 resolution). When `service_uri` is `NULL` or not set on the spec, Tiers 0a/0b are skipped entirely and the function is equivalent to pre-feature behavior (full backward compatibility, I5).
+
+When two credentials collide at Tier 0a (an installer owns two credentials with the same `service_uri` and type), the most recently created one wins. The `service_uri` value should be unique per (user, slot) to avoid this.
+
+### Two-Credential Bundle Pattern
+
+A bundle that exposes a producer agent's per-user-scoped API ships **two** credentials:
+
+1. **Connection credential** (`agent_api` type, `provided_by="publisher"` / PBP) — the narrowed proxy URL and a single shared token that all installers use. The publisher enables `allow_sharing=True`, and the bundle delivers it to every installer via the existing PBP flow. All installer traffic routes through the publisher's single producer environment. This credential carries **no** per-user authority.
+
+2. **Per-user second token** (`api_token` type, `provided_by="user"` / PBU) — carries the specific company or scope the publisher has granted to that installer. The publisher pre-creates one per installer, stamps the same `service_uri` as the connection credential, and shares it to the correct user before the user installs. At install time the Tier 0b matcher finds the shared token and auto-suggests it — the experience is "install and it just works." Authority is validated server-side inside the producer agent; the platform proxy enforces `policy.yaml` method/rate constraints at the edge.
+
+Revoking a user's access = revoking the `CredentialShare` for that user's second token. The connection credential's share is independent and is not affected. When a user has no second token (none pre-shared, or the share was revoked), the runtime gate leaves the install in `needs_setup` — no token, no access.
+
+### Share-Before-Install Ordering Constraint
+
+Auto-prefill runs **at install time** — the matcher queries the installer's accessible credentials at the moment `POST /catalog/{bundle_id}/install` is called. This means per-user credentials must be shared with the installer **before** they install the bundle. If the token is shared after the install, the install has already run the matcher and created a `needs_setup` placeholder for that spec. The user must then link the now-shared token manually from the agent's **Credentials tab** — there is no automatic re-match in the current implementation.
+
+Recommended publisher workflow:
+1. Pre-create each per-user second token with the correct `service_uri`.
+2. Share each token to the intended installer's email via the Credential Sharing UI.
+3. Only after sharing, notify the user to install the bundle (or publish/grant catalog access).
+
+If a token is shared late, the fallback is: user opens the Credentials tab on the installed agent, finds the placeholder row marked "Setup needed", and uses the credential picker to switch it to the pre-shared token.
+
 ## Business Rules
 
 ### Sharing Modes Summary

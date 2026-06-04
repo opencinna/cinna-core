@@ -17,7 +17,6 @@ from app.models import Agent, AgentStatusPublic, AgentStatusListPublic
 from app.services.agents.agent_status_service import (
     AgentStatusService,
     AgentStatusSnapshot,
-    StatusUnavailableError,
 )
 
 logger = logging.getLogger(__name__)
@@ -106,17 +105,13 @@ async def get_agent_status(
         return AgentStatusPublic(agent_id=agent_id)
 
     if force_refresh:
-        try:
-            snapshot = await AgentStatusService.fetch_status(
-                environment, run_refresh_command=True, agent=agent
-            )
-            return _snapshot_to_public(snapshot, agent_id)
-        except StatusUnavailableError as exc:
-            # Env not running or file missing — fall back to cache, carrying any
-            # pre-command warning produced before the download failed.
-            snapshot = AgentStatusService.get_cached_status(environment)
-            snapshot.refresh_command_warning = exc.refresh_command_warning
-            return _snapshot_to_public(snapshot, agent_id)
+        # Single service entrypoint: wakes a suspended env, runs the pre-command,
+        # fetches STATUS.md, and falls back to the cached snapshot (carrying any
+        # pre-command warning) when the env is unreachable. Never raises.
+        snapshot = await AgentStatusService.force_refresh_status(
+            environment, agent=agent
+        )
+        return _snapshot_to_public(snapshot, agent_id)
 
     snapshot = AgentStatusService.get_cached_status(environment)
     return _snapshot_to_public(snapshot, agent_id)

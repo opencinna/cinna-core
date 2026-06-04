@@ -102,6 +102,71 @@ class AgentStatusService:
     # ------------------------------------------------------------------ #
 
     @classmethod
+    async def _ensure_environment_running(
+        cls, environment: AgentEnvironment, agent: "Agent | None"
+    ) -> None:
+        """
+        On user-initiated force refresh, wake a suspended environment so the
+        status pre-command and the STATUS.md fetch can actually run instead of
+        serving a stale cached snapshot. Mirrors the auto-resume behavior of the
+        message-send / CLI / session paths.
+
+        No-op when the env is already running, when no agent is available, or for
+        statuses other than ``suspended`` (``stopped`` / ``error`` envs keep the
+        existing "environment not running" warning path — they need a heavier
+        full start that a status poll shouldn't trigger).
+
+        Best-effort: any activation failure is swallowed so the caller falls back
+        to the normal not-running handling. Because activation rotates the env's
+        auth token, the refreshed ``status`` and ``config`` are copied back onto
+        the passed ``environment`` so the downstream exec/fetch use current
+        values. Concurrency-safe: if a parallel request already woke (or is
+        waking) the env, the latest DB status/config is still copied back.
+        """
+        if environment.status == "running" or agent is None:
+            return
+        if environment.status != "suspended":
+            return
+
+        from app.services.environments.environment_lifecycle import (
+            EnvironmentLifecycleManager,
+        )
+        from app.models.agents.agent import Agent as AgentModel
+        from app.core.db import create_session
+
+        try:
+            lifecycle = EnvironmentLifecycleManager()
+            with create_session() as sess:
+                fresh_env = sess.get(AgentEnvironment, environment.id)
+                if fresh_env is None:
+                    return
+                if fresh_env.status == "suspended":
+                    fresh_agent = sess.get(AgentModel, fresh_env.agent_id)
+                    if fresh_agent is None:
+                        return
+                    logger.info(
+                        "agent_status_resume_environment agent_id=%s env_id=%s "
+                        "action=activating",
+                        environment.agent_id, environment.id,
+                    )
+                    await lifecycle.activate_suspended_environment(
+                        db_session=sess,
+                        environment=fresh_env,
+                        agent=fresh_agent,
+                        emit_events=True,
+                    )
+                # Copy the latest status/config back onto the caller's instance
+                # (covers both our own activation and a concurrent one).
+                environment.status = fresh_env.status
+                environment.config = fresh_env.config
+        except Exception as exc:
+            logger.warning(
+                "agent_status_resume_environment agent_id=%s env_id=%s "
+                "action=failed reason=%s",
+                environment.agent_id, environment.id, exc,
+            )
+
+    @classmethod
     async def _run_refresh_command(
         cls, agent: "Agent | None", environment: AgentEnvironment
     ) -> str | None:
@@ -255,6 +320,10 @@ class AgentStatusService:
         if run_refresh_command:
             if agent is None:
                 agent = cls._load_agent(environment.agent_id, db_session)
+            # User-initiated force refresh wakes a suspended env first (mirrors
+            # message-send / CLI auto-resume) so the pre-command and STATUS.md
+            # fetch can actually run instead of serving a stale cached snapshot.
+            await cls._ensure_environment_running(environment, agent)
             refresh_command_warning = await cls._run_refresh_command(agent, environment)
 
         lifecycle_manager = EnvironmentService.get_lifecycle_manager()
@@ -372,6 +441,40 @@ class AgentStatusService:
             severity_changed_at=severity_changed_at,
             refresh_command_warning=refresh_command_warning,
         )
+
+    @classmethod
+    async def force_refresh_status(
+        cls,
+        environment: AgentEnvironment,
+        agent: "Agent | None" = None,
+        db_session=None,
+    ) -> AgentStatusSnapshot:
+        """
+        Single entrypoint for a user-initiated status refresh.
+
+        This is the one method behind the UI refresh button, the REST
+        ``GET /agents/{id}/status?force_refresh=true`` path, the A2A
+        ``agent/status`` force path, and the ``/agent-status`` command. It wakes
+        a suspended environment, runs the configured status-refresh pre-command,
+        fetches and persists STATUS.md, and returns the resulting snapshot.
+
+        Never raises: on adapter failure / missing file it returns the cached DB
+        snapshot with any pre-command warning attached, so callers only need to
+        shape the response. (Surface-specific concerns — A2A's protocol-level
+        rate-limit, the slash command's "no STATUS.md" copy — stay with their
+        callers.)
+        """
+        try:
+            return await cls.fetch_status(
+                environment,
+                db_session=db_session,
+                run_refresh_command=True,
+                agent=agent,
+            )
+        except StatusUnavailableError as exc:
+            snapshot = cls.get_cached_status(environment)
+            snapshot.refresh_command_warning = exc.refresh_command_warning
+            return snapshot
 
     @classmethod
     def _load_agent(cls, agent_id: "UUID | None", db_session=None) -> "Agent | None":

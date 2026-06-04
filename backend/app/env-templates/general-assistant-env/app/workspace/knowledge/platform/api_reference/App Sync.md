@@ -59,6 +59,13 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 
 ---
 
+## DELETE `/api/v1/app-sync/encryption`
+**Reset Encryption**
+
+**Response:** `EncryptionStatePublic`
+
+---
+
 ## POST `/api/v1/app-sync/encryption/init`
 **Init Encryption**
 
@@ -135,9 +142,51 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 
 **Request body** (`PairingStartRequest`):
   - `new_device_pubkey`: string (required)
+  - `commitment`: string (required)
   - `device_label`: string | null
 
 **Response:** `PairingStartResponse`
+
+---
+
+## GET `/api/v1/app-sync/pairing/inbox`
+**Pairing Inbox**
+
+---
+
+## GET `/api/v1/app-sync/pairing/inbox/{pairing_id}`
+**Pairing Inbox Get**
+
+**Path parameters:**
+- `pairing_id`: uuid
+
+**Response:** `PairingInboxDetail`
+
+---
+
+## POST `/api/v1/app-sync/pairing/inbox/{pairing_id}/sealer-nonce`
+**Pairing Set Sealer Nonce**
+
+**Path parameters:**
+- `pairing_id`: uuid
+
+**Request body** (`PairingSealerNonceRequest`):
+  - `sealer_nonce`: string (required)
+
+**Response:** `Message`
+
+---
+
+## POST `/api/v1/app-sync/pairing/inbox/{pairing_id}/complete`
+**Pairing Complete By Id**
+
+**Path parameters:**
+- `pairing_id`: uuid
+
+**Request body** (`PairingCompleteRequest`):
+  - `sealed_umk`: string (required)
+
+**Response:** `Message`
 
 ---
 
@@ -151,14 +200,14 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 
 ---
 
-## POST `/api/v1/app-sync/pairing/{code}/complete`
-**Pairing Complete**
+## POST `/api/v1/app-sync/pairing/{code}/reveal`
+**Pairing Reveal**
 
 **Path parameters:**
 - `code`: string
 
-**Request body** (`PairingCompleteRequest`):
-  - `sealed_umk`: string (required)
+**Request body** (`PairingRevealRequest`):
+  - `joiner_nonce`: string (required)
 
 **Response:** `Message`
 

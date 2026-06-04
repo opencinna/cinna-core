@@ -49,9 +49,9 @@ System prompt construction for agent environments. Each agent environment operat
 
 1. Building session stream completes
 2. `stream_completed` event fires
-3. Backend reads prompt files from environment via adapter
-4. Agent model fields updated: `workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`
-5. If workflow_prompt changed, A2A skills are regenerated
+3. Backend runs the three-way reconcile for each of the three bidirectional prompt files
+4. For each file the reconcile compares the DB content, the env file content, and the per-environment baseline hash to decide the action (NOOP, PULL, PUSH, CONFLICT with LWW tiebreak)
+5. Any DB-side change (`PULL`, `CONFLICT_PULL`, `SEED_PULL`) updates the Agent model and bumps the per-prompt `*_updated_at` clock; if `workflow_prompt` changed, A2A skills are regenerated and `AGENT_UPDATED` is emitted to the owner so the UI refreshes
 
 ## Business Rules
 
@@ -107,10 +107,29 @@ System prompt construction for agent environments. Each agent environment operat
 
 ### Prompt Sync Rules
 
-- **Environment to Backend** - Automatic after building session completion. Updates Agent model fields
-- **Backend to Environment** - Manual, triggered by user via sync endpoint. Requires active running environment
-- Workflow prompt changes trigger A2A skills regeneration and optional description update
-- **Publish snapshot** - At publish time (`POST /agents/{id}/publish`), the four prompt fields (`workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`, `router_trigger_prompt`) are copied from the `Agent` row into `AgentBundleRevision` and into the revision's `manifest.json` (`prompts.router_trigger`). On `apply_update`, all four fields are synced back onto the install's `Agent` row and the auto-managed `AppAgentRoute.trigger_prompt` is refreshed
+The three bidirectional prompt documents (`WORKFLOW_PROMPT.md`, `ENTRYPOINT_PROMPT.md`, `REFINER_PROMPT.md`) use a **three-way reconcile with LWW tiebreak** — not a blind one-directional push. This means edits made in either place (UI or the container via cinna-cli) are preserved and never silently clobbered.
+
+**Reconcile model:**
+- A per-environment baseline hash (`AgentEnvironment.*_synced_hash`) records the last-reconciled common ancestor for each prompt
+- On each reconcile pass, the DB content hash and env file content hash are compared against the baseline
+- If only one side changed since the baseline, that side wins (PULL or PUSH) — no conflict
+- If both sides changed (genuine divergence), the LWW tiebreaker uses the per-prompt `Agent.*_updated_at` clock (DB side) versus the file mtime clamped for clock skew (env side). A tie favours the env (the direction that was being lost before this feature)
+- If content is identical on both sides, it is a NOOP — only the baseline is healed to the current hash
+- A `None` baseline means "never reconciled" — DB wins on first sync (`SEED_PUSH`) unless DB is empty and env has content (`SEED_PULL`)
+- Conflicts are logged as WARNINGs with both hashes and the winner for observability
+
+**Reconcile triggers** (all three prompts, including `refiner_prompt` which was previously omitted on the push path):
+- **Every environment start, activation, and rebuild** — `_sync_dynamic_data` calls `reconcile_agent_prompts` (replaces old blind `set_agent_prompts`)
+- **New container first setup** — `reconcile_agent_prompts(prefer="db")` seeds DB content and initialises baselines; subsequent reconciles are full three-way
+- **Building session completes** — `STREAM_COMPLETED` event triggers `handle_stream_completed_event` → `reconcile_agent_prompts`
+- **Workspace file change** — env-core watcher fires `WORKSPACE_FILES_CHANGED` (e.g. after a Mutagen sync from cinna-cli) → `handle_workspace_files_changed_event` → `reconcile_agent_prompts`
+- **UI edit followed by force-push** — `POST /agents/{id}/sync-prompts` is an **intentional force-push** (DB always wins, baselines are reset); use this as an explicit override when you know the DB version should replace the env file
+
+**Live UI refresh:** when the reconcile writes to the DB (`PULL`, `CONFLICT_PULL`, `SEED_PULL`), the backend emits `AGENT_UPDATED` to the owner. The agent detail page subscribes and invalidates `["agent", agentId]` / `["agents"]` so the Prompts cards in `AgentConfigTab` re-render with the pulled content.
+
+**Workflow prompt changes** (regardless of the reconcile direction) trigger A2A skills regeneration and optional description update — unchanged from before.
+
+**Publish snapshot:** at publish time (`POST /agents/{id}/publish`), the four prompt fields (`workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`, `router_trigger_prompt`) are copied from the `Agent` row into `AgentBundleRevision` and into the revision's `manifest.json` (`prompts.router_trigger`). On `apply_update`, all four fields are written onto the install's `Agent` row, per-prompt `*_updated_at` clocks are bumped (DB authoritative), and any synced-hash baselines are cleared so the next reconcile treats the revision content as the current anchor (see "apply_update baseline reset" in [Agent Bundles](../agent_bundles/agent_bundles.md)). The auto-managed `AppAgentRoute.trigger_prompt` is also refreshed.
 
 ### Trigger Prompt Scope
 
@@ -141,16 +160,31 @@ Conversation Mode:
     + handover instructions (from agent_handover_config.json — if any handovers configured)
     → Plain string prompt
 
-Sync Flow:
-  Building Session Completes → stream_completed event
-    → EnvironmentService reads prompts from env
-    → Updates Agent model (workflow_prompt, entrypoint_prompt, refiner_prompt)
-    → Triggers A2A skills regeneration if workflow_prompt changed
+Sync Flow (three-way reconcile + LWW):
+  Any Trigger → reconcile_agent_prompts(session, environment, agent, prefer?)
+    → adapter.get_agent_prompts() → {content, mtimes}
+    → for each of {workflow, entrypoint, refiner}:
+        base_hash = environment.<field>_synced_hash   (common ancestor)
+        db_hash   = content_hash(agent.<field>)
+        env_hash  = content_hash(env_file)
+        decide() → NOOP | PULL | PUSH | SEED_* | CONFLICT_* (LWW)
+    → apply DB writes (PULL/CONFLICT_PULL/SEED_PULL)
+        → bump agent.<field>_updated_at
+        → if workflow_prompt: regen A2A skills + emit AGENT_UPDATED
+    → apply env writes (PUSH/CONFLICT_PUSH/SEED_PUSH)
+    → update environment.<field>_synced_hash (new baseline)
+    → commit
 
-  User Edits in UI → PUT /agents/{id}
-    → Agent model updated in DB
-    → POST /agents/{id}/sync-prompts
-    → EnvironmentService writes prompts to env files
+  Triggers:
+    Building Session Completes → STREAM_COMPLETED → handle_stream_completed_event
+    Workspace file changed (Mutagen/cli) → WORKSPACE_FILES_CHANGED → handle_workspace_files_changed_event
+    Env start/activate/rebuild → _sync_dynamic_data → reconcile_agent_prompts
+    New container first setup → reconcile_agent_prompts(prefer="db")  [DB wins, baselines init]
+    Bundle apply-update → bump *_updated_at, clear baselines, reconcile(prefer="db")
+
+  Force-push (escape hatch):
+    POST /agents/{id}/sync-prompts → DB always wins, baselines reset
+    PUT /agents/{id} (UI edit) → agent updated, then reconcile (or force-push, DB wins)
 ```
 
 ## Integration Points
@@ -166,4 +200,7 @@ Sync Flow:
 - **[Knowledge Management](../../application/knowledge_sources/knowledge_sources.md)** - Knowledge topic folders listed in prompts; agents read files on-demand
 - **[Agent Handover](../agent_handover/agent_handover.md)** - The consolidated `handover_prompt` from `{workspace}/docs/agent_handover_config.json` is appended at the end of conversation mode prompts so agents know when and how to delegate work
 - **[App MCP Server](../../application/app_mcp_server/app_mcp_server.md)** - `router_trigger_prompt` is the only prompt field consumed by the App MCP router; it is snapshotted into the bundle revision and propagated to the auto-managed `AppAgentRoute` at install time and on apply-update
-- **[Agent Bundles](../agent_bundles/agent_bundles.md)** - `router_trigger_prompt` is snapshotted into `AgentBundleRevision` at publish and drives auto-route creation at install time
+- **[Agent Bundles](../agent_bundles/agent_bundles.md)** - `router_trigger_prompt` is snapshotted into `AgentBundleRevision` at publish; `apply_update` overwrites all four prompt fields from the revision, bumps per-prompt `*_updated_at` clocks, and clears `*_synced_hash` baselines so the reconcile treats the revision content as the new anchor rather than pulling stale env files back
+- **[cinna-cli Integration](../../application/cinna_cli_integration/cinna_cli_integration.md)** - bidirectional prompt sync is the path that cinna-cli edits flow through: Mutagen→env-core watcher→`WORKSPACE_FILES_CHANGED`→`reconcile_agent_prompts`; no CLI-side change is required by this feature
+- **[App Sync](../../application/app_sync/app_sync.md)** - the reconcile mirrors App Sync's `content_fingerprint` no-op short-circuit and LWW pattern; same conceptual model applied to prompt docs
+- **[Realtime Events](../../application/realtime_events/event_bus_system.md)** - the `WORKSPACE_FILES_CHANGED` event is the shared trigger for all five synced workspace files; `AGENT_UPDATED` is emitted by `reconcile_agent_prompts` on every env→DB prompt pull

@@ -77,6 +77,7 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
   - `notes`: string | null
   - `allow_sharing`: boolean
   - `allow_template_sharing`: boolean
+  - `service_uri`: string | null
   - `credential_data`: object | null
   - `user_workspace_id`: string | null
   - `template_private_fields`: array | null
@@ -108,6 +109,7 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
   - `allow_sharing`: boolean | null
   - `allow_template_sharing`: boolean | null
   - `template_private_fields`: array | null
+  - `service_uri`: string | null
 
 **Response:** `CredentialPublic`
 

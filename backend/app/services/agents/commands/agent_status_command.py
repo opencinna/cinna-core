@@ -7,7 +7,7 @@ the cached DB snapshot when the environment is not running or the file is absent
 import logging
 
 from app.services.agents.command_service import CommandHandler, CommandContext, CommandResult
-from app.services.agents.agent_status_service import AgentStatusService, StatusUnavailableError
+from app.services.agents.agent_status_service import AgentStatusService
 from app.core.db import create_session
 
 logger = logging.getLogger(__name__)
@@ -50,24 +50,16 @@ class AgentStatusCommandHandler(CommandHandler):
 
             agent = db.get(Agent, environment.agent_id)
 
-            snapshot = None
-            refresh_command_warning: str | None = None
+            # Single service entrypoint (same as the UI button / REST / A2A):
+            # wakes a suspended env, runs the pre-command, fetches STATUS.md, and
+            # falls back to the cached snapshot. Never raises.
+            snapshot = await AgentStatusService.force_refresh_status(
+                environment, agent=agent, db_session=db
+            )
+            refresh_command_warning = snapshot.refresh_command_warning
 
-            # Attempt live fetch, running the configured status-refresh
-            # pre-command first (this is a user-initiated live refresh).
-            try:
-                snapshot = await AgentStatusService.fetch_status(
-                    environment, db_session=db, run_refresh_command=True, agent=agent
-                )
-                refresh_command_warning = snapshot.refresh_command_warning
-            except StatusUnavailableError as exc:
-                refresh_command_warning = exc.refresh_command_warning
-                # Fall back to cached snapshot if one exists
-                if environment.status_file_raw or environment.status_file_severity:
-                    snapshot = AgentStatusService.get_cached_status(environment)
-                    snapshot.refresh_command_warning = refresh_command_warning
-
-            if snapshot is None:
+            # No STATUS.md ever recorded for this env → nothing to show.
+            if snapshot.raw is None and snapshot.severity is None:
                 content = (
                     "No STATUS.md available for this agent.\n\n"
                     "See COMPLEX_AGENT_DESIGN.md for the expected format."

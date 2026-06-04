@@ -5,7 +5,7 @@ Each file below documents one API domain.
 
 | Domain | File | Endpoints |
 |--------|------|-----------|
-| App Sync | [App Sync.md](./App Sync.md) | 16 |
+| App Sync | [App Sync.md](./App Sync.md) | 21 |
 | Dashboards | [Dashboards.md](./Dashboards.md) | 17 |
 | A2A | [a2a.md](./a2a.md) | 9 |
 | Access Tokens | [access_tokens.md](./access_tokens.md) | 5 |

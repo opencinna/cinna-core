@@ -82,6 +82,11 @@ Per-agent HTTP webhook endpoints let external systems trigger the agent on deman
 
 See [Agent Webhooks](../../agents/agent_webhooks/agent_webhooks.md)
 
+### Agent Status (Integrations tab card)
+The **Integrations tab > Agent status card** (owner/developer only; hidden from `agent-user` role) shows the current self-reported status snapshot (severity, summary, reported/fetched timestamps) and lets the owner configure a **status refresh command** — a shell command or `/run:<name>` CLI reference that runs inside the container immediately before every manual or forced status refresh. Default value is `/run:status`. Failures are non-blocking and surface as a transient warning banner.
+
+See [Agent Status Tracking](../../agents/agent_status_tracking/agent_status_tracking.md)
+
 ### Bundles & Installs
 An agent developer can **publish** their agent as a versioned bundle. Other users **install** the bundle, each getting their own running copy plus a persistent per-user App Data area. The publisher can push updates to all installs; users choose manual or automatic update mode. Guest tokens continue to provide time-limited unauthenticated access to a user's install.
 

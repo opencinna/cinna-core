@@ -46,6 +46,7 @@ Auto-generated from OpenAPI spec. Tag: `agents`
   - `entrypoint_prompt`: string | null
   - `refiner_prompt`: string | null
   - `router_trigger_prompt`: string | null
+  - `status_refresh_command`: string | null
   - `description`: string | null
   - `user_workspace_id`: string | null
 
@@ -76,6 +77,7 @@ Auto-generated from OpenAPI spec. Tag: `agents`
   - `entrypoint_prompt`: string | null
   - `refiner_prompt`: string | null
   - `router_trigger_prompt`: string | null
+  - `status_refresh_command`: string | null
   - `is_active`: boolean | null
   - `ui_color_preset`: string | null
   - `show_on_dashboard`: boolean | null

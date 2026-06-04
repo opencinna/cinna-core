@@ -350,18 +350,15 @@ async def _handle_jsonrpc(
         elif method == "agent/status":
             # Custom extension: return the agent's self-reported STATUS.md snapshot.
             # Params: { "force_refresh": bool } (optional)
-            from app.services.agents.agent_status_service import AgentStatusService, StatusUnavailableError
+            from app.services.agents.agent_status_service import AgentStatusService
             force_refresh = params.get("force_refresh", False)
             if force_refresh:
+                # A2A keeps its own protocol-level rate-limit on force refresh.
                 if AgentStatusService.is_rate_limited(environment.id):
                     return _error_response(request_id, -32029, "Rate limited — try again in 30 seconds")
-                try:
-                    snapshot = await AgentStatusService.fetch_status(
-                        environment, run_refresh_command=True, agent=agent
-                    )
-                except StatusUnavailableError as exc:
-                    snapshot = AgentStatusService.get_cached_status(environment)
-                    snapshot.refresh_command_warning = exc.refresh_command_warning
+                snapshot = await AgentStatusService.force_refresh_status(
+                    environment, agent=agent
+                )
             else:
                 snapshot = AgentStatusService.get_cached_status(environment)
             result = {

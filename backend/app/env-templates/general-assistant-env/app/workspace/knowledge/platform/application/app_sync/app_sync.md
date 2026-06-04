@@ -88,11 +88,11 @@ When the existing row wins, the result is `status='conflict'` and `server_record
 
 ## Entity Identity Across Devices
 
-The sync identity of an entity is `client_entity_id`, which is a **client-generated globally-unique UUID (v4)**, minted once at creation on whichever device and carried forever. It must never be a device-local autoincrement integer or rowid — if it were, two devices would independently create a note with local id `5`, both push `client_entity_id = "5"`, and LWW would silently destroy one device's data.
+The sync identity of an entity is `client_entity_id`, which is a client-generated globally-unique **opaque id** (a UUID or a nanoid — any URL-safe, stable, collision-free client id), minted once at creation on whichever device and carried forever. It must never be a device-local autoincrement integer or rowid — if it were, two devices would independently create a note with local id `5`, both push `client_entity_id = "5"`, and LWW would silently destroy one device's data.
 
-The server validates that `client_entity_id` is a well-formed UUID string and rejects anything else with `422`. This is a deliberate footgun-blocker.
+The server validates that `client_entity_id` is a well-formed opaque client id — URL-safe `[A-Za-z0-9_-]`, 8–128 chars, and **not** a bare integer (the device-local-rowid footgun); UUIDs and nanoids both qualify; anything else → `422`. This is a deliberate footgun-blocker.
 
-All cross-references between synced entities inside a payload (e.g. a note's `folderId`) must also use these UUIDs, not local foreign keys, so parent-child links are valid on every device.
+All cross-references between synced entities inside a payload (e.g. a note's `folderId`) must also use these ids, not local foreign keys, so parent-child links are valid on every device.
 
 ---
 
@@ -150,13 +150,27 @@ Until an account's E2E is initialised (`app_sync_state.active_umk_version == 0`)
 
 ### Cross-Device Key Sharing
 
-#### QR Device Pairing (primary — zero typing)
+#### Device Pairing (primary — commit-then-reveal protocol)
 
-The joining device generates an ephemeral X25519 keypair and calls `POST /pairing/start` to create a short-lived relay row; the server returns a one-time pairing code. The joining device renders a QR carrying `{pairing_code, ephemeral_public_key}`. An existing unlocked device scans the QR, seals the UMK to the ephemeral public key (`crypto_box_seal`), and calls `POST /pairing/{code}/complete`. The joining device polls `GET /pairing/{code}`, receives the sealed blob, and opens it with its ephemeral private key. The server relays ciphertext sealed to a key whose private half never existed on the server.
+The pairing flow uses a **commit-then-reveal** handshake that makes the 6-digit SAS grind-proof even against a fully malicious relay. The server is a dumb relay throughout: it stores and forwards opaque strings and never verifies the commitment.
 
-The pairing row has a 5-minute TTL and is consumed after the joining device retrieves the `sealed_umk` (single-use delivery).
+**Participants:**
+- **Joiner** — the new device, addressed by the secret `code`.
+- **Sealer** — an existing trusted, unlocked device. It discovers pending requests via the inbox surface (auto-discovery; no manual code transfer required) or by code entry.
 
-Camera-less fallback (two desktops): the joining device shows a short human pairing code; the user types it into the existing device. Both devices display a short authentication string (derived from `hash(ephemeral_pubkey ‖ pairing_code)`) for the user to compare, guarding against a server-substituted key.
+**Protocol sequence:**
+
+1. Joiner generates an ephemeral X25519 keypair and a 16-byte random `nonce_J`, then computes `commitment = blake2b(pubkey_J ‖ nonce_J, 32 bytes)`. It posts `{new_device_pubkey, commitment, device_label}` to `POST /pairing/start` and receives a `pairing_code`.
+2. Sealer discovers the request from `GET /pairing/inbox` (the backend returns its own non-terminal rows: `id, device_label, status, expires_at`). The user opts in to verify. The sealer fetches the detail from `GET /pairing/inbox/{id}` (returns `new_device_pubkey, commitment, status, expires_at` — no secrets yet) and generates its own 16-byte random `nonce_S`, then posts it to `POST /pairing/inbox/{id}/sealer-nonce`. The relay row advances to `sealer_nonce_set`.
+3. Joiner polls `GET /pairing/{code}`. Once `sealer_nonce` is set, the joiner computes `SAS = trunc6(blake2b(pubkey_J ‖ nonce_J ‖ nonce_S))` and reveals `nonce_J` to the relay via `POST /pairing/{code}/reveal`. The relay row advances to `revealed`.
+4. Sealer polls `GET /pairing/inbox/{id}`. Once `joiner_nonce` is present, it verifies `commitment == blake2b(pubkey_J ‖ joiner_nonce)` — if the check fails it aborts without showing a SAS (tamper auto-detected). On success it computes the same SAS and the user enters/confirms the 6-digit code. The sealer seals the UMK to `pubkey_J` and posts `{sealed_umk}` to `POST /pairing/inbox/{id}/complete`. The relay row advances to `completed`.
+5. Joiner polls `GET /pairing/{code}`, receives `sealed_umk`, and opens it with its ephemeral private key. The row is marked `consumed` (single-use delivery).
+
+**Why this is grind-proof:** the relay must commit a substitute `(pubkey_evil, nonce_evil)` toward the sealer before `nonce_S` exists. Once `nonce_S` is public, the sealer-side SAS is fixed. To match it on the joiner side, the relay would have to grind `nonce_J` — but at that moment `nonce_J` is still hidden inside the commitment. No grindable handle remains; the attacker is reduced to a blind 1-in-10⁶ guess.
+
+**Auto-discovery:** a trusted, active, unlocked device can poll `GET /pairing/inbox` for its own pending pairing requests. The backend returns only discovery metadata (`id, device_label, status, expires_at`) — no pubkeys, nonces, or sealed UMK. The full detail for a specific row is fetched separately from `GET /pairing/inbox/{id}`. Whether and how clients surface this polling is a client-side concern (Priority 4 in the hardening plan); the backend inbox endpoints are the supported discovery surface.
+
+The pairing row has a 5-minute TTL and expires at any non-terminal state if unused.
 
 #### Recovery Key (mandatory offline backup)
 
@@ -172,6 +186,35 @@ Offered at setup for users who prefer typing a memorised phrase. `KEK_pw = Argon
 
 After a device is revoked, the client should rotate the UMK: generate UMK v(n+1), re-wrap it for all surviving unlock methods (`POST /keys`), bump `active_umk_version`, then lazily re-encrypt records (re-pushing rows with `enc_umk_version = n+1`). The server tolerates mixed `enc_umk_version` during the sweep — each record self-describes its generation. Rotation protects future confidentiality only; a revoked device already saw the old data.
 
+### Monotonic UMK Generation on Init
+
+`POST /encryption/init` does not hardcode the new UMK generation to version 1. Instead, the server computes `new_version = (max enc_umk_version over all of the user's records, live and tombstoned) + 1` and stamps the new envelopes and `active_umk_version` at that number.
+
+Why: `reset_encryption` (see below) deliberately leaves `app_sync_record` rows intact. If init always assigned version 1, a new device pairing in after a reset would see the surviving stale v1 records and — because the AEAD AAD binds `umk_version` — attempt to decrypt them with the new key, failing silently or raising spurious errors. Generating a strictly higher version number ensures the new UMK occupies a generation no surviving record carries.
+
+Consequences:
+- **First-ever init** (no records exist for the account) → generation **1** (unchanged from prior behaviour).
+- **Reinit after a reset that left records behind** → generation **2** (or higher). Old records become a stale dead generation and are ignored by any device using the new key.
+- The version is **server-authoritative**: the client submits envelopes without a `umk_version` field; the server overwrites the version label on all envelopes before persisting. The client learns the assigned generation from `active_umk_version` in the init response.
+
+### Encryption Reset (`DELETE /encryption`)
+
+`DELETE /api/v1/app-sync/encryption` tears E2E back down so the account can be re-initialised as the "first device" again. It:
+
+- Hard-deletes every `app_sync_key_envelope` row for the user.
+- Hard-deletes every `app_sync_device` row for the user (compare `DELETE /devices/{device_id}`, which soft-marks `is_revoked=True` and keeps the row for the audit/trusted-devices UI — the full reset does a clean sweep).
+- Hard-deletes any pending `app_sync_pairing` relay rows.
+- Sets `active_umk_version = 0` and `e2e_initialized_at = None` on `app_sync_state`.
+
+**Records are deliberately retained.** The `app_sync_record` rows and the seq cursor in `app_sync_state` are untouched. The old ciphertext is undecryptable under the next generation's key (AEAD AAD binds `umk_version`), so the stale blobs cause no confusion. A full account reset is a deliberate two-step:
+
+1. `DELETE /api/v1/app-sync/encryption` — drops all keys and devices, allows re-init.
+2. `DELETE /api/v1/app-sync` — tombstones all records, resets quota counters.
+
+**Idempotent:** safe to call when E2E was never initialised. Returns the (un-initialized) `EncryptionStatePublic` with `initialized=False`, `active_umk_version=0`, `devices=[]`.
+
+**No step-up gate.** The endpoint requires only the standard `CurrentUser` authentication — there is intentionally no server-side confirmation challenge. The native client owns the confirmation UX (destructive-action prompt before calling the endpoint). This is a deliberate design decision, not an oversight.
+
 ---
 
 ## Error Handling
@@ -181,12 +224,15 @@ After a device is revoked, the client should rotate the UMK: generate UMK v(n+1)
 | Push before E2E initialised (`active_umk_version == 0`) | `409` |
 | `POST /encryption/init` when already initialised | `409` |
 | `POST /encryption/init` without a `device` envelope or without a `recovery` envelope | `422` |
-| `POST /pairing/{code}/complete` when status is not `pending` | `409` |
+| `DELETE /encryption` (reset) — any state, including never-initialised | `200` (idempotent; always succeeds) |
+| `POST /pairing/{code}/reveal` when status is not `sealer_nonce_set` | `409` |
+| `POST /pairing/inbox/{id}/sealer-nonce` when status is not `pending` | `409` |
+| `POST /pairing/inbox/{id}/complete` when status is not `revealed` | `409` |
 | Pairing request expired or not found | `410` (expired) / `404` (not found) |
 | Single record ciphertext exceeds 1 MiB | `413` with `{client_entity_id, payload_bytes, max_payload_bytes}` |
 | Push batch exceeds 500 records | `422` |
 | Per-user quota exceeded | `413` with `{total_bytes, quota_bytes, total_records, quota_records}` |
-| Non-UUID `client_entity_id` | `422` (footgun-blocker) |
+| Malformed or bare-integer `client_entity_id` | `422` (footgun-blocker) |
 | Missing `payload_ciphertext` / `content_fingerprint` on non-tombstone | `422` |
 | Device / envelope / pairing not found (or owned by another user) | `404` |
 | Desktop device revoked mid-sync | `401 Desktop session has been revoked` (existing `get_current_user` check) |
@@ -200,6 +246,7 @@ There is no cinna-core SPA UI for browsing sync content — the server cannot de
 - Sync storage usage from `GET /api/v1/app-sync/state`
 - A trusted-devices list from `GET /api/v1/app-sync/devices` with per-device revoke
 - A confirm-gated "Delete synced data" button (`DELETE /api/v1/app-sync`)
+- A confirm-gated "Reset encryption / start over" action that calls `DELETE /api/v1/app-sync/encryption` (drops all key envelopes and devices, restores first-device state) followed by `DELETE /api/v1/app-sync` (wipes records). Both steps are required for a complete account reset; the native client owns the confirmation UX.
 
 All user-facing sync feedback (progress, conflicts, "storage full", "enter your recovery key") lives in the native client, not in the SPA.
 
@@ -214,4 +261,4 @@ All user-facing sync feedback (progress, conflicts, "storage full", "enter your 
 
 ---
 
-*Last updated: 2026-05-31*
+*Last updated: 2026-06-03*
