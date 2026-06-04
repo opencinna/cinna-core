@@ -405,3 +405,165 @@ def test_rebuild_of_correctly_created_env_does_not_introduce_openai_key(
                 "The rebuild introduced the mis-filing that the fix should prevent."
             )
             break
+
+
+# ── Scenario 4: Mixed-SDK per-mode fallback regression (reported bug) ──────────
+#
+# Reported bug: a NEW agent created from the dashboard wizard with
+#   conversation = opencode/openai   (default conversation credential = OpenAI)
+#   building     = claude-code/anthropic  (no per-mode building default; the
+#                  Anthropic key comes from the *type-level* default credential)
+# started up with ``ANTHROPIC_API_KEY=`` empty, and rebuilding did not help.
+#
+# Root cause: the OpenAI conversation credential is compatible with
+# ``opencode/openai`` so its id is PERSISTED as ``conversation_ai_credential_id``.
+# The building mode resolves Anthropic from the type-level default at create
+# time, which fills the value but persists NO ``building_ai_credential_id``. On
+# every reconfigure (start / restart / rebuild) the old all-or-nothing fallback
+# gate saw "one mode is pinned" and skipped the profile / type-default fallback
+# for BOTH modes — dropping the unpinned building Anthropic key.
+#
+# The fix scopes the fallback PER MODE: a mode with no usable assigned
+# credential still re-resolves its key, even when the other mode is pinned.
+
+
+def _setup_mixed_sdk_asymmetric_defaults(
+    client: TestClient, headers: dict[str, str], *, openai_key: str, anthropic_key: str
+) -> dict:
+    """Create the asymmetric credential setup behind the reported bug and return
+    the created OpenAI / Anthropic credential rows.
+
+    - OpenAI credential: per-mode *conversation* default (compatible with
+      ``opencode/openai`` → its id IS persisted on the env).
+    - Anthropic credential: *type-level* default only, NO per-mode building
+      default (resolved into the value but its id is NOT persisted on the env).
+    """
+    openai_cred = create_random_ai_credential(
+        client,
+        headers,
+        credential_type="openai",
+        api_key=openai_key,
+        name="MixedSDK-OpenAI-Conv",
+        set_default=True,
+    )
+    _set_per_mode_defaults(client, headers, conversation_id=openai_cred["id"])
+
+    anthropic_cred = create_random_ai_credential(
+        client,
+        headers,
+        credential_type="anthropic",
+        api_key=anthropic_key,
+        name="MixedSDK-Anthropic-TypeDefault",
+        set_default=True,
+    )
+    return {"openai": openai_cred, "anthropic": anthropic_cred}
+
+
+def test_rebuild_preserves_anthropic_when_only_conversation_credential_pinned(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """Rebuild of a mixed-SDK env keeps the unpinned building Anthropic key."""
+    openai_key = "sk-openai-mixed-conv-default-key"
+    anthropic_key = "sk-ant-api03-mixed-build-typedefault-key"
+
+    creds = _setup_mixed_sdk_asymmetric_defaults(
+        client, superuser_token_headers, openai_key=openai_key, anthropic_key=anthropic_key
+    )
+
+    agent = _create_agent_with_env(client, superuser_token_headers)
+    agent_id = agent["id"]
+
+    env = _create_env_via_api(
+        client,
+        superuser_token_headers,
+        agent_id,
+        sdk_conversation="opencode/openai",
+        sdk_building="claude-code/anthropic",
+        use_default_ai_credentials=True,
+    )
+    env_id = env["id"]
+
+    # The asymmetry that triggers the bug: conversation id persisted, building not.
+    r = client.get(f"{API}/environments/{env_id}", headers=superuser_token_headers)
+    assert r.status_code == 200, r.text
+    detail = r.json()
+    assert detail["conversation_ai_credential_id"] == creds["openai"]["id"], detail
+    assert detail["building_ai_credential_id"] is None, detail
+
+    # Baseline: create-time .env has the Anthropic key.
+    assert f"ANTHROPIC_API_KEY={anthropic_key}" in _read_env_file(env_id)
+
+    # Rebuild — the operation the user reported "doesn't help".
+    r = client.post(
+        f"{API}/environments/{env_id}/rebuild", headers=superuser_token_headers
+    )
+    assert r.status_code == 200, r.text
+    drain_tasks()
+
+    env_after = _read_env_file(env_id)
+    assert f"ANTHROPIC_API_KEY={anthropic_key}" in env_after, (
+        "ANTHROPIC_API_KEY was dropped on rebuild for the unpinned building mode. "
+        f".env content:\n{env_after}"
+    )
+    # The pinned OpenAI conversation key is still resolved (written to .env and
+    # embedded into opencode.json for the opencode/openai conversation mode).
+    assert f"OPENAI_API_KEY={openai_key}" in env_after, env_after
+
+
+def test_reconfigure_preserves_anthropic_when_only_conversation_credential_pinned(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db,
+) -> None:
+    """The start / reconfigure path (``_update_environment_config``) keeps the
+    unpinned building Anthropic key.
+
+    This drives the exact code path that ``start_environment`` runs on auto-start
+    (the original symptom: a freshly *started* env had an empty
+    ``ANTHROPIC_API_KEY``). We invoke ``_update_environment_config`` directly so
+    the test does not depend on a running Docker daemon for the agent container.
+    """
+    import uuid as _uuid
+
+    from app.models.agents.agent import Agent
+    from app.models.environments.environment import AgentEnvironment
+
+    openai_key = "sk-openai-reconfigure-conv-default-key"
+    anthropic_key = "sk-ant-api03-reconfigure-build-typedefault-key"
+
+    _setup_mixed_sdk_asymmetric_defaults(
+        client, superuser_token_headers, openai_key=openai_key, anthropic_key=anthropic_key
+    )
+
+    agent = _create_agent_with_env(client, superuser_token_headers)
+    agent_id = agent["id"]
+
+    env = _create_env_via_api(
+        client,
+        superuser_token_headers,
+        agent_id,
+        sdk_conversation="opencode/openai",
+        sdk_building="claude-code/anthropic",
+        use_default_ai_credentials=True,
+    )
+    env_id = env["id"]
+
+    # Baseline.
+    assert f"ANTHROPIC_API_KEY={anthropic_key}" in _read_env_file(env_id)
+
+    # Re-run config generation the way start_environment does (no credential bag
+    # passed → resolves purely from stored ids + per-mode fallback).
+    lm = EnvironmentService.get_lifecycle_manager()
+    env_obj = db.get(AgentEnvironment, _uuid.UUID(env_id))
+    agent_obj = db.get(Agent, _uuid.UUID(agent_id))
+    assert env_obj is not None and agent_obj is not None
+    instance_dir = lm.instances_dir / env_id
+
+    lm._update_environment_config(db, instance_dir, env_obj, agent_obj)
+
+    env_after = _read_env_file(env_id)
+    assert f"ANTHROPIC_API_KEY={anthropic_key}" in env_after, (
+        "ANTHROPIC_API_KEY was dropped on reconfigure for the unpinned building "
+        f"mode. .env content:\n{env_after}"
+    )

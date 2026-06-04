@@ -99,6 +99,34 @@
 - `_generate_opencode_config_files()` — writes `opencode.json` to `app/core/.opencode/{mode}/` for each mode that uses `opencode/*`; embeds model selection, provider registration with API key, permission rules, tool flags, and MCP bridge server commands; called at environment creation and rebuild
 - `rebuild_environment()` — after core replacement, regenerates settings files for all adapter types including OpenCode
 
+### Credential resolution into the environment
+
+Which AI key reaches each mode is resolved in two phases. Both fill a **credential bag** (`make_empty_credential_bag` / `apply_credential_to_bag` in `sdk_constants.py`, keyed by `CREDENTIAL_TYPE_TO_BAG_KEY`).
+
+**Create-time (one-shot)** — `environment_service.py:create_environment()`:
+- `use_default_ai_credentials=True`: seeds the bag from the legacy profile, then per mode applies the user's per-mode default credential (`default_ai_credential_conversation_id` / `default_ai_credential_building_id`) when type-compatible, else the type-level default (`get_default_for_type`).
+- `use_default_ai_credentials=False`: applies the explicit `conversation_ai_credential_id` / `building_ai_credential_id`, else the type-level default for the mode's SDK.
+- A credential id is **persisted on the environment only when it came from an explicit pick or a per-mode default**. Type-level-default fallbacks fill the bag value but persist NO id (so `building_ai_credential_id` / `conversation_ai_credential_id` stay `null`).
+- Validates every required bag key for the chosen SDKs is present, else raises `EnvironmentCredentialError` (HTTP 400).
+- The computed bag is passed through `create_environment_instance()` → `_update_environment_config()` → `_generate_env_file()`.
+
+**Reconfigure (start / restart / rebuild)** — re-resolves with NO bag passed in, using only the ids stored on the environment plus a per-mode fallback. Two code paths share the same helpers:
+- `_update_environment_config()` — runs on every `start_environment()` (and restart).
+- `rebuild_environment()` — runs on rebuild.
+
+Shared helpers on `EnvironmentLifecycleManager` (in `environment_lifecycle.py`):
+- `_usable_assigned_credential(db_session, user, credential_id, sdk_id)` — an id counts as "assigned" only if it exists AND is type-compatible with the mode's SDK; a mismatched/poisoned id is ignored so the fallback can self-heal the slot.
+- `_resolve_assigned_credential_into_bag(db_session, user, environment, bag, credential_id, sdk_id, label)` — files an assigned credential into the bag by its ACTUAL type, skipping incompatible ids, filling empty slots only.
+- `_fallback_fill_bag_for_sdk(db_session, user, bag, sdk_id)` — for a mode with no usable assigned id, fills its slot from the user's named type-default, then the legacy encrypted profile (anthropic / minimax / openai_compatible only; openai / google are named-credential-only).
+
+**Per-mode fallback rule:** the fallback is gated PER MODE (`if not conv_assigned: ...; if not build_assigned: ...`), never all-or-nothing. A mode whose id was never persisted (resolved from a type-level default at create time) still re-resolves on every reconfigure, even when the OTHER mode pins a credential. An earlier all-or-nothing gate dropped the unpinned mode's key — e.g. left `ANTHROPIC_API_KEY=` empty for a `claude-code/anthropic` building mode paired with a pinned `opencode/openai` conversation mode.
+
+**Key delivery quirks:**
+- `OPENAI_API_KEY` / `GOOGLE_API_KEY` are written to `.env` but the docker-compose templates do NOT forward them into the container — only `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` are passed through (see each template's `environment:` block). OpenCode reads its key from `opencode.json` (`provider.<id>.options.apiKey`), not an env var, so "no OpenAI env var in the container" is expected.
+- `ai_credentials_service.py:_sync_default_to_user_profile()` mirrors only anthropic / minimax / openai_compatible defaults into the legacy `ai_credentials_encrypted` profile; openai / google live solely as named credentials.
+
+Regression tests: `backend/tests/api/agents/agents_ai_credential_slot_mismatch_test.py` — mismatch self-heal plus mixed-SDK per-mode fallback on both rebuild and reconfigure paths.
+
 ## Frontend Components
 
 **`frontend/src/components/UserSettings/AICredentials.tsx`:**

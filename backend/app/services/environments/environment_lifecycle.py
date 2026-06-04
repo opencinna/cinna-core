@@ -19,6 +19,7 @@ from app.utils import detect_anthropic_credential_type
 from .adapters.base import EnvironmentAdapter, EnvInitConfig
 from .adapters.docker_adapter import DockerEnvironmentAdapter
 from .sdk_constants import (
+    CREDENTIAL_TYPE_TO_BAG_KEY,
     SDK_TO_CREDENTIAL_TYPE,
     apply_credential_to_bag,
     is_credential_compatible_with_sdk,
@@ -919,118 +920,60 @@ class EnvironmentLifecycleManager:
             sdk_building = environment.agent_sdk_building or "claude-code/anthropic"
             uses_minimax = sdk_conversation == "claude-code/minimax" or sdk_building == "claude-code/minimax"
 
-            # Fetch user credentials for SDK settings regeneration
-            # If specific credentials are assigned, use ONLY those (no fallback to user profile)
+            # Fetch user credentials for SDK settings regeneration.
+            #
+            # Resolution mirrors _update_environment_config: build a credential
+            # bag from any env-assigned ids (filed by the credential's ACTUAL
+            # type, incompatible ids skipped), then fall back PER MODE to the
+            # user's default / profile credentials for any mode without a usable
+            # assigned credential. The shared bag helpers keep this rebuild path
+            # and the start/reconfigure path from drifting.
             user = db_session.get(User, agent.owner_id)
             anthropic_api_key = None
             minimax_api_key = None
             openai_compatible_api_key = None
             openai_compatible_base_url = None
             openai_compatible_model = None
-
-            # Track if specific credentials are assigned (to prevent fallback).
-            # A stored id only counts when it actually exists and is type-compatible
-            # with its mode's SDK — a poisoned (mismatched) id is ignored so the
-            # profile fallback below can resolve the correct credential instead.
-            def _usable_assigned(credential_id, sdk_id) -> bool:
-                if not credential_id or not user:
-                    return False
-                cred = db_session.get(AICredential, credential_id)
-                return cred is not None and is_credential_compatible_with_sdk(sdk_id, cred.type)
-
-            has_assigned_credentials = (
-                _usable_assigned(environment.conversation_ai_credential_id, sdk_conversation) or
-                _usable_assigned(environment.building_ai_credential_id, sdk_building)
-            )
+            openai_api_key = None
+            google_api_key = None
 
             if user:
-                from app.services.credentials.ai_credentials_service import ai_credentials_service
+                bag = make_empty_credential_bag()
 
-                # Initialise credential variables for all supported types
-                openai_api_key = None
-                google_api_key = None
+                # Per-mode assignment flags. Tracked separately (not OR'd into a
+                # single all-or-nothing flag) so the fallback runs for a mode
+                # with no usable assigned credential even when the OTHER mode
+                # pins one.
+                conv_assigned = self._usable_assigned_credential(
+                    db_session, user, environment.conversation_ai_credential_id, sdk_conversation
+                )
+                build_assigned = self._usable_assigned_credential(
+                    db_session, user, environment.building_ai_credential_id, sdk_building
+                )
 
-                def _apply_cred_to_vars(cred_type, cred_data):
-                    """Apply credential data to the appropriate local variable."""
-                    nonlocal anthropic_api_key, minimax_api_key
-                    nonlocal openai_compatible_api_key, openai_compatible_base_url, openai_compatible_model
-                    nonlocal openai_api_key, google_api_key
-                    if cred_type == AICredentialType.ANTHROPIC and anthropic_api_key is None:
-                        anthropic_api_key = cred_data.api_key
-                    elif cred_type == AICredentialType.MINIMAX and minimax_api_key is None:
-                        minimax_api_key = cred_data.api_key
-                    elif cred_type == AICredentialType.OPENAI_COMPATIBLE and openai_compatible_api_key is None:
-                        openai_compatible_api_key = cred_data.api_key
-                        openai_compatible_base_url = cred_data.base_url
-                        openai_compatible_model = cred_data.model
-                    elif cred_type == AICredentialType.OPENAI and openai_api_key is None:
-                        openai_api_key = cred_data.api_key
-                    elif cred_type == AICredentialType.GOOGLE and google_api_key is None:
-                        google_api_key = cred_data.api_key
+                # Apply env-assigned credentials (handles shared credentials).
+                self._resolve_assigned_credential_into_bag(
+                    db_session, user, environment, bag,
+                    environment.conversation_ai_credential_id, sdk_conversation, "conversation",
+                )
+                self._resolve_assigned_credential_into_bag(
+                    db_session, user, environment, bag,
+                    environment.building_ai_credential_id, sdk_building, "building",
+                )
 
-                def _apply_assigned_cred(credential_id, sdk_id, label):
-                    """Apply an assigned credential to local vars using its ACTUAL
-                    type, skipping any whose type is incompatible with the mode's
-                    SDK (prevents mis-filing e.g. an OpenAI key as ANTHROPIC)."""
-                    cred = db_session.get(AICredential, credential_id)
-                    if cred and not is_credential_compatible_with_sdk(sdk_id, cred.type):
-                        logger.warning(
-                            "Skipping assigned %s credential %s (type=%s) during "
-                            "rebuild for environment %s: incompatible with SDK "
-                            "'%s' (expects %s).",
-                            label, credential_id, cred.type, environment.id, sdk_id,
-                            sdk_expected_credential_type(sdk_id),
-                        )
-                        return
-                    cred_data = ai_credentials_service.get_credential_for_use(
-                        db_session, credential_id, user.id
-                    )
-                    if cred_data:
-                        cred_type = cred.type if cred else SDK_TO_CREDENTIAL_TYPE.get(sdk_id)
-                        if cred_type:
-                            _apply_cred_to_vars(cred_type, cred_data)
-                    else:
-                        logger.warning(f"Assigned {label} credential {credential_id} not accessible during rebuild for environment {environment.id}")
+                # Per-mode fallback for any mode without a usable assigned credential.
+                if not conv_assigned:
+                    self._fallback_fill_bag_for_sdk(db_session, user, bag, sdk_conversation)
+                if not build_assigned:
+                    self._fallback_fill_bag_for_sdk(db_session, user, bag, sdk_building)
 
-                # Use assigned credentials from environment (handles shared credentials)
-                if environment.conversation_ai_credential_id:
-                    _apply_assigned_cred(
-                        environment.conversation_ai_credential_id, sdk_conversation, "conversation"
-                    )
-
-                if environment.building_ai_credential_id:
-                    _apply_assigned_cred(
-                        environment.building_ai_credential_id, sdk_building, "building"
-                    )
-
-                # Fall back to user profile credentials ONLY if no specific credentials are assigned
-                if not has_assigned_credentials:
-                    ai_credentials = ai_credentials_service.get_user_ai_credentials(user=user)
-                    if ai_credentials:
-                        if anthropic_api_key is None and ai_credentials.anthropic_api_key:
-                            anthropic_api_key = ai_credentials.anthropic_api_key
-                        if minimax_api_key is None and ai_credentials.minimax_api_key:
-                            minimax_api_key = ai_credentials.minimax_api_key
-                        if openai_compatible_api_key is None and ai_credentials.openai_compatible_api_key:
-                            openai_compatible_api_key = ai_credentials.openai_compatible_api_key
-                        if openai_compatible_base_url is None and ai_credentials.openai_compatible_base_url:
-                            openai_compatible_base_url = ai_credentials.openai_compatible_base_url
-                        if openai_compatible_model is None and ai_credentials.openai_compatible_model:
-                            openai_compatible_model = ai_credentials.openai_compatible_model
-                    # For OpenCode-specific types (openai, google), try resolving
-                    # from the user's named default credentials
-                    if openai_api_key is None:
-                        openai_default = ai_credentials_service.get_default_for_type(
-                            db_session, user.id, AICredentialType.OPENAI
-                        )
-                        if openai_default:
-                            openai_api_key = ai_credentials_service.decrypt_credential(openai_default).api_key
-                    if google_api_key is None:
-                        google_default = ai_credentials_service.get_default_for_type(
-                            db_session, user.id, AICredentialType.GOOGLE
-                        )
-                        if google_default:
-                            google_api_key = ai_credentials_service.decrypt_credential(google_default).api_key
+                anthropic_api_key = bag["anthropic_api_key"]
+                minimax_api_key = bag["minimax_api_key"]
+                openai_compatible_api_key = bag["openai_compatible_api_key"]
+                openai_compatible_base_url = bag["openai_compatible_base_url"]
+                openai_compatible_model = bag["openai_compatible_model"]
+                openai_api_key = bag["openai_api_key"]
+                google_api_key = bag["google_api_key"]
 
                 # Regenerate MiniMax settings if needed
                 if uses_minimax and minimax_api_key:
@@ -1337,8 +1280,6 @@ class EnvironmentLifecycleManager:
         #    This is critical for cloned agents that use shared AI credentials
         user = db_session.get(User, agent.owner_id)
 
-        from app.services.credentials.ai_credentials_service import ai_credentials_service
-
         sdk_conversation = environment.agent_sdk_conversation or "claude-code/anthropic"
         sdk_building = environment.agent_sdk_building or "claude-code/anthropic"
 
@@ -1353,101 +1294,44 @@ class EnvironmentLifecycleManager:
             "google_api_key": google_api_key,
         }
 
-        def _stored_credential_usable(credential_id, sdk_id) -> bool:
-            """A stored credential id counts as 'assigned' only if it actually
-            exists and is type-compatible with the mode's SDK. A poisoned env
-            whose stored id is incompatible is treated as not-assigned so the
-            profile / named-default fallback resolves the correct slot instead."""
-            if not credential_id or not user:
-                return False
-            cred = db_session.get(AICredential, credential_id)
-            if cred is None:
-                return False
-            return is_credential_compatible_with_sdk(sdk_id, cred.type)
-
         # Track if specific credentials are assigned (to prevent fallback). An
-        # incompatible stored id is NOT treated as assigned — see above.
-        has_assigned_conversation_credential = _stored_credential_usable(
-            environment.conversation_ai_credential_id, sdk_conversation
+        # incompatible stored id is NOT treated as assigned — see
+        # _usable_assigned_credential.
+        has_assigned_conversation_credential = self._usable_assigned_credential(
+            db_session, user, environment.conversation_ai_credential_id, sdk_conversation
         )
-        has_assigned_building_credential = _stored_credential_usable(
-            environment.building_ai_credential_id, sdk_building
+        has_assigned_building_credential = self._usable_assigned_credential(
+            db_session, user, environment.building_ai_credential_id, sdk_building
         )
-
-        def _resolve_assigned_credential(credential_id, sdk_id, label):
-            """Resolve an assigned credential into the bag (only fills None slots).
-
-            File the credential into the bag slot matching its ACTUAL type and
-            never apply one whose type is incompatible with the mode's SDK. A
-            stored id that doesn't match the SDK (e.g. a poisoned env whose
-            conversation_ai_credential_id points at an OpenAI credential while the
-            SDK is claude-code/anthropic) is skipped so the anthropic default can
-            resolve instead — otherwise we'd mis-file an OpenAI key into
-            ANTHROPIC_API_KEY.
-            """
-            if not credential_id or not user:
-                return
-            cred = db_session.get(AICredential, credential_id)
-            if cred and not is_credential_compatible_with_sdk(sdk_id, cred.type):
-                logger.warning(
-                    "Skipping assigned %s credential %s (type=%s) for environment "
-                    "%s: incompatible with SDK '%s' (expects %s).",
-                    label, credential_id, cred.type, environment.id, sdk_id,
-                    sdk_expected_credential_type(sdk_id),
-                )
-                return
-            cred_data = ai_credentials_service.get_credential_for_use(
-                db_session, credential_id, user.id
-            )
-            if cred_data:
-                # Use the credential's actual type, not one inferred from the SDK
-                cred_type = cred.type if cred else SDK_TO_CREDENTIAL_TYPE.get(sdk_id)
-                if cred_type:
-                    # Only fill keys that are still None
-                    temp_bag = make_empty_credential_bag()
-                    apply_credential_to_bag(temp_bag, cred_type, cred_data)
-                    for key, val in temp_bag.items():
-                        if val is not None and bag[key] is None:
-                            bag[key] = val
-                    logger.debug(f"Resolved {label} credential for environment {environment.id}")
-            else:
-                logger.warning(f"Assigned {label} credential {credential_id} not accessible for environment {environment.id}")
 
         # Resolve conversation and building credentials if stored on environment
-        _resolve_assigned_credential(
-            environment.conversation_ai_credential_id, sdk_conversation, "conversation"
-        )
-        _resolve_assigned_credential(
-            environment.building_ai_credential_id, sdk_building, "building"
-        )
+        if user:
+            self._resolve_assigned_credential_into_bag(
+                db_session, user, environment, bag,
+                environment.conversation_ai_credential_id, sdk_conversation, "conversation",
+            )
+            self._resolve_assigned_credential_into_bag(
+                db_session, user, environment, bag,
+                environment.building_ai_credential_id, sdk_building, "building",
+            )
 
-        # Fall back to user's profile credentials ONLY if no specific credentials are assigned
-        if user and not has_assigned_conversation_credential and not has_assigned_building_credential:
-            ai_credentials = ai_credentials_service.get_user_ai_credentials(user=user)
-            if ai_credentials:
-                if bag["anthropic_api_key"] is None and ai_credentials.anthropic_api_key:
-                    bag["anthropic_api_key"] = ai_credentials.anthropic_api_key
-                if bag["minimax_api_key"] is None and ai_credentials.minimax_api_key:
-                    bag["minimax_api_key"] = ai_credentials.minimax_api_key
-                if bag["openai_compatible_api_key"] is None and ai_credentials.openai_compatible_api_key:
-                    bag["openai_compatible_api_key"] = ai_credentials.openai_compatible_api_key
-                if bag["openai_compatible_base_url"] is None and ai_credentials.openai_compatible_base_url:
-                    bag["openai_compatible_base_url"] = ai_credentials.openai_compatible_base_url
-                if bag["openai_compatible_model"] is None and ai_credentials.openai_compatible_model:
-                    bag["openai_compatible_model"] = ai_credentials.openai_compatible_model
-            # For OpenCode-specific types, try named default credentials
-            if bag["openai_api_key"] is None:
-                openai_default = ai_credentials_service.get_default_for_type(
-                    db_session, user.id, AICredentialType.OPENAI
-                )
-                if openai_default:
-                    bag["openai_api_key"] = ai_credentials_service.decrypt_credential(openai_default).api_key
-            if bag["google_api_key"] is None:
-                google_default = ai_credentials_service.get_default_for_type(
-                    db_session, user.id, AICredentialType.GOOGLE
-                )
-                if google_default:
-                    bag["google_api_key"] = ai_credentials_service.decrypt_credential(google_default).api_key
+        # Per-mode fallback to the user's default / profile credentials.
+        #
+        # The fallback is gated PER MODE, not globally. A mode whose credential
+        # id was never persisted on the environment — e.g. building resolved
+        # from a type-level default at create time, which fills the bag but
+        # stores no id — must still re-resolve its key on every reconfigure
+        # (start / restart / rebuild). A previous all-or-nothing gate
+        # ("fall back only if NEITHER mode is assigned") silently dropped that
+        # mode's key whenever the OTHER mode happened to have a pinned id,
+        # leaving e.g. ANTHROPIC_API_KEY empty for a claude-code/anthropic
+        # building mode. Suppressing fallback is the right behaviour only for a
+        # mode that actually pins a credential, so we scope it to that mode.
+        if user:
+            if not has_assigned_conversation_credential:
+                self._fallback_fill_bag_for_sdk(db_session, user, bag, sdk_conversation)
+            if not has_assigned_building_credential:
+                self._fallback_fill_bag_for_sdk(db_session, user, bag, sdk_building)
 
         # Unpack bag back to local vars for downstream methods that use positional args
         anthropic_api_key = bag["anthropic_api_key"]
@@ -1495,6 +1379,134 @@ class EnvironmentLifecycleManager:
             )
 
         logger.info(f"Updated configuration files for environment {environment.id}")
+
+    def _usable_assigned_credential(
+        self,
+        db_session: Session,
+        user: "User | None",
+        credential_id,
+        sdk_id: str | None,
+    ) -> bool:
+        """Whether a stored credential id counts as 'assigned' for a mode.
+
+        True only if the id exists AND is type-compatible with the mode's SDK. A
+        poisoned env whose stored id is incompatible is treated as not-assigned,
+        so the profile / named-default fallback can resolve the correct slot
+        instead of being suppressed by a mismatched id.
+        """
+        if not credential_id or not user:
+            return False
+        cred = db_session.get(AICredential, credential_id)
+        if cred is None:
+            return False
+        return is_credential_compatible_with_sdk(sdk_id, cred.type)
+
+    def _resolve_assigned_credential_into_bag(
+        self,
+        db_session: Session,
+        user: "User",
+        environment: AgentEnvironment,
+        bag: dict,
+        credential_id,
+        sdk_id: str | None,
+        label: str,
+    ) -> None:
+        """Resolve an env-assigned credential into the bag (fills empty slots only).
+
+        Files the credential by its ACTUAL type and never applies one whose type
+        is incompatible with the mode's SDK. A stored id that doesn't match the
+        SDK (e.g. a ``conversation_ai_credential_id`` pointing at an OpenAI
+        credential while the SDK is ``claude-code/anthropic``) is skipped so the
+        correct typed default can resolve instead — otherwise we'd mis-file an
+        OpenAI key into ``ANTHROPIC_API_KEY``.
+        """
+        if not credential_id or not user:
+            return
+        from app.services.credentials.ai_credentials_service import ai_credentials_service
+
+        cred = db_session.get(AICredential, credential_id)
+        if cred and not is_credential_compatible_with_sdk(sdk_id, cred.type):
+            logger.warning(
+                "Skipping assigned %s credential %s (type=%s) for environment "
+                "%s: incompatible with SDK '%s' (expects %s).",
+                label, credential_id, cred.type, environment.id, sdk_id,
+                sdk_expected_credential_type(sdk_id),
+            )
+            return
+        cred_data = ai_credentials_service.get_credential_for_use(
+            db_session, credential_id, user.id
+        )
+        if not cred_data:
+            logger.warning(
+                f"Assigned {label} credential {credential_id} not accessible "
+                f"for environment {environment.id}"
+            )
+            return
+        # Use the credential's actual type, not one inferred from the SDK.
+        cred_type = cred.type if cred else SDK_TO_CREDENTIAL_TYPE.get(sdk_id)
+        if not cred_type:
+            return
+        # Only fill keys that are still empty.
+        temp_bag = make_empty_credential_bag()
+        apply_credential_to_bag(temp_bag, cred_type, cred_data)
+        for key, val in temp_bag.items():
+            if val is not None and bag[key] is None:
+                bag[key] = val
+        logger.debug(f"Resolved {label} credential for environment {environment.id}")
+
+    def _fallback_fill_bag_for_sdk(
+        self,
+        db_session: Session,
+        user: User,
+        bag: dict,
+        sdk_id: str | None,
+    ) -> None:
+        """Fill the bag slot for a single mode's SDK from the user's defaults.
+
+        Resolves the credential type the SDK expects and, if that slot is still
+        empty, fills it from the user's named default credential for that type,
+        falling back to the legacy encrypted profile for the types it stores.
+        Only ever fills empty slots, so a credential already resolved from an
+        assigned id (or shared with the other mode via the same type) is never
+        overwritten.
+
+        This is the per-mode fallback used on reconfigure for a mode that has no
+        usable assigned credential id — see the call site in
+        ``_update_environment_config``.
+        """
+        from app.services.credentials.ai_credentials_service import ai_credentials_service
+
+        cred_type = sdk_expected_credential_type(sdk_id)
+        if cred_type is None:
+            return
+        bag_key = CREDENTIAL_TYPE_TO_BAG_KEY.get(cred_type)
+        if not bag_key or bag.get(bag_key) is not None:
+            return
+
+        # Prefer the user's named default credential for this type.
+        default_cred = ai_credentials_service.get_default_for_type(
+            db_session, user.id, cred_type
+        )
+        if default_cred:
+            apply_credential_to_bag(
+                bag, cred_type, ai_credentials_service.decrypt_credential(default_cred)
+            )
+            return
+
+        # Fall back to the legacy encrypted profile for the types it stores
+        # (anthropic / minimax / openai_compatible). OpenAI and Google live only
+        # as named credentials, so they have no profile fallback.
+        ai_credentials = ai_credentials_service.get_user_ai_credentials(user=user)
+        if not ai_credentials:
+            return
+        if cred_type == AICredentialType.ANTHROPIC and ai_credentials.anthropic_api_key:
+            bag["anthropic_api_key"] = ai_credentials.anthropic_api_key
+        elif cred_type == AICredentialType.MINIMAX and ai_credentials.minimax_api_key:
+            bag["minimax_api_key"] = ai_credentials.minimax_api_key
+        elif cred_type == AICredentialType.OPENAI_COMPATIBLE and ai_credentials.openai_compatible_api_key:
+            bag["openai_compatible_api_key"] = ai_credentials.openai_compatible_api_key
+            bag["openai_compatible_base_url"] = ai_credentials.openai_compatible_base_url
+            bag["openai_compatible_model"] = ai_credentials.openai_compatible_model
 
     def _generate_compose_file(
         self,
