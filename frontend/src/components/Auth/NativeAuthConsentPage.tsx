@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
+import { UsersService } from "@/client"
 import { redirectToLoginPreservingTarget } from "@/hooks/useAuth"
 import { Button } from "@/components/ui/button"
 import {
@@ -18,6 +19,7 @@ import {
   ShieldX,
   AlertTriangle,
   CheckCircle2,
+  UserCircle2,
 } from "lucide-react"
 
 /** Non-secret metadata returned by the consent-request endpoint. */
@@ -64,6 +66,14 @@ export function NativeAuthConsentPage({
   } = useQuery({
     queryKey: [queryKeyPrefix, nonce],
     queryFn: () => getRequest(nonce),
+    retry: false,
+  })
+
+  // The account the consent will be granted for. Shares the global
+  // ["currentUser"] cache key so it reuses any already-fetched profile.
+  const { data: currentUser } = useQuery({
+    queryKey: ["currentUser"],
+    queryFn: () => UsersService.readUserMe(),
     retry: false,
   })
 
@@ -177,6 +187,22 @@ export function NativeAuthConsentPage({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {currentUser && (
+            <div className="flex items-center gap-3 rounded-lg border bg-muted/40 p-3">
+              <UserCircle2 className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <div className="min-w-0">
+                <p className="text-xs text-muted-foreground">Signed in as</p>
+                <p className="truncate text-sm font-medium">
+                  {currentUser.full_name || currentUser.email}
+                </p>
+                {currentUser.full_name && (
+                  <p className="truncate text-xs text-muted-foreground">
+                    {currentUser.email}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
           <div className="rounded-lg border p-4 space-y-3">
             {deviceLabel && (
               <div className="flex justify-between">

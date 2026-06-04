@@ -192,7 +192,7 @@ Route: `/desktop-auth/consent?request={nonce}` (file: `frontend/src/routes/deskt
 
 - Public route (not under `_layout/`), but `beforeLoad` redirects unauthenticated users to `/login`
 - On mount: `GET /requests/{nonce}` to fetch display metadata
-- Renders: device name, platform, app version from the request metadata
+- Renders: a "Signed in as" block with the current user's name/email (lightweight `GET /users/me` query sharing the `["currentUser"]` cache key) so the user can confirm which account they're authorizing; plus device name, platform, app version from the request metadata
 - Approve button: `POST /consent` with `action="approve"` → receives `redirect_to` → `window.location.href = redirect_to`
 - Deny button: `POST /consent` with `action="deny"` → receives `redirect_to` with `error=access_denied` → navigates there
 - "Use another account" link (footer): calls `redirectToLoginPreservingTarget()` — clears the stored `access_token` (logout) and redirects to `/login?redirect=<this consent URL>`, so a user who authenticated as the wrong account can sign in as a different one and land back on the same consent request
