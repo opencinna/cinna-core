@@ -157,13 +157,15 @@ The caller must own the producer agent (or be a superuser). The resulting creden
 
 ### Producer Integrations UI (Agent REST API card)
 
-The producer card is **enable + View Spec + a Connections list** — there is no token management UI.
+The producer card is **enable + View Spec + Refresh + a Connections list** — there is no token management UI.
 
 | State | What the user sees |
 |-------|-------------------|
 | **Empty** (toggle off) | Enable toggle + one-paragraph explainer (e.g. "a narrow API in front of credentials with excessive permissions"). |
 | **Error** | A **compact one-line summary** of the boot/harvest failure (e.g. "API failed to start. Error 404. Probably, not implemented yet."), a **Details** toggle that reveals the full raw error, and a **Retry** button. |
-| **Enabled** | Status badge, a **View Spec** button (opens the harvested OpenAPI as rendered docs in a new tab — see [Spec Viewer](spec_viewer.md)), and a **Connections** section listing the agents consuming this API. |
+| **Enabled** | Status badge, a **View Spec** button (opens the harvested OpenAPI as rendered docs in a new tab — see [Spec Viewer](spec_viewer.md)), a **Refresh** button, and a **Connections** section listing the agents consuming this API. |
+
+**Refresh button.** Next to **View Spec**, the **Refresh** button forces an on-demand re-harvest — it re-imports the producer's `agent_api/` modules to refresh the cached OpenAPI spec **and** re-parses `policy.yaml` to refresh the cached guardrails (`POST /_refresh` → `get_spec(force_refresh=True)` + `load_policy(force_refresh=True)`). By default both caches only refresh on the next *automatic* re-harvest (triggered when the producer edits a workspace file), so a `policy.yaml` edit applied out-of-band — or a transient harvest error — would otherwise stick until the next edit. Refresh clears it immediately. It is the same mechanism the error banner's **Retry** button uses.
 
 **Error banner — compact summary + Retry.** The raw boot/harvest error can be a long traceback or HTTP error string; the banner shows a short human summary (it extracts the HTTP status code when present and adds "Probably, not implemented yet." for a 404) with the full text behind **Details**. The error caches are *sticky* — env-core's in-memory boot error and the env-row spec error only clear on a successful re-harvest, which by default happens only when the producer edits a file. **Retry** forces an immediate re-harvest so a transient or already-fixed error clears without waiting for the next edit.
 

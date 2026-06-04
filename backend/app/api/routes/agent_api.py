@@ -88,14 +88,16 @@ async def refresh_agent_api_status(
     current_user: CurrentUser,
 ):
     """
-    Force a fresh import-only re-harvest and return the updated status.
+    Force a fresh import-only re-harvest (spec + policy) and return the status.
 
-    The cached boot error (env-core in-memory + the env row) otherwise only
-    clears on the next *automatic* re-harvest, so a transient harvest failure
-    can stick on screen indefinitely. This lets the owner clear it on demand: a
-    successful re-harvest clears the error and refreshes the spec; a failed one
-    re-records it. The status is returned either way (never raises on a harvest
-    failure — the returned ``last_error`` reflects the outcome).
+    The cached spec/policy and any boot error (env-core in-memory + the env row)
+    otherwise only refresh on the next *automatic* re-harvest (a producer file
+    edit), so a transient harvest failure can stick on screen indefinitely and a
+    policy.yaml edit won't take effect until the next reload. This lets the owner
+    force it on demand: a successful re-harvest refreshes the spec, re-parses the
+    policy, and clears the error; a failed one re-records it. The status is
+    returned either way (never raises on a harvest failure — the returned
+    ``last_error`` reflects the outcome).
     """
     try:
         agent = AgentApiService.resolve_agent_only(
@@ -110,11 +112,19 @@ async def refresh_agent_api_status(
 
     # Best-effort re-harvest. Only meaningful when enabled + env running; the
     # error (if any) is persisted by get_spec, and the status below reflects it.
+    # Re-parse the policy.yaml alongside the spec so a policy edit is picked up
+    # on demand (mirrors the background refresh_spec_cache).
     if agent.agent_api_enabled and environment is not None and environment.status == "running":
         try:
             await AgentApiService.get_spec(session, environment, force_refresh=True)
         except AgentApiError:
             pass  # persisted; surfaced via the status payload
+        try:
+            await AgentApiService.load_policy(session, environment, force_refresh=True)
+        except Exception:  # best-effort; status still returns (matches refresh_spec_cache)
+            logger.debug(
+                "agent_api _refresh policy reload failed for env %s", environment.id
+            )
 
     return await AgentApiService.get_status(session, agent, environment)
 

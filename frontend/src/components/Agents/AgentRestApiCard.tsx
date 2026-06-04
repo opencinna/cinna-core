@@ -100,6 +100,7 @@ export function AgentRestApiCard({
       )
       queryClient.invalidateQueries({ queryKey: ["agentApiStatus", agentId] })
       queryClient.invalidateQueries({ queryKey: ["agentApiSpec", agentId] })
+      showSuccessToast("Agent REST API refreshed")
     },
     onError: (e: any) => showErrorToast(e?.message || "Failed to refresh"),
   })
@@ -190,17 +191,34 @@ export function AgentRestApiCard({
             </div>
           )}
 
-          {/* View spec — opens the harvested OpenAPI spec as rendered docs in
-              a new tab (authenticated via the same app shell). */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => openAgentApiSpec(agentId)}
-            title="Open the OpenAPI spec (rendered docs) in a new tab"
-          >
-            <FileJson className="h-4 w-4 mr-1" />
-            View Spec
-          </Button>
+          {/* View spec + Refresh */}
+          <div className="flex items-center gap-2">
+            {/* View spec — opens the harvested OpenAPI spec as rendered docs in
+                a new tab (authenticated via the same app shell). */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => openAgentApiSpec(agentId)}
+              title="Open the OpenAPI spec (rendered docs) in a new tab"
+            >
+              <FileJson className="h-4 w-4 mr-1" />
+              View Spec
+            </Button>
+            {/* Refresh — force a re-harvest of the spec and re-parse of
+                policy.yaml so on-demand edits are picked up immediately. */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => refreshMutation.mutate()}
+              disabled={refreshMutation.isPending}
+              title="Re-parse the API (re-harvests the spec and re-reads policy.yaml)"
+            >
+              <RefreshCw
+                className={`h-4 w-4 mr-1 ${refreshMutation.isPending ? "animate-spin" : ""}`}
+              />
+              Refresh
+            </Button>
+          </div>
 
           {/* Connections — agents consuming this API */}
           <div>
