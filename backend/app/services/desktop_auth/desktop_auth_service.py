@@ -43,6 +43,13 @@ _LOCALHOST_RE = re.compile(r"^http://(localhost|127\.0\.0\.1):(\d+)(/.*)?$")
 # Mobile app's own scheme. Fixed + tied to the installed app, so safe everywhere.
 _APP_SCHEME_RE = re.compile(r"^cinna-mobile://[^\s]*$")
 
+# iOS native redirect (RFC 8252 §7.1, private-use URI scheme): Apple's standard
+# is to use the app's bundle identifier as the custom URL scheme. The production
+# build is `io.opencinna.ios`; debug/dev/staging builds get a dotted suffix on
+# the bundle id (e.g. `io.opencinna.ios.dev`) and therefore a matching scheme.
+# Like `cinna-mobile://`, these are tied to the installed app, so safe everywhere.
+_IOS_SCHEME_RE = re.compile(r"^io\.opencinna\.ios(\.[a-z0-9]+)*://[^\s]*$")
+
 # Expo Go development redirect: exp://<dev-host>:<port>/--/oauth/callback. Host/
 # port are the developer's Metro server and vary per machine — non-production only.
 _EXPO_DEV_RE = re.compile(r"^exp://[^/\s]+(/.*)?$")
@@ -87,10 +94,15 @@ def _client_kind_for_redirect_uri(redirect_uri: str) -> str:
 
     Used purely for consent-screen display copy — the redirect_uri itself stays
     secret, only this derived label is exposed. Mobile native redirects use the
-    app's private-use scheme (``cinna-mobile://``) or Expo Go's ``exp://`` dev
-    scheme; everything else (loopback HTTP) is the desktop app.
+    app's private-use scheme (``cinna-mobile://``), the iOS bundle-id scheme
+    (``io.opencinna.ios[.dev]://``), or Expo Go's ``exp://`` dev scheme;
+    everything else (loopback HTTP) is the desktop app.
     """
-    if _APP_SCHEME_RE.match(redirect_uri) or _EXPO_DEV_RE.match(redirect_uri):
+    if (
+        _APP_SCHEME_RE.match(redirect_uri)
+        or _IOS_SCHEME_RE.match(redirect_uri)
+        or _EXPO_DEV_RE.match(redirect_uri)
+    ):
         return "mobile"
     return "desktop"
 
@@ -101,6 +113,7 @@ def _validate_redirect_uri(redirect_uri: str) -> None:
     Accepts:
       - Desktop loopback:  http://127.0.0.1:<port>/...  /  http://localhost:<port>/...
       - Mobile app scheme: cinna-mobile://...           (all environments)
+      - iOS bundle scheme: io.opencinna.ios[.dev]://...  (all environments)
       - Expo Go dev:       exp://...                    (non-production only)
     """
     m = _LOCALHOST_RE.match(redirect_uri)
@@ -110,7 +123,7 @@ def _validate_redirect_uri(redirect_uri: str) -> None:
             raise HTTPException(status_code=400, detail="invalid_redirect_uri")
         return
 
-    if _APP_SCHEME_RE.match(redirect_uri):
+    if _APP_SCHEME_RE.match(redirect_uri) or _IOS_SCHEME_RE.match(redirect_uri):
         return
 
     if settings.ENVIRONMENT != "production" and _EXPO_DEV_RE.match(redirect_uri):
@@ -121,6 +134,18 @@ def _validate_redirect_uri(redirect_uri: str) -> None:
 
 class DesktopAuthService:
     """Service class for Desktop OAuth 2.0 with PKCE operations."""
+
+    # ── Redirect URI validation ───────────────────────────────────────────
+
+    @staticmethod
+    def validate_redirect_uri(redirect_uri: str) -> None:
+        """Raise HTTP 400 unless ``redirect_uri`` is an accepted native-client callback.
+
+        Public entry point for the route layer (both the ``/desktop-auth`` and
+        ``/app-auth`` surfaces). See the module-level ``_validate_redirect_uri``
+        for the accepted forms.
+        """
+        _validate_redirect_uri(redirect_uri)
 
     # ── Client management ─────────────────────────────────────────────────
 

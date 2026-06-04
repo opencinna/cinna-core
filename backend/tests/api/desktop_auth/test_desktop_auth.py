@@ -748,6 +748,16 @@ def test_redirect_uri_validation(client: TestClient) -> None:
         ("production", "cinna-mobile://oauth/callback", True),
         ("staging", "cinna-mobile://oauth/callback", True),
         ("local", "cinna-mobile://oauth/callback", True),
+        # iOS bundle-id private-use scheme — prod build + dotted dev/staging
+        # builds (e.g. io.opencinna.ios.dev), accepted in every environment.
+        ("production", "io.opencinna.ios://oauth/callback", True),
+        ("production", "io.opencinna.ios.dev://oauth/callback", True),
+        ("production", "io.opencinna.ios.preview://oauth/callback", True),
+        ("staging", "io.opencinna.ios.dev://oauth/callback", True),
+        ("local", "io.opencinna.ios.dev://oauth/callback", True),
+        # A look-alike / foreign reverse-DNS scheme must still be rejected.
+        ("production", "io.opencinna.iosx://oauth/callback", False),
+        ("production", "com.opencinna.ios://oauth/callback", False),
         # Expo Go dev redirect — accepted only outside production.
         ("local", "exp://192.168.1.5:8081/--/oauth/callback", True),
         ("staging", "exp://192.168.1.5:8081/--/oauth/callback", True),

@@ -84,8 +84,7 @@ def authorize(
         )
 
     # Validate redirect_uri before storing anything
-    from app.services.desktop_auth.desktop_auth_service import _validate_redirect_uri
-    _validate_redirect_uri(redirect_uri)
+    DesktopAuthService.validate_redirect_uri(redirect_uri)
 
     if not client_id and not device_name:
         raise HTTPException(

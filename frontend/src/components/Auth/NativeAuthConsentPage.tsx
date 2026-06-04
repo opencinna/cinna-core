@@ -233,6 +233,16 @@ export function NativeAuthConsentPage({
             </p>
           </div>
         )}
+        <div className="px-6 pb-6 text-center">
+          <button
+            type="button"
+            onClick={() => redirectToLoginPreservingTarget()}
+            disabled={consentMutation.isPending}
+            className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50"
+          >
+            Use another account
+          </button>
+        </div>
       </Card>
     </div>
   )

@@ -164,6 +164,13 @@ def test_app_consent_metadata_client_kind_mobile(client: TestClient) -> None:
     [
         ("production", "cinna-mobile://oauth/callback", True),
         ("local", "cinna-mobile://oauth/callback", True),
+        # iOS bundle-id scheme — prod + dotted dev/staging builds, every env.
+        ("production", "io.opencinna.ios://oauth/callback", True),
+        ("production", "io.opencinna.ios.dev://oauth/callback", True),
+        ("production", "io.opencinna.ios.preview://oauth/callback", True),
+        ("local", "io.opencinna.ios.dev://oauth/callback", True),
+        # A foreign reverse-DNS scheme must not slip through.
+        ("production", "io.evil.app://oauth/callback", False),
         # Loopback still works on the app surface too.
         ("production", "http://127.0.0.1:19836/callback", True),
         # Expo Go dev redirect — non-production only.

@@ -42,7 +42,6 @@ from app.models.desktop_auth.desktop_oauth_client import (
 )
 from app.services.desktop_auth.desktop_auth_service import (
     DesktopAuthService,
-    _validate_redirect_uri,
 )
 
 router = APIRouter(prefix="/app-auth", tags=["app-auth"])
@@ -100,7 +99,7 @@ def authorize(
         )
 
     # Validate redirect_uri before storing anything
-    _validate_redirect_uri(redirect_uri)
+    DesktopAuthService.validate_redirect_uri(redirect_uri)
 
     if not client_id and not device_name:
         raise HTTPException(
