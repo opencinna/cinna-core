@@ -90,6 +90,13 @@ function Dashboard() {
   const [showFileModal, setShowFileModal] = useState(false)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   const [showGettingStarted, setShowGettingStarted] = useState(false)
+  // Reactive mirror of the `onboardingSkipped` localStorage flag. Reading
+  // localStorage directly during render is not reactive, so clicking "Skip
+  // for now" would not re-render this page (the credentials query refetches
+  // identical data and React Query's tracked-props suppress the re-render).
+  const [onboardingSkipped, setOnboardingSkipped] = useState(
+    () => localStorage.getItem("onboardingSkipped") === "true",
+  )
   const [isHoveringInput, setIsHoveringInput] = useState(false)
   const [envConfigOpen, setEnvConfigOpen] = useState(false)
   const [envConfig, setEnvConfig] = useState<EnvConfigValue>(INITIAL_ENV_CONFIG)
@@ -525,7 +532,6 @@ function Dashboard() {
   }
 
   // Show onboarding if user doesn't have Anthropic API key and hasn't skipped
-  const onboardingSkipped = localStorage.getItem("onboardingSkipped") === "true"
   if (!hasAnthropicKey && !onboardingSkipped) {
     return (
       <ApiKeyOnboarding
@@ -534,6 +540,7 @@ function Dashboard() {
           setShowGettingStarted(true)
         }}
         onSkip={() => {
+          setOnboardingSkipped(true)
           queryClient.invalidateQueries({ queryKey: ["aiCredentialsStatus"] })
         }}
       />
