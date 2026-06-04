@@ -18,6 +18,11 @@ class AgentStatusPublic(SQLModel):
     has_structured_metadata: bool = False        # True when YAML frontmatter was successfully parsed
     prev_severity: str | None = None             # severity before the most recent transition
     severity_changed_at: datetime | None = None  # timestamp of the last severity transition
+    # Transient (never persisted) warning describing why the configured status
+    # refresh pre-command did not run cleanly on a force/live refresh
+    # (not found / failed / timed out / env down). Always null on cache-only
+    # responses (list endpoint, non-force A2A).
+    refresh_command_warning: str | None = None
 
 
 class AgentStatusListPublic(SQLModel):

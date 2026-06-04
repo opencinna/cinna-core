@@ -41,29 +41,40 @@ class AgentStatusCommandHandler(CommandHandler):
 
     async def execute(self, context: CommandContext, args: str) -> CommandResult:
         from app.models.environments.environment import AgentEnvironment
+        from app.models.agents.agent import Agent
 
         with create_session() as db:
             environment = db.get(AgentEnvironment, context.environment_id)
             if not environment:
                 return CommandResult(content="Environment not found.", is_error=True)
 
-            snapshot = None
+            agent = db.get(Agent, environment.agent_id)
 
-            # Attempt live fetch
+            snapshot = None
+            refresh_command_warning: str | None = None
+
+            # Attempt live fetch, running the configured status-refresh
+            # pre-command first (this is a user-initiated live refresh).
             try:
-                snapshot = await AgentStatusService.fetch_status(environment)
-            except StatusUnavailableError:
+                snapshot = await AgentStatusService.fetch_status(
+                    environment, db_session=db, run_refresh_command=True, agent=agent
+                )
+                refresh_command_warning = snapshot.refresh_command_warning
+            except StatusUnavailableError as exc:
+                refresh_command_warning = exc.refresh_command_warning
                 # Fall back to cached snapshot if one exists
                 if environment.status_file_raw or environment.status_file_severity:
                     snapshot = AgentStatusService.get_cached_status(environment)
+                    snapshot.refresh_command_warning = refresh_command_warning
 
             if snapshot is None:
-                return CommandResult(
-                    content=(
-                        "No STATUS.md available for this agent.\n\n"
-                        "See COMPLEX_AGENT_DESIGN.md for the expected format."
-                    )
+                content = (
+                    "No STATUS.md available for this agent.\n\n"
+                    "See COMPLEX_AGENT_DESIGN.md for the expected format."
                 )
+                if refresh_command_warning:
+                    content = f"⚠️ _{refresh_command_warning}_\n\n{content}"
+                return CommandResult(content=content)
 
             # Build markdown response
             severity = snapshot.severity or "unknown"
@@ -88,6 +99,10 @@ class AgentStatusCommandHandler(CommandHandler):
             if snapshot.prev_severity and snapshot.prev_severity != severity:
                 prev_icon = SEVERITY_ICONS.get(snapshot.prev_severity, "⚪")
                 lines.append(f"_Changed from {prev_icon} {snapshot.prev_severity}_")
+
+            # Status-refresh pre-command warning (non-blocking; surfaced here)
+            if refresh_command_warning:
+                lines.append(f"⚠️ _{refresh_command_warning}_")
 
             # Running-state warning: a stopped env can only show cached data
             if environment.status != "running":

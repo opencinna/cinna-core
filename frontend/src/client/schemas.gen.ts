@@ -2639,6 +2639,19 @@ export const AgentCreateSchema = {
             ],
             title: 'Router Trigger Prompt'
         },
+        status_refresh_command: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1024
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status Refresh Command',
+            default: '/run:status'
+        },
         description: {
             anyOf: [
                 {
@@ -3986,6 +3999,18 @@ export const AgentPublicSchema = {
             ],
             title: 'Router Trigger Prompt'
         },
+        status_refresh_command: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status Refresh Command',
+            default: '/run:status'
+        },
         is_active: {
             type: 'boolean',
             title: 'Is Active'
@@ -4621,6 +4646,17 @@ export const AgentStatusPublicSchema = {
                 }
             ],
             title: 'Severity Changed At'
+        },
+        refresh_command_warning: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Refresh Command Warning'
         }
     },
     type: 'object',
@@ -4980,6 +5016,18 @@ export const AgentUpdateSchema = {
                 }
             ],
             title: 'Router Trigger Prompt'
+        },
+        status_refresh_command: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1024
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status Refresh Command'
         },
         is_active: {
             anyOf: [
@@ -13967,11 +14015,121 @@ export const PairingCompleteRequestSchema = {
     title: 'PairingCompleteRequest'
 } as const;
 
+export const PairingInboxDetailSchema = {
+    properties: {
+        new_device_pubkey: {
+            type: 'string',
+            title: 'New Device Pubkey'
+        },
+        commitment: {
+            type: 'string',
+            title: 'Commitment'
+        },
+        sealer_nonce: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Sealer Nonce'
+        },
+        joiner_nonce: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Joiner Nonce'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        expires_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Expires At'
+        }
+    },
+    type: 'object',
+    required: ['new_device_pubkey', 'commitment', 'status', 'expires_at'],
+    title: 'PairingInboxDetail',
+    description: 'Sealer-facing detail for one of its own rows. Never includes sealed_umk.'
+} as const;
+
+export const PairingInboxItemSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        device_label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Device Label'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        expires_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Expires At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'status', 'expires_at'],
+    title: 'PairingInboxItem',
+    description: 'Discovery metadata only — no code, pubkey, nonces, or sealed_umk.'
+} as const;
+
+export const PairingRevealRequestSchema = {
+    properties: {
+        joiner_nonce: {
+            type: 'string',
+            title: 'Joiner Nonce'
+        }
+    },
+    type: 'object',
+    required: ['joiner_nonce'],
+    title: 'PairingRevealRequest'
+} as const;
+
+export const PairingSealerNonceRequestSchema = {
+    properties: {
+        sealer_nonce: {
+            type: 'string',
+            title: 'Sealer Nonce'
+        }
+    },
+    type: 'object',
+    required: ['sealer_nonce'],
+    title: 'PairingSealerNonceRequest'
+} as const;
+
 export const PairingStartRequestSchema = {
     properties: {
         new_device_pubkey: {
             type: 'string',
             title: 'New Device Pubkey'
+        },
+        commitment: {
+            type: 'string',
+            title: 'Commitment'
         },
         device_label: {
             anyOf: [
@@ -13986,7 +14144,7 @@ export const PairingStartRequestSchema = {
         }
     },
     type: 'object',
-    required: ['new_device_pubkey'],
+    required: ['new_device_pubkey', 'commitment'],
     title: 'PairingStartRequest'
 } as const;
 
@@ -14027,6 +14185,17 @@ export const PairingStatusPublicSchema = {
         status: {
             type: 'string',
             title: 'Status'
+        },
+        sealer_nonce: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Sealer Nonce'
         },
         sealed_umk: {
             anyOf: [

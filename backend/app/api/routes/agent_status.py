@@ -45,6 +45,7 @@ def _snapshot_to_public(
         has_structured_metadata=snapshot.has_structured_metadata,
         prev_severity=snapshot.prev_severity,
         severity_changed_at=snapshot.severity_changed_at,
+        refresh_command_warning=snapshot.refresh_command_warning,
     )
 
 
@@ -106,11 +107,15 @@ async def get_agent_status(
 
     if force_refresh:
         try:
-            snapshot = await AgentStatusService.fetch_status(environment)
+            snapshot = await AgentStatusService.fetch_status(
+                environment, run_refresh_command=True, agent=agent
+            )
             return _snapshot_to_public(snapshot, agent_id)
-        except StatusUnavailableError:
-            # Env not running or file missing — fall back to cache
+        except StatusUnavailableError as exc:
+            # Env not running or file missing — fall back to cache, carrying any
+            # pre-command warning produced before the download failed.
             snapshot = AgentStatusService.get_cached_status(environment)
+            snapshot.refresh_command_warning = exc.refresh_command_warning
             return _snapshot_to_public(snapshot, agent_id)
 
     snapshot = AgentStatusService.get_cached_status(environment)

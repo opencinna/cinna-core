@@ -407,6 +407,7 @@ export type AgentCreate = {
     entrypoint_prompt?: (string | null);
     refiner_prompt?: (string | null);
     router_trigger_prompt?: (string | null);
+    status_refresh_command?: (string | null);
     description?: (string | null);
     user_workspace_id?: (string | null);
 };
@@ -758,6 +759,7 @@ export type AgentPublic = {
     entrypoint_prompt: (string | null);
     refiner_prompt: (string | null);
     router_trigger_prompt?: (string | null);
+    status_refresh_command?: (string | null);
     is_active: boolean;
     active_environment_id: (string | null);
     ui_color_preset: (string | null);
@@ -885,6 +887,7 @@ export type AgentStatusPublic = {
     has_structured_metadata?: boolean;
     prev_severity?: (string | null);
     severity_changed_at?: (string | null);
+    refresh_command_warning?: (string | null);
 };
 
 /**
@@ -946,6 +949,7 @@ export type AgentUpdate = {
     entrypoint_prompt?: (string | null);
     refiner_prompt?: (string | null);
     router_trigger_prompt?: (string | null);
+    status_refresh_command?: (string | null);
     is_active?: (boolean | null);
     ui_color_preset?: (string | null);
     show_on_dashboard?: (boolean | null);
@@ -3005,8 +3009,39 @@ export type PairingCompleteRequest = {
     sealed_umk: string;
 };
 
+/**
+ * Sealer-facing detail for one of its own rows. Never includes sealed_umk.
+ */
+export type PairingInboxDetail = {
+    new_device_pubkey: string;
+    commitment: string;
+    sealer_nonce?: (string | null);
+    joiner_nonce?: (string | null);
+    status: string;
+    expires_at: string;
+};
+
+/**
+ * Discovery metadata only — no code, pubkey, nonces, or sealed_umk.
+ */
+export type PairingInboxItem = {
+    id: string;
+    device_label?: (string | null);
+    status: string;
+    expires_at: string;
+};
+
+export type PairingRevealRequest = {
+    joiner_nonce: string;
+};
+
+export type PairingSealerNonceRequest = {
+    sealer_nonce: string;
+};
+
 export type PairingStartRequest = {
     new_device_pubkey: string;
+    commitment: string;
     device_label?: (string | null);
 };
 
@@ -3019,6 +3054,7 @@ export type PairingStatusPublic = {
     new_device_pubkey: string;
     device_label?: (string | null);
     status: string;
+    sealer_nonce?: (string | null);
     sealed_umk?: (string | null);
     expires_at: string;
 };
@@ -5273,18 +5309,40 @@ export type AppSyncPairingStartData = {
 
 export type AppSyncPairingStartResponse = (PairingStartResponse);
 
+export type AppSyncPairingInboxResponse = (Array<PairingInboxItem>);
+
+export type AppSyncPairingInboxGetData = {
+    pairingId: string;
+};
+
+export type AppSyncPairingInboxGetResponse = (PairingInboxDetail);
+
+export type AppSyncPairingSetSealerNonceData = {
+    pairingId: string;
+    requestBody: PairingSealerNonceRequest;
+};
+
+export type AppSyncPairingSetSealerNonceResponse = (Message);
+
+export type AppSyncPairingCompleteByIdData = {
+    pairingId: string;
+    requestBody: PairingCompleteRequest;
+};
+
+export type AppSyncPairingCompleteByIdResponse = (Message);
+
 export type AppSyncPairingGetData = {
     code: string;
 };
 
 export type AppSyncPairingGetResponse = (PairingStatusPublic);
 
-export type AppSyncPairingCompleteData = {
+export type AppSyncPairingRevealData = {
     code: string;
-    requestBody: PairingCompleteRequest;
+    requestBody: PairingRevealRequest;
 };
 
-export type AppSyncPairingCompleteResponse = (Message);
+export type AppSyncPairingRevealResponse = (Message);
 
 export type BundlesListBundlesResponse = (AgentBundlesPublic);
 

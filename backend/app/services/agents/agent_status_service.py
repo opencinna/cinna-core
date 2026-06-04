@@ -12,13 +12,16 @@ transitions.
 import logging
 import asyncio
 from datetime import datetime, UTC
-from typing import AsyncIterator
+from typing import AsyncIterator, TYPE_CHECKING
 from dataclasses import dataclass
 from uuid import UUID
 
 import yaml
 
 from app.models.environments.environment import AgentEnvironment
+
+if TYPE_CHECKING:
+    from app.models.agents.agent import Agent
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +32,11 @@ _rate_limit_lock: dict[UUID, datetime] = {}
 class StatusUnavailableError(Exception):
     """Raised when STATUS.md cannot be fetched (env not running, file missing, adapter error)."""
 
-    def __init__(self, reason: str):
+    def __init__(self, reason: str, refresh_command_warning: str | None = None):
         self.reason = reason
+        # Carries the status-refresh pre-command warning across the failed
+        # download so callers can attach it to the cached fallback snapshot.
+        self.refresh_command_warning = refresh_command_warning
         super().__init__(reason)
 
 
@@ -59,6 +65,10 @@ class AgentStatusSnapshot:
     has_structured_metadata: bool
     prev_severity: str | None
     severity_changed_at: datetime | None
+    # Transient warning from the status-refresh pre-command (never persisted).
+    # Populated only on force/live refreshes when the pre-command did not run
+    # cleanly; None on cache-only snapshots.
+    refresh_command_warning: str | None = None
 
 
 class AgentStatusService:
@@ -69,6 +79,7 @@ class AgentStatusService:
     MAX_FRONTMATTER_BYTES = 4 * 1024  # 4 KB — oversized frontmatter falls through
     SEVERITY_VALUES = {"ok", "warning", "error", "info"}
     FORCE_REFRESH_TTL_SECONDS = 30   # 30 second rate limit per environment
+    STATUS_REFRESH_COMMAND_TIMEOUT = 120  # seconds — bounds the pre-command exec
 
     # ------------------------------------------------------------------ #
     # Rate-limit helpers                                                   #
@@ -87,12 +98,137 @@ class AgentStatusService:
         _rate_limit_lock[environment_id] = datetime.now(UTC)
 
     # ------------------------------------------------------------------ #
+    # Status refresh pre-command                                           #
+    # ------------------------------------------------------------------ #
+
+    @classmethod
+    async def _run_refresh_command(
+        cls, agent: "Agent | None", environment: AgentEnvironment
+    ) -> str | None:
+        """
+        Run the agent's configured status-refresh pre-command inside the
+        container before a live status fetch.
+
+        Resolves ``agent.status_refresh_command``:
+          - blank/None → no command configured, returns None (no warning).
+          - "/run:<name>" → resolved against ``environment.cli_commands_parsed``;
+            a missing name returns a warning and skips execution.
+          - any other value → used verbatim as the shell command.
+
+        Non-blocking by contract: never raises. Any failure (env down, missing
+        reference, non-zero exit, timeout, connect error, unexpected error) is
+        converted to a generic warning string that the caller surfaces in the
+        status snapshot. Warnings deliberately exclude stdout/stderr so command
+        output can never leak into the public-ish status surfaces.
+
+        Returns a warning string when the command did not run cleanly, or None
+        when it ran successfully or there was nothing to run.
+        """
+        raw_command = (agent.status_refresh_command or "").strip() if agent else ""
+        if not raw_command:
+            return None  # deliberate opt-out — no command, no warning
+
+        resolved_form = "shell"
+        if raw_command.startswith("/run:"):
+            resolved_form = "run"
+            name = raw_command[len("/run:"):].strip()
+            command = cls._resolve_run_command(environment, name)
+            if command is None:
+                logger.info(
+                    "agent_status_refresh_command agent_id=%s env_id=%s "
+                    "resolved_form=run name=%s outcome=warning reason=not_found",
+                    environment.agent_id, environment.id, name,
+                )
+                return (
+                    f"Refresh command '/run:{name}' is not defined in "
+                    "CLI_COMMANDS.yaml — skipped."
+                )
+        else:
+            command = raw_command
+
+        if environment.status != "running":
+            logger.info(
+                "agent_status_refresh_command agent_id=%s env_id=%s "
+                "resolved_form=%s outcome=warning reason=env_not_running",
+                environment.agent_id, environment.id, resolved_form,
+            )
+            return "Environment is not running — refresh command skipped."
+
+        from app.services.sessions.message_service import MessageService
+        from app.services.environments.agent_env_connector import AgentEnvConnector
+
+        base_url = MessageService.get_environment_url(environment)
+        auth_token = (environment.config or {}).get("auth_token", "")
+
+        try:
+            result = await AgentEnvConnector().exec_command(
+                base_url=base_url,
+                auth_token=auth_token,
+                command=command,
+                timeout=cls.STATUS_REFRESH_COMMAND_TIMEOUT,
+            )
+        except RuntimeError as exc:
+            # exec_command raises RuntimeError on HTTP error / timeout / connect
+            # failure. The exception message is generic (no stdout/stderr).
+            logger.info(
+                "agent_status_refresh_command agent_id=%s env_id=%s "
+                "resolved_form=%s outcome=warning reason=exec_failed: %s",
+                environment.agent_id, environment.id, resolved_form, exc,
+            )
+            return f"Refresh command failed: {exc}"
+        except Exception as exc:
+            logger.warning(
+                "agent_status_refresh_command agent_id=%s env_id=%s "
+                "resolved_form=%s outcome=warning reason=unexpected: %s",
+                environment.agent_id, environment.id, resolved_form, exc,
+            )
+            return "Refresh command failed unexpectedly — skipped."
+
+        exit_code = result.get("exit_code", -1)
+        if exit_code != 0:
+            logger.info(
+                "agent_status_refresh_command agent_id=%s env_id=%s "
+                "resolved_form=%s exit=%s outcome=warning",
+                environment.agent_id, environment.id, resolved_form, exit_code,
+            )
+            return f"Refresh command exited with code {exit_code}."
+
+        logger.info(
+            "agent_status_refresh_command agent_id=%s env_id=%s "
+            "resolved_form=%s exit=0 outcome=ok",
+            environment.agent_id, environment.id, resolved_form,
+        )
+        return None
+
+    @staticmethod
+    def _resolve_run_command(
+        environment: AgentEnvironment, name: str
+    ) -> str | None:
+        """
+        Look up a ``/run:<name>`` reference in the environment's cached
+        CLI_COMMANDS.yaml list. Returns the resolved shell command string, or
+        None when the name is not present.
+        """
+        if not name:
+            return None
+        for entry in environment.cli_commands_parsed or []:
+            if isinstance(entry, dict) and entry.get("name") == name:
+                command = entry.get("command")
+                return command if command else None
+        return None
+
+    # ------------------------------------------------------------------ #
     # Public API                                                           #
     # ------------------------------------------------------------------ #
 
     @classmethod
     async def fetch_status(
-        cls, environment: AgentEnvironment, db_session=None
+        cls,
+        environment: AgentEnvironment,
+        db_session=None,
+        *,
+        run_refresh_command: bool = False,
+        agent: "Agent | None" = None,
     ) -> AgentStatusSnapshot:
         """
         Download app-data/storage/STATUS.md via the environment adapter, parse it, persist the
@@ -102,10 +238,26 @@ class AgentStatusService:
         missing, or the adapter raises an error.
 
         db_session: optional SQLModel DB session; if None a new one is opened.
-        """
-        from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
 
-        lifecycle_manager = EnvironmentLifecycleManager()
+        run_refresh_command: when True (force/live refresh paths only), run the
+            agent's configured status-refresh pre-command before downloading the
+            file. Non-blocking — any pre-command failure becomes a transient
+            ``refresh_command_warning`` on the returned snapshot (and is stashed
+            on a raised StatusUnavailableError so the caller's cached fallback
+            can surface it). The post-action / event-driven refresh path leaves
+            this False so background refreshes never run the command.
+        agent: optional pre-loaded Agent; resolved by ``environment.agent_id``
+            when omitted. Only used when run_refresh_command is True.
+        """
+        from app.services.environments.environment_service import EnvironmentService
+
+        refresh_command_warning: str | None = None
+        if run_refresh_command:
+            if agent is None:
+                agent = cls._load_agent(environment.agent_id, db_session)
+            refresh_command_warning = await cls._run_refresh_command(agent, environment)
+
+        lifecycle_manager = EnvironmentService.get_lifecycle_manager()
         adapter = lifecycle_manager.get_adapter(environment)
 
         # ── Fetch file with metadata ──────────────────────────────────── #
@@ -116,14 +268,20 @@ class AgentStatusService:
                 "agent_status_fetch_failure agent_id=%s env_id=%s reason=adapter_error: %s",
                 environment.agent_id, environment.id, exc,
             )
-            raise StatusUnavailableError(f"adapter_error: {exc}")
+            raise StatusUnavailableError(
+                f"adapter_error: {exc}",
+                refresh_command_warning=refresh_command_warning,
+            )
 
         if not meta.exists:
             logger.debug(
                 "agent_status_fetch_failure agent_id=%s env_id=%s reason=file_missing",
                 environment.agent_id, environment.id,
             )
-            raise StatusUnavailableError("file_missing")
+            raise StatusUnavailableError(
+                "file_missing",
+                refresh_command_warning=refresh_command_warning,
+            )
 
         # ── Consume bounded body ──────────────────────────────────────── #
         raw_text = await cls._consume_download_stream(stream)
@@ -212,7 +370,21 @@ class AgentStatusService:
             has_structured_metadata=parsed.has_structured_metadata,
             prev_severity=prev_severity,
             severity_changed_at=severity_changed_at,
+            refresh_command_warning=refresh_command_warning,
         )
+
+    @classmethod
+    def _load_agent(cls, agent_id: "UUID | None", db_session=None) -> "Agent | None":
+        """Load an Agent by id, reusing the provided session or opening a new one."""
+        if agent_id is None:
+            return None
+        from app.models.agents.agent import Agent as AgentModel
+
+        if db_session is not None:
+            return db_session.get(AgentModel, agent_id)
+        from app.core.db import create_session
+        with create_session() as sess:
+            return sess.get(AgentModel, agent_id)
 
     @classmethod
     def get_cached_status(cls, environment: AgentEnvironment) -> AgentStatusSnapshot:
@@ -239,6 +411,7 @@ class AgentStatusService:
             has_structured_metadata=has_meta,
             prev_severity=environment.status_file_prev_severity,
             severity_changed_at=environment.status_file_severity_changed_at,
+            refresh_command_warning=None,
         )
 
     # ------------------------------------------------------------------ #
@@ -349,6 +522,7 @@ class AgentStatusService:
             has_structured_metadata=False,
             prev_severity=None,
             severity_changed_at=None,
+            refresh_command_warning=None,
         )
 
     # ------------------------------------------------------------------ #

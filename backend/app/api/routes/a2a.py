@@ -356,9 +356,12 @@ async def _handle_jsonrpc(
                 if AgentStatusService.is_rate_limited(environment.id):
                     return _error_response(request_id, -32029, "Rate limited — try again in 30 seconds")
                 try:
-                    snapshot = await AgentStatusService.fetch_status(environment)
-                except StatusUnavailableError:
+                    snapshot = await AgentStatusService.fetch_status(
+                        environment, run_refresh_command=True, agent=agent
+                    )
+                except StatusUnavailableError as exc:
                     snapshot = AgentStatusService.get_cached_status(environment)
+                    snapshot.refresh_command_warning = exc.refresh_command_warning
             else:
                 snapshot = AgentStatusService.get_cached_status(environment)
             result = {
@@ -373,6 +376,7 @@ async def _handle_jsonrpc(
                 "has_structured_metadata": snapshot.has_structured_metadata,
                 "prev_severity": snapshot.prev_severity,
                 "severity_changed_at": snapshot.severity_changed_at.isoformat() if snapshot.severity_changed_at else None,
+                "refresh_command_warning": snapshot.refresh_command_warning,
             }
             return JSONResponse(content=jsonrpc_success(request_id, result))
 

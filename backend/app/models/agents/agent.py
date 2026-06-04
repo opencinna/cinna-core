@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, UTC
 from typing import List
 from sqlmodel import Field, Relationship, SQLModel, Column
-from sqlalchemy import JSON, Index, text, Text, UniqueConstraint, DateTime
+from sqlalchemy import JSON, Index, text, Text, UniqueConstraint, DateTime, String
 
 from app.models.users.user import User
 from app.models.credentials.link_models import AgentCredentialLink
@@ -30,6 +30,16 @@ class AgentBase(SQLModel):
     # and propagated back into auto-managed AppAgentRoute rows on install
     # / apply-update.
     router_trigger_prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    # Command executed inside the agent container before every live/forced
+    # status refresh (REST force_refresh, A2A agent/status force, /agent-status).
+    # Two forms: a raw shell/python command run verbatim, or a "/run:<name>"
+    # reference resolved against the environment's CLI_COMMANDS.yaml cache.
+    # Non-blocking — a missing reference, non-zero exit, timeout, or down env
+    # only emits a transient warning and never blocks the status fetch. Empty /
+    # blank means "no command configured" (deliberate opt-out, no warning).
+    status_refresh_command: str | None = Field(
+        default="/run:status", max_length=1024
+    )
 
 
 # Properties to receive on agent creation
@@ -46,6 +56,7 @@ class AgentUpdate(SQLModel):
     entrypoint_prompt: str | None = None
     refiner_prompt: str | None = None
     router_trigger_prompt: str | None = None
+    status_refresh_command: str | None = Field(default=None, max_length=1024)
     is_active: bool | None = None
     ui_color_preset: str | None = None
     show_on_dashboard: bool | None = None
@@ -145,6 +156,15 @@ class Agent(AgentBase, table=True):
     inactivity_period_limit: str | None = Field(default=None)  # None="10min" | "2_days" | "1_week" | "1_month" | "always_on"
     webapp_enabled: bool = Field(default=False)  # Whether webapp feature is active
     agent_api_enabled: bool = Field(default=False)  # Whether the agent REST API (cinna_api) feature is active
+    # Status refresh pre-command (see AgentBase). Stored as VARCHAR(1024),
+    # nullable, with a server default so existing rows backfill to "/run:status"
+    # on migration. The Python model default governs new rows.
+    status_refresh_command: str | None = Field(
+        default="/run:status",
+        sa_column=Column(
+            String(1024), nullable=True, server_default="/run:status"
+        ),
+    )
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -227,6 +247,7 @@ class AgentPublic(SQLModel):
     entrypoint_prompt: str | None
     refiner_prompt: str | None
     router_trigger_prompt: str | None = None
+    status_refresh_command: str | None = "/run:status"
     is_active: bool
     active_environment_id: uuid.UUID | None
     ui_color_preset: str | None

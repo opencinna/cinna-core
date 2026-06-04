@@ -113,6 +113,7 @@ class AgentService:
             entrypoint_prompt=agent.entrypoint_prompt,
             refiner_prompt=agent.refiner_prompt,
             router_trigger_prompt=agent.router_trigger_prompt,
+            status_refresh_command=agent.status_refresh_command,
             is_active=agent.is_active,
             active_environment_id=agent.active_environment_id,
             ui_color_preset=agent.ui_color_preset,
