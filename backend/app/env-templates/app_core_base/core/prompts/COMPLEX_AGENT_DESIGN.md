@@ -371,6 +371,7 @@ if __name__ == "__main__":
 
 - **Print exactly `OK`** (uppercase, no punctuation, no extra whitespace) on the happy path. A trailing newline is fine; extra characters are not.
 - **Never print progress chatter** (`"Connecting..."`, `"Fetched 500 rows"`) on the happy path — it breaks the exact-match check.
+- **Invoke through `uv run --quiet`, not plain `uv run`.** uv prints resolver/sync progress to stdout the first time it resolves dependencies (e.g. after an environment rebuild); `--quiet` suppresses it so the happy-path output stays exactly `OK` and no session is spuriously created.
 - **Keep non-OK output short and actionable.** The first line should summarize the situation ("3 overdue invoices found"), and the rest should give the conversation agent enough context to act. Big payloads belong in a file under `./files/data/` — reference the path from the output.
 - **Use `sys.exit(1)` + a stderr message for errors.** This still creates a session (with the error as context) and makes the failure visible in execution logs.
 - **Never print credential values or secrets.** Scheduled output is surfaced to the agent session and stored in execution logs.
@@ -383,7 +384,7 @@ if __name__ == "__main__":
 The schedule's **command** field is a single line executed at `/app/workspace/`. For an OK-pattern script:
 
 ```
-uv run python scripts/monitoring/check_unpaid_invoices.py
+uv run --quiet python scripts/monitoring/check_unpaid_invoices.py
 ```
 
 For quick bash-only checks, a one-liner is fine too:
@@ -470,6 +471,25 @@ uv run python scripts/update_status.py --status ok --summary "All monitors green
 
 Run `uv run python scripts/update_status.py --help` for full options.
 
+### The `/run:status` refresh convention
+
+Every agent has a configurable **status-refresh command** that the platform runs inside the container right before a forced/live `/agent-status` fetch — so the snapshot a user, A2A client, or dashboard tile sees is freshly recomputed rather than stale. **Its default value is `/run:status`**: i.e. the platform expects a CLI command named `status` declared in `CLI_COMMANDS.yaml` (see [Exposed CLI Commands](#exposed-cli-commands)). Because a `/run:<name>` command executes as a plain shell command with **no LLM turn**, it is safe to invoke from cron / scheduled contexts and never starts a session.
+
+To honour this default, expose a `status` command that recomputes the agent's health and refreshes `STATUS.md`:
+
+```yaml
+commands:
+  - name: status
+    description: Recompute and publish the current agent status
+    command: uv run --quiet python /app/workspace/scripts/health_check.py
+```
+
+where `health_check.py` checks the agent's state and calls `update_status.py` (or writes `STATUS.md` directly) to publish the result.
+
+- **Keep the name exactly `status`** unless the owner has changed the configured status-refresh command — the platform looks for `/run:status` by default.
+- **Run it through `uv run --quiet` and keep stdout clean** — the same cron-safety rules apply (see [Exposed CLI Commands → Keep output quiet](#keep-output-quiet--so-commands-are-cron--and-status-safe)).
+- If you do **not** expose a `status` command, the refresh step is simply a no-op and `/agent-status` reads the last-written `STATUS.md` as-is.
+
 ---
 
 ## Exposed CLI Commands
@@ -492,7 +512,7 @@ Declare deterministic operations the agent owner wants to be callable on demand:
 commands:
   - name: check                      # required, slug [a-z][a-z0-9_-]{0,31}
     description: Monthly data check  # optional, 1–512 chars
-    command: uv run /app/workspace/scripts/check-data.py --month  # required, single-line shell string
+    command: uv run --quiet /app/workspace/scripts/check-data.py --month  # required, single-line shell string
 ```
 
 - `name` — identifier the user types after `/run:`. Must be unique.
@@ -515,6 +535,25 @@ Commands run with the agent's full environment access. Do not declare commands t
 - Perform destructive actions without a confirmation step inside the script itself.
 
 The resolved `command` string is visible in the A2A agent card description and the UI tooltip — do not embed credentials.
+
+### Keep output quiet — so commands are cron- and status-safe
+
+The shell string you declare here rarely stays in chat only. The platform reuses the exact same command when you wire it to a **scheduled script trigger** (the "OK" pattern above), set it as the agent's **status-refresh command** (run inside the container before every `/agent-status` fetch), or when an A2A client invokes it. On the script-trigger path the platform inspects stdout and **creates a new agent session — spending tokens — whenever stdout is not exactly `OK`**. Tooling chatter on stdout breaks that match and spawns sessions that were never needed.
+
+So author every command to produce deterministic, chatter-free stdout:
+
+- **Use `uv run --quiet`, never plain `uv run`.** uv writes resolver/sync progress (`Resolved N packages`, `Installed …`, download bars) to the stream the first time it has to resolve or sync dependencies — e.g. right after an environment rebuild. `--quiet` suppresses it so that noise never leaks into `/run:<name>` output, `/agent-status` snapshots, or OK-pattern matching.
+- **Print only what the caller needs.** A command meant to be a scheduled/status check must print exactly `OK` on the happy path (see [Scheduled Script Triggers](#scheduled-script-triggers--the-ok-pattern)). Route progress and debug lines to stderr, not stdout.
+- **Keep commands non-interactive and idempotent** — they may run unattended on a schedule and must be safe to run twice in a row.
+
+```yaml
+commands:
+  - name: status
+    description: Health check — prints OK when all monitors are green
+    command: uv run --quiet python /app/workspace/scripts/health_check.py
+```
+
+> The `status` command above is special: `/run:status` is the platform's **default status-refresh command**, run before every live `/agent-status` fetch. See [Agent Self-Reported Status → The `/run:status` refresh convention](#the-runstatus-refresh-convention).
 
 ### Helper
 
