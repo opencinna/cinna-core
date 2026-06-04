@@ -40,8 +40,10 @@ logger = logging.getLogger(__name__)
 _LOCALHOST_RE = re.compile(r"^http://(localhost|127\.0\.0\.1):(\d+)(/.*)?$")
 
 # Mobile native redirect (RFC 8252 §7.1, private-use URI scheme): the Cinna
-# Mobile app's own scheme. Fixed + tied to the installed app, so safe everywhere.
-_APP_SCHEME_RE = re.compile(r"^cinna-mobile://[^\s]*$")
+# Mobile app's own scheme. The production build uses `cinna-mobile`; dev/preview/
+# staging builds get a hyphenated suffix (e.g. `cinna-mobile-dev`). Fixed + tied
+# to the installed app, so safe everywhere.
+_APP_SCHEME_RE = re.compile(r"^cinna-mobile(-[a-z0-9]+)*://[^\s]*$")
 
 # iOS native redirect (RFC 8252 §7.1, private-use URI scheme): Apple's standard
 # is to use the app's bundle identifier as the custom URL scheme. The production

@@ -748,6 +748,11 @@ def test_redirect_uri_validation(client: TestClient) -> None:
         ("production", "cinna-mobile://oauth/callback", True),
         ("staging", "cinna-mobile://oauth/callback", True),
         ("local", "cinna-mobile://oauth/callback", True),
+        # Hyphenated dev/preview variants of the app scheme — accepted everywhere.
+        ("production", "cinna-mobile-dev://oauth/callback", True),
+        ("staging", "cinna-mobile-preview://oauth/callback", True),
+        # A look-alike app scheme must still be rejected.
+        ("production", "cinna-mobilex://oauth/callback", False),
         # iOS bundle-id private-use scheme — prod build + dotted dev/staging
         # builds (e.g. io.opencinna.ios.dev), accepted in every environment.
         ("production", "io.opencinna.ios://oauth/callback", True),

@@ -164,6 +164,11 @@ def test_app_consent_metadata_client_kind_mobile(client: TestClient) -> None:
     [
         ("production", "cinna-mobile://oauth/callback", True),
         ("local", "cinna-mobile://oauth/callback", True),
+        # Hyphenated dev/preview variants of the app scheme — every env.
+        ("production", "cinna-mobile-dev://oauth/callback", True),
+        ("production", "cinna-mobile-preview://oauth/callback", True),
+        # A foreign app scheme must not slip through.
+        ("production", "cinna-mobilex://oauth/callback", False),
         # iOS bundle-id scheme — prod + dotted dev/staging builds, every env.
         ("production", "io.opencinna.ios://oauth/callback", True),
         ("production", "io.opencinna.ios.dev://oauth/callback", True),
