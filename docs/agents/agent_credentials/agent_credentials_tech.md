@@ -86,9 +86,10 @@
 
 ### CredentialsService (`backend/app/services/credentials/credentials_service.py`)
 - `prepare_credentials_for_environment()` - Decrypts credentials, applies field whitelisting, returns JSON and README data
+- `get_agent_credentials_with_data()` - Decrypts each linked credential; for `api_token` runs `_process_api_token_credential()` and injects the non-secret `service_uri` column (when set) into the credential data. Sole caller is `prepare_credentials_for_environment()`
 - `generate_credentials_readme()` - Creates redacted README with ID-based lookup examples
 - `redact_credential_data()` - Replaces sensitive field values with `***REDACTED***` (only for non-empty values)
-- `_process_api_token_credential()` - Converts API token input (type + template + token) to ready-to-use HTTP headers
+- `_process_api_token_credential()` - Converts API token input (type + template + token) to ready-to-use HTTP headers (`http_header_name` / `http_header_value`). The non-secret `service_uri` slot id is added separately in `get_agent_credentials_with_data()` (it is a `Credential` column, not part of `credential_data`)
 - `sync_credentials_to_agent_environments()` - Syncs credential files to all running environments of an agent
 - `refresh_expiring_credentials_for_agent()` - Checks OAuth tokens linked to agent, refreshes those expiring within threshold
 - `check_credential_completeness(credential_type, credential_data)` - Returns `"complete"` or `"incomplete"` based on whether the per-type required fields are all non-empty in the decrypted `credential_data`. Used by `GET /agents/{id}/credentials` to populate the `status` field on each row

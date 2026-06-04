@@ -53,6 +53,7 @@ When a bundle is installed, placeholder credentials are created for any user-pro
 2. For Bearer: system generates `Authorization: Bearer {token}` header pair
 3. For Custom: user provides template (e.g., `X-API-Key: {TOKEN}`), system parses to header name/value
 4. Agent environment receives pre-processed `http_header_name` and `http_header_value` - no parsing needed
+5. If the credential has a `service_uri` set (a non-secret audience/slot id stored as a `Credential` column), it is also synced into the credential data so agent scripts can read it alongside the header pair
 
 ### Email SMTP Credential Usage in Agent Scripts
 

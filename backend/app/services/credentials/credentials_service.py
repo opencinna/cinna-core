@@ -90,7 +90,11 @@ class CredentialsService:
         "email_imap": ["host", "port", "login", "password", "is_ssl"],
         "email_smtp": ["host", "port", "username", "password", "from_email", "use_tls", "use_ssl"],
         "odoo": ["url", "database_name", "login", "api_token"],
-        "api_token": ["http_header_name", "http_header_value"],
+        # service_uri is a non-secret audience/slot identifier (a Credential column,
+        # not a credential_data field). It is injected into the api_token data in
+        # get_agent_credentials_with_data so scripts can read the slot id alongside
+        # the ready-to-use header pair.
+        "api_token": ["http_header_name", "http_header_value", "service_uri"],
         "google_service_account": ["file_path", "project_id", "client_email"],
 
         # OAuth credentials: Only expose access token and metadata
@@ -198,6 +202,11 @@ class CredentialsService:
             # Process API Token credentials to generate HTTP header fields
             if cred.type.value == "api_token":
                 credential_data = CredentialsService._process_api_token_credential(credential_data)
+                # service_uri lives on the Credential row (a non-secret slot id), not
+                # in credential_data. Surface it alongside the header pair so it syncs
+                # to the agent env like any other whitelisted api_token field.
+                if cred.service_uri:
+                    credential_data["service_uri"] = cred.service_uri
 
             result.append({
                 "id": str(cred.id),

@@ -47,11 +47,11 @@ Excluded (backend-only): `refresh_token`, `client_secret`, `granted_at`
 - **email_imap** - Allowed: `host`, `port`, `login`, `password`, `is_ssl`
 - **email_smtp** - Allowed: `host`, `port`, `username`, `password`, `from_email`, `use_tls`, `use_ssl`
 - **odoo** - Allowed: `url`, `database_name`, `login`, `api_token`
-- **api_token** - Allowed: `http_header_name`, `http_header_value` (pre-processed from raw token + template)
+- **api_token** - Allowed: `http_header_name`, `http_header_value` (pre-processed from raw token + template), `service_uri` (non-secret audience/slot id; a `Credential` column injected into the synced data only when set)
 - **google_service_account** - Allowed: `file_path`, `project_id`, `client_email`
 - **ssh_key** - Allowed: `public_key`, `fingerprint`, `key_type`, `host_aliases`
 
-For API tokens, raw fields like `api_token_type`, `api_token_template`, and `api_token` are NOT included — they are pre-processed into ready-to-use HTTP header pairs before whitelisting.
+For API tokens, raw fields like `api_token_type`, `api_token_template`, and `api_token` are NOT included — they are pre-processed into ready-to-use HTTP header pairs before whitelisting. The non-secret `service_uri` slot id (stored as a `Credential` column, not inside `credential_data`) is injected into the processed data when present, so agent scripts can read it alongside the header pair.
 
 For SSH keys, `private_key` and `passphrase` are NEVER whitelisted. They travel on a sibling transport — the `ssh_keys` array in the `/config/credentials` payload — and are written directly into `~/.ssh/` (0600) inside the container, so they never appear in `credentials.json` or any agent-readable workspace file. See [SSH Key Credentials](ssh_key_credentials.md) for the full security model and delivery path.
 
