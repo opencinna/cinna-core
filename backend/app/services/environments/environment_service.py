@@ -190,6 +190,27 @@ class EnvironmentService:
     # Singleton lifecycle manager instance
     _lifecycle_manager = None
 
+    @staticmethod
+    def to_public_with_health(
+        session: Session, environment: "AgentEnvironment"
+    ) -> "AgentEnvironmentPublic":
+        """Build an AgentEnvironmentPublic with the computed (transient)
+        model_health attached.
+
+        Used by the env list/detail builders so the model-freshness signal
+        rides on the existing responses without a new endpoint. Cheap:
+        evaluate_environment reads the catalog + the already-cached
+        discovered_models, no live API calls.
+        """
+        from app.models.environments.environment import AgentEnvironmentPublic
+        from app.services.environments.model_health_service import (
+            evaluate_environment,
+        )
+
+        public = AgentEnvironmentPublic.model_validate(environment)
+        public.model_health = evaluate_environment(session, environment)
+        return public
+
     @classmethod
     def get_lifecycle_manager(cls) -> EnvironmentLifecycleManager:
         """Get or create lifecycle manager singleton"""

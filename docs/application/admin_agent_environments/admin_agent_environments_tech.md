@@ -6,6 +6,7 @@
 
 - `backend/app/api/routes/admin_environments.py` — API route handlers (list, bulk-rebuild, single-rebuild)
 - `backend/app/services/environments/admin_environment_service.py` — `AdminEnvironmentService`
+- `backend/app/services/environments/model_health_service.py` — `evaluate_environment` (called per row to populate `model_health_warning`)
 - `backend/app/models/environments/environment.py` — admin response schemas and the two new `AgentEnvironment` columns
 - `backend/app/core/config.py` — `ADMIN_BULK_REBUILD_CONCURRENCY`, `ADMIN_ENV_MAX_BULK_SIZE`, `ENV_TEMPLATES_DIR`
 - `backend/app/alembic/versions/d40c20201e5b_add_admin_env_fields.py` — migration adding `last_build_at` and `current_image_tag`
@@ -54,6 +55,7 @@ All schemas live in `backend/app/models/environments/environment.py` alongside t
 | `active_sessions_count` | `int` | Count of sessions with `last_message_at >= now() - 10min` |
 | `last_build_at` | `datetime \| None` | From `AgentEnvironment.last_build_at` |
 | `sync_active` | `bool` | From `AgentEnvironment.sync_active` |
+| `model_health_warning` | `bool` | `True` when any mode's configured model is deprecated/unavailable. Computed by `evaluate_environment` per row. Distinct from `is_stale`: config health, not image-tag staleness. |
 
 **`AdminAgentEnvironmentsPublic`** (list response):
 
@@ -271,7 +273,7 @@ On mount, the route subscribes to `EventTypes.ENVIRONMENT_STATUS_CHANGED` via `e
 
 **`AdminEnvTable`**: TanStack Table (`useReactTable`) with:
 - Checkbox column; rows in transitional statuses have `enableRowSelection = false` and render at 60% opacity.
-- Columns: Agent (name + owner email), Instance, Template (badge), Status (`StatusBadge`), In use (`InUseBadge`), Stale (`StaleBadge`), Current tag (`ImageTagCell`), Expected tag (`ImageTagCell`), Last built, Last activity.
+- Columns: Agent (name + owner email), Instance, Template (badge), Status (`StatusBadge`), In use (`InUseBadge`), Stale (`StaleBadge`), Model Health (`ModelHealthCell` — amber indicator when `model_health_warning`), Current tag (`ImageTagCell`), Expected tag (`ImageTagCell`), Last built, Last activity.
 - Bulk action bar (shown when `selectedRows.length > 0`): "N envs selected", "Rebuild Selected" button, "Clear" button.
 - Delegates confirm dialog to `AdminEnvBulkRebuildDialog`.
 

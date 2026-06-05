@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { EnvironmentsService, AiCredentialsService } from "@/client"
 import type { AgentEnvironmentPublic, AgentEnvironmentReconfigure } from "@/client"
 import { EnvironmentStatusBadge } from "./EnvironmentStatusBadge"
+import { ModelHealthBadge } from "./ModelHealthBadge"
 import {
   EnvModeEditDialog,
   composeEnvModeConfigFields,
@@ -392,6 +393,24 @@ export function EnvironmentCard({
             {getSDKBadgeLabel(environment.agent_sdk_building, environment.model_override_building)}
           </Badge>
         )}
+        <ModelHealthBadge
+          modelHealth={environment.model_health}
+          onAction={
+            canEditMode
+              ? () => {
+                  // Open the editor for the first flagged mode so the user can
+                  // edit/clear the override, then reconfigure + restart.
+                  const flagged = (environment.model_health?.modes ?? []).find(
+                    (m) =>
+                      m.status === "retired_override" ||
+                      m.status === "unknown_model",
+                  )
+                  const mode = flagged?.mode === "building" ? "building" : "conversation"
+                  setEditingMode(mode)
+                }
+              : undefined
+          }
+        />
       </div>
 
       {environment.last_health_check && (

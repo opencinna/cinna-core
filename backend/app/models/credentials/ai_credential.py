@@ -71,6 +71,22 @@ class AICredential(AICredentialBase, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    # Per-credential model discovery cache (populated by the model discovery
+    # cron). Different API keys can see different models, so the available
+    # model list is cached per credential. These are non-secret.
+    # - discovered_models: concrete provider model IDs this key can see.
+    #   None = never discovered.
+    # - models_discovered_at: timestamp of last SUCCESSFUL discovery.
+    # - models_discovery_error: coarse reason code for the last failure
+    #   (e.g. "oauth_token_unsupported"), not a raw API error body.
+    discovered_models: list[str] | None = Field(
+        default=None, sa_column=Column(sa.JSON, nullable=True)
+    )
+    models_discovered_at: datetime | None = Field(default=None)
+    models_discovery_error: str | None = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
+
     # Relationships
     owner: "User" = Relationship(
         sa_relationship_kwargs={"foreign_keys": "[AICredential.owner_id]"}
@@ -88,6 +104,11 @@ class AICredentialPublic(AICredentialBase):
     base_url: str | None = None     # For openai_compatible, google
     model: str | None = None        # For openai_compatible
     expiry_notification_date: datetime | None = None
+    # Per-credential model discovery cache (non-secret). Lets the UI show the
+    # models this key can access and surface "couldn't verify" states.
+    discovered_models: list[str] | None = None
+    models_discovered_at: datetime | None = None
+    models_discovery_error: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -104,6 +125,43 @@ class AICredentialData(SQLModel):
     api_key: str
     base_url: str | None = None
     model: str | None = None
+
+
+# Test-connection request/response (used by POST /ai-credentials/test-connection)
+class AICredentialTestRequest(SQLModel):
+    """Request to validate an AI credential and refresh its model list.
+
+    The key may come from the form (``api_key``) for the Add case, or be
+    resolved from a stored credential (``credential_id``) for the Edit case.
+    """
+    type: AICredentialType
+    api_key: str | None = None
+    base_url: str | None = None
+    credential_id: uuid.UUID | None = None
+
+
+class AICredentialTestResult(SQLModel):
+    """Result of a Test Connection probe.
+
+    The ``error`` and ``skip_reason`` fields are mutually exclusive and keyed
+    off ``success`` for an unambiguous contract:
+
+    - ``success=True`` + non-empty ``models``: the key works and a model list
+      was retrieved (``error`` and ``skip_reason`` both ``None``).
+    - ``success=True`` + ``skip_reason`` set
+      (``oauth_token_unsupported`` / ``no_list_endpoint`` / ``no_base_url``):
+      the connection is considered valid but model listing isn't supported for
+      this credential type/token — the UI shows an informative note.
+    - ``success=False`` + ``error`` set (e.g. ``invalid_key``): the provider
+      rejected the key (HTTP 401/403) or another hard failure occurred.
+    """
+    success: bool
+    models: list[str] = []
+    model_count: int = 0
+    # Populated ONLY on success=False (real failure).
+    error: str | None = None
+    # Populated ONLY on success=True with a benign skip.
+    skip_reason: str | None = None
 
 
 # Affected environments query response models

@@ -205,6 +205,43 @@ export const AICredentialPublicSchema = {
             ],
             title: 'Model'
         },
+        discovered_models: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Discovered Models'
+        },
+        models_discovered_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Models Discovered At'
+        },
+        models_discovery_error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Models Discovery Error'
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -262,6 +299,115 @@ export const AICredentialSelectionsSchema = {
 has acknowledged a publisher-provides-AI bundle. The backend never
 depends on this flag: when the bundle has \`\`publisher_ai_credential_*_id\`\`
 set, those rows are always linked regardless of what the frontend sent.`
+} as const;
+
+export const AICredentialTestRequestSchema = {
+    properties: {
+        type: {
+            '$ref': '#/components/schemas/AICredentialType'
+        },
+        api_key: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Api Key'
+        },
+        base_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Url'
+        },
+        credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credential Id'
+        }
+    },
+    type: 'object',
+    required: ['type'],
+    title: 'AICredentialTestRequest',
+    description: `Request to validate an AI credential and refresh its model list.
+
+The key may come from the form (\`\`api_key\`\`) for the Add case, or be
+resolved from a stored credential (\`\`credential_id\`\`) for the Edit case.`
+} as const;
+
+export const AICredentialTestResultSchema = {
+    properties: {
+        success: {
+            type: 'boolean',
+            title: 'Success'
+        },
+        models: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Models',
+            default: []
+        },
+        model_count: {
+            type: 'integer',
+            title: 'Model Count',
+            default: 0
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        },
+        skip_reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skip Reason'
+        }
+    },
+    type: 'object',
+    required: ['success'],
+    title: 'AICredentialTestResult',
+    description: `Result of a Test Connection probe.
+
+The \`\`error\`\` and \`\`skip_reason\`\` fields are mutually exclusive and keyed
+off \`\`success\`\` for an unambiguous contract:
+
+- \`\`success=True\`\` + non-empty \`\`models\`\`: the key works and a model list
+  was retrieved (\`\`error\`\` and \`\`skip_reason\`\` both \`\`None\`\`).
+- \`\`success=True\`\` + \`\`skip_reason\`\` set
+  (\`\`oauth_token_unsupported\`\` / \`\`no_list_endpoint\`\` / \`\`no_base_url\`\`):
+  the connection is considered valid but model listing isn't supported for
+  this credential type/token — the UI shows an informative note.
+- \`\`success=False\`\` + \`\`error\`\` set (e.g. \`\`invalid_key\`\`): the provider
+  rejected the key (HTTP 401/403) or another hard failure occurred.`
 } as const;
 
 export const AICredentialTypeSchema = {
@@ -1349,6 +1495,16 @@ export const AdminAgentEnvironmentPublicSchema = {
             ],
             title: 'Building Ai Credential Id'
         },
+        model_health: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/ModelHealthPublic'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
         agent_name: {
             type: 'string',
             title: 'Agent Name'
@@ -1456,6 +1612,11 @@ export const AdminAgentEnvironmentPublicSchema = {
         sync_active: {
             type: 'boolean',
             title: 'Sync Active'
+        },
+        model_health_warning: {
+            type: 'boolean',
+            title: 'Model Health Warning',
+            default: false
         }
     },
     type: 'object',
@@ -3329,6 +3490,16 @@ export const AgentEnvironmentPublicSchema = {
                 }
             ],
             title: 'Building Ai Credential Id'
+        },
+        model_health: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/ModelHealthPublic'
+                },
+                {
+                    type: 'null'
+                }
+            ]
         }
     },
     type: 'object',
@@ -13915,6 +14086,84 @@ export const MfaVerifyRequestSchema = {
 Plain \`\`pydantic.BaseModel\`\` (not \`\`SQLModel\`\`) so the \`\`Literal\`\`
 constraint on \`\`method\`\` propagates into OpenAPI as an enum and the
 generated TypeScript client gets a string-union type.`
+} as const;
+
+export const ModelHealthModeSchema = {
+    properties: {
+        mode: {
+            type: 'string',
+            title: 'Mode'
+        },
+        model: {
+            type: 'string',
+            title: 'Model'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        cause: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Cause'
+        },
+        suggested_model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Suggested Model'
+        },
+        cta: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Cta'
+        }
+    },
+    type: 'object',
+    required: ['mode', 'model', 'status'],
+    title: 'ModelHealthMode',
+    description: `Per-mode model-health entry.
+
+Computed from the central model catalog + the linked credential's
+discovered-model cache. Purely a read-time signal; never stored.`
+} as const;
+
+export const ModelHealthPublicSchema = {
+    properties: {
+        has_warning: {
+            type: 'boolean',
+            title: 'Has Warning',
+            default: false
+        },
+        modes: {
+            items: {
+                '$ref': '#/components/schemas/ModelHealthMode'
+            },
+            type: 'array',
+            title: 'Modes',
+            default: []
+        }
+    },
+    type: 'object',
+    title: 'ModelHealthPublic',
+    description: 'Roll-up of per-mode model health for an environment.'
 } as const;
 
 export const NewPasswordSchema = {

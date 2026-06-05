@@ -104,7 +104,7 @@ def get_environment(
         environment, _ = EnvironmentService.get_environment_with_access_check(
             session, id, current_user.id, current_user.is_superuser
         )
-        return environment
+        return EnvironmentService.to_public_with_health(session, environment)
     except AgentEnvironmentError as e:
         _handle_service_error(e)
 
@@ -127,7 +127,7 @@ def update_environment(
         updated_environment = EnvironmentService.update_environment(
             session=session, env_id=id, data=environment_in
         )
-        return updated_environment
+        return EnvironmentService.to_public_with_health(session, updated_environment)
     except AgentEnvironmentError as e:
         _handle_service_error(e)
 
@@ -159,7 +159,7 @@ async def reconfigure_environment(
             data=data,
             rebuild=data.rebuild,
         )
-        return updated_environment
+        return EnvironmentService.to_public_with_health(session, updated_environment)
     except AgentEnvironmentError as e:
         _handle_service_error(e)
 

@@ -308,10 +308,26 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                 except Exception as e:
                     logger.warning(f"Could not load plugins: {e}")
 
-                # Set model based on mode
-                if mode == "conversation":
+                # Set model from the per-mode MODEL_<MODE> env var, which the
+                # backend computes from the central model catalog (honoring any
+                # model_override_*). For claude-code/anthropic with no override
+                # this is a tier word (haiku/sonnet) the CLI auto-resolves; for
+                # minimax or an explicit override it's a concrete model id.
+                #
+                # Fallbacks when the env var is unset (e.g. an old environment
+                # generated before this var existed):
+                #   - conversation: fall back to "haiku" (prior behavior)
+                #   - building: leave unset so the SDK uses its default
+                model_env_var = f"MODEL_{mode.upper()}"
+                model_value = (os.getenv(model_env_var) or "").strip()
+                if model_value:
+                    options.model = model_value
+                    logger.info(f"Using model '{model_value}' for {mode} mode (from {model_env_var})")
+                elif mode == "conversation":
                     options.model = "haiku"
-                    logger.info("Using Haiku model for conversation mode")
+                    logger.info("Using fallback Haiku model for conversation mode (no MODEL_CONVERSATION set)")
+                else:
+                    logger.info("No MODEL_BUILDING set; using SDK default model for building mode")
 
                 # Set system prompt
                 if system_prompt:

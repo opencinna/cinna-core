@@ -200,9 +200,19 @@ function SDKModeEditDialog({
 
   const compatible = getCompatibleCredentials(engine, credentials)
   const selectedCredential = credentials.find((c) => c.id === credentialId) ?? null
+  const discoveredModels = selectedCredential?.discovered_models ?? []
   const suggestedModels = selectedCredential
-    ? (SUGGESTED_MODELS[selectedCredential.type] ?? [])
+    ? Array.from(
+        new Set([
+          ...discoveredModels,
+          ...(SUGGESTED_MODELS[selectedCredential.type] ?? []),
+        ]),
+      )
     : []
+  const overrideNotDiscovered =
+    modelOverride.trim().length > 0 &&
+    discoveredModels.length > 0 &&
+    !discoveredModels.includes(modelOverride.trim())
 
   // Resolve default credential for this engine
   const { data: resolvedDefault } = useQuery({
@@ -307,6 +317,12 @@ function SDKModeEditDialog({
                   <option key={m} value={m} />
                 ))}
               </datalist>
+            )}
+            {overrideNotDiscovered && (
+              <p className="text-xs text-orange-600 dark:text-orange-400">
+                This model isn't in the list of models this credential can
+                access. Double-check the name.
+              </p>
             )}
           </div>
         </div>

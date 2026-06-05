@@ -20,6 +20,9 @@ services:
       - DUMP_LLM_SESSION=${DUMP_LLM_SESSION:-true}
       - SDK_ADAPTER_BUILDING=${SDK_ADAPTER_BUILDING:-claude-code/anthropic}
       - SDK_ADAPTER_CONVERSATION=${SDK_ADAPTER_CONVERSATION:-claude-code/anthropic}
+      # Per-mode resolved model (from the central model catalog); consumed by the claude-code adapter
+      - MODEL_BUILDING=${MODEL_BUILDING:-}
+      - MODEL_CONVERSATION=${MODEL_CONVERSATION:-}
       - BACKEND_URL=http://backend:8000
 
     # App-data: per-(user, bundle) persistent volume - survives uninstall, reattaches on reinstall

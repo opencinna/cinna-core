@@ -336,6 +336,8 @@ MCP tool names visible to the agent follow the pattern `mcp__{server}__{tool}` (
 **Environment variables injected into container:**
 - `SDK_ADAPTER_BUILDING` — SDK ID for building mode (e.g., `claude-code/anthropic`)
 - `SDK_ADAPTER_CONVERSATION` — SDK ID for conversation mode
+- `MODEL_BUILDING` — resolved building-mode model string (tier word for claude-code/anthropic; concrete ID otherwise). Computed by the host via `model_catalog.resolve_model`. Read by the claude-code adapter.
+- `MODEL_CONVERSATION` — resolved conversation-mode model string (same semantics as `MODEL_BUILDING`)
 - `DUMP_LLM_SESSION` — set to `true` to enable JSONL event logging for all adapters (Claude Code and OpenCode); log files are written to `{workspace}/logs/` with adapter-specific prefixes
 - `OPENCODE_SKIP_UPDATE` — always set to `1` in subprocess env to suppress update prompts
 
@@ -354,14 +356,38 @@ MCP tool names visible to the agent follow the pattern `mcp__{server}__{tool}` (
 - `mcp` — MCP bridge server entries (knowledge, task, collaboration); each has `type: "local"`, `command: ["python3", "..."]`, `enabled: true`
 - `server` — `{"port": 4096, "hostname": "127.0.0.1"}` (building) or `{"port": 4097, ...}` (conversation)
 
-**Default models per provider per mode (OpenCode):**
+**Default models per engine/provider per mode:**
 
-| Provider | Building Mode Default | Conversation Mode Default |
-|----------|----------------------|--------------------------|
-| `anthropic` | `anthropic/claude-sonnet-4-5` | `anthropic/claude-haiku-4-5-20251001` |
-| `openai` | `openai/gpt-5.4-mini` | `openai/gpt-5.4-nano` |
-| `openai_compatible` | from credential config | from credential config |
-| `google` | `google/gemini-2.5-pro` | `google/gemini-2.5-flash` |
+Defaults are managed by the central model catalog (`backend/app/services/environments/model_catalog.py`),
+which is the single source of truth. The table below reflects the catalog's current values:
+
+| Engine | Provider | Building (BALANCED) | Conversation (FAST) |
+|--------|----------|---------------------|---------------------|
+| `claude-code` | `anthropic` | `sonnet` *(tier word)* | `haiku` *(tier word)* |
+| `claude-code` | `minimax` | `MiniMax-M2.1` | `MiniMax-M2.1-lightning` |
+| `opencode` | `anthropic` | `anthropic/claude-sonnet-4-6` | `anthropic/claude-haiku-4-5` |
+| `opencode` | `openai` | `openai/gpt-5.4-mini` | `openai/gpt-5.4-nano` |
+| `opencode` | `openai_compatible` | from credential config | from credential config |
+| `opencode` | `google` | `google/gemini-2.5-pro` | `google/gemini-2.5-flash` |
+
+`claude-code/anthropic` stores tier **words** (`haiku`/`sonnet`) — the Claude Code CLI auto-resolves
+these to the current model and they are never flagged as deprecated. See
+[model_freshness_tech.md](../agent_environments/model_freshness_tech.md) for catalog details.
+
+**Per-mode model env vars (injected by the backend, consumed by the claude-code adapter):**
+
+- `MODEL_BUILDING` — resolved building-mode model (tier word or concrete ID)
+- `MODEL_CONVERSATION` — resolved conversation-mode model
+
+These are computed in `_generate_env_file` via `resolve_model(engine, provider, mode, override)`
+and forwarded into the container through all three docker-compose templates
+(`general-env`, `python-env-advanced`, `general-assistant-env`) with `${MODEL_BUILDING:-}`
+/ `${MODEL_CONVERSATION:-}` syntax (empty-string default for backward compatibility).
+
+The claude-code adapter (`claude_code_sdk_adapter.py`) reads `MODEL_{MODE.upper()}` and calls
+`options.model = model_value`. This fixed a latent bug where `model_override_*` was silently
+ignored by the claude-code engine. OpenCode bakes its model into `opencode.json` at config
+generation time and does not use these env vars.
 
 **MiniMax settings file fields:** `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, model mappings
 

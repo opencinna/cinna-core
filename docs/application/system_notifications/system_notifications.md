@@ -4,7 +4,8 @@
 
 System notifications are platform-initiated messages sent to users when significant events occur in their agent ecosystem. The feature introduces a **generic notification layer** designed to carry any number of future notification types without requiring re-architecture: a typed catalog drives all dispatch logic, per-user preferences live in a dedicated table, and a built-in throttle prevents inbox storms.
 
-The first notification type is `session_error`: an email to the agent owner when one of their sessions ends with an error.
+Two notification types are currently active: `session_error` (session ended with an error) and
+`model_deprecated` (an environment's AI model is deprecated or unavailable).
 
 ## Core Concepts
 
@@ -15,6 +16,36 @@ The first notification type is `session_error`: an email to the agent owner when
 - **Platform Email Sender** — The shared SMTP configuration (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAILS_FROM_EMAIL`, `EMAILS_FROM_NAME`). The same sender handles password-reset emails, new-user invitations, and all system notifications. When `SMTP_HOST` or `EMAILS_FROM_EMAIL` is not set, `emails_enabled` resolves to `False` and all notification dispatch is skipped.
 
 ## Notification Types
+
+### `model_deprecated` — Deprecated AI model email
+
+**Label:** "Deprecated AI models"
+**Description:** "Email me when one of my agent environments is configured to use an AI model that is deprecated or no longer available."
+**Default:** enabled for all users
+**Recipient:** the agent owner (`Agent.owner_id`)
+
+**When it fires**
+
+Dispatched by the model-discovery cron (daily) after refreshing the per-credential available-model
+cache. `dispatch_model_deprecation_notifications` evaluates every environment and fires a
+notification when an environment **newly transitions** into a warning state. In-memory
+transition tracking (`_warned_env_ids`) ensures the email fires only once per deprecation event,
+not on every daily run for a persistently-broken environment.
+
+**Email content**
+
+- Subject: `{PROJECT_NAME} — Update the AI model for {instance_name}`
+- Body: agent name, environment name, per-mode detail (affected model + CTA copy), deep link to
+  the agent page (`{FRONTEND_HOST}/agents/{agent_id}`), and a footer note to turn off notifications.
+- `dedup_scope="environment_id"` (throttle on environment, not session).
+
+**Remediation CTAs:**
+- Frozen override (pinned to a retired/unavailable model): "Edit or clear the model override, then restart."
+- Stale default (catalog default not in discovered list): "Restart to use the current model."
+
+See [Model Freshness](../../agents/agent_environments/model_freshness.md) for the full feature description.
+
+---
 
 ### `session_error` — Session error email
 
@@ -75,8 +106,10 @@ In both cases the `error_occurred` activity is always created first; the notific
 
 ## Integration Points
 
-- [Agent Activities](../agent_activities/agent_activities.md) — creating an `error_occurred` activity is the trigger point. The notification dispatch is a side-effect of that creation; the activity itself is the source of truth and is unaffected by notification failures.
+- [Agent Activities](../agent_activities/agent_activities.md) — creating an `error_occurred` activity is the trigger point for `session_error`. The notification dispatch is a side-effect of that creation; the activity itself is the source of truth and is unaffected by notification failures.
 - [Agent Sessions](../agent_sessions/agent_sessions.md) — the session row provides the owner (`user_id`), session title, and the `session_id` used for dedup and the deep link in the email.
+- [AI Credentials](../ai_credentials/ai_credentials.md) — the daily model-discovery cron populates `AICredential.discovered_models`, which `dispatch_model_deprecation_notifications` reads to evaluate model health and fire `model_deprecated` notifications.
+- [Model Freshness](../../agents/agent_environments/model_freshness.md) — the `model_deprecated` notification type is dispatched from the discovery cron when an environment newly transitions into a warning state.
 - [Auth / Users](../auth/auth.md) — preferences live in a new table FK-referenced to `user`; no new column on the `user` table. The recipient address is `User.email`.
 - [Realtime Events](../realtime_events/event_bus_system.md) — the `STREAM_ERROR` and `SESSION_STATE_UPDATED` events on the event bus are what trigger the two error paths in `ActivityService`.
 - [Email Integration / Mail Servers](../email_integration/mail_servers.md) — **distinct** from per-user IMAP/SMTP mail servers used for agent email automation. System notifications use the platform-level SMTP sender configured via `SMTP_*` environment variables, not the `mail_server_config` table.

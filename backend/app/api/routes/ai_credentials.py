@@ -16,12 +16,15 @@ from app.models.credentials.ai_credential import (
     AICredentialPublic,
     AICredentialsPublic,
     AICredentialDeletionImpact,
+    AICredentialTestRequest,
+    AICredentialTestResult,
     AffectedEnvironmentsPublic,
 )
 from app.services.credentials.ai_credentials_service import (
     ai_credentials_service,
     AICredentialInUseError,
 )
+from app.services.credentials import model_discovery_service
 
 router = APIRouter(prefix="/ai-credentials", tags=["ai-credentials"])
 
@@ -50,6 +53,29 @@ def resolve_default_credential(
     """
     return ai_credentials_service.resolve_default_credential_for_sdk(
         session, current_user.id, sdk_engine
+    )
+
+
+@router.post("/test-connection", response_model=AICredentialTestResult)
+async def test_ai_credential_connection(
+    *, session: SessionDep, current_user: CurrentUser, data: AICredentialTestRequest
+) -> Any:
+    """
+    Validate an AI credential and refresh its discovered model list.
+
+    Tests that the key actually works against the provider's native model
+    endpoint. The key comes from ``api_key`` (Add form) or, when
+    ``credential_id`` is set, the stored credential (Edit) — owner-scoped.
+
+    For the Edit case (``credential_id`` present) the fresh model list is
+    persisted onto the credential row (force-refresh). Returns
+    ``AICredentialTestResult``: ``success`` + ``models`` on a working key;
+    ``success=True`` with an ``error`` skip-reason when listing isn't supported
+    for the credential type/token; ``success=False`` with ``error="invalid_key"``
+    on a provider auth rejection.
+    """
+    return await model_discovery_service.test_connection(
+        session, current_user.id, data
     )
 
 

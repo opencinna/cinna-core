@@ -72,6 +72,7 @@ Support both Anthropic API Keys and Claude Code OAuth Tokens with automatic dete
 - **Unknown prefixes default to API Key** - If prefix is not recognized, treated as standard API key
 - **Both env vars passed to container** - Docker template includes both `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`; only the appropriate one is populated
 - **OAuth tokens cannot be used for AI Functions** - OAuth tokens (`sk-ant-oat*`) are incompatible with the Anthropic Messages API used for AI utility calls (titles, schedules, SQL generation, etc.). The system rejects them at both the settings save endpoint and the service layer. See [AI Functions SDK Routing](ai_functions_sdk_routing.md)
+- **OAuth tokens skipped for model discovery** - The daily model-discovery cron detects `sk-ant-oat*` prefixes and skips the Anthropic `/v1/models` call, recording `"oauth_token_unsupported"` as `models_discovery_error`. Health classification for environments backed by OAuth credentials falls back to the static `RETIRED_MODELS` catalog. No false-positive health warnings are raised for these credentials.
 
 ## Architecture Overview
 
@@ -94,7 +95,8 @@ Container started → Agent SDK reads the populated env var
 - **Frontend Dialog** - Auto-fill expiry on OAuth token input, instructions modal
 - **Credentials List** - Expiry badge display with color coding; `is_oauth_token` field drives UI disabling in AI Functions credential picker
 - **AI Functions SDK Routing** - OAuth tokens rejected for use with AI utility functions. See [AI Functions SDK Routing](ai_functions_sdk_routing.md)
+- **Model Discovery** - OAuth tokens are skipped by the discovery cron (`sk-ant-oat*` prefix detected, `"oauth_token_unsupported"` recorded). Model health for these environments uses static fallback only. See [Model Freshness Tech](../../agents/agent_environments/model_freshness_tech.md)
 
 ---
 
-*Last updated: 2026-03-18*
+*Last updated: 2026-06-05*

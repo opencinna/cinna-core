@@ -15,15 +15,16 @@
 
 - `backend/app/email-templates/src/session_error.mjml` — MJML source
 - `backend/app/email-templates/build/session_error.html` — compiled HTML read at runtime
+- `backend/app/email-templates/build/model_deprecated.html` — compiled HTML for model-deprecated notifications (no MJML source committed; edit the HTML directly or add MJML source and recompile)
 
-The runtime reads only the built HTML. To modify the template, edit the MJML source and rebuild:
+The runtime reads only the built HTML. To modify a template from MJML source:
 
 ```bash
 npx mjml backend/app/email-templates/src/session_error.mjml \
          -o backend/app/email-templates/build/session_error.html
 ```
 
-Commit the resulting `build/session_error.html`.
+Commit the resulting `build/*.html`.
 
 ### Frontend
 
@@ -68,6 +69,7 @@ Constraints:
 ```python
 class NotificationType(str, Enum):
     SESSION_ERROR = "session_error"
+    MODEL_DEPRECATED = "model_deprecated"
 ```
 
 ### `NotificationTypeMeta` (frozen dataclass)
@@ -91,6 +93,24 @@ class NotificationType(str, Enum):
 | `email_template` | `"session_error.html"` |
 | `subject` | `lambda ctx: f"{settings.PROJECT_NAME} — Session error on agent {ctx.get('agent_name', 'your agent')}"` |
 | `dedup_scope` | `"session_id"` |
+
+### `MODEL_DEPRECATED` catalog entry
+
+| Field | Value |
+|-------|-------|
+| `label` | `"Deprecated AI models"` |
+| `description` | `"Email me when one of my agent environments is configured to use an AI model that is deprecated or no longer available."` |
+| `default_email_enabled` | `True` |
+| `email_template` | `"model_deprecated.html"` |
+| `subject` | `lambda ctx: f"{settings.PROJECT_NAME} — Update the AI model for {ctx.get('instance_name', 'your environment')}"` |
+| `dedup_scope` | `"environment_id"` |
+
+Dispatched from `model_discovery_service.dispatch_model_deprecation_notifications()` (called by
+the discovery cron after each `refresh_all_credentials` run) when an environment **newly**
+transitions into a warning state. Context keys: `project_name`, `agent_name`, `instance_name`,
+`environment_id`, `detail` (per-mode model + CTA), `link`.
+
+Email template: `backend/app/email-templates/build/model_deprecated.html`.
 
 ### How to add a new notification type
 

@@ -22,6 +22,9 @@ services:
       # SDK Adapter Configuration - tells agent-env which adapter to use per mode
       - SDK_ADAPTER_BUILDING=${SDK_ADAPTER_BUILDING:-claude-code/anthropic}
       - SDK_ADAPTER_CONVERSATION=${SDK_ADAPTER_CONVERSATION:-claude-code/anthropic}
+      # Per-mode resolved model (from the central model catalog); consumed by the claude-code adapter
+      - MODEL_BUILDING=${MODEL_BUILDING:-}
+      - MODEL_CONVERSATION=${MODEL_CONVERSATION:-}
 
     # NO port exposure - communication via agent-bridge network only
     # Backend connects via http://agent-${ENV_ID}:${AGENT_PORT}

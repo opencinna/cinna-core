@@ -22,6 +22,7 @@ class NotificationType(str, Enum):
     """Catalog keys for system notifications."""
 
     SESSION_ERROR = "session_error"
+    MODEL_DEPRECATED = "model_deprecated"
 
 
 @dataclass(frozen=True)
@@ -50,5 +51,21 @@ NOTIFICATION_CATALOG: dict[NotificationType, NotificationTypeMeta] = {
             f"{ctx.get('agent_name', 'your agent')}"
         ),
         dedup_scope="session_id",
+    ),
+    NotificationType.MODEL_DEPRECATED: NotificationTypeMeta(
+        label="Deprecated AI models",
+        description=(
+            "Email me when one of my agent environments is configured to use "
+            "an AI model that is deprecated or no longer available."
+        ),
+        default_email_enabled=True,
+        email_template="model_deprecated.html",
+        subject=lambda ctx: (
+            f"{settings.PROJECT_NAME} — Update the AI model for "
+            f"{ctx.get('instance_name', 'your environment')}"
+        ),
+        # Dedup on the environment so we don't re-notify for the same env within
+        # the throttle window (only fires on transition into a warning state).
+        dedup_scope="environment_id",
     ),
 }

@@ -123,6 +123,30 @@ class AgentEnvironmentReconfigure(SQLModel):
     rebuild: bool = True
 
 
+# ---------------------------------------------------------------------------
+# Model health (computed, transient — never persisted)
+# ---------------------------------------------------------------------------
+
+class ModelHealthMode(SQLModel):
+    """Per-mode model-health entry.
+
+    Computed from the central model catalog + the linked credential's
+    discovered-model cache. Purely a read-time signal; never stored.
+    """
+    mode: str                       # "conversation" | "building"
+    model: str                      # effective resolved model (override or catalog default)
+    status: str                     # "ok" | "retired_override" | "unknown_model" | "unverified"
+    cause: str | None = None        # "stale_default" | "frozen_override" | None
+    suggested_model: str | None = None  # tier-appropriate catalog default (when known)
+    cta: str | None = None          # plain-language remediation copy for the UI
+
+
+class ModelHealthPublic(SQLModel):
+    """Roll-up of per-mode model health for an environment."""
+    has_warning: bool = False
+    modes: list[ModelHealthMode] = []
+
+
 class AgentEnvironmentPublic(SQLModel):
     id: uuid.UUID
     agent_id: uuid.UUID
@@ -146,6 +170,10 @@ class AgentEnvironmentPublic(SQLModel):
     use_default_ai_credentials: bool
     conversation_ai_credential_id: uuid.UUID | None
     building_ai_credential_id: uuid.UUID | None
+    # Computed, transient (never persisted) model-health signal. Mirrors the
+    # refresh_command_warning precedent on AgentStatusPublic: populated by the
+    # route/service builders for list/detail responses; null when not computed.
+    model_health: ModelHealthPublic | None = None
 
 
 class AgentEnvironmentsPublic(SQLModel):
@@ -179,6 +207,11 @@ class AdminAgentEnvironmentPublic(AgentEnvironmentPublic):
     active_sessions_count: int
     last_build_at: datetime | None
     sync_active: bool
+    # Cheap model-health roll-up flag (computed per row in list_environments).
+    # True when any mode resolves to a retired/unavailable model. Distinct from
+    # is_stale (image-tag staleness → rebuild); this is a config-health signal
+    # → reconfigure/restart.
+    model_health_warning: bool = False
 
 
 class AdminTemplateInfoPublic(SQLModel):

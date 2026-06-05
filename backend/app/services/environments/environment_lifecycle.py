@@ -26,6 +26,7 @@ from .sdk_constants import (
     make_empty_credential_bag,
     sdk_expected_credential_type,
 )
+from .model_catalog import resolve_model
 
 logger = logging.getLogger(__name__)
 
@@ -1654,6 +1655,30 @@ class EnvironmentLifecycleManager:
         uses_anthropic = sdk_conversation == "claude-code/anthropic" or sdk_building == "claude-code/anthropic"
         uses_minimax = sdk_conversation == "claude-code/minimax" or sdk_building == "claude-code/minimax"
 
+        # Resolve the per-mode model from the central catalog and inject it as
+        # MODEL_<MODE> env vars. These reach the claude-code adapter inside the
+        # container (the only adapter that reads them — OpenCode bakes its model
+        # into opencode.json). For claude-code/anthropic with no override this
+        # is a tier WORD (haiku/sonnet) that the CLI auto-resolves; for minimax
+        # or any explicit override it is the concrete model id.
+        def _resolve_mode_model(sdk_value: str, mode: str) -> str:
+            engine, _, provider = sdk_value.partition("/")
+            provider = provider or "anthropic"
+            override = (
+                environment.model_override_building if mode == "building"
+                else environment.model_override_conversation
+            )
+            return resolve_model(
+                engine=engine,
+                provider=provider,
+                mode=mode,
+                override=override,
+                openai_compatible_model=openai_compatible_model,
+            )
+
+        model_building = _resolve_mode_model(sdk_building, "building")
+        model_conversation = _resolve_mode_model(sdk_conversation, "conversation")
+
         # 1. Generate root .env file for docker-compose
         agent_personal_database_url = ''  # To be implemented
         agent_container_log_level = 'INFO'
@@ -1718,6 +1743,13 @@ GOOGLE_API_KEY={google_api_key or ""}
 # Format: <adapter-type>/<provider> (e.g., claude-code/anthropic, claude-code/minimax, opencode/anthropic)
 SDK_ADAPTER_BUILDING={sdk_building}
 SDK_ADAPTER_CONVERSATION={sdk_conversation}
+
+# Per-mode resolved model (from the central model catalog).
+# Consumed by the claude-code adapter inside the container. For
+# claude-code/anthropic with no override this is a tier word (haiku/sonnet)
+# the CLI auto-resolves; otherwise a concrete model id.
+MODEL_BUILDING={model_building}
+MODEL_CONVERSATION={model_conversation}
 """
 
         env_path = instance_dir / ".env"
@@ -1771,20 +1803,47 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
         """
         import json
 
-        # Settings content for MiniMax
-        minimax_settings = {
-            "env": {
-                "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
-                "ANTHROPIC_AUTH_TOKEN": minimax_api_key,
-                "API_TIMEOUT_MS": "3000000",
-                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": 1,
-                "ANTHROPIC_MODEL": "MiniMax-M2.1",
-                "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2.1-lightning",
-                "ANTHROPIC_DEFAULT_SONNET_MODEL": "MiniMax-M2.1",
-                "ANTHROPIC_DEFAULT_OPUS_MODEL": "MiniMax-M2.1",
-                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "MiniMax-M2.1"
+        def _build_minimax_settings(mode: str) -> dict:
+            """Build the MiniMax settings dict for a mode, sourcing model ids
+            from the central catalog.
+
+            Behavior is preserved exactly: the catalog's BALANCED tier is the
+            primary MiniMax model and fills every Claude Code tier slot
+            (sonnet/opus/haiku) and the top-level ``ANTHROPIC_MODEL``; the FAST
+            tier fills only the ``ANTHROPIC_SMALL_FAST_MODEL`` slot — matching
+            the previous hardcoded literals. A per-mode ``model_override_*`` is
+            now honored verbatim (catalog ``resolve_model`` returns it as-is)
+            and applied to the primary model slot.
+            """
+            override = (
+                environment.model_override_building if mode == "building"
+                else environment.model_override_conversation
+            )
+            # Primary model for this mode (override → catalog BALANCED default).
+            # MiniMax mapped both modes to the same primary model, so we resolve
+            # against the BALANCED tier regardless of mode, then let any
+            # per-mode override take precedence.
+            primary_model = resolve_model(
+                engine="claude-code",
+                provider="minimax",
+                mode="building",
+                override=override,
+            )
+            # The small/fast slot always uses the catalog FAST tier id.
+            fast_model = resolve_model("claude-code", "minimax", "conversation", None)
+            return {
+                "env": {
+                    "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+                    "ANTHROPIC_AUTH_TOKEN": minimax_api_key,
+                    "API_TIMEOUT_MS": "3000000",
+                    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": 1,
+                    "ANTHROPIC_MODEL": primary_model,
+                    "ANTHROPIC_SMALL_FAST_MODEL": fast_model,
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": primary_model,
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": primary_model,
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": primary_model,
+                }
             }
-        }
 
         # Create .claude directory in core folder
         # Inside container this will be at /app/core/.claude/
@@ -1795,14 +1854,14 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
         if sdk_building == "claude-code/minimax":
             building_settings_path = claude_settings_dir / "building_settings.json"
             with open(building_settings_path, 'w') as f:
-                json.dump(minimax_settings, f, indent=2)
+                json.dump(_build_minimax_settings("building"), f, indent=2)
             logger.info(f"Generated MiniMax building settings for environment {environment.id}")
 
         # Generate conversation settings file if conversation mode uses MiniMax
         if sdk_conversation == "claude-code/minimax":
             conversation_settings_path = claude_settings_dir / "conversation_settings.json"
             with open(conversation_settings_path, 'w') as f:
-                json.dump(minimax_settings, f, indent=2)
+                json.dump(_build_minimax_settings("conversation"), f, indent=2)
             logger.info(f"Generated MiniMax conversation settings for environment {environment.id}")
 
     def _generate_opencode_config_files(
@@ -1847,26 +1906,6 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
         # Create .opencode directory inside the instance core folder
         opencode_dir = instance_dir / "app" / "core" / ".opencode"
         opencode_dir.mkdir(parents=True, exist_ok=True)
-
-        # Default models per provider per mode
-        _default_models = {
-            "anthropic": {
-                "building": "anthropic/claude-sonnet-4-5",
-                "conversation": "anthropic/claude-haiku-4-5-20251001",
-            },
-            "openai": {
-                "building": "openai/gpt-5.4-mini",
-                "conversation": "openai/gpt-5.4-nano",
-            },
-            "openai_compatible": {
-                "building": openai_compatible_model or "gpt-4",
-                "conversation": openai_compatible_model or "gpt-4",
-            },
-            "google": {
-                "building": "google/gemini-2.5-pro",
-                "conversation": "google/gemini-2.5-flash",
-            },
-        }
 
         def _get_provider_from_sdk(sdk_value: str) -> str:
             """Extract the provider from an SDK value like 'opencode/anthropic'."""
@@ -1933,13 +1972,20 @@ SDK_ADAPTER_CONVERSATION={sdk_conversation}
             """Build a complete opencode config dict for a given mode."""
             provider = _get_provider_from_sdk(sdk_value)
 
-            # Determine model: explicit override → provider+mode default
+            # Determine model via the central catalog: explicit override →
+            # provider+mode catalog default. openai_compatible draws its model
+            # from the credential config.
             model_override = (
                 environment.model_override_building if mode == "building"
                 else environment.model_override_conversation
             )
-            provider_defaults = _default_models.get(provider, _default_models.get("anthropic", {}))
-            model = model_override or provider_defaults.get(mode, "anthropic/claude-sonnet-4-5")
+            model = resolve_model(
+                engine="opencode",
+                provider=provider,
+                mode=mode,
+                override=model_override,
+                openai_compatible_model=openai_compatible_model,
+            )
 
             # MCP bridge servers expose platform custom tools to OpenCode agents.
             # Server names must match Claude Code's MCP server names so both

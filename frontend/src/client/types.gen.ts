@@ -127,6 +127,7 @@ export type AdminAgentEnvironmentPublic = {
     use_default_ai_credentials: boolean;
     conversation_ai_credential_id: (string | null);
     building_ai_credential_id: (string | null);
+    model_health?: (ModelHealthPublic | null);
     agent_name: string;
     owner_id: string;
     owner_email: string;
@@ -141,6 +142,7 @@ export type AdminAgentEnvironmentPublic = {
     active_sessions_count: number;
     last_build_at: (string | null);
     sync_active: boolean;
+    model_health_warning?: boolean;
 };
 
 /**
@@ -509,6 +511,7 @@ export type AgentEnvironmentPublic = {
     use_default_ai_credentials: boolean;
     conversation_ai_credential_id: (string | null);
     building_ai_credential_id: (string | null);
+    model_health?: (ModelHealthPublic | null);
 };
 
 /**
@@ -1244,6 +1247,9 @@ export type AICredentialPublic = {
     is_oauth_token?: boolean;
     base_url?: (string | null);
     model?: (string | null);
+    discovered_models?: (Array<(string)> | null);
+    models_discovered_at?: (string | null);
+    models_discovery_error?: (string | null);
     created_at: string;
     updated_at: string;
 };
@@ -1268,6 +1274,42 @@ export type AICredentialSelections = {
 export type AICredentialsPublic = {
     data: Array<AICredentialPublic>;
     count: number;
+};
+
+/**
+ * Request to validate an AI credential and refresh its model list.
+ *
+ * The key may come from the form (``api_key``) for the Add case, or be
+ * resolved from a stored credential (``credential_id``) for the Edit case.
+ */
+export type AICredentialTestRequest = {
+    type: AICredentialType;
+    api_key?: (string | null);
+    base_url?: (string | null);
+    credential_id?: (string | null);
+};
+
+/**
+ * Result of a Test Connection probe.
+ *
+ * The ``error`` and ``skip_reason`` fields are mutually exclusive and keyed
+ * off ``success`` for an unambiguous contract:
+ *
+ * - ``success=True`` + non-empty ``models``: the key works and a model list
+ * was retrieved (``error`` and ``skip_reason`` both ``None``).
+ * - ``success=True`` + ``skip_reason`` set
+ * (``oauth_token_unsupported`` / ``no_list_endpoint`` / ``no_base_url``):
+ * the connection is considered valid but model listing isn't supported for
+ * this credential type/token — the UI shows an informative note.
+ * - ``success=False`` + ``error`` set (e.g. ``invalid_key``): the provider
+ * rejected the key (HTTP 401/403) or another hard failure occurred.
+ */
+export type AICredentialTestResult = {
+    success: boolean;
+    models?: Array<(string)>;
+    model_count?: number;
+    error?: (string | null);
+    skip_reason?: (string | null);
 };
 
 /**
@@ -2998,6 +3040,29 @@ export type MfaVerifyRequest = {
 };
 
 export type method = 'passkey' | 'totp' | 'recovery';
+
+/**
+ * Per-mode model-health entry.
+ *
+ * Computed from the central model catalog + the linked credential's
+ * discovered-model cache. Purely a read-time signal; never stored.
+ */
+export type ModelHealthMode = {
+    mode: string;
+    model: string;
+    status: string;
+    cause?: (string | null);
+    suggested_model?: (string | null);
+    cta?: (string | null);
+};
+
+/**
+ * Roll-up of per-mode model health for an environment.
+ */
+export type ModelHealthPublic = {
+    has_warning?: boolean;
+    modes?: Array<ModelHealthMode>;
+};
 
 export type NewPassword = {
     token: string;
@@ -5167,6 +5232,12 @@ export type AiCredentialsResolveDefaultCredentialData = {
 };
 
 export type AiCredentialsResolveDefaultCredentialResponse = ((AICredentialPublic | null));
+
+export type AiCredentialsTestAiCredentialConnectionData = {
+    requestBody: AICredentialTestRequest;
+};
+
+export type AiCredentialsTestAiCredentialConnectionResponse = (AICredentialTestResult);
 
 export type AiCredentialsGetAiCredentialData = {
     credentialId: string;

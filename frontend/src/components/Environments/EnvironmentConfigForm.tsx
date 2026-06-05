@@ -258,9 +258,23 @@ export function EnvModeEditDialog({
 
   const compatible = getCompatibleCredentials(engine, credentials)
   const selectedCredential = credentials.find((c) => c.id === credentialId) ?? null
+  // Prefer the credential's discovered (per-key) models as suggestions, falling
+  // back to / augmenting the static SUGGESTED_MODELS list.
+  const discoveredModels = selectedCredential?.discovered_models ?? []
   const suggestedModels = selectedCredential
-    ? (SUGGESTED_MODELS[selectedCredential.type] ?? [])
+    ? Array.from(
+        new Set([
+          ...discoveredModels,
+          ...(SUGGESTED_MODELS[selectedCredential.type] ?? []),
+        ]),
+      )
     : []
+  // Inline warning: a non-empty typed override that isn't in this key's
+  // discovered list (only meaningful once discovery has populated a list).
+  const overrideNotDiscovered =
+    modelOverride.trim().length > 0 &&
+    discoveredModels.length > 0 &&
+    !discoveredModels.includes(modelOverride.trim())
 
   // Resolve default credential for this engine
   const { data: resolvedDefault } = useQuery({
@@ -369,9 +383,16 @@ export function EnvModeEditDialog({
                 ))}
               </datalist>
             )}
-            <p className="text-xs text-muted-foreground">
-              Leave empty to use the SDK default for this mode.
-            </p>
+            {overrideNotDiscovered ? (
+              <p className="text-xs text-orange-600 dark:text-orange-400">
+                This model isn't in the list of models this credential can
+                access. Double-check the name, or leave empty to use the default.
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Leave empty to use the SDK default for this mode.
+              </p>
+            )}
           </div>
         </div>
 

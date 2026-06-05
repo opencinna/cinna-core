@@ -469,7 +469,11 @@ def list_agent_environments(
         raise HTTPException(status_code=400, detail="Not enough permissions")
 
     environments = EnvironmentService.list_agent_environments(session=session, agent_id=id)
-    return AgentEnvironmentsPublic(data=environments, count=len(environments))
+    data = [
+        EnvironmentService.to_public_with_health(session, env)
+        for env in environments
+    ]
+    return AgentEnvironmentsPublic(data=data, count=len(data))
 
 
 @router.post("/{id}/environments/{env_id}/activate", response_model=AgentPublic)

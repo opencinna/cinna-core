@@ -24,7 +24,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { Copy, Check } from "lucide-react"
+import { Copy, Check, AlertTriangle } from "lucide-react"
 import { AdminEnvBulkRebuildDialog } from "./AdminEnvBulkRebuildDialog"
 
 // ---------------------------------------------------------------------------
@@ -98,6 +98,26 @@ function StaleBadge({
         </p>
         <p className="font-mono text-xs">
           expected: {shortExpected}
+        </p>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+function ModelHealthCell({ warning }: { warning: boolean }) {
+  if (!warning) return <span className="text-xs text-muted-foreground">OK</span>
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200 cursor-default">
+          <AlertTriangle className="h-3 w-3" />
+          Model
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        <p className="text-xs">
+          A configured AI model is deprecated or unavailable. Owner should
+          reconfigure / restart this environment.
         </p>
       </TooltipContent>
     </Tooltip>
@@ -262,6 +282,12 @@ const columns = [
         currentTag={row.original.current_image_tag ?? null}
         expectedTag={row.original.expected_image_tag ?? null}
       />
+    ),
+  }),
+  columnHelper.accessor("model_health_warning", {
+    header: "Model",
+    cell: ({ row }) => (
+      <ModelHealthCell warning={row.original.model_health_warning ?? false} />
     ),
   }),
   columnHelper.accessor("current_image_tag", {

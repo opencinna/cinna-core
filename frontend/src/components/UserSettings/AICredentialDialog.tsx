@@ -1,8 +1,13 @@
 import { useState, useEffect } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Loader2, Info } from "lucide-react"
+import { Loader2, Info, CheckCircle2 } from "lucide-react"
 
-import { AiCredentialsService, AICredentialPublic, AICredentialType } from "@/client"
+import {
+  AiCredentialsService,
+  AICredentialPublic,
+  AICredentialTestResult,
+  AICredentialType,
+} from "@/client"
 import { AnthropicCredentialsModal } from "./AnthropicCredentialsModal"
 import { AffectedEnvironmentsDialog } from "./AffectedEnvironmentsDialog"
 import {
@@ -42,6 +47,32 @@ interface AICredentialDialogProps {
   credential?: AICredentialPublic | null // If provided, we're editing
 }
 
+// Human-readable copy for the test-connection skip reasons. A skip means the
+// connection is valid but model listing isn't applicable for this credential.
+const TEST_SKIP_MESSAGES: Record<string, string> = {
+  oauth_token_unsupported:
+    "Connection valid — model listing isn't supported for OAuth tokens.",
+  no_list_endpoint:
+    "Connection valid — this provider doesn't expose a model list.",
+  no_base_url: "Enter a Base URL to list available models.",
+  unsupported_type: "Connection valid — model listing not supported.",
+}
+
+function describeTestResult(result: AICredentialTestResult): string {
+  if (result.success) {
+    if (result.skip_reason && TEST_SKIP_MESSAGES[result.skip_reason]) {
+      return TEST_SKIP_MESSAGES[result.skip_reason]
+    }
+    return `Connection successful — ${result.model_count} model${
+      result.model_count === 1 ? "" : "s"
+    } available.`
+  }
+  if (result.error === "invalid_key") {
+    return "Connection failed — the provider rejected this key."
+  }
+  return "Connection failed."
+}
+
 export function AICredentialDialog({
   open,
   onOpenChange,
@@ -64,11 +95,15 @@ export function AICredentialDialog({
   const [showAffectedDialog, setShowAffectedDialog] = useState(false)
   const [updatedCredentialId, setUpdatedCredentialId] = useState<string | null>(null)
 
+  // Test Connection result (inline alert)
+  const [testResult, setTestResult] = useState<AICredentialTestResult | null>(null)
+
   const isEditing = !!credential
 
   // Reset form when dialog opens/closes or credential changes
   useEffect(() => {
     if (open) {
+      setTestResult(null)
       if (credential) {
         // Editing existing credential
         setName(credential.name)
@@ -205,6 +240,39 @@ export function AICredentialDialog({
     },
   })
 
+  // Test Connection mutation — validates the key and (in Edit) force-refreshes
+  // the credential's discovered model list.
+  const testMutation = useMutation({
+    mutationFn: () =>
+      AiCredentialsService.testAiCredentialConnection({
+        requestBody: {
+          type,
+          api_key: apiKey || undefined,
+          base_url:
+            type === "openai_compatible" || type === "google"
+              ? baseUrl || undefined
+              : undefined,
+          credential_id: isEditing ? credential!.id : undefined,
+        },
+      }),
+    onSuccess: (result) => {
+      setTestResult(result)
+      // A successful Edit test persists fresh discovered_models — propagate to
+      // the list query that backs the model-override datalist suggestions.
+      if (result.success && isEditing) {
+        queryClient.invalidateQueries({ queryKey: ["aiCredentialsList"] })
+      }
+    },
+    onError: (err: Error) => {
+      setTestResult({
+        success: false,
+        models: [],
+        model_count: 0,
+        error: err.message || "Connection failed",
+      })
+    },
+  })
+
   const handleSubmit = () => {
     if (isEditing) {
       updateMutation.mutate()
@@ -215,6 +283,18 @@ export function AICredentialDialog({
 
   const isPending = createMutation.isPending || updateMutation.isPending
   const error = createMutation.error || updateMutation.error
+
+  // Test Connection is testable when there's a key to test:
+  //  - Add: requires apiKey (and base_url + model for openai_compatible).
+  //  - Edit: always allowed (falls back to the stored key when apiKey blank).
+  const canTest = (): boolean => {
+    if (testMutation.isPending) return false
+    if (isEditing) return true
+    if (apiKey.trim() === "") return false
+    if (type === "openai_compatible")
+      return baseUrl.trim() !== "" && model.trim() !== ""
+    return true
+  }
 
   // Validation — different required fields per type
   const isValid = (): boolean => {
@@ -391,6 +471,15 @@ export function AICredentialDialog({
             </Label>
           </div>
 
+          {testResult && (
+            <Alert variant={testResult.success ? "default" : "destructive"}>
+              {testResult.success && (
+                <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+              )}
+              <AlertDescription>{describeTestResult(testResult)}</AlertDescription>
+            </Alert>
+          )}
+
           {error && (
             <Alert variant="destructive">
               <AlertDescription>
@@ -404,7 +493,21 @@ export function AICredentialDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleSubmit} disabled={isPending || !isValid()}>
+          <Button
+            variant="secondary"
+            onClick={() => testMutation.mutate()}
+            disabled={!canTest() || isPending}
+          >
+            {testMutation.isPending ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Testing...
+              </>
+            ) : (
+              "Test Connection"
+            )}
+          </Button>
+          <Button onClick={handleSubmit} disabled={isPending || testMutation.isPending || !isValid()}>
             {isPending ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />

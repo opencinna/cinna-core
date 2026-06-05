@@ -313,6 +313,13 @@ class Settings(BaseSettings):
     RUN_COMMAND_TIMEOUT_SECONDS: int = 300
     RUN_COMMAND_MAX_OUTPUT_BYTES: int = 262144  # 256 KB
 
+    # AI Model Discovery (per-credential available-model cache cron).
+    # Different API keys can see different models, so the available-model list
+    # is polled per AICredential against each provider's native /models
+    # endpoint and cached on the credential. Model lists change rarely → daily.
+    MODEL_DISCOVERY_ENABLED: bool = True
+    MODEL_DISCOVERY_INTERVAL_HOURS: int = 24
+
     # Bundle / App Data Storage (Phase 1 — agent bundles & installs)
     # ``BUNDLE_STORAGE_DIR`` holds bundle revision snapshots:
     #   <BUNDLE_STORAGE_DIR>/<bundle_id>/<revision_number>/

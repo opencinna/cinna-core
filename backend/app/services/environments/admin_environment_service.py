@@ -34,6 +34,7 @@ from app.models.environments.environment import (
 from app.models.events.security_event import SecurityEvent
 from app.models.sessions.session import Session as ChatSession
 from app.services.environments.environment_service import EnvironmentService
+from app.services.environments.model_health_service import evaluate_environment
 from app.services.environments.template_image_service import template_image_service
 
 logger = logging.getLogger(__name__)
@@ -197,6 +198,13 @@ class AdminEnvironmentService:
             sessions_count = counts_by_env.get(env.id, 0)
             computed_in_use = AdminEnvironmentService._derive_in_use(env, sessions_count)
 
+            # Cheap model-health roll-up (catalog + cached discovered_models).
+            # The agent row is already loaded from the join, so pass it through
+            # to avoid an extra Agent PK lookup per row across the whole fleet.
+            model_health_warning = evaluate_environment(
+                session, env, agent=agent
+            ).has_warning
+
             row = AdminAgentEnvironmentPublic(
                 id=env.id,
                 agent_id=env.agent_id,
@@ -232,6 +240,7 @@ class AdminEnvironmentService:
                 active_sessions_count=sessions_count,
                 last_build_at=env.last_build_at,
                 sync_active=env.sync_active,
+                model_health_warning=model_health_warning,
             )
             enriched.append(row)
 

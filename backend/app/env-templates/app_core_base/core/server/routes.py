@@ -686,7 +686,11 @@ async def get_building_prompt():
             "agent_name": ENV_NAME,
             "template": None,
             "sdk_adapter_building": os.getenv("SDK_ADAPTER_BUILDING"),
-            "model_override_building": os.getenv("MODEL_OVERRIDE_BUILDING"),
+            # Resolved per-mode model (from the central model catalog). Reflects
+            # the active model for each mode — a tier word, concrete id, or the
+            # user's model_override_* when set.
+            "model_building": os.getenv("MODEL_BUILDING"),
+            "model_conversation": os.getenv("MODEL_CONVERSATION"),
         }
 
         return {
