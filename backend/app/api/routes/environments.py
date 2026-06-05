@@ -25,6 +25,13 @@ from app.services.environments.environment_service import (
 )
 
 router = APIRouter(prefix="/environments", tags=["environments"])
+
+# Browser-facing WebSocket routes (web terminal + live logs follow) live under a
+# dedicated ``/env-console`` prefix rather than ``/environments`` so the reverse
+# proxy can enable WebSocket upgrade with a single prefix ``location`` block
+# without touching the REST environment endpoints. See
+# ``docs/infrastructure/nginx_setup.md``.
+console_ws_router = APIRouter(prefix="/env-console", tags=["environments"])
 logger = logging.getLogger(__name__)
 
 
@@ -466,6 +473,11 @@ async def agent_api_reloaded(
 # (browsers cannot set Authorization on a WS handshake). Thin controllers: the
 # auth dep enforces ownership / developer-role and the service owns the full
 # proxy lifecycle. These endpoints do not appear in the OpenAPI client.
+#
+# Mounted on ``console_ws_router`` (prefix ``/env-console``) so the reverse proxy
+# can scope WebSocket-upgrade to a single prefix block. Full paths:
+#   WS /api/v1/env-console/{id}/terminal
+#   WS /api/v1/env-console/{id}/logs/stream
 
 
 def _ws_source_ip(websocket: WebSocket) -> str | None:
@@ -476,7 +488,7 @@ def _ws_source_ip(websocket: WebSocket) -> str | None:
     return websocket.client.host if websocket.client else None
 
 
-@router.websocket("/{id}/terminal")
+@console_ws_router.websocket("/{id}/terminal")
 async def environment_terminal_ws(
     websocket: WebSocket,
     id: uuid.UUID,
@@ -505,7 +517,7 @@ async def environment_terminal_ws(
     )
 
 
-@router.websocket("/{id}/logs/stream")
+@console_ws_router.websocket("/{id}/logs/stream")
 async def environment_logs_stream_ws(
     websocket: WebSocket,
     id: uuid.UUID,

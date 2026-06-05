@@ -14,7 +14,7 @@
 
 ### Backend — Routes
 
-- `backend/app/api/routes/environments.py` — `WS /{id}/terminal` and `WS /{id}/logs/stream` thin controllers; `_ws_source_ip()` helper for audit.
+- `backend/app/api/routes/environments.py` — `WS /{id}/terminal` and `WS /{id}/logs/stream` thin controllers on a dedicated `console_ws_router` (prefix `/env-console`, registered separately in `api/main.py`); `_ws_source_ip()` helper for audit. The separate prefix lets the reverse proxy enable WebSocket upgrade with one prefix `location` block without touching the REST `/environments` endpoints — see [Nginx Setup](../../infrastructure/nginx_setup.md).
 
 ### Backend — Dependencies
 
@@ -62,12 +62,12 @@
 
 ### Browser-Facing WebSocket Routes
 
-These are **WebSocket** routes and do not appear in the generated OpenAPI client.
+These are **WebSocket** routes mounted under the dedicated `/env-console` prefix (not `/environments`) so the reverse proxy can scope WebSocket-upgrade to a single prefix block. They do not appear in the generated OpenAPI client.
 
 | Endpoint | Auth | Access | Close codes |
 |----------|------|--------|-------------|
-| `WS /api/v1/environments/{id}/terminal` | `?token=<platform JWT>` | Owner + agent-developer/superuser | 1008 bad token/perm, 4404 not running, 4429 cap, 1011 internal |
-| `WS /api/v1/environments/{id}/logs/stream?tail=N` | `?token=<platform JWT>` | Owner or superuser | 1008 bad token/perm, 4404 not running, 4429 cap |
+| `WS /api/v1/env-console/{id}/terminal` | `?token=<platform JWT>` | Owner + agent-developer/superuser | 1008 bad token/perm, 4404 not running, 4429 cap, 1011 internal |
+| `WS /api/v1/env-console/{id}/logs/stream?tail=N` | `?token=<platform JWT>` | Owner or superuser | 1008 bad token/perm, 4404 not running, 4429 cap |
 
 ### env-core Internal WebSocket (Terminal Only)
 

@@ -57,7 +57,10 @@ from tests.utils.user import (
 )
 
 _API = settings.API_V1_STR
-_ENV_BASE = f"{_API}/environments"
+# Console WebSocket routes live under a dedicated /env-console prefix (separate
+# from the REST /environments router) so the reverse proxy can scope WS-upgrade
+# to one prefix block. See docs/infrastructure/nginx_setup.md.
+_ENV_BASE = f"{_API}/env-console"
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

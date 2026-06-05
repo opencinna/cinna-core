@@ -43,6 +43,34 @@ Present only in the production reverse proxy. In local dev the SPA calls the bac
 
 **Upstream:** backend.
 
+### `/api/v1/env-console/`
+
+**Feature:** Agent Environment Console — live container-logs follow (`WS /api/v1/env-console/{id}/logs/stream`) and interactive web terminal (`WS /api/v1/env-console/{id}/terminal`). See [Agent Environment Console](../agents/agent_environments/agent_env_console.md).
+**Why a dedicated block:** these are **WebSocket-only** routes (registered with `@router.websocket(...)` — there is no HTTP `GET` at these paths; the REST logs *snapshot* lives at the separate `GET /api/v1/environments/{id}/logs`). The generic `/api/` block proxies plain HTTP without the WebSocket upgrade directives, so the handshake arrives at the backend as an ordinary `GET`, matches no HTTP route, and Starlette returns **404**. Local dev works because the SPA connects straight to the backend via `VITE_API_URL`, bypassing the proxy. The routes live under a dedicated `/env-console` prefix (mounted on a separate `console_ws_router`, not the REST `/environments` router) precisely so this can be a simple prefix block that doesn't disable buffering on the REST environment endpoints.
+
+**Special requirements:** WebSocket upgrade (`proxy_http_version 1.1`, `Upgrade`/`Connection` headers), `proxy_buffering off`, `proxy_cache off`, and a long `proxy_read_timeout`/`proxy_send_timeout` (3600s) so logs-follow and the terminal (env-core idle watchdog up to 900s) aren't cut mid-stream. Declare it before the generic `/api/` block.
+
+```nginx
+location /api/v1/env-console/ {
+    proxy_pass http://backend;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+```
+
+**Auth note:** browsers cannot set an `Authorization` header on a WebSocket handshake, so these routes accept the platform JWT via the `?token=` query param (the dep also accepts `Authorization: Bearer` for non-browser callers). Ensure the proxy does **not** strip the query string.
+
+**Upstream:** backend.
+
 ### `/.well-known/oauth-protected-resource`
 
 **Feature:** RFC 9728 Protected Resource Metadata for MCP OAuth — see [MCP Integration](../application/mcp_integration/agent_mcp_architecture.md) and [MCP Connector Setup](../application/mcp_integration/mcp_connector_setup.md).
@@ -82,7 +110,7 @@ Note: `/hooks/` (task triggers) carries the same requirement. Both paths must ap
 
 ## Configuration Files
 
-- `frontend/nginx.conf` — in-container nginx config baked into the frontend Docker image. Currently serves the SPA and proxies the three `.well-known/*` URIs above. Does **not** proxy `/api/`, `/mcp/`, `/ws/` because the SPA talks to the backend directly via `VITE_API_URL` in local/docker-compose mode.
+- `frontend/nginx.conf` — in-container nginx config baked into the frontend Docker image. Serves the SPA and proxies `/api/`, the two WebSocket/SSE-upgrade blocks (`/api/v1/cli/`, `/api/v1/env-console/`) that must precede it, and the `.well-known/*` URIs above. Kept in parity with the production reverse proxy so the frontend container can act as the entry point in local docker-compose. (When the SPA talks to the backend directly via `VITE_API_URL`, these blocks are bypassed — but they must still match prod for correctness.)
 - `frontend/nginx-backend-not-found.conf` — mountable snippet that returns 404 for `/api`, `/docs`, `/redoc` when the frontend container is used without a backend in front.
 - Production reverse-proxy config — lives in deployment infrastructure (outside this repo). Must include all location blocks listed above.
 
@@ -102,5 +130,6 @@ When a new feature introduces a `/.well-known/*` endpoint:
 - [Desktop App Authentication](../application/desktop_auth/desktop_auth.md) — uses `/.well-known/cinna-desktop`
 - [Realtime Events](../application/realtime_events/event_bus_system.md) — uses `/ws/`
 - [Cinna CLI Integration](../application/cinna_cli_integration/cinna_cli_integration.md) — uses `/api/v1/cli/` (WebSocket sync tunnel + SSE exec stream)
+- [Agent Environment Console](../agents/agent_environments/agent_env_console.md) — uses `/api/v1/env-console/` (`WS .../{id}/terminal` + `WS .../{id}/logs/stream`, web terminal + live logs follow)
 - [Agent Webhooks](../agents/agent_webhooks/agent_webhooks.md) — uses `/agent-hooks/` (public webhook execution, no JWT)
 - [Task Triggers](../application/input_tasks/task_triggers.md) — uses `/hooks/` (same pattern as agent webhooks, public webhook execution, no JWT)

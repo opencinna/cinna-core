@@ -4,8 +4,8 @@
  * The OpenAPI client (`@/client`) does not cover WebSockets, so this hook
  * manages a plain {@link WebSocket} for the two backend console endpoints:
  *
- *   * `terminal` → `WS /api/v1/environments/{id}/terminal`
- *   * `logs`     → `WS /api/v1/environments/{id}/logs/stream?tail=N`
+ *   * `terminal` → `WS /api/v1/env-console/{id}/terminal`
+ *   * `logs`     → `WS /api/v1/env-console/{id}/logs/stream?tail=N`
  *
  * Browsers cannot set `Authorization` on a WS handshake, so the platform
  * access token is passed as a `?token=` query param (read from
@@ -94,8 +94,8 @@ function buildConsoleUrl(kind: EnvConsoleKind, environmentId: string, tail?: num
 
   const path =
     kind === "terminal"
-      ? `/api/v1/environments/${environmentId}/terminal`
-      : `/api/v1/environments/${environmentId}/logs/stream`
+      ? `/api/v1/env-console/${environmentId}/terminal`
+      : `/api/v1/env-console/${environmentId}/logs/stream`
 
   const params = new URLSearchParams()
   const token = localStorage.getItem("access_token")
