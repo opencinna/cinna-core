@@ -12,6 +12,7 @@ import {
 } from "@/client"
 import { useMfaChallenge } from "@/components/Auth/MfaChallengeContext"
 import { handleError, safeRedirectPath } from "@/utils"
+import { getTrustedDeviceToken } from "@/utils/trustedDevice"
 import useCustomToast from "./useCustomToast"
 
 /**
@@ -177,6 +178,9 @@ const useAuth = () => {
   const login = async (data: AccessToken): Promise<LoginOutcome> => {
     const response = await LoginService.loginAccessToken({
       formData: data,
+      // "Do not ask on this device" — when a valid token is stored, the
+      // backend skips the 2FA challenge and returns a token directly.
+      xTrustedDevice: getTrustedDeviceToken() ?? undefined,
     })
     if (isMfaChallengeResponse(response)) {
       return { kind: "mfa_challenge", challenge: response }

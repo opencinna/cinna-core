@@ -263,6 +263,11 @@ class Settings(BaseSettings):
     # Override RP ID; when unset, falls back to ``urlparse(FRONTEND_HOST).hostname``.
     MFA_WEBAUTHN_RP_ID: str | None = None
     MFA_TOTP_ISSUER: str = "Cinna"
+    # Server-side allowlist for the "Do not ask on this device" duration.
+    # The MFA service rejects any ``remember_device_days`` not in this set
+    # (defence-in-depth behind the ``Literal[1, 7, 30]`` on the schema —
+    # keep the two in sync).
+    MFA_TRUSTED_DEVICE_ALLOWED_DAYS: list[int] = [1, 7, 30]
 
     @computed_field  # type: ignore[prop-decorator]
     @property

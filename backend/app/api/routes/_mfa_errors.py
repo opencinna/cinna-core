@@ -17,6 +17,7 @@ _STATUS_BY_CODE: dict[str, int] = {
     "invalid_assertion": 400,
     "invalid_secret_token": 400,
     "invalid_method": 400,
+    "invalid_trust_duration": 400,
     "challenge_not_found": 404,
     "passkey_not_found": 404,
     "factor_not_enrolled": 404,

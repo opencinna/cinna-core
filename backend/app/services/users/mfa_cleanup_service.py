@@ -1,8 +1,9 @@
 """MFA Cleanup Scheduler.
 
-Periodically removes stale :class:`UserMfaChallenge` rows.  Mirrors the
-pattern used by :mod:`app.services.desktop_auth.desktop_auth_scheduler`
-and :mod:`app.services.cli.cli_setup_token_scheduler` — a
+Periodically removes stale :class:`UserMfaChallenge` rows and expired
+:class:`UserTrustedDevice` rows.  Mirrors the pattern used by
+:mod:`app.services.desktop_auth.desktop_auth_scheduler` and
+:mod:`app.services.cli.cli_setup_token_scheduler` — a
 ``BackgroundScheduler`` with a single ``interval`` job.
 
 Idempotent — a failure on one run is harmless because the next run will
@@ -17,6 +18,7 @@ from sqlmodel import Session, delete
 
 from app.core.db import engine
 from app.models import UserMfaChallenge
+from app.services.users.mfa_service import MfaService
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +31,7 @@ _RETENTION = timedelta(hours=24)
 
 
 def run_cleanup() -> None:
-    """Delete every :class:`UserMfaChallenge` older than 24h."""
+    """Delete stale challenges (>24h) and expired trusted-device rows."""
     cutoff = datetime.now(UTC) - _RETENTION
     try:
         with Session(engine) as session:
@@ -47,6 +49,18 @@ def run_cleanup() -> None:
             )
     except Exception as exc:  # noqa: BLE001 — log and swallow, will retry next run
         logger.error("MFA challenge cleanup failed: %s", exc)
+
+    # Sweep expired trusted devices in a separate transaction so a
+    # failure on one sweep does not mask the other. Expired rows are also
+    # rejected at read time, so this is purely housekeeping.
+    try:
+        with Session(engine) as session:
+            removed = MfaService.purge_expired_trusted_devices(session=session)
+            logger.info(
+                "MFA trusted-device cleanup complete: %s rows removed", removed
+            )
+    except Exception as exc:  # noqa: BLE001 — log and swallow, will retry next run
+        logger.error("MFA trusted-device cleanup failed: %s", exc)
 
 
 def start_scheduler() -> None:

@@ -13,6 +13,12 @@ router = APIRouter(prefix="/auth", tags=["oauth"])
 class GoogleCallbackRequest(BaseModel):
     code: str
     state: str
+    # Opaque trusted-device token ("Do not ask on this device"). When a
+    # valid unexpired token is presented for a 2FA user, the callback
+    # returns a ``LoginToken`` directly and skips the challenge. Absent or
+    # forged → normal challenge path. Only read on the login callback, not
+    # on ``/google/link``.
+    trusted_device_token: str | None = None
 
 
 @router.get("/oauth/config")
@@ -64,6 +70,18 @@ async def google_callback(
         )
 
         if result.requires_mfa:
+            # "Do not ask on this device" skip — only attempted when 2FA
+            # is on (Google identity already verified above). The result's
+            # ``access_token`` is None on the MFA branch, so mint it here
+            # via the same helper the non-MFA branch uses.
+            if MfaService.consume_trusted_device(
+                session=session,
+                user=result.user,
+                token=body.trusted_device_token,
+            ):
+                return LoginToken(
+                    access_token=AuthService.create_access_token(result.user.id)
+                )
             challenge = result.mfa_challenge
             assert challenge is not None  # for mypy; guarded by requires_mfa
             return MfaChallenge(

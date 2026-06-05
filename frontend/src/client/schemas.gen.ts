@@ -10727,6 +10727,17 @@ export const GoogleCallbackRequestSchema = {
         state: {
             type: 'string',
             title: 'State'
+        },
+        trusted_device_token: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Trusted Device Token'
         }
     },
     type: 'object',
@@ -13361,6 +13372,17 @@ export const LoginTokenSchema = {
             type: 'string',
             title: 'Token Type',
             default: 'bearer'
+        },
+        trusted_device_token: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Trusted Device Token'
         }
     },
     type: 'object',
@@ -14069,6 +14091,18 @@ export const MfaVerifyRequestSchema = {
             additionalProperties: true,
             type: 'object',
             title: 'Payload'
+        },
+        remember_device_days: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    enum: [1, 7, 30]
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Remember Device Days'
         }
     },
     type: 'object',

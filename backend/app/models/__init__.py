@@ -38,6 +38,10 @@ from .users.user_recovery_code import (
     RecoveryCodeStatus,
     RecoveryCodesPlaintext,
 )
+from .users.user_trusted_device import (
+    UserTrustedDevice,
+    TrustedDevicePublic,
+)
 from .users.user_mfa_challenge import (
     UserMfaChallenge,
     MfaFirstFactor,
@@ -667,6 +671,8 @@ __all__ = [
     "UserRecoveryCode",
     "RecoveryCodeStatus",
     "RecoveryCodesPlaintext",
+    "UserTrustedDevice",
+    "TrustedDevicePublic",
     "UserMfaChallenge",
     "MfaFirstFactor",
     "MfaChallenge",

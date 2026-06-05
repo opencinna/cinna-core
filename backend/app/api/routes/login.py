@@ -2,7 +2,7 @@ import logging
 from datetime import timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.security import OAuth2PasswordRequestForm
 
@@ -42,17 +42,28 @@ _translate_mfa_error = translate_mfa_error
 
 @router.post("/login/access-token", response_model=LoginResponse)
 def login_access_token(
-    session: SessionDep, form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
+    session: SessionDep,
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+    trusted_device_token: Annotated[
+        str | None, Header(alias="X-Trusted-Device")
+    ] = None,
 ) -> Any:
     """OAuth2-compatible password login.
 
     Returns a :class:`LoginResponse` discriminated union:
 
     - :class:`LoginToken` (``kind="token"``)   — straight access token
-      when 2FA is off.
+      when 2FA is off, or when 2FA is on **and** a valid unexpired
+      trusted-device token is presented (the "Do not ask on this device"
+      skip).
     - :class:`MfaChallenge` (``kind="mfa_challenge"``) — short-lived
-      challenge handle when ``user.two_factor_enabled=True``.  The
-      frontend completes the flow via ``POST /login/mfa/verify``.
+      challenge handle when ``user.two_factor_enabled=True`` and no valid
+      trusted-device token was presented.  The frontend completes the
+      flow via ``POST /login/mfa/verify``.
+
+    The optional ``X-Trusted-Device`` header carries the opaque
+    trusted-device token minted at a prior ``/login/mfa/verify``.  Absent
+    or forged → normal challenge path (no error, no oracle).
     """
     user = UserService.authenticate(
         session=session, email=form_data.username, password=form_data.password
@@ -63,6 +74,20 @@ def login_access_token(
         raise HTTPException(status_code=400, detail="Inactive user")
 
     if user.two_factor_enabled:
+        # "Do not ask on this device" skip — only attempted when 2FA is
+        # on (a non-2FA user has no challenge to skip).  Runs after the
+        # password already verified, so it opens no new probing surface.
+        if MfaService.consume_trusted_device(
+            session=session, user=user, token=trusted_device_token
+        ):
+            access_token_expires = timedelta(
+                minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
+            )
+            return LoginToken(
+                access_token=security.create_access_token(
+                    user.id, expires_delta=access_token_expires
+                )
+            )
         challenge = MfaService.issue_challenge(
             session=session, user=user, first_factor=FIRST_FACTOR_PASSWORD
         )
@@ -173,11 +198,13 @@ def login_mfa_verify(
         raise translate_mfa_error(exc)
 
     try:
-        user = MfaService.verify_challenge(
+        user, trusted_device_token = MfaService.verify_challenge(
             session=session,
             challenge_token=body.challenge_token,
             method=body.method,
             payload=body.payload or {},
+            remember_device_days=body.remember_device_days,
+            user_agent=request.headers.get("user-agent"),
         )
     except ValueError as exc:
         raise translate_mfa_error(exc)
@@ -189,7 +216,8 @@ def login_mfa_verify(
     return LoginToken(
         access_token=security.create_access_token(
             user.id, expires_delta=access_token_expires
-        )
+        ),
+        trusted_device_token=trusted_device_token,
     )
 
 

@@ -86,6 +86,30 @@ Public API schemas: `RecoveryCodeStatus { remaining_count, total_count, last_reg
 
 `total_count` is populated by `MfaService.total_recovery_codes` and represents every code in the current batch (used and unused). The Settings UI renders this as an "N of M remaining" badge.
 
+### `UserTrustedDevice` (`user_trusted_device` table — `backend/app/models/users/user_trusted_device.py`)
+
+One row per trusted browser per user. Created when the user opts into "Do not ask on this device" at `/login/mfa`. Mirrors the `UserRecoveryCode` hashing pattern — **the plaintext token is never stored at rest**; only a bcrypt hash is persisted.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `UUID` | PK, `default_factory=uuid.uuid4` |
+| `user_id` | `UUID` | FK → `user.id` `ON DELETE CASCADE`, indexed |
+| `token_hash` | `str` | bcrypt hash of the opaque plaintext token (`get_password_hash`). Never returned through any API. |
+| `expires_at` | `datetime` (timezone-aware) | `created_at + remember_device_days`. The skip is rejected once `now >= expires_at`. |
+| `created_at` | `datetime` (timezone-aware) | UTC now at insertion. |
+| `last_used_at` | `datetime \| None` (timezone-aware) | Updated each time the token is used to skip a challenge. |
+| `label` | `str \| None` (max 256) | Best-effort device label — truncated User-Agent captured at mint time. Display-only. |
+
+Indexes:
+- FK index on `user_id` (btree) — every lookup is "all live tokens for this user".
+- Composite `ix_user_trusted_device_user_expires (user_id, expires_at)` — supports "live tokens for user" + cleanup sweep.
+
+**Token shape:** `secrets.token_urlsafe(32)` (256-bit opaque random). No structure; no user id embedded. Only validated against the requesting user's own rows, so a stolen token cannot skip MFA for a different account.
+
+**Resolution pattern:** Because bcrypt salts each hash, the token cannot be looked up directly by hash. `consume_trusted_device` iterates the user's live (unexpired) rows and bcrypt-verifies the candidate against each — identical to the `consume_recovery_code` pattern. Row count per user is tiny (one per device, expired rows swept hourly).
+
+Public API schema: `TrustedDevicePublic { id, created_at, expires_at, last_used_at, label }` — defined for a future Settings device-management list; not used in MVP routes.
+
 ### `UserMfaChallenge` (`user_mfa_challenge` table — `backend/app/models/users/user_mfa_challenge.py`)
 
 Short-lived, created after first-factor success when `two_factor_enabled=True`. Also used for step-up challenges and passkey registration challenges.
@@ -120,12 +144,26 @@ Re-exported from `app.models` and `app.models.users.user_mfa_challenge`. This Li
 | `"google_oauth"` | `/auth/google/callback` OAuth login |
 | `"step_up"` | Synthetic challenge for passkey enrollment and step-up assertions — never reaches the login challenge flow |
 
+### Extended schemas in `user_mfa_challenge.py` (trusted-device additions)
+
+`MfaVerifyRequest` gains:
+```
+remember_device_days: Literal[1, 7, 30] | None = None
+```
+`Literal` so the OpenAPI enum (and TS union) reject arbitrary durations at the edge. The service also re-checks against `MFA_TRUSTED_DEVICE_ALLOWED_DAYS` for non-route callers.
+
+`LoginToken` gains:
+```
+trusted_device_token: str | None = None
+```
+Populated only by `/login/mfa/verify` when `remember_device_days` was set and the device was registered. `None` on every other `LoginToken` (plain login, skip-path login, no-duration verify). Adding an optional field keeps the `LoginResponse` union backward-compatible.
+
 ### API response schemas (in `user_mfa_challenge.py`)
 
 | Schema | Kind | Description |
 |--------|------|-------------|
 | `MfaChallenge` | `Literal["mfa_challenge"]` | Second-factor prompt returned after first-factor success. |
-| `LoginToken` | `Literal["token"]` | Access token returned when 2FA is off or after second-factor success. |
+| `LoginToken` | `Literal["token"]` | Access token returned when 2FA is off, after second-factor success, or on a trusted-device skip. Optionally carries `trusted_device_token` (once, on mint). |
 | `LoginResponse` | union | `LoginToken \| MfaChallenge` — the discriminated union returned by login endpoints. |
 | `MfaStatus` | — | Status response for the Security tab. |
 | `StepUpProof` | — | Body for destructive mutations: exactly one of `password`, `totp_code`, or `passkey_assertion + passkey_challenge_token`. |
@@ -139,9 +177,9 @@ Re-exported from `app.models` and `app.models.users.user_mfa_challenge`. This Li
 
 | Method | Path | Auth | Request | Response | Notes |
 |--------|------|------|---------|----------|-------|
-| `POST` | `/login/access-token` | none | `OAuth2PasswordRequestForm` | `LoginResponse` | Returns `LoginToken` when 2FA off; `MfaChallenge` when on. |
+| `POST` | `/login/access-token` | none | `OAuth2PasswordRequestForm` + optional `X-Trusted-Device` header | `LoginResponse` | Returns `LoginToken` when 2FA off; `LoginToken` (skip) when a valid trusted-device token is presented and 2FA is on; `MfaChallenge` otherwise. |
 | `POST` | `/login/mfa/passkey/options` | none | `PasskeyAuthOptionsRequest { challenge_token }` | `dict` (WebAuthn assertion options) | Loads the pending challenge, generates `PublicKeyCredentialRequestOptions`, writes `webauthn_challenge` if not already set. |
-| `POST` | `/login/mfa/verify` | none | `MfaVerifyRequest { challenge_token, method, payload }` | `LoginToken` | Applies anonymous per-source rate limit first, then resolves the challenge, then applies per-user rate limit, then dispatches to passkey / TOTP / recovery handler. Returns the final access token. |
+| `POST` | `/login/mfa/verify` | none | `MfaVerifyRequest { challenge_token, method, payload, remember_device_days? }` | `LoginToken` | Applies anonymous per-source rate limit first, then resolves the challenge, then applies per-user rate limit, then dispatches to passkey / TOTP / recovery handler. If `remember_device_days` is set, mints a `UserTrustedDevice` row and returns the plaintext token on `LoginToken.trusted_device_token` (once). |
 
 `MfaVerifyRequest.method` is `Literal["passkey", "totp", "recovery"]`. `payload` shape:
 - passkey: full WebAuthn `AuthenticationResponseJSON` dict
@@ -159,7 +197,7 @@ Bad-token probes (`challenge_not_found`, `challenge_expired`, `challenge_consume
 
 ### Google OAuth callback (`backend/app/api/routes/oauth.py`)
 
-`POST /auth/google/callback` returns the same `LoginResponse`. The `AuthService.authenticate_with_google()` result object carries a `requires_mfa` flag and `mfa_challenge` handle; the route branches identically to the password-login route.
+`POST /auth/google/callback` returns the same `LoginResponse`. `GoogleCallbackRequest` is a JSON body model with fields `code`, `state`, and the new optional `trusted_device_token: str | None`. The `AuthService.authenticate_with_google()` result carries a `requires_mfa` flag and `mfa_challenge` handle. When `requires_mfa` is true, the route first attempts the trusted-device skip (via `MfaService.consume_trusted_device`): on a match it mints the access token inline via `AuthService.create_access_token(result.user.id)` and returns `LoginToken` directly; otherwise it returns the `MfaChallenge`.
 
 ### MFA management endpoints (`backend/app/api/routes/mfa.py`)
 
@@ -193,6 +231,7 @@ All `MfaService` `ValueError(code)` exceptions are translated by `translate_mfa_
 | `invalid_assertion` | 400 |
 | `invalid_secret_token` | 400 |
 | `invalid_method` | 400 |
+| `invalid_trust_duration` | 400 |
 | `challenge_not_found` | 404 |
 | `passkey_not_found` | 404 |
 | `factor_not_enrolled` | 404 |
@@ -202,6 +241,8 @@ All `MfaService` `ValueError(code)` exceptions are translated by `translate_mfa_
 | `rate_limited` | 429 |
 | `totp_already_enrolled` | 409 |
 | `step_up_required` | 401 |
+
+Note: `invalid_trust_duration` is only reachable via direct service calls; the `Literal[1,7,30]` on `MfaVerifyRequest.remember_device_days` causes the API edge to return 422 for out-of-allowlist values.
 
 Response body: `{ "detail": { "code": "<error_code>", "message": "<error_code>" } }`. The frontend keys on `error.detail.code`.
 
@@ -221,7 +262,7 @@ Stateless — all methods are `@staticmethod` and accept an explicit `session`. 
 | `get_challenge(*, session, challenge_token)` | Loads and validates a challenge — raises on not-found, expired, consumed, or attempt-limit. |
 | `_consume_challenge(session, challenge)` | Marks `consumed_at`. |
 | `_record_failed_attempt(session, challenge)` | Increments `attempts` and commits. |
-| `verify_challenge(*, session, challenge_token, method, payload)` | Dispatches to passkey / TOTP / recovery; bumps attempts + logs failure atomically on error; updates `two_factor_last_used_at` + logs `MFA_CHALLENGE_SUCCESS` on success. Returns `User`. |
+| `verify_challenge(*, session, challenge_token, method, payload, remember_device_days=None, user_agent=None)` | Dispatches to passkey / TOTP / recovery; bumps attempts + logs failure atomically on error; updates `two_factor_last_used_at` + logs `MFA_CHALLENGE_SUCCESS` on success. If `remember_device_days` is set, calls `register_trusted_device` inside the same transaction. Returns `tuple[User, str \| None]` (user, plaintext trusted-device token or None). |
 
 **WebAuthn registration:**
 
@@ -256,6 +297,14 @@ Stateless — all methods are `@staticmethod` and accept an explicit `session`. 
 | `last_recovery_batch_at(*, session, user)` | `created_at` of the most recent code row. |
 | `regenerate_recovery_codes_with_step_up(*, session, user, proof)` | Enforces enrollment precondition, then calls `require_recent_factor`, then delegates to `generate_recovery_codes`. Owned by the service so the precondition order is always correct. |
 
+**Trusted devices:**
+
+| Method | Description |
+|--------|-------------|
+| `register_trusted_device(*, session, user, days, label)` | Validates `days ∈ MFA_TRUSTED_DEVICE_ALLOWED_DAYS` (raises `"invalid_trust_duration"` otherwise). Generates `secrets.token_urlsafe(32)`; inserts `UserTrustedDevice` with `token_hash = get_password_hash(token)`, `expires_at = now + timedelta(days=days)`, `label` (truncated to 256 chars). Flushes (not commits) so the row gets its `id` for the audit detail; the caller (`verify_challenge`) owns the commit. Logs `MFA_TRUSTED_DEVICE_REGISTERED` (details: `{days, device_id}`). Returns the **plaintext** token. |
+| `consume_trusted_device(*, session, user, token)` | Returns `False` immediately if `token` is falsy. Loads the user's rows where `expires_at > now(UTC)`; bcrypt-verifies `token` against each `token_hash`. On match: sets `last_used_at = now`, logs `MFA_TRUSTED_DEVICE_USED` (details: `{device_id}`), commits, returns `True`. On no match: returns `False` (silent — no error, no oracle). |
+| `purge_expired_trusted_devices(*, session)` | `DELETE FROM user_trusted_device WHERE expires_at < now()`. Returns the number of rows deleted. Called by the hourly cleanup job. |
+
 **Step-up re-auth:**
 
 | Method | Description |
@@ -283,7 +332,9 @@ Stateless — all methods are `@staticmethod` and accept an explicit `session`. 
 
 ### `UserService.disable_all_factors` (`backend/app/services/users/user_service.py`)
 
-Accepts a `reason` parameter (default `"user_initiated"`). Deletes `UserPasskey`, `UserTotpSecret`, `UserRecoveryCode`, and `UserMfaChallenge` rows for the user in a single transaction; sets `two_factor_enabled=False`; calls `session.refresh(user)` so post-call reads see the fresh state; preserves `two_factor_enrolled_at` and `two_factor_last_used_at` for audit reference; logs `MFA_DISABLED` with `details={"reason": reason}`.
+Accepts a `reason` parameter (default `"user_initiated"`). Deletes `UserPasskey`, `UserTotpSecret`, `UserRecoveryCode`, `UserMfaChallenge`, and `UserTrustedDevice` rows for the user in a single transaction; sets `two_factor_enabled=False`; calls `session.refresh(user)` so post-call reads see the fresh state; preserves `two_factor_enrolled_at` and `two_factor_last_used_at` for audit reference; logs `MFA_DISABLED` with `details={"reason": reason}`.
+
+The inclusion of `UserTrustedDevice` in the wipe ensures that any live "Do not ask on this device" tokens become inert immediately when 2FA is disabled. This covers all three disable entry points: the explicit `POST /mfa/disable`, last-factor passkey delete, and last-factor TOTP removal — all route through this method.
 
 Called with `reason="last_factor_removed"` by `MfaService.delete_passkey` and `MfaService.disable_totp` when the removed factor is the user's last one. Called with `reason="user_initiated"` (default) by the `POST /mfa/disable` route.
 
@@ -306,8 +357,10 @@ Called with `reason="last_factor_removed"` by `MfaService.delete_passkey` and `M
 `backend/app/services/users/mfa_cleanup_service.py` — APScheduler `BackgroundScheduler` with a single `interval` job.
 
 - **Schedule:** every 1 hour.
-- **Task:** `DELETE FROM user_mfa_challenge WHERE created_at < now() - 24h`.
-- **Pattern:** mirrors `desktop_auth_scheduler` and `cli_setup_token_scheduler`. Idempotent; failures are logged and ignored; the next run picks up missed rows.
+- **Tasks (both in one `run_cleanup()` call, separate transactions):**
+  1. `DELETE FROM user_mfa_challenge WHERE created_at < now() - 24h` — removes stale challenge rows.
+  2. `MfaService.purge_expired_trusted_devices(session)` — removes `user_trusted_device` rows where `expires_at < now()`. Expired device rows are also rejected at read time in `consume_trusted_device`, so this is purely housekeeping.
+- **Pattern:** mirrors `desktop_auth_scheduler` and `cli_setup_token_scheduler`. Idempotent; failures on one sweep are logged and ignored without masking the other sweep; the next run picks up missed rows.
 - **Startup / shutdown:** `start_scheduler()` / `shutdown_scheduler()` registered in `app.main` lifespan.
 
 ---
@@ -323,6 +376,7 @@ Called with `reason="last_factor_removed"` by `MfaService.delete_passkey` and `M
 | `MFA_WEBAUTHN_RP_NAME` | `str` | `"Cinna"` | Relying-party display name in WebAuthn ceremonies. |
 | `MFA_WEBAUTHN_RP_ID` | `str \| None` | `None` | Override RP ID; defaults to `urlparse(FRONTEND_HOST).hostname`. |
 | `MFA_TOTP_ISSUER` | `str` | `"Cinna"` | Issuer field in the `otpauth://` URI. |
+| `MFA_TRUSTED_DEVICE_ALLOWED_DAYS` | `list[int]` | `[1, 7, 30]` | Allowlist of valid `remember_device_days` values. The service re-checks against this list for non-route callers. Keep in sync with the `Literal[1,7,30]` on `MfaVerifyRequest.remember_device_days`. |
 
 Computed properties (not environment variables):
 - `settings.mfa_webauthn_rp_id` — returns `MFA_WEBAUTHN_RP_ID` if set, otherwise the hostname of `FRONTEND_HOST`.
@@ -346,12 +400,16 @@ All events are written via `MfaService._log_event` inside the same database tran
 | `MFA_RATE_LIMITED` | Per-user rate limit exceeded on `POST /login/mfa/verify`. Details: `window_seconds`, `max_attempts`. | medium |
 | `MFA_SIGN_COUNT_REGRESSION` | Passkey sign count regressed (possible clone). Still authenticates but logged. Details: `passkey_id`, `old_sign_count`, `new_sign_count`. | high |
 | `MFA_PASSKEY_INVALID_ORIGIN` | WebAuthn assertion failed due to RP ID / origin mismatch. Details: `error`. | high |
+| `MFA_TRUSTED_DEVICE_REGISTERED` | A trusted-device token was minted at verify time. Details: `days`, `device_id`. The plaintext token is never logged. | medium |
+| `MFA_TRUSTED_DEVICE_USED` | A valid trusted-device token was used to skip the MFA challenge on login. Details: `device_id`. | low |
 
 Note: bad-token and orphaned-challenge probes on `/login/mfa/verify` are logged at `WARNING` level in server logs only (no `SecurityEvent` row — there is no `user_id` to attribute them to).
 
 ---
 
-## Database Migration
+## Database Migrations
+
+### Initial 2FA tables
 
 File: `backend/app/alembic/versions/538667612c3d_add_user_2fa_tables.py`
 
@@ -362,6 +420,18 @@ Revision: `538667612c3d` (down: `dd4ef5a6b7c8`)
 **Downgrade:** Drops the four tables in reverse order, then drops the three `user` columns.
 
 **Backfill:** none — all existing users default to `two_factor_enabled=False`.
+
+### Trusted-device table
+
+File: `backend/app/alembic/versions/465c41b435ab_add_user_trusted_device.py`
+
+Revision: `465c41b435ab` (down: `581dd9e44be1`)
+
+**Upgrade:** Creates `user_trusted_device` table with columns `id`, `user_id` (FK → `user.id` ON DELETE CASCADE), `token_hash`, `expires_at` (timezone-aware), `created_at` (timezone-aware), `last_used_at` (nullable, timezone-aware), `label` (nullable, max 256). Creates `ix_user_trusted_device_user_expires (user_id, expires_at)` composite index and `ix_user_trusted_device_user_id` btree index on `user_id`.
+
+**Downgrade:** Drops the composite index, drops the `user_id` index, drops the table.
+
+**Backfill:** none — feature is opt-in per device; no existing rows.
 
 ---
 
@@ -384,13 +454,16 @@ Revision: `538667612c3d` (down: `dd4ef5a6b7c8`)
 | File | Role |
 |------|------|
 | `frontend/src/utils/webauthn.ts` | Thin wrapper over `@simplewebauthn/browser`. Exports `startRegistration`, `startAuthentication`, `isWebAuthnSupported`, `isWebAuthnUserCancellation`. |
+| `frontend/src/utils/trustedDevice.ts` | Centralized helpers for the trusted-device localStorage slot. Exports `TRUSTED_DEVICE_KEY = "mfa.trusted_device_token"`, `getTrustedDeviceToken()`, `setTrustedDeviceToken(token)`, `clearTrustedDeviceToken()`. All three are try/catch-wrapped (non-fatal in private mode / quota-exceeded scenarios). |
 | `frontend/src/components/Auth/MfaChallengeContext.tsx` | React context holding `{ challenge, redirectTo }` in memory. Provider mounted in `__root.tsx`. Never persisted to storage. |
 | `frontend/src/routes/login/mfa.tsx` | Public TanStack route — renders `<TwoFactorChallenge />` inside `<AuthLayout>`. |
-| `frontend/src/components/Auth/TwoFactorChallenge.tsx` | Challenge page orchestrator — reads from `MfaChallengeContext`, renders passkey button, TOTP form, or recovery form based on `allowed_methods`. Manages structured `TotpErrorKind` state (`"invalid_code"` \| `"attempt_limit_exceeded"`); passes `autoClearOnInvalid` to `TotpForm` only on `invalid_code`. |
+| `frontend/src/components/Auth/TwoFactorChallenge.tsx` | Challenge page orchestrator — reads from `MfaChallengeContext`, renders passkey button, TOTP form, or recovery form based on `allowed_methods`. Manages structured `TotpErrorKind` state (`"invalid_code"` \| `"attempt_limit_exceeded"`); passes `autoClearOnInvalid` to `TotpForm` only on `invalid_code`. Also renders a full-width shadcn `Select` (outside the method-specific blocks, visible in both primary and recovery modes) for "Do not ask on this device" with values `off / 1 / 7 / 30`; passes `remember_device_days: RememberDays` into every `verify()` call. On `onSuccess`, calls `setTrustedDeviceToken(data.trusted_device_token)` before `window.location.assign(target)` (and deliberately does NOT call `clearChallenge()` to avoid the race with the "no challenge → /login" effect). |
 | `frontend/src/components/Auth/PasskeyButton.tsx` | Calls `fetchLoginPasskeyOptions` then `startAuthentication`; dispatches `useVerifyMfaMutation`. |
 | `frontend/src/components/Auth/TotpForm.tsx` | 6-digit OTP input with `inputMode="numeric"` and `autocomplete="one-time-code"`. Accepts `label: string \| null` (hides the label when `null`, using `aria-label` instead), `errorMessage: string \| null` (override helper text), and `autoClearOnInvalid: boolean` (triggers wave auto-clear animation on a rising `invalid` edge). |
 | `frontend/src/index.css` | Defines `@keyframes shake-x` (whole-row shake) and `@keyframes shake-slot` (per-slot shake used in the wave), exposed as Tailwind utilities `animate-shake-x` / `animate-shake-slot`. Suppressed by `prefers-reduced-motion`. |
 | `frontend/src/hooks/useMfa.ts` | All React Query hooks and the `runStepUpPasskey` helper. |
+| `frontend/src/hooks/useAuth.ts` | Exports `isMfaChallengeResponse` guard (used by `GoogleLoginButton`). The `login()` function passes `xTrustedDevice: getTrustedDeviceToken() ?? undefined` to `LoginService.loginAccessToken`; the OpenAPI-generated header field is named `xTrustedDevice` (derived from `X-Trusted-Device`). |
+| `frontend/src/components/Auth/GoogleLoginButton.tsx` | In the `mutationFn`, adds `trusted_device_token: getTrustedDeviceToken() ?? undefined` to the `GoogleCallbackRequest` body. The `onSuccess` branch handles the skip-path `LoginToken` normally (the backend never returns a `trusted_device_token` from the Google callback — minting only happens at `/login/mfa/verify`). |
 | `frontend/src/components/UserSettings/Security/SecurityTab.tsx` | Orchestrator for the Security settings tab. Passes `mfaStatus` down to `PasskeySection` and `DisableTotpDialog`. |
 | `frontend/src/components/UserSettings/Security/PasskeySection.tsx` | Passkey card — uses `useMfaPasskeys`; passes `mfaStatus` to `PasskeyList`. |
 | `frontend/src/components/UserSettings/Security/PasskeyList.tsx` | Passkey rows with rename and delete. Receives `mfaStatus` to detect when a deletion would remove the last factor and switch dialog copy accordingly. |
@@ -466,11 +539,12 @@ Monkeypatch `app.services.users.mfa_service.datetime` to return a far-future `da
 
 | Gap | Notes |
 |-----|-------|
-| Google-OAuth MFA full-flow test | The IdP is not contacted during tests; the Google-OAuth branch is stub-tested via unit paths. A full end-to-end test requires an IdP mock. |
+| Google-OAuth MFA full-flow test | The IdP is not contacted during tests; the Google-OAuth branch is stub-tested via unit paths. A full end-to-end test requires an IdP mock. The Google-callback trusted-device skip path therefore also has no automated test. |
 | `MFA_SIGN_COUNT_REGRESSION` and `MFA_PASSKEY_INVALID_ORIGIN` test coverage | Both events are wired in the service and manually verified, but lack dedicated test scenarios. |
 | `SecurityActivityList` | The component is a placeholder; it renders an empty state. The `GET /security-events/` endpoint exists but a filtered list endpoint scoped to MFA events only is not yet implemented. |
 | Admin disable-2FA override | No endpoint for a superuser to disable 2FA on another user's account. Current escape hatch is a direct database operation. |
+| Trusted-device list and per-device revoke | There is currently no `GET /users/me/mfa/trusted-devices` list endpoint and no `DELETE /users/me/mfa/trusted-devices/{id}` single-revoke endpoint in Settings. `TrustedDevicePublic` is defined in the model for when this is added. The current revocation mechanism is wipe-on-disable (all devices are revoked when 2FA is turned off). |
 
 ---
 
-*Last updated: 2026-05-21*
+*Last updated: 2026-06-05*

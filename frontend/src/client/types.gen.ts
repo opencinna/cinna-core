@@ -2349,6 +2349,7 @@ export type GenerateSQLRequest = {
 export type GoogleCallbackRequest = {
     code: string;
     state: string;
+    trusted_device_token?: (string | null);
 };
 
 /**
@@ -2867,6 +2868,7 @@ export type LoginToken = {
     kind?: "token";
     access_token: string;
     token_type?: string;
+    trusted_device_token?: (string | null);
 };
 
 export type MailServerConfigCreate = {
@@ -3037,6 +3039,7 @@ export type MfaVerifyRequest = {
     payload: {
         [key: string]: unknown;
     };
+    remember_device_days?: (1 | 7 | 30 | null);
 };
 
 export type method = 'passkey' | 'totp' | 'recovery';
@@ -6576,6 +6579,7 @@ export type LlmPluginsUpgradeAgentPluginResponse = (PluginSyncResponse);
 
 export type LoginLoginAccessTokenData = {
     formData: Body_login_login_access_token;
+    xTrustedDevice?: (string | null);
 };
 
 export type LoginLoginAccessTokenResponse = ((LoginToken | MfaChallenge));

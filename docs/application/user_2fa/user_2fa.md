@@ -11,6 +11,7 @@ See [tech reference](user_2fa_tech.md) for models, route signatures, and service
 - Optional, per-user. Existing sessions and users are unaffected until the user explicitly enrolls.
 - Two supported factor types: **WebAuthn passkeys** (FIDO2, platform and roaming authenticators) and **TOTP** authenticator apps (Google Authenticator, Authy, 1Password, etc.).
 - Single-use **recovery codes** (8 codes) issued at first enrollment; regenerable from Settings.
+- **Trusted devices ("Do not ask on this device")** — after completing a second-factor challenge the user may opt to trust the current browser for 1, 7, or 30 days. Subsequent logins from that browser skip the challenge entirely while the trust window is active.
 - Step-up re-authentication required for any action that disables or weakens 2FA (disable, delete a factor, regenerate recovery codes).
 - Audit trail of every meaningful 2FA event via the existing `SecurityEvent` infrastructure.
 
@@ -23,22 +24,32 @@ Login
  +-------------------------------------------------------------------------+
  |  1. Submit credentials (password or Google OAuth)                        |
  |     -> UserService.authenticate / Google OAuth callback                  |
+ |     Password path sends X-Trusted-Device header; Google path sends       |
+ |     trusted_device_token JSON body field.                                |
  |                                                                         |
  |  2.   if user.two_factor_enabled is False:                              |
  |           return LoginToken { kind="token", access_token }   <- no change|
  |       else:                                                             |
- |           return MfaChallenge { kind="mfa_challenge",                   |
- |                                  challenge_token, expires_at,           |
- |                                  allowed_methods }                      |
+ |           if valid trusted-device token presented for this user:         |
+ |               return LoginToken { kind="token", access_token }  <- skip  |
+ |           else:                                                          |
+ |               return MfaChallenge { kind="mfa_challenge",               |
+ |                                      challenge_token, expires_at,       |
+ |                                      allowed_methods }                  |
  |                                                                         |
  |  3.  Frontend navigates to /login/mfa and shows:                        |
  |       - "Use passkey" button  -> WebAuthn assertion                     |
  |       - "Enter 6-digit code"  -> TOTP form                              |
  |       - "Use a recovery code" -> recovery-code form                     |
+ |       - "Do not ask on this device" Select (off / 1 / 7 / 30 days)     |
  |                                                                         |
- |  4.  POST /login/mfa/verify { challenge_token, method, payload }        |
+ |  4.  POST /login/mfa/verify { challenge_token, method, payload,         |
+ |                                remember_device_days? }                  |
  |     -> MfaService.verify_challenge                                      |
- |     -> Returns LoginToken { kind="token", access_token }                |
+ |     -> Returns LoginToken { kind="token", access_token,                 |
+ |                              trusted_device_token? }                    |
+ |     If remember_device_days was set, trusted_device_token is non-null;  |
+ |     frontend stores it in localStorage["mfa.trusted_device_token"].     |
  +-------------------------------------------------------------------------+
 ```
 
@@ -66,12 +77,13 @@ The `challenge_token` is held in memory by `MfaChallengeContext` in the frontend
 
 ### Login with 2FA Enabled
 
-1. User enters email and password (or uses Google OAuth).
-2. Backend returns an `MfaChallenge` instead of an access token.
-3. Frontend navigates to `/login/mfa`.
+1. User enters email and password (or uses Google OAuth). The frontend reads any stored trusted-device token from `localStorage["mfa.trusted_device_token"]` and sends it on the request (password login: `X-Trusted-Device` HTTP header; Google OAuth: `trusted_device_token` JSON body field).
+2. If the token is valid and unexpired for that user, the backend returns a `LoginToken` directly — the user never sees the 2FA challenge screen.
+3. If no valid trusted-device token is presented, the backend returns an `MfaChallenge` and the frontend navigates to `/login/mfa`.
 4. Preferred path: passkey button — browser shows native dialog; assertion POSTed to `/login/mfa/verify`.
 5. Fallback: TOTP form (6-digit code) or "Use a recovery code" link (raw code, case-insensitive, dashes ignored).
-6. On success the final `LoginToken` is returned; the frontend stores `access_token` in `localStorage` and navigates to the post-login target.
+6. The user may select a "Do not ask on this device" duration (1, 7, or 30 days) from the Select below the TOTP form. The selection applies to whichever factor the user completes.
+7. On success the final `LoginToken` is returned. If the user opted in, `trusted_device_token` is also returned (once) and the frontend stores it in `localStorage["mfa.trusted_device_token"]`. The frontend then stores `access_token` in `localStorage` and navigates to the post-login target.
 
 ### Login Challenge Form UX
 
@@ -81,6 +93,25 @@ The TOTP form on the login challenge page uses a structured inline error with tw
 - **`attempt_limit_exceeded`** — shows the inline error message without the wave (the challenge is dead; retrying is pointless). The frontend should redirect to `/login` after this.
 
 The wave animation keyframes (`shake-x`, `shake-slot`) live in `frontend/src/index.css` and are suppressed by `prefers-reduced-motion`.
+
+### Trusted Devices / Do Not Ask on This Device
+
+After successfully completing a second-factor challenge, the user can opt to trust the current browser for a bounded window by selecting a duration from the "Do not ask on this device" Select on the `/login/mfa` screen. The Select is full-width and shows in both primary mode (passkey/TOTP) and recovery-code mode. Default is "Ask every time" (no trust).
+
+**When trust is selected:**
+
+1. The verify request carries `remember_device_days: 1 | 7 | 30`.
+2. On success the backend mints a `user_trusted_device` row (bcrypt-hashed opaque token, never stored in plaintext).
+3. The plaintext token is returned once on the `LoginToken` response as `trusted_device_token`.
+4. The frontend stores it at `localStorage["mfa.trusted_device_token"]`.
+
+**On subsequent logins:**
+
+The frontend reads the stored token and passes it to the backend. If the token is valid and unexpired for that user, the login endpoint returns a `LoginToken` directly without issuing an `MfaChallenge`. An invalid, expired, forged, or wrong-user token causes silent fallthrough to the normal challenge — no error, no hint to the caller.
+
+**Revoking trust:**
+
+There is currently no per-device revoke endpoint in Settings. The token expires naturally after the chosen window. Disabling 2FA (any path: explicit disable, last-factor removal) wipes all trusted-device rows immediately via `disable_all_factors`, making any live localStorage token inert.
 
 ### Rename or Delete a Passkey
 
@@ -126,6 +157,13 @@ Requires a fresh-factor proof (password, TOTP code, or passkey assertion). Same 
 | **`DELETE /totp` is idempotent** | Returns success even when no TOTP is enrolled. |
 | **Google-OAuth users without a password** | May still use passkey or TOTP for step-up proof; password proof is unavailable to them for step-up mutations. |
 | **Password reset does not bypass 2FA** | Password recovery lets the user change their password, but 2FA remains in force on the next login. The UI communicates this explicitly. |
+| **Trusted-device duration allowlist** | Only `1`, `7`, or `30` days are accepted for `remember_device_days`. Out-of-allowlist values from the API return 422 (Pydantic `Literal[1,7,30]|None` enforcement at the edge); a direct service call raises `invalid_trust_duration` (400). |
+| **Trusted-device scope** | Per-device, per-user. A token is only ever validated against the requesting user's own rows. A token from user A cannot skip MFA for user B. |
+| **Trusted-device graceful fallthrough** | An invalid, expired, forged, or wrong-user token is silently ignored (returns `False`). The response is identical to "no token presented" — no oracle. |
+| **Trusted-device skip only when 2FA is on** | The skip branch runs only inside the `if user.two_factor_enabled:` block. Users without 2FA are completely unaffected. |
+| **Wipe-on-disable** | All trusted-device rows are wiped by `disable_all_factors`. This covers the explicit "Turn off 2FA" flow, last-factor passkey delete, and last-factor TOTP removal. Any live localStorage token becomes inert immediately. |
+| **Trusted-device token hashed at rest** | `token_hash` is a bcrypt hash (`get_password_hash`). The plaintext is returned once at mint time and never stored server-side. |
+| **Trusted-device cleanup** | The hourly cleanup job sweeps expired rows. Expired rows are also rejected at read time, so housekeeping is best-effort. |
 
 ---
 
@@ -161,6 +199,8 @@ Users who have never enrolled 2FA see a dismissable banner on the dashboard enco
 | Step-up required (401) | The proof form surfaces a "Verification failed" error. |
 | Recovery codes modal | Cannot be dismissed without clicking "I've saved these codes". |
 | TOTP input | `inputMode="numeric"`, `autocomplete="one-time-code"` for mobile keyboard and password manager offer. |
+| Trusted-device token invalid/expired | Silent fallthrough to normal MFA challenge — no error shown. The stale `localStorage` token is harmless; the user completes the challenge normally. |
+| 2FA disabled with live trusted-device token | Backend wipes device rows; the stored localStorage token becomes inert on next login and falls through to a challenge. |
 
 ---
 
@@ -169,6 +209,8 @@ Users who have never enrolled 2FA see a dismissable banner on the dashboard enco
 ### Auth (login + Google OAuth)
 
 Both `POST /login/access-token` and `POST /auth/google/callback` return a `LoginResponse` discriminated union. When `user.two_factor_enabled=True` they return `MfaChallenge`; otherwise `LoginToken`. See [auth](../auth/auth.md) and [Google OAuth](../auth/google_oauth.md).
+
+The trusted-device skip is layered inside the `two_factor_enabled=True` branch of both endpoints. The password login path reads the token from the `X-Trusted-Device` HTTP header; the Google OAuth callback reads it from the `trusted_device_token` JSON body field. Both endpoints return `LoginToken` on a skip and `MfaChallenge` when no valid token is found — the response shape is indistinguishable from the non-skip path by design.
 
 The `allowed_methods` list in the challenge is computed by `MfaService.allowed_methods_for_user` and reflects only the factors the specific user has enrolled with unused codes.
 
@@ -202,4 +244,4 @@ Pre-issued A2A machine tokens are explicitly **out of scope** for user 2FA. They
 
 ---
 
-*Last updated: 2026-05-21*
+*Last updated: 2026-06-05*

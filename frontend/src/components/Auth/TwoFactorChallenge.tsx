@@ -9,9 +9,17 @@ import {
   type RecoveryCodeFormData,
 } from "@/components/Auth/RecoveryCodeForm"
 import { TotpForm, type TotpFormData } from "@/components/Auth/TotpForm"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import useCustomToast from "@/hooks/useCustomToast"
 import { fetchLoginPasskeyOptions, useVerifyMfaMutation } from "@/hooks/useMfa"
 import { handleError } from "@/utils"
+import { setTrustedDeviceToken } from "@/utils/trustedDevice"
 import {
   isWebAuthnSupported,
   isWebAuthnUserCancellation,
@@ -19,6 +27,18 @@ import {
 } from "@/utils/webauthn"
 
 type Method = "passkey" | "totp" | "recovery"
+
+type RememberDays = 1 | 7 | 30 | null
+
+// Maps the radix Select string values (it only stores strings) to the
+// typed `remember_device_days` the API expects.
+const REMEMBER_OFF = "off"
+const rememberValueToDays = (value: string): RememberDays => {
+  if (value === "1") return 1
+  if (value === "7") return 7
+  if (value === "30") return 30
+  return null
+}
 
 interface VerifyParams {
   method: Method
@@ -46,6 +66,9 @@ export function TwoFactorChallenge() {
   const [passkeyLoading, setPasskeyLoading] = useState(false)
   const [totpError, setTotpError] = useState<TotpInlineError | null>(null)
   const [recoveryMode, setRecoveryMode] = useState(false)
+  // "Do not ask on this device" duration — rides along with whichever
+  // factor the user completes.
+  const [rememberDays, setRememberDays] = useState<RememberDays>(null)
 
   const allowedMethods = challenge?.allowed_methods ?? []
   const passkeyAllowed =
@@ -76,14 +99,27 @@ export function TwoFactorChallenge() {
       challenge_token: challenge.challenge_token,
       method,
       payload,
+      remember_device_days: rememberDays,
     }
     verifyMutation.mutate(body, {
       onSuccess: (data) => {
         localStorage.setItem("access_token", data.access_token)
-        clearChallenge()
+        // Persist the trusted-device token (when the user opted in) BEFORE
+        // the hard reload below so the next login can skip the challenge.
+        // Must stay here — see the clearChallenge() note below.
+        if (data.trusted_device_token) {
+          setTrustedDeviceToken(data.trusted_device_token)
+        }
         showSuccessToast("Signed in")
         const target = redirectTo && redirectTo !== "/" ? redirectTo : "/"
-        // Use a full assign to honor arbitrary same-origin redirect targets.
+        // Hard assign honors arbitrary same-origin redirect targets and
+        // reboots the app cleanly. We intentionally do NOT clearChallenge()
+        // here: nulling the in-memory challenge while still mounted on
+        // /login/mfa would fire the "no challenge → /login" effect below,
+        // starting a client-side route transition that races this reload.
+        // That doomed transition's aborted testToken() throws and briefly
+        // flashes the root error boundary. The reload discards challenge
+        // state anyway, so there is nothing to clear.
         window.location.assign(target)
       },
       onError: (err) => {
@@ -214,6 +250,30 @@ export function TwoFactorChallenge() {
           )}
         </div>
       )}
+
+      {/* "Do not ask on this device" — applies to whichever method the
+          user completes (passkey / TOTP / recovery), so it lives outside
+          the method blocks and shows in both recovery and primary modes. */}
+      <Select
+        value={rememberDays === null ? REMEMBER_OFF : String(rememberDays)}
+        onValueChange={(value) => setRememberDays(rememberValueToDays(value))}
+      >
+        <SelectTrigger className="w-full" aria-label="Remember this device">
+          <SelectValue placeholder="Ask every time" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={REMEMBER_OFF}>Ask every time</SelectItem>
+          <SelectItem value="1">
+            Don't ask on this device for 1 day
+          </SelectItem>
+          <SelectItem value="7">
+            Don't ask on this device for 7 days
+          </SelectItem>
+          <SelectItem value="30">
+            Don't ask on this device for 30 days
+          </SelectItem>
+        </SelectContent>
+      </Select>
 
       <div className="flex items-center justify-center gap-6 text-sm">
         <button

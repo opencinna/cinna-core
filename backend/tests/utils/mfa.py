@@ -349,3 +349,117 @@ def assert_security_event_written(
         f"Expected at least one '{event_type}' security event but found none. "
         f"All events: {[e.get('event_type') for e in events]}"
     )
+
+
+def find_security_events(
+    client: TestClient,
+    headers: dict[str, str],
+    event_type: str,
+    *,
+    limit: int = 50,
+) -> list[dict]:
+    """Return all ``SecurityEvent`` rows matching ``event_type``."""
+    events = list_security_events(client, headers, limit=limit)
+    return [e for e in events if e.get("event_type") == event_type]
+
+
+# ── Trusted-device helpers ──────────────────────────────────────────────
+
+
+def verify_challenge_totp_remember(
+    client: TestClient,
+    challenge_token: str,
+    totp_secret: str,
+    remember_device_days: int | None,
+    *,
+    expected_status: int = 200,
+) -> dict:
+    """Verify an MFA challenge via TOTP with an optional trusted-device duration.
+
+    Passes ``remember_device_days`` in the request body.  When set to a
+    valid value (1/7/30), the returned ``LoginToken`` carries a non-null
+    ``trusted_device_token``.  When ``None`` (default), the field is absent
+    or null.
+
+    Uses ``counter_offset=+1`` to generate a code from the adjacent TOTP
+    step.  This avoids the ``last_used_step`` replay guard when this helper
+    is called in the same 30-second window as ``enroll_totp_and_get_secret``
+    (which records the current step during enrollment).  Using the +1 step
+    is accepted by the service (``valid_window=1``) and mirrors the pattern
+    used by ``test_totp_verify_accepts_adjacent_steps``.
+    """
+    import time as _time
+    ts = int(_time.time())
+    code = pyotp.TOTP(totp_secret).at(ts, counter_offset=1)
+    r = client.post(
+        f"{_BASE}/login/mfa/verify",
+        json={
+            "challenge_token": challenge_token,
+            "method": "totp",
+            "payload": {"code": code},
+            "remember_device_days": remember_device_days,
+        },
+    )
+    assert r.status_code == expected_status, (
+        f"mfa/verify (remember) expected {expected_status}, got {r.status_code}: {r.text}"
+    )
+    return r.json()
+
+
+def verify_challenge_recovery_remember(
+    client: TestClient,
+    challenge_token: str,
+    recovery_code: str,
+    remember_device_days: int | None,
+    *,
+    expected_status: int = 200,
+) -> dict:
+    """Verify an MFA challenge via recovery code with an optional trusted-device duration."""
+    r = client.post(
+        f"{_BASE}/login/mfa/verify",
+        json={
+            "challenge_token": challenge_token,
+            "method": "recovery",
+            "payload": {"code": recovery_code},
+            "remember_device_days": remember_device_days,
+        },
+    )
+    assert r.status_code == expected_status, (
+        f"mfa/verify (recovery remember) expected {expected_status}, got {r.status_code}: {r.text}"
+    )
+    return r.json()
+
+
+def login_with_trusted_device(
+    client: TestClient,
+    email: str,
+    password: str,
+    token: str,
+) -> dict:
+    """POST /login/access-token with the ``X-Trusted-Device`` header set.
+
+    Returns the raw response body.  Does NOT assert on the kind so the
+    caller can branch on ``kind=="token"`` (skip) vs ``kind=="mfa_challenge"``
+    (no skip) vs check error responses.
+    """
+    r = client.post(
+        f"{_BASE}/login/access-token",
+        data={"username": email, "password": password},
+        headers={"X-Trusted-Device": token},
+    )
+    assert r.status_code == 200, f"login_with_trusted_device: {r.status_code} {r.text}"
+    return r.json()
+
+
+def enroll_totp_and_get_secret(client: TestClient, headers: dict[str, str]) -> str:
+    """Enroll TOTP and return the TOTP secret (``secret_base32``).
+
+    Needed for tests that must call ``pyotp.TOTP(secret).now()`` after enrollment
+    (e.g. to obtain a fresh challenge verify code) without going through the
+    begin/finish ceremony a second time.
+    """
+    begin = totp_begin(client, headers)
+    secret = begin["secret_base32"]
+    code = pyotp.TOTP(secret).now()
+    totp_finish(client, headers, begin["secret_token"], code)
+    return secret

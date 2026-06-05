@@ -20,6 +20,7 @@ from app.models import (
     UserPasskey,
     UserRecoveryCode,
     UserTotpSecret,
+    UserTrustedDevice,
     UserUpdate,
 )
 from app.models.events import security_event as security_event_constants
@@ -269,6 +270,8 @@ class UserService:
         - the :class:`UserTotpSecret` row (if any)
         - all :class:`UserRecoveryCode` rows
         - pending :class:`UserMfaChallenge` rows
+        - all :class:`UserTrustedDevice` rows (so any live
+          "Do not ask on this device" token becomes inert)
 
         Also writes a :data:`MFA_DISABLED` security-event row for the
         audit trail.  Idempotent — safe to call when no factors are
@@ -279,6 +282,9 @@ class UserService:
             delete(UserTotpSecret).where(UserTotpSecret.user_id == user.id),
             delete(UserRecoveryCode).where(UserRecoveryCode.user_id == user.id),
             delete(UserMfaChallenge).where(UserMfaChallenge.user_id == user.id),
+            delete(UserTrustedDevice).where(
+                UserTrustedDevice.user_id == user.id
+            ),
         ):
             session.exec(stmt)
         user.two_factor_enabled = False

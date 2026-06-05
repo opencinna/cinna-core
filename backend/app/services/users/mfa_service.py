@@ -72,6 +72,7 @@ from app.models import (
     UserPasskeyPublic,
     UserRecoveryCode,
     UserTotpSecret,
+    UserTrustedDevice,
 )
 from app.models.events import security_event as security_event_constants
 from app.services.users.user_service import UserService
@@ -256,21 +257,32 @@ class MfaService:
         challenge_token: str,
         method: str,
         payload: dict,
-    ) -> User:
+        remember_device_days: int | None = None,
+        user_agent: str | None = None,
+    ) -> tuple[User, str | None]:
         """Verify a second-factor proof against a pending login challenge.
 
-        Returns the authenticated ``User`` on success and marks the
-        challenge consumed.  The route layer then issues the access
-        token.
+        Returns ``(user, trusted_device_token_or_None)`` on success and
+        marks the challenge consumed.  When ``remember_device_days`` is
+        set, a :class:`UserTrustedDevice` row is minted inside the same
+        transaction and its plaintext token is returned (once) so the
+        route can hand it back on the ``LoginToken``.  The route layer
+        then issues the access token.
 
         Args:
             session: DB session.
             challenge_token: The token returned by ``issue_challenge``.
             method: ``"passkey"`` | ``"totp"`` | ``"recovery"``.
             payload: Method-specific dict (see plan §5.1.1).
+            remember_device_days: ``1`` / ``7`` / ``30`` to register a
+                trusted device, or ``None`` to skip device registration.
+            user_agent: Best-effort device label captured at the route
+                edge; stored on the trusted-device row for display.
 
         Raises:
-            ValueError: Any of the codes documented at the module level.
+            ValueError: Any of the codes documented at the module level,
+                plus ``invalid_trust_duration`` when
+                ``remember_device_days`` is outside the allowlist.
         """
         # Validate method membership BEFORE loading the challenge so a
         # malformed body doesn't bump ``attempts`` against a perfectly
@@ -349,9 +361,24 @@ class MfaService:
             severity="low",
             details={"method": method, "first_factor": challenge.first_factor},
         )
+
+        # Optionally register a trusted device so this browser can skip
+        # the challenge for the chosen window.  Runs in the SAME
+        # transaction as the challenge-consume + success event: if the
+        # duration is invalid (non-route caller) everything rolls back
+        # together and no access token is issued.
+        trusted_device_token: str | None = None
+        if remember_device_days is not None:
+            trusted_device_token = MfaService.register_trusted_device(
+                session=session,
+                user=user,
+                days=remember_device_days,
+                label=user_agent,
+            )
+
         session.commit()
         session.refresh(user)
-        return user
+        return user, trusted_device_token
 
     # ── WebAuthn — registration (enrollment) ───────────────────────────
 
@@ -978,6 +1005,107 @@ class MfaService:
         )
         latest = session.exec(stmt).first()
         return latest.created_at if latest else None
+
+    # ── Trusted devices ("Do not ask on this device") ─────────────────
+
+    @staticmethod
+    def register_trusted_device(
+        *,
+        session: Session,
+        user: User,
+        days: int,
+        label: str | None,
+    ) -> str:
+        """Mint a trusted-device token so this browser can skip the 2FA
+        challenge for ``days`` days.
+
+        Stores only a bcrypt hash of an opaque random token (mirrors the
+        recovery-code pattern) and returns the plaintext exactly once for
+        the caller to surface on the ``LoginToken``.  Does **not** commit
+        — the caller (``verify_challenge``) commits as part of its single
+        success transaction.
+
+        Raises ``ValueError("invalid_trust_duration")`` when ``days`` is
+        not in :pyattr:`Settings.MFA_TRUSTED_DEVICE_ALLOWED_DAYS` — never
+        trust an arbitrary client-supplied duration.
+        """
+        if days not in settings.MFA_TRUSTED_DEVICE_ALLOWED_DAYS:
+            raise ValueError("invalid_trust_duration")
+        token = secrets.token_urlsafe(32)
+        device = UserTrustedDevice(
+            user_id=user.id,
+            token_hash=get_password_hash(token),
+            expires_at=datetime.now(UTC) + timedelta(days=days),
+            label=(label[:256] if isinstance(label, str) else None),
+        )
+        session.add(device)
+        # Flush so the row gets its ``id`` for the audit detail without
+        # committing — the caller owns the commit.
+        session.flush()
+        MfaService._log_event(
+            session=session,
+            user=user,
+            event_type=security_event_constants.MFA_TRUSTED_DEVICE_REGISTERED,
+            severity="medium",
+            details={"days": days, "device_id": str(device.id)},
+        )
+        return token
+
+    @staticmethod
+    def consume_trusted_device(
+        *, session: Session, user: User, token: str | None
+    ) -> bool:
+        """Validate a presented trusted-device ``token`` for ``user``.
+
+        Returns ``True`` (and skips the challenge) when the token matches
+        one of the user's live (unexpired) rows; ``False`` otherwise —
+        silently, with no error and no oracle, so a forged token is
+        indistinguishable from "no token presented".
+
+        Resolution is ``user``-scoped and bcrypt-verifies the candidate
+        against each live row (bcrypt salts each hash, so we cannot look
+        up by hash directly — exactly the ``consume_recovery_code``
+        pattern).  On a match it bumps ``last_used_at``, logs
+        ``MFA_TRUSTED_DEVICE_USED``, and commits.
+        """
+        if not token or not isinstance(token, str):
+            return False
+        now = datetime.now(UTC)
+        stmt = select(UserTrustedDevice).where(
+            UserTrustedDevice.user_id == user.id
+        )
+        for device in session.exec(stmt):
+            if _ensure_utc(device.expires_at) <= now:
+                continue
+            if verify_password(token, device.token_hash):
+                device.last_used_at = now
+                session.add(device)
+                MfaService._log_event(
+                    session=session,
+                    user=user,
+                    event_type=security_event_constants.MFA_TRUSTED_DEVICE_USED,
+                    severity="low",
+                    details={"device_id": str(device.id)},
+                )
+                session.commit()
+                return True
+        return False
+
+    @staticmethod
+    def purge_expired_trusted_devices(*, session: Session) -> int:
+        """Delete every trusted-device row past its ``expires_at``.
+
+        Called by the hourly cleanup job.  Expired rows are also rejected
+        at read time in :meth:`consume_trusted_device`, so this is purely
+        housekeeping.  Returns the number of rows deleted.
+        """
+        result = session.exec(
+            delete(UserTrustedDevice).where(
+                UserTrustedDevice.expires_at < datetime.now(UTC)
+            )
+        )
+        session.commit()
+        return int(getattr(result, "rowcount", 0) or 0)
 
     # ── Step-up re-authentication ──────────────────────────────────────
 

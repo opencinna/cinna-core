@@ -23,6 +23,11 @@ MFA_RATE_LIMITED = "MFA_RATE_LIMITED"
 MFA_SIGN_COUNT_REGRESSION = "MFA_SIGN_COUNT_REGRESSION"
 MFA_PASSKEY_INVALID_ORIGIN = "MFA_PASSKEY_INVALID_ORIGIN"
 MFA_RECOVERY_CODES_REGENERATED = "MFA_RECOVERY_CODES_REGENERATED"
+# Trusted-device ("Do not ask on this device") audit events. Registered
+# when a trusted-device token is minted on verify; Used when a valid
+# token skips the login challenge. The plaintext token is never logged.
+MFA_TRUSTED_DEVICE_REGISTERED = "MFA_TRUSTED_DEVICE_REGISTERED"
+MFA_TRUSTED_DEVICE_USED = "MFA_TRUSTED_DEVICE_USED"
 
 # ── Agent environment console event-type constants ───────────────────
 # Emitted by ``EnvironmentConsoleService`` when an owner+developer opens or

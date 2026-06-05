@@ -7876,12 +7876,20 @@ export class LoginService {
      * Returns a :class:`LoginResponse` discriminated union:
      *
      * - :class:`LoginToken` (``kind="token"``)   — straight access token
-     * when 2FA is off.
+     * when 2FA is off, or when 2FA is on **and** a valid unexpired
+     * trusted-device token is presented (the "Do not ask on this device"
+     * skip).
      * - :class:`MfaChallenge` (``kind="mfa_challenge"``) — short-lived
-     * challenge handle when ``user.two_factor_enabled=True``.  The
-     * frontend completes the flow via ``POST /login/mfa/verify``.
+     * challenge handle when ``user.two_factor_enabled=True`` and no valid
+     * trusted-device token was presented.  The frontend completes the
+     * flow via ``POST /login/mfa/verify``.
+     *
+     * The optional ``X-Trusted-Device`` header carries the opaque
+     * trusted-device token minted at a prior ``/login/mfa/verify``.  Absent
+     * or forged → normal challenge path (no error, no oracle).
      * @param data The data for the request.
      * @param data.formData
+     * @param data.xTrustedDevice
      * @returns unknown Successful Response
      * @throws ApiError
      */
@@ -7889,6 +7897,9 @@ export class LoginService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/api/v1/login/access-token',
+            headers: {
+                'X-Trusted-Device': data.xTrustedDevice
+            },
             formData: data.formData,
             mediaType: 'application/x-www-form-urlencoded',
             errors: {

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { isMfaChallengeResponse } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { safeRedirectPath } from "@/utils"
+import { getTrustedDeviceToken } from "@/utils/trustedDevice"
 
 const GOOGLE_REDIRECT_KEY = "google_oauth_redirect"
 
@@ -30,6 +31,9 @@ export function GoogleLoginButton() {
       const requestBody: GoogleCallbackRequest = {
         code,
         state,
+        // "Do not ask on this device" — when a valid token is stored, the
+        // backend skips the 2FA challenge and returns a token directly.
+        trusted_device_token: getTrustedDeviceToken() ?? undefined,
       }
       return await OauthService.googleCallback({
         requestBody,

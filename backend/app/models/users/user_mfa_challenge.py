@@ -91,6 +91,12 @@ class MfaVerifyRequest(BaseModel):
     challenge_token: str
     method: Literal["passkey", "totp", "recovery"]
     payload: dict
+    # "Do not ask on this device" duration. When set, a successful verify
+    # mints a ``UserTrustedDevice`` row and returns the plaintext token on
+    # the ``LoginToken`` response.  ``Literal`` so the OpenAPI enum (and TS
+    # union) reject arbitrary durations at the edge; the service re-checks
+    # against ``MFA_TRUSTED_DEVICE_ALLOWED_DAYS`` for non-route callers.
+    remember_device_days: Literal[1, 7, 30] | None = None
 
 
 class LoginToken(SQLModel):
@@ -103,6 +109,13 @@ class LoginToken(SQLModel):
     kind: Literal["token"] = "token"
     access_token: str
     token_type: str = "bearer"
+    # Plaintext trusted-device token, returned exactly once by
+    # ``/login/mfa/verify`` when a ``remember_device_days`` duration was
+    # requested and the device was registered.  ``None`` on every other
+    # ``LoginToken`` (plain login, skip-path login, no-duration verify).
+    # Adding an optional field keeps the ``LoginResponse`` discriminated
+    # union backward-compatible.
+    trusted_device_token: str | None = None
 
 
 class MfaStatus(SQLModel):
