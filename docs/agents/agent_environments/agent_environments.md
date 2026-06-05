@@ -144,6 +144,7 @@ Each agent has a configurable inactivity threshold (agent-level setting, not per
 3. Last activity exceeds the agent's configured threshold
 4. EITHER: user is offline (no active WebSocket) OR environment is not the active one for its agent
 5. `sync_active` is `false` — an active CLI sync WebSocket keeps the environment warm. When the last sync WebSocket disconnects, a grace period (default 5 minutes) starts; only after that elapses without a new connection or session does the environment become a suspension candidate. See [Cinna CLI Integration](../../application/cinna_cli_integration/cinna_cli_integration.md)
+6. No attached environment console — an open Logs or Terminal console marks the environment warm via `EnvConsoleActivityTracker.is_console_warm()`. Normal inactivity rules resume once the last console detaches. See [Agent Environment Console](./agent_env_console.md)
 
 ### Activity Tracking
 
@@ -208,6 +209,7 @@ User → Frontend → Backend API → Environment Lifecycle Manager → Docker A
 
 ## Integration Points
 
+- **[Agent Environment Console](./agent_env_console.md)** - Live log tailing and interactive web terminal (PTY shell) surfaced per environment card; console keep-warm gates auto-suspension; full SecurityEvent audit on terminal open/close
 - **[Agent Sessions](../../application/agent_sessions/agent_sessions.md)** - Sessions connect users to environments; environment must be running for message streaming; `ENVIRONMENT_ACTIVATED` event triggers processing of pending sessions
 - **[Agent Prompts](../agent_prompts/agent_prompts.md)** - Prompts synced to `workspace/docs/` on every start; building mode reads comprehensive prompt set, conversation mode reads workflow prompt
 - **[Session Recovery](../agent_commands/session_recovery_command.md)** - SDK session IDs stored for resumption after container restarts; recovery handles lost connections after rebuilds

@@ -292,6 +292,72 @@ class AgentEnvConnector:
         except Exception as e:
             raise RuntimeError(f"Failed to connect to env-core sync endpoint at {ws_url}: {e}") from e
 
+    async def open_shell_websocket(
+        self,
+        base_url: str,
+        auth_headers: dict,
+        preamble: dict | None = None,
+    ):
+        """
+        Open a WebSocket connection to the env-core /shell/pty endpoint.
+
+        Mirrors ``open_sync_websocket``: converts the internal HTTP base URL to a
+        ws:// URL, connects with the env-core auth headers, and optionally sends
+        a preamble JSON frame ({"cols": N, "rows": M, "shell": "bash"}) so the
+        spawned PTY starts at the right window size.
+
+        Returns a ``websockets`` client connection object connected to the
+        internal env-core shell endpoint.
+
+        Args:
+            base_url: Internal base URL of the env-core HTTP server (e.g.,
+                http://container:8080).
+            auth_headers: Auth headers dict — carries the env's AGENT_AUTH_TOKEN
+                bearer for the internal-only endpoint.
+            preamble: Optional preamble dict sent as a text JSON frame right
+                after the connection opens.
+
+        Returns:
+            An open websockets connection object.
+
+        Raises:
+            RuntimeError: If the connection cannot be established.
+        """
+        import json as _json
+
+        import websockets
+
+        # Convert http:// → ws://, https:// → wss://
+        ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://")
+        ws_url = f"{ws_url.rstrip('/')}/shell/pty"
+
+        try:
+            connection = await websockets.connect(
+                ws_url,
+                additional_headers=auth_headers,
+                open_timeout=15.0,
+                max_size=None,  # PTY output bursts (TUI redraws) can be large
+            )
+            logger.info(f"Opened shell WebSocket to env-core at {ws_url}")
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to connect to env-core shell endpoint at {ws_url}: {e}"
+            ) from e
+
+        if preamble is not None:
+            try:
+                await connection.send(_json.dumps(preamble))
+            except Exception as e:
+                try:
+                    await connection.close()
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"Failed to send shell preamble to env-core at {ws_url}: {e}"
+                ) from e
+
+        return connection
+
     async def interrupt_command(
         self,
         base_url: str,

@@ -24,6 +24,12 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 
+async def _empty_async_iter() -> AsyncIterator[str]:
+    """An async generator that yields nothing — used as a logs-follow fallback."""
+    return
+    yield ""  # pragma: no cover - makes this a generator
+
+
 class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
     """
     Docker environment adapter using docker-compose.
@@ -939,22 +945,91 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
             raise
 
     async def get_logs(self, lines: int = 100, follow: bool = False) -> list[str] | AsyncIterator[str]:
-        """Get container logs."""
+        """Get container logs.
+
+        For ``follow=False`` returns a list of recent log lines (snapshot).
+
+        For ``follow=True`` returns an async generator that yields log lines as
+        they arrive. The Docker SDK's ``container.logs(stream=True)`` returns a
+        *blocking* iterator backed by a socket; iterating it directly on the
+        event loop would stall every other coroutine in the process. We therefore
+        drive the blocking iterator on a worker thread (``asyncio.to_thread``)
+        that feeds an ``asyncio.Queue``, and the async generator drains the queue.
+        The stream ends gracefully (StopAsyncIteration) when the container stops
+        or the consumer stops iterating.
+        """
         try:
             container = self.docker_client.containers.get(self.container_name)
+        except Exception as e:
+            logger.warning(f"get_logs: container {self.container_name} unavailable: {e}")
+            return [] if not follow else _empty_async_iter()
 
-            if follow:
-                # Stream logs
-                async def log_stream():
-                    for line in container.logs(stream=True, follow=True, tail=lines):
-                        yield line.decode()
-                return log_stream()
-            else:
-                # Get recent logs
-                logs = container.logs(tail=lines).decode()
+        if not follow:
+            try:
+                logs = container.logs(tail=lines).decode(errors="replace")
                 return logs.split("\n")
-        except Exception:
-            return [] if not follow else iter([])
+            except Exception as e:
+                logger.warning(f"get_logs: failed to read logs for {self.container_name}: {e}")
+                return []
+
+        return self._follow_logs(container, lines)
+
+    async def _follow_logs(self, container: Container, lines: int) -> AsyncIterator[str]:
+        """Stream container logs without blocking the event loop.
+
+        A worker thread iterates the blocking Docker log generator and pushes
+        decoded lines onto an asyncio queue; this coroutine yields them. A
+        sentinel (None) signals end-of-stream (container stopped / iterator
+        exhausted). On consumer cancellation the blocking iterator is closed so
+        the worker thread can exit.
+        """
+        queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=1000)
+        loop = asyncio.get_event_loop()
+        stop = False
+
+        log_iter = container.logs(stream=True, follow=True, tail=lines)
+
+        def _drain_blocking() -> None:
+            try:
+                for raw in log_iter:
+                    if stop:
+                        break
+                    line = raw.decode(errors="replace") if isinstance(raw, bytes) else str(raw)
+                    # Hand the line back to the loop thread; block briefly if the
+                    # consumer is slow (bounded queue provides backpressure).
+                    fut = asyncio.run_coroutine_threadsafe(queue.put(line), loop)
+                    try:
+                        fut.result(timeout=30)
+                    except Exception:
+                        break
+            except Exception as e:
+                logger.debug(f"_follow_logs: blocking drain ended for {self.container_name}: {e}")
+            finally:
+                asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+
+        drain_task = asyncio.create_task(asyncio.to_thread(_drain_blocking))
+
+        try:
+            while True:
+                line = await queue.get()
+                if line is None:
+                    break
+                yield line
+        finally:
+            stop = True
+            try:
+                # Closing the underlying socket unblocks the worker thread.
+                close = getattr(log_iter, "close", None)
+                if callable(close):
+                    close()
+            except Exception:
+                pass
+            if not drain_task.done():
+                drain_task.cancel()
+            try:
+                await drain_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
     # === Helper Methods ===
 

@@ -2,14 +2,20 @@ import logging
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, WebSocket, status
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import (
+    CurrentUser,
+    EnvConsoleContext,
+    SessionDep,
+    get_env_console_context_ws,
+)
 from app.models import (
     AgentEnvironment,
     AgentEnvironmentUpdate,
+    AgentEnvironmentReconfigure,
     AgentEnvironmentPublic,
     Message,
 )
@@ -120,6 +126,38 @@ def update_environment(
         )
         updated_environment = EnvironmentService.update_environment(
             session=session, env_id=id, data=environment_in
+        )
+        return updated_environment
+    except AgentEnvironmentError as e:
+        _handle_service_error(e)
+
+
+@router.post("/{id}/reconfigure", response_model=AgentEnvironmentPublic)
+async def reconfigure_environment(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: uuid.UUID,
+    data: AgentEnvironmentReconfigure,
+) -> Any:
+    """
+    Dynamically change an environment's per-mode SDK / AI credential / model
+    override and (by default) rebuild it immediately.
+
+    Validates the new SDK↔credential pairing up front (400 on mismatch / missing
+    key) so the change is rejected before any rebuild starts. Owner / superuser
+    only (enforced by the access check).
+    """
+    try:
+        EnvironmentService.get_environment_with_access_check(
+            session, id, current_user.id, current_user.is_superuser
+        )
+        updated_environment = await EnvironmentService.reconfigure_environment(
+            session=session,
+            env_id=id,
+            user=current_user,
+            data=data,
+            rebuild=data.rebuild,
         )
         return updated_environment
     except AgentEnvironmentError as e:
@@ -421,3 +459,75 @@ async def agent_api_reloaded(
     # Best-effort: re-harvest + re-cache the spec in its own session.
     await AgentApiService.refresh_spec_cache(env.id)
     return Message(message="Agent API spec re-cache triggered")
+
+
+# ── Environment console WebSocket routes (web terminal + logs follow) ─────────
+# Browser-facing WebSockets authenticated with the platform JWT in ``?token=``
+# (browsers cannot set Authorization on a WS handshake). Thin controllers: the
+# auth dep enforces ownership / developer-role and the service owns the full
+# proxy lifecycle. These endpoints do not appear in the OpenAPI client.
+
+
+def _ws_source_ip(websocket: WebSocket) -> str | None:
+    """Best-effort client IP for audit, honouring a reverse-proxy header."""
+    forwarded = websocket.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return websocket.client.host if websocket.client else None
+
+
+@router.websocket("/{id}/terminal")
+async def environment_terminal_ws(
+    websocket: WebSocket,
+    id: uuid.UUID,
+    ctx: Annotated[
+        EnvConsoleContext, Depends(get_env_console_context_ws(require_terminal=True))
+    ],
+) -> None:
+    """
+    Interactive web-terminal WebSocket (owner + agent-developer/superuser only).
+
+    The auth dep validates the token, loads the env, and enforces the
+    ownership + developer gate; this controller just hands the socket to
+    ``EnvironmentConsoleService.run_terminal_tunnel``.
+    """
+    from app.services.environments.environment_console_service import (
+        EnvironmentConsoleService,
+    )
+
+    await EnvironmentConsoleService.run_terminal_tunnel(
+        websocket=websocket,
+        environment=ctx.environment,
+        agent_id=ctx.agent.id,
+        user=ctx.user,
+        raw_token=ctx.raw_token,
+        source_ip=_ws_source_ip(websocket),
+    )
+
+
+@router.websocket("/{id}/logs/stream")
+async def environment_logs_stream_ws(
+    websocket: WebSocket,
+    id: uuid.UUID,
+    ctx: Annotated[
+        EnvConsoleContext, Depends(get_env_console_context_ws(require_terminal=False))
+    ],
+    tail: int = Query(default=200, ge=1),
+) -> None:
+    """
+    Live container-logs follow WebSocket (owner/superuser).
+
+    Streams a tail snapshot followed by host-side ``docker logs -f`` output.
+    Thin controller — delegates the lifecycle to the console service.
+    """
+    from app.services.environments.environment_console_service import (
+        EnvironmentConsoleService,
+    )
+
+    await EnvironmentConsoleService.follow_logs(
+        websocket=websocket,
+        environment=ctx.environment,
+        user=ctx.user,
+        raw_token=ctx.raw_token,
+        tail=tail,
+    )

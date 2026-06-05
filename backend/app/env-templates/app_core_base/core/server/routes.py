@@ -2170,6 +2170,379 @@ async def sync_exec_ws(websocket: WebSocket) -> None:
         logger.info(f"sync/exec: session ended (pid={proc.pid}, returncode={proc.returncode})")
 
 
+# ── Interactive PTY shell endpoint (web terminal) ─────────────────────────────
+
+
+# Idle timeout for an interactive shell — auto-closes after this many seconds
+# of no inbound keystrokes so a forgotten browser tab cannot orphan a shell.
+ENV_TERMINAL_IDLE_TIMEOUT_SECONDS = int(
+    os.getenv("ENV_TERMINAL_IDLE_TIMEOUT_SECONDS", "900")
+)
+
+# Clamp ranges for resize control frames (defensive — the backend also clamps).
+_PTY_MIN_DIM = 1
+_PTY_MAX_DIM = 500
+
+
+@router.websocket("/shell/pty")
+async def shell_pty_ws(websocket: WebSocket) -> None:
+    """
+    Internal WebSocket endpoint serving an interactive PTY shell.
+
+    Internal-only — reachable only from the platform backend over the internal
+    Docker network (the backend performs the user ownership + developer-role
+    gate before opening this socket). Spawns ``bash -i`` (``sh`` fallback) in a
+    pseudo-terminal rooted at the workspace and pumps stdio bidirectionally over
+    the WebSocket as opaque bytes, plus a JSON control channel for window resize.
+
+    Protocol:
+    1. Verify Authorization header matches AGENT_AUTH_TOKEN (mirrors /sync/exec).
+    2. accept().
+    3. Optional preamble frame (text JSON): {"cols": N, "rows": M, "shell": "bash"}.
+       Sent within 5s; if absent, defaults are used and the first inbound frame
+       is treated as keystrokes.
+    4. pty.openpty() → master/slave; spawn the shell with the slave as its
+       controlling tty in a new session (start_new_session=True).
+    5. Concurrent pumps:
+         - pty → ws: loop.add_reader(master_fd) forwards bytes as WS binary.
+         - ws → pty: binary frames → os.write(master_fd); text frames → JSON
+           control ({"type":"resize","cols":N,"rows":M}) → TIOCSWINSZ.
+         - idle watchdog: closes if no inbound keystrokes within the idle window.
+    6. Teardown (either side ends / process exits): SIGTERM the process group,
+       wait 2s, SIGKILL; close master fd; close WS.
+    """
+    import json as _json
+    import pty
+
+    # ── Auth: verify AGENT_AUTH_TOKEN before accepting ───────────────────────
+    if AGENT_AUTH_TOKEN:
+        auth_header = websocket.headers.get("authorization", "")
+        token = ""
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header.split(" ", 1)[1]
+        if token != AGENT_AUTH_TOKEN:
+            await websocket.close(code=1008)
+            return
+
+    await websocket.accept()
+    logger.info("shell/pty: WebSocket accepted")
+
+    loop = asyncio.get_event_loop()
+
+    # ── Optional preamble frame ──────────────────────────────────────────────
+    init_cols, init_rows = 80, 24
+    requested_shell = "bash"
+    pending_first_input: bytes | None = None
+    try:
+        preamble_raw = await asyncio.wait_for(websocket.receive(), timeout=5.0)
+        # Starlette WS message dict: prefer text (preamble) but tolerate bytes.
+        if preamble_raw.get("text") is not None:
+            try:
+                preamble = _json.loads(preamble_raw["text"])
+                init_cols = _clamp_pty_dim(preamble.get("cols"), 80)
+                init_rows = _clamp_pty_dim(preamble.get("rows"), 24)
+                if isinstance(preamble.get("shell"), str):
+                    requested_shell = preamble["shell"]
+            except (ValueError, TypeError):
+                logger.warning("shell/pty: malformed preamble, using defaults")
+        elif preamble_raw.get("bytes") is not None:
+            # No preamble — first frame is already keystrokes; replay it later.
+            pending_first_input = preamble_raw["bytes"]
+        elif preamble_raw.get("type") == "websocket.disconnect":
+            return
+    except asyncio.TimeoutError:
+        logger.debug("shell/pty: no preamble within 5s, using defaults")
+    except Exception as e:
+        logger.debug(f"shell/pty: error reading preamble: {e}")
+
+    # ── Resolve shell: prefer bash, fall back to sh ──────────────────────────
+    import shutil as _shutil
+
+    shell_path = _shutil.which(requested_shell) or _shutil.which("bash") or _shutil.which("sh")
+    if not shell_path:
+        logger.error("shell/pty: no shell binary available (bash/sh both missing)")
+        try:
+            await websocket.send_text(_json.dumps({"type": "error", "message": "no shell available"}))
+        except Exception:
+            pass
+        await websocket.close(code=1011)
+        return
+
+    # ── Open PTY + spawn shell ───────────────────────────────────────────────
+    master_fd, slave_fd = pty.openpty()
+    _set_pty_winsize(master_fd, init_rows, init_cols)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            shell_path,
+            "-i",
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            cwd="/app/workspace",
+            env=os.environ.copy(),
+            start_new_session=True,
+        )
+    except Exception as e:
+        logger.error(f"shell/pty: failed to spawn shell {shell_path}: {e}")
+        os.close(master_fd)
+        os.close(slave_fd)
+        await websocket.close(code=1011)
+        return
+
+    # The child holds its own copy of the slave fd; the parent no longer needs it.
+    os.close(slave_fd)
+    logger.info(f"shell/pty: spawned {shell_path} (pid={proc.pid}, cols={init_cols}, rows={init_rows})")
+
+    # Make the master fd non-blocking for loop.add_reader reads.
+    os.set_blocking(master_fd, False)
+
+    closed = asyncio.Event()
+    last_input_at = loop.time()
+    # Ordered hand-off from the synchronous reader callback to a single async
+    # sender — guarantees PTY output reaches the WS in read order even under
+    # bursty TUI redraws (one drain task, never concurrent sends).
+    #
+    # Bounded so a chatty TUI cannot flood container memory: when the queue
+    # fills we deregister the fd reader, which stops draining the kernel PTY
+    # buffer and lets the shell's writes block naturally (backpressure). The
+    # drain task re-registers the reader once it has drained below the mark.
+    _PTY_OUT_QUEUE_MAXSIZE = 1000
+    out_queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=_PTY_OUT_QUEUE_MAXSIZE)
+    reader_registered = False
+
+    def _add_reader() -> None:
+        nonlocal reader_registered
+        if reader_registered:
+            return
+        try:
+            loop.add_reader(master_fd, _on_master_readable)
+            reader_registered = True
+        except Exception as e:
+            logger.error(f"shell/pty: add_reader failed: {e}")
+            closed.set()
+
+    def _remove_reader() -> None:
+        nonlocal reader_registered
+        if not reader_registered:
+            return
+        try:
+            loop.remove_reader(master_fd)
+        except Exception:
+            pass
+        reader_registered = False
+
+    def _on_master_readable() -> None:
+        """Reader callback (sync): read PTY output and enqueue it in order.
+
+        Pauses the reader (backpressure) when the bounded queue fills.
+        """
+        try:
+            data = os.read(master_fd, 65536)
+        except BlockingIOError:
+            return
+        except OSError:
+            # Slave closed (shell exited) — signal end-of-output.
+            out_queue.put_nowait(None)
+            return
+        if not data:
+            out_queue.put_nowait(None)
+            return
+        try:
+            out_queue.put_nowait(data)
+        except asyncio.QueueFull:
+            # Consumer is behind — stop reading the PTY so the kernel buffer
+            # backpressures the shell. The drain task re-adds the reader.
+            _remove_reader()
+            try:
+                out_queue.put_nowait(data)
+            except asyncio.QueueFull:
+                # Lost the race with an empty slot; re-queue via the drain side
+                # by dropping this read — extremely unlikely (single producer).
+                pass
+        if out_queue.full():
+            _remove_reader()
+
+    async def pty_to_ws() -> None:
+        """Drain the output queue to the WebSocket as ordered binary frames."""
+        try:
+            while True:
+                data = await out_queue.get()
+                if data is None:
+                    break
+                await websocket.send_bytes(data)
+                # Re-enable reading once we've drained the buffer (backpressure
+                # release). Safe to call when already registered (no-op).
+                if not reader_registered and not closed.is_set():
+                    _add_reader()
+        except Exception as e:
+            logger.debug(f"shell/pty pty→ws pump ended: {e}")
+        finally:
+            closed.set()
+
+    _add_reader()
+
+    async def ws_to_pty() -> None:
+        """WebSocket → PTY master fd (keystrokes) + resize control frames."""
+        nonlocal last_input_at
+        try:
+            if pending_first_input is not None:
+                last_input_at = loop.time()
+                os.write(master_fd, pending_first_input)
+            while not closed.is_set():
+                message = await websocket.receive()
+                msg_type = message.get("type")
+                if msg_type == "websocket.disconnect":
+                    break
+                data = message.get("bytes")
+                text = message.get("text")
+                if data is not None:
+                    last_input_at = loop.time()
+                    try:
+                        os.write(master_fd, data)
+                    except OSError:
+                        break
+                elif text is not None:
+                    # JSON control channel (resize). Not counted as keystroke
+                    # activity so a resize-spamming client cannot keep an
+                    # otherwise-idle shell warm.
+                    try:
+                        control = _json.loads(text)
+                    except (ValueError, TypeError):
+                        continue
+                    if control.get("type") == "resize":
+                        rows = _clamp_pty_dim(control.get("rows"), init_rows)
+                        cols = _clamp_pty_dim(control.get("cols"), init_cols)
+                        _set_pty_winsize(master_fd, rows, cols)
+        except Exception as e:
+            logger.debug(f"shell/pty ws→pty pump ended: {e}")
+        finally:
+            closed.set()
+
+    async def idle_watchdog() -> None:
+        """Close the shell after the idle window elapses with no keystrokes."""
+        try:
+            while not closed.is_set():
+                idle_for = loop.time() - last_input_at
+                remaining = ENV_TERMINAL_IDLE_TIMEOUT_SECONDS - idle_for
+                if remaining <= 0:
+                    logger.info(
+                        f"shell/pty: idle timeout ({ENV_TERMINAL_IDLE_TIMEOUT_SECONDS}s), closing"
+                    )
+                    try:
+                        await websocket.send_text(
+                            _json.dumps({"type": "closed", "reason": "idle_timeout"})
+                        )
+                    except Exception:
+                        pass
+                    closed.set()
+                    return
+                # Wait until either the session closes or the next tick fires.
+                # A tick (TimeoutError) just re-checks idle time on the next
+                # iteration — never self-recurse (would grow the call stack
+                # unbounded for long-lived terminals).
+                try:
+                    await asyncio.wait_for(closed.wait(), timeout=min(remaining, 30.0))
+                except asyncio.TimeoutError:
+                    continue
+        except asyncio.CancelledError:
+            pass
+
+    async def proc_waiter() -> None:
+        try:
+            await proc.wait()
+        except Exception:
+            pass
+        finally:
+            closed.set()
+
+    out_task = asyncio.create_task(pty_to_ws())
+    in_task = asyncio.create_task(ws_to_pty())
+    watchdog_task = asyncio.create_task(idle_watchdog())
+    waiter_task = asyncio.create_task(proc_waiter())
+    tasks = (out_task, in_task, watchdog_task, waiter_task)
+
+    try:
+        await closed.wait()
+    finally:
+        _remove_reader()
+
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+        # SIGTERM the whole process group, escalate to SIGKILL after 2s.
+        await _kill_pty_process_group(proc)
+
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+        logger.info(f"shell/pty: session ended (pid={proc.pid}, returncode={proc.returncode})")
+
+
+def _clamp_pty_dim(value: Any, default: int) -> int:
+    """Clamp a cols/rows value to the sane PTY range, falling back to default."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    if n < _PTY_MIN_DIM:
+        return _PTY_MIN_DIM
+    if n > _PTY_MAX_DIM:
+        return _PTY_MAX_DIM
+    return n
+
+
+def _set_pty_winsize(master_fd: int, rows: int, cols: int) -> None:
+    """Apply a window size to the PTY master via TIOCSWINSZ."""
+    import fcntl
+    import struct
+    import termios
+
+    try:
+        winsize = struct.pack("HHHH", rows, cols, 0, 0)
+        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+    except OSError as e:
+        logger.debug(f"shell/pty: TIOCSWINSZ failed: {e}")
+
+
+async def _kill_pty_process_group(proc: "asyncio.subprocess.Process") -> None:
+    """SIGTERM the shell's process group, then SIGKILL after a 2s grace period."""
+    import signal
+
+    if proc.returncode is not None:
+        return
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, OSError):
+        pgid = None
+
+    try:
+        if pgid is not None:
+            os.killpg(pgid, signal.SIGTERM)
+        else:
+            proc.terminate()
+        await asyncio.sleep(2)
+        if proc.returncode is None:
+            if pgid is not None:
+                os.killpg(pgid, signal.SIGKILL)
+            else:
+                proc.kill()
+            await proc.wait()
+    except ProcessLookupError:
+        pass
+    except Exception as e:
+        logger.debug(f"shell/pty: error killing process group: {e}")
+
+
 @router.post("/command/interrupt/{exec_id}", dependencies=[Depends(verify_auth_token)])
 async def interrupt_command(exec_id: str):
     """

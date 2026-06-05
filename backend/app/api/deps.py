@@ -403,6 +403,172 @@ async def get_cli_context_ws(websocket: WebSocket, db: SessionDep) -> CLIContext
 CLIContextWSDep = Annotated[CLIContext, Depends(get_cli_context_ws)]
 
 
+# ── Environment console (web terminal + logs) WS context ───────────────
+
+
+class EnvConsoleContext(SQLModel):
+    """
+    Context object for environment-console WebSocket routes (web terminal /
+    logs follow).
+
+    Returned by ``get_env_console_context_ws`` after the platform JWT in
+    ``?token=`` is validated and the user is confirmed to own (or superuser-
+    access) the environment. ``Any`` is used for agent/environment to avoid a
+    circular import with models that depend on deps indirectly.
+    """
+    user: User
+    agent: Any  # Agent
+    environment: Any  # AgentEnvironment
+    raw_token: str  # platform JWT — re-checked each heartbeat for expiry/revocation
+
+
+# Scoped token types/roles that must NEVER be accepted on a console socket:
+# guest-share and webapp-viewer JWTs are narrowly scoped to chat and must not
+# be promotable to a full shell / logs stream (defense-in-depth on top of the
+# ownership + role checks below).
+_DISALLOWED_CONSOLE_TOKEN_TYPES = {"guest_share", "webapp_share"}
+_DISALLOWED_CONSOLE_ROLES = {"chat-guest", "webapp-viewer"}
+
+
+def _resolve_platform_user_from_token(db: Session, raw_token: str) -> User:
+    """Decode a platform access JWT and return the active ``User``.
+
+    Mirrors the validation in ``get_current_user`` (including expiry and
+    desktop-token revocation) but raises plain ``ValueError`` so WS callers can
+    translate it to a close code. HTTP callers should keep using
+    ``get_current_user``.
+
+    Defense-in-depth: explicitly rejects scoped guest-share / webapp-viewer
+    tokens by ``token_type``/``role`` rather than relying solely on a ``sub``
+    mismatch (those tokens carry a share id in ``sub``, not a user id).
+    """
+    try:
+        payload = jwt.decode(
+            raw_token, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
+        )
+        token_data = TokenPayload(**payload)
+    except (InvalidTokenError, ValidationError) as e:
+        raise ValueError("Could not validate credentials") from e
+
+    # Scope assertion — a full platform access token carries neither of these.
+    if payload.get("token_type") in _DISALLOWED_CONSOLE_TOKEN_TYPES:
+        raise ValueError("Token type not allowed for environment console")
+    if payload.get("role") in _DISALLOWED_CONSOLE_ROLES:
+        raise ValueError("Token role not allowed for environment console")
+
+    user = db.get(User, token_data.sub)
+    if not user:
+        raise ValueError("User not found")
+    if not user.is_active:
+        raise ValueError("Inactive user")
+
+    # Honour desktop-token revocation the same way get_current_user does.
+    if payload.get("client_kind") == "desktop":
+        from app.services.desktop_auth.desktop_auth_service import (
+            DesktopAuthError,
+            DesktopAuthService,
+        )
+
+        try:
+            DesktopAuthService.verify_active_or_raise(
+                db, payload.get("external_client_id")
+            )
+        except DesktopAuthError as e:
+            raise ValueError(e.message) from e
+
+    return user
+
+
+def _extract_ws_token(websocket: WebSocket) -> str:
+    """Extract a platform JWT from a WS handshake (Authorization header or
+    ``?token=`` query param). Raises ``ValueError`` when absent."""
+    auth_header = websocket.headers.get("authorization") or websocket.headers.get(
+        "Authorization"
+    )
+    if auth_header:
+        parts = auth_header.split(" ", 1)
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            return parts[1].strip()
+    token = websocket.query_params.get("token")
+    if token:
+        return token.strip()
+    raise ValueError("Missing authentication token")
+
+
+def get_env_console_context_ws(require_terminal: bool):
+    """Build a WebSocket auth dependency for environment-console routes.
+
+    Returns a FastAPI dependency callable that validates the platform JWT from
+    ``?token=``, loads the environment named by the ``{id}`` path param, enforces
+    owner/superuser access, and — when ``require_terminal`` is True — additionally
+    requires the ``agent-developer`` role (or superuser). On any failure it
+    closes the WebSocket with code ``1008`` and raises ``WebSocketDisconnect``
+    (mirrors ``get_cli_context_ws``).
+    """
+
+    async def _dep(websocket: WebSocket, db: SessionDep) -> EnvConsoleContext:
+        from starlette.websockets import WebSocketDisconnect, WebSocketState
+
+        from app.services.environments.environment_service import (
+            EnvironmentService,
+            EnvironmentNotFoundError,
+            AgentNotFoundError,
+            EnvironmentPermissionDeniedError,
+        )
+        from app.services.users.role_service import RoleService
+
+        async def _close_and_raise(reason: str) -> None:
+            try:
+                if websocket.client_state != WebSocketState.DISCONNECTED:
+                    await websocket.close(code=1008)
+            except Exception:
+                pass
+            raise WebSocketDisconnect(code=1008, reason=reason)
+
+        # 1. Resolve user from the platform JWT
+        try:
+            raw_token = _extract_ws_token(websocket)
+            user = _resolve_platform_user_from_token(db, raw_token)
+        except ValueError as e:
+            await _close_and_raise(str(e))
+
+        # 2. Resolve env id from the path param
+        env_id_raw = websocket.path_params.get("id")
+        try:
+            env_id = uuid.UUID(str(env_id_raw))
+        except (ValueError, TypeError):
+            await _close_and_raise("Invalid environment id")
+
+        # 3. Ownership / superuser access check
+        try:
+            environment, agent = EnvironmentService.get_environment_with_access_check(
+                session=db,
+                env_id=env_id,
+                user_id=user.id,
+                is_superuser=user.is_superuser,
+            )
+        except (
+            EnvironmentNotFoundError,
+            AgentNotFoundError,
+            EnvironmentPermissionDeniedError,
+        ) as e:
+            # Do not leak existence — a non-owner gets the same 1008 close.
+            await _close_and_raise(str(e) or "Access denied")
+
+        # 4. Terminal gate: developer/superuser only
+        if require_terminal and not RoleService.is_developer(user):
+            await _close_and_raise("Terminal access requires the agent-developer role")
+
+        return EnvConsoleContext(
+            user=user,
+            agent=agent,
+            environment=environment,
+            raw_token=raw_token,
+        )
+
+    return _dep
+
+
 # ── External client attribution ────────────────────────────────────────
 
 

@@ -1,9 +1,15 @@
+import { useState, useEffect } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { AgentsService } from "@/client"
+import { eventService, EventTypes, type EventData } from "@/services/eventService"
+import type { AgentEnvironmentPublic } from "@/client"
 import { EnvironmentCard } from "@/components/Environments/EnvironmentCard"
+import { EnvironmentConsoleDrawer } from "@/components/Environments/EnvironmentConsoleDrawer"
 import { AddEnvironment } from "@/components/Environments/AddEnvironment"
+import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import useRole from "@/hooks/useRole"
+import type { EnvConsoleKind } from "@/hooks/useEnvConsoleSocket"
 import {
   Select,
   SelectContent,
@@ -27,11 +33,19 @@ interface AgentEnvironmentsTabProps {
 export function AgentEnvironmentsTab({ agentId }: AgentEnvironmentsTabProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
+  const { user } = useAuth()
   // Phase 3 — agent-user view of this tab is read-only.  Activate /
   // add / inactivity-edit are developer-only controls; the EnvironmentCard
   // still surfaces sessions and start-conversation links so the install→
   // chat flow works.
   const { isDeveloper } = useRole()
+
+  // Shared console drawer state — a single drawer instance is hosted here and
+  // driven by the per-card Logs/Terminal actions.
+  const [consoleTarget, setConsoleTarget] = useState<{
+    environment: AgentEnvironmentPublic
+    kind: EnvConsoleKind
+  } | null>(null)
 
   const { data: agentData } = useQuery({
     queryKey: ["agent", agentId],
@@ -60,8 +74,32 @@ export function AgentEnvironmentsTab({ agentId }: AgentEnvironmentsTabProps) {
     queryKey: ["environments", agentId],
     queryFn: () => AgentsService.listAgentEnvironments({ id: agentId }),
     enabled: !!agentId,
-    refetchInterval: 10000, // Poll every 10s for status updates
+    refetchInterval: 10000, // Poll every 10s as a fallback for status updates
   })
+
+  // Real-time status updates: the backend emits environment lifecycle events
+  // (e.g. ENVIRONMENT_STATUS_CHANGED at the very start of a rebuild) so the
+  // cards reflect rebuild/suspend/activate transitions immediately instead of
+  // waiting for the 10s poll or a blocking mutation to settle.
+  useEffect(() => {
+    if (!agentId) return
+    const handler = (event: EventData) => {
+      // Each env event carries the owning agent id in its meta — ignore events
+      // for other agents to avoid needless refetches.
+      const eventAgentId = event.meta?.agent_id as string | undefined
+      if (eventAgentId && eventAgentId !== agentId) return
+      queryClient.invalidateQueries({ queryKey: ["environments", agentId] })
+      queryClient.invalidateQueries({ queryKey: ["agent", agentId] })
+    }
+    const subIds = [
+      EventTypes.ENVIRONMENT_STATUS_CHANGED,
+      EventTypes.ENVIRONMENT_ACTIVATING,
+      EventTypes.ENVIRONMENT_ACTIVATED,
+      EventTypes.ENVIRONMENT_ACTIVATION_FAILED,
+      EventTypes.ENVIRONMENT_SUSPENDED,
+    ].map((type) => eventService.subscribe(type, handler))
+    return () => subIds.forEach((id) => eventService.unsubscribe(id))
+  }, [agentId, queryClient])
 
   const activateMutation = useMutation({
     mutationFn: (envId: string) =>
@@ -128,6 +166,30 @@ export function AgentEnvironmentsTab({ agentId }: AgentEnvironmentsTabProps) {
     .filter((env) => env.id !== activeEnvironment?.id)
     .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
 
+  // Single ordered list rendered as a tiled grid: the primary (active)
+  // environment is always first, followed by the rest (most-recently-updated
+  // first). Agent-users (read-only) only ever see the active environment.
+  const orderedEnvironments = isDeveloper
+    ? [...(activeEnvironment ? [activeEnvironment] : []), ...inactiveEnvironments]
+    : activeEnvironment
+      ? [activeEnvironment]
+      : []
+
+  // Console gating (UX only — the backend WS dep is the real boundary):
+  //   * Logs     → owner (or superuser, who already reads as developer here).
+  //   * Terminal → owner AND agent-developer/superuser.
+  // ``isDeveloper`` already degrades to false for foreign installs via the
+  // RoleOverrideContext, so an installed (non-owned) agent never shows the
+  // terminal. We additionally require ownership of the agent itself.
+  const isOwner = !!user && agentData?.owner_id === user.id
+  const canFollowLogs = isDeveloper && isOwner
+  const canOpenTerminal = isDeveloper && isOwner
+
+  const openConsole = (environmentId: string, kind: EnvConsoleKind) => {
+    const env = environments.find((e) => e.id === environmentId)
+    if (env) setConsoleTarget({ environment: env, kind })
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
@@ -177,41 +239,34 @@ export function AgentEnvironmentsTab({ agentId }: AgentEnvironmentsTabProps) {
           {isDeveloper && <AddEnvironment agentId={agentId} />}
         </div>
       ) : (
-        <div className="space-y-4">
-          {activeEnvironment && (
-            <div>
-              <h3 className="text-sm font-semibold text-muted-foreground mb-2">
-                ACTIVE ENVIRONMENT
-              </h3>
-              <EnvironmentCard
-                environment={activeEnvironment}
-                agentId={agentId}
-                onActivate={
-                  isDeveloper ? () => handleActivate(activeEnvironment.id) : undefined
-                }
-                readOnly={!isDeveloper}
-              />
-            </div>
-          )}
-
-          {isDeveloper && inactiveEnvironments.length > 0 && (
-            <div>
-              <h3 className="text-sm font-semibold text-muted-foreground mb-2">
-                OTHER ENVIRONMENTS
-              </h3>
-              <div className="space-y-3">
-                {inactiveEnvironments.map((env) => (
-                  <EnvironmentCard
-                    key={env.id}
-                    environment={env}
-                    agentId={agentId}
-                    onActivate={() => handleActivate(env.id)}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
+        // Tiled list — each card is half the page width on wider screens; the
+        // active environment is always rendered first with a highlighted border.
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {orderedEnvironments.map((env) => (
+            <EnvironmentCard
+              key={env.id}
+              environment={env}
+              agentId={agentId}
+              isPrimary={env.id === activeEnvironment?.id}
+              onActivate={isDeveloper ? () => handleActivate(env.id) : undefined}
+              readOnly={!isDeveloper}
+              canFollowLogs={canFollowLogs}
+              canOpenTerminal={canOpenTerminal}
+              onOpenConsole={openConsole}
+            />
+          ))}
         </div>
+      )}
+
+      {consoleTarget && (
+        <EnvironmentConsoleDrawer
+          open
+          onOpenChange={(next) => {
+            if (!next) setConsoleTarget(null)
+          }}
+          environment={consoleTarget.environment}
+          kind={consoleTarget.kind}
+        />
       )}
     </div>
   )

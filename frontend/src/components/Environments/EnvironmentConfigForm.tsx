@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { UsersService, AiCredentialsService } from "@/client"
-import type { AICredentialPublic } from "@/client"
+import type { AICredentialPublic, AgentEnvironmentPublic } from "@/client"
 import { Pencil, MessageCircle, Wrench, Save, Code2, Boxes } from "lucide-react"
 
 // ============= Constants =============
@@ -107,6 +107,82 @@ export function composeSDKId(engine: string, credential: AICredentialPublic | nu
     return `${engine}/${credential.type}`
   }
   return DEFAULT_SDK_FOR_ENGINE[engine] ?? `${engine}/anthropic`
+}
+
+/**
+ * Shared, API-shaped subset of an environment's per-mode config. Produced from
+ * the form's {@link EnvConfigValue} and consumed by both the create payload
+ * (AddEnvironment) and the dynamic reconfigure payload (EnvironmentCard).
+ */
+export interface EnvModeConfigFields {
+  agent_sdk_conversation: string
+  agent_sdk_building: string
+  model_override_conversation: string | null
+  model_override_building: string | null
+  use_default_ai_credentials: boolean
+  conversation_ai_credential_id: string | null
+  building_ai_credential_id: string | null
+}
+
+/**
+ * Resolve an {@link EnvConfigValue} into the API-shaped per-mode fields, applying
+ * the same default/explicit credential rules used at environment creation. The
+ * "use account default" sentinel collapses to a null credential id + the
+ * `use_default_ai_credentials` flag.
+ */
+export function composeEnvModeConfigFields(
+  config: EnvConfigValue,
+  credentials: AICredentialPublic[],
+): EnvModeConfigFields {
+  const convIsDefault = config.conversationCredentialId === USE_DEFAULT_SENTINEL
+  const buildIsDefault = config.buildingCredentialId === USE_DEFAULT_SENTINEL
+
+  const selectedConversationCredential =
+    credentials.find((c) => c.id === config.conversationCredentialId) ?? null
+  const selectedBuildingCredential =
+    credentials.find((c) => c.id === config.buildingCredentialId) ?? null
+
+  const useDefaultForAll = convIsDefault && buildIsDefault
+
+  return {
+    agent_sdk_conversation: composeSDKId(
+      config.sdkEngineConversation,
+      convIsDefault ? null : selectedConversationCredential,
+    ),
+    agent_sdk_building: composeSDKId(
+      config.sdkEngineBuilding,
+      buildIsDefault ? null : selectedBuildingCredential,
+    ),
+    model_override_conversation: config.modelOverrideConversation.trim() || null,
+    model_override_building: config.modelOverrideBuilding.trim() || null,
+    use_default_ai_credentials: useDefaultForAll,
+    conversation_ai_credential_id: useDefaultForAll
+      ? null
+      : convIsDefault
+        ? null
+        : config.conversationCredentialId || null,
+    building_ai_credential_id: useDefaultForAll
+      ? null
+      : buildIsDefault
+        ? null
+        : config.buildingCredentialId || null,
+  }
+}
+
+/**
+ * Map an existing environment row back into an {@link EnvConfigValue} so the
+ * shared per-mode edit dialog can be seeded with its current configuration.
+ */
+export function envToEnvConfig(env: AgentEnvironmentPublic): EnvConfigValue {
+  return {
+    envName: env.env_name,
+    sdkEngineConversation: extractEngine(env.agent_sdk_conversation),
+    conversationCredentialId: env.conversation_ai_credential_id ?? USE_DEFAULT_SENTINEL,
+    modelOverrideConversation: env.model_override_conversation ?? "",
+    sdkEngineBuilding: extractEngine(env.agent_sdk_building),
+    buildingCredentialId: env.building_ai_credential_id ?? USE_DEFAULT_SENTINEL,
+    modelOverrideBuilding: env.model_override_building ?? "",
+  }
 }
 
 export function getCompatibleCredentials(engine: string, credentials: AICredentialPublic[]): AICredentialPublic[] {
@@ -209,7 +285,7 @@ export function EnvModeEditDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[440px]">
+      <DialogContent className="sm:max-w-[560px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {isConversation ? (

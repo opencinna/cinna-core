@@ -1,12 +1,47 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { EnvironmentsService } from "@/client"
-import type { AgentEnvironmentPublic } from "@/client"
+import { EnvironmentsService, AiCredentialsService } from "@/client"
+import type { AgentEnvironmentPublic, AgentEnvironmentReconfigure } from "@/client"
 import { EnvironmentStatusBadge } from "./EnvironmentStatusBadge"
-import { Play, Trash2, RefreshCw, Pause, Loader2, Wrench, MessageCircle, Box } from "lucide-react"
+import {
+  EnvModeEditDialog,
+  composeEnvModeConfigFields,
+  envToEnvConfig,
+  type EnvConfigValue,
+} from "./EnvironmentConfigForm"
+import { cn } from "@/lib/utils"
+import {
+  Play,
+  Trash2,
+  RefreshCw,
+  Pause,
+  Loader2,
+  Wrench,
+  MessageCircle,
+  Box,
+  ScrollText,
+  SquareTerminal,
+  MoreVertical,
+  Pencil,
+} from "lucide-react"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import useCustomToast from "@/hooks/useCustomToast"
+import type { EnvConsoleKind } from "@/hooks/useEnvConsoleSocket"
 
 // Helper to get template display name
 const getTemplateDisplayName = (envName: string): string => {
@@ -43,6 +78,13 @@ interface EnvironmentCardProps {
   agentId: string
   onActivate?: () => void
   /**
+   * Marks this card as the agent's primary (active) environment. Renders a
+   * highlighted border and an "Active" label. Derived by the parent from
+   * ``agent.active_environment_id`` (with ``is_active`` fallback) so a still-
+   * building primary env is highlighted immediately.
+   */
+  isPrimary?: boolean
+  /**
    * When true, the card hides developer-only mutation controls
    * (Activate, Suspend, Rebuild, Delete).  Used by the agent-user
    * view of the environments tab so users can see the active env
@@ -50,16 +92,48 @@ interface EnvironmentCardProps {
    * Defaults to false.
    */
   readOnly?: boolean
+  /**
+   * When true the viewer owns the agent and may follow its container logs.
+   * The `Logs` action is hidden otherwise (and never in `readOnly` cards).
+   * The server still enforces ownership on the WS handshake.
+   */
+  canFollowLogs?: boolean
+  /**
+   * When true the viewer is the owner AND an agent-developer/superuser, so the
+   * interactive terminal is offered (still only enabled when `status==running`).
+   * Never set for agent-user / guest / read-only views.
+   */
+  canOpenTerminal?: boolean
+  /**
+   * Opens the shared console drawer hosted by the parent tab. The card decides
+   * visibility/enablement; the parent owns the single drawer instance.
+   */
+  onOpenConsole?: (environmentId: string, kind: EnvConsoleKind) => void
 }
 
 export function EnvironmentCard({
   environment,
   agentId,
   onActivate,
+  isPrimary = false,
   readOnly = false,
+  canFollowLogs = false,
+  canOpenTerminal = false,
+  onOpenConsole,
 }: EnvironmentCardProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
+
+  // Per-mode (conversation/building) config editor — clicking a mode badge opens
+  // the shared EnvModeEditDialog; saving reconfigures the env and rebuilds it.
+  const [editingMode, setEditingMode] = useState<"conversation" | "building" | null>(null)
+
+  const { data: aiCredentialsData } = useQuery({
+    queryKey: ["aiCredentialsList"],
+    queryFn: () => AiCredentialsService.listAiCredentials(),
+    enabled: !readOnly,
+  })
+  const credentials = aiCredentialsData?.data ?? []
 
   const deleteMutation = useMutation({
     mutationFn: () => EnvironmentsService.deleteEnvironment({ id: environment.id }),
@@ -100,6 +174,56 @@ export function EnvironmentCard({
       queryClient.invalidateQueries({ queryKey: ["agent", agentId] })
     },
   })
+
+  const reconfigureMutation = useMutation({
+    mutationFn: (requestBody: AgentEnvironmentReconfigure) =>
+      EnvironmentsService.reconfigureEnvironment({ id: environment.id, requestBody }),
+    onSuccess: () => {
+      showSuccessToast(
+        "Configuration updated. Rebuild started — this may take a few minutes."
+      )
+    },
+    onError: (error: any) => {
+      showErrorToast(
+        error.body?.detail || error.message || "Failed to update configuration"
+      )
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["environments", agentId] })
+      queryClient.invalidateQueries({ queryKey: ["agent", agentId] })
+    },
+  })
+
+  // Apply a single mode's edit on top of the env's current config, then confirm
+  // and reconfigure + rebuild. The untouched mode keeps its current values.
+  const handleModeSave = (engine: string, credentialId: string, modelOverride: string) => {
+    if (!editingMode) return
+    const base = envToEnvConfig(environment)
+    const next: EnvConfigValue =
+      editingMode === "conversation"
+        ? {
+            ...base,
+            sdkEngineConversation: engine,
+            conversationCredentialId: credentialId,
+            modelOverrideConversation: modelOverride,
+          }
+        : {
+            ...base,
+            sdkEngineBuilding: engine,
+            buildingCredentialId: credentialId,
+            modelOverrideBuilding: modelOverride,
+          }
+    const fields = composeEnvModeConfigFields(next, credentials)
+    if (
+      confirm(
+        "Apply this configuration and rebuild the environment now?\n\n" +
+          "The container will be rebuilt with the new settings. " +
+          "Workspace data (scripts, files, credentials) is preserved."
+      )
+    ) {
+      reconfigureMutation.mutate({ ...fields, rebuild: true })
+    }
+  }
 
   const handleDelete = () => {
     if (confirm("Delete this environment? This action cannot be undone.")) {
@@ -143,110 +267,261 @@ export function EnvironmentCard({
     "activating",
   ].includes(environment.status)
 
+  const isRunning = environment.status === "running"
+  const isBuilding =
+    environment.status === "creating" ||
+    environment.status === "building" ||
+    environment.status === "rebuilding"
+  // An active+running environment can be suspended; anything else can be
+  // (re)started via the same footer slot.
+  const isSuspendable = environment.is_active && isRunning
+  // Mode badges are editable for developers when the env isn't mid-build
+  // (reconfigure is also rejected server-side during a build).
+  const canEditMode = !readOnly && !isBuilding
+  // Console actions are owner+role gated by the parent and never shown in
+  // read-only (agent-user / guest) cards. Terminal needs a running env; logs
+  // are available whenever the viewer may follow them and a container exists.
+  const showLogs = !readOnly && canFollowLogs && !!onOpenConsole
+  const showTerminal = !readOnly && canOpenTerminal && !!onOpenConsole
+
   return (
-    <Card className={`p-4 ${environment.is_active ? "bg-green-50 dark:bg-green-950/20" : ""}`}>
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-2">
-            <h3 className="text-lg font-semibold break-words">
+    <Card
+      className={cn(
+        "flex flex-col gap-3 p-4 transition-colors",
+        isPrimary && "border-2 border-green-500/60 shadow-sm dark:border-green-500/50"
+      )}
+    >
+      {/* Header: name + id + status, with the context menu in the corner */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="truncate text-base font-semibold" title={environment.instance_name}>
               {environment.instance_name}
-            <span className="text-sm text-muted-foreground pl-4">
-              {environment.id}
-            </span>
             </h3>
-          </div>
-          <div className="space-y-1 text-sm text-muted-foreground">
-            <p>
-              <span className="font-medium">Status:</span>{" "}
-              <EnvironmentStatusBadge status={environment.status} />
-            </p>
-            <div className="flex items-center gap-2 flex-wrap">
-              <Badge variant="secondary" className="text-xs gap-1">
-                <Box className="h-3 w-3" />
-                {getTemplateDisplayName(environment.env_name)}
+            {isPrimary && (
+              <Badge className="shrink-0 border-green-500/50 bg-green-500/15 text-green-700 dark:text-green-400" variant="outline">
+                Main
               </Badge>
-              <Badge variant="outline" className="text-xs gap-1">
-                <MessageCircle className="h-3 w-3" />
-                {getSDKBadgeLabel(environment.agent_sdk_conversation, environment.model_override_conversation)}
-              </Badge>
-              <Badge variant="outline" className="text-xs gap-1">
-                <Wrench className="h-3 w-3" />
-                {getSDKBadgeLabel(environment.agent_sdk_building, environment.model_override_building)}
-              </Badge>
-            </div>
-            {environment.last_health_check && (
-              <p>
-                <span className="font-medium">Last health check:</span>{" "}
-                {new Date(environment.last_health_check).toLocaleString()}
-              </p>
             )}
           </div>
+          <p className="truncate text-xs text-muted-foreground" title={environment.id}>
+            {environment.id}
+          </p>
         </div>
 
-        {!readOnly && (
-          <div className="flex flex-col gap-2">
-            {(!environment.is_active || (environment.is_active && environment.status !== "running")) && (
-              <Button
-                size="sm"
-                onClick={onActivate}
-                className="gap-1"
-                disabled={isTransitioning}
-              >
-                {isTransitioning ? (
+        <div className="flex shrink-0 items-center gap-2">
+          <EnvironmentStatusBadge status={environment.status} />
+          {!readOnly && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" className="text-muted-foreground">
+                  <MoreVertical className="h-4 w-4" />
+                  <span className="sr-only">Environment actions</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={handleRebuild} disabled={rebuildMutation.isPending || isBuilding}>
+                  <RefreshCw className={cn("h-4 w-4", rebuildMutation.isPending && "animate-spin")} />
+                  Rebuild
+                </DropdownMenuItem>
+                {!environment.is_active && (
                   <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Activating...
-                  </>
-                ) : (
-                  <>
-                    <Play className="h-4 w-4" />
-                    Activate
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={handleDelete}
+                      disabled={deleteMutation.isPending}
+                      variant="destructive"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Delete
+                    </DropdownMenuItem>
                   </>
                 )}
-              </Button>
-            )}
-            {environment.is_active && environment.status === "running" && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleSuspend}
-                disabled={suspendMutation.isPending}
-                className="gap-1"
-              >
-                <Pause className="h-4 w-4" />
-                Suspend
-              </Button>
-            )}
-            <Button
-              size="sm"
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
+      </div>
+
+      {/* Meta badges — the conversation/building mode badges are clickable to
+          change their SDK / credential / model override and rebuild. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="secondary" className="gap-1 text-xs">
+          <Box className="h-3 w-3" />
+          {getTemplateDisplayName(environment.env_name)}
+        </Badge>
+        {canEditMode ? (
+          <button
+            type="button"
+            onClick={() => setEditingMode("conversation")}
+            title="Change conversation SDK / credential / model and rebuild"
+          >
+            <Badge
               variant="outline"
-              onClick={handleRebuild}
-              disabled={
-                rebuildMutation.isPending ||
-                environment.status === "creating" ||
-                environment.status === "building" ||
-                environment.status === "rebuilding"
-              }
-              className="gap-1"
+              className="gap-1 text-xs cursor-pointer transition-colors hover:border-primary/60 hover:bg-accent"
             >
-              <RefreshCw className={`h-4 w-4 ${rebuildMutation.isPending ? "animate-spin" : ""}`} />
-              Rebuild
-            </Button>
-            {!environment.is_active && (
-              <Button
-                size="sm"
-                variant="destructive"
-                onClick={handleDelete}
-                disabled={deleteMutation.isPending}
-                className="gap-1"
-              >
-                <Trash2 className="h-4 w-4" />
-                Delete
-              </Button>
-            )}
-          </div>
+              <MessageCircle className="h-3 w-3" />
+              {getSDKBadgeLabel(environment.agent_sdk_conversation, environment.model_override_conversation)}
+              <Pencil className="h-2.5 w-2.5 opacity-60" />
+            </Badge>
+          </button>
+        ) : (
+          <Badge variant="outline" className="gap-1 text-xs">
+            <MessageCircle className="h-3 w-3" />
+            {getSDKBadgeLabel(environment.agent_sdk_conversation, environment.model_override_conversation)}
+          </Badge>
+        )}
+        {canEditMode && environment.agent_sdk_building ? (
+          <button
+            type="button"
+            onClick={() => setEditingMode("building")}
+            title="Change building SDK / credential / model and rebuild"
+          >
+            <Badge
+              variant="outline"
+              className="gap-1 text-xs cursor-pointer transition-colors hover:border-primary/60 hover:bg-accent"
+            >
+              <Wrench className="h-3 w-3" />
+              {getSDKBadgeLabel(environment.agent_sdk_building, environment.model_override_building)}
+              <Pencil className="h-2.5 w-2.5 opacity-60" />
+            </Badge>
+          </button>
+        ) : (
+          <Badge variant="outline" className="gap-1 text-xs">
+            <Wrench className="h-3 w-3" />
+            {getSDKBadgeLabel(environment.agent_sdk_building, environment.model_override_building)}
+          </Badge>
         )}
       </div>
+
+      {environment.last_health_check && (
+        <p className="text-xs text-muted-foreground">
+          <span className="font-medium">Last health check:</span>{" "}
+          {new Date(environment.last_health_check).toLocaleString()}
+        </p>
+      )}
+
+      {/* Footer: square icon actions (start/suspend, logs, terminal) */}
+      {!readOnly && (
+        <div className="mt-auto flex items-center gap-2 border-t pt-3">
+          <TooltipProvider>
+            {isSuspendable ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    onClick={handleSuspend}
+                    disabled={suspendMutation.isPending}
+                    className="border-amber-500/50 text-amber-600 hover:bg-amber-500/10 hover:text-amber-600 dark:text-amber-400 dark:hover:text-amber-400"
+                  >
+                    {suspendMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Pause className="h-4 w-4" />
+                    )}
+                    <span className="sr-only">Suspend</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Suspend environment</TooltipContent>
+              </Tooltip>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    onClick={onActivate}
+                    disabled={isTransitioning}
+                    className="border-green-500/50 text-green-600 hover:bg-green-500/10 hover:text-green-600 dark:text-green-400 dark:hover:text-green-400"
+                  >
+                    {isTransitioning ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Play className="h-4 w-4" />
+                    )}
+                    <span className="sr-only">Start</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {isTransitioning ? "Starting…" : "Start environment"}
+                </TooltipContent>
+              </Tooltip>
+            )}
+
+            {/* Console actions pushed to the right edge of the footer */}
+            <div className="ml-auto flex items-center gap-2">
+              {showLogs && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="icon"
+                      variant="outline"
+                      onClick={() => onOpenConsole?.(environment.id, "logs")}
+                    >
+                      <ScrollText className="h-4 w-4" />
+                      <span className="sr-only">Logs</span>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Follow container logs</TooltipContent>
+                </Tooltip>
+              )}
+
+              {showTerminal && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    {/* span wrapper so the tooltip still fires while disabled */}
+                    <span className="inline-flex">
+                      <Button
+                        size="icon"
+                        variant="outline"
+                        onClick={() => onOpenConsole?.(environment.id, "terminal")}
+                        disabled={!isRunning}
+                      >
+                        <SquareTerminal className="h-4 w-4" />
+                        <span className="sr-only">Terminal</span>
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {isRunning
+                      ? "Open an interactive shell in this environment"
+                      : "Start the environment to open a terminal"}
+                  </TooltipContent>
+                </Tooltip>
+              )}
+            </div>
+          </TooltipProvider>
+        </div>
+      )}
+
+      {/* Per-mode SDK / credential / model editor (shared with Add Environment) */}
+      {editingMode && (
+        <EnvModeEditDialog
+          open={!!editingMode}
+          onOpenChange={(isOpen) => {
+            if (!isOpen) setEditingMode(null)
+          }}
+          mode={editingMode}
+          engine={
+            editingMode === "conversation"
+              ? envToEnvConfig(environment).sdkEngineConversation
+              : envToEnvConfig(environment).sdkEngineBuilding
+          }
+          credentialId={
+            editingMode === "conversation"
+              ? envToEnvConfig(environment).conversationCredentialId
+              : envToEnvConfig(environment).buildingCredentialId
+          }
+          modelOverride={
+            editingMode === "conversation"
+              ? envToEnvConfig(environment).modelOverrideConversation
+              : envToEnvConfig(environment).modelOverrideBuilding
+          }
+          credentials={credentials}
+          onSave={handleModeSave}
+        />
+      )}
     </Card>
   )
 }

@@ -7,7 +7,14 @@ from typing import Any
 from sqlmodel import Session, select
 from sqlalchemy import or_
 from sqlalchemy.orm.attributes import flag_modified
-from app.models import AgentEnvironment, AgentEnvironmentCreate, AgentEnvironmentUpdate, Agent, User
+from app.models import (
+    AgentEnvironment,
+    AgentEnvironmentCreate,
+    AgentEnvironmentUpdate,
+    AgentEnvironmentReconfigure,
+    Agent,
+    User,
+)
 from app.models.credentials.ai_credential import AICredential, AICredentialType
 from app.core.db import engine, create_session
 from app.utils import create_task_with_error_logging
@@ -453,62 +460,31 @@ class EnvironmentService:
                         error_session.commit()
 
     @staticmethod
-    async def create_environment(
+    def _resolve_credentials(
         session: Session,
-        agent_id: UUID,
-        data: AgentEnvironmentCreate,
         user: User,
-        auto_start: bool = False,
-        source_environment_id: UUID | None = None
-    ) -> AgentEnvironment:
+        sdk_conversation: str,
+        sdk_building: str | None,
+        use_default_ai_credentials: bool,
+        requested_conversation_credential_id: UUID | None,
+        requested_building_credential_id: UUID | None,
+    ) -> tuple[dict, UUID | None, UUID | None]:
         """
-        Create environment for agent.
+        Resolve the per-mode AI credential bag and the credential ids to persist.
 
-        Steps:
-        1. Validate SDK values and required API keys
-        2. Create DB record with status "creating"
-        3. Spawn background task to build Docker instance (non-blocking)
-        4. Return immediately - client can poll status endpoint
+        Shared by ``create_environment`` (initial build) and
+        ``reconfigure_environment`` (dynamic mode change + rebuild). Validates
+        SDK↔credential compatibility and access, fills the credential bag, and
+        returns the conversation/building credential ids that should be stored on
+        the environment row.
 
-        Args:
-            session: Database session
-            agent_id: Agent ID
-            data: Environment creation data
-            user: User creating the environment
-            auto_start: If True, automatically start and activate after build completes
-            source_environment_id: If provided, copy workspace from this environment after build (for clones)
+        Note: only per-mode defaults and explicit picks persist an id; type-level
+        default fallbacks fill the bag but persist no id (rebuild re-resolves the
+        typed default), mirroring the long-standing create-time behaviour.
 
-        Note: The actual Docker build happens asynchronously.
-        Use GET /environments/{id}/status to track progress.
+        Raises ``EnvironmentCredentialError`` on inaccessible/incompatible
+        credentials or a missing required API key.
         """
-        # Get agent
-        agent = session.get(Agent, agent_id)
-        if not agent:
-            raise AgentNotFoundError(f"Agent {agent_id} not found")
-
-        # Normalize SDK values (use user's defaults, then fall back to global default)
-        # Conversation SDK is always required
-        sdk_conversation = data.agent_sdk_conversation or user.default_sdk_conversation or DEFAULT_SDK
-        # Building SDK can be None (e.g., for user-mode clones that don't need building)
-        # Only apply defaults if not explicitly set to None
-        if data.agent_sdk_building is None:
-            # Explicitly None means "not needed" (e.g., user-mode clones)
-            sdk_building = None
-        else:
-            sdk_building = data.agent_sdk_building or user.default_sdk_building or DEFAULT_SDK
-
-        # Validate SDK values
-        if not is_valid_sdk(sdk_conversation):
-            raise AgentEnvironmentError(
-                f"Invalid agent_sdk_conversation: '{sdk_conversation}'. "
-                f"Must be a known SDK or engine/provider format. Valid engines: {VALID_SDK_ENGINES}"
-            )
-        if sdk_building is not None and not is_valid_sdk(sdk_building):
-            raise AgentEnvironmentError(
-                f"Invalid agent_sdk_building: '{sdk_building}'. "
-                f"Must be a known SDK or engine/provider format. Valid engines: {VALID_SDK_ENGINES}"
-            )
-
         # Credential bag — single dict holding all resolved API keys
         bag = make_empty_credential_bag()
 
@@ -516,7 +492,7 @@ class EnvironmentService:
         conversation_ai_credential_id = None
         building_ai_credential_id = None
 
-        if data.use_default_ai_credentials:
+        if use_default_ai_credentials:
             # Seed bag from user's legacy profile credentials
             ai_credentials = ai_credentials_service.get_user_ai_credentials(user=user)
             if ai_credentials:
@@ -617,22 +593,22 @@ class EnvironmentService:
                         )
         else:
             # Resolve conversation credential
-            if data.conversation_ai_credential_id:
-                conv_cred_obj = session.get(AICredential, data.conversation_ai_credential_id)
+            if requested_conversation_credential_id:
+                conv_cred_obj = session.get(AICredential, requested_conversation_credential_id)
                 # Owner OR a recipient of an AICredentialShare may use the
                 # row. Shared credentials are how publisher-provided AI
                 # credentials reach foreign installs.
                 if not conv_cred_obj or not ai_credentials_service.can_access_credential(
-                    session, data.conversation_ai_credential_id, user.id
+                    session, requested_conversation_credential_id, user.id
                 ):
                     raise EnvironmentCredentialError("Cannot access the specified conversation AI credential")
                 _validate_sdk_credential_compatibility(sdk_conversation, conv_cred_obj)
                 conv_cred_data = ai_credentials_service.get_credential_for_use(
-                    session, data.conversation_ai_credential_id, user.id
+                    session, requested_conversation_credential_id, user.id
                 )
                 if not conv_cred_data:
                     raise EnvironmentCredentialError("Cannot access the specified conversation AI credential")
-                conversation_ai_credential_id = data.conversation_ai_credential_id
+                conversation_ai_credential_id = requested_conversation_credential_id
                 cred_type = SDK_TO_CREDENTIAL_TYPE.get(sdk_conversation)
                 if cred_type:
                     apply_credential_to_bag(bag, cred_type, conv_cred_data)
@@ -647,26 +623,26 @@ class EnvironmentService:
                         logger.debug(f"No default credential found for type {cred_type}")
 
             # Resolve building credential
-            if data.building_ai_credential_id:
-                build_cred_obj = session.get(AICredential, data.building_ai_credential_id)
+            if requested_building_credential_id:
+                build_cred_obj = session.get(AICredential, requested_building_credential_id)
                 if not build_cred_obj or not ai_credentials_service.can_access_credential(
-                    session, data.building_ai_credential_id, user.id
+                    session, requested_building_credential_id, user.id
                 ):
                     raise EnvironmentCredentialError("Cannot access the specified building AI credential")
                 if sdk_building:
                     _validate_sdk_credential_compatibility(sdk_building, build_cred_obj)
                 build_cred_data = ai_credentials_service.get_credential_for_use(
-                    session, data.building_ai_credential_id, user.id
+                    session, requested_building_credential_id, user.id
                 )
                 if not build_cred_data:
                     raise EnvironmentCredentialError("Cannot access the specified building AI credential")
-                building_ai_credential_id = data.building_ai_credential_id
+                building_ai_credential_id = requested_building_credential_id
                 cred_type = SDK_TO_CREDENTIAL_TYPE.get(sdk_building)
                 if cred_type:
                     apply_credential_to_bag(bag, cred_type, build_cred_data)
             else:
                 # Fall back to user's default for building SDK if not same as conversation
-                if sdk_building != sdk_conversation or not data.conversation_ai_credential_id:
+                if sdk_building != sdk_conversation or not requested_conversation_credential_id:
                     cred_type = SDK_TO_CREDENTIAL_TYPE.get(sdk_building)
                     if cred_type:
                         default_cred = ai_credentials_service.get_default_for_type(session, user.id, cred_type)
@@ -685,6 +661,78 @@ class EnvironmentService:
                             f"Missing required API key for SDK '{sdk}'. "
                             f"Please select an AI credential or set a default."
                         )
+
+        return bag, conversation_ai_credential_id, building_ai_credential_id
+
+    @staticmethod
+    async def create_environment(
+        session: Session,
+        agent_id: UUID,
+        data: AgentEnvironmentCreate,
+        user: User,
+        auto_start: bool = False,
+        source_environment_id: UUID | None = None
+    ) -> AgentEnvironment:
+        """
+        Create environment for agent.
+
+        Steps:
+        1. Validate SDK values and required API keys
+        2. Create DB record with status "creating"
+        3. Spawn background task to build Docker instance (non-blocking)
+        4. Return immediately - client can poll status endpoint
+
+        Args:
+            session: Database session
+            agent_id: Agent ID
+            data: Environment creation data
+            user: User creating the environment
+            auto_start: If True, automatically start and activate after build completes
+            source_environment_id: If provided, copy workspace from this environment after build (for clones)
+
+        Note: The actual Docker build happens asynchronously.
+        Use GET /environments/{id}/status to track progress.
+        """
+        # Get agent
+        agent = session.get(Agent, agent_id)
+        if not agent:
+            raise AgentNotFoundError(f"Agent {agent_id} not found")
+
+        # Normalize SDK values (use user's defaults, then fall back to global default)
+        # Conversation SDK is always required
+        sdk_conversation = data.agent_sdk_conversation or user.default_sdk_conversation or DEFAULT_SDK
+        # Building SDK can be None (e.g., for user-mode clones that don't need building)
+        # Only apply defaults if not explicitly set to None
+        if data.agent_sdk_building is None:
+            # Explicitly None means "not needed" (e.g., user-mode clones)
+            sdk_building = None
+        else:
+            sdk_building = data.agent_sdk_building or user.default_sdk_building or DEFAULT_SDK
+
+        # Validate SDK values
+        if not is_valid_sdk(sdk_conversation):
+            raise AgentEnvironmentError(
+                f"Invalid agent_sdk_conversation: '{sdk_conversation}'. "
+                f"Must be a known SDK or engine/provider format. Valid engines: {VALID_SDK_ENGINES}"
+            )
+        if sdk_building is not None and not is_valid_sdk(sdk_building):
+            raise AgentEnvironmentError(
+                f"Invalid agent_sdk_building: '{sdk_building}'. "
+                f"Must be a known SDK or engine/provider format. Valid engines: {VALID_SDK_ENGINES}"
+            )
+
+        # Resolve the per-mode credential bag + the credential ids to persist.
+        bag, conversation_ai_credential_id, building_ai_credential_id = (
+            EnvironmentService._resolve_credentials(
+                session=session,
+                user=user,
+                sdk_conversation=sdk_conversation,
+                sdk_building=sdk_building,
+                use_default_ai_credentials=data.use_default_ai_credentials,
+                requested_conversation_credential_id=data.conversation_ai_credential_id,
+                requested_building_credential_id=data.building_ai_credential_id,
+            )
+        )
 
         # Generate a memorable instance name if not provided
         instance_name = data.instance_name if data.instance_name != "Instance" else generate_environment_name()
@@ -754,6 +802,95 @@ class EnvironmentService:
         session.add(environment)
         session.commit()
         session.refresh(environment)
+        return environment
+
+    @staticmethod
+    async def reconfigure_environment(
+        session: Session,
+        env_id: UUID,
+        user: User,
+        data: AgentEnvironmentReconfigure,
+        rebuild: bool = True,
+    ) -> AgentEnvironment:
+        """
+        Dynamically change an environment's per-mode SDK / AI credential / model
+        configuration and (optionally) rebuild it right away.
+
+        Unlike create, the SDK fields were historically immutable; this method is
+        the supported path to change them after the fact. It re-runs the same
+        credential resolution + validation as create (``_resolve_credentials``)
+        so an incompatible SDK↔credential pair or a missing key fails fast with a
+        400 instead of a broken rebuild. The resolved credential ids are persisted
+        on the env row; the rebuild path re-resolves the bag from those ids.
+
+        Args:
+            session: Database session
+            env_id: Environment to reconfigure
+            user: Acting user (already access-checked by the route)
+            data: New per-mode configuration
+            rebuild: When True, kick off a rebuild after persisting the config
+
+        Raises:
+            EnvironmentNotFoundError / EnvironmentCredentialError / AgentEnvironmentError
+        """
+        environment = session.get(AgentEnvironment, env_id)
+        if not environment:
+            raise EnvironmentNotFoundError(f"Environment {env_id} not found")
+
+        if environment.status in ("creating", "building", "rebuilding"):
+            raise AgentEnvironmentError(
+                "Environment is currently building. Wait for it to finish before reconfiguring."
+            )
+
+        # Use the supplied SDK ids, falling back to the env's current values.
+        sdk_conversation = data.agent_sdk_conversation or environment.agent_sdk_conversation
+        sdk_building = (
+            data.agent_sdk_building
+            if data.agent_sdk_building is not None
+            else environment.agent_sdk_building
+        )
+
+        if not sdk_conversation or not is_valid_sdk(sdk_conversation):
+            raise AgentEnvironmentError(
+                f"Invalid agent_sdk_conversation: '{sdk_conversation}'."
+            )
+        if sdk_building is not None and not is_valid_sdk(sdk_building):
+            raise AgentEnvironmentError(
+                f"Invalid agent_sdk_building: '{sdk_building}'."
+            )
+
+        # Validate + resolve the credential ids to persist (bag is recomputed by
+        # the rebuild path from these ids, so it is intentionally discarded here).
+        _bag, conversation_ai_credential_id, building_ai_credential_id = (
+            EnvironmentService._resolve_credentials(
+                session=session,
+                user=user,
+                sdk_conversation=sdk_conversation,
+                sdk_building=sdk_building,
+                use_default_ai_credentials=data.use_default_ai_credentials,
+                requested_conversation_credential_id=data.conversation_ai_credential_id,
+                requested_building_credential_id=data.building_ai_credential_id,
+            )
+        )
+
+        environment.agent_sdk_conversation = sdk_conversation
+        environment.agent_sdk_building = sdk_building
+        environment.model_override_conversation = data.model_override_conversation or None
+        environment.model_override_building = data.model_override_building or None
+        environment.use_default_ai_credentials = data.use_default_ai_credentials
+        environment.conversation_ai_credential_id = conversation_ai_credential_id
+        environment.building_ai_credential_id = building_ai_credential_id
+        environment.updated_at = datetime.now(UTC)
+        session.add(environment)
+        session.commit()
+        session.refresh(environment)
+
+        if rebuild:
+            # Re-resolves the credential bag from the freshly-stored ids and
+            # reships core files + Docker image while preserving workspace data.
+            await EnvironmentService.rebuild_environment(session=session, env_id=env_id)
+            session.refresh(environment)
+
         return environment
 
     @staticmethod

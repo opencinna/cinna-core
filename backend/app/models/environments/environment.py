@@ -104,6 +104,25 @@ class AgentEnvironmentUpdate(SQLModel):
     config: dict | None = None
 
 
+class AgentEnvironmentReconfigure(SQLModel):
+    """Dynamic per-mode reconfiguration payload (SDK / credential / model).
+
+    Mirrors the credential-bearing subset of ``AgentEnvironmentCreate``. Sent by
+    the Environments tab when a developer edits a mode badge and rebuilds. Both
+    modes are always supplied (the UI seeds the untouched mode from the current
+    env), so ``None`` SDK fields mean "keep the env's current value".
+    """
+    agent_sdk_conversation: str | None = None
+    agent_sdk_building: str | None = None
+    model_override_conversation: str | None = None
+    model_override_building: str | None = None
+    use_default_ai_credentials: bool = True
+    conversation_ai_credential_id: uuid.UUID | None = None
+    building_ai_credential_id: uuid.UUID | None = None
+    # When True (default) a rebuild is kicked off immediately after persisting.
+    rebuild: bool = True
+
+
 class AgentEnvironmentPublic(SQLModel):
     id: uuid.UUID
     agent_id: uuid.UUID

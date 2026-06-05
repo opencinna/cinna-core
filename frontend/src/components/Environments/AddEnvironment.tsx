@@ -18,8 +18,7 @@ import {
   EnvironmentConfigForm,
   EnvConfigValue,
   INITIAL_ENV_CONFIG,
-  USE_DEFAULT_SENTINEL,
-  composeSDKId,
+  composeEnvModeConfigFields,
 } from "./EnvironmentConfigForm"
 
 interface AddEnvironmentProps {
@@ -58,39 +57,11 @@ export function AddEnvironment({ agentId }: AddEnvironmentProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
 
-    const allCredentials = aiCredentials?.data ?? []
-    const convIsDefault = envConfig.conversationCredentialId === USE_DEFAULT_SENTINEL
-    const buildIsDefault = envConfig.buildingCredentialId === USE_DEFAULT_SENTINEL
-
-    const selectedConversationCredential =
-      allCredentials.find((c) => c.id === envConfig.conversationCredentialId) ?? null
-    const selectedBuildingCredential =
-      allCredentials.find((c) => c.id === envConfig.buildingCredentialId) ?? null
-
-    const sdkConversation = composeSDKId(
-      envConfig.sdkEngineConversation,
-      convIsDefault ? null : selectedConversationCredential,
-    )
-    const sdkBuilding = composeSDKId(
-      envConfig.sdkEngineBuilding,
-      buildIsDefault ? null : selectedBuildingCredential,
-    )
-
-    const useDefaultForAll = convIsDefault && buildIsDefault
+    const fields = composeEnvModeConfigFields(envConfig, aiCredentials?.data ?? [])
 
     createMutation.mutate({
       env_name: envConfig.envName,
-      agent_sdk_conversation: sdkConversation,
-      agent_sdk_building: sdkBuilding,
-      model_override_conversation: envConfig.modelOverrideConversation.trim() || undefined,
-      model_override_building: envConfig.modelOverrideBuilding.trim() || undefined,
-      use_default_ai_credentials: useDefaultForAll,
-      conversation_ai_credential_id: useDefaultForAll
-        ? undefined
-        : (convIsDefault ? undefined : (envConfig.conversationCredentialId || undefined)),
-      building_ai_credential_id: useDefaultForAll
-        ? undefined
-        : (buildIsDefault ? undefined : (envConfig.buildingCredentialId || undefined)),
+      ...fields,
     })
   }
 

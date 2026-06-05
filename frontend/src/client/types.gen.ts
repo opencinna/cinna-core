@@ -511,6 +511,25 @@ export type AgentEnvironmentPublic = {
     building_ai_credential_id: (string | null);
 };
 
+/**
+ * Dynamic per-mode reconfiguration payload (SDK / credential / model).
+ *
+ * Mirrors the credential-bearing subset of ``AgentEnvironmentCreate``. Sent by
+ * the Environments tab when a developer edits a mode badge and rebuilds. Both
+ * modes are always supplied (the UI seeds the untouched mode from the current
+ * env), so ``None`` SDK fields mean "keep the env's current value".
+ */
+export type AgentEnvironmentReconfigure = {
+    agent_sdk_conversation?: (string | null);
+    agent_sdk_building?: (string | null);
+    model_override_conversation?: (string | null);
+    model_override_building?: (string | null);
+    use_default_ai_credentials?: boolean;
+    conversation_ai_credential_id?: (string | null);
+    building_ai_credential_id?: (string | null);
+    rebuild?: boolean;
+};
+
 export type AgentEnvironmentsPublic = {
     data: Array<AgentEnvironmentPublic>;
     count: number;
@@ -5902,6 +5921,13 @@ export type EnvironmentsDeleteEnvironmentData = {
 };
 
 export type EnvironmentsDeleteEnvironmentResponse = (Message);
+
+export type EnvironmentsReconfigureEnvironmentData = {
+    id: string;
+    requestBody: AgentEnvironmentReconfigure;
+};
+
+export type EnvironmentsReconfigureEnvironmentResponse = (AgentEnvironmentPublic);
 
 export type EnvironmentsStartEnvironmentData = {
     id: string;

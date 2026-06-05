@@ -156,6 +156,7 @@ from .environments.environment import (
     AgentEnvironment,
     AgentEnvironmentCreate,
     AgentEnvironmentUpdate,
+    AgentEnvironmentReconfigure,
     AgentEnvironmentPublic,
     AgentEnvironmentsPublic,
     AdminAgentEnvironmentPublic,
@@ -774,6 +775,7 @@ __all__ = [
     "AgentEnvironment",
     "AgentEnvironmentCreate",
     "AgentEnvironmentUpdate",
+    "AgentEnvironmentReconfigure",
     "AgentEnvironmentPublic",
     "AgentEnvironmentsPublic",
     # Admin Environments (admin-only schemas)

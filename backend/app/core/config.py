@@ -47,6 +47,28 @@ class Settings(BaseSettings):
     # Platform API version advertised to the CLI alongside the Mutagen pin.
     PLATFORM_API_VERSION: str = "1.0"
 
+    # ── Environment console (web terminal + logs follow) ─────────────────
+    # Idle timeout for an interactive PTY shell: the env-core /shell/pty
+    # endpoint and the backend terminal tunnel both auto-close a terminal
+    # after this many seconds of no inbound keystrokes, so a forgotten
+    # browser tab cannot leave an orphaned shell holding the env warm.
+    ENV_TERMINAL_IDLE_TIMEOUT_SECONDS: int = 900  # 15 minutes
+    # Max concurrent consoles attached to a single environment. SHARED across
+    # both console kinds (terminal + logs) by design — one knob avoids per-kind
+    # accounting and 3 is generous for an operator. Intentional trade-off: 3
+    # open Logs tabs on the same env block a 4th console of EITHER kind (incl.
+    # Terminal). Split into per-kind caps if that proves annoying in practice.
+    ENV_CONSOLE_MAX_PER_ENV: int = 3
+    # Max concurrent consoles a single user may hold across all of their
+    # environments (also shared across kinds).
+    ENV_CONSOLE_MAX_PER_USER: int = 10
+    # Per-user console open-rate cap (opens allowed within the sliding window).
+    ENV_CONSOLE_OPEN_RATE_LIMIT: int = 10
+    ENV_CONSOLE_OPEN_RATE_WINDOW_SECONDS: int = 60
+    # Initial logs tail snapshot clamp (lines).
+    ENV_CONSOLE_LOGS_TAIL_DEFAULT: int = 200
+    ENV_CONSOLE_LOGS_TAIL_MAX: int = 5000
+
     BACKEND_CORS_ORIGINS: Annotated[
         list[AnyUrl] | str, BeforeValidator(parse_cors)
     ] = []

@@ -24,6 +24,15 @@ MFA_SIGN_COUNT_REGRESSION = "MFA_SIGN_COUNT_REGRESSION"
 MFA_PASSKEY_INVALID_ORIGIN = "MFA_PASSKEY_INVALID_ORIGIN"
 MFA_RECOVERY_CODES_REGENERATED = "MFA_RECOVERY_CODES_REGENERATED"
 
+# ── Agent environment console event-type constants ───────────────────
+# Emitted by ``EnvironmentConsoleService`` when an owner+developer opens or
+# closes an interactive web terminal against their agent's Docker environment.
+# A full shell exposes synced credential files, so every open/close is audited
+# with the acting user and source IP. ``event_type`` is a free-form ``str``
+# column (no Postgres enum) so these constants need no migration.
+AGENT_ENV_TERMINAL_OPENED = "AGENT_ENV_TERMINAL_OPENED"
+AGENT_ENV_TERMINAL_CLOSED = "AGENT_ENV_TERMINAL_CLOSED"
+
 
 class SecurityEvent(SQLModel, table=True):
     """

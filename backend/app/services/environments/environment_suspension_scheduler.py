@@ -75,6 +75,14 @@ async def _check_and_suspend_environments():
                     logger.debug(f"Skipping environment {env.id}: CLI sync is active")
                     continue
 
+                # Skip environments with an attached web console (terminal / logs).
+                from app.services.environments.env_console_activity_tracker import (
+                    env_console_activity_tracker,
+                )
+                if env_console_activity_tracker.is_console_warm(env.id):
+                    logger.debug(f"Skipping environment {env.id}: web console is attached")
+                    continue
+
                 # Resolve per-agent inactivity limit
                 inactivity_limit = INACTIVITY_LIMITS.get(
                     agent.inactivity_period_limit, timedelta(minutes=INACTIVITY_THRESHOLD_MINUTES)

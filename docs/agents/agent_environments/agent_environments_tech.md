@@ -59,6 +59,8 @@ Note: `Dockerfile`, `pyproject.toml`, and `uv.lock` are NOT copied into per-env 
 
 ### Backend - Services
 
+- `backend/app/services/environments/environment_console_service.py` - `EnvironmentConsoleService` - web terminal and logs-follow lifecycle; see [Agent Environment Console tech](./agent_env_console_tech.md)
+- `backend/app/services/environments/env_console_activity_tracker.py` - `EnvConsoleActivityTracker` singleton — keep-warm gate, concurrency cap, open-rate cap; see [Agent Environment Console tech](./agent_env_console_tech.md)
 - `backend/app/services/environments/environment_lifecycle.py` - `EnvironmentLifecycleManager` - core lifecycle operations
 - `backend/app/services/environments/environment_service.py` - `EnvironmentService` - route-level orchestration
 - `backend/app/services/environments/template_image_service.py` - `TemplateImageService` - shared per-template Docker image management (content-hash tagging, build, cache)
