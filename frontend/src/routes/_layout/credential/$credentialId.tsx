@@ -286,7 +286,12 @@ function OwnedCredentialView({
       <div className="space-y-6">
         <AgentApiConnectionView credential={credential} />
 
-        <CredentialSharing credential={credential} />
+        {/* Sharing stays half-width (left), matching the Template-card layout
+            of other types. The right half is intentionally empty — agent_api
+            connections have no Template-sharing card. */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <CredentialSharing credential={credential} />
+        </div>
       </div>
     )
   }

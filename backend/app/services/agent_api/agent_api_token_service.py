@@ -236,7 +236,7 @@ class AgentApiTokenService:
             CredentialCreate(
                 name=label,
                 type=CredentialType.AGENT_API,
-                notes=f"Proxy to agent {producer_agent_id} REST API",
+                notes=f"Proxy to agent {agent.name} (ID: {producer_agent_id}) REST API",
                 allow_sharing=False,
                 user_workspace_id=workspace_id,
                 credential_data={

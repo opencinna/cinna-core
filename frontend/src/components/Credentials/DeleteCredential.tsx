@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { AlertTriangle, Bot, Box, Loader2, Trash2 } from "lucide-react"
+import { AlertTriangle, Box, Loader2, Trash2 } from "lucide-react"
 import { useState } from "react"
 
 import {
@@ -30,8 +30,7 @@ import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { LoadingButton } from "@/components/ui/loading-button"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
-import { getColorPreset } from "@/utils/colorPresets"
-import { cn } from "@/lib/utils"
+import { AgentBadge } from "@/components/Common/AgentBadge"
 
 interface DeleteCredentialProps {
   credential: CredentialPublic
@@ -196,22 +195,9 @@ const DeleteCredential = ({
                   {affectedAgents.length !== 1 ? "s" : ""}:
                 </p>
                 <div className="flex flex-wrap gap-2">
-                  {affectedAgents.map((agent) => {
-                    const preset = getColorPreset(agent.ui_color_preset)
-                    return (
-                      <span
-                        key={agent.id}
-                        className={cn(
-                          "px-3 py-1.5 text-sm rounded-md flex items-center gap-2",
-                          preset.badgeBg,
-                          preset.badgeText,
-                        )}
-                      >
-                        <Bot className="h-3.5 w-3.5" />
-                        {agent.name}
-                      </span>
-                    )
-                  })}
+                  {affectedAgents.map((agent) => (
+                    <AgentBadge key={agent.id} agent={agent} size="md" />
+                  ))}
                 </div>
               </div>
             )}

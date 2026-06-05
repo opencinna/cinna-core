@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Bot, FileJson, Lock, Network, RefreshCw, Trash2 } from "lucide-react"
+import { FileJson, Lock, Network, RefreshCw, Trash2 } from "lucide-react"
 import { useState } from "react"
 import type { AgentApiProducerConnection } from "@/client"
 import { AgentApiService, AgentsService } from "@/client"
@@ -25,10 +25,10 @@ import {
 } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
 import type { AgentApiStatus } from "@/hooks/useAgentApi"
+import { AgentBadge } from "@/components/Common/AgentBadge"
 import { useAgentApiStatus } from "@/hooks/useAgentApi"
 import useCustomToast from "@/hooks/useCustomToast"
 import { openAgentApiSpec } from "@/utils/agentApiSpec"
-import { getColorPreset } from "@/utils/colorPresets"
 
 interface AgentRestApiCardProps {
   agentId: string
@@ -254,18 +254,9 @@ export function AgentRestApiCard({
                           Not linked to an agent
                         </span>
                       ) : (
-                        conn.consumer_agents.map((a) => {
-                          const preset = getColorPreset(a.ui_color_preset)
-                          return (
-                            <span
-                              key={a.id}
-                              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${preset.badgeBg} ${preset.badgeText}`}
-                            >
-                              <Bot className="h-3 w-3" />
-                              {a.name}
-                            </span>
-                          )
-                        })
+                        conn.consumer_agents.map((a) => (
+                          <AgentBadge key={a.id} agent={a} />
+                        ))
                       )}
                       {conn.read_only && (
                         <Badge variant="outline" className="gap-1 text-xs">

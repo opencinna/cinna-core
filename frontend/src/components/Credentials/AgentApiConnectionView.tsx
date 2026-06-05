@@ -1,6 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowRight, Bot, FileJson, Lock, Network } from "lucide-react"
+import { Link } from "@tanstack/react-router"
+import { ArrowRight, FileJson, Lock, Network } from "lucide-react"
 import { useEffect } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
@@ -27,10 +28,10 @@ import {
 import { Input } from "@/components/ui/input"
 import { LoadingButton } from "@/components/ui/loading-button"
 import { Textarea } from "@/components/ui/textarea"
+import { AgentBadge } from "@/components/Common/AgentBadge"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 import { openAgentApiSpec } from "@/utils/agentApiSpec"
-import { getColorPreset } from "@/utils/colorPresets"
 
 const formSchema = z.object({
   name: z.string().min(1, { message: "Name is required" }),
@@ -116,10 +117,26 @@ export function AgentApiConnectionView({
               <span className="text-xs font-medium text-muted-foreground">
                 Producer
               </span>
-              <Badge variant="secondary" className="gap-1">
-                <Network className="h-3 w-3" />
-                {producerName}
-              </Badge>
+              {producerAgentId ? (
+                <Badge
+                  asChild
+                  variant="secondary"
+                  className="gap-1 hover:underline transition-colors"
+                >
+                  <Link
+                    to="/agent/$agentId"
+                    params={{ agentId: producerAgentId }}
+                  >
+                    <Network className="h-3 w-3" />
+                    {producerName}
+                  </Link>
+                </Badge>
+              ) : (
+                <Badge variant="secondary" className="gap-1">
+                  <Network className="h-3 w-3" />
+                  {producerName}
+                </Badge>
+              )}
               {connection?.read_only && (
                 <Badge variant="outline" className="gap-1 text-xs">
                   <Lock className="h-3 w-3" />
@@ -141,18 +158,9 @@ export function AgentApiConnectionView({
                   Not linked to any agent yet
                 </span>
               ) : (
-                consumers.map((a) => {
-                  const preset = getColorPreset(a.ui_color_preset)
-                  return (
-                    <span
-                      key={a.id}
-                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${preset.badgeBg} ${preset.badgeText}`}
-                    >
-                      <Bot className="h-3 w-3" />
-                      {a.name}
-                    </span>
-                  )
-                })
+                consumers.map((a) => (
+                  <AgentBadge key={a.id} agent={a} linkTo="agent" />
+                ))
               )}
             </div>
           </div>
