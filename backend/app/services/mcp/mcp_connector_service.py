@@ -6,7 +6,7 @@ from sqlmodel import Session as DBSession, select, func
 
 from app.models.mcp.mcp_connector import MCPConnector, MCPConnectorCreate, MCPConnectorUpdate
 from app.models.mcp.mcp_oauth_client import MCPOAuthClient
-from app.models import Agent
+from app.models import Agent, User
 from app.models.environments.environment import AgentEnvironment
 from app.core.config import settings
 from app.services.mcp.mcp_errors import (
@@ -34,6 +34,8 @@ class MCPConnectorService:
             name=data.name,
             mode=data.mode,
             allowed_emails=data.allowed_emails,
+            allowed_user_ids=[str(uid) for uid in data.allowed_user_ids],
+            allow_token_access=data.allow_token_access,
             max_clients=data.max_clients,
         )
         db_session.add(connector)
@@ -74,6 +76,11 @@ class MCPConnectorService:
             raise MCPPermissionDeniedError()
 
         update_dict = data.model_dump(exclude_unset=True)
+        # Persist UUIDs as strings in the JSON column for consistency.
+        if "allowed_user_ids" in update_dict and update_dict["allowed_user_ids"] is not None:
+            update_dict["allowed_user_ids"] = [
+                str(uid) for uid in update_dict["allowed_user_ids"]
+            ]
         connector.sqlmodel_update(update_dict)
         connector.updated_at = datetime.now(UTC)
 
@@ -110,16 +117,45 @@ class MCPConnectorService:
         return True
 
     @staticmethod
+    def check_user_access(
+        db_session: DBSession,
+        connector_id: uuid.UUID,
+        user: User,
+    ) -> bool:
+        """Check if a user may access the connector.
+
+        Access is granted when the user is the connector owner, their id is in
+        ``allowed_user_ids``, or (legacy fallback) their email is in
+        ``allowed_emails``.
+        """
+        connector = db_session.get(MCPConnector, connector_id)
+        if not connector:
+            return False
+        if connector.owner_id == user.id:
+            return True
+        if str(user.id) in [str(u) for u in (connector.allowed_user_ids or [])]:
+            return True
+        if (
+            user.email
+            and connector.allowed_emails
+            and user.email.lower() in [e.lower() for e in connector.allowed_emails]
+        ):
+            return True
+        return False
+
+    @staticmethod
     def check_email_access(
         db_session: DBSession,
         connector_id: uuid.UUID,
         email: str,
     ) -> bool:
-        """Check if an email has access to the connector (owner or in allowed_emails)."""
+        """Legacy email-only ACL check (kept for backward compatibility).
+
+        Prefer ``check_user_access`` which also honours ``allowed_user_ids``.
+        """
         connector = db_session.get(MCPConnector, connector_id)
         if not connector:
             return False
-        # If allowed_emails is empty, only owner has access (checked at route level)
         if not connector.allowed_emails:
             return False
         return email.lower() in [e.lower() for e in connector.allowed_emails]
@@ -175,8 +211,38 @@ class MCPConnectorService:
         return connector, agent, environment
 
     @staticmethod
-    def to_public(connector: MCPConnector) -> dict:
-        """Convert connector to public dict with computed mcp_server_url."""
+    def _resolve_allowed_users(
+        db_session: DBSession,
+        allowed_user_ids: list,
+    ) -> list[dict]:
+        """Batch-resolve allowed_user_ids to display info (id/email/full_name).
+
+        Single query to avoid an N+1 across the connector list. IDs that no
+        longer resolve to a user are dropped from the display projection (the
+        raw id stays in ``allowed_user_ids`` until the owner removes it).
+        """
+        if not allowed_user_ids:
+            return []
+        ids = [str(u) for u in allowed_user_ids]
+        users = db_session.exec(select(User).where(User.id.in_(ids))).all()
+        return [
+            {"id": u.id, "email": u.email, "full_name": u.full_name}
+            for u in users
+        ]
+
+    @staticmethod
+    def to_public(connector: MCPConnector, db_session: DBSession | None = None) -> dict:
+        """Convert connector to public dict with computed mcp_server_url.
+
+        When ``db_session`` is provided, ``allowed_users`` is resolved to
+        display info for the frontend picker; otherwise it is empty.
+        """
+        allowed_user_ids = connector.allowed_user_ids or []
+        allowed_users = (
+            MCPConnectorService._resolve_allowed_users(db_session, allowed_user_ids)
+            if db_session is not None
+            else []
+        )
         data = {
             "id": connector.id,
             "agent_id": connector.agent_id,
@@ -185,6 +251,9 @@ class MCPConnectorService:
             "mode": connector.mode,
             "is_active": connector.is_active,
             "allowed_emails": connector.allowed_emails or [],
+            "allowed_user_ids": allowed_user_ids,
+            "allowed_users": allowed_users,
+            "allow_token_access": connector.allow_token_access,
             "max_clients": connector.max_clients,
             "mcp_server_url": f"{settings.MCP_SERVER_BASE_URL}/{connector.id}/mcp" if settings.MCP_SERVER_BASE_URL else None,
             "created_at": connector.created_at,

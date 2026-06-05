@@ -11,6 +11,8 @@ class MCPConnectorBase(SQLModel):
 
 class MCPConnectorCreate(MCPConnectorBase):
     allowed_emails: list[str] = []
+    allowed_user_ids: list[uuid.UUID] = []
+    allow_token_access: bool = False
     max_clients: int = 10
 
 
@@ -19,6 +21,8 @@ class MCPConnectorUpdate(SQLModel):
     mode: str | None = None
     is_active: bool | None = None
     allowed_emails: list[str] | None = None
+    allowed_user_ids: list[uuid.UUID] | None = None
+    allow_token_access: bool | None = None
     max_clients: int | None = None
 
 
@@ -30,9 +34,21 @@ class MCPConnector(MCPConnectorBase, table=True):
     owner_id: uuid.UUID = Field(foreign_key="user.id", nullable=False, ondelete="CASCADE")
     is_active: bool = Field(default=True)
     allowed_emails: list = Field(default_factory=list, sa_column=Column(JSON))
+    # Exact platform-user ACL (UUIDs stored as list of str). Preferred over
+    # allowed_emails; allowed_emails is retained as a fallback for legacy shares.
+    allowed_user_ids: list = Field(default_factory=list, sa_column=Column(JSON))
+    # Gates direct-token generation. When False, clients must use OAuth.
+    allow_token_access: bool = Field(default=False)
     max_clients: int = Field(default=10)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class MCPConnectorAllowedUser(SQLModel):
+    """Resolved display projection for an allowed platform user."""
+    id: uuid.UUID
+    email: str
+    full_name: str | None = None
 
 
 class MCPConnectorPublic(SQLModel):
@@ -43,6 +59,10 @@ class MCPConnectorPublic(SQLModel):
     mode: str
     is_active: bool
     allowed_emails: list[str]
+    allowed_user_ids: list[uuid.UUID]
+    # Resolved display info for allowed_user_ids (name/email for the picker).
+    allowed_users: list[MCPConnectorAllowedUser] = []
+    allow_token_access: bool
     max_clients: int
     mcp_server_url: str | None = None  # Computed from MCP_SERVER_BASE_URL + id
     created_at: datetime

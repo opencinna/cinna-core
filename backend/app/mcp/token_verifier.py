@@ -22,11 +22,14 @@ class MCPTokenVerifier(TokenVerifier):
     async def verify_token(self, token: str) -> AccessToken | None:
         """Verify a bearer token and return an AccessToken if valid."""
         with DBSession(engine) as db:
-            # Look up token
+            # Look up token. Accept OAuth "access" tokens and connector-scoped
+            # "direct" tokens — both are opaque bearer tokens verified the same
+            # way. Direct tokens carry user_id=owner_id, so identity resolution
+            # below is identical.
             token_record = db.exec(
                 select(MCPToken).where(
                     MCPToken.token == token,
-                    MCPToken.token_type == "access",
+                    MCPToken.token_type.in_(["access", "direct"]),
                 )
             ).first()
 
@@ -57,6 +60,16 @@ class MCPTokenVerifier(TokenVerifier):
 
             scopes = [s for s in token_record.scope.split(" ") if s] if token_record.scope else []
             expires_at_ts = int(token_record.expires_at.timestamp()) if token_record.expires_at else None
+
+            # Best-effort "last used" stamp for the token list UI. A write
+            # failure must never block authentication.
+            try:
+                token_record.last_used_at = datetime.now(UTC).replace(tzinfo=None)
+                db.add(token_record)
+                db.commit()
+            except Exception:  # noqa: BLE001
+                db.rollback()
+                logger.debug("Failed to update token last_used_at", exc_info=True)
 
             # Propagate authenticated user identity to tool handlers via ContextVar.
             # Token not captured — cleanup is handled by MCPServerRegistry.__call__()

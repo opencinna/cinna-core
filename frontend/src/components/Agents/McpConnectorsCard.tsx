@@ -20,6 +20,7 @@ import {
   UserAllowlistPicker,
   type UserAllowlistSelectedItem,
 } from "@/components/Common/UserAllowlistPicker"
+import { McpDirectTokensManager } from "./McpDirectTokensManager"
 import {
   Card,
   CardContent,
@@ -82,6 +83,12 @@ function getAuthHeaders() {
 // Types
 // ---------------------------------------------------------------------------
 
+interface McpConnectorAllowedUser {
+  id: string
+  email: string
+  full_name: string | null
+}
+
 interface McpConnector {
   id: string
   agent_id: string
@@ -90,6 +97,9 @@ interface McpConnector {
   mode: string
   is_active: boolean
   allowed_emails: string[]
+  allowed_user_ids: string[]
+  allowed_users: McpConnectorAllowedUser[]
+  allow_token_access: boolean
   max_clients: number
   mcp_server_url: string | null
   created_at: string
@@ -165,7 +175,8 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
   // Direct connector form
   const [name, setName] = useState("")
   const [mode, setMode] = useState("conversation")
-  const [allowedEmails, setAllowedEmails] = useState("")
+  const [allowedUsers, setAllowedUsers] = useState<UserAllowlistSelectedItem[]>([])
+  const [allowTokenAccess, setAllowTokenAccess] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
   // Edit connector state
@@ -173,7 +184,8 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
   const [editingConnector, setEditingConnector] = useState<McpConnector | null>(null)
   const [editName, setEditName] = useState("")
   const [editMode, setEditMode] = useState("conversation")
-  const [editAllowedEmails, setEditAllowedEmails] = useState("")
+  const [editAllowedUsers, setEditAllowedUsers] = useState<UserAllowlistSelectedItem[]>([])
+  const [editAllowTokenAccess, setEditAllowTokenAccess] = useState(false)
 
   // App MCP route form
   const [appMcpName, setAppMcpName] = useState("")
@@ -275,7 +287,12 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
   // ---- Mutations: Direct Connectors ----
 
   const createConnectorMutation = useMutation({
-    mutationFn: async (body: { name: string; mode: string; allowed_emails: string[] }) => {
+    mutationFn: async (body: {
+      name: string
+      mode: string
+      allowed_user_ids: string[]
+      allow_token_access: boolean
+    }) => {
       const res = await fetch(`${API_BASE}/api/v1/agents/${agentId}/mcp-connectors`, {
         method: "POST",
         headers: getAuthHeaders(),
@@ -339,7 +356,12 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
       body,
     }: {
       connectorId: string
-      body: { name?: string; mode?: string; allowed_emails?: string[] }
+      body: {
+        name?: string
+        mode?: string
+        allowed_user_ids?: string[]
+        allow_token_access?: boolean
+      }
     }) => {
       const res = await fetch(
         `${API_BASE}/api/v1/agents/${agentId}/mcp-connectors/${connectorId}`,
@@ -650,7 +672,8 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
       setCreateType("direct")
       setName("")
       setMode("conversation")
-      setAllowedEmails("")
+      setAllowedUsers([])
+      setAllowTokenAccess(false)
       setAppMcpName("")
       setAppMcpSessionMode("conversation")
       setAppMcpTriggerPrompt("")
@@ -687,11 +710,12 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
   }
 
   const handleCreateConnector = () => {
-    const emails = allowedEmails
-      .split(",")
-      .map((e) => e.trim())
-      .filter(Boolean)
-    createConnectorMutation.mutate({ name, mode, allowed_emails: emails })
+    createConnectorMutation.mutate({
+      name,
+      mode,
+      allowed_user_ids: allowedUsers.map((s) => s.userId),
+      allow_token_access: allowTokenAccess,
+    })
   }
 
   const handleCreateAppMcpRoute = () => {
@@ -722,21 +746,41 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
     setEditingConnector(connector)
     setEditName(connector.name)
     setEditMode(connector.mode)
-    setEditAllowedEmails(connector.allowed_emails.join(", "))
+    // Seed the picker from the resolved allowed_users projection so pills show
+    // names/emails rather than raw UUIDs.
+    setEditAllowedUsers(
+      (connector.allowed_user_ids || []).map((uid) => {
+        const resolved = (connector.allowed_users || []).find((u) => u.id === uid)
+        return {
+          id: uid,
+          userId: uid,
+          fallbackLabel: resolved?.full_name || resolved?.email || uid,
+        }
+      })
+    )
+    setEditAllowTokenAccess(connector.allow_token_access)
     setEditDialogOpen(true)
   }
 
   const handleEditConnectorSave = () => {
     if (!editingConnector) return
-    const body: { name?: string; mode?: string; allowed_emails?: string[] } = {}
+    const body: {
+      name?: string
+      mode?: string
+      allowed_user_ids?: string[]
+      allow_token_access?: boolean
+    } = {}
     if (editName !== editingConnector.name) body.name = editName
     if (editMode !== editingConnector.mode) body.mode = editMode
-    const newEmails = editAllowedEmails
-      .split(",")
-      .map((e) => e.trim())
-      .filter(Boolean)
-    if (JSON.stringify(newEmails) !== JSON.stringify(editingConnector.allowed_emails)) {
-      body.allowed_emails = newEmails
+    const newUserIds = editAllowedUsers.map((s) => s.userId)
+    if (
+      JSON.stringify(newUserIds) !==
+      JSON.stringify(editingConnector.allowed_user_ids || [])
+    ) {
+      body.allowed_user_ids = newUserIds
+    }
+    if (editAllowTokenAccess !== editingConnector.allow_token_access) {
+      body.allow_token_access = editAllowTokenAccess
     }
     updateConnectorMutation.mutate({ connectorId: editingConnector.id, body })
   }
@@ -907,16 +951,56 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                       </p>
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="allowed-emails">Allowed Emails (optional)</Label>
-                      <Input
-                        id="allowed-emails"
-                        placeholder="user@example.com, other@example.com"
-                        value={allowedEmails}
-                        onChange={(e) => setAllowedEmails(e.target.value)}
+                      <UserAllowlistPicker
+                        enabled={
+                          createDialogOpen &&
+                          createStep === "form" &&
+                          createType === "direct"
+                        }
+                        selected={allowedUsers}
+                        onAdd={(u) =>
+                          setAllowedUsers((prev) =>
+                            prev.some((s) => s.userId === u.id)
+                              ? prev
+                              : [
+                                  ...prev,
+                                  {
+                                    id: u.id,
+                                    userId: u.id,
+                                    fallbackLabel: u.full_name || u.email,
+                                  },
+                                ]
+                          )
+                        }
+                        onRemove={(item) =>
+                          setAllowedUsers((prev) =>
+                            prev.filter((s) => s.userId !== item.userId)
+                          )
+                        }
+                        label={
+                          <Label className="flex items-center gap-2">
+                            <Users className="h-4 w-4" />
+                            Allowed Users (optional)
+                          </Label>
+                        }
+                        searchPlaceholder="Search users..."
+                        emptyHint="Leave empty for owner-only access."
                       />
-                      <p className="text-xs text-muted-foreground">
-                        Comma-separated. Leave empty for owner-only access.
-                      </p>
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between py-1">
+                      <div className="space-y-0.5 pr-4">
+                        <Label className="text-sm">Allow token access</Label>
+                        <p className="text-xs text-muted-foreground">
+                          When off, clients must authorize via OAuth. When on, you can
+                          generate a direct access token that a client uses without an
+                          account — it connects under your name, for this connector only.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={allowTokenAccess}
+                        onCheckedChange={setAllowTokenAccess}
+                      />
                     </div>
                   </div>
                   <DialogFooter>
@@ -1338,11 +1422,23 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                           Inactive
                         </Badge>
                       )}
-                      {connector.allowed_emails.length > 0 && (
-                        <span className="text-xs text-muted-foreground shrink-0">
-                          {connector.allowed_emails.length} email
-                          {connector.allowed_emails.length !== 1 ? "s" : ""}
-                        </span>
+                      {(() => {
+                        const userCount =
+                          (connector.allowed_user_ids?.length || 0) +
+                          (connector.allowed_emails?.length || 0)
+                        return userCount > 0 ? (
+                          <span className="text-xs text-muted-foreground shrink-0">
+                            {userCount} user{userCount !== 1 ? "s" : ""}
+                          </span>
+                        ) : null
+                      })()}
+                      {connector.allow_token_access && (
+                        <Badge
+                          variant="outline"
+                          className="text-xs shrink-0 border-amber-300 text-amber-600"
+                        >
+                          Tokens
+                        </Badge>
                       )}
                     </div>
                     <div className="flex items-center gap-0.5 ml-1 shrink-0">
@@ -1719,10 +1815,10 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
           <DialogHeader>
             <DialogTitle>Edit MCP Connector</DialogTitle>
             <DialogDescription>
-              Update the connector name, mode, or allowed emails.
+              Update the connector name, mode, allowed users, or token access.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="space-y-4 max-h-[65vh] overflow-y-auto pr-1">
             <div className="space-y-2">
               <Label htmlFor="edit-connector-name">Name</Label>
               <Input
@@ -1748,17 +1844,68 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
               </p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="edit-allowed-emails">Allowed Emails (optional)</Label>
-              <Input
-                id="edit-allowed-emails"
-                placeholder="user@example.com, other@example.com"
-                value={editAllowedEmails}
-                onChange={(e) => setEditAllowedEmails(e.target.value)}
+              <UserAllowlistPicker
+                enabled={editDialogOpen}
+                selected={editAllowedUsers}
+                onAdd={(u) =>
+                  setEditAllowedUsers((prev) =>
+                    prev.some((s) => s.userId === u.id)
+                      ? prev
+                      : [
+                          ...prev,
+                          {
+                            id: u.id,
+                            userId: u.id,
+                            fallbackLabel: u.full_name || u.email,
+                          },
+                        ]
+                  )
+                }
+                onRemove={(item) =>
+                  setEditAllowedUsers((prev) =>
+                    prev.filter((s) => s.userId !== item.userId)
+                  )
+                }
+                label={
+                  <Label className="flex items-center gap-2">
+                    <Users className="h-4 w-4" />
+                    Allowed Users (optional)
+                  </Label>
+                }
+                searchPlaceholder="Search users..."
+                emptyHint="Leave empty for owner-only access."
               />
-              <p className="text-xs text-muted-foreground">
-                Comma-separated. Leave empty for owner-only access.
-              </p>
+              {editingConnector && editingConnector.allowed_emails.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Legacy allowed emails (fallback):{" "}
+                  {editingConnector.allowed_emails.join(", ")}
+                </p>
+              )}
             </div>
+            <Separator />
+            <div className="flex items-center justify-between py-1">
+              <div className="space-y-0.5 pr-4">
+                <Label className="text-sm">Allow token access</Label>
+                <p className="text-xs text-muted-foreground">
+                  When off, clients must authorize via OAuth. When on, you can generate a
+                  direct access token that a client uses without an account — it connects
+                  under your name, for this connector only.
+                </p>
+              </div>
+              <Switch
+                checked={editAllowTokenAccess}
+                onCheckedChange={setEditAllowTokenAccess}
+              />
+            </div>
+            {editingConnector && editAllowTokenAccess && (
+              <>
+                <Separator />
+                <McpDirectTokensManager
+                  agentId={agentId}
+                  connectorId={editingConnector.id}
+                />
+              </>
+            )}
             {editingConnector && (
               <div className="space-y-2">
                 <Label>MCP Server URL</Label>

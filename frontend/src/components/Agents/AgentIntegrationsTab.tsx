@@ -14,9 +14,10 @@ import {
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Separator } from "@/components/ui/separator"
 import useAuth from "@/hooks/useAuth"
 import useRole from "@/hooks/useRole"
-import { AccessTokensCard } from "./AccessTokensCard"
+import { A2aAccessTokensManager } from "./A2aAccessTokensManager"
 import { AgentRestApiCard } from "./AgentRestApiCard"
 import { EmailIntegrationCard } from "./EmailIntegrationCard"
 import { GuestShareCard } from "./GuestShareCard"
@@ -155,12 +156,15 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
                     Use this URL to connect external A2A-compatible clients
                   </p>
                 </div>
+
+                <Separator />
+
+                {/* A2A access tokens — only relevant when A2A is enabled */}
+                <A2aAccessTokensManager agentId={agent.id} />
               </div>
             )}
           </CardContent>
         </Card>
-        {/* Access Tokens Card */}
-        <AccessTokensCard agentId={agent.id} />
 
         {/* Guest Share Links Card */}
         <GuestShareCard agentId={agent.id} />

@@ -19,7 +19,7 @@ Provides scoped JWT-based authentication tokens for external A2A clients to acce
 ### 1. Creating an Access Token
 
 1. User navigates to agent's **Integrations** tab (A2A must be enabled)
-2. Clicks "Create Token" in the Access Tokens card
+2. Clicks "Create Token" inside the **A2A Integration** card (the token list is embedded directly in that card; there is no separate Access Tokens card)
 3. Selects mode: `conversation` (default) or `building`
 4. Selects scope: `limited` (default) or `general`
 5. Enters a descriptive name for the token
@@ -134,4 +134,4 @@ Pre-issued A2A access tokens are scoped machine credentials that authenticate in
 
 ---
 
-*Last updated: 2026-03-02*
+*Last updated: 2026-06-06*

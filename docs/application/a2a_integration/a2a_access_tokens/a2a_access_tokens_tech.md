@@ -21,8 +21,8 @@
 - `backend/app/alembic/versions/f6a7b8c9d0e1_add_agent_access_tokens.py` - Token table and session FK
 
 ### Frontend
-- `frontend/src/components/Agents/AccessTokensCard.tsx` - Token management UI
-- `frontend/src/components/Agents/AgentIntegrationsTab.tsx` - Shows AccessTokensCard when A2A is enabled
+- `frontend/src/components/Agents/A2aAccessTokensManager.tsx` - Token management UI (list, create, revoke, delete); embedded inside the A2A Integration card. The standalone `AccessTokensCard.tsx` was removed — this component renders inline when A2A is enabled.
+- `frontend/src/components/Agents/AgentIntegrationsTab.tsx` - Imports `A2aAccessTokensManager`; renders it inside the A2A Integration card when `a2aEnabled` is `true`
 
 ## Database Schema
 
@@ -101,19 +101,20 @@
 
 ## Frontend Components
 
-### AccessTokensCard
-**File:** `frontend/src/components/Agents/AccessTokensCard.tsx`
+### A2aAccessTokensManager
+**File:** `frontend/src/components/Agents/A2aAccessTokensManager.tsx`
 
 - Lists tokens with mode/scope badges
 - Create dialog with mode and scope selection
 - Shows token once on creation with copy button
 - Revoke/restore toggle
 - Delete with confirmation dialog
+- Embedded inline inside the A2A Integration card (no standalone card)
 
 ### AgentIntegrationsTab (token integration)
 **File:** `frontend/src/components/Agents/AgentIntegrationsTab.tsx`
 
-- Shows AccessTokensCard when A2A is enabled
+- Imports `A2aAccessTokensManager` and renders it inside the A2A Integration card when `a2aEnabled` is `true`
 - Token management only available when A2A integration is active
 
 ### State Management
@@ -149,4 +150,4 @@
 
 ---
 
-*Last updated: 2026-04-18*
+*Last updated: 2026-06-06*

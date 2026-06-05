@@ -154,15 +154,19 @@ class MCPConsentService:
         if not connector:
             raise ConnectorNotFoundError()
 
-        # Check email access: user must be connector owner or in allowed_emails
+        # Access check: user must be connector owner, in allowed_user_ids, or
+        # (legacy fallback) in allowed_emails.
         is_owner = connector.owner_id == current_user.id
+        user_id_allowed = str(current_user.id) in [
+            str(u) for u in (connector.allowed_user_ids or [])
+        ]
         email_allowed = (
             current_user.email
             and connector.allowed_emails
             and current_user.email.lower()
             in [e.lower() for e in connector.allowed_emails]
         )
-        if not is_owner and not email_allowed:
+        if not (is_owner or user_id_allowed or email_allowed):
             raise MCPPermissionDeniedError(
                 "You don't have access to this connector"
             )

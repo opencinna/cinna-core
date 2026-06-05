@@ -2916,10 +2916,21 @@ export type MailServerType = 'imap' | 'smtp';
  */
 export type MarketplaceStatus = 'pending' | 'connected' | 'error' | 'disconnected';
 
+/**
+ * Resolved display projection for an allowed platform user.
+ */
+export type MCPConnectorAllowedUser = {
+    id: string;
+    email: string;
+    full_name?: (string | null);
+};
+
 export type MCPConnectorCreate = {
     name: string;
     mode?: string;
     allowed_emails?: Array<(string)>;
+    allowed_user_ids?: Array<(string)>;
+    allow_token_access?: boolean;
     max_clients?: number;
 };
 
@@ -2931,6 +2942,9 @@ export type MCPConnectorPublic = {
     mode: string;
     is_active: boolean;
     allowed_emails: Array<(string)>;
+    allowed_user_ids: Array<(string)>;
+    allowed_users?: Array<MCPConnectorAllowedUser>;
+    allow_token_access: boolean;
     max_clients: number;
     mcp_server_url?: (string | null);
     created_at: string;
@@ -2943,11 +2957,52 @@ export type MCPConnectorsPublic = {
     mcp_server_base_url?: (string | null);
 };
 
+export type MCPConnectorTokenCreate = {
+    label: string;
+};
+
+/**
+ * Returned only on creation — includes the full token value once.
+ */
+export type MCPConnectorTokenCreated = {
+    id: string;
+    connector_id: string;
+    label: (string | null);
+    prefix: string;
+    created_at: string;
+    last_used_at: (string | null);
+    revoked: boolean;
+    expires_at: string;
+    token: string;
+};
+
+export type MCPConnectorTokenPublic = {
+    id: string;
+    connector_id: string;
+    label: (string | null);
+    prefix: string;
+    created_at: string;
+    last_used_at: (string | null);
+    revoked: boolean;
+    expires_at: string;
+};
+
+export type MCPConnectorTokensPublic = {
+    data: Array<MCPConnectorTokenPublic>;
+    count: number;
+};
+
+export type MCPConnectorTokenUpdate = {
+    revoked?: (boolean | null);
+};
+
 export type MCPConnectorUpdate = {
     name?: (string | null);
     mode?: (string | null);
     is_active?: (boolean | null);
     allowed_emails?: (Array<(string)> | null);
+    allowed_user_ids?: (Array<(string)> | null);
+    allow_token_access?: (boolean | null);
     max_clients?: (number | null);
 };
 
@@ -6689,6 +6744,38 @@ export type McpConnectorsDeleteMcpConnectorData = {
 };
 
 export type McpConnectorsDeleteMcpConnectorResponse = (Message);
+
+export type McpConnectorsListConnectorTokensData = {
+    agentId: string;
+    connectorId: string;
+};
+
+export type McpConnectorsListConnectorTokensResponse = (MCPConnectorTokensPublic);
+
+export type McpConnectorsCreateConnectorTokenData = {
+    agentId: string;
+    connectorId: string;
+    requestBody: MCPConnectorTokenCreate;
+};
+
+export type McpConnectorsCreateConnectorTokenResponse = (MCPConnectorTokenCreated);
+
+export type McpConnectorsUpdateConnectorTokenData = {
+    agentId: string;
+    connectorId: string;
+    requestBody: MCPConnectorTokenUpdate;
+    tokenId: string;
+};
+
+export type McpConnectorsUpdateConnectorTokenResponse = (MCPConnectorTokenPublic);
+
+export type McpConnectorsDeleteConnectorTokenData = {
+    agentId: string;
+    connectorId: string;
+    tokenId: string;
+};
+
+export type McpConnectorsDeleteConnectorTokenResponse = (Message);
 
 export type McpConsentGetConsentInfoData = {
     appMcp?: boolean;

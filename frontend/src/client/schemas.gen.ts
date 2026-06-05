@@ -13395,6 +13395,35 @@ Mirrors :class:\`app.models.users.user.Token\` with an explicit
 \`\`kind\`\` literal so the frontend can branch on a single union shape.`
 } as const;
 
+export const MCPConnectorAllowedUserSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        email: {
+            type: 'string',
+            title: 'Email'
+        },
+        full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Full Name'
+        }
+    },
+    type: 'object',
+    required: ['id', 'email'],
+    title: 'MCPConnectorAllowedUser',
+    description: 'Resolved display projection for an allowed platform user.'
+} as const;
+
 export const MCPConnectorCreateSchema = {
     properties: {
         name: {
@@ -13415,6 +13444,20 @@ export const MCPConnectorCreateSchema = {
             type: 'array',
             title: 'Allowed Emails',
             default: []
+        },
+        allowed_user_ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            title: 'Allowed User Ids',
+            default: []
+        },
+        allow_token_access: {
+            type: 'boolean',
+            title: 'Allow Token Access',
+            default: false
         },
         max_clients: {
             type: 'integer',
@@ -13463,6 +13506,26 @@ export const MCPConnectorPublicSchema = {
             type: 'array',
             title: 'Allowed Emails'
         },
+        allowed_user_ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            title: 'Allowed User Ids'
+        },
+        allowed_users: {
+            items: {
+                '$ref': '#/components/schemas/MCPConnectorAllowedUser'
+            },
+            type: 'array',
+            title: 'Allowed Users',
+            default: []
+        },
+        allow_token_access: {
+            type: 'boolean',
+            title: 'Allow Token Access'
+        },
         max_clients: {
             type: 'integer',
             title: 'Max Clients'
@@ -13490,8 +13553,182 @@ export const MCPConnectorPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'agent_id', 'owner_id', 'name', 'mode', 'is_active', 'allowed_emails', 'max_clients', 'created_at', 'updated_at'],
+    required: ['id', 'agent_id', 'owner_id', 'name', 'mode', 'is_active', 'allowed_emails', 'allowed_user_ids', 'allow_token_access', 'max_clients', 'created_at', 'updated_at'],
     title: 'MCPConnectorPublic'
+} as const;
+
+export const MCPConnectorTokenCreateSchema = {
+    properties: {
+        label: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Label'
+        }
+    },
+    type: 'object',
+    required: ['label'],
+    title: 'MCPConnectorTokenCreate'
+} as const;
+
+export const MCPConnectorTokenCreatedSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        connector_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Connector Id'
+        },
+        label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        prefix: {
+            type: 'string',
+            title: 'Prefix'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        last_used_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Used At'
+        },
+        revoked: {
+            type: 'boolean',
+            title: 'Revoked'
+        },
+        expires_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Expires At'
+        },
+        token: {
+            type: 'string',
+            title: 'Token'
+        }
+    },
+    type: 'object',
+    required: ['id', 'connector_id', 'label', 'prefix', 'created_at', 'last_used_at', 'revoked', 'expires_at', 'token'],
+    title: 'MCPConnectorTokenCreated',
+    description: 'Returned only on creation — includes the full token value once.'
+} as const;
+
+export const MCPConnectorTokenPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        connector_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Connector Id'
+        },
+        label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        prefix: {
+            type: 'string',
+            title: 'Prefix'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        last_used_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Used At'
+        },
+        revoked: {
+            type: 'boolean',
+            title: 'Revoked'
+        },
+        expires_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Expires At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'connector_id', 'label', 'prefix', 'created_at', 'last_used_at', 'revoked', 'expires_at'],
+    title: 'MCPConnectorTokenPublic'
+} as const;
+
+export const MCPConnectorTokenUpdateSchema = {
+    properties: {
+        revoked: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Revoked'
+        }
+    },
+    type: 'object',
+    title: 'MCPConnectorTokenUpdate'
+} as const;
+
+export const MCPConnectorTokensPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/MCPConnectorTokenPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'MCPConnectorTokensPublic'
 } as const;
 
 export const MCPConnectorUpdateSchema = {
@@ -13544,6 +13781,32 @@ export const MCPConnectorUpdateSchema = {
                 }
             ],
             title: 'Allowed Emails'
+        },
+        allowed_user_ids: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string',
+                        format: 'uuid'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Allowed User Ids'
+        },
+        allow_token_access: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Allow Token Access'
         },
         max_clients: {
             anyOf: [

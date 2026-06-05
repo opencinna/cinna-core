@@ -434,6 +434,7 @@ from .mcp.mcp_connector import (
     MCPConnectorUpdate,
     MCPConnectorPublic,
     MCPConnectorsPublic,
+    MCPConnectorAllowedUser,
 )
 from .mcp.mcp_oauth_client import (
     MCPOAuthClient,
@@ -445,6 +446,11 @@ from .mcp.mcp_auth_code import (
 )
 from .mcp.mcp_token import (
     MCPToken,
+    MCPConnectorTokenCreate,
+    MCPConnectorTokenUpdate,
+    MCPConnectorTokenPublic,
+    MCPConnectorTokenCreated,
+    MCPConnectorTokensPublic,
 )
 from .mcp.mcp_session_meta import (
     MCPSessionMeta,
@@ -1026,12 +1032,19 @@ __all__ = [
     "MCPConnectorUpdate",
     "MCPConnectorPublic",
     "MCPConnectorsPublic",
+    "MCPConnectorAllowedUser",
     # MCP OAuth
     "MCPOAuthClient",
     "MCPOAuthClientPublic",
     "MCPAuthCode",
     "MCPAuthRequest",
     "MCPToken",
+    # MCP Direct Tokens
+    "MCPConnectorTokenCreate",
+    "MCPConnectorTokenUpdate",
+    "MCPConnectorTokenPublic",
+    "MCPConnectorTokenCreated",
+    "MCPConnectorTokensPublic",
     # MCP Session Meta
     "MCPSessionMeta",
     "MCPSessionMetaPublic",
