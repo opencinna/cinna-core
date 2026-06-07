@@ -2,6 +2,7 @@ import { Lightbulb } from "lucide-react"
 import { ToolCallBlock } from "./ToolCallBlock"
 import { MarkdownRenderer } from "./MarkdownRenderer"
 import { WebappActionBlock } from "./WebappActionBlock"
+import { AttachmentBlock } from "./AttachmentBlock"
 import type { StreamEvent } from "@/hooks/useSessionStreaming"
 
 interface StreamEventRendererProps {
@@ -56,6 +57,26 @@ export function StreamEventRenderer({ events, conversationModeUi = "detailed" }:
               action={event.content}
               data={event.metadata?.data}
               isCompact={conversationModeUi === "compact"}
+            />
+          )
+        } else if (event.type === "attachment") {
+          return (
+            <AttachmentBlock
+              key={key}
+              variant="attachment"
+              fileId={event.metadata?.file_id}
+              filename={event.metadata?.filename}
+              mimeType={event.metadata?.mime_type}
+              size={event.metadata?.size}
+              isCompact={conversationModeUi === "compact"}
+            />
+          )
+        } else if (event.type === "attachment_error") {
+          return (
+            <AttachmentBlock
+              key={key}
+              variant="attachment_error"
+              errorReason={event.content}
             />
           )
         } else if (event.type === "system" && event.content.trim()) {

@@ -21,9 +21,15 @@ from a2a.types import (
     Message,
     Part,
     TextPart,
+    FilePart,
+    FileWithUri,
 )
 
+from app.core.config import settings
 from app.models import SessionMessage
+from app.services.environments.agent_workspace_token_service import (
+    AgentWorkspaceTokenService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +63,15 @@ CONTENT_KIND_TOOL = "tool"
 CONTENT_KIND_TOOL_RESULT = "tool_result"
 CONTENT_KIND_NOTICE = "notice"
 CONTENT_KIND_COMMAND_RESULT = "command_result"
+# Agent-authored file attachment delivered as a native A2A FilePart.
+CONTENT_KIND_FILE = "file"
+
+# Metadata keys carried on an attachment FilePart (vendor-namespaced), so A2A
+# clients can render the file without parsing the surrounding narration.
+FILE_ID_KEY = "cinna.file_id"
+FILE_NAME_KEY = "cinna.file_name"
+FILE_MIME_KEY = "cinna.file_mime"
+FILE_SIZE_KEY = "cinna.file_size"
 
 # Allowed values for cinna.tool_stream
 TOOL_STREAM_STDOUT = "stdout"
@@ -67,7 +82,62 @@ _STREAM_EVENT_TO_CONTENT_KIND = {
     "thinking": CONTENT_KIND_THINKING,
     "tool": CONTENT_KIND_TOOL,
     "tool_result_delta": CONTENT_KIND_TOOL_RESULT,
+    "attachment": CONTENT_KIND_FILE,
 }
+
+
+def _build_file_download_uri(file_id: str, session_id: str) -> str:
+    """Build an absolute, signed download URL for an attachment FilePart.
+
+    Embeds a short-lived ``file_download`` token so native A2A clients can fetch
+    the file without a regular session JWT. The base host is the public frontend
+    host (same approach as the /files command link builder).
+    """
+    try:
+        token = AgentWorkspaceTokenService.create_file_download_token(
+            file_id=UUID(file_id),
+            session_id=UUID(session_id),
+        )
+    except (ValueError, TypeError):
+        token = ""
+    base = settings.FRONTEND_HOST.rstrip("/")
+    suffix = f"?token={token}" if token else ""
+    return f"{base}{settings.API_V1_STR}/files/{file_id}/download{suffix}"
+
+
+def _build_attachment_file_part(
+    event_meta: dict,
+    session_id: str,
+) -> Part | None:
+    """Build an A2A FilePart for a stored/streamed ``attachment`` event.
+
+    Returns None when the event has no usable file_id. Content-kind metadata is
+    placed on the part (never on the Message), consistent with the TextPart rule.
+    """
+    file_id = event_meta.get("file_id")
+    if not file_id:
+        return None
+    filename = event_meta.get("filename")
+    mime_type = event_meta.get("mime_type")
+    size = event_meta.get("size")
+
+    part_metadata: dict[str, Any] = {
+        CONTENT_KIND_KEY: CONTENT_KIND_FILE,
+        FILE_ID_KEY: file_id,
+    }
+    if filename:
+        part_metadata[FILE_NAME_KEY] = filename
+    if mime_type:
+        part_metadata[FILE_MIME_KEY] = mime_type
+    if isinstance(size, int):
+        part_metadata[FILE_SIZE_KEY] = size
+
+    file_with_uri = FileWithUri(
+        uri=_build_file_download_uri(file_id, session_id),
+        name=filename,
+        mime_type=mime_type,
+    )
+    return Part(root=FilePart(file=file_with_uri, metadata=part_metadata))
 
 
 class A2AEventMapper:
@@ -207,6 +277,21 @@ class A2AEventMapper:
                 )
             return None
 
+        elif event_type == "attachment":
+            # Live agent attachment — deliver as a FilePart on a working status
+            # update so streaming A2A clients see the file as it is finalised.
+            event_meta = event.get("metadata") or {}
+            file_part = _build_attachment_file_part(event_meta, task_id)
+            if file_part is None:
+                return None
+            return A2AEventMapper.create_file_status_update(
+                task_id=task_id,
+                context_id=context_id,
+                state=TaskState.working,
+                final=False,
+                file_part=file_part,
+            )
+
         elif event_type == "done":
             # Final event from MessageService - map to completed or canceled based on metadata
             metadata = event.get("metadata") or {}
@@ -310,6 +395,40 @@ class A2AEventMapper:
                 parts=[Part(root=text_part)],
             )
 
+        event = TaskStatusUpdateEvent(
+            taskId=task_id,
+            contextId=context_id,
+            status=status,
+            final=final,
+        )
+        return {
+            "kind": "status-update",
+            **event.model_dump(by_alias=True, exclude_none=True),
+        }
+
+    @staticmethod
+    def create_file_status_update(
+        task_id: str,
+        context_id: str,
+        state: TaskState,
+        final: bool,
+        file_part: Part,
+    ) -> dict:
+        """Create a TaskStatusUpdateEvent whose message carries a single FilePart.
+
+        Used to deliver a live agent attachment to streaming A2A clients. The
+        content-kind metadata lives on the part (set by ``_build_attachment_file_part``),
+        never on the Message.
+        """
+        status = TaskStatus(
+            state=state,
+            timestamp=datetime.now(UTC).isoformat() + "Z",
+        )
+        status.message = Message(
+            messageId=uuid4().hex,
+            role="agent",
+            parts=[file_part],
+        )
         event = TaskStatusUpdateEvent(
             taskId=task_id,
             contextId=context_id,
@@ -440,12 +559,23 @@ class A2AEventMapper:
         if not streaming_events:
             return fallback
 
+        session_id = str(msg.session_id)
         parts: list[Part] = []
         for evt in streaming_events:
             evt_type = evt.get("type")
             content_kind = _STREAM_EVENT_TO_CONTENT_KIND.get(evt_type)
             if content_kind is None:
                 continue
+
+            # Agent attachment → native FilePart (no text content required).
+            if content_kind == CONTENT_KIND_FILE:
+                file_part = _build_attachment_file_part(
+                    evt.get("metadata") or {}, session_id
+                )
+                if file_part is not None:
+                    parts.append(file_part)
+                continue
+
             content = evt.get("content") or ""
             if not content:
                 continue

@@ -96,7 +96,7 @@
 - `_update_environment_config()` — fetches user credentials and triggers env file generation
 - `_generate_env_file()` — writes `.env`; conditionally includes `ANTHROPIC_API_KEY`; calls settings generators for MiniMax, OpenAI Compatible, and OpenCode
 - `_generate_minimax_settings_files()` — writes JSON settings to `app/core/.claude/`
-- `_generate_opencode_config_files()` — writes `opencode.json` to `app/core/.opencode/{mode}/` for each mode that uses `opencode/*`; embeds model selection, provider registration with API key, permission rules, tool flags, and MCP bridge server commands; called at environment creation and rebuild
+- `_generate_opencode_config_files()` — writes `opencode.json` to `app/core/.opencode/{mode}/` for each mode that uses `opencode/*`; embeds model selection, provider registration with API key, permission rules, tool flags, MCP bridge server commands, and the absolute `instructions` AGENTS.md path; called at environment creation and rebuild. Uses the `OPENCODE_RUNTIME_DIR_TEMPLATE` / `OPENCODE_AGENTS_MD_FILENAME` constants mirrored from the adapter
 - `rebuild_environment()` — after core replacement, regenerates settings files for all adapter types including OpenCode
 
 ### Credential resolution into the environment
@@ -252,16 +252,17 @@ Each mode has its own `opencode serve` process. Model is baked into the config �
 
 **Server lifecycle:**
 - `_ensure_server_running()` — starts the process if not alive; uses `asyncio.Lock` to prevent concurrent starts; clears stale session ID on restart
-- `_start_opencode_server()` — creates the runtime dir, symlinks static config files from the read-only `/app/core/.opencode/{mode}/` into the writable `/tmp/.opencode_{mode}/`, launches `opencode serve --port {port} --hostname 127.0.0.1` with `cwd={runtime_dir}` so opencode finds `opencode.json` and `AGENTS.md` in one place
+- `_start_opencode_server()` — creates the runtime dir, symlinks static config files from the read-only `/app/core/.opencode/{mode}/` into the writable `/tmp/.opencode_{mode}/`, launches `opencode serve --port {port} --hostname 127.0.0.1` with `cwd={runtime_dir}`. The subprocess env sets `OPENCODE_CONFIG` and `CINNA_SESSION_CONTEXT_PATH` (both absolute paths under the runtime dir) — required because each session binds to `/app/workspace` as its project root (see **Workspace project binding** below)
 - `_wait_for_server_health()` — polls `GET /health` then `GET /doc` every 1s up to `OPENCODE_STARTUP_TIMEOUT` (30s)
+- The `/tmp/.opencode_{mode}` path and the `AGENTS.md` filename are the module constants `OPENCODE_RUNTIME_DIR_TEMPLATE` / `OPENCODE_AGENTS_MD_FILENAME`; the host-side config generator (`environment_lifecycle.py`) **mirrors** them (host/container boundary prevents a shared import — keep the two definitions in sync)
 
 **Message flow per `send_message_stream()` call:**
 1. Resolve per-mode port/dir via `_resolve_mode(mode)` (no-op if already resolved)
 2. Ensure server is running
-3. Create or resume session via `POST /session`; yield `SESSION_CREATED` or `SESSION_RESUMED`
+3. Create or resume session via `POST /session?directory=/app/workspace`; yield `SESSION_CREATED` or `SESSION_RESUMED`. The `directory` query param binds the session's project root to the agent workspace (see **Workspace project binding**)
 4. Register session with `active_session_manager` for interrupt support
 5. Write `session_context.json` to the runtime dir so MCP bridge servers can read `backend_session_id`
-6. Resolve and write system prompt as `AGENTS.md` to the runtime dir
+6. Resolve and write system prompt as `AGENTS.md` to the runtime dir (loaded via the config's `instructions` entry, not cwd auto-discovery)
 7. Build plugin MCP config; yield `SYSTEM` event with `subtype="tools_init"` and full tool list
 8. Open SSE stream on `GET /global/event` first
 9. On first SSE event (any type), fire `POST /session/{id}/message` as a background `asyncio.Task` — this avoids missing events from fast models and prevents deadlock (POST blocks until LLM completes)
@@ -278,6 +279,17 @@ Each mode has its own `opencode serve` process. Model is baked into the config �
 - `interrupt_session()` calls `active_session_manager.request_interrupt(session_id)` to set a flag
 - The SSE loop checks this flag between chunks; when set, calls `_delete_session()` and yields `INTERRUPTED`
 - Fallback: if session is not registered (already finishing), calls `DELETE /session/{id}` directly
+- `_delete_session()` also passes `?directory=/app/workspace` so opencode resolves the right project instance
+
+**Workspace project binding:**
+
+By default `opencode serve` treats its launch cwd (the runtime dir under `/tmp`) as the project root, so agent file tools (`write` / `edit` / `apply_patch` / `bash`) resolve **relative** paths into `/tmp/.opencode_{mode}/…` instead of `/app/workspace`. That makes agent-created files invisible to the workspace, the `/files` browser, sync, and message attachments (see [agent_message_attachments_tech.md](../agent_file_management/agent_message_attachments_tech.md)). Claude Code is unaffected because its adapter launches with `cwd=workspace_dir`.
+
+The OpenCode adapter fixes this **per session** via opencode's native `directory` query param (`POST /session?directory=/app/workspace`, also on `/session/{id}/message` and `DELETE /session/{id}`), which binds the session's project root to the workspace so file tools operate there. opencode v1.14 confirmed: relative writes land in the bound `directory`; `/global/event` SSE remains global (no `directory` needed). Three consequences this binding forces, each handled in the adapter launch env / config:
+
+- **Config discovery** — opencode loads project `opencode.json` by walking up from the project `directory` + global dirs, NOT from cwd. With `directory=/app/workspace` it would no longer find the per-mode config under `/tmp`. Fix: `OPENCODE_CONFIG` env pins the absolute config path.
+- **System prompt** — opencode no longer auto-discovers `AGENTS.md` from cwd. Fix: `opencode.json` carries an absolute `instructions` path to the runtime-dir `AGENTS.md` (verified to load only when the config itself is loaded via `OPENCODE_CONFIG`).
+- **MCP bridge cwd** — opencode spawns local MCP servers with `cwd` = the session project dir (`/app/workspace`), so they can't read `session_context.json` from cwd. Fix: `CINNA_SESSION_CONTEXT_PATH` env gives the absolute path; the bridge servers read it with a cwd-relative fallback.
 
 ### OpenCodeEventTransformer (`adapters/opencode_event_transformer.py`)
 
@@ -307,6 +319,11 @@ Stateful translator from raw OpenCode SSE events to `SDKEvent` objects. Instanti
 - When the part finishes (`time.end` present), the buffer remainder is flushed
 - This produces natural streaming without extra paragraph spacing from many small deltas
 
+**Assistant-event coalescing (finalize, host-side):**
+- Because OpenCode flushes assistant text on every newline, a multi-line markdown block (code fence, table, list) arrives as one `assistant` event per line. The web chat renders each `assistant` streaming event as its own markdown block, so a code fence split across events shatters into "empty code block / plain text / empty code block".
+- `backend/app/services/sessions/message_service.py:_coalesce_assistant_events()` merges runs of **consecutive** `assistant` events (stopping at any other event type to preserve tool / webapp_action / attachment interleaving) and renumbers `event_seq` contiguously. It runs as the first step of the `stream_message_with_events` finalize block (before webapp_action splitting and attachment processing).
+- Adapter-agnostic and applied only to the **persisted** trace (web re-render + A2A replay); the live stream still carries per-line deltas (clients concatenate). Claude Code emits whole text blocks per turn, so coalescing is a no-op there. Tests: `backend/tests/unit/test_coalesce_assistant_events.py`.
+
 **SSE envelope unwrapping:**
 - OpenCode wraps SSE events in `{"payload": {...}}`; `_parse_sse_event()` unwraps this so callers always see the inner event dict with `type` and `properties` at the top level
 
@@ -324,7 +341,7 @@ Stateful translator from raw OpenCode SSE events to `SDKEvent` objects. Instanti
 
 Located in `tools/mcp_bridge/`. Each is a standalone Python MCP stdio server registered in `opencode.json`. OpenCode spawns them as child processes when needed.
 
-All bridge servers read `session_context.json` from their cwd (the mode runtime dir, where `opencode serve` is run) to get `backend_session_id` at call time.
+Bridge servers read `session_context.json` to get `backend_session_id` at call time. They prefer the absolute path in the `CINNA_SESSION_CONTEXT_PATH` env var (set by the adapter on the serve subprocess and inherited by the spawned bridges), falling back to the cwd-relative `session_context.json` for older environments. This indirection is required because, once sessions bind to `/app/workspace`, opencode spawns the bridges with `cwd = /app/workspace` rather than the runtime dir (see **Workspace project binding**). `task_server.py` reads context; `knowledge_server.py` is env-var-configured and does not.
 
 - `knowledge_server.py` — exposes `query_integration_knowledge` tool; calls backend knowledge API
 - `task_server.py` — exposes `add_comment`, `update_status`, `create_task`, `create_subtask`, `get_details`, `list_tasks` tools
@@ -340,6 +357,8 @@ MCP tool names visible to the agent follow the pattern `mcp__{server}__{tool}` (
 - `MODEL_CONVERSATION` — resolved conversation-mode model string (same semantics as `MODEL_BUILDING`)
 - `DUMP_LLM_SESSION` — set to `true` to enable JSONL event logging for all adapters (Claude Code and OpenCode); log files are written to `{workspace}/logs/` with adapter-specific prefixes
 - `OPENCODE_SKIP_UPDATE` — always set to `1` in subprocess env to suppress update prompts
+- `OPENCODE_CONFIG` — (opencode subprocess env) absolute path to the per-mode `opencode.json` in the runtime dir; pins config loading since sessions bind to `/app/workspace` and opencode no longer discovers config from cwd
+- `CINNA_SESSION_CONTEXT_PATH` — (opencode subprocess env, inherited by spawned MCP bridges) absolute path to the runtime-dir `session_context.json`; lets the bridges resolve it regardless of their `cwd`
 
 **Settings file locations inside container:**
 - `app/core/.claude/building_settings.json` — MiniMax building mode config
@@ -350,6 +369,7 @@ MCP tool names visible to the agent follow the pattern `mcp__{server}__{tool}` (
 **OpenCode `opencode.json` fields (generated by `_generate_opencode_config_files`):**
 - `$schema` — `"https://opencode.ai/config.json"`
 - `model` — provider-qualified model string (e.g., `anthropic/claude-sonnet-4-5`, `openai/gpt-4o`); set from `model_override_*` if provided, else from per-provider mode defaults
+- `instructions` — list with the absolute runtime-dir `AGENTS.md` path (`/tmp/.opencode_{mode}/AGENTS.md`); delivers the system prompt now that sessions bind to `/app/workspace` and cwd-based `AGENTS.md` discovery no longer applies (see **Workspace project binding**)
 - `provider` — provider registration block; registers the selected model by ID so OpenCode accepts it even if it's not in OpenCode's built-in list; includes `options.apiKey` with the API key directly embedded (file permissions set to `0o600`)
 - `permission` — wildcard allow `"*": "allow"` plus `external_directory` rules pre-approving `/app/workspace/**`, `/app/**`, `/tmp/**`
 - `tools` — per-tool enable flags: `webfetch`, `websearch`, `bash`, `read`, `write`, `edit`, `glob`, `grep`, `list`, `patch`

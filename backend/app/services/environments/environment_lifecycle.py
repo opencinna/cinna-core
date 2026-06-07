@@ -45,6 +45,17 @@ APP_CORE_BASE_DIR_NAME = "app_core_base"
 # need the generated docker-compose.yml (derived from docker-compose.template.yml).
 TEMPLATE_ONLY_FILES = {"Dockerfile", "pyproject.toml", "uv.lock"}
 
+# OpenCode per-mode runtime dir + system-prompt filename, used to bake the
+# absolute AGENTS.md path into opencode.json's ``instructions`` (so the prompt
+# loads regardless of the session's project directory). These MUST mirror
+# ``OPENCODE_RUNTIME_DIR_TEMPLATE`` / ``OPENCODE_AGENTS_MD_FILENAME`` in the
+# env-template adapter (``core/server/adapters/opencode_sdk_adapter.py``), which
+# is what actually writes AGENTS.md into that dir at runtime. The adapter runs
+# inside the container and this module on the host, so they can't share an
+# import — keep the two definitions in sync.
+OPENCODE_RUNTIME_DIR_TEMPLATE = "/tmp/.opencode_{mode}"
+OPENCODE_AGENTS_MD_FILENAME = "AGENTS.md"
+
 
 class EnvironmentLifecycleManager:
     """
@@ -2035,6 +2046,18 @@ MODEL_CONVERSATION={model_conversation}
             config = {
                 "$schema": "https://opencode.ai/config.json",
                 "model": config_model,
+                # System prompt delivery: the adapter writes the generated prompt
+                # to AGENTS.md in the per-mode runtime dir and binds each session
+                # to /app/workspace (via the `directory` query param) so file
+                # tools operate in the workspace. Because the session's project
+                # root is now /app/workspace (not the runtime cwd), opencode no
+                # longer auto-discovers that AGENTS.md — so we load it explicitly
+                # by absolute path here. Path template is mirrored from the
+                # adapter (see the OPENCODE_RUNTIME_DIR_TEMPLATE note above).
+                "instructions": [
+                    f"{OPENCODE_RUNTIME_DIR_TEMPLATE.format(mode=mode)}/"
+                    f"{OPENCODE_AGENTS_MD_FILENAME}"
+                ],
                 "provider": provider_config,
                 "permission": {
                     "*": "allow",

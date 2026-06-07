@@ -99,6 +99,7 @@ Environment Panel → Frontend Route (new tab) → Backend Workspace API → Age
 
 ## Integration Points
 
+- **[Agent Message Attachments](./agent_message_attachments.md)** - The reverse flow: agents attach workspace-produced files to their reply messages via `<cinna_attach>` tags; reuses the models and services defined here
 - **[Agent Sessions](../../application/agent_sessions/agent_sessions.md)** - File upload is part of the message send flow; files are attached to messages
 - **Agent Environments** - Files are transferred to Docker workspace via adapter; agent-env has upload endpoint. See [Agent Environments](../agent_environments/agent_environments.md)
 - **Agent Environment Core** - Agent-env server handles file upload reception, filename sanitization, workspace tree updates, and prompt generation for uploaded files. See [Agent Environment Core](../agent_environment_core/agent_environment_core.md)

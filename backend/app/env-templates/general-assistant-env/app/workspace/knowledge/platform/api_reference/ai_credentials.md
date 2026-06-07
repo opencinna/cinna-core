@@ -32,6 +32,19 @@ Auto-generated from OpenAPI spec. Tag: `ai-credentials`
 
 ---
 
+## POST `/api/v1/ai-credentials/test-connection`
+**Test Ai Credential Connection**
+
+**Request body** (`AICredentialTestRequest`):
+  - `type`: AICredentialType (required)
+  - `api_key`: string | null
+  - `base_url`: string | null
+  - `credential_id`: string | null
+
+**Response:** `AICredentialTestResult`
+
+---
+
 ## GET `/api/v1/ai-credentials/{credential_id}`
 **Get Ai Credential**
 

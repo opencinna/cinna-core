@@ -189,14 +189,36 @@ class FileService:
         *,
         session: Session,
         message_id: uuid.UUID,
-    ) -> list[FileUpload]:
-        """Get all files attached to a message"""
+    ) -> list[FileUploadPublic]:
+        """Get all files attached to a message as response projections.
+
+        Each ``FileUploadPublic`` carries the ``source`` (``user_upload`` or
+        ``agent_attachment``) from its ``message_files`` junction row so the
+        frontend can distinguish agent attachments from user uploads. Results are
+        ordered by the junction ``event_seq`` (agent attachments) with NULLs
+        (user uploads) sorting first, then creation time.
+        """
         statement = (
-            select(FileUpload)
+            select(FileUpload, MessageFile.source, MessageFile.event_seq)
             .join(MessageFile, MessageFile.file_id == FileUpload.id)
             .where(MessageFile.message_id == message_id)
+            .order_by(MessageFile.event_seq, MessageFile.created_at)
         )
-        return list(session.exec(statement).all())
+        rows = session.exec(statement).all()
+        files: list[FileUploadPublic] = []
+        for file_upload, source, _event_seq in rows:
+            files.append(
+                FileUploadPublic(
+                    id=file_upload.id,
+                    filename=file_upload.filename,
+                    file_size=file_upload.file_size,
+                    mime_type=file_upload.mime_type,
+                    status=file_upload.status,
+                    uploaded_at=file_upload.uploaded_at,
+                    source=source or "user_upload",
+                )
+            )
+        return files
 
     @staticmethod
     async def upload_files_to_agent_env(

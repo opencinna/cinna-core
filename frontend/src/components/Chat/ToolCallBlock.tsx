@@ -13,6 +13,7 @@ import { AgentHandoverToolBlock } from "./AgentHandoverToolBlock"
 import { UpdateSessionStateToolBlock } from "./UpdateSessionStateToolBlock"
 import { CompactBashBlock } from "./CompactBashBlock"
 import { WebFetchToolBlock } from "./WebFetchToolBlock"
+import { ApplyPatchToolBlock } from "./ApplyPatchToolBlock"
 
 interface ToolCallBlockProps {
   toolName: string
@@ -53,6 +54,13 @@ export function ToolCallBlock({ toolName, toolInput, conversationModeUi = "detai
   const writeContent = getInput("content")
   if (toolNameLower === "write" && filePath && writeContent) {
     return <WriteToolBlock filePath={filePath} content={writeContent} />
+  }
+
+  // Special rendering for OpenCode apply_patch tool — render patch_text as a
+  // proper diff instead of letting the default renderer markdown-flatten it.
+  const patchText = getInput("patch_text")
+  if (toolNameLower === "apply_patch" && typeof patchText === "string" && patchText.trim()) {
+    return <ApplyPatchToolBlock patchText={patchText} isCompact={isCompact} />
   }
 
   // Special rendering for Edit tool

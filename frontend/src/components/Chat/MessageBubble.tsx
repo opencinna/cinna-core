@@ -2,12 +2,13 @@ import { useState, useEffect, useRef } from "react"
 import { formatDistanceToNow } from "date-fns"
 import { Link } from "@tanstack/react-router"
 import { toast } from "sonner"
-import type { MessagePublic } from "@/client"
+import type { MessagePublic, FileUploadPublic } from "@/client"
 import { StreamEventRenderer } from "./StreamEventRenderer"
 import { MarkdownRenderer } from "./MarkdownRenderer"
 import { MessageActions } from "./MessageActions"
 import { AnswerQuestionsModal } from "./AnswerQuestionsModal"
 import { FileBadge } from "./FileBadge"
+import { AttachmentPreviewModal } from "./AttachmentPreviewModal"
 import { Button } from "@/components/ui/button"
 import { Info, AlertCircle, ExternalLink, CheckCircle2, HelpCircle, AlertTriangle, Mail, RefreshCw, Clock, Terminal, Copy, Check, XCircle } from "lucide-react"
 import { useToolApproval } from "@/hooks/useToolApproval"
@@ -27,6 +28,7 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
   const [showAnswerModal, setShowAnswerModal] = useState(false)
   const [showRecoverModal, setShowRecoverModal] = useState(false)
   const [commandOutputCopied, setCommandOutputCopied] = useState(false)
+  const [previewFile, setPreviewFile] = useState<FileUploadPublic | null>(null)
   const approvalMessageSentRef = useRef(false)
 
   // Tool approval hook
@@ -475,18 +477,54 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
                 <StreamEventRenderer events={streamingEvents} conversationModeUi={conversationModeUi} />
               )}
 
-              {/* File badges */}
-              {message.files && message.files.length > 0 && (
-                <div className="flex flex-wrap gap-1 pt-2 border-t border-border/50">
-                  {message.files.map((file: any) => (
-                    <FileBadge
-                      key={file.id}
-                      file={file}
-                      downloadable={true}
-                    />
-                  ))}
-                </div>
-              )}
+              {/* File badges.
+                  User uploads always render as downloadable badges. Agent
+                  attachments normally render inline via `attachment` events in
+                  the streaming trace (StreamEventRenderer → AttachmentBlock);
+                  we only fall back to rendering them here as preview badges
+                  when this message carries no attachment events. */}
+              {(() => {
+                const files = (message.files || []) as FileUploadPublic[]
+                if (files.length === 0) return null
+
+                const userFiles = files.filter(
+                  (f) => f.source !== "agent_attachment"
+                )
+                const agentFiles = files.filter(
+                  (f) => f.source === "agent_attachment"
+                )
+
+                const hasAttachmentEvents = streamingEvents.some(
+                  (e: any) => e.type === "attachment"
+                )
+                // Render agent attachments as a fallback only when there is no
+                // inline event trace for them.
+                const fallbackAgentFiles = hasAttachmentEvents ? [] : agentFiles
+
+                const badgeFiles = [...userFiles, ...fallbackAgentFiles]
+                if (badgeFiles.length === 0) return null
+
+                return (
+                  <div className="flex flex-wrap gap-1 pt-2 border-t border-border/50">
+                    {badgeFiles.map((file) => {
+                      const isAgentAttachment =
+                        file.source === "agent_attachment"
+                      return (
+                        <FileBadge
+                          key={file.id}
+                          file={file}
+                          downloadable={!isAgentAttachment}
+                          onPreview={
+                            isAgentAttachment
+                              ? (f) => setPreviewFile(f)
+                              : undefined
+                          }
+                        />
+                      )
+                    })}
+                  </div>
+                )
+              })()}
 
               <div className="flex items-center justify-between gap-2">
                 <p
@@ -558,6 +596,20 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
           )}
         </div>
       </div>
+
+      {/* Attachment preview modal (fallback agent-attachment badges) */}
+      {previewFile && (
+        <AttachmentPreviewModal
+          open={!!previewFile}
+          onOpenChange={(open) => {
+            if (!open) setPreviewFile(null)
+          }}
+          fileId={previewFile.id}
+          filename={previewFile.filename}
+          mimeType={previewFile.mime_type}
+          size={previewFile.file_size}
+        />
+      )}
 
       {/* Answer Questions Modal */}
       {!isUser && hasQuestions && (

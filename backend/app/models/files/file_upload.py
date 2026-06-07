@@ -9,6 +9,8 @@ class FileUpload(SQLModel, table=True):
 
     __tablename__ = "file_uploads"
 
+    __table_args__ = (Index("ix_file_uploads_session_id", "session_id"),)
+
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="user.id", ondelete="CASCADE")
 
@@ -19,6 +21,16 @@ class FileUpload(SQLModel, table=True):
     )  # Relative path: uploads/{user_id}/{file_id}/{filename}
     file_size: int  # Bytes
     mime_type: str = Field(max_length=127)
+
+    # Provenance
+    origin: str = Field(
+        default="user", max_length=31
+    )  # "user" (uploaded by a person) | "agent" (produced by an agent)
+    # Session an agent attachment was produced in; NULL for user uploads.
+    # Detached (SET NULL) when the session is deleted — message linkage lives in message_files.
+    session_id: uuid.UUID | None = Field(
+        default=None, foreign_key="session.id", ondelete="SET NULL"
+    )
 
     # Lifecycle tracking
     status: str = Field(
@@ -43,8 +55,18 @@ class MessageFile(SQLModel, table=True):
     message_id: uuid.UUID = Field(foreign_key="message.id", ondelete="CASCADE")
     file_id: uuid.UUID = Field(foreign_key="file_uploads.id", ondelete="CASCADE")
 
-    # Agent-env path (where file was stored in container)
+    # For user uploads: where the file was stored in the container.
+    # For agent attachments: the originating ABSOLUTE workspace path
+    # (e.g. /app/workspace/files/report.pdf). The display filename is its basename.
     agent_env_path: str | None = Field(default=None, max_length=512)
+
+    # Provenance — drives rendering & A2A part kind
+    source: str = Field(
+        default="user_upload", max_length=31
+    )  # "user_upload" | "agent_attachment"
+    # Position of the corresponding `attachment` event in the message's
+    # streaming_events, for inline ordering. NULL for user uploads.
+    event_seq: int | None = Field(default=None)
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -76,6 +98,10 @@ class FileUploadPublic(SQLModel):
     mime_type: str
     status: str
     uploaded_at: datetime
+    # "user_upload" (default) | "agent_attachment". Sourced from the linking
+    # message_files.source row when populated per-message; defaults to
+    # "user_upload" for standalone file projections.
+    source: str = "user_upload"
 
 
 class FileUploadsPublic(SQLModel):

@@ -2301,6 +2301,7 @@ export type FileUploadPublic = {
     mime_type: string;
     status: string;
     uploaded_at: string;
+    source?: string;
 };
 
 /**
@@ -6285,7 +6286,15 @@ export type FilesDeleteFileData = {
 export type FilesDeleteFileResponse = (unknown);
 
 export type FilesDownloadFileData = {
+    /**
+     * Set to 'inline' to render the file in-place (preview); defaults to 'attachment' (download).
+     */
+    disposition?: (string | null);
     fileId: string;
+    /**
+     * Signed file-download token (alternative to a session JWT, used by A2A/native clients).
+     */
+    token?: (string | null);
 };
 
 export type FilesDownloadFileResponse = (unknown);

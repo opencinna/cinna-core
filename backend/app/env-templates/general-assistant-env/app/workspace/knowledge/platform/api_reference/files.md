@@ -26,4 +26,8 @@ Auto-generated from OpenAPI spec. Tag: `files`
 **Path parameters:**
 - `file_id`: uuid
 
+**Query parameters:**
+- `token`: string | null
+- `disposition`: string | null
+
 ---

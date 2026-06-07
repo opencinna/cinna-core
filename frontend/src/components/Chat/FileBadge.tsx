@@ -6,9 +6,18 @@ interface FileBadgeProps {
   file: FileUploadPublic
   onRemove?: () => void
   downloadable?: boolean
+  /**
+   * When provided, clicking the badge body opens a preview (via this handler)
+   * instead of forcing a download. The explicit download path stays available
+   * through the badge's own download fallback when `downloadable` is set and no
+   * preview handler is given.
+   */
+  onPreview?: (file: FileUploadPublic) => void
 }
 
-export function FileBadge({ file, onRemove, downloadable = false }: FileBadgeProps) {
+export function FileBadge({ file, onRemove, downloadable = false, onPreview }: FileBadgeProps) {
+  // `source` distinguishes agent-authored attachments from user uploads.
+  const isAgentAttachment = file.source === "agent_attachment"
   const getFileIcon = (mimeType: string) => {
     if (mimeType.startsWith('image/')) return <Image className="h-3 w-3" />
     if (mimeType.startsWith('text/')) return <FileText className="h-3 w-3" />
@@ -30,6 +39,10 @@ export function FileBadge({ file, onRemove, downloadable = false }: FileBadgePro
   }
 
   const handleClick = async () => {
+    if (onPreview) {
+      onPreview(file)
+      return
+    }
     if (downloadable) {
       // Download file with authentication
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
@@ -62,12 +75,14 @@ export function FileBadge({ file, onRemove, downloadable = false }: FileBadgePro
     }
   }
 
+  const isClickable = onPreview != null || downloadable
+
   return (
     <Badge
       variant="secondary"
-      className={`flex items-center gap-1 pl-2 pr-1 ${downloadable ? 'cursor-pointer hover:bg-secondary/80' : ''}`}
-      onClick={downloadable ? handleClick : undefined}
-      title={`${file.filename} (${formatFileSize(file.file_size)})`}
+      className={`flex items-center gap-1 pl-2 pr-1 ${isClickable ? 'cursor-pointer hover:bg-secondary/80' : ''} ${isAgentAttachment ? 'border border-border' : ''}`}
+      onClick={isClickable ? handleClick : undefined}
+      title={`${file.filename} (${formatFileSize(file.file_size)})${onPreview ? ' — preview' : ''}`}
     >
       {getFileIcon(file.mime_type)}
       <span className="text-xs">{truncateFilename(file.filename)}</span>

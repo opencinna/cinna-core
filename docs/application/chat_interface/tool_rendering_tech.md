@@ -11,6 +11,7 @@
 - `frontend/src/components/Chat/ReadToolBlock.tsx` — Displays `file_path` from tool input
 - `frontend/src/components/Chat/WriteToolBlock.tsx` — Displays `file_path` and `content`
 - `frontend/src/components/Chat/EditToolBlock.tsx` — Displays `file_path` with `old_string` → `new_string` comparison
+- `frontend/src/components/Chat/ApplyPatchToolBlock.tsx` — Renders the OpenCode `apply_patch` tool's `patch_text` as a proper diff (parses the `*** Begin/End Patch`, `*** Add/Update/Delete File:`, `*** Move to:`, `@@`, `+`/`-`/context envelope). Per-file op badge (Add/Update/Delete) + `+N/−M` counts + colored monospace diff body, collapsible past 8 lines, multi-file aware, compact one-liner mode. Unparseable input falls back to a raw `<pre>` (never markdown). Added because `apply_patch` has no other dedicated block, so it fell through to the default renderer which markdown-flattened the diff (single newlines collapsed to spaces, `***`/`-`/`+` mis-parsed)
 - `frontend/src/components/Chat/BashToolBlock.tsx` — Displays `command` in a styled block
 - `frontend/src/components/Chat/CompactBashBlock.tsx` — Compact variant of BashToolBlock, used when `conversationModeUi === "compact"`
 - `frontend/src/components/Chat/GlobToolBlock.tsx` — Displays `pattern` for file matching

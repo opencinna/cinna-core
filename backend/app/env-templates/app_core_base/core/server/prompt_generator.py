@@ -491,6 +491,16 @@ class PromptGenerator:
             f"\n\n---\n\n## Environment Context\n\n"
             f"**WORKING_DIRECTORY**: `/app/workspace` (all relative paths are from here)\n\n"
             f"**Uploaded files location**: `./app-data/uploads/` (user-uploaded files are here, access them with relative path `./app-data/uploads/filename`)\n"
+            f"\n\n### Attaching files to your reply\n\n"
+            f"To attach a file you created to your reply, emit a `<cinna_attach>` tag whose body is the "
+            f"**absolute container path** of the file (always rooted at `/app/workspace`):\n\n"
+            f"```\n"
+            f"<cinna_attach>/app/workspace/files/report.pdf</cinna_attach>\n"
+            f"<cinna_attach>/app/workspace/app-data/storage/export.csv</cinna_attach>\n"
+            f"```\n\n"
+            f"- The path may point anywhere under the workspace root (`files/`, `app-data/`, `logs/`, …) — no dedicated folder is required.\n"
+            f"- Use the full absolute path; do not add a name or description. Repeat the tag to attach several files.\n"
+            f"- **When to use it**: whenever the user asks you to *provide / generate / send / give / make / export / create* a file (or a document, report, spreadsheet, export, etc.) for them, finish by emitting a `<cinna_attach>` tag for that file so it is delivered as a real downloadable attachment — do not paste the file's contents inline in the chat instead.\n"
         )
 
     def generate_building_mode_prompt(self, session_context: Optional[dict] = None) -> Optional[Dict[str, Any]]:

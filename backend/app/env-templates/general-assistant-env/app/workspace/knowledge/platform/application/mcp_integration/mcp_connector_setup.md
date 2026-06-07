@@ -220,13 +220,17 @@ If you see this, the tunnel → backend → MCP OAuth chain is working.
 1. Open the app at `http://localhost:5173`
 2. Navigate to your agent → **Integrations** tab
 3. Click **Create MCP Connector**
-4. Fill in: name, mode (conversation/building), optional allowed emails
-5. Copy the **MCP Server URL** from the created connector
+4. Fill in: name, mode (conversation/building)
+5. Optionally assign platform users via the **User Allowlist** picker — these users can authorize via OAuth; leave empty for owner-only access
+6. Optionally enable **Allow token access** if you want to generate direct access tokens (an alternative to OAuth — see below)
+7. Copy the **MCP Server URL** from the created connector
 
 The URL will look like:
 ```
 https://rndzx-xxx-xxx.a.free.pinggy.link/mcp/{connector-uuid}/mcp
 ```
+
+**Direct access tokens (optional alternative to OAuth):** If you enabled *Allow token access*, open the connector's edit dialog and use the **Direct Access Tokens** section to generate a connector-scoped opaque bearer token. The full token value is shown once — copy it immediately. A client passes it directly as `Authorization: Bearer <token>` without completing any OAuth flow. The client connects under the connector owner's identity, scoped to this connector only. Useful for scripts or tools that have no platform account.
 
 #### 5. Configure the MCP Client
 

@@ -157,8 +157,9 @@ Defined at module level in `backend/app/services/a2a/a2a_event_mapper.py`; impor
 | `TOOL_STREAM_STDOUT` | `"stdout"` | Default stream value; used when the underlying event omits a `stream` field or emits an unknown value |
 | `TOOL_STREAM_STDERR` | `"stderr"` | Stream value for stderr output |
 | `COMMAND_INVOCATION_KEY` | `"cinna.command_invocation"` | Cross-content-kind metadata key; present on `tool`, `tool_result`, and `command_result` parts when the part originated from a Cinna slash command. Value is the verbatim invocation string (e.g. `"/files"`, `"/run:rotate_status"`). Absent on LLM-initiated parts. |
+| `CONTENT_KIND_FILE` | `"file"` | Value for `attachment` events (agent-authored file delivered as a native `FilePart`). The part is a `FilePart(FileWithUri)`, not a `TextPart`. Carries additional file-specific metadata keys: `cinna.file_id` (platform UUID), `cinna.file_name` (display filename), `cinna.file_mime` (sniffed MIME), `cinna.file_size` (bytes). `FileWithUri.uri` is a signed 1-hour download URL. See [agent_message_attachments_tech.md](../../../agents/agent_file_management/agent_message_attachments_tech.md) for the full part-contract table. |
 
-Metadata is always placed on `TextPart.metadata`, never on `Message.metadata`, because a history-replay `Message` can contain parts of mixed kinds.
+Metadata is always placed on `TextPart.metadata` (for text parts) or `FilePart.metadata` (for file parts), never on `Message.metadata`, because a history-replay `Message` can contain parts of mixed kinds.
 
 ### A2A Task Store
 **File:** `backend/app/services/a2a/a2a_task_store.py`

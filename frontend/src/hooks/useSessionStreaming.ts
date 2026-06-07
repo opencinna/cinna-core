@@ -3,7 +3,15 @@ import { useQueryClient } from "@tanstack/react-query"
 import { eventService } from "@/services/eventService"
 
 export interface StreamEvent {
-  type: "assistant" | "tool" | "thinking" | "system" | "webapp_action" | "tool_result_delta"
+  type:
+    | "assistant"
+    | "tool"
+    | "thinking"
+    | "system"
+    | "webapp_action"
+    | "tool_result_delta"
+    | "attachment"
+    | "attachment_error"
   content: string
   event_seq: number
   tool_name?: string
@@ -20,6 +28,12 @@ export interface StreamEvent {
     command_done?: boolean          // true on the final system event for a command
     action?: string
     data?: Record<string, unknown>
+    // present on `attachment` events (agent-authored file attachments)
+    file_id?: string
+    filename?: string
+    mime_type?: string
+    size?: number
+    agent_env_path?: string
   }
 }
 
@@ -96,7 +110,24 @@ export function useSessionStreaming({
       // Extract event_seq from data or top-level
       const seq = data?.event_seq ?? event.event_seq
       if (!seq) {
-        // Events without seq (stream_started, stream_completed, etc.)
+        // `attachment_error` notices carry no event_seq (they are not part of
+        // the persisted streaming_events ordering) — render them inline using a
+        // synthetic seq above the last known one so they always append.
+        const incomingType = data?.type || event.event_type
+        if (incomingType === "attachment_error") {
+          const syntheticSeq = lastKnownSeqRef.current + 0.5
+          setStreamingEvents((prev) => [
+            ...prev,
+            {
+              type: "attachment_error",
+              content: data?.content || "",
+              event_seq: syntheticSeq,
+              metadata: data?.metadata,
+            },
+          ])
+          return
+        }
+        // Other seq-less events (stream_started, stream_completed, etc.)
         // are handled by session query refetch via session_interaction_status_changed
         return
       }

@@ -37,10 +37,16 @@ logger = logging.getLogger(__name__)
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8000")
 AGENT_AUTH_TOKEN = os.getenv("AGENT_AUTH_TOKEN", "")
 
-# Session context is written by the adapter into the opencode serve runtime dir.
-# MCP bridge servers are spawned by opencode serve with cwd = runtime dir,
-# so reading from cwd works for per-mode dirs (/tmp/.opencode_{mode}).
-SESSION_CONTEXT_PATH = Path("session_context.json")
+# Session context is written by the adapter into the opencode serve runtime dir
+# (/tmp/.opencode_{mode}/session_context.json). Once sessions are bound to
+# /app/workspace as their project directory, opencode spawns these MCP bridge
+# servers with cwd = /app/workspace, so reading "session_context.json" relative
+# to cwd no longer works. The adapter therefore exports its absolute path via
+# CINNA_SESSION_CONTEXT_PATH; fall back to the cwd-relative name for older
+# environments that still run opencode with cwd = runtime dir.
+SESSION_CONTEXT_PATH = Path(
+    os.getenv("CINNA_SESSION_CONTEXT_PATH") or "session_context.json"
+)
 
 # ---------------------------------------------------------------------------
 # Helpers

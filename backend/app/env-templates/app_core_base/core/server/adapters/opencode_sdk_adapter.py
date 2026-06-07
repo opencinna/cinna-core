@@ -104,6 +104,19 @@ OPENCODE_STARTUP_TIMEOUT = 30
 # timing out.  Heartbeats keep the socket alive but don't count as progress.
 OPENCODE_PROGRESS_TIMEOUT = 120  # seconds
 
+# Per-mode opencode runtime dir (writable, unlike the read-only core config
+# volume). Holds the symlinked opencode.json, the per-request AGENTS.md, and
+# session_context.json. `{mode}` is formatted in.
+#
+# COUPLING (host ⇄ container): the host-side config generator in
+# ``app/services/environments/environment_lifecycle.py`` bakes the absolute
+# AGENTS.md path under this dir into opencode.json's ``instructions`` so the
+# system prompt loads regardless of the session's project directory. That module
+# runs on the host and cannot import this one (which runs inside the container),
+# so it MIRRORS these two constants — keep them in sync.
+OPENCODE_RUNTIME_DIR_TEMPLATE = "/tmp/.opencode_{mode}"
+OPENCODE_AGENTS_MD_FILENAME = "AGENTS.md"
+
 # OpenCode built-in tools exposed to users
 OPENCODE_BUILTIN_TOOLS = [
     "bash", "read", "write", "edit", "glob", "grep",
@@ -180,7 +193,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
         self._mode = mode
         self._port = OPENCODE_MODE_PORTS.get(mode, 4096)
         self._base_url = f"http://127.0.0.1:{self._port}"
-        self._runtime_dir = Path(f"/tmp/.opencode_{mode}")
+        self._runtime_dir = Path(OPENCODE_RUNTIME_DIR_TEMPLATE.format(mode=mode))
 
     # ------------------------------------------------------------------
     # Process management
@@ -200,8 +213,6 @@ class OpenCodeAdapter(BaseSDKAdapter):
             self._mode, self._port,
         )
 
-        env = {**os.environ, "OPENCODE_SKIP_UPDATE": "1"}
-
         # Ensure the runtime directory exists (writable, unlike OPENCODE_CONFIG_DIR
         # which is mounted read-only via the /app/core:ro volume).
         self._runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -216,9 +227,29 @@ class OpenCodeAdapter(BaseSDKAdapter):
                     if not link.exists():
                         link.symlink_to(config_file)
 
-        # opencode reads config from the current directory or XDG dirs.
-        # We point it at our runtime dir as cwd so it finds opencode.json,
-        # AGENTS.md, and session_context.json there.
+        # Sessions are bound to /app/workspace as their project directory (via
+        # the `directory` query param) so file tools operate in the workspace.
+        # Consequences that this env handles:
+        #   * opencode loads project config by walking up from the project dir
+        #     (/app/workspace), NOT from cwd — so it would no longer find our
+        #     per-mode opencode.json. OPENCODE_CONFIG pins it explicitly.
+        #   * opencode spawns local MCP servers (the knowledge / agent_task
+        #     bridges) with cwd = the project dir (/app/workspace), so they can
+        #     no longer read session_context.json from cwd. We pass its absolute
+        #     path so the bridges resolve it regardless of their cwd.
+        # The system prompt is delivered via the config's `instructions` entry
+        # (absolute AGENTS.md path), so cwd-based AGENTS.md discovery is not
+        # needed either.
+        env = {
+            **os.environ,
+            "OPENCODE_SKIP_UPDATE": "1",
+            "OPENCODE_CONFIG": str(self._runtime_dir / "opencode.json"),
+            "CINNA_SESSION_CONTEXT_PATH": str(self._runtime_dir / "session_context.json"),
+        }
+
+        # cwd stays at the runtime dir (where the adapter writes opencode.json,
+        # AGENTS.md, and session_context.json); the workspace project binding is
+        # applied per request via the `directory` query param.
         self._server_process = await asyncio.create_subprocess_exec(
             "opencode", "serve",
             "--port", str(self._port),
@@ -323,6 +354,13 @@ class OpenCodeAdapter(BaseSDKAdapter):
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{self._base_url}/session",
+                # Bind the session to the agent workspace as its project root.
+                # Without this, opencode uses the server's cwd (the runtime
+                # config dir under /tmp) as the project, so file tools
+                # (write/edit/apply_patch/bash) resolve relative paths to /tmp
+                # instead of /app/workspace — making created files invisible to
+                # the workspace, the /files browser, and message attachments.
+                params={"directory": self.workspace_dir},
                 json={},
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
@@ -356,6 +394,10 @@ class OpenCodeAdapter(BaseSDKAdapter):
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{self._base_url}/session/{session_id}/message",
+                # Keep the request scoped to the workspace project so message
+                # processing and tool execution run in /app/workspace (matches
+                # the directory the session was created with).
+                params={"directory": self.workspace_dir},
                 json=body,
                 timeout=aiohttp.ClientTimeout(total=60),
             ) as resp:
@@ -377,7 +419,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
 
     async def _write_agents_md(self, system_prompt: str) -> None:
         """Write the system prompt to AGENTS.md in the runtime directory."""
-        agents_md_path = self._runtime_dir / "AGENTS.md"
+        agents_md_path = self._runtime_dir / OPENCODE_AGENTS_MD_FILENAME
         self._runtime_dir.mkdir(parents=True, exist_ok=True)
         agents_md_path.write_text(system_prompt, encoding="utf-8")
         logger.info("Wrote AGENTS.md (%d chars)", len(system_prompt))
@@ -825,6 +867,9 @@ class OpenCodeAdapter(BaseSDKAdapter):
             async with aiohttp.ClientSession() as session:
                 async with session.delete(
                     f"{self._base_url}/session/{session_id}",
+                    # Session is scoped to the workspace project; pass the
+                    # directory so opencode resolves the right instance.
+                    params={"directory": self.workspace_dir},
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     # 404 is acceptable — session may have already completed

@@ -19,7 +19,7 @@ Each file below documents one API domain.
 | Agent Webhooks | [agent_webhooks.md](./agent_webhooks.md) | 8 |
 | Agentic Teams | [agentic_teams.md](./agentic_teams.md) | 18 |
 | Agents | [agents.md](./agents.md) | 36 |
-| Ai Credentials | [ai_credentials.md](./ai_credentials.md) | 9 |
+| Ai Credentials | [ai_credentials.md](./ai_credentials.md) | 10 |
 | App Agent Routes | [app_agent_routes.md](./app_agent_routes.md) | 7 |
 | App Auth | [app_auth.md](./app_auth.md) | 9 |
 | App Data | [app_data.md](./app_data.md) | 3 |
@@ -29,7 +29,7 @@ Each file below documents one API domain.
 | Credentials | [credentials.md](./credentials.md) | 19 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
 | Email Integration | [email_integration.md](./email_integration.md) | 6 |
-| Environments | [environments.md](./environments.md) | 14 |
+| Environments | [environments.md](./environments.md) | 15 |
 | Events | [events.md](./events.md) | 3 |
 | External | [external.md](./external.md) | 5 |
 | External A2A | [external_a2a.md](./external_a2a.md) | 9 |
@@ -43,7 +43,7 @@ Each file below documents one API domain.
 | Knowledge Sources | [knowledge_sources.md](./knowledge_sources.md) | 11 |
 | Llm Plugins | [llm_plugins.md](./llm_plugins.md) | 13 |
 | Mail Servers | [mail_servers.md](./mail_servers.md) | 6 |
-| Mcp Connectors | [mcp_connectors.md](./mcp_connectors.md) | 5 |
+| Mcp Connectors | [mcp_connectors.md](./mcp_connectors.md) | 9 |
 | Messages | [messages.md](./messages.md) | 5 |
 | Mfa | [mfa.md](./mfa.md) | 13 |
 | Notification Settings | [notification_settings.md](./notification_settings.md) | 2 |

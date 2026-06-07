@@ -10563,6 +10563,11 @@ export const FileUploadPublicSchema = {
             type: 'string',
             format: 'date-time',
             title: 'Uploaded At'
+        },
+        source: {
+            type: 'string',
+            title: 'Source',
+            default: 'user_upload'
         }
     },
     type: 'object',

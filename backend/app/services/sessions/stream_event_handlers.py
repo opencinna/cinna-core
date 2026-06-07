@@ -53,6 +53,14 @@ class WebSocketEventHandler:
         )
 
     async def on_event(self, event: dict) -> None:
+        # Agent `attachment` events are emitted to the Socket.IO room explicitly
+        # at finalize (inside MessageService._process_attachments) so session
+        # watchers see the file regardless of which client drives the stream.
+        # They are *also* yielded into the stream generator so streaming A2A
+        # clients receive the FilePart live. Skip them here so the web client
+        # (when it is the driver) doesn't render the same attachment twice.
+        if event.get("type") == "attachment":
+            return
         await self.event_service.emit_stream_event(
             session_id=self.session_id,
             event_type=event.get("type"),

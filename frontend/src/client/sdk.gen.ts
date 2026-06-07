@@ -6520,12 +6520,22 @@ export class FilesService {
      * Download File
      * Download a file.
      *
-     * Authorization:
-     * - File owner, OR
-     * - User owns a session with a message referencing this file
-     * - Guest users can download files owned by the agent owner
+     * Authorization (either is sufficient):
+     * - A valid signed ``?token=`` whose ``file_id`` claim matches this file, OR
+     * - a session JWT belonging to the file owner / a session participant / the
+     * agent owner (for guests).
+     *
+     * ``?disposition=inline`` serves the file with ``Content-Disposition: inline``
+     * for browser/in-place preview, but ONLY for a known-safe preview MIME set;
+     * any other type (e.g. text/html, image/svg+xml) is forced to a download to
+     * prevent same-origin script execution. The default is ``attachment``.
+     *
+     * All responses carry ``X-Content-Type-Options: nosniff``; inline responses
+     * additionally carry a restrictive ``Content-Security-Policy``.
      * @param data The data for the request.
      * @param data.fileId
+     * @param data.token Signed file-download token (alternative to a session JWT, used by A2A/native clients).
+     * @param data.disposition Set to 'inline' to render the file in-place (preview); defaults to 'attachment' (download).
      * @returns unknown Successful Response
      * @throws ApiError
      */
@@ -6535,6 +6545,10 @@ export class FilesService {
             url: '/api/v1/files/{file_id}/download',
             path: {
                 file_id: data.fileId
+            },
+            query: {
+                token: data.token,
+                disposition: data.disposition
             },
             errors: {
                 422: 'Validation Error'

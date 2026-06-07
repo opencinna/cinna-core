@@ -56,12 +56,28 @@ MCP Client (Claude Desktop / Cursor)
 | `conversation` | Chat interactions with the agent |
 | `building` | Development/builder tasks |
 
-### Email Access Control
+### User Access Control
 
-| Configuration | Who Can Authorize |
-|---------------|-------------------|
-| `allowed_emails = []` | Owner only |
-| `allowed_emails = ["a@b.com"]` | Owner + listed emails |
+Connectors use an exact-user ACL (`allowed_user_ids`) as the primary mechanism, with a legacy email fallback (`allowed_emails`) kept for backward compatibility. Access is granted when **any** of these conditions is true:
+
+| Condition | Who is allowed |
+|-----------|----------------|
+| Owner | The connector owner always has access |
+| `user.id in allowed_user_ids` | Platform users explicitly assigned (preferred path) |
+| `user.email in allowed_emails` (fallback) | Legacy email shares still work; emails with no matching account remain in the list |
+
+`MCPConnectorPublic` surfaces a resolved `allowed_users` projection (`id` / `email` / `full_name`) alongside the raw `allowed_user_ids`, so the frontend picker can show names instead of UUIDs.
+
+When `allow_token_access` is `False` (the default), clients must complete the OAuth 2.1 flow to connect. When it is `True`, the owner can also mint direct access tokens (see below).
+
+### Direct Access Token States
+
+| State | Description |
+|-------|-------------|
+| Active | Token is valid and usable |
+| Revoked | `revoked=True`; rejected by verifier immediately |
+| Expired | Past 5-year `expires_at`; rejected by verifier |
+| Deleted | Row removed from DB; connector deletion cascades automatically |
 
 ### OAuth Token Lifecycle
 
@@ -88,16 +104,19 @@ MCP Client (Claude Desktop / Cursor)
 | `name` | VARCHAR(255) | Display name |
 | `mode` | VARCHAR | "conversation" or "building" |
 | `is_active` | BOOLEAN | Whether connector accepts connections |
-| `allowed_emails` | JSON | Email ACL list (empty = owner only) |
+| `allowed_emails` | JSON | Legacy email ACL list; kept as fallback — prefer `allowed_user_ids` |
+| `allowed_user_ids` | JSON | Exact platform-user ACL (list of UUID strings). Added in migration `cdfb21cadb62` |
+| `allow_token_access` | BOOLEAN | `False` = OAuth only; `True` = owner may mint direct tokens. Added in `cdfb21cadb62` |
 | `max_clients` | INTEGER | Maximum DCR registrations (default 10) |
 | `created_at`, `updated_at` | DATETIME | Timestamps |
 
 **Models:** `backend/app/models/mcp/mcp_connector.py`
 - `MCPConnector` (table model)
-- `MCPConnectorCreate`, `MCPConnectorUpdate` (input schemas)
-- `MCPConnectorPublic`, `MCPConnectorsPublic` (response schemas)
-- `MCPConnectorPublic` includes computed `mcp_server_url` field
-- `MCPConnectorsPublic` includes `mcp_server_base_url` (current env value, used by frontend to construct URLs dynamically)
+- `MCPConnectorCreate` — includes `allowed_user_ids: list[UUID] = []`, `allow_token_access: bool = False`, `allowed_emails`
+- `MCPConnectorUpdate` — all fields optional, including `allowed_user_ids`, `allow_token_access`
+- `MCPConnectorAllowedUser` — resolved display projection (`id`, `email`, `full_name`) for the frontend picker
+- `MCPConnectorPublic` — includes `allowed_emails`, `allowed_user_ids`, `allowed_users` (resolved), `allow_token_access`, and computed `mcp_server_url`
+- `MCPConnectorsPublic` — includes `mcp_server_base_url` (current env value, used by frontend to construct URLs dynamically)
 
 ### Table: `mcp_oauth_client`
 
@@ -160,18 +179,27 @@ MCP Client (Claude Desktop / Cursor)
 |--------|------|-------------|
 | `id` | UUID, PK | Internal ID |
 | `token` | VARCHAR, unique, indexed | Opaque bearer token (token_urlsafe 48) |
-| `token_type` | VARCHAR | "access" or "refresh" |
-| `client_id` | VARCHAR, indexed | OAuth client |
-| `user_id` | UUID, FK → user.id (CASCADE) | Token owner |
+| `token_type` | VARCHAR | `"access"` \| `"refresh"` \| `"direct"` |
+| `client_id` | VARCHAR, indexed | OAuth client ID; sentinel `"direct"` for direct tokens |
+| `user_id` | UUID, FK → user.id (CASCADE) | Token owner; direct tokens store `owner_id` here |
 | `connector_id` | UUID, FK → mcp_connector.id (CASCADE), indexed | Target connector |
 | `scope` | VARCHAR | Granted scopes |
 | `resource` | VARCHAR | MCP resource URL |
+| `label` | VARCHAR, nullable | Human-readable name for direct tokens; `NULL` for OAuth tokens. Added in `cdfb21cadb62` |
 | `expires_at` | DATETIME | Token expiry |
 | `revoked` | BOOLEAN | Revocation flag |
+| `last_used_at` | DATETIME, nullable | Set on each successful verification (best-effort). Added in `cdfb21cadb62` |
 | `created_at` | DATETIME | Timestamp |
 
 **Models:** `backend/app/models/mcp/mcp_token.py`
 - `MCPToken` (table model)
+- `MCPConnectorTokenCreate` — `label: str` (1–255 chars) for direct token creation
+- `MCPConnectorTokenUpdate` — `revoked: bool | None` for revoke/restore
+- `MCPConnectorTokenPublic` — projection with `prefix` (first 8 chars), `label`, `last_used_at`, `expires_at`, `revoked`; **never exposes the full token value**
+- `MCPConnectorTokenCreated` — extends `MCPConnectorTokenPublic`, adds `token: str`; returned only once on creation
+- `MCPConnectorTokensPublic` — `data: list[MCPConnectorTokenPublic]`, `count: int`
+
+**One-time reveal guarantee:** The full token value lives in `MCPToken.token` for verifier lookup (same as OAuth tokens). One-time reveal is enforced at the API projection layer — public schemas omit `token`. Only `MCPConnectorTokenCreated` includes it, returned exactly once from the POST endpoint.
 
 ### Table: `mcp_session_meta`
 
@@ -219,6 +247,25 @@ Two new nullable fields added to the `session` table:
 
 **Ownership Enforcement:** All operations verify the current user owns the agent via `_check_agent_owner()`.
 
+### API Routes — Direct Access Tokens
+
+These routes are nested under the connector path and are owner-only:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v1/agents/{agent_id}/mcp-connectors/{connector_id}/tokens` | List tokens (prefix only, never full value) |
+| `POST` | `/api/v1/agents/{agent_id}/mcp-connectors/{connector_id}/tokens` | Mint a token; returns `MCPConnectorTokenCreated` with the full value **once**. Returns **403** if `connector.allow_token_access` is `False` |
+| `PUT` | `/api/v1/agents/{agent_id}/mcp-connectors/{connector_id}/tokens/{token_id}` | Revoke or restore a token (`revoked: bool`) |
+| `DELETE` | `/api/v1/agents/{agent_id}/mcp-connectors/{connector_id}/tokens/{token_id}` | Permanently delete a token |
+
+**Gate logic (POST):**
+1. `_check_agent_owner` — 403 if not agent owner
+2. Load connector, verify `connector.agent_id == agent_id` — 404 if mismatch
+3. `if not connector.allow_token_access` → 403 with detail `"Direct token access is disabled for this connector"`
+4. Delegate to `MCPDirectTokenService.create_token`
+
+**PUT/DELETE:** Load token via `MCPDirectTokenService.get_token(token_id, connector_id)` — 404 if missing, wrong connector, or not `token_type="direct"`.
+
 ### API Routes — OAuth Consent
 
 **File:** `backend/app/api/routes/mcp_consent.py`
@@ -236,7 +283,7 @@ Two new nullable fields added to the `session` table:
 
 **Approval Logic** (in `MCPConsentService.approve_consent()`):
 1. Validate nonce exists, not used, not expired
-2. Check email ACL: user is connector owner OR email in `allowed_emails`
+2. Check user ACL: user is connector owner **OR** `user.id in allowed_user_ids` **OR** (legacy fallback) `user.email in allowed_emails`
 3. Mark auth request as used
 4. Generate auth code (5 min expiry)
 5. Return redirect URL with code + state params
@@ -307,17 +354,33 @@ Mounted at `/mcp/oauth` in `backend/app/main.py`. Route handlers are thin wrappe
 **Class:** `MCPConnectorService` (static methods)
 
 **Methods:**
-- `create_connector(db_session, agent_id, owner_id, data)` — Create connector
+- `create_connector(db_session, agent_id, owner_id, data)` — Create connector; stores `allowed_user_ids` as list of strings, `allow_token_access`
 - `list_connectors(db_session, agent_id, owner_id)` — List connectors for agent/owner
 - `get_connector(db_session, connector_id)` — Get by ID
-- `update_connector(db_session, connector_id, owner_id, data)` — Update with ownership check; evicts MCP server if deactivated
+- `update_connector(db_session, connector_id, owner_id, data)` — Update with ownership check; normalizes `allowed_user_ids` to strings; evicts MCP server if deactivated
 - `delete_connector(db_session, connector_id, owner_id)` — Delete with ownership check; evicts MCP server from registry
 - `resolve_connector_context(db_session, connector_id)` — Load and validate connector, agent, environment for tool requests. Raises: `ConnectorNotFoundError`, `ConnectorInactiveError`, `AgentNotAvailableError`, `EnvironmentNotFoundError`
-- `check_email_access(db_session, connector_id, email)` — Check email in `allowed_emails`
+- `check_user_access(db_session, connector_id, user)` — ACL check: returns `True` if owner, or `user.id in allowed_user_ids`, or (fallback) `user.email in allowed_emails`
+- `check_email_access(db_session, connector_id, email)` — Legacy email-only ACL check; kept for backward compatibility; prefer `check_user_access`
 - `get_registered_client_count(db_session, connector_id)` — Count registered OAuth clients
-- `to_public(connector)` — Convert to public dict with computed `mcp_server_url`
+- `_resolve_allowed_users(db_session, allowed_user_ids)` — Batch-query `User` by IDs; returns list of `{id, email, full_name}`; IDs with no matching user are silently dropped from the display projection
+- `to_public(connector, db_session=None)` — Convert to public dict with computed `mcp_server_url`. When `db_session` is provided, also resolves `allowed_users` display projection via `_resolve_allowed_users`
 
 **Exception Handling:** All service methods raise domain exceptions from `mcp_errors.py` (e.g., `MCPPermissionDeniedError` for ownership violations) instead of generic `ValueError`. Route handlers catch `MCPError` and convert to `HTTPException` using `status_code` from the exception.
+
+### Direct Token Service
+
+**File:** `backend/app/services/mcp/mcp_direct_token_service.py`
+
+**Class:** `MCPDirectTokenService` (static methods)
+
+**Methods:**
+- `create_token(db_session, connector, label)` — Mints a connector-scoped `MCPToken` with `token_type="direct"`, `client_id="direct"` (sentinel), `user_id=owner_id`, 5-year TTL. Returns `MCPConnectorTokenCreated` (the only time the full token value is exposed). Ownership and `allow_token_access` flag are verified by the route layer before this is called.
+- `list_tokens(db_session, connector_id)` — Query `MCPToken` where `token_type="direct"`, ordered by `created_at desc`. Returns `list[MCPConnectorTokenPublic]` — prefix only, no full value.
+- `get_token(db_session, token_id, connector_id)` — Load a direct token verifying it belongs to the connector and is `token_type="direct"`.
+- `set_revoked(db_session, token, revoked)` — Set `token.revoked`; returns public projection.
+- `delete_token(db_session, token)` — Delete the row.
+- `to_public(token)` — Project an `MCPToken` to `MCPConnectorTokenPublic` (prefix = `token[:8]`).
 
 ### MCP Server Infrastructure
 
@@ -328,13 +391,16 @@ Mounted at `/mcp/oauth` in `backend/app/main.py`. Route handlers are thin wrappe
 **Class:** `MCPTokenVerifier(TokenVerifier)` — implements MCP SDK `TokenVerifier` protocol
 
 **`verify_token(token)` logic:**
-1. Look up token in `mcp_token` table (type=access)
+1. Look up token in `mcp_token` table where `token_type in ("access", "direct")` — accepts both OAuth access tokens and connector-scoped direct tokens
 2. Check expiry
 3. Check revocation
 4. Verify `connector_id` matches this verifier's connector
 5. Verify connector is still active
-6. Set `mcp_authenticated_user_id_var` ContextVar with `token_record.user_id` (propagates OAuth-authenticated user identity to tool handlers)
-7. Return SDK `AccessToken` or `None`
+6. Best-effort `last_used_at` update: sets `token_record.last_used_at = now`, commits; wrapped in try/except so a write failure never blocks authentication
+7. Set `mcp_authenticated_user_id_var` ContextVar with `token_record.user_id`. For direct tokens `user_id = owner_id`, so sessions run under the connector owner's identity — the same code path as OAuth tokens.
+8. Return SDK `AccessToken` or `None`
+
+**Direct token identity:** Direct tokens store `user_id = connector.owner_id` at mint time, so all downstream session/message logic is identical to OAuth token handling. There is no separate "direct" branch after the verifier — `mcp_authenticated_user_id_var` carries the owner's UUID in both cases.
 
 #### Server Factory
 
@@ -567,30 +633,50 @@ All notification failures are non-fatal — they are caught and logged at debug 
 **Location:** Rendered in `AgentIntegrationsTab.tsx`
 
 **Features:**
-- List existing connectors with name, mode badge, active/inactive status
-- Copyable MCP Server URL — constructed dynamically from `mcp_server_base_url` (returned by list endpoint) + connector ID, so URLs always reflect the current backend `MCP_SERVER_BASE_URL` env without stale cache
-- Edit dialog with read-only MCP server URL, name/mode/email editing
-- Create dialog: name, mode selector, allowed emails input
-- Toggle active/inactive
-- Delete with confirmation dialog
+- List existing connectors with name, mode badge, active/inactive status; summary line shows count of allowed users + any residual legacy emails; shows a "Token Access" badge when `allow_token_access` is `true`
+- Copyable MCP Server URL — constructed dynamically from `mcp_server_base_url` (returned by list endpoint) + connector ID
+- **Create dialog:** name, mode selector, `UserAllowlistPicker` for user assignment (`allowed_user_ids`), `allow_token_access` switch with help text. Sends `allowed_user_ids`; stops writing `allowed_emails`
+- **Edit dialog:** same `UserAllowlistPicker` seeded from the resolved `connector.allowed_users` projection so pills display names; residual `allowed_emails` shown as read-only text pills; `allow_token_access` switch. Embeds `McpDirectTokensManager` when `allow_token_access` is `true`
+- Toggle active/inactive; delete with confirmation dialog
+
+**`UserAllowlistPicker` seeding on edit:** `allowed_users` from the connector public response provides `{id, email, full_name}`. Each entry is mapped to a picker `selected` item with `userId = id` and `fallbackLabel = full_name || email`. See [User Selector Pattern](../../development/frontend/user_selector_pattern.md).
+
+**Legacy email display:** `allowed_emails` entries that were not backfilled to `allowed_user_ids` are displayed as static read-only pills in the edit dialog. The create dialog no longer writes to `allowed_emails`.
+
+### Direct Tokens Manager
+
+**File:** `frontend/src/components/Agents/McpDirectTokensManager.tsx`
+
+**Props:** `agentId: string`, `connectorId: string`
+
+**Features:**
+- Embedded inside the connector edit dialog, visible only when `allow_token_access` is `true`
+- Generate button → label input dialog → `McpConnectorsService.createConnectorToken(...)` → one-time reveal card with copy button and amber warning ("Store this now, it cannot be retrieved again")
+- Token list: prefix (`xxxxxxxx…`), label, created date, last used, revoked badge; Revoke/Restore (PUT) and Delete (DELETE with confirmation) actions
+- Uses the generated `McpConnectorsService` (not raw `fetch()`)
 
 ### State Management
 
 **Query Keys:**
 - `["mcp-connectors", agentId]` — List of connectors
+- `["mcp-connector-tokens", connectorId]` — Direct token list for a connector
 
 **Mutations:**
-- Create → invalidates connector list
-- Delete → invalidates connector list
-- Toggle active → invalidates connector list
+- Create connector / Update connector → invalidates `["mcp-connectors", agentId]`
+- Delete connector → invalidates connector list
+- Generate token → invalidates `["mcp-connector-tokens", connectorId]`
+- Revoke/restore token → invalidates `["mcp-connector-tokens", connectorId]`
+- Delete token → invalidates `["mcp-connector-tokens", connectorId]`
 
 ### API Client
 
-Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
+**Connector CRUD:** Uses direct `fetch()` calls with JWT auth headers.
 
-**Interface:** `McpConnector` defined locally in `McpConnectorsCard.tsx`.
+**Direct token endpoints:** Uses the auto-generated `McpConnectorsService` from `@/client` (regenerated after backend route additions).
 
-**Dynamic URL Construction:** The list endpoint returns `mcp_server_base_url` alongside connector data. The frontend constructs MCP server URLs as `{mcp_server_base_url}/{connector_id}/mcp` at render time via `getMcpServerUrl()`, rather than relying on the per-connector `mcp_server_url` field. This ensures URLs always reflect the current backend environment, even if React Query serves cached connector data.
+**Interface:** `McpConnector` defined locally in `McpConnectorsCard.tsx`; extended with `allowed_user_ids: string[]`, `allowed_users: McpConnectorAllowedUser[]`, `allow_token_access: boolean`.
+
+**Dynamic URL Construction:** The list endpoint returns `mcp_server_base_url` alongside connector data. The frontend constructs MCP server URLs as `{mcp_server_base_url}/{connector_id}/mcp` at render time via `getMcpServerUrl()`, rather than relying on the per-connector `mcp_server_url` field.
 
 ## Security Features
 
@@ -603,9 +689,11 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 
 **Access Control:**
 - Connector CRUD: agent ownership validation
-- Consent approval: email ACL check (owner or in `allowed_emails`)
-- Token verification: per-connector isolation (token for connector A rejected on connector B)
+- Consent approval: user-id ACL check (owner OR `allowed_user_ids` OR `allowed_emails` fallback)
+- Direct token CRUD: owner-only; POST gated by `allow_token_access`
+- Token verification: per-connector isolation (token for connector A rejected on connector B); `revoked` and `expires_at` checked on every request
 - DCR: `max_clients` limit per connector (429 if exceeded)
+- Direct tokens: connector deletion cascades to all direct tokens (FK `ON DELETE CASCADE`)
 
 **Session Isolation:**
 - Session routing is driven by `context_id` (platform session UUID), not by `mcp_session_id`
@@ -685,14 +773,34 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 5. MCP client continues with new token
 ```
 
+### Scenario 6: Direct Token Access (Account-less Client)
+
+Use case: give MCP access to a script or tool that has no platform account, scoped to a single connector.
+
+```
+1. Agent owner enables "Allow token access" on the connector
+2. Owner clicks Generate in the Direct Access Tokens section of the edit dialog
+3. Enters a label (e.g. "ci-script") and confirms
+4. POST .../mcp-connectors/{id}/tokens returns MCPConnectorTokenCreated with full token value
+5. Owner copies the token — it cannot be retrieved again; only the 8-char prefix is shown afterward
+6. External client (no account) passes token in header: Authorization: Bearer <direct-token>
+7. POST /mcp/{connector_id}/mcp → MCPServerRegistry → MCPTokenVerifier.verify_token()
+8. Verifier: token found, type="direct", not expired, not revoked, connector matches and is active
+9. Verifier stamps last_used_at (best-effort) and sets mcp_authenticated_user_id_var = owner_id
+10. send_message runs under the connector owner's identity (same as OAuth tokens)
+11. Session is created with user_id = owner_id; no MCPSessionMeta (no separate authenticated user)
+```
+
+**When `allow_token_access` is turned off after tokens exist:** existing tokens keep working (only new generation is blocked). To stop a token: revoke or delete it explicitly.
+
 ## File Locations Reference
 
 ### Backend — Models
 
-- `backend/app/models/mcp/mcp_connector.py` — MCPConnector model and schemas
+- `backend/app/models/mcp/mcp_connector.py` — MCPConnector model and schemas (`MCPConnectorAllowedUser`, `MCPConnectorPublic` with `allowed_user_ids`/`allowed_users`/`allow_token_access`)
 - `backend/app/models/mcp/mcp_oauth_client.py` — MCPOAuthClient model
 - `backend/app/models/mcp/mcp_auth_code.py` — MCPAuthCode + MCPAuthRequest models
-- `backend/app/models/mcp/mcp_token.py` — MCPToken model
+- `backend/app/models/mcp/mcp_token.py` — MCPToken model (with `label`, `last_used_at`) + direct-token schemas (`MCPConnectorTokenCreate/Public/Created/sPublic/Update`)
 - `backend/app/models/mcp/mcp_session_meta.py` — MCPSessionMeta model (authenticated user tracking)
 - `backend/app/models/sessions/session.py:46-50` — MCP fields on session table
 - `backend/app/models/__init__.py` — Exports added
@@ -708,8 +816,9 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 ### Backend — Services
 
 - `backend/app/services/mcp/mcp_errors.py` — MCPError exception hierarchy (ConnectorNotFoundError, ConnectorInactiveError, MCPPermissionDeniedError, AgentNotAvailableError, EnvironmentNotFoundError, AuthRequestNotFoundError/Expired/Used, InvalidClientError, InvalidGrantError, MaxClientsReachedError)
-- `backend/app/services/mcp/mcp_connector_service.py` — Connector CRUD logic; raises domain exceptions from `mcp_errors.py`
-- `backend/app/services/mcp/mcp_consent_service.py` — OAuth consent flow (get_consent_details, approve_consent, _validate_auth_request)
+- `backend/app/services/mcp/mcp_connector_service.py` — Connector CRUD logic; `check_user_access` (id-or-email-or-owner ACL); `to_public(connector, db_session)` resolves `allowed_users`
+- `backend/app/services/mcp/mcp_direct_token_service.py` — `MCPDirectTokenService`: create/list/revoke/delete direct tokens; projection to `MCPConnectorTokenPublic` (prefix-only)
+- `backend/app/services/mcp/mcp_consent_service.py` — OAuth consent flow; `approve_consent` uses `check_user_access`-equivalent inline logic (owner OR allowed_user_ids OR allowed_emails fallback)
 - `backend/app/services/mcp/mcp_oauth_service.py` — OAuth 2.1 logic (register_client, create_authorization, exchange_authorization_code, refresh_access_token, revoke_token) plus helpers (get_as_metadata_dict, extract_connector_id_from_resource)
 
 ### Backend — MCP Infrastructure
@@ -735,6 +844,7 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 
 - `backend/app/alembic/versions/dc259404533e_add_mcp_integration_tables.py`
 - `backend/app/alembic/versions/1cfe565b5e39_add_mcp_session_meta_table.py`
+- `backend/app/alembic/versions/cdfb21cadb62_mcp_connector_user_acl_and_direct_tokens.py` — adds `allowed_user_ids`, `allow_token_access` to `mcp_connector`; adds `label`, `last_used_at` to `mcp_token`; best-effort email→user_id backfill (matched emails copied to `allowed_user_ids`; unmatched emails kept in `allowed_emails` as fallback)
 
 ### Backend — Dependencies
 
@@ -743,13 +853,16 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 ### Frontend
 
 - `frontend/src/routes/oauth/mcp-consent.tsx` — OAuth consent page
-- `frontend/src/components/Agents/McpConnectorsCard.tsx` — Connector management card
+- `frontend/src/components/Agents/McpConnectorsCard.tsx` — Connector management card (UserAllowlistPicker for ACL, allow_token_access switch, embeds McpDirectTokensManager)
+- `frontend/src/components/Agents/McpDirectTokensManager.tsx` — Direct access token list/create/revoke/delete UI (embedded in connector edit dialog)
 - `frontend/src/components/Agents/AgentIntegrationsTab.tsx` — Imports McpConnectorsCard
 
 ### Tests
 
 - `backend/tests/api/mcp_integration/conftest.py` — Test fixtures
 - `backend/tests/api/mcp_integration/test_mcp_connector_crud.py` — Connector CRUD tests
+- `backend/tests/api/mcp_integration/test_mcp_connector_acl.py` — User ACL tests: `allowed_user_ids`/`allow_token_access` round-trip, `allowed_users` display projection, stale UUID handling, consent ACL (owner / allowed_user / legacy email / denied)
+- `backend/tests/api/mcp_integration/test_mcp_connector_direct_tokens.py` — Direct token tests: generate returns full value once, list never leaks value, revoke/restore/delete, 403 when `allow_token_access=False`, non-owner 403, verifier accepts `direct` type, verifier rejects revoked, connector-mismatch rejection, cascade on connector delete, `last_used_at` update
 - `backend/tests/api/mcp_integration/test_mcp_oauth_flow.py` — OAuth flow tests
 - `backend/tests/api/mcp_integration/test_mcp_send_message.py` — send_message tool handler tests
 - `backend/tests/api/mcp_integration/test_mcp_file_upload.py` — File upload tool and endpoint tests
@@ -766,6 +879,6 @@ Uses direct `fetch()` calls with JWT auth headers (not auto-generated client).
 
 ---
 
-**Document Version:** 1.8
-**Last Updated:** 2026-03-02
-**Status:** Implemented (Phase 1-7 complete + workspace resources, per-chat session isolation via context_id, example prompts, resource change notifications, progress & content streaming notifications, service layer refactoring, authenticated MCP user tracking via MCPSessionMeta)
+**Document Version:** 1.9
+**Last Updated:** 2026-06-06
+**Status:** Implemented (Phase 1-7 complete + workspace resources, per-chat session isolation via context_id, example prompts, resource change notifications, progress & content streaming notifications, service layer refactoring, authenticated MCP user tracking via MCPSessionMeta, user-ID ACL with email fallback, connector-scoped direct access tokens)

@@ -18,6 +18,7 @@ Tool call rendering provides specialized visual feedback for each type of tool t
 | `read` | ReadToolBlock | File path being read | Filename only with icon |
 | `write` | WriteToolBlock | File path + content being written | Same (no compact variant) |
 | `edit` | EditToolBlock | File path + old/new string comparison | Filename only with icon |
+| `apply_patch` | ApplyPatchToolBlock | OpenCode patch rendered as a per-file diff (Add/Update/Delete badge, `+N/−M` counts, colored `+`/`-` lines) | One-liner per file with icon |
 | `bash` | BashToolBlock | Shell command being executed | CompactBashBlock (shortened) |
 | `glob` | GlobToolBlock | Glob pattern for file matching | Same |
 | `websearch` | WebSearchToolBlock | Search query text | Same |

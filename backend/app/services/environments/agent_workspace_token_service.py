@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 # Token validity duration
 WORKSPACE_VIEW_TOKEN_EXPIRY = timedelta(hours=1)
 
+# Short-lived signed download token for agent message attachments.
+FILE_DOWNLOAD_TOKEN_EXPIRY = timedelta(hours=1)
+
 
 class AgentWorkspaceTokenService:
     """Service for creating and verifying agent workspace view tokens."""
@@ -65,4 +68,63 @@ class AgentWorkspaceTokenService:
             return None
         except jwt.InvalidTokenError as e:
             logger.warning(f"Invalid workspace view token: {e}")
+            return None
+
+    @staticmethod
+    def create_file_download_token(
+        file_id: UUID,
+        session_id: UUID,
+        expiry: timedelta = FILE_DOWNLOAD_TOKEN_EXPIRY,
+    ) -> str:
+        """
+        Create a short-lived JWT authorising download of a single file.
+
+        Used to embed an authenticated download URL for agent message
+        attachments in A2A ``FilePart`` payloads so native clients
+        (Cinna Desktop/Mobile) can fetch the file without a regular session JWT.
+
+        Args:
+            file_id: FileUpload UUID the token authorises.
+            session_id: Session the attachment belongs to.
+            expiry: Token validity duration (default 1h).
+
+        Returns:
+            Signed JWT string.
+        """
+        expire = datetime.now(timezone.utc) + expiry
+        payload = {
+            "type": "file_download",
+            "file_id": str(file_id),
+            "session_id": str(session_id),
+            "exp": expire,
+        }
+        return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
+
+    @staticmethod
+    def verify_file_download_token(token: str) -> dict | None:
+        """
+        Decode and validate a file download token.
+
+        Args:
+            token: JWT string.
+
+        Returns:
+            ``{"file_id": str, "session_id": str}`` if valid, else None.
+        """
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+            if payload.get("type") != "file_download":
+                logger.warning("Token type mismatch: expected 'file_download'")
+                return None
+            file_id = payload.get("file_id")
+            session_id = payload.get("session_id")
+            if not file_id or not session_id:
+                logger.warning("File download token missing required claims")
+                return None
+            return {"file_id": file_id, "session_id": session_id}
+        except jwt.ExpiredSignatureError:
+            logger.debug("File download token expired")
+            return None
+        except jwt.InvalidTokenError as e:
+            logger.warning(f"Invalid file download token: {e}")
             return None

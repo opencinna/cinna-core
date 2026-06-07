@@ -24,6 +24,14 @@ _WEBAPP_ACTION_TAG_RE = re.compile(
     re.DOTALL,
 )
 
+# Regex for matching complete <cinna_attach>...</cinna_attach> tags.
+# The tag body is the trimmed ABSOLUTE container path of a file the agent
+# created (rooted at /app/workspace). No JSON, no name — just the path.
+_ATTACH_TAG_RE = re.compile(
+    r"<cinna_attach>(.*?)</cinna_attach>",
+    re.DOTALL,
+)
+
 # Pre-allowed tools that never require user approval.
 # Canonical source: tool_name_registry.PRE_APPROVED_TOOLS (inside agent-env).
 # Kept in sync here because the backend cannot import from agent-env templates.
@@ -169,6 +177,144 @@ async def _emit_webapp_action_events(
     except Exception as e:
         logger.error(
             "Failed to emit webapp_action events for session %s: %s", session_id, e, exc_info=True
+        )
+
+
+def _extract_attachments(content: str) -> tuple[list[str], str]:
+    """
+    Extract all complete <cinna_attach>...</cinna_attach> tags from content.
+
+    Each tag body is treated as a plain ABSOLUTE container path (no JSON). The
+    trimmed body is collected when it is a non-empty absolute path; empty or
+    non-absolute bodies are logged and skipped. All complete tags — valid or not
+    — are stripped from the returned cleaned content so they never appear in the
+    chat UI (mirrors the <webapp_action> convention).
+
+    Args:
+        content: Raw text that may contain cinna_attach tags.
+
+    Returns:
+        (paths, cleaned_content) where:
+        - paths: list of absolute container paths, in textual order (may repeat)
+        - cleaned_content: the original text with all complete tags removed
+    """
+    paths: list[str] = []
+    for match in _ATTACH_TAG_RE.finditer(content):
+        body = match.group(1).strip()
+        if not body:
+            logger.debug("cinna_attach tag had empty body — skipping")
+            continue
+        if not body.startswith("/"):
+            logger.debug("cinna_attach path is not absolute — skipping: %r", body[:200])
+            continue
+        paths.append(body)
+
+    cleaned_content = _ATTACH_TAG_RE.sub("", content)
+    return paths, cleaned_content
+
+
+def _coalesce_assistant_events(events: list[dict]) -> list[dict]:
+    """Merge runs of consecutive ``assistant`` events into a single event.
+
+    Some SDK adapters (notably OpenCode) flush assistant text on every newline,
+    producing one ``assistant`` streaming event per line. The chat UI renders
+    each ``assistant`` event as an independent markdown block, so a multi-line
+    construct (code fence, table, list) gets shattered — e.g. an opening
+    ```` ```text ```` fence and its closing ```` ``` ```` land in separate
+    events and each renders as an empty/garbled block. Claude Code emits one
+    ``assistant`` event per whole text block and never hits this.
+
+    Merging adjacent ``assistant`` events — stopping at any other event type so
+    tool / webapp_action / attachment interleaving is preserved — restores the
+    whole-block shape regardless of adapter. ``event_seq`` is renumbered
+    contiguously so downstream consumers see a gap-free sequence; later
+    post-processing (webapp_action splitting, attachment splicing) renumbers
+    again on top of this when it runs.
+    """
+    if not events:
+        return events
+
+    coalesced: list[dict] = []
+    for evt in events:
+        prev = coalesced[-1] if coalesced else None
+        if (
+            evt.get("type") == "assistant"
+            and prev is not None
+            and prev.get("type") == "assistant"
+        ):
+            prev["content"] = (prev.get("content") or "") + (evt.get("content") or "")
+            # Keep the first chunk's metadata (e.g. model); only backfill keys
+            # it was missing from later chunks.
+            if evt.get("metadata"):
+                prev["metadata"] = {**evt["metadata"], **(prev.get("metadata") or {})}
+        else:
+            coalesced.append(dict(evt))
+
+    for i, evt in enumerate(coalesced, start=1):
+        evt["event_seq"] = i
+    return coalesced
+
+
+async def _emit_attachment_event(
+    session_id: UUID,
+    event_seq: int,
+    event_meta: dict,
+) -> None:
+    """
+    Emit a single ``attachment`` WebSocket stream event for a materialised file.
+
+    The event carries the file_id + display metadata so live web/A2A clients can
+    render the attachment card as the agent reply finalises. Errors are caught and
+    logged — a failed emission must never crash the stream.
+    """
+    try:
+        from app.services.events.event_service import event_service
+        await event_service.emit_stream_event(
+            session_id=session_id,
+            event_type="attachment",
+            event_data={
+                "type": "attachment",
+                "content": event_meta.get("filename", ""),
+                "event_seq": event_seq,
+                "metadata": event_meta,
+                "session_id": str(session_id),
+            },
+        )
+        logger.info(
+            "Emitted attachment event: file_id=%s session=%s",
+            event_meta.get("file_id"), session_id,
+        )
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        raise
+    except Exception as e:
+        logger.error(
+            "Failed to emit attachment event for session %s: %s",
+            session_id, e, exc_info=True,
+        )
+
+
+async def _emit_attachment_error_event(
+    session_id: UUID,
+    reason: str,
+) -> None:
+    """Emit a system ``attachment_error`` stream event (failure-isolated)."""
+    try:
+        from app.services.events.event_service import event_service
+        await event_service.emit_stream_event(
+            session_id=session_id,
+            event_type="attachment_error",
+            event_data={
+                "type": "attachment_error",
+                "content": reason,
+                "session_id": str(session_id),
+            },
+        )
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        raise
+    except Exception as e:
+        logger.error(
+            "Failed to emit attachment_error event for session %s: %s",
+            session_id, e, exc_info=True,
         )
 
 
@@ -2496,6 +2642,14 @@ class MessageService:
 
             # After stream completes, save agent response to database
             if streaming_events:
+                # Merge per-line assistant fragments (OpenCode flushes on every
+                # newline) into whole text blocks so multi-line markdown renders
+                # intact, matching Claude Code's one-event-per-block shape. Runs
+                # before webapp_action / attachment post-processing so those see
+                # consolidated assistant events (and tags that straddled a
+                # newline-flush boundary).
+                streaming_events = _coalesce_assistant_events(streaming_events)
+
                 text_parts = [e["content"] for e in streaming_events if e["type"] == "assistant" and e.get("content")]
                 agent_content = "".join(text_parts) if text_parts else "Agent response"
 
@@ -2579,6 +2733,29 @@ class MessageService:
                         evt["event_seq"] = i
                     streaming_events = processed_events
 
+                # Agent message attachments: materialise any <cinna_attach> paths,
+                # splice `attachment` events into the trace at their tag positions,
+                # and strip the tags from the saved content. Mirrors the
+                # <webapp_action> post-processing above. Runs only on agent output
+                # (this whole branch is the agent finalize path).
+                if _ATTACH_TAG_RE.search(agent_content):
+                    streaming_events, agent_content, live_attachment_events = (
+                        await MessageService._process_attachments(
+                            session_id=session_id,
+                            agent_message_id=agent_message_id,
+                            streaming_events=streaming_events,
+                            agent_content=agent_content,
+                            get_fresh_db_session=get_fresh_db_session,
+                        )
+                    )
+                    # Yield each materialised attachment into the stream so
+                    # streaming A2A clients (Desktop / Mobile) receive the
+                    # FilePart live. Web watchers already got it via the
+                    # websocket emit inside _process_attachments;
+                    # WebSocketEventHandler skips these to avoid a duplicate.
+                    for _attachment_event in live_attachment_events:
+                        yield _attachment_event
+
                 response_metadata["external_session_id"] = new_external_session_id
                 if tools_needing_approval:
                     response_metadata["tools_needing_approval"] = list(tools_needing_approval)
@@ -2649,6 +2826,182 @@ class MessageService:
             # Always unregister stream when done (success, error, or interruption)
             await active_streaming_manager.unregister_stream(session_id)
             logger.info(f"Stream unregistered for session {session_id}")
+
+    @staticmethod
+    async def _process_attachments(
+        session_id: UUID,
+        agent_message_id: UUID | None,
+        streaming_events: list[dict],
+        agent_content: str,
+        get_fresh_db_session: callable,
+    ) -> tuple[list[dict], str, list[dict]]:
+        """
+        Finalize-time agent attachment processing.
+
+        Extracts <cinna_attach> paths from the assembled agent content, materialises
+        the referenced workspace files into platform storage, emits live
+        `attachment` / `attachment_error` stream events, strips the tags from the
+        saved content, splices an `attachment` event into ``streaming_events`` at
+        each tag's textual position, renumbers ``event_seq`` contiguously, and
+        records the final ``event_seq`` on each MessageFile.
+
+        Returns ``(new_streaming_events, cleaned_agent_content, live_attachment_events)``.
+        The third element is the list of `attachment` event dicts to *yield* from
+        the stream generator so streaming A2A clients (Cinna Desktop / Mobile)
+        receive the FilePart live — the websocket `emit_stream_event` only reaches
+        Socket.IO (web), not the A2A SSE handler. On any failure it falls back to
+        stripping the tags and returning no live events so the stream always
+        completes normally.
+        """
+        from app.models.sessions.session import Session as ChatSession
+
+        # 1. Extract declared paths (textual order, may repeat).
+        paths, _ = _extract_attachments(agent_content)
+        if not paths or agent_message_id is None:
+            # Nothing to materialise (or no message row) — just strip the tags.
+            return streaming_events, _ATTACH_TAG_RE.sub("", agent_content).strip() or agent_content, []
+
+        # 2. Materialise in a fresh DB session (blocking I/O off the loop).
+        def _materialize_sync() -> "MaterializationResult | None":
+            from app.services.files.attachment_materialization_service import (
+                AttachmentMaterializationService,
+            )
+            with get_fresh_db_session() as db:
+                chat_session = db.get(ChatSession, session_id)
+                message = db.get(SessionMessage, agent_message_id)
+                if chat_session is None or message is None:
+                    return None
+                return asyncio.run(
+                    AttachmentMaterializationService.materialize_attachments(
+                        db=db,
+                        session=chat_session,
+                        message=message,
+                        paths=paths,
+                    )
+                )
+
+        try:
+            result = await asyncio.to_thread(_materialize_sync)
+        except Exception as e:
+            logger.error(
+                "Attachment materialisation failed for session %s: %s",
+                session_id, e, exc_info=True,
+            )
+            await _emit_attachment_error_event(
+                session_id, "An attachment could not be delivered"
+            )
+            return streaming_events, _ATTACH_TAG_RE.sub("", agent_content).strip() or agent_content, []
+
+        if result is None:
+            return streaming_events, _ATTACH_TAG_RE.sub("", agent_content).strip() or agent_content, []
+
+        # 3. Surface rejections as a single error notice (avoid spamming).
+        for reason in result.rejections:
+            await _emit_attachment_error_event(session_id, reason)
+
+        # 4. Splice attachment events into the trace at tag positions.
+        #    Walk each assistant event, splitting on <cinna_attach> tags and
+        #    inserting the materialised attachment event for paths that succeeded.
+        #    file_id -> final event_seq, to persist on the MessageFile rows.
+        file_id_to_seq: dict[str, int] = {}
+        any_tag = any(
+            evt.get("type") == "assistant"
+            and evt.get("content")
+            and _ATTACH_TAG_RE.search(evt["content"])
+            for evt in streaming_events
+        )
+
+        if any_tag:
+            processed: list[dict] = []
+            for evt in streaming_events:
+                if (
+                    evt.get("type") == "assistant"
+                    and evt.get("content")
+                    and _ATTACH_TAG_RE.search(evt["content"])
+                ):
+                    content = evt["content"]
+                    last_end = 0
+                    for match in _ATTACH_TAG_RE.finditer(content):
+                        text_before = content[last_end:match.start()].strip()
+                        if text_before:
+                            processed.append({
+                                **{k: v for k, v in evt.items() if k not in ("content", "event_seq")},
+                                "content": text_before,
+                            })
+                        raw_path = match.group(1).strip()
+                        materialized = result.by_path.get(raw_path)
+                        if materialized is not None:
+                            event_meta = materialized.event_metadata()
+                            processed.append({
+                                "type": "attachment",
+                                "content": event_meta["filename"],
+                                "metadata": event_meta,
+                            })
+                        last_end = match.end()
+                    text_after = content[last_end:].strip()
+                    if text_after:
+                        processed.append({
+                            **{k: v for k, v in evt.items() if k not in ("content", "event_seq")},
+                            "content": text_after,
+                        })
+                else:
+                    processed.append(evt)
+            # Renumber contiguously and record final seq per materialised file.
+            for i, evt in enumerate(processed, start=1):
+                evt["event_seq"] = i
+                if evt.get("type") == "attachment":
+                    fid = evt.get("metadata", {}).get("file_id")
+                    if fid:
+                        file_id_to_seq[fid] = i
+            streaming_events = processed
+
+        # 5. Emit live attachment events (after splicing so we know the seq).
+        #    Emitted two ways: to the Socket.IO room (web watchers) AND collected
+        #    into `live_events` for the stream generator to yield, so streaming
+        #    A2A clients receive the FilePart live (the websocket emit doesn't
+        #    reach the A2A SSE handler). `WebSocketEventHandler` skips yielded
+        #    `attachment` events to avoid a web double-emit.
+        live_events: list[dict] = []
+        emitted: set[str] = set()
+        for materialized in result.by_path.values():
+            fid = str(materialized.file_upload.id)
+            if fid in emitted:
+                continue
+            emitted.add(fid)
+            seq = file_id_to_seq.get(fid, materialized.message_file.event_seq or 0)
+            event_meta = materialized.event_metadata()
+            await _emit_attachment_event(session_id, seq, event_meta)
+            live_events.append({
+                "type": "attachment",
+                "content": event_meta.get("filename", ""),
+                "event_seq": seq,
+                "metadata": event_meta,
+            })
+
+        # 6. Persist the final event_seq onto each MessageFile.
+        if file_id_to_seq:
+            def _persist_event_seq() -> None:
+                from app.models.files.file_upload import MessageFile
+                with get_fresh_db_session() as db:
+                    rows = db.exec(
+                        select(MessageFile).where(MessageFile.message_id == agent_message_id)
+                    ).all()
+                    for row in rows:
+                        seq = file_id_to_seq.get(str(row.file_id))
+                        if seq is not None:
+                            row.event_seq = seq
+                    db.commit()
+            try:
+                await asyncio.to_thread(_persist_event_seq)
+            except Exception as e:
+                logger.error(
+                    "Failed to persist attachment event_seq for session %s: %s",
+                    session_id, e, exc_info=True,
+                )
+
+        # 7. Strip tags from the saved content.
+        cleaned = _ATTACH_TAG_RE.sub("", agent_content).strip() or agent_content
+        return streaming_events, cleaned, live_events
 
     @staticmethod
     async def create_user_message_and_emit_event(

@@ -82,6 +82,17 @@ Note: `anthropic` credentials also support OAuth tokens (prefix `sk-ant-oat*`) �
    - If no credentials exist: error with link to Settings
 4. Clone created with recipient's own credentials
 
+### Testing a Credential Connection
+
+1. User opens the Add or Edit AI Credential dialog.
+2. Clicks **Test Connection** (between Cancel and Create/Update).
+3. The platform probes the provider's native model-listing endpoint with the supplied (or stored) key and shows an inline result:
+   - **Success:** "Connection successful — N models available." The available-model list is immediately refreshed in model-override inputs for the edited credential.
+   - **Benign skip (OAuth token / MiniMax):** A note explaining that the connection is valid but model listing is not supported for this credential type — this is expected and not an error.
+   - **Failure:** "Connection failed — the provider rejected this key."
+4. For a saved credential (Edit dialog) a successful test also persists the refreshed model list onto the credential row, replacing the last nightly-cron result immediately.
+5. For the Add dialog (no saved row yet), the probe result is shown but nothing is persisted.
+
 ### Updating Credentials and Rebuilding Environments
 
 1. User updates an AI credential's API key
@@ -145,4 +156,4 @@ Clone created → Uses owner's shared or recipient's own credentials
 
 ---
 
-*Last updated: 2026-03-21*
+*Last updated: 2026-06-05 — added Test Connection user flow*

@@ -279,6 +279,22 @@ export function WebappChatWidget({
         return
       }
 
+      // Agent attachment delivery failures carry no event_seq — render them
+      // inline immediately using a synthetic seq so they always append.
+      if (eventType === "attachment_error") {
+        const syntheticSeq = lastKnownSeqRef.current + 0.5
+        setStreamingEvents((prev) => [
+          ...prev,
+          {
+            type: "attachment_error",
+            content: data?.content || "",
+            event_seq: syntheticSeq,
+            metadata: data?.metadata,
+          },
+        ])
+        return
+      }
+
       // Forward webapp_action events to the iframe via postMessage.
       // These events are emitted by the agent when it wants to trigger a UI
       // action (e.g. refresh_page, update_form, show_notification).

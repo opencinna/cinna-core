@@ -14,6 +14,12 @@ Two additional cases are always treated as stale:
 - `current_image_tag` is `NULL` — the environment predates the migration (never been rebuilt since the admin fields were added) or was created before the tracking column existed.
 - The template directory for the environment's `env_name` no longer exists on the server — the row shows `expected_image_tag = null` and the rebuild action is disabled with a "template missing" indicator.
 
+### Model Health Warning
+
+A separate, independent signal from image-tag staleness. An environment has a **model health warning** when any of its configured AI models are deprecated, retired, or unavailable to its credential. The warning is a **configuration** problem (remediation: edit the model override or restart to pick up the current catalog default); it is not fixed by a Docker image rebuild.
+
+`AdminAgentEnvironmentPublic.model_health_warning` (`bool`) appears as a column in the admin table beside `is_stale`. It is computed cheaply per row by `evaluate_environment` during `list_environments`. See [Model Freshness](../../agents/agent_environments/model_freshness.md) for the full feature description.
+
 ### In-Use
 
 An environment is **in use** when any of the following is true:
@@ -73,6 +79,7 @@ Not yet present in the current table UI — individual rebuilds are triggered vi
 | [Agent Environments](../../agents/agent_environments/agent_environments.md) | `EnvironmentLifecycleManager.rebuild_environment()` is the single entry point for all rebuild operations. Admin-triggered rebuilds use this path unchanged. |
 | [Agent Environment Core](../../agents/agent_environment_core/agent_environment_core.md) | The `current_image_tag` field is written inside `_update_environment_config()` during any start or rebuild; `last_build_at` is written on rebuild completion. |
 | [Realtime Events](../realtime_events/event_bus_system.md) | The admin page subscribes to `ENVIRONMENT_STATUS_CHANGED` to update table rows in real time as rebuilds progress. |
+| [Model Freshness](../../agents/agent_environments/model_freshness.md) | The `model_health_warning` column is computed by `evaluate_environment` per row during `list_environments`. Distinct from `is_stale`: different cause, different remediation. |
 | Security Events | Each admin-triggered rebuild emits a `SecurityEvent` row for audit purposes. |
 | Sidebar | The "Agent Environments" entry in `AdminMenu.tsx` (between Users and Knowledge Sources) is only rendered for superusers. |
 

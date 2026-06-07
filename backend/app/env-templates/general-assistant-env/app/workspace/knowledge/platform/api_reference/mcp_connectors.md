@@ -12,6 +12,8 @@ Auto-generated from OpenAPI spec. Tag: `mcp-connectors`
   - `name`: string (required)
   - `mode`: string
   - `allowed_emails`: string[]
+  - `allowed_user_ids`: uuid[]
+  - `allow_token_access`: boolean
   - `max_clients`: integer
 
 **Response:** `MCPConnectorPublic`
@@ -51,6 +53,8 @@ Auto-generated from OpenAPI spec. Tag: `mcp-connectors`
   - `mode`: string | null
   - `is_active`: boolean | null
   - `allowed_emails`: array | null
+  - `allowed_user_ids`: array | null
+  - `allow_token_access`: boolean | null
   - `max_clients`: integer | null
 
 **Response:** `MCPConnectorPublic`
@@ -63,6 +67,58 @@ Auto-generated from OpenAPI spec. Tag: `mcp-connectors`
 **Path parameters:**
 - `agent_id`: uuid
 - `connector_id`: uuid
+
+**Response:** `Message`
+
+---
+
+## GET `/api/v1/agents/{agent_id}/mcp-connectors/{connector_id}/tokens`
+**List Connector Tokens**
+
+**Path parameters:**
+- `agent_id`: uuid
+- `connector_id`: uuid
+
+**Response:** `MCPConnectorTokensPublic`
+
+---
+
+## POST `/api/v1/agents/{agent_id}/mcp-connectors/{connector_id}/tokens`
+**Create Connector Token**
+
+**Path parameters:**
+- `agent_id`: uuid
+- `connector_id`: uuid
+
+**Request body** (`MCPConnectorTokenCreate`):
+  - `label`: string (required)
+
+**Response:** `MCPConnectorTokenCreated`
+
+---
+
+## PUT `/api/v1/agents/{agent_id}/mcp-connectors/{connector_id}/tokens/{token_id}`
+**Update Connector Token**
+
+**Path parameters:**
+- `agent_id`: uuid
+- `connector_id`: uuid
+- `token_id`: uuid
+
+**Request body** (`MCPConnectorTokenUpdate`):
+  - `revoked`: boolean | null
+
+**Response:** `MCPConnectorTokenPublic`
+
+---
+
+## DELETE `/api/v1/agents/{agent_id}/mcp-connectors/{connector_id}/tokens/{token_id}`
+**Delete Connector Token**
+
+**Path parameters:**
+- `agent_id`: uuid
+- `connector_id`: uuid
+- `token_id`: uuid
 
 **Response:** `Message`
 
