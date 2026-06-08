@@ -318,6 +318,13 @@ class Settings(BaseSettings):
     DESKTOP_AUTH_ENABLED: bool = True
     DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     DESKTOP_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+    # Reuse-grace window for refresh-token rotation (OWASP / RFC 9700 §4.14.2).
+    # A revoked token re-presented within this window after rotation is treated
+    # as a benign lost-rotation-response retry (re-rotate from the same family)
+    # instead of a theft replay (revoke the whole family). Native apps that get
+    # suspended mid-refresh (iOS backgrounding, request timeouts) never persist
+    # the successor token and would otherwise be force-logged-out.
+    DESKTOP_REFRESH_TOKEN_REUSE_GRACE_SECONDS: int = 60
 
     # Mobile App Authentication (parallel /app-auth surface, shared backing).
     # Token lifetimes are shared with the desktop flow (same DesktopAuthService).

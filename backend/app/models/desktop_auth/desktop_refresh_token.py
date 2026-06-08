@@ -26,6 +26,9 @@ class DesktopRefreshToken(SQLModel, table=True):
     token_hash: str = Field()
     token_family: UUID = Field()
     is_revoked: bool = Field(default=False)
+    revoked_at: datetime | None = Field(
+        default=None, sa_type=DateTime(timezone=True)
+    )
     expires_at: datetime = Field(sa_type=DateTime(timezone=True))
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC),

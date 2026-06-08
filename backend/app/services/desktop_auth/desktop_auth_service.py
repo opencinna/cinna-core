@@ -558,9 +558,45 @@ class DesktopAuthService:
 
         now = datetime.now(UTC)
 
-        # Replay detection: if the token is already revoked, revoke the entire
-        # family (another instance may have already used this token)
+        # Reuse of an already-revoked token. Two cases, distinguished by the
+        # rotation reuse-grace window (OWASP / RFC 9700 §4.14.2):
+        #   1. Within grace  — a benign lost-rotation-response retry. A native
+        #      client refreshed, the server rotated and revoked this token, but
+        #      the client never persisted the successor (suspended JS thread /
+        #      timed-out response). Re-rotate from the same family instead of
+        #      nuking it. The orphaned successor the client never saw is revoked
+        #      so the family collapses back to a single live token.
+        #   2. Outside grace / legacy row — a genuine replay (token theft).
+        #      Revoke the entire family to force re-authentication.
         if token_record.is_revoked:
+            within_grace = (
+                token_record.revoked_at is not None
+                and now - _ensure_utc(token_record.revoked_at)
+                <= timedelta(seconds=settings.DESKTOP_REFRESH_TOKEN_REUSE_GRACE_SECONDS)
+            )
+            if within_grace:
+                # Re-validate exactly as the normal path: token must not be
+                # expired and the client must be valid before we issue.
+                if _ensure_utc(token_record.expires_at) <= now:
+                    raise HTTPException(status_code=400, detail="invalid_grant")
+                client = DesktopAuthService._resolve_refresh_client(
+                    session, token_record.client_id, client_id_str
+                )
+                logger.info(
+                    "grace reuse: re-rotating within grace window for family %s",
+                    token_record.token_family,
+                )
+                # Collapse the family to a single live token: revoke any other
+                # still-live token (the successor the client never received)
+                # before issuing the fresh pair.
+                DesktopAuthService._revoke_live_family_tokens(
+                    session, token_record.token_family, now
+                )
+                client.last_used_at = now
+                return DesktopAuthService._issue_refresh_pair(
+                    session, client, token_record.user_id, token_record.token_family
+                )
+
             logger.warning(
                 "Replay detected: revoked refresh token reused for family %s — revoking family",
                 token_record.token_family,
@@ -572,32 +608,20 @@ class DesktopAuthService:
             raise HTTPException(status_code=400, detail="invalid_grant")
 
         # Verify the token belongs to the claimed client
-        client_stmt = select(DesktopOAuthClient).where(
-            DesktopOAuthClient.id == token_record.client_id,
-            DesktopOAuthClient.client_id == client_id_str,
-            DesktopOAuthClient.is_revoked == False,  # noqa: E712
+        client = DesktopAuthService._resolve_refresh_client(
+            session, token_record.client_id, client_id_str
         )
-        client = session.exec(client_stmt).first()
-        if not client:
-            raise HTTPException(status_code=400, detail="invalid_grant")
 
         # Revoke the old token and issue a new pair — preserving the family
         # so the rotation chain stays linked (replay of any ancestor revokes
         # the current live token too).
         token_record.is_revoked = True
+        token_record.revoked_at = now
         client.last_used_at = now
 
-        access_token, refresh_token_raw = DesktopAuthService._create_token_pair(
+        return DesktopAuthService._issue_refresh_pair(
             session, client, token_record.user_id, token_record.token_family
         )
-
-        return {
-            "access_token": access_token,
-            "refresh_token": refresh_token_raw,
-            "token_type": "bearer",
-            "expires_in": settings.DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            "client_id": client.client_id,
-        }
 
     @staticmethod
     def revoke_token_family(session: Session, family_id: UUID) -> None:
@@ -672,6 +696,72 @@ class DesktopAuthService:
         return count
 
     # ── Private helpers ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _resolve_refresh_client(
+        session: Session,
+        token_client_pk: UUID,
+        client_id_str: str,
+    ) -> DesktopOAuthClient:
+        """Load the active client for a refresh, or raise 400 invalid_grant.
+
+        The token must belong to the claimed (non-revoked) client. Shared by
+        the normal rotation path and the grace re-rotation path so both apply
+        identical client validation.
+        """
+        client_stmt = select(DesktopOAuthClient).where(
+            DesktopOAuthClient.id == token_client_pk,
+            DesktopOAuthClient.client_id == client_id_str,
+            DesktopOAuthClient.is_revoked == False,  # noqa: E712
+        )
+        client = session.exec(client_stmt).first()
+        if not client:
+            raise HTTPException(status_code=400, detail="invalid_grant")
+        return client
+
+    @staticmethod
+    def _revoke_live_family_tokens(
+        session: Session,
+        family_id: UUID,
+        now: datetime,
+    ) -> None:
+        """Revoke every still-live token in a family, stamping ``revoked_at``.
+
+        Used by the grace re-rotation path to collapse the family back to a
+        single live token: the orphaned successor the client never received is
+        revoked so it can't linger. Does NOT commit — the caller commits when
+        it persists the fresh pair.
+        """
+        stmt = select(DesktopRefreshToken).where(
+            DesktopRefreshToken.token_family == family_id,
+            DesktopRefreshToken.is_revoked == False,  # noqa: E712
+        )
+        for token in session.exec(stmt).all():
+            token.is_revoked = True
+            token.revoked_at = now
+
+    @staticmethod
+    def _issue_refresh_pair(
+        session: Session,
+        client: DesktopOAuthClient,
+        user_id: UUID,
+        token_family: UUID,
+    ) -> dict:
+        """Issue a fresh token pair within ``token_family`` and build the response dict.
+
+        Shared by the normal rotation path and the grace re-rotation path so
+        both return the identical response shape.
+        """
+        access_token, refresh_token_raw = DesktopAuthService._create_token_pair(
+            session, client, user_id, token_family
+        )
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token_raw,
+            "token_type": "bearer",
+            "expires_in": settings.DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            "client_id": client.client_id,
+        }
 
     @staticmethod
     def _create_token_pair(

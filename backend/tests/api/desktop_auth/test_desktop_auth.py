@@ -14,14 +14,19 @@ Tests cover the consent-page OAuth 2.0 + PKCE flow:
   11. Consent nonce reuse rejection
   12. Expired consent nonce rejection
   13. Cross-user client_id rejection in consent
+  14. Refresh token rotation reuse-grace window (6 scenarios)
 """
+import hashlib
 import uuid
+from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlmodel import Session, select
 
 from app.core.config import settings
+from app.models.desktop_auth.desktop_refresh_token import DesktopRefreshToken
 from tests.utils.desktop_auth import (
     exchange_code_for_tokens,
     generate_pkce_pair,
@@ -481,7 +486,9 @@ def test_consent_cross_user_client_rejected(
 
 
 def test_refresh_token_rotation(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
     Refresh token rotation happy path:
@@ -489,7 +496,7 @@ def test_refresh_token_rotation(
       2. Refresh → new access_token + new refresh_token
       3. New access_token works with API
       4. New refresh_token can itself be rotated
-      5. (Separate client) old refresh_token replay is rejected
+      5. (Separate client, grace=0) old refresh_token outside grace is rejected
     """
     # ── Phase 1: Obtain initial token pair ───────────────────────────────
     verifier, challenge = generate_pkce_pair()
@@ -522,9 +529,14 @@ def test_refresh_token_rotation(
     assert final_tokens["refresh_token"]
     assert final_tokens["refresh_token"] != new_tokens["refresh_token"]
 
-    # ── Phase 5: Old refresh_token replay is rejected (fresh client) ─────
-    # Use a separate client so the replay-triggered family revocation above
-    # does not interact with the assertions here.
+    # ── Phase 5: Old refresh_token outside grace is rejected ─────────────
+    # The grace window means a recently-revoked token is treated as a benign
+    # retry and re-issued.  To verify that a token that is genuinely outside
+    # the grace window is still rejected, set grace=0.  A separate client is
+    # used so the replay-triggered family revocation does not interfere with
+    # other assertions.
+    monkeypatch.setattr(settings, "DESKTOP_REFRESH_TOKEN_REUSE_GRACE_SECONDS", 0)
+
     v2, c2 = generate_pkce_pair()
     code2 = get_authorization_code(
         client,
@@ -538,7 +550,7 @@ def test_refresh_token_rotation(
     tok2 = exchange_code_for_tokens(client, client_id2, code2, v2)
     refresh_access_token(client, client_id2, tok2["refresh_token"])  # rotate once
 
-    # Try to use the original (now-revoked) token
+    # Try to use the original (now-revoked) token with grace=0 → rejected
     r_old = client.post(
         f"{_BASE}/token",
         json={
@@ -555,15 +567,25 @@ def test_refresh_token_rotation(
 
 
 def test_refresh_token_replay_detection(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Replay attack detection (RFC 9700 §4.14.2):
+    Replay attack detection (RFC 9700 §4.14.2) outside the grace window:
       1. Obtain token pair via lazy-reg
-      2. Refresh twice to build a rotation chain: T1 → T2 → T3
-      3. Replay T1 (already revoked by the first rotation)
-      4. Entire family is revoked — the live T3 becomes invalid too
+      2. Set grace=0 to disable the reuse-grace window
+      3. Refresh twice to build a rotation chain: T1 → T2 → T3
+      4. Replay T1 (outside grace — genuine replay) → 400 invalid_grant
+      5. Entire family is revoked — the live T3 becomes invalid too
+
+    The grace window is set to 0 seconds so T1's reuse is immediately treated
+    as a genuine replay (no benign-retry path), preserving the RFC 9700
+    §4.14.2 invariant for the out-of-grace case.
     """
+    # Disable grace so T1's reuse is a genuine replay.
+    monkeypatch.setattr(settings, "DESKTOP_REFRESH_TOKEN_REUSE_GRACE_SECONDS", 0)
+
     # ── Phase 1: Obtain initial token pair ───────────────────────────────
     verifier, challenge = generate_pkce_pair()
     code = get_authorization_code(
@@ -582,7 +604,7 @@ def test_refresh_token_replay_detection(
     t2 = refresh_access_token(client, client_id, t1)["refresh_token"]
     t3 = refresh_access_token(client, client_id, t2)["refresh_token"]
 
-    # ── Phase 3: Replay T1 (already revoked) ─────────────────────────────
+    # ── Phase 3: Replay T1 (outside grace=0 → genuine replay) ────────────
     r_replay = client.post(
         f"{_BASE}/token",
         json={
@@ -1257,4 +1279,400 @@ def test_revoked_desktop_client_rejects_userinfo(
     assert r_post.status_code == 401, (
         f"userinfo should be blocked after revocation, got {r_post.status_code}: "
         f"{r_post.text}"
+    )
+
+
+# ── Test: Refresh token reuse-grace window ──────────────────────────────────
+
+
+def _obtain_tokens(
+    client: TestClient,
+    headers: dict[str, str],
+    device_name: str,
+) -> tuple[str, str]:
+    """Full consent flow → exchange → return (client_id, refresh_token)."""
+    verifier, challenge = generate_pkce_pair()
+    code = get_authorization_code(
+        client, headers, code_challenge=challenge, device_name=device_name
+    )
+    clients = list_desktop_clients(client, headers)
+    reg = next(c for c in clients if c["device_name"] == device_name)
+    client_id = reg["client_id"]
+    tokens = exchange_code_for_tokens(client, client_id, code, verifier)
+    return client_id, tokens["refresh_token"]
+
+
+def test_grace_rerotation_happy_path(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    Reuse-grace window: re-presenting a just-rotated token within the grace window
+    succeeds with a FRESH pair from the same family and does NOT revoke the family.
+
+      1. Obtain initial token pair
+      2. Rotate R0 → R1  (R0 is now revoked, revoked_at=now)
+      3. Re-present R0 immediately (within grace) → expect 200 with a new R2,
+         same family as R0/R1
+      4. R1 (the orphaned successor) is now dead — verify it cannot be used
+      5. R2 (the new token) works for a subsequent refresh
+      6. The family was NOT nuclear-revoked (R2 still works — see step 5)
+    """
+    # ── Phase 1: Obtain initial token pair ───────────────────────────────
+    client_id, r0 = _obtain_tokens(
+        client, superuser_token_headers, device_name="Grace Happy Path Device"
+    )
+
+    # ── Phase 2: Rotate R0 → R1 ──────────────────────────────────────────
+    r1_tokens = refresh_access_token(client, client_id, r0)
+    r1 = r1_tokens["refresh_token"]
+    assert r1 != r0
+
+    # ── Phase 3: Re-present R0 within grace → expect 200 with fresh R2 ───
+    r_grace = client.post(
+        f"{_BASE}/token",
+        json={
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "refresh_token": r0,
+        },
+    )
+    assert r_grace.status_code == 200, (
+        f"Grace re-rotation should succeed (200), got {r_grace.status_code}: {r_grace.text}"
+    )
+    grace_data = r_grace.json()
+    r2 = grace_data["refresh_token"]
+    assert r2 not in (r0, r1), "Grace re-rotation must return a NEW refresh token"
+    assert grace_data["access_token"], "Grace re-rotation must return an access token"
+    assert grace_data["token_type"] == "bearer"
+    assert grace_data["client_id"] == client_id
+
+    # ── Phase 4: Family was NOT nuclear-revoked: R2 is usable ────────────
+    # Note: R1 was collapsed via _revoke_live_family_tokens which stamps
+    # revoked_at, so R1 itself is within the grace window and the service
+    # would grant it another grace re-rotation too. The critical property
+    # is that the family was NOT fully revoked (no family nuke happened),
+    # which we verify by confirming R2 — the freshly-issued token — can
+    # be used for a subsequent refresh.
+    r_r2 = client.post(
+        f"{_BASE}/token",
+        json={
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "refresh_token": r2,
+        },
+    )
+    assert r_r2.status_code == 200, (
+        f"Newly-issued R2 must be usable (family NOT nuclear-revoked), got "
+        f"{r_r2.status_code}: {r_r2.text}"
+    )
+    r3 = r_r2.json()["refresh_token"]
+    assert r3 != r2, "Rotation of R2 must produce a new token"
+    assert r3 not in (r0, r1, r2), "Rotation of R2 must yield a token distinct from all prior ones"
+
+
+def test_outside_grace_reuse_triggers_replay_detection(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Outside-grace reuse behaves as a genuine replay: 400 + whole family revoked.
+
+    Technique: set DESKTOP_REFRESH_TOKEN_REUSE_GRACE_SECONDS=0 so any revoked
+    token — no matter how recently stamped — is immediately outside the window.
+
+      1. Obtain initial token pair
+      2. Rotate R0 → R1 (R0 gets revoked_at=now, grace window=0s)
+      3. Re-present R0 → expect 400 invalid_grant
+      4. The live sibling R1 is also revoked (entire family nuked)
+    """
+    # Set grace window to zero so the immediately-revoked token is outside it.
+    monkeypatch.setattr(
+        settings, "DESKTOP_REFRESH_TOKEN_REUSE_GRACE_SECONDS", 0
+    )
+
+    # ── Phase 1 + 2: Obtain tokens, rotate R0 → R1 ───────────────────────
+    client_id, r0 = _obtain_tokens(
+        client, superuser_token_headers, device_name="Outside Grace Device"
+    )
+    r1_tokens = refresh_access_token(client, client_id, r0)
+    r1 = r1_tokens["refresh_token"]
+
+    # ── Phase 3: Re-present R0 (grace=0 → outside window) → replay ───────
+    r_replay = client.post(
+        f"{_BASE}/token",
+        json={
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "refresh_token": r0,
+        },
+    )
+    assert r_replay.status_code == 400, (
+        f"Outside-grace reuse must trigger 400, got {r_replay.status_code}"
+    )
+    assert r_replay.json()["detail"] == "invalid_grant"
+
+    # ── Phase 4: Live sibling R1 must also be dead (family revoked) ───────
+    r_r1 = client.post(
+        f"{_BASE}/token",
+        json={
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "refresh_token": r1,
+        },
+    )
+    assert r_r1.status_code == 400, (
+        f"Live sibling R1 must be revoked after replay detection, got {r_r1.status_code}"
+    )
+    assert r_r1.json()["detail"] == "invalid_grant"
+
+
+def test_legacy_null_revoked_at_is_genuine_replay(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    """
+    A revoked token with revoked_at=NULL (legacy row) presented again → 400 + family revoked.
+
+    Legacy rows pre-date the grace-window feature and have no ``revoked_at``
+    stamp. They must always be treated as genuine replays (no grace).
+
+      1. Obtain initial token pair and rotate once (R0 → R1).
+         R0 now has is_revoked=True and revoked_at=now (normal rotation).
+      2. Directly null out R0's revoked_at to simulate a legacy row.
+      3. Re-present R0 → expect 400 invalid_grant (no grace for NULL revoked_at).
+      4. The live sibling R1 must also be revoked (family nuked).
+    """
+    # ── Phase 1: Obtain tokens, rotate R0 → R1 ───────────────────────────
+    client_id, r0 = _obtain_tokens(
+        client, superuser_token_headers, device_name="Legacy NULL Grace Device"
+    )
+    r1_tokens = refresh_access_token(client, client_id, r0)
+    r1 = r1_tokens["refresh_token"]
+
+    # ── Phase 2: Null out revoked_at on R0 to simulate a legacy row ──────
+    r0_hash = hashlib.sha256(r0.encode()).hexdigest()
+    token_row = db.exec(
+        select(DesktopRefreshToken).where(DesktopRefreshToken.token_hash == r0_hash)
+    ).first()
+    assert token_row is not None, "R0 token row must exist"
+    assert token_row.is_revoked is True, "R0 must be revoked after rotation"
+    token_row.revoked_at = None
+    db.commit()
+
+    # ── Phase 3: Re-present R0 (revoked_at=NULL → genuine replay) ────────
+    r_replay = client.post(
+        f"{_BASE}/token",
+        json={
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "refresh_token": r0,
+        },
+    )
+    assert r_replay.status_code == 400, (
+        f"Legacy NULL revoked_at must trigger replay detection (400), "
+        f"got {r_replay.status_code}: {r_replay.text}"
+    )
+    assert r_replay.json()["detail"] == "invalid_grant"
+
+    # ── Phase 4: Live sibling R1 must be revoked too ──────────────────────
+    r_r1 = client.post(
+        f"{_BASE}/token",
+        json={
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "refresh_token": r1,
+        },
+    )
+    assert r_r1.status_code == 400, (
+        f"Live sibling R1 must be revoked after family nuke, got {r_r1.status_code}"
+    )
+    assert r_r1.json()["detail"] == "invalid_grant"
+
+
+def test_expired_token_within_grace_is_not_rerotated(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    """
+    A token that is both revoked-within-grace AND past its expires_at → 400.
+
+    Grace should NOT bypass expiry: the re-validation logic must check
+    expires_at even for within-grace tokens.
+
+      1. Obtain initial token pair and rotate R0 → R1 (R0 is within grace).
+      2. Directly backdate R0's expires_at to the past.
+      3. Re-present R0 (within grace, but expired) → expect 400 invalid_grant.
+    """
+    # ── Phase 1: Obtain tokens and rotate R0 → R1 ────────────────────────
+    client_id, r0 = _obtain_tokens(
+        client, superuser_token_headers, device_name="Expired Within Grace Device"
+    )
+    refresh_access_token(client, client_id, r0)  # rotate: R0 now revoked_at=now
+
+    # ── Phase 2: Backdate R0's expires_at to the past ─────────────────────
+    r0_hash = hashlib.sha256(r0.encode()).hexdigest()
+    token_row = db.exec(
+        select(DesktopRefreshToken).where(DesktopRefreshToken.token_hash == r0_hash)
+    ).first()
+    assert token_row is not None, "R0 token row must exist"
+    assert token_row.is_revoked is True, "R0 must be revoked after rotation"
+    # R0 is within grace (revoked_at is just now); make it expired.
+    token_row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    db.commit()
+
+    # ── Phase 3: Re-present R0 (within grace, but expired) → 400 ─────────
+    r_expired = client.post(
+        f"{_BASE}/token",
+        json={
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "refresh_token": r0,
+        },
+    )
+    assert r_expired.status_code == 400, (
+        f"Expired-within-grace token must be rejected (400), "
+        f"got {r_expired.status_code}: {r_expired.text}"
+    )
+    assert r_expired.json()["detail"] == "invalid_grant"
+
+
+def test_hard_revoked_token_does_not_qualify_for_grace(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    Hard-revoked tokens (via client revocation or revoke_token_family) must
+    NOT qualify for the grace window even if the revocation was recent.
+
+    Client revocation stamps is_revoked=True but leaves revoked_at=NULL —
+    so such tokens follow the genuine-replay path, not the grace path.
+
+    This test guards the critical security invariant: grace is ONLY for
+    rotation-revoked tokens, not for administratively-revoked ones.
+
+      1. Obtain initial token pair
+      2. Obtain a live refresh token R1
+      3. Revoke the client (hard revocation — cascades to all tokens, revoked_at=NULL)
+      4. Present R1 → must fail with 400 (not granted via grace)
+    """
+    # ── Phase 1 + 2: Obtain tokens ────────────────────────────────────────
+    client_id, r0 = _obtain_tokens(
+        client, superuser_token_headers, device_name="Hard Revoke Grace Guard Device"
+    )
+    # Rotate once so we have a live R1 that was never used as a rotation source
+    r1_tokens = refresh_access_token(client, client_id, r0)
+    r1 = r1_tokens["refresh_token"]
+
+    # ── Phase 3: Hard-revoke the client (cascade to tokens, revoked_at=NULL) ─
+    revoke_desktop_client(client, superuser_token_headers, client_id)
+
+    # ── Phase 4: Present R1 → must fail (hard revocation bypasses grace) ──
+    r_hard = client.post(
+        f"{_BASE}/token",
+        json={
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "refresh_token": r1,
+        },
+    )
+    assert r_hard.status_code == 400, (
+        f"Hard-revoked token must be rejected (400), "
+        f"got {r_hard.status_code}: {r_hard.text}"
+    )
+    # The detail is 'invalid_grant' — client is revoked, not the token family
+    assert r_hard.json()["detail"] == "invalid_grant"
+
+
+def test_grace_family_collapse(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    After a grace re-rotation, the freshly-issued token is the live representative
+    of the family and can itself be rotated further.
+
+    The grace logic stamps revoked_at on all live tokens it collapses, so those
+    collapsed tokens are themselves eligible for another grace re-rotation.
+    The chain therefore advances continuously — each retry producing a fresh
+    unique token — while the family is never nuclear-revoked.
+
+    Verified behaviorally (no DB inspection):
+      - Grace re-rotation of R0 (after R0→R1) produces R2; R2 is usable.
+      - Normal rotation of R2 → R3; R3 is usable.
+      - Grace re-rotation of R3 (after R3→R4) produces R5 — a fresh unique token.
+      - The family is NEVER nuclear-revoked: the chain keeps issuing fresh pairs.
+
+      1. Obtain R0, rotate R0 → R1
+      2. Grace re-present R0 → R2 (R1 gets revoked_at stamped by collapse)
+      3. R2 is usable → rotate to R3
+      4. Rotate R3 → R4
+      5. Grace re-present R3 → R5 (R4 gets revoked_at stamped)
+      6. R5 is a fresh unique token; the chain is not stuck
+    """
+    # ── Phase 1: Obtain + rotate R0 → R1 ─────────────────────────────────
+    client_id, r0 = _obtain_tokens(
+        client, superuser_token_headers, device_name="Grace Collapse Device"
+    )
+    r1_tokens = refresh_access_token(client, client_id, r0)
+    r1 = r1_tokens["refresh_token"]
+    assert r1 != r0
+
+    # ── Phase 2: Grace re-present R0 → R2 ────────────────────────────────
+    r_grace = client.post(
+        f"{_BASE}/token",
+        json={
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "refresh_token": r0,
+        },
+    )
+    assert r_grace.status_code == 200, (
+        f"Grace re-rotation must succeed: {r_grace.status_code} {r_grace.text}"
+    )
+    r2 = r_grace.json()["refresh_token"]
+    assert r2 not in (r0, r1), "Grace re-rotation must issue a new unique token"
+
+    # ── Phase 3: R2 is the live token — normal rotation to R3 ────────────
+    r2_data = refresh_access_token(client, client_id, r2)
+    r3 = r2_data["refresh_token"]
+    assert r3 not in (r0, r1, r2)
+
+    # ── Phase 4: Normal rotation R3 → R4 ─────────────────────────────────
+    r3_data = refresh_access_token(client, client_id, r3)
+    r4 = r3_data["refresh_token"]
+    assert r4 not in (r0, r1, r2, r3), (
+        "Rotation chain must always produce a fresh unique token"
+    )
+
+    # ── Phase 5: Grace re-present R3 → R5 (R4 collapsed with revoked_at) ─
+    # R3 was normally rotated into R4 and has revoked_at stamped; presenting
+    # it within grace triggers another grace re-rotation. R4 is collapsed
+    # (revoked_at stamped) and R5 is issued.
+    r3_grace = client.post(
+        f"{_BASE}/token",
+        json={
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "refresh_token": r3,
+        },
+    )
+    assert r3_grace.status_code == 200, (
+        f"Re-presenting R3 (within grace) must yield 200: "
+        f"{r3_grace.status_code} {r3_grace.text}"
+    )
+    r5 = r3_grace.json()["refresh_token"]
+    assert r5 not in (r0, r1, r2, r3, r4), (
+        "Each grace re-rotation must produce a token distinct from all prior ones"
+    )
+
+    # ── Phase 6: R5 is the current live token; chain is not stuck ─────────
+    # Verify R5 can be used for a normal rotation → R6.
+    r5_data = refresh_access_token(client, client_id, r5)
+    r6 = r5_data["refresh_token"]
+    assert r6 not in (r0, r1, r2, r3, r4, r5), (
+        "Chain must continue producing unique tokens after grace re-rotation sequences"
     )

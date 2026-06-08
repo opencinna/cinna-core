@@ -92,8 +92,9 @@ Desktop apps are public clients — they cannot store a client secret. PKCE prev
 
 - Every refresh token use issues a new refresh token and invalidates the old one
 - Tokens share a `token_family` UUID for rotation chain tracking
-- **Replay detection**: if a revoked token in a family is reused (stolen token scenario), the entire family is immediately revoked, forcing re-authentication
-- Follows OAuth 2.0 Security Best Current Practice (RFC 9700)
+- **Reuse-grace window**: a brief grace period (60 seconds by default, configurable) covers the case where a rotation response was lost before the client could persist the new tokens — for example when iOS suspends an app mid-refresh or a network timeout fires after the server already rotated. Within the window, re-presenting the revoked token is treated as a benign lost-response retry: the server re-validates the token family, revokes any orphaned successor, and issues a fresh pair. This prevents spurious logouts in unreliable network conditions.
+- **Replay detection**: outside the grace window, reusing a revoked token is treated as a genuine replay (stolen-token scenario) — the entire family is immediately revoked, forcing re-authentication. Hard revocations (Disconnect from Settings, or `revoke_token_family` triggered by theft detection) do not stamp a rotation timestamp on the revoked tokens, so those tokens can never qualify for grace re-rotation. Theft detection stays strict.
+- Follows OAuth 2.0 Security Best Current Practice (RFC 9700 §4.14.2)
 
 ### Redirect URI Validation
 
