@@ -1801,6 +1801,39 @@ export type ConnectAgentApiResponse = {
     linked_consumer_agent_id?: (string | null);
 };
 
+/**
+ * Connect to a platform agent's agent-to-agent MCP connector.
+ *
+ * Resolves the connector, ACL-checks the caller, mints a connector-scoped
+ * direct token bound to the new credential, builds the endpoint URL, and
+ * creates an ``mcp_provider`` credential (``auth_mode="agent2agent"``).
+ */
+export type ConnectMcpProviderAgentRequest = {
+    connector_id: string;
+    consumer_agent_id?: (string | null);
+    mcp_mode_conversation?: boolean;
+    mcp_mode_building?: boolean;
+    label?: (string | null);
+};
+
+/**
+ * Add an arbitrary external MCP server.
+ *
+ * For ``fixed_token`` / ``none`` the credential is created immediately. For
+ * ``oauth_dcr`` the credential is created in ``awaiting_auth`` and the DCR +
+ * authorization flow runs separately (Phase 5).
+ */
+export type ConnectMcpProviderExternalRequest = {
+    endpoint_url: string;
+    transport?: string;
+    auth_mode?: string;
+    token?: (string | null);
+    consumer_agent_id?: (string | null);
+    mcp_mode_conversation?: boolean;
+    mcp_mode_building?: boolean;
+    label?: (string | null);
+};
+
 export type ConsentApproveResponse = {
     redirect_url: string;
 };
@@ -1907,6 +1940,8 @@ export type CredentialCreate = {
     allow_sharing?: boolean;
     allow_template_sharing?: boolean;
     service_uri?: (string | null);
+    mcp_mode_conversation?: boolean;
+    mcp_mode_building?: boolean;
     credential_data?: ({
     [key: string]: unknown;
 } | null);
@@ -1955,6 +1990,8 @@ export type CredentialPublic = {
     allow_sharing?: boolean;
     allow_template_sharing?: boolean;
     service_uri?: (string | null);
+    mcp_mode_conversation?: boolean;
+    mcp_mode_building?: boolean;
     id: string;
     owner_id: string;
     user_workspace_id: (string | null);
@@ -2025,7 +2062,7 @@ export type CredentialsPublic = {
     count: number;
 };
 
-export type CredentialType = 'email_imap' | 'email_smtp' | 'odoo' | 'gmail_oauth' | 'gmail_oauth_readonly' | 'gdrive_oauth' | 'gdrive_oauth_readonly' | 'gcalendar_oauth' | 'gcalendar_oauth_readonly' | 'google_service_account' | 'api_token' | 'ssh_key' | 'agent_api';
+export type CredentialType = 'email_imap' | 'email_smtp' | 'odoo' | 'gmail_oauth' | 'gmail_oauth_readonly' | 'gdrive_oauth' | 'gdrive_oauth_readonly' | 'gcalendar_oauth' | 'gcalendar_oauth_readonly' | 'google_service_account' | 'api_token' | 'ssh_key' | 'agent_api' | 'mcp_provider';
 
 export type CredentialUpdate = {
     name?: (string | null);
@@ -2037,6 +2074,8 @@ export type CredentialUpdate = {
     allow_template_sharing?: (boolean | null);
     template_private_fields?: (Array<(string)> | null);
     service_uri?: (string | null);
+    mcp_mode_conversation?: (boolean | null);
+    mcp_mode_building?: (boolean | null);
 };
 
 export type CredentialWithData = {
@@ -2046,6 +2085,8 @@ export type CredentialWithData = {
     allow_sharing?: boolean;
     allow_template_sharing?: boolean;
     service_uri?: (string | null);
+    mcp_mode_conversation?: boolean;
+    mcp_mode_building?: boolean;
     id: string;
     owner_id: string;
     user_workspace_id: (string | null);
@@ -2094,6 +2135,24 @@ export type DeviceInput = {
     device_label: string;
     public_key: string;
     external_client_id?: (string | null);
+};
+
+/**
+ * A platform agent that exposes an agent2agent connector the current user is
+ * allowed to consume. Drives the "Connect MCP Provider → platform agent" picker.
+ */
+export type DiscoverableAgent = {
+    agent_id: string;
+    agent_name: string;
+    connector_id: string;
+    connector_name: string;
+    mode: string;
+    ui_color_preset?: (string | null);
+};
+
+export type DiscoverableAgents = {
+    data: Array<DiscoverableAgent>;
+    count: number;
 };
 
 /**
@@ -2944,6 +3003,7 @@ export type MCPConnectorAllowedUser = {
 export type MCPConnectorCreate = {
     name: string;
     mode?: string;
+    is_agent_to_agent?: boolean;
     allowed_emails?: Array<(string)>;
     allowed_user_ids?: Array<(string)>;
     allow_token_access?: boolean;
@@ -2957,6 +3017,7 @@ export type MCPConnectorPublic = {
     name: string;
     mode: string;
     is_active: boolean;
+    is_agent_to_agent?: boolean;
     allowed_emails: Array<(string)>;
     allowed_user_ids: Array<(string)>;
     allowed_users?: Array<MCPConnectorAllowedUser>;
@@ -3016,6 +3077,7 @@ export type MCPConnectorUpdate = {
     name?: (string | null);
     mode?: (string | null);
     is_active?: (boolean | null);
+    is_agent_to_agent?: (boolean | null);
     allowed_emails?: (Array<(string)> | null);
     allowed_user_ids?: (Array<(string)> | null);
     allow_token_access?: (boolean | null);
@@ -3027,6 +3089,74 @@ export type MCPConnectorUpdate = {
  */
 export type McpInfoResponse = {
     mcp_server_url: string;
+};
+
+/**
+ * Result of either connect helper — what it created / linked.
+ */
+export type MCPProviderConnectionResponse = {
+    credential_id: string;
+    auth_mode: string;
+    endpoint_url: string;
+    transport: string;
+    status: string;
+    linked_consumer_agent_id?: (string | null);
+    authorize_url?: (string | null);
+};
+
+/**
+ * The authorize URL the frontend opens to start the OAuth/DCR consent.
+ */
+export type MCPProviderOAuthAuthorizeResponse = {
+    authorize_url: string;
+};
+
+/**
+ * Authorization-code callback payload, forwarded by the frontend route.
+ */
+export type MCPProviderOAuthCallbackRequest = {
+    code: string;
+    state: string;
+};
+
+export type MCPProviderOAuthCallbackResponse = {
+    credential_id: string;
+    status: string;
+    message: string;
+};
+
+/**
+ * Derived connection status for an ``mcp_provider`` credential, surfaced on the
+ * credential detail panel. Owner-only.
+ */
+export type MCPProviderStatus = {
+    credential_id: string;
+    auth_mode: string;
+    transport: string;
+    endpoint_url: string;
+    status: string;
+    mcp_mode_conversation: boolean;
+    mcp_mode_building: boolean;
+    target_agent?: (MCPProviderTargetAgent | null);
+    last_error?: (string | null);
+};
+
+/**
+ * (agent2agent only) the producer agent this connection points at.
+ */
+export type MCPProviderTargetAgent = {
+    id: string;
+    name: string;
+    ui_color_preset?: (string | null);
+};
+
+/**
+ * Result of the best-effort connectivity probe.
+ */
+export type MCPProviderTestResult = {
+    ok: boolean;
+    tools?: Array<(string)>;
+    error?: (string | null);
 };
 
 export type Message = {
@@ -6889,6 +7019,54 @@ export type McpOauthRevokeTokenData = {
 };
 
 export type McpOauthRevokeTokenResponse = (unknown);
+
+export type McpProvidersListDiscoverableAgentsData = {
+    consumerAgentId?: (string | null);
+};
+
+export type McpProvidersListDiscoverableAgentsResponse = (DiscoverableAgents);
+
+export type McpProvidersConnectAgentData = {
+    requestBody: ConnectMcpProviderAgentRequest;
+};
+
+export type McpProvidersConnectAgentResponse = (MCPProviderConnectionResponse);
+
+export type McpProvidersConnectExternalData = {
+    requestBody: ConnectMcpProviderExternalRequest;
+};
+
+export type McpProvidersConnectExternalResponse = (MCPProviderConnectionResponse);
+
+export type McpProvidersGetProviderStatusData = {
+    credentialId: string;
+};
+
+export type McpProvidersGetProviderStatusResponse = (MCPProviderStatus);
+
+export type McpProvidersOauthAuthorizeData = {
+    credentialId: string;
+};
+
+export type McpProvidersOauthAuthorizeResponse = (MCPProviderOAuthAuthorizeResponse);
+
+export type McpProvidersOauthReauthorizeData = {
+    credentialId: string;
+};
+
+export type McpProvidersOauthReauthorizeResponse = (MCPProviderOAuthAuthorizeResponse);
+
+export type McpProvidersOauthCallbackData = {
+    requestBody: MCPProviderOAuthCallbackRequest;
+};
+
+export type McpProvidersOauthCallbackResponse = (MCPProviderOAuthCallbackResponse);
+
+export type McpProvidersTestConnectionData = {
+    credentialId: string;
+};
+
+export type McpProvidersTestConnectionResponse = (MCPProviderTestResult);
 
 export type McpUploadUploadFileToMcpData = {
     authorization?: (string | null);

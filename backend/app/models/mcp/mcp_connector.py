@@ -7,6 +7,11 @@ from sqlalchemy import JSON
 class MCPConnectorBase(SQLModel):
     name: str = Field(min_length=1, max_length=255)
     mode: str = "conversation"  # "conversation" | "building"
+    # Marks a connector intended for agent-to-agent consumption. Drives the
+    # producer sub-tab grouping and the consumer "Connect MCP Provider" picker
+    # discoverability. Does NOT change RS/token behaviour — agent2agent and
+    # external-client connectors share the same RS stack (RD-1).
+    is_agent_to_agent: bool = False
 
 
 class MCPConnectorCreate(MCPConnectorBase):
@@ -20,6 +25,7 @@ class MCPConnectorUpdate(SQLModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     mode: str | None = None
     is_active: bool | None = None
+    is_agent_to_agent: bool | None = None
     allowed_emails: list[str] | None = None
     allowed_user_ids: list[uuid.UUID] | None = None
     allow_token_access: bool | None = None
@@ -33,6 +39,7 @@ class MCPConnector(MCPConnectorBase, table=True):
     agent_id: uuid.UUID = Field(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
     owner_id: uuid.UUID = Field(foreign_key="user.id", nullable=False, ondelete="CASCADE")
     is_active: bool = Field(default=True)
+    is_agent_to_agent: bool = Field(default=False)
     allowed_emails: list = Field(default_factory=list, sa_column=Column(JSON))
     # Exact platform-user ACL (UUIDs stored as list of str). Preferred over
     # allowed_emails; allowed_emails is retained as a fallback for legacy shares.
@@ -58,6 +65,7 @@ class MCPConnectorPublic(SQLModel):
     name: str
     mode: str
     is_active: bool
+    is_agent_to_agent: bool = False
     allowed_emails: list[str]
     allowed_user_ids: list[uuid.UUID]
     # Resolved display info for allowed_user_ids (name/email for the picker).

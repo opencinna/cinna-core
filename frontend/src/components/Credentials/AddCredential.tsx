@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { Network, Plus, Search } from "lucide-react"
+import { Network, Plug, Plus, Search } from "lucide-react"
 import { useMemo, useState } from "react"
 
 import {
@@ -27,6 +27,7 @@ import {
   type CredentialTypeOption,
 } from "@/components/Credentials/credentialTypes"
 import { ConnectAgentApiDialog } from "@/components/Credentials/ConnectAgentApiDialog"
+import { ConnectMcpProviderDialog } from "@/components/Credentials/ConnectMcpProviderDialog"
 
 type CredentialTypeKey = CredentialType
 
@@ -40,6 +41,7 @@ const AddCredential = () => {
   const [query, setQuery] = useState("")
   const [pendingType, setPendingType] = useState<CredentialTypeKey | null>(null)
   const [connectOpen, setConnectOpen] = useState(false)
+  const [connectMcpOpen, setConnectMcpOpen] = useState(false)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -114,6 +116,10 @@ const AddCredential = () => {
   return (
     <>
     <ConnectAgentApiDialog open={connectOpen} onOpenChange={setConnectOpen} />
+    <ConnectMcpProviderDialog
+      open={connectMcpOpen}
+      onOpenChange={setConnectMcpOpen}
+    />
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         <Button className="my-4">
@@ -144,6 +150,20 @@ const AddCredential = () => {
             <span>Connect Agent API</span>
             <span className="ml-auto text-xs text-muted-foreground">
               another agent's REST API
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setIsOpen(false)
+              setConnectMcpOpen(true)
+            }}
+            className="flex w-full items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+          >
+            <Plug className="h-4 w-4 shrink-0" />
+            <span>Connect MCP Provider</span>
+            <span className="ml-auto text-xs text-muted-foreground">
+              a platform agent or external MCP server
             </span>
           </button>
           <div className="relative">

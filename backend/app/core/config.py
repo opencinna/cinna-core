@@ -38,6 +38,26 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
     FRONTEND_HOST: str = "http://localhost:5173"
     MCP_SERVER_BASE_URL: str = ""
+    # Internal/container-reachable MCP origin. The public MCP_SERVER_BASE_URL is
+    # not always routable from inside the agent network, so for agent2agent
+    # providers the env-synced manifest copy of the endpoint URL has its netloc
+    # rewritten to this origin (RD-4). The stored credential + UI keep the public
+    # URL. When empty, no rewrite happens (single-host/dev deployments). Used by
+    # the Phase 4 manifest collector.
+    MCP_SERVER_CONTAINER_URL: str = ""
+    # SSRF/egress guard (RD-6): backend-initiated calls to external MCP servers
+    # (DCR registration, OAuth refresh, connectivity probe) reject internal /
+    # link-local / private ranges unless this is True. Default false; a
+    # self-hosted operator may flip it to reach private MCP servers.
+    MCP_PROVIDER_ALLOW_PRIVATE_HOSTS: bool = False
+    # Redirect URI for the MCP-provider OAuth/DCR authorization-code flow
+    # (Phase 5). The target AS redirects the browser back here after consent; the
+    # frontend route forwards (code, state) to POST /mcp-providers/oauth/callback.
+    # Must be registered with the target AS during DCR. Defaults to a frontend
+    # route mirroring the Google credential OAuth callback.
+    MCP_PROVIDER_OAUTH_REDIRECT_URI: str = (
+        "http://localhost:5173/mcp-providers/oauth/callback"
+    )
     ENVIRONMENT: Literal["local", "staging", "production"] = "local"
 
     # Mutagen agent version pinned in env-template Dockerfiles. Exposed via

@@ -38,6 +38,7 @@ import { Route as LayoutSessionsIndexRouteImport } from './routes/_layout/sessio
 import { Route as LayoutDashboardsIndexRouteImport } from './routes/_layout/dashboards/index'
 import { Route as LayoutCatalogIndexRouteImport } from './routes/_layout/catalog/index'
 import { Route as LayoutAgenticTeamsIndexRouteImport } from './routes/_layout/agentic-teams/index'
+import { Route as McpProvidersOauthCallbackRouteImport } from './routes/mcp-providers/oauth/callback'
 import { Route as CredentialsOauthCallbackRouteImport } from './routes/credentials/oauth/callback'
 import { Route as LayoutTasksShortCodeRouteImport } from './routes/_layout/tasks/$shortCode'
 import { Route as LayoutTaskTaskIdRouteImport } from './routes/_layout/task/$taskId'
@@ -206,6 +207,12 @@ const LayoutAgenticTeamsIndexRoute = LayoutAgenticTeamsIndexRouteImport.update({
   path: '/agentic-teams/',
   getParentRoute: () => LayoutRoute,
 } as any)
+const McpProvidersOauthCallbackRoute =
+  McpProvidersOauthCallbackRouteImport.update({
+    id: '/mcp-providers/oauth/callback',
+    path: '/mcp-providers/oauth/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const CredentialsOauthCallbackRoute =
   CredentialsOauthCallbackRouteImport.update({
     id: '/credentials/oauth/callback',
@@ -368,6 +375,7 @@ export interface FileRoutesByFullPath {
   '/task/$taskId': typeof LayoutTaskTaskIdRoute
   '/tasks/$shortCode': typeof LayoutTasksShortCodeRoute
   '/credentials/oauth/callback': typeof CredentialsOauthCallbackRoute
+  '/mcp-providers/oauth/callback': typeof McpProvidersOauthCallbackRoute
   '/agentic-teams': typeof LayoutAgenticTeamsIndexRoute
   '/catalog/': typeof LayoutCatalogIndexRoute
   '/dashboards': typeof LayoutDashboardsIndexRoute
@@ -417,6 +425,7 @@ export interface FileRoutesByTo {
   '/task/$taskId': typeof LayoutTaskTaskIdRoute
   '/tasks/$shortCode': typeof LayoutTasksShortCodeRoute
   '/credentials/oauth/callback': typeof CredentialsOauthCallbackRoute
+  '/mcp-providers/oauth/callback': typeof McpProvidersOauthCallbackRoute
   '/agentic-teams': typeof LayoutAgenticTeamsIndexRoute
   '/catalog': typeof LayoutCatalogIndexRoute
   '/dashboards': typeof LayoutDashboardsIndexRoute
@@ -471,6 +480,7 @@ export interface FileRoutesById {
   '/_layout/task/$taskId': typeof LayoutTaskTaskIdRoute
   '/_layout/tasks/$shortCode': typeof LayoutTasksShortCodeRoute
   '/credentials/oauth/callback': typeof CredentialsOauthCallbackRoute
+  '/mcp-providers/oauth/callback': typeof McpProvidersOauthCallbackRoute
   '/_layout/agentic-teams/': typeof LayoutAgenticTeamsIndexRoute
   '/_layout/catalog/': typeof LayoutCatalogIndexRoute
   '/_layout/dashboards/': typeof LayoutDashboardsIndexRoute
@@ -525,6 +535,7 @@ export interface FileRouteTypes {
     | '/task/$taskId'
     | '/tasks/$shortCode'
     | '/credentials/oauth/callback'
+    | '/mcp-providers/oauth/callback'
     | '/agentic-teams'
     | '/catalog/'
     | '/dashboards'
@@ -574,6 +585,7 @@ export interface FileRouteTypes {
     | '/task/$taskId'
     | '/tasks/$shortCode'
     | '/credentials/oauth/callback'
+    | '/mcp-providers/oauth/callback'
     | '/agentic-teams'
     | '/catalog'
     | '/dashboards'
@@ -627,6 +639,7 @@ export interface FileRouteTypes {
     | '/_layout/task/$taskId'
     | '/_layout/tasks/$shortCode'
     | '/credentials/oauth/callback'
+    | '/mcp-providers/oauth/callback'
     | '/_layout/agentic-teams/'
     | '/_layout/catalog/'
     | '/_layout/dashboards/'
@@ -657,6 +670,7 @@ export interface RootRouteChildren {
   OauthMcpConsentRoute: typeof OauthMcpConsentRoute
   WebappWebappTokenRoute: typeof WebappWebappTokenRoute
   CredentialsOauthCallbackRoute: typeof CredentialsOauthCallbackRoute
+  McpProvidersOauthCallbackRoute: typeof McpProvidersOauthCallbackRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -863,6 +877,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/agentic-teams'
       preLoaderRoute: typeof LayoutAgenticTeamsIndexRouteImport
       parentRoute: typeof LayoutRoute
+    }
+    '/mcp-providers/oauth/callback': {
+      id: '/mcp-providers/oauth/callback'
+      path: '/mcp-providers/oauth/callback'
+      fullPath: '/mcp-providers/oauth/callback'
+      preLoaderRoute: typeof McpProvidersOauthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/credentials/oauth/callback': {
       id: '/credentials/oauth/callback'
@@ -1180,6 +1201,7 @@ const rootRouteChildren: RootRouteChildren = {
   OauthMcpConsentRoute: OauthMcpConsentRoute,
   WebappWebappTokenRoute: WebappWebappTokenRoute,
   CredentialsOauthCallbackRoute: CredentialsOauthCallbackRoute,
+  McpProvidersOauthCallbackRoute: McpProvidersOauthCallbackRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

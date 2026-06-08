@@ -155,6 +155,12 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
     async def get_plugins_settings(self) -> dict:
         return {}
 
+    async def set_mcp_servers(self, manifest: dict) -> bool:
+        # Capture the per-mode MCP-provider manifest pushed by the lifecycle
+        # so scenario tests can assert what reached the (stubbed) container.
+        self.mcp_servers_set = manifest
+        return True
+
     # --- File Operations ---
 
     async def upload_file(self, file: File) -> bool:

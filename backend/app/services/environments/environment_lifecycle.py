@@ -343,6 +343,54 @@ class EnvironmentLifecycleManager:
         from app.services.agents.agent_service import AgentService
         await AgentService.sync_agent_handover_config(db_session, agent.id)
 
+        # Sync the per-mode MCP-provider server manifest (RD-5 baseline). This
+        # injects credential-derived remote MCP servers into the SDK runtime
+        # config; it runs after credential sync because the manifest is built
+        # from the same mcp_provider credentials. Non-blocking.
+        environment.status_message = "Syncing MCP providers..."
+        db_session.add(environment)
+        db_session.commit()
+        await self._sync_mcp_servers_to_environment(db_session, environment, agent)
+
+    async def _sync_mcp_servers_to_environment(
+        self,
+        db_session: Session,
+        environment: AgentEnvironment,
+        agent: Agent,
+    ) -> None:
+        """
+        Build and push the per-mode MCP-provider server manifest to an env.
+
+        Collects the agent's ``mcp_provider`` credentials into a per-mode
+        manifest (``conversation`` / ``building``) via
+        ``CredentialsService.collect_mcp_provider_manifest`` (which applies the
+        RD-4 container-URL rewrite) and pushes it to the env-core
+        ``POST /config/mcp-servers`` route. The env-core persists it as the
+        ``user_mcp.json`` baseline; the next session merges it into the SDK
+        runtime config.
+
+        MCP-provider sync must never block env start: a transport/endpoint error
+        is logged and swallowed.
+        """
+        from app.services.credentials.credentials_service import CredentialsService
+
+        adapter = self.get_adapter(environment)
+        manifest = {
+            "conversation": CredentialsService.collect_mcp_provider_manifest(
+                session=db_session, agent_id=agent.id, mode="conversation"
+            ),
+            "building": CredentialsService.collect_mcp_provider_manifest(
+                session=db_session, agent_id=agent.id, mode="building"
+            ),
+        }
+        try:
+            await adapter.set_mcp_servers(manifest)
+        except Exception as e:
+            logger.warning(
+                f"MCP-provider sync to environment {environment.id} failed "
+                f"(non-blocking): {e}"
+            )
+
     async def _sync_plugins_to_environment(
         self,
         db_session: Session,

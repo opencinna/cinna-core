@@ -237,6 +237,39 @@ class PluginsSettingsResponse(BaseModel):
     active_plugins: list[PluginInfo]
 
 
+class McpServerManifestEntry(BaseModel):
+    """One credential-derived remote MCP server in the per-mode manifest.
+
+    Built by the backend's ``collect_mcp_provider_manifest``. ``headers`` may
+    carry an ``Authorization: Bearer …`` token — the only place an
+    mcp_provider token reaches the container, mirroring the embedded LLM key in
+    opencode.json. Files are written 0o600.
+    """
+    key: str                         # namespaced SDK server key (cinna_mcp_<id>)
+    url: str                         # container-reachable endpoint URL
+    transport: str = "streamable-http"  # "streamable-http" | "sse"
+    headers: dict[str, str] = {}
+
+
+class McpServerManifest(BaseModel):
+    """Backend-authored per-mode MCP-provider manifest pushed to
+    ``/config/mcp-servers``.
+
+    Persisted by the env-core as the ``user_mcp.json`` baseline; the SDK
+    adapters merge the matching mode's entries into the runtime MCP config at
+    session start (RD-5).
+    """
+    conversation: list[McpServerManifestEntry] = []
+    building: list[McpServerManifestEntry] = []
+
+
+class McpServersResponse(BaseModel):
+    """Response of POST /config/mcp-servers."""
+    status: str
+    conversation_count: int = 0
+    building_count: int = 0
+
+
 class CommandStreamRequest(BaseModel):
     """Request to stream a shell command execution via SSE."""
     command: str                         # Full shell command string to execute

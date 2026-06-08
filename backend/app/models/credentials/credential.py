@@ -27,6 +27,12 @@ class CredentialType(str, Enum):
     API_TOKEN = "api_token"
     SSH_KEY = "ssh_key"
     AGENT_API = "agent_api"
+    # A connection to a remote MCP server — either another platform agent's
+    # agent-to-agent connector or an arbitrary external MCP server. Unlike every
+    # other credential type, this is never written to credentials.json; it is
+    # collected into a per-mode MCP-server manifest and injected directly into the
+    # SDK runtime config (see collect_mcp_provider_manifest).
+    MCP_PROVIDER = "mcp_provider"
 
 
 # Shared properties for credentials
@@ -42,6 +48,13 @@ class CredentialBase(SQLModel):
     # auto-prefill matcher (top-precedence tier) without carrying any authority
     # itself — plaintext, never encrypted, never redacted. NULL = legacy behavior.
     service_uri: str | None = Field(default=None)
+    # Per-mode applicability for MCP_PROVIDER credentials. These live on the
+    # credential row (not inside the encrypted blob) so the per-mode MCP manifest
+    # collector can filter cheaply without decrypting, and so they appear plainly
+    # in the credential detail UI. Only meaningful for MCP_PROVIDER rows; ignored
+    # for all other types. Default true so a freshly connected provider is active.
+    mcp_mode_conversation: bool = Field(default=True)
+    mcp_mode_building: bool = Field(default=True)
 
 
 # Type-specific credential data models (for validation)
@@ -114,6 +127,47 @@ class SSHKeyCredentialData(SQLModel):
     host_aliases: list[str] | None = None
 
 
+class MCPProviderData(SQLModel):
+    """
+    Normalised shape of an ``mcp_provider`` credential's encrypted blob.
+
+    Connects a consumer agent's SDK to a remote MCP server. Created by the
+    "Connect MCP Provider" helper, never hand-edited. The whole blob is encrypted
+    at rest; ``token`` / ``oauth_client_secret`` / ``oauth_refresh_token`` are the
+    secrets and are never written to any container artifact other than the
+    per-mode MCP manifest (and the backend-only OAuth secrets never leave the
+    backend at all).
+
+    OAuth/DCR fields are stored here in Phase 1–3 but the live DCR + refresh
+    machinery that populates / rotates them is Phase 5.
+    """
+    # The MCP server URL the consumer's SDK connects to. For agent2agent this is
+    # {MCP_SERVER_BASE_URL}/{connector_id}/mcp; for external it is user-entered.
+    endpoint_url: str
+    # "streamable-http" (default) or "sse".
+    transport: str = "streamable-http"
+    # "agent2agent" | "fixed_token" | "oauth_dcr" | "none".
+    auth_mode: str = "agent2agent"
+    # Display name / SDK server key seed.
+    label: str | None = None
+    # (agent2agent only) producer agent UUID — UI display + back-reference.
+    target_agent_id: str | None = None
+    # (agent2agent only) producer mcp_connector UUID.
+    target_connector_id: str | None = None
+    # Bearer token sent as ``Authorization: Bearer …``. For agent2agent this is
+    # the producer's direct token; for fixed_token it's the user-entered token;
+    # for oauth_dcr it's the current (refreshed) access token. None for "none".
+    token: str | None = None
+    # ── oauth_dcr only (Phase 5 populates these) ──────────────────────────────
+    oauth_client_id: str | None = None
+    oauth_client_secret: str | None = None  # backend-only, never whitelisted
+    oauth_refresh_token: str | None = None  # backend-only, never whitelisted
+    oauth_token_expires_at: int | None = None  # unix ts; drives pre-stream refresh
+    oauth_authorization_server: str | None = None  # AS metadata base URL
+    oauth_scope: str | None = None
+    oauth_resource: str | None = None  # RFC 8707 resource param (the endpoint URL)
+
+
 # Properties to receive on credential creation
 class CredentialCreate(CredentialBase):
     # credential_data will contain the type-specific data (EmailImapData, OdooData, or GmailOAuthData)
@@ -132,6 +186,9 @@ class CredentialUpdate(SQLModel):
     allow_template_sharing: bool | None = None  # Toggle template-sharing
     template_private_fields: list[str] | None = None  # Fields the installer must supply when installing a bundle that uses this credential as a template
     service_uri: str | None = None  # Editable non-secret audience/slot id (I4)
+    # Per-mode toggles for MCP_PROVIDER credentials (ignored for other types).
+    mcp_mode_conversation: bool | None = None
+    mcp_mode_building: bool | None = None
 
 
 # Database model

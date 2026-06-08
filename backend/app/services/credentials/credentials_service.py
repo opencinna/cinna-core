@@ -19,7 +19,7 @@ from app.core.ssh_key_utils import (
     is_private_key_encrypted,
     validate_key_pair,
 )
-from app.models import Credential, Agent, AgentEnvironment, AgentCredentialLink, CredentialCreate, CredentialUpdate
+from app.models import Credential, Agent, AgentEnvironment, AgentCredentialLink, CredentialCreate, CredentialUpdate, CredentialType
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,10 @@ class CredentialsService:
         # agent_api: the proxy token is the secret; base_url/spec_url are safe to
         # show in clear (the consumer agent needs to know where to call).
         "agent_api": ["token"],
+        # mcp_provider: the bearer token + backend-only OAuth secrets are redacted
+        # in any README/prompt render. endpoint_url / label / auth_mode / transport
+        # are shown in clear.
+        "mcp_provider": ["token", "oauth_client_secret", "oauth_refresh_token"],
     }
 
     # WHITELIST: Fields that ARE allowed to be exposed to agent environment
@@ -158,6 +162,12 @@ class CredentialsService:
         # and label are informational. The token is redacted in the README render
         # (SENSITIVE_FIELDS) but IS synced to credentials.json so scripts can use it.
         "agent_api": ["base_url", "spec_url", "token", "label", "producer_agent_id"],
+        # mcp_provider: NEVER written to credentials.json. An MCP provider is
+        # materialised into the per-mode SDK MCP config via
+        # collect_mcp_provider_manifest, not as a credential file. An empty
+        # whitelist guarantees the credential (token + endpoint) never lands in
+        # credentials.json or its README render.
+        "mcp_provider": [],
     }
 
     @staticmethod
@@ -1193,6 +1203,15 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         # (e.g., refresh tokens, client secrets for OAuth credentials)
         filtered_credentials = []
         for cred in credentials:
+            # mcp_provider credentials are NEVER written to credentials.json or its
+            # README. They are materialised into the per-mode SDK MCP config via
+            # collect_mcp_provider_manifest (Phase 4), not as a credential file.
+            # Excluding the whole row here (rather than relying solely on the empty
+            # whitelist) keeps the credential — including its name and endpoint —
+            # out of the agent-readable file surface entirely, mirroring how ssh_key
+            # private material is carried out-of-band.
+            if cred["type"] == "mcp_provider":
+                continue
             filtered_cred = copy.deepcopy(cred)
             filtered_cred["credential_data"] = CredentialsService.filter_credential_data_for_agent_env(
                 cred["type"],
@@ -1211,6 +1230,102 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             "service_account_files": service_account_files,
             "ssh_keys": ssh_keys,
         }
+
+    @staticmethod
+    def _rewrite_mcp_endpoint_for_env(endpoint_url: str, auth_mode: str) -> str:
+        """
+        Rewrite an agent2agent MCP endpoint URL to the container-reachable origin
+        (RD-4), mirroring ``_rewrite_agent_api_urls_for_env``.
+
+        The stored credential keeps the PUBLIC ``MCP_SERVER_BASE_URL`` host so the
+        UI can display a clickable address, but a consumer agent's SDK connects
+        from INSIDE its Docker container where the public host may be
+        unroutable. We swap only the netloc to ``MCP_SERVER_CONTAINER_URL``,
+        preserving the ``/{connector_id}/mcp`` path. Only applies to
+        ``auth_mode="agent2agent"`` (external URLs are user-supplied and reached
+        directly). No-op when ``MCP_SERVER_CONTAINER_URL`` is unset.
+        """
+        if auth_mode != "agent2agent" or not settings.MCP_SERVER_CONTAINER_URL:
+            return endpoint_url
+        internal = urlsplit(settings.MCP_SERVER_CONTAINER_URL.rstrip("/"))
+        if not internal.netloc:
+            logger.warning(
+                "MCP_SERVER_CONTAINER_URL (%r) has no host; skipping MCP endpoint rewrite",
+                settings.MCP_SERVER_CONTAINER_URL,
+            )
+            return endpoint_url
+        original = urlsplit(endpoint_url)
+        return urlunsplit(
+            (
+                internal.scheme or original.scheme,
+                internal.netloc,
+                original.path,
+                original.query,
+                original.fragment,
+            )
+        )
+
+    @staticmethod
+    def collect_mcp_provider_manifest(
+        session: Session,
+        agent_id: uuid.UUID,
+        mode: str,
+    ) -> list[dict]:
+        """
+        Build the per-mode MCP-server manifest for an agent's ``mcp_provider``
+        credentials (the seam consumed by env-core config generation in Phase 4).
+
+        For each ``mcp_provider`` credential linked to ``agent_id`` whose
+        ``mcp_mode_<mode>`` flag is on, returns:
+
+            {
+              "key":       "cinna_mcp_<credential_id>",   # namespaced SDK server key
+              "url":       <container-reachable endpoint URL>,
+              "transport": "streamable-http" | "sse",
+              "headers":   {"Authorization": "Bearer <token>"}  # omitted if no token
+            }
+
+        Namespacing under ``cinna_mcp_<id>`` prevents collision with MCP bridge
+        servers and plugin-declared MCP servers. ``mode`` is "conversation" or
+        "building"; an unknown mode yields an empty manifest.
+        """
+        if mode not in ("conversation", "building"):
+            return []
+        mode_attr = f"mcp_mode_{mode}"
+
+        credentials = CredentialsService.get_agent_credentials(
+            session=session, agent_id=agent_id
+        )
+        manifest: list[dict] = []
+        for cred in credentials:
+            if cred.type != CredentialType.MCP_PROVIDER:
+                continue
+            if not getattr(cred, mode_attr, True):
+                continue
+            data = CredentialsService.decrypt_credential_data(
+                session=session, credential=cred
+            )
+            endpoint_url = data.get("endpoint_url")
+            if not endpoint_url:
+                logger.warning(
+                    "mcp_provider credential %s has no endpoint_url; skipping", cred.id
+                )
+                continue
+            auth_mode = data.get("auth_mode", "agent2agent")
+            url = CredentialsService._rewrite_mcp_endpoint_for_env(
+                endpoint_url, auth_mode
+            )
+            entry: dict = {
+                "key": f"cinna_mcp_{cred.id}",
+                "url": url,
+                "transport": data.get("transport", "streamable-http"),
+                "headers": {},
+            }
+            token = data.get("token")
+            if token:
+                entry["headers"]["Authorization"] = f"Bearer {token}"
+            manifest.append(entry)
+        return manifest
 
     @staticmethod
     async def sync_credentials_to_agent_environments(
@@ -1253,6 +1368,20 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         # Get lifecycle manager
         lifecycle_manager = EnvironmentService.get_lifecycle_manager()
 
+        # Build the per-mode MCP-provider server manifest once (RD-5 live push).
+        # mcp_provider credentials are excluded from credentials.json and are
+        # instead injected into the SDK runtime config; pushing it here keeps a
+        # credential change (connect / disconnect / mode toggle / OAuth refresh)
+        # reflected in running containers without a full config regeneration.
+        mcp_manifest = {
+            "conversation": CredentialsService.collect_mcp_provider_manifest(
+                session=session, agent_id=agent_id, mode="conversation"
+            ),
+            "building": CredentialsService.collect_mcp_provider_manifest(
+                session=session, agent_id=agent_id, mode="building"
+            ),
+        }
+
         # Sync to each running environment
         for env in running_environments:
             try:
@@ -1263,6 +1392,17 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             except Exception as e:
                 logger.error(f"Failed to sync credentials to environment {env.id}: {e}")
                 # Continue with other environments even if one fails
+
+            # Push the MCP-provider manifest live (non-blocking, independent of
+            # the credential file sync above).
+            try:
+                adapter = lifecycle_manager.get_adapter(env)
+                await adapter.set_mcp_servers(mcp_manifest)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to sync MCP providers to environment {env.id} "
+                    f"(non-blocking): {e}"
+                )
 
     @staticmethod
     def create_credential(
@@ -1293,6 +1433,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             allow_sharing=credential_in.allow_sharing,
             allow_template_sharing=credential_in.allow_template_sharing,
             service_uri=credential_in.service_uri,
+            mcp_mode_conversation=credential_in.mcp_mode_conversation,
+            mcp_mode_building=credential_in.mcp_mode_building,
             template_private_fields=template_private_fields,
             encrypted_data=encrypted_data,
             owner_id=owner_id,
@@ -2142,6 +2284,18 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             return False
 
         for credential in credentials:
+            # MCP-provider oauth_dcr credentials are refreshed by their own
+            # backend OAuth client (the access token, not refresh_token/secret,
+            # is the only value that reaches the container). Same pre-stream
+            # mechanism, different service. Graceful on failure: a failed refresh
+            # records status=error and the stream proceeds with the stale token.
+            if credential.type == CredentialType.MCP_PROVIDER:
+                refreshed = await CredentialsService._refresh_expiring_mcp_provider(
+                    session=session, credential=credential, threshold=threshold
+                )
+                credentials_refreshed = credentials_refreshed or refreshed
+                continue
+
             # Only check OAuth credential types
             if credential.type.value not in CredentialsService.OAUTH_CREDENTIAL_TYPES:
                 continue
@@ -2202,6 +2356,70 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 )
 
         return credentials_refreshed
+
+    @staticmethod
+    async def _refresh_expiring_mcp_provider(
+        session: Session,
+        credential: Credential,
+        threshold: float,
+    ) -> bool:
+        """
+        Pre-stream refresh for an ``mcp_provider`` ``oauth_dcr`` credential.
+
+        Only ``oauth_dcr`` rows with a refresh token and an expiry within the
+        threshold are refreshed; all other mcp_provider rows (agent2agent /
+        fixed_token / none / not-yet-authorized) are no-ops. Graceful on failure:
+        the refresh service records ``last_error`` (→ status ``error``) and the
+        stream proceeds with the stale token (the MCP server returns 401 and the
+        agent sees a failed tool — Reauthorize fixes it).
+
+        Returns True if a token was refreshed.
+        """
+        from app.services.mcp_providers.mcp_provider_oauth_service import (
+            MCPProviderOAuthService,
+        )
+
+        try:
+            data = CredentialsService.decrypt_credential_data(
+                session=session, credential=credential
+            )
+        except Exception as e:
+            logger.error(
+                f"Could not decrypt mcp_provider credential {credential.id}: {e}"
+            )
+            return False
+
+        if data.get("auth_mode") != "oauth_dcr":
+            return False
+        if not data.get("oauth_refresh_token"):
+            return False
+        expires_at = data.get("oauth_token_expires_at")
+        if not isinstance(expires_at, (int, float)):
+            return False
+        if expires_at > threshold:
+            return False
+
+        logger.info(
+            f"MCP provider credential {credential.id} access token expiring, "
+            f"refreshing..."
+        )
+        try:
+            await MCPProviderOAuthService.refresh_access_token(
+                session=session, credential=credential
+            )
+            logger.info(f"Refreshed MCP provider credential {credential.id}")
+            return True
+        except ValueError as ve:
+            logger.warning(
+                f"Cannot refresh MCP provider credential {credential.id}: {ve}. "
+                f"Reauthorize required."
+            )
+        except Exception as e:
+            # The refresh service already recorded last_error; never block stream.
+            logger.error(
+                f"Failed to refresh MCP provider credential {credential.id}: {e}"
+            )
+        return False
 
     @staticmethod
     def list_bundle_usages(

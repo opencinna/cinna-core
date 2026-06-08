@@ -339,6 +339,28 @@ class EnvironmentAdapter(ABC):
         """
         pass
 
+    @abstractmethod
+    async def set_mcp_servers(self, manifest: dict) -> bool:
+        """
+        Push the per-mode MCP-provider server manifest to the environment.
+
+        The manifest carries the credential-derived remote MCP servers for both
+        modes (conversation / building) that are injected into the SDK runtime
+        config (OpenCode ``opencode.json`` ``"mcp"`` block / Claude Code
+        ``options.mcp_servers``). The env-core persists it as a baseline so a
+        session picks it up without a full config regeneration (RD-5).
+
+        Args:
+            manifest: ``{"conversation": [entry...], "building": [entry...]}``
+                where each entry is
+                ``{"key", "url", "transport", "headers"}`` from
+                ``CredentialsService.collect_mcp_provider_manifest``.
+
+        Returns:
+            True if the manifest was persisted successfully.
+        """
+        pass
+
     # === File Operations ===
 
     @abstractmethod

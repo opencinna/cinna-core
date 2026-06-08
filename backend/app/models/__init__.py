@@ -87,6 +87,7 @@ from .credentials.credential import (
     GmailOAuthData,
     ApiTokenData,
     SSHKeyCredentialData,
+    MCPProviderData,
     CredentialWithData,
 )
 from .credentials.ai_credential import (
@@ -454,6 +455,19 @@ from .mcp.mcp_token import (
     MCPConnectorTokenCreated,
     MCPConnectorTokensPublic,
 )
+from .mcp.mcp_provider import (
+    ConnectMcpProviderAgentRequest,
+    ConnectMcpProviderExternalRequest,
+    MCPProviderConnectionResponse,
+    MCPProviderTargetAgent,
+    MCPProviderStatus,
+    DiscoverableAgent,
+    DiscoverableAgents,
+    MCPProviderOAuthAuthorizeResponse,
+    MCPProviderOAuthCallbackRequest,
+    MCPProviderOAuthCallbackResponse,
+    MCPProviderTestResult,
+)
 from .mcp.mcp_session_meta import (
     MCPSessionMeta,
     MCPSessionMetaPublic,
@@ -724,6 +738,7 @@ __all__ = [
     "GmailOAuthData",
     "ApiTokenData",
     "SSHKeyCredentialData",
+    "MCPProviderData",
     "CredentialWithData",
     # AI Credentials
     "AICredential",
@@ -1049,6 +1064,18 @@ __all__ = [
     "MCPConnectorTokenPublic",
     "MCPConnectorTokenCreated",
     "MCPConnectorTokensPublic",
+    # MCP Providers (consumer-side connections)
+    "ConnectMcpProviderAgentRequest",
+    "ConnectMcpProviderExternalRequest",
+    "MCPProviderConnectionResponse",
+    "MCPProviderTargetAgent",
+    "MCPProviderStatus",
+    "DiscoverableAgent",
+    "DiscoverableAgents",
+    "MCPProviderOAuthAuthorizeResponse",
+    "MCPProviderOAuthCallbackRequest",
+    "MCPProviderOAuthCallbackResponse",
+    "MCPProviderTestResult",
     # MCP Session Meta
     "MCPSessionMeta",
     "MCPSessionMetaPublic",

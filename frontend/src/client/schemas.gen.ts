@@ -8689,6 +8689,132 @@ export const ConnectAgentApiResponseSchema = {
     description: 'Result of the connect helper — IDs of what it created/linked.'
 } as const;
 
+export const ConnectMcpProviderAgentRequestSchema = {
+    properties: {
+        connector_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Connector Id'
+        },
+        consumer_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Consumer Agent Id'
+        },
+        mcp_mode_conversation: {
+            type: 'boolean',
+            title: 'Mcp Mode Conversation',
+            default: true
+        },
+        mcp_mode_building: {
+            type: 'boolean',
+            title: 'Mcp Mode Building',
+            default: true
+        },
+        label: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        }
+    },
+    type: 'object',
+    required: ['connector_id'],
+    title: 'ConnectMcpProviderAgentRequest',
+    description: `Connect to a platform agent's agent-to-agent MCP connector.
+
+Resolves the connector, ACL-checks the caller, mints a connector-scoped
+direct token bound to the new credential, builds the endpoint URL, and
+creates an \`\`mcp_provider\`\` credential (\`\`auth_mode="agent2agent"\`\`).`
+} as const;
+
+export const ConnectMcpProviderExternalRequestSchema = {
+    properties: {
+        endpoint_url: {
+            type: 'string',
+            maxLength: 2048,
+            minLength: 1,
+            title: 'Endpoint Url'
+        },
+        transport: {
+            type: 'string',
+            title: 'Transport',
+            default: 'streamable-http'
+        },
+        auth_mode: {
+            type: 'string',
+            title: 'Auth Mode',
+            default: 'none'
+        },
+        token: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Token'
+        },
+        consumer_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Consumer Agent Id'
+        },
+        mcp_mode_conversation: {
+            type: 'boolean',
+            title: 'Mcp Mode Conversation',
+            default: true
+        },
+        mcp_mode_building: {
+            type: 'boolean',
+            title: 'Mcp Mode Building',
+            default: true
+        },
+        label: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2048
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        }
+    },
+    type: 'object',
+    required: ['endpoint_url'],
+    title: 'ConnectMcpProviderExternalRequest',
+    description: `Add an arbitrary external MCP server.
+
+For \`\`fixed_token\`\` / \`\`none\`\` the credential is created immediately. For
+\`\`oauth_dcr\`\` the credential is created in \`\`awaiting_auth\`\` and the DCR +
+authorization flow runs separately (Phase 5).`
+} as const;
+
 export const ConsentApproveResponseSchema = {
     properties: {
         redirect_url: {
@@ -9066,6 +9192,16 @@ export const CredentialCreateSchema = {
             ],
             title: 'Service Uri'
         },
+        mcp_mode_conversation: {
+            type: 'boolean',
+            title: 'Mcp Mode Conversation',
+            default: true
+        },
+        mcp_mode_building: {
+            type: 'boolean',
+            title: 'Mcp Mode Building',
+            default: true
+        },
         credential_data: {
             anyOf: [
                 {
@@ -9221,6 +9357,16 @@ export const CredentialPublicSchema = {
                 }
             ],
             title: 'Service Uri'
+        },
+        mcp_mode_conversation: {
+            type: 'boolean',
+            title: 'Mcp Mode Conversation',
+            default: true
+        },
+        mcp_mode_building: {
+            type: 'boolean',
+            title: 'Mcp Mode Building',
+            default: true
         },
         id: {
             type: 'string',
@@ -9434,7 +9580,7 @@ This row surfaces that gap so the UI can prompt a republish.`
 
 export const CredentialTypeSchema = {
     type: 'string',
-    enum: ['email_imap', 'email_smtp', 'odoo', 'gmail_oauth', 'gmail_oauth_readonly', 'gdrive_oauth', 'gdrive_oauth_readonly', 'gcalendar_oauth', 'gcalendar_oauth_readonly', 'google_service_account', 'api_token', 'ssh_key', 'agent_api'],
+    enum: ['email_imap', 'email_smtp', 'odoo', 'gmail_oauth', 'gmail_oauth_readonly', 'gdrive_oauth', 'gdrive_oauth_readonly', 'gcalendar_oauth', 'gcalendar_oauth_readonly', 'google_service_account', 'api_token', 'ssh_key', 'agent_api', 'mcp_provider'],
     title: 'CredentialType'
 } as const;
 
@@ -9522,6 +9668,28 @@ export const CredentialUpdateSchema = {
                 }
             ],
             title: 'Service Uri'
+        },
+        mcp_mode_conversation: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Mcp Mode Conversation'
+        },
+        mcp_mode_building: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Mcp Mode Building'
         }
     },
     type: 'object',
@@ -9570,6 +9738,16 @@ export const CredentialWithDataSchema = {
                 }
             ],
             title: 'Service Uri'
+        },
+        mcp_mode_conversation: {
+            type: 'boolean',
+            title: 'Mcp Mode Conversation',
+            default: true
+        },
+        mcp_mode_building: {
+            type: 'boolean',
+            title: 'Mcp Mode Building',
+            default: true
         },
         id: {
             type: 'string',
@@ -9850,6 +10028,68 @@ export const DeviceInputSchema = {
     type: 'object',
     required: ['device_label', 'public_key'],
     title: 'DeviceInput'
+} as const;
+
+export const DiscoverableAgentSchema = {
+    properties: {
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        agent_name: {
+            type: 'string',
+            title: 'Agent Name'
+        },
+        connector_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Connector Id'
+        },
+        connector_name: {
+            type: 'string',
+            title: 'Connector Name'
+        },
+        mode: {
+            type: 'string',
+            title: 'Mode'
+        },
+        ui_color_preset: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ui Color Preset'
+        }
+    },
+    type: 'object',
+    required: ['agent_id', 'agent_name', 'connector_id', 'connector_name', 'mode'],
+    title: 'DiscoverableAgent',
+    description: `A platform agent that exposes an agent2agent connector the current user is
+allowed to consume. Drives the "Connect MCP Provider → platform agent" picker.`
+} as const;
+
+export const DiscoverableAgentsSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/DiscoverableAgent'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'DiscoverableAgents'
 } as const;
 
 export const DiscoverableSourcePublicSchema = {
@@ -13551,6 +13791,11 @@ export const MCPConnectorCreateSchema = {
             title: 'Mode',
             default: 'conversation'
         },
+        is_agent_to_agent: {
+            type: 'boolean',
+            title: 'Is Agent To Agent',
+            default: false
+        },
         allowed_emails: {
             items: {
                 type: 'string'
@@ -13612,6 +13857,11 @@ export const MCPConnectorPublicSchema = {
         is_active: {
             type: 'boolean',
             title: 'Is Active'
+        },
+        is_agent_to_agent: {
+            type: 'boolean',
+            title: 'Is Agent To Agent',
+            default: false
         },
         allowed_emails: {
             items: {
@@ -13882,6 +14132,17 @@ export const MCPConnectorUpdateSchema = {
             ],
             title: 'Is Active'
         },
+        is_agent_to_agent: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Is Agent To Agent'
+        },
         allowed_emails: {
             anyOf: [
                 {
@@ -13966,6 +14227,231 @@ export const MCPConnectorsPublicSchema = {
     type: 'object',
     required: ['data', 'count'],
     title: 'MCPConnectorsPublic'
+} as const;
+
+export const MCPProviderConnectionResponseSchema = {
+    properties: {
+        credential_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Credential Id'
+        },
+        auth_mode: {
+            type: 'string',
+            title: 'Auth Mode'
+        },
+        endpoint_url: {
+            type: 'string',
+            title: 'Endpoint Url'
+        },
+        transport: {
+            type: 'string',
+            title: 'Transport'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        linked_consumer_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Linked Consumer Agent Id'
+        },
+        authorize_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Authorize Url'
+        }
+    },
+    type: 'object',
+    required: ['credential_id', 'auth_mode', 'endpoint_url', 'transport', 'status'],
+    title: 'MCPProviderConnectionResponse',
+    description: 'Result of either connect helper — what it created / linked.'
+} as const;
+
+export const MCPProviderOAuthAuthorizeResponseSchema = {
+    properties: {
+        authorize_url: {
+            type: 'string',
+            title: 'Authorize Url'
+        }
+    },
+    type: 'object',
+    required: ['authorize_url'],
+    title: 'MCPProviderOAuthAuthorizeResponse',
+    description: 'The authorize URL the frontend opens to start the OAuth/DCR consent.'
+} as const;
+
+export const MCPProviderOAuthCallbackRequestSchema = {
+    properties: {
+        code: {
+            type: 'string',
+            title: 'Code'
+        },
+        state: {
+            type: 'string',
+            title: 'State'
+        }
+    },
+    type: 'object',
+    required: ['code', 'state'],
+    title: 'MCPProviderOAuthCallbackRequest',
+    description: 'Authorization-code callback payload, forwarded by the frontend route.'
+} as const;
+
+export const MCPProviderOAuthCallbackResponseSchema = {
+    properties: {
+        credential_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Credential Id'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        message: {
+            type: 'string',
+            title: 'Message'
+        }
+    },
+    type: 'object',
+    required: ['credential_id', 'status', 'message'],
+    title: 'MCPProviderOAuthCallbackResponse'
+} as const;
+
+export const MCPProviderStatusSchema = {
+    properties: {
+        credential_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Credential Id'
+        },
+        auth_mode: {
+            type: 'string',
+            title: 'Auth Mode'
+        },
+        transport: {
+            type: 'string',
+            title: 'Transport'
+        },
+        endpoint_url: {
+            type: 'string',
+            title: 'Endpoint Url'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        mcp_mode_conversation: {
+            type: 'boolean',
+            title: 'Mcp Mode Conversation'
+        },
+        mcp_mode_building: {
+            type: 'boolean',
+            title: 'Mcp Mode Building'
+        },
+        target_agent: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/MCPProviderTargetAgent'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        last_error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Error'
+        }
+    },
+    type: 'object',
+    required: ['credential_id', 'auth_mode', 'transport', 'endpoint_url', 'status', 'mcp_mode_conversation', 'mcp_mode_building'],
+    title: 'MCPProviderStatus',
+    description: `Derived connection status for an \`\`mcp_provider\`\` credential, surfaced on the
+credential detail panel. Owner-only.`
+} as const;
+
+export const MCPProviderTargetAgentSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        ui_color_preset: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ui Color Preset'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name'],
+    title: 'MCPProviderTargetAgent',
+    description: '(agent2agent only) the producer agent this connection points at.'
+} as const;
+
+export const MCPProviderTestResultSchema = {
+    properties: {
+        ok: {
+            type: 'boolean',
+            title: 'Ok'
+        },
+        tools: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Tools',
+            default: []
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        }
+    },
+    type: 'object',
+    required: ['ok'],
+    title: 'MCPProviderTestResult',
+    description: 'Result of the best-effort connectivity probe.'
 } as const;
 
 export const MailServerConfigCreateSchema = {

@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ExternalLink,
   Network,
+  Plug,
   Plus,
   Search,
   Unlink,
@@ -12,6 +13,7 @@ import {
 import { useState, useMemo } from "react"
 
 import { ConnectAgentApiDialog } from "@/components/Credentials/ConnectAgentApiDialog"
+import { ConnectMcpProviderDialog } from "@/components/Credentials/ConnectMcpProviderDialog"
 
 import {
   AgentsService,
@@ -66,6 +68,7 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
   const { workspaceFilter } = useWorkspace()
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [isConnectOpen, setIsConnectOpen] = useState(false)
+  const [isConnectMcpOpen, setIsConnectMcpOpen] = useState(false)
   const [selectedCredentialId, setSelectedCredentialId] = useState<
     string | undefined
   >(undefined)
@@ -266,6 +269,24 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
           <ConnectAgentApiDialog
             open={isConnectOpen}
             onOpenChange={setIsConnectOpen}
+            defaultConsumerAgentId={agentId}
+            onConnected={() =>
+              queryClient.invalidateQueries({
+                queryKey: ["agent-credentials", agentId],
+              })
+            }
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setIsConnectMcpOpen(true)}
+          >
+            <Plug className="mr-2 h-4 w-4" />
+            Connect MCP Provider
+          </Button>
+          <ConnectMcpProviderDialog
+            open={isConnectMcpOpen}
+            onOpenChange={setIsConnectMcpOpen}
             defaultConsumerAgentId={agentId}
             onConnected={() =>
               queryClient.invalidateQueries({

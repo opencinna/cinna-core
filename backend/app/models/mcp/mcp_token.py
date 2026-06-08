@@ -12,6 +12,14 @@ class MCPToken(SQLModel, table=True):
     client_id: str = Field(index=True)
     user_id: uuid.UUID = Field(foreign_key="user.id", ondelete="CASCADE")
     connector_id: uuid.UUID = Field(foreign_key="mcp_connector.id", ondelete="CASCADE", index=True)
+    # (agent-to-agent only) the consumer MCP_PROVIDER credential this direct token
+    # is bound to. Each agent2agent connection mints a DISTINCT direct token bound
+    # to its consumer credential (RD-2): deleting the credential = revoke THAT
+    # consumer only, leaving other consumers of the same producer connector intact.
+    # Nullable: OAuth tokens and standalone direct tokens leave this null.
+    credential_id: uuid.UUID | None = Field(
+        default=None, foreign_key="credential.id", ondelete="CASCADE", index=True
+    )
     scope: str = ""
     resource: str = ""
     # Human-readable name for direct tokens (OAuth tokens leave this null).

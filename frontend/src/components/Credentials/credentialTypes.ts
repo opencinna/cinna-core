@@ -13,6 +13,7 @@ import {
   KeyRound,
   Mail,
   Network,
+  Plug,
   Send,
   ShieldCheck,
   type LucideIcon,
@@ -175,6 +176,15 @@ const DISPLAY_ONLY_META: CredentialTypeMeta[] = [
     icon: Network,
     badgeClass:
       "bg-teal-50 text-teal-900 border-teal-200 hover:bg-teal-100 dark:bg-teal-950/40 dark:text-teal-100 dark:border-teal-900 dark:hover:bg-teal-900/40",
+  },
+  // mcp_provider connections are created by the "Connect MCP Provider" helper
+  // (platform-agent or external-server flow), never by hand.
+  {
+    type: "mcp_provider",
+    label: "MCP Provider",
+    icon: Plug,
+    badgeClass:
+      "bg-indigo-50 text-indigo-900 border-indigo-200 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:text-indigo-100 dark:border-indigo-900 dark:hover:bg-indigo-900/40",
   },
 ]
 

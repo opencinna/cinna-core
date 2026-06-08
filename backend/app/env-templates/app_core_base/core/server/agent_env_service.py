@@ -67,6 +67,12 @@ class AgentEnvService:
         self.docs_dir = self.workspace_dir / "docs"
         self.credentials_dir = self.workspace_dir / "credentials"
         self.plugins_dir = self.workspace_dir / "plugins"
+        # Per-mode MCP-provider manifest (user_mcp.json) baseline directory.
+        # Holds the credential-derived remote MCP servers the SDK adapters merge
+        # into the runtime config at session start (RD-5). Lives outside the
+        # agent-readable credentials dir; the manifest carries bearer tokens so
+        # the file is written 0o600.
+        self.mcp_dir = self.workspace_dir / "mcp"
 
     def get_agent_prompts(self) -> Tuple[Optional[str], Optional[str], Optional[str]]:
         """
@@ -2027,6 +2033,154 @@ class AgentEnvService:
             if isinstance(env, dict) and env:
                 entry["environment"] = {str(k): str(v) for k, v in env.items()}
             return entry
+
+        return None
+
+    # =========================================================================
+    # MCP-provider servers (user_mcp.json) — credential-derived remote MCP
+    # servers injected into the SDK runtime config per mode (RD-5).
+    # =========================================================================
+
+    # Filename of the persisted per-mode MCP-provider manifest baseline.
+    _MCP_MANIFEST_FILENAME = "user_mcp.json"
+
+    def set_mcp_servers(self, manifest: dict) -> dict:
+        """Persist the per-mode MCP-provider manifest as the baseline.
+
+        The backend pushes ``{"conversation": [entry...], "building": [...]}``
+        where each entry is ``{key, url, transport, headers}``. We write it to
+        ``mcp/user_mcp.json`` (0o600 — entries may carry a bearer token) so the
+        SDK adapters can read the matching mode's servers at session start
+        without a full config regeneration.
+
+        The whole manifest is overwritten on every push (declarative SSOT,
+        mirroring the plugin manifest): a disconnected provider simply drops out
+        of the next push and disappears. Returns per-mode counts.
+        """
+        self.mcp_dir.mkdir(parents=True, exist_ok=True)
+        conversation = manifest.get("conversation") or []
+        building = manifest.get("building") or []
+
+        normalised = {
+            "conversation": [self._normalise_mcp_entry(e) for e in conversation],
+            "building": [self._normalise_mcp_entry(e) for e in building],
+        }
+        # Drop entries that failed normalisation (no url / no key).
+        normalised["conversation"] = [e for e in normalised["conversation"] if e]
+        normalised["building"] = [e for e in normalised["building"] if e]
+
+        manifest_file = self.mcp_dir / self._MCP_MANIFEST_FILENAME
+        try:
+            with open(manifest_file, "w", encoding="utf-8") as f:
+                json.dump(normalised, f, indent=2)
+            try:
+                os.chmod(manifest_file, 0o600)
+            except OSError:
+                pass
+            logger.info(
+                "Wrote %s (%d conversation, %d building MCP provider server(s))",
+                self._MCP_MANIFEST_FILENAME,
+                len(normalised["conversation"]),
+                len(normalised["building"]),
+            )
+        except OSError as e:
+            logger.error(f"Failed to write {self._MCP_MANIFEST_FILENAME}: {e}")
+            raise
+
+        return {
+            "conversation_count": len(normalised["conversation"]),
+            "building_count": len(normalised["building"]),
+        }
+
+    @staticmethod
+    def _normalise_mcp_entry(entry: dict) -> Optional[dict]:
+        """Validate + normalise one manifest entry; None if unusable."""
+        if not isinstance(entry, dict):
+            return None
+        key = entry.get("key")
+        url = entry.get("url")
+        if not isinstance(key, str) or not key:
+            return None
+        if not isinstance(url, str) or not url:
+            return None
+        transport = entry.get("transport") or "streamable-http"
+        headers = entry.get("headers")
+        if not isinstance(headers, dict):
+            headers = {}
+        return {
+            "key": key,
+            "url": url,
+            "transport": str(transport),
+            "headers": {str(k): str(v) for k, v in headers.items()},
+        }
+
+    def _read_user_mcp_manifest(self) -> dict:
+        """Read the persisted per-mode MCP-provider manifest (empty if absent)."""
+        manifest_file = self.mcp_dir / self._MCP_MANIFEST_FILENAME
+        if not manifest_file.exists():
+            return {"conversation": [], "building": []}
+        try:
+            data = json.loads(manifest_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(f"Failed to read {self._MCP_MANIFEST_FILENAME}: {e}")
+            return {"conversation": [], "building": []}
+        if not isinstance(data, dict):
+            return {"conversation": [], "building": []}
+        return {
+            "conversation": data.get("conversation") or [],
+            "building": data.get("building") or [],
+        }
+
+    def get_user_mcp_servers_for_mode(self, mode: str, engine: str) -> dict:
+        """Build the engine-specific MCP server config for ``mode``.
+
+        Reads the persisted ``user_mcp.json`` baseline and translates each entry
+        for the requested ``mode`` into the target engine's MCP server shape:
+
+          - ``engine="opencode"`` →
+            ``{"type": "remote", "url", "headers", "enabled": True}``
+          - ``engine="claude_code"`` →
+            ``{"type": "http"|"sse", "url", "headers"}`` (Claude SDK
+            ``McpHttpServerConfig`` / ``McpSSEServerConfig``)
+
+        Keyed by the credential-namespaced ``cinna_mcp_<id>`` so it never
+        collides with the knowledge / agent_task bridges or plugin servers.
+        """
+        if mode not in ("conversation", "building"):
+            return {}
+        manifest = self._read_user_mcp_manifest()
+        entries = manifest.get(mode) or []
+
+        servers: dict = {}
+        for raw in entries:
+            entry = self._normalise_mcp_entry(raw)
+            if entry is None:
+                continue
+            translated = self._translate_user_mcp_for_engine(entry, engine)
+            if translated is not None:
+                servers[entry["key"]] = translated
+        return servers
+
+    @staticmethod
+    def _translate_user_mcp_for_engine(entry: dict, engine: str) -> Optional[dict]:
+        """Translate one normalised manifest entry into an engine MCP config."""
+        url = entry["url"]
+        transport = entry.get("transport") or "streamable-http"
+        headers = entry.get("headers") or {}
+
+        if engine == "opencode":
+            cfg: dict = {"type": "remote", "url": url, "enabled": True}
+            if headers:
+                cfg["headers"] = dict(headers)
+            return cfg
+
+        if engine == "claude_code":
+            # Claude SDK distinguishes "sse" from "http" (streamable-http).
+            cfg_type = "sse" if transport == "sse" else "http"
+            cfg = {"type": cfg_type, "url": url}
+            if headers:
+                cfg["headers"] = dict(headers)
+            return cfg
 
         return None
 

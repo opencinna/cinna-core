@@ -51,6 +51,7 @@ import {
 import { CredentialSharing } from "@/components/Credentials/CredentialSharing"
 import { CredentialTemplateSharing } from "@/components/Credentials/CredentialTemplateSharing"
 import { AgentApiConnectionView } from "@/components/Credentials/AgentApiConnectionView"
+import { McpProviderConnectionView } from "@/components/Credentials/McpProviderConnectionView"
 
 const formSchema = z.object({
   name: z.string().min(1, { message: "Name is required" }),
@@ -89,6 +90,8 @@ function getCredentialTypeLabel(type: string): string {
       return "SSH Key"
     case "agent_api":
       return "Agent REST API"
+    case "mcp_provider":
+      return "MCP Provider"
     default:
       return type
   }
@@ -289,6 +292,24 @@ function OwnedCredentialView({
         {/* Sharing stays half-width (left), matching the Template-card layout
             of other types. The right half is intentionally empty — agent_api
             connections have no Template-sharing card. */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <CredentialSharing credential={credential} />
+        </div>
+      </div>
+    )
+  }
+
+  // mcp_provider credentials are connection records too: the token / OAuth
+  // secrets are managed internally, so the connection view owns the
+  // metadata-only name/notes editor, the per-mode toggles, and the
+  // status/test/reauthorize actions. Sharing stays (role-gated inside the
+  // card); no Template-sharing card — a connection has no user-fillable
+  // private fields.
+  if (credential.type === "mcp_provider") {
+    return (
+      <div className="space-y-6">
+        <McpProviderConnectionView credential={credential} />
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <CredentialSharing credential={credential} />
         </div>

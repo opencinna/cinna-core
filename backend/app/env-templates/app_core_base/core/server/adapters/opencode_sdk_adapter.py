@@ -515,6 +515,27 @@ class OpenCodeAdapter(BaseSDKAdapter):
             mcp_section.update(plugin_mcp)
             config["mcp"] = mcp_section
 
+        # 1b) Merge credential-derived MCP-provider servers (RD-5). These are
+        #     namespaced cinna_mcp_<credential_id> so they never collide with the
+        #     knowledge / agent_task bridges or plugin_* servers.
+        try:
+            user_mcp = self.agent_env_service.get_user_mcp_servers_for_mode(
+                self._mode, engine="opencode"
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Could not build user MCP servers: %s", e)
+            user_mcp = {}
+        if user_mcp:
+            mcp_section = config.get("mcp")
+            if not isinstance(mcp_section, dict):
+                mcp_section = {}
+            mcp_section.update(user_mcp)
+            config["mcp"] = mcp_section
+            logger.info(
+                "OpenCode %s: merged %d MCP-provider server(s)",
+                self._mode, len(user_mcp),
+            )
+
         # 2) Copy plugin command markdown into the runtime command dir.
         self._copy_plugin_commands(artifacts.get("command_files") or [])
 

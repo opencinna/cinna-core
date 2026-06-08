@@ -11,10 +11,12 @@ import {
   X,
   MessageCircle,
   Wrench,
+  Bot,
 } from "lucide-react"
 import { useState } from "react"
 
 import useAuth from "@/hooks/useAuth"
+import useRole from "@/hooks/useRole"
 import useCustomToast from "@/hooks/useCustomToast"
 import {
   UserAllowlistPicker,
@@ -96,6 +98,7 @@ interface McpConnector {
   name: string
   mode: string
   is_active: boolean
+  is_agent_to_agent: boolean
   allowed_emails: string[]
   allowed_user_ids: string[]
   allowed_users: McpConnectorAllowedUser[]
@@ -152,7 +155,7 @@ interface IdentityAgentBinding {
 }
 
 type CreateStep = "type_select" | "form"
-type CreateType = "direct" | "app_mcp" | "identity_mcp"
+type CreateType = "direct" | "app_mcp" | "identity_mcp" | "agent2agent"
 
 interface McpConnectorsCardProps {
   agentId: string
@@ -166,6 +169,9 @@ interface McpConnectorsCardProps {
 export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps) {
   const { user: currentUser } = useAuth()
   const isAdmin = currentUser?.is_superuser ?? false
+  // RD-7: creating an agent-to-agent connector exposes an agent over MCP, so it
+  // requires agent-developer. Consuming a connection is use-only (agent-user).
+  const { isDeveloper } = useRole()
 
   // ---- Create dialog state ----
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
@@ -178,6 +184,13 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
   const [allowedUsers, setAllowedUsers] = useState<UserAllowlistSelectedItem[]>([])
   const [allowTokenAccess, setAllowTokenAccess] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+
+  // Agent-to-agent connector form (exposes this agent over MCP for other agents)
+  const [a2aName, setA2aName] = useState("")
+  const [a2aMode, setA2aMode] = useState("conversation")
+  const [a2aAllowedUsers, setA2aAllowedUsers] = useState<
+    UserAllowlistSelectedItem[]
+  >([])
 
   // Edit connector state
   const [editDialogOpen, setEditDialogOpen] = useState(false)
@@ -278,7 +291,11 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
   // Edit Identity Binding: live assignments (carry target_user_name/email)
   const editIdentityAssignments = existingIdentityBinding?.assignments ?? []
 
-  const connectors = connectorData?.data ?? []
+  const allConnectors = connectorData?.data ?? []
+  // agent-to-agent connectors get their own sub-section; the rest are the
+  // existing external-client (direct) connectors.
+  const connectors = allConnectors.filter((c) => !c.is_agent_to_agent)
+  const a2aConnectors = allConnectors.filter((c) => c.is_agent_to_agent)
   const mcpServerBaseUrl = connectorData?.mcp_server_base_url ?? null
 
   const getMcpServerUrl = (connectorId: string) =>
@@ -292,6 +309,7 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
       mode: string
       allowed_user_ids: string[]
       allow_token_access: boolean
+      is_agent_to_agent?: boolean
     }) => {
       const res = await fetch(`${API_BASE}/api/v1/agents/${agentId}/mcp-connectors`, {
         method: "POST",
@@ -674,6 +692,9 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
       setMode("conversation")
       setAllowedUsers([])
       setAllowTokenAccess(false)
+      setA2aName("")
+      setA2aMode("conversation")
+      setA2aAllowedUsers([])
       setAppMcpName("")
       setAppMcpSessionMode("conversation")
       setAppMcpTriggerPrompt("")
@@ -696,6 +717,9 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
     if (type === "app_mcp" && !appMcpName) {
       setAppMcpName(agentName)
     }
+    if (type === "agent2agent" && !a2aName) {
+      setA2aName(`${agentName} (Agent to Agent)`)
+    }
   }
 
   const handleCreateIdentityBinding = () => {
@@ -715,6 +739,19 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
       mode,
       allowed_user_ids: allowedUsers.map((s) => s.userId),
       allow_token_access: allowTokenAccess,
+    })
+  }
+
+  const handleCreateAgent2Agent = () => {
+    // Agent-to-agent connectors always allow token access — the consumer's
+    // "Connect MCP Provider" flow mints a connector-scoped direct token to
+    // authenticate the cross-agent MCP calls.
+    createConnectorMutation.mutate({
+      name: a2aName,
+      mode: a2aMode,
+      allowed_user_ids: a2aAllowedUsers.map((s) => s.userId),
+      allow_token_access: true,
+      is_agent_to_agent: true,
     })
   }
 
@@ -910,6 +947,25 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                         Expose this agent behind your personal identity. Other users can address you by name and the system routes to this agent automatically.
                       </p>
                     </button>
+
+                    {isDeveloper && (
+                      <button
+                        onClick={() => handleTypeSelect("agent2agent")}
+                        className="flex flex-col items-start gap-2 p-4 border rounded-lg text-left hover:border-primary hover:bg-accent transition-colors cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Bot className="h-5 w-5 text-emerald-500" />
+                          <span className="font-medium text-sm">
+                            Agent to Agent MCP Connector
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Expose this agent over MCP so other platform agents can
+                          connect to it via "Connect MCP Provider". A direct token
+                          is minted automatically; control who may consume it.
+                        </p>
+                      </button>
+                    )}
                   </div>
                 </>
               ) : createType === "direct" ? (
@@ -1007,6 +1063,100 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                     <Button
                       onClick={handleCreateConnector}
                       disabled={!name.trim() || createConnectorMutation.isPending}
+                    >
+                      {createConnectorMutation.isPending ? "Creating..." : "Create"}
+                    </Button>
+                  </DialogFooter>
+                </>
+              ) : createType === "agent2agent" ? (
+                <>
+                  <DialogHeader>
+                    <DialogTitle>Create Agent to Agent MCP Connector</DialogTitle>
+                    <DialogDescription>
+                      <button
+                        onClick={() => setCreateStep("type_select")}
+                        className="text-primary hover:underline text-sm"
+                      >
+                        &larr; Back
+                      </button>
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 max-h-[65vh] overflow-y-auto pr-1">
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+                      Share this connector with the users below. Their agents can
+                      then connect to this one via{" "}
+                      <span className="font-medium">Connect MCP Provider</span>. A
+                      direct token is minted automatically when a consumer
+                      connects. Manage the token and allowed users later from the
+                      connector's edit dialog.
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="a2a-name">Name</Label>
+                      <Input
+                        id="a2a-name"
+                        placeholder="My Agent to Agent Connector"
+                        value={a2aName}
+                        onChange={(e) => setA2aName(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Mode</Label>
+                      <Select value={a2aMode} onValueChange={setA2aMode}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="conversation">Conversation</SelectItem>
+                          <SelectItem value="building">Building</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Conversation mode for chat interactions, Building mode for
+                        development tasks.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <UserAllowlistPicker
+                        enabled={
+                          createDialogOpen &&
+                          createStep === "form" &&
+                          createType === "agent2agent"
+                        }
+                        selected={a2aAllowedUsers}
+                        onAdd={(u) =>
+                          setA2aAllowedUsers((prev) =>
+                            prev.some((s) => s.userId === u.id)
+                              ? prev
+                              : [
+                                  ...prev,
+                                  {
+                                    id: u.id,
+                                    userId: u.id,
+                                    fallbackLabel: u.full_name || u.email,
+                                  },
+                                ]
+                          )
+                        }
+                        onRemove={(item) =>
+                          setA2aAllowedUsers((prev) =>
+                            prev.filter((s) => s.userId !== item.userId)
+                          )
+                        }
+                        label={
+                          <Label className="flex items-center gap-2">
+                            <Users className="h-4 w-4" />
+                            Allowed Users (who may consume)
+                          </Label>
+                        }
+                        searchPlaceholder="Search users..."
+                        emptyHint="Leave empty for owner-only access."
+                      />
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button
+                      onClick={handleCreateAgent2Agent}
+                      disabled={!a2aName.trim() || createConnectorMutation.isPending}
                     >
                       {createConnectorMutation.isPending ? "Creating..." : "Create"}
                     </Button>
@@ -1547,8 +1697,172 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
               </div>
             )}
 
+            {/* Separator before the agent-to-agent sub-section */}
+            {connectors.length > 0 && a2aConnectors.length > 0 && <Separator />}
+
+            {/* ---- Agent to Agent MCP Connectors ---- */}
+            {a2aConnectors.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Agent to Agent MCP Connector
+                </p>
+                {a2aConnectors.map((connector) => (
+                  <div
+                    key={connector.id}
+                    className={`flex items-center justify-between px-3 py-2 border rounded-lg ${
+                      !connector.is_active ? "opacity-50 bg-muted" : ""
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Bot className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                      <span className="font-medium text-sm truncate">
+                        {connector.name}
+                      </span>
+                      {connector.mode === "building" ? (
+                        <Wrench className="h-3.5 w-3.5 text-orange-500 shrink-0" />
+                      ) : (
+                        <MessageCircle className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                      )}
+                      <Badge
+                        variant="outline"
+                        className="text-xs shrink-0 border-emerald-300 text-emerald-600"
+                      >
+                        Agent to Agent
+                      </Badge>
+                      {connector.is_active ? (
+                        <Badge className="text-xs shrink-0 bg-emerald-500 hover:bg-emerald-600">
+                          Active
+                        </Badge>
+                      ) : (
+                        <Badge variant="destructive" className="text-xs shrink-0">
+                          Inactive
+                        </Badge>
+                      )}
+                      {(() => {
+                        const userCount =
+                          (connector.allowed_user_ids?.length || 0) +
+                          (connector.allowed_emails?.length || 0)
+                        return userCount > 0 ? (
+                          <span className="text-xs text-muted-foreground shrink-0">
+                            {userCount} user{userCount !== 1 ? "s" : ""}
+                          </span>
+                        ) : null
+                      })()}
+                    </div>
+                    <div className="flex items-center gap-0.5 ml-1 shrink-0">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6"
+                              disabled={!getMcpServerUrl(connector.id)}
+                              onClick={() => {
+                                const url = getMcpServerUrl(connector.id)
+                                if (url) handleCopyUrl(url, connector.id)
+                              }}
+                            >
+                              {copiedId === connector.id ? (
+                                <Check className="h-3.5 w-3.5 text-green-500" />
+                              ) : (
+                                <Copy className="h-3.5 w-3.5" />
+                              )}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="text-xs">
+                            {getMcpServerUrl(connector.id)
+                              ? "Copy MCP server URL"
+                              : "MCP_SERVER_BASE_URL not configured"}
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      <div className="h-4 w-px bg-border mx-1" />
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6"
+                              onClick={() => handleEditConnectorOpen(connector)}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="text-xs">
+                            Edit connector & manage tokens
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6"
+                              onClick={() =>
+                                toggleConnectorMutation.mutate({
+                                  connectorId: connector.id,
+                                  isActive: !connector.is_active,
+                                })
+                              }
+                            >
+                              <Unplug
+                                className={`h-3.5 w-3.5 ${
+                                  connector.is_active
+                                    ? "text-emerald-500"
+                                    : "text-muted-foreground"
+                                }`}
+                              />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="text-xs">
+                            {connector.is_active ? "Deactivate" : "Activate"}
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 text-destructive hover:text-destructive"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Delete Connector</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              This will disconnect all agents consuming this
+                              connector and revoke their tokens.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              onClick={() =>
+                                deleteConnectorMutation.mutate(connector.id)
+                              }
+                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            >
+                              Delete
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Separator when both sections have items */}
-            {connectors.length > 0 && appMcpRoutes.length > 0 && <Separator />}
+            {(connectors.length > 0 || a2aConnectors.length > 0) &&
+              appMcpRoutes.length > 0 && <Separator />}
 
             {/* ---- App MCP Routes ---- */}
             {appMcpRoutes.length > 0 && (
@@ -1671,7 +1985,7 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
             )}
 
             {/* Empty state */}
-            {connectors.length === 0 && appMcpRoutes.length === 0 && !existingIdentityBinding && (
+            {connectors.length === 0 && a2aConnectors.length === 0 && appMcpRoutes.length === 0 && !existingIdentityBinding && (
               <p className="text-sm text-muted-foreground">
                 No MCP integrations yet. Create one to allow external clients to connect.
               </p>
@@ -1679,7 +1993,9 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
 
             {/* Separator when identity section follows connectors/routes */}
             {existingIdentityBinding &&
-              (connectors.length > 0 || appMcpRoutes.length > 0) && <Separator />}
+              (connectors.length > 0 ||
+                a2aConnectors.length > 0 ||
+                appMcpRoutes.length > 0) && <Separator />}
 
             {/* Identity Server binding */}
             {existingIdentityBinding && (

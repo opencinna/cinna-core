@@ -550,6 +550,40 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
             logger.error(f"Failed to set plugins: {e}")
             raise Exception(f"Failed to set plugins: {e}")
 
+    async def set_mcp_servers(self, manifest: dict) -> bool:
+        """
+        Push the per-mode MCP-provider server manifest to the environment.
+
+        Mirrors ``set_plugins``: the backend sends the per-mode manifest (no
+        secrets beyond the bearer tokens that must reach the SDK transport) and
+        the env-core persists it as the ``user_mcp.json`` baseline. The next
+        session merges it into the SDK runtime config (RD-5). Live updates use
+        this same route on credential change without a full config regen.
+
+        Args:
+            manifest: ``{"conversation": [entry...], "building": [entry...]}``.
+
+        Returns:
+            True if the manifest was persisted successfully.
+
+        Raises:
+            Exception: On transport/endpoint failure (caller treats it as
+            non-blocking — MCP-provider sync must never break env start).
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.base_url}/config/mcp-servers",
+                    json=manifest,
+                    headers=self._get_headers(),
+                    timeout=10.0,
+                )
+                response.raise_for_status()
+                return True
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to set MCP servers: {e}")
+            raise Exception(f"Failed to set MCP servers: {e}")
+
     async def get_plugins_settings(self) -> dict:
         """
         Get current plugins settings from environment.

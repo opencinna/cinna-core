@@ -38,6 +38,8 @@ from .models import (
     PluginManifest,
     PluginsInstallResponse,
     PluginsSettingsResponse,
+    McpServerManifest,
+    McpServersResponse,
     CommandStreamRequest,
 )
 from .sdk_manager import sdk_manager
@@ -901,6 +903,42 @@ async def get_plugins_settings() -> PluginsSettingsResponse:
     ]
 
     return PluginsSettingsResponse(active_plugins=active_plugins)
+
+
+@router.post(
+    "/config/mcp-servers",
+    dependencies=[Depends(verify_auth_token)],
+    response_model=McpServersResponse,
+)
+async def set_mcp_servers(manifest: McpServerManifest) -> McpServersResponse:
+    """
+    Persist the per-mode MCP-provider server manifest (RD-5 baseline).
+
+    The backend pushes the credential-derived remote MCP servers for both modes
+    (conversation / building). This endpoint writes ``mcp/user_mcp.json`` (0o600
+    — entries may carry a bearer token); the SDK adapters merge the matching
+    mode's entries into the runtime MCP config at session start. The manifest is
+    declarative (fully overwritten on each push), so a disconnected provider
+    drops out on the next sync.
+
+    Called by the backend on:
+    - Environment start / rebuild (baseline from DB)
+    - Credential connect / disconnect / mode toggle / OAuth refresh (live push)
+    """
+    try:
+        counts = agent_env_service.set_mcp_servers(manifest.model_dump())
+    except Exception as e:
+        logger.error(f"Failed to set MCP servers: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to set MCP servers: {str(e)}",
+        )
+
+    return McpServersResponse(
+        status="ok",
+        conversation_count=counts.get("conversation_count", 0),
+        building_count=counts.get("building_count", 0),
+    )
 
 
 @router.get("/workspace/tree", dependencies=[Depends(verify_auth_token)])

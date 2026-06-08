@@ -308,6 +308,30 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                 except Exception as e:
                     logger.warning(f"Could not load plugins: {e}")
 
+                # Merge credential-derived MCP-provider servers (RD-5). Each is
+                # a remote http/sse MCP server keyed cinna_mcp_<credential_id>,
+                # so it never collides with the knowledge / agent_task SDK
+                # servers above. The bearer token (if any) rides in headers — the
+                # only place an mcp_provider token reaches the container.
+                try:
+                    user_mcp = self.agent_env_service.get_user_mcp_servers_for_mode(
+                        mode, engine="claude_code"
+                    )
+                    if user_mcp:
+                        if options.mcp_servers:
+                            options.mcp_servers.update(user_mcp)
+                        else:
+                            options.mcp_servers = dict(user_mcp)
+                        # Allow the agent to call every tool these servers expose.
+                        for server_key in user_mcp:
+                            options.allowed_tools.append(f"mcp__{server_key}")
+                        logger.info(
+                            f"Merged {len(user_mcp)} MCP-provider server(s) "
+                            f"for {mode} mode"
+                        )
+                except Exception as e:
+                    logger.warning(f"Could not load MCP-provider servers: {e}")
+
                 # Set model from the per-mode MODEL_<MODE> env var, which the
                 # backend computes from the central model catalog (honoring any
                 # model_override_*). For claude-code/anthropic with no override

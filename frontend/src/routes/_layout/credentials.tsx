@@ -65,12 +65,13 @@ function CredentialSections() {
 
   const credentials = data?.data || []
 
-  // "Automatic Credentials" are connection records auto-created by the
-  // "Connect Agent API" helper (type === "agent_api"). Grouping is derived
-  // from the type — no new column / query param. Everything else is "My
-  // Credentials".
-  const automatic = credentials.filter((c) => c.type === "agent_api")
-  const mine = credentials.filter((c) => c.type !== "agent_api")
+  // "Automatic Credentials" are connection records auto-created by a "Connect"
+  // helper — "Connect Agent API" (type === "agent_api") and "Connect MCP
+  // Provider" (type === "mcp_provider"). Grouping is derived from the type — no
+  // new column / query param. Everything else is "My Credentials".
+  const AUTOMATIC_TYPES = new Set(["agent_api", "mcp_provider"])
+  const automatic = credentials.filter((c) => AUTOMATIC_TYPES.has(c.type))
+  const mine = credentials.filter((c) => !AUTOMATIC_TYPES.has(c.type))
 
   return (
     <>
@@ -103,8 +104,8 @@ function CredentialSections() {
               <h2 className="text-lg font-semibold">Automatic Credentials</h2>
             </div>
             <p className="text-sm text-muted-foreground">
-              Connections created by "Connect Agent API". Manage name, notes,
-              and sharing here.
+              Connections created by "Connect Agent API" or "Connect MCP
+              Provider". Manage name, notes, and sharing here.
             </p>
           </div>
           <CredentialGrid credentials={automatic} />

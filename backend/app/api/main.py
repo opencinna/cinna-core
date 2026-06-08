@@ -32,6 +32,7 @@ from app.api.routes import (
     installs,
     mcp_connectors,
     mcp_consent,
+    mcp_providers,
     events,
     files,
     guest_shares,
@@ -130,6 +131,7 @@ api_router.include_router(a2a.v1_router)     # /a2a/v1.0/{agent_id}/
 api_router.include_router(a2a.v03_router)    # /a2a/v0.3/{agent_id}/
 api_router.include_router(mcp_connectors.router)
 api_router.include_router(mcp_consent.router)
+api_router.include_router(mcp_providers.router)  # /mcp-providers/* (consumer connect helper)
 api_router.include_router(agent_app_mcp_routes.router)
 api_router.include_router(app_agent_routes.router)
 api_router.include_router(user_app_agent_routes.router)
