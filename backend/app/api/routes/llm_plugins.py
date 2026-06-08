@@ -12,27 +12,20 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from sqlmodel import select
 
 from app.api.deps import CurrentUser, SessionDep
 from app.models import (
-    Agent,
     Message,
 )
 from app.models.plugins.llm_plugin import (
-    LLMPluginMarketplace,
     LLMPluginMarketplaceCreate,
     LLMPluginMarketplaceUpdate,
     LLMPluginMarketplacePublic,
     LLMPluginMarketplacesPublic,
-    LLMPluginMarketplacePlugin,
     LLMPluginMarketplacePluginPublic,
     LLMPluginMarketplacePluginsPublic,
-    AgentPluginLink,
     AgentPluginLinkCreate,
     AgentPluginLinkUpdate,
-    AgentPluginLinkPublic,
-    AgentPluginLinkWithUpdateInfo,
     AgentPluginLinksPublic,
     PluginSyncResponse,
 )
@@ -112,15 +105,9 @@ def get_marketplace(
     - Their own marketplaces
     - Public marketplaces
     """
-    marketplace = LLMPluginService.get_marketplace(session, marketplace_id)
-    if not marketplace:
-        raise HTTPException(status_code=404, detail="Marketplace not found")
-
-    # Check access: own marketplace or public
-    if marketplace.user_id != current_user.id and not marketplace.public_discovery:
-        if not current_user.is_superuser:
-            raise HTTPException(status_code=403, detail="Not enough permissions")
-
+    marketplace = LLMPluginService.get_marketplace_with_access_check(
+        session, marketplace_id, current_user
+    )
     return LLMPluginService.get_marketplace_public(session, marketplace)
 
 
@@ -137,13 +124,9 @@ def update_marketplace(
 
     Only the marketplace owner or superuser can update.
     """
-    marketplace = LLMPluginService.get_marketplace(session, marketplace_id)
-    if not marketplace:
-        raise HTTPException(status_code=404, detail="Marketplace not found")
-
-    # Check ownership
-    if marketplace.user_id != current_user.id and not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
+    marketplace = LLMPluginService.get_marketplace_with_access_check(
+        session, marketplace_id, current_user, require_write=True
+    )
 
     updated = LLMPluginService.update_marketplace(
         session=session,
@@ -168,13 +151,9 @@ def delete_marketplace(
 
     Only the marketplace owner or superuser can delete.
     """
-    marketplace = LLMPluginService.get_marketplace(session, marketplace_id)
-    if not marketplace:
-        raise HTTPException(status_code=404, detail="Marketplace not found")
-
-    # Check ownership
-    if marketplace.user_id != current_user.id and not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
+    marketplace = LLMPluginService.get_marketplace_with_access_check(
+        session, marketplace_id, current_user, require_write=True
+    )
 
     deleted = LLMPluginService.delete_marketplace(
         session=session,
@@ -198,13 +177,9 @@ def sync_marketplace(
 
     Only the marketplace owner or superuser can sync.
     """
-    marketplace = LLMPluginService.get_marketplace(session, marketplace_id)
-    if not marketplace:
-        raise HTTPException(status_code=404, detail="Marketplace not found")
-
-    # Check ownership
-    if marketplace.user_id != current_user.id and not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
+    marketplace = LLMPluginService.get_marketplace_with_access_check(
+        session, marketplace_id, current_user, require_write=True
+    )
 
     try:
         synced = LLMPluginService.sync_marketplace(
@@ -273,37 +248,15 @@ def get_plugin(
     if not plugin:
         raise HTTPException(status_code=404, detail="Plugin not found")
 
-    # Check marketplace access
+    # Check marketplace access (read level: owner OR public OR superuser).
     marketplace = plugin.marketplace
     if not marketplace:
         raise HTTPException(status_code=404, detail="Plugin marketplace not found")
-
-    if marketplace.user_id != current_user.id and not marketplace.public_discovery:
-        if not current_user.is_superuser:
-            raise HTTPException(status_code=403, detail="Not enough permissions")
-
-    return LLMPluginMarketplacePluginPublic(
-        id=plugin.id,
-        marketplace_id=plugin.marketplace_id,
-        name=plugin.name,
-        description=plugin.description,
-        version=plugin.version,
-        author_name=plugin.author_name,
-        author_email=plugin.author_email,
-        category=plugin.category,
-        homepage=plugin.homepage,
-        source_path=plugin.source_path,
-        source_type=plugin.source_type,
-        source_url=plugin.source_url,
-        source_branch=plugin.source_branch,
-        source_commit_hash=plugin.source_commit_hash,
-        plugin_type=plugin.plugin_type,
-        commit_hash=plugin.commit_hash,
-        config=plugin.config,
-        created_at=plugin.created_at,
-        updated_at=plugin.updated_at,
-        marketplace_name=marketplace.name,
+    LLMPluginService.get_marketplace_with_access_check(
+        session, marketplace.id, current_user
     )
+
+    return LLMPluginService.get_plugin_public(plugin, marketplace_name=marketplace.name)
 
 
 # =============================================================================
@@ -324,12 +277,7 @@ def list_agent_plugins(
     - has_update: True if newer version available
     - latest_version: Current version in marketplace
     """
-    # Verify agent access
-    agent = session.get(Agent, agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if agent.owner_id != current_user.id and not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
+    LLMPluginService.verify_agent_access(session, agent_id, current_user)
 
     plugins = LLMPluginService.get_agent_plugins(session, agent_id)
     return AgentPluginLinksPublic(data=plugins, count=len(plugins))
@@ -353,18 +301,17 @@ async def install_agent_plugin(
 
     Returns sync status for all environments.
     """
-    # Verify agent access
-    agent = session.get(Agent, agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if agent.owner_id != current_user.id and not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
+    LLMPluginService.verify_agent_access(session, agent_id, current_user)
 
     # Verify plugin access
     plugin = LLMPluginService.get_plugin(session, data.plugin_id)
     if not plugin:
         raise HTTPException(status_code=404, detail="Plugin not found")
 
+    # Plugin marketplace access (read level). Kept inline rather than calling
+    # get_marketplace_with_access_check to preserve the existing behavior: a
+    # plugin whose marketplace row is unresolvable is tolerated (no 404), and the
+    # 403 detail is plugin-specific.
     marketplace = plugin.marketplace
     if marketplace:
         if marketplace.user_id != current_user.id and not marketplace.public_discovery:
@@ -404,12 +351,7 @@ async def uninstall_agent_plugin(
     The plugin will be removed and environments will be synced.
     Returns sync status for all environments.
     """
-    # Verify agent access
-    agent = session.get(Agent, agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if agent.owner_id != current_user.id and not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
+    LLMPluginService.verify_agent_access(session, agent_id, current_user)
 
     deleted = LLMPluginService.uninstall_plugin_from_agent(
         session=session,
@@ -420,15 +362,12 @@ async def uninstall_agent_plugin(
         raise HTTPException(status_code=404, detail="Plugin link not found")
 
     # Sync to running/suspended environments
-    sync_response = await LLMPluginService.sync_plugins_to_agent_environments(
+    return await LLMPluginService.sync_plugins_to_agent_environments(
         session=session,
         agent_id=agent_id,
         user_id=current_user.id,
+        message_prefix="Plugin uninstalled.",
     )
-
-    # Override message for uninstall
-    sync_response.message = f"Plugin uninstalled. {sync_response.message}"
-    return sync_response
 
 
 @router.put("/agents/{agent_id}/plugins/{link_id}", response_model=PluginSyncResponse)
@@ -446,12 +385,7 @@ async def update_agent_plugin(
     Changes will be synced to running and suspended environments.
     Returns sync status for all environments.
     """
-    # Verify agent access
-    agent = session.get(Agent, agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if agent.owner_id != current_user.id and not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
+    LLMPluginService.verify_agent_access(session, agent_id, current_user)
 
     link = LLMPluginService.update_plugin_modes(
         session=session,
@@ -487,12 +421,7 @@ async def upgrade_agent_plugin(
     the current values in the marketplace.
     Returns sync status for all environments.
     """
-    # Verify agent access
-    agent = session.get(Agent, agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if agent.owner_id != current_user.id and not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
+    LLMPluginService.verify_agent_access(session, agent_id, current_user)
 
     link = LLMPluginService.upgrade_agent_plugin(
         session=session,
@@ -503,13 +432,10 @@ async def upgrade_agent_plugin(
         raise HTTPException(status_code=404, detail="Plugin link not found")
 
     # Sync to running/suspended environments
-    sync_response = await LLMPluginService.sync_plugins_to_agent_environments(
+    return await LLMPluginService.sync_plugins_to_agent_environments(
         session=session,
         agent_id=agent_id,
         user_id=current_user.id,
         plugin_link=link,
+        message_prefix="Plugin upgraded.",
     )
-
-    # Override message for upgrade
-    sync_response.message = f"Plugin upgraded. {sync_response.message}"
-    return sync_response

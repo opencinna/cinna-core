@@ -93,6 +93,20 @@ class AgentBundleRevision(SQLModel, table=True):
         sa_column=Column(JSON, nullable=False, server_default=text("'[]'::json")),
     )
 
+    # Snapshot of the publisher install's ``AgentPluginLink`` rows at publish
+    # time. Each entry mirrors the link's identity + per-mode flags plus a
+    # frozen ``config`` and ``snapshot_subdir = "plugins/<mkt>/<plugin>"``:
+    # ``{marketplace_name, plugin_name, version, commit_hash, conversation_mode,
+    # building_mode, disabled, config, snapshot_subdir}``. The plugin *files*
+    # live in the snapshot tree under ``plugins/`` — only coordinates/flags are
+    # stored here. Read by ``InstallService`` to materialise ``source=bundle``
+    # links on the consumer. Empty list ``[]`` on revisions published before
+    # this field existed (fully backward compatible).
+    plugin_specs: list = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default=text("'[]'::json")),
+    )
+
     # Filesystem location of the snapshot under ``BUNDLE_STORAGE_DIR``.
     snapshot_path: str = Field(max_length=1024, nullable=False)
 
@@ -131,6 +145,7 @@ class AgentBundleRevisionPublic(SQLModel):
     model_override_conversation: str | None = None
     required_credential_specs: list = []
     schedules: list = []
+    plugin_specs: list = []
     published_by_user_id: uuid.UUID | None
     published_at: datetime
     release_notes: str | None = None

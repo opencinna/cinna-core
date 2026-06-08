@@ -314,18 +314,18 @@ class EnvironmentAdapter(ABC):
         pass
 
     @abstractmethod
-    async def set_plugins(self, plugins_data: dict) -> bool:
+    async def set_plugins(self, manifest: dict) -> list[dict]:
         """
-        Set or update plugins in the environment.
+        Push the plugin manifest and run the container install routine.
 
         Args:
-            plugins_data: Dictionary containing:
-                - active_plugins: List of plugin configs
-                - settings_json: Settings file content
-                - plugin_files: Dict mapping plugin paths to file contents
+            manifest: Dictionary containing:
+                - plugins: List of manifest entries (git coords + per-mode flags)
+                - allowed_tools: Optional allowed-tools list (pass-through)
 
         Returns:
-            True if plugins set successfully
+            List of per-plugin install result dicts
+            (``{plugin_name, marketplace_name, source, status, error_message}``).
         """
         pass
 

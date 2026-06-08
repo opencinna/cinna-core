@@ -424,6 +424,30 @@ class InstallService:
             except Exception:
                 session.rollback()
 
+        # 8. Materialise the publisher's plugins as source=bundle links. The
+        # plugin files were already seeded into the env workspace in step 3;
+        # these links drive the manifest (git=null) so the container install
+        # routine marks them installed without a marketplace fetch. Best-effort:
+        # a failure logs a warning and marks the install degraded.
+        try:
+            InstallService._materialise_plugin_links(
+                session=session,
+                install=install,
+                revision=revision,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to materialise plugin links for install %s: %s",
+                install.id, e,
+            )
+            try:
+                install.last_update_status = "degraded"
+                session.add(install)
+                session.commit()
+                session.refresh(install)
+            except Exception:
+                session.rollback()
+
         return install
 
     @staticmethod
@@ -443,6 +467,29 @@ class InstallService:
         from app.services.bundles import schedule_sync
 
         created = schedule_sync.materialise(session, install, revision)
+        if created:
+            session.commit()
+
+    @staticmethod
+    def _materialise_plugin_links(
+        *,
+        session: Session,
+        install: Agent,
+        revision: AgentBundleRevision,
+    ) -> None:
+        """Create the install's ``source=bundle`` plugin links from the revision.
+
+        Thin wrapper over ``plugin_sync.materialise`` that owns the commit — the
+        helper only stages rows so the install flow controls the transaction
+        boundary. The plugin *files* are already seeded into the env workspace by
+        ``seed_workspace_from_bundle_snapshot``; the first container setup builds
+        the manifest from these links (source=bundle, git=null) and the install
+        routine marks them installed without any fetch. Exceptions propagate to
+        the best-effort call site, which marks the install degraded.
+        """
+        from app.services.bundles import plugin_sync
+
+        created = plugin_sync.materialise(session, install, revision)
         if created:
             session.commit()
 
@@ -1217,6 +1264,23 @@ class InstallService:
             except Exception as e:
                 logger.warning(
                     "Failed to merge schedules for install %s on "
+                    "apply-update: %s",
+                    install.id, e,
+                )
+
+            # Merge the install's bundle plugin links against the new revision.
+            # Behaviorally-unchanged plugins keep the user's enable/disable +
+            # per-mode toggles; changed / removed plugins are reinstalled /
+            # deleted. ONLY source=bundle links are touched — the consumer's own
+            # source=marketplace plugins are left alone. The plugin files were
+            # already re-seeded by replace_bundle_content above. Best-effort.
+            try:
+                from app.services.bundles import plugin_sync
+
+                plugin_sync.merge(session, install, revision)
+            except Exception as e:
+                logger.warning(
+                    "Failed to merge plugins for install %s on "
                     "apply-update: %s",
                     install.id, e,
                 )

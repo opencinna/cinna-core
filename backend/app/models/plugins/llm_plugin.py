@@ -142,6 +142,21 @@ class PluginSourceType(str, Enum):
     url = "url"  # Plugin files are in an external repo (source_url is the git URL)
 
 
+class PluginSource(str, Enum):
+    """Origin of an installed agent plugin link.
+
+    - ``marketplace`` — files fetched by the container via ``git clone`` of the
+      plugin's marketplace source at its pinned commit. ``plugin_id`` references
+      the resolvable marketplace plugin row.
+    - ``bundle`` — files delivered inside the install's bundle revision snapshot
+      and seeded into the env workspace. ``plugin_id`` is NULL (no marketplace
+      needed); identity/coordinates come from the snapshot fields.
+    """
+
+    marketplace = "marketplace"
+    bundle = "bundle"
+
+
 class LLMPluginMarketplacePluginBase(SQLModel):
     """Base model for marketplace plugin."""
 
@@ -238,6 +253,11 @@ class AgentPluginLink(AgentPluginLinkBase, table=True):
 
     __tablename__ = "agent_plugin_link"
     __table_args__ = (
+        # NOTE: this uniqueness guard only covers marketplace-sourced links
+        # (plugin_id NOT NULL). Bundle-sourced links carry plugin_id=NULL and
+        # are deduped by (agent_id, snapshot_marketplace_name, snapshot_plugin_name)
+        # at the service layer instead. Postgres treats NULLs as distinct in a
+        # unique index, so multiple bundle rows per agent do not collide here.
         Index("idx_agent_plugin_unique", "agent_id", "plugin_id", unique=True),
         Index("idx_agent_plugin_agent", "agent_id"),
         Index("idx_agent_plugin_plugin", "plugin_id"),
@@ -245,9 +265,23 @@ class AgentPluginLink(AgentPluginLinkBase, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     agent_id: uuid.UUID = Field(foreign_key="agent.id", ondelete="CASCADE", index=True)
-    plugin_id: uuid.UUID = Field(
-        foreign_key="llm_plugin_marketplace_plugin.id", ondelete="CASCADE", index=True
+    # Nullable: bundle-sourced links have no resolvable marketplace plugin row.
+    # ON DELETE SET NULL so deleting a marketplace plugin orphans (but keeps)
+    # the link rather than cascading the install away.
+    plugin_id: Optional[uuid.UUID] = Field(
+        default=None,
+        foreign_key="llm_plugin_marketplace_plugin.id",
+        ondelete="SET NULL",
+        index=True,
+        nullable=True,
     )
+    # Origin of this link: marketplace (git-fetched) or bundle (snapshot-seeded).
+    source: PluginSource = Field(default=PluginSource.marketplace, sa_type=sa.String())
+    # Bundle-sourced identity (NULL for marketplace links): the on-disk dir
+    # segment + manifest label, and a frozen copy of plugin.json for the UI.
+    snapshot_marketplace_name: Optional[str] = None
+    snapshot_plugin_name: Optional[str] = None
+    snapshot_config: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     installed_version: Optional[str] = None  # Version string at installation time
     installed_commit_hash: Optional[str] = None  # Git commit hash for reproducibility
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -279,7 +313,11 @@ class AgentPluginLinkPublic(SQLModel):
 
     id: uuid.UUID
     agent_id: uuid.UUID
-    plugin_id: uuid.UUID
+    plugin_id: Optional[uuid.UUID]
+    source: PluginSource = PluginSource.marketplace
+    snapshot_marketplace_name: Optional[str] = None
+    snapshot_plugin_name: Optional[str] = None
+    snapshot_config: Optional[dict] = None
     installed_version: Optional[str]
     installed_commit_hash: Optional[str]
     conversation_mode: bool
@@ -319,6 +357,21 @@ class AgentPluginLinksPublic(SQLModel):
 # =============================================================================
 
 
+class PluginInstallResult(SQLModel):
+    """Per-plugin result returned by the container install routine.
+
+    Errors are surfaced as results, not exceptions: a ``failed`` plugin is
+    excluded from ``settings.json`` (so the SDK never gets a missing path) and
+    reported, never silently listed-but-absent.
+    """
+
+    plugin_name: str
+    marketplace_name: str
+    source: str = "marketplace"  # PluginSource value as a plain string
+    status: str  # "installed" | "failed" | "skipped"
+    error_message: Optional[str] = None
+
+
 class EnvironmentSyncStatus(SQLModel):
     """Status of plugin sync for a single environment."""
 
@@ -327,6 +380,13 @@ class EnvironmentSyncStatus(SQLModel):
     status: str  # "success", "error", "activated_and_synced", "skipped"
     error_message: Optional[str] = None
     was_suspended: bool = False
+    # Per-plugin install results from the container install routine for THIS
+    # environment. A `failed` entry means the plugin could not be fetched/seeded
+    # and was excluded from settings.json — the env sync itself still succeeded.
+    plugin_results: list[PluginInstallResult] = []
+    # True when any entry in `plugin_results` is `failed` (the env transport
+    # succeeded but one or more plugins did not install).
+    partial_failures: bool = False
 
 
 class PluginSyncResponse(SQLModel):
@@ -339,3 +399,12 @@ class PluginSyncResponse(SQLModel):
     total_environments: int = 0
     successful_syncs: int = 0
     failed_syncs: int = 0
+    # Aggregated per-plugin install failures across all synced environments.
+    # Distinct from `failed_syncs` (which counts environments the transport
+    # could not reach): a `plugin_results` failure means the env was reached but
+    # a specific plugin did not install. Drives the FE warning surface.
+    plugin_results: list[PluginInstallResult] = []
+    # True when any environment reported a `failed` plugin result. The overall
+    # operation can still be `success=True` (env-level) while having
+    # partial_failures=True (plugin-level).
+    partial_failures: bool = False

@@ -20,9 +20,9 @@
 
 ## Database Schema
 
-**Table: `llmpluginmarketplace`** (`LLMPluginMarketplace`, `backend/app/models/plugins/llm_plugin.py:52`)
+**Table: `llm_plugin_marketplace`** (`LLMPluginMarketplace`, `backend/app/models/plugins/llm_plugin.py`)
 
-Defined via `LLMPluginMarketplaceBase` (line 34):
+Defined via `LLMPluginMarketplaceBase`:
 
 | Field | Purpose |
 |-------|---------|
@@ -39,29 +39,32 @@ Defined via `LLMPluginMarketplaceBase` (line 34):
 | `owner_name`, `owner_email` | Extracted from `author` field in `marketplace.json` |
 | `plugin_count` | Cached count of plugins (updated on sync) |
 
-**Table: `llmpluginmarketplaceplugin`** (`LLMPluginMarketplacePlugin`, line 164)
+**Table: `llm_plugin_marketplace_plugin`** (`LLMPluginMarketplacePlugin`)
 
-Defined via `LLMPluginMarketplacePluginBase` (line 145):
+Defined via `LLMPluginMarketplacePluginBase`:
 
 | Field | Purpose |
 |-------|---------|
-| `marketplace_id` | FK → `llmpluginmarketplace` |
+| `marketplace_id` | FK → `llm_plugin_marketplace` |
 | `name`, `description`, `version`, `category` | Plugin metadata |
 | `author_name`, `author_email` | Plugin author from `plugin.json` |
 | `source_type` | `local` or `url` |
 | `source_path` | Relative path (local plugins) |
 | `source_url`, `source_branch` | External repo details (url plugins) |
+| `source_commit_hash` | Pinned commit from external repo (url plugins) |
 | `commit_hash` | Commit hash when this plugin config was last parsed |
 | `homepage` | Optional external link |
 | `config` | Full `plugin.json` stored as JSON blob |
 
+These rows are the source of git coordinates consumed by `LLMPluginService.build_plugin_manifest()` at agent plugin install time. There is no companion cache directory on disk.
+
 **API Schemas** (non-table, in `llm_plugin.py`)
-- `LLMPluginMarketplaceCreate` (line 97) — `url`, `ssh_key_id` (create only; name/branch extracted from repo)
-- `LLMPluginMarketplaceUpdate` (line 112) — `public_discovery` (only editable field post-creation)
-- `LLMPluginMarketplacePublic` (line 74) — Full public representation including `plugin_count`, `last_sync_at`, `owner_name/email`
-- `LLMPluginMarketplacesPublic` (line 126) — Paginated list wrapper
-- `LLMPluginMarketplacePluginPublic` (line 190) — Public plugin representation
-- `LLMPluginMarketplacePluginsPublic` (line 216) — Paginated plugins list wrapper
+- `LLMPluginMarketplaceCreate` — `url`, `ssh_key_id`, `git_branch`, `public_discovery`, `type` (name/description extracted from repo)
+- `LLMPluginMarketplaceUpdate` — All fields optional; `public_discovery` is the most commonly edited field post-creation
+- `LLMPluginMarketplacePublic` — Full public representation including `plugin_count`, `last_sync_at`, `owner_name/email`
+- `LLMPluginMarketplacesPublic` — Paginated list wrapper
+- `LLMPluginMarketplacePluginPublic` — Public plugin representation (includes `source_url`, `source_commit_hash`)
+- `LLMPluginMarketplacePluginsPublic` — Paginated plugins list wrapper
 
 ## API Endpoints
 
@@ -72,9 +75,9 @@ All in `backend/app/api/routes/llm_plugins.py`, admin-only (superuser guard):
 | `POST` | `/api/v1/llm-plugins/marketplaces` | `LLMPluginMarketplaceCreate` | `LLMPluginMarketplacePublic` | Create + trigger initial sync |
 | `GET` | `/api/v1/llm-plugins/marketplaces` | `?includePublic=bool` | `LLMPluginMarketplacesPublic` | List (owner's + optionally public) |
 | `GET` | `/api/v1/llm-plugins/marketplaces/{id}` | — | `LLMPluginMarketplacePublic` | Get single marketplace |
-| `PUT` | `/api/v1/llm-plugins/marketplaces/{id}` | `LLMPluginMarketplaceUpdate` | `LLMPluginMarketplacePublic` | Update `public_discovery` flag |
-| `DELETE` | `/api/v1/llm-plugins/marketplaces/{id}` | — | `Message` | Delete marketplace and plugins |
-| `POST` | `/api/v1/llm-plugins/marketplaces/{id}/sync` | — | `LLMPluginMarketplacePublic` | Trigger re-sync |
+| `PUT` | `/api/v1/llm-plugins/marketplaces/{id}` | `LLMPluginMarketplaceUpdate` | `LLMPluginMarketplacePublic` | Update fields |
+| `DELETE` | `/api/v1/llm-plugins/marketplaces/{id}` | — | `Message` | Delete marketplace and plugins (no cache cleanup) |
+| `POST` | `/api/v1/llm-plugins/marketplaces/{id}/sync` | — | `LLMPluginMarketplacePublic` | Trigger re-sync (temp-clone, parse, discard) |
 | `GET` | `/api/v1/llm-plugins/discover` | `?search=&category=` | `LLMPluginMarketplacePluginsPublic` | Discover plugins from accessible marketplaces |
 | `GET` | `/api/v1/llm-plugins/marketplaces/{id}/plugins` | — | `LLMPluginMarketplacePluginsPublic` | List plugins for a specific marketplace |
 
@@ -83,13 +86,23 @@ All in `backend/app/api/routes/llm_plugins.py`, admin-only (superuser guard):
 **`backend/app/services/plugins/llm_plugin_service.py` — `LLMPluginService`**
 
 Marketplace lifecycle:
-- `create_marketplace()` — Creates `LLMPluginMarketplace` record, immediately calls `sync_marketplace()` in background; generates temp name from URL until repo metadata is read
-- `sync_marketplace()` — Calls `git_operations.clone_or_pull()`, updates `status`, reads `marketplace.json`, calls `_parse_claude_marketplace()`, writes `sync_commit_hash` and `last_sync_at`
-- `_parse_claude_marketplace()` — Reads `.claude-plugin/marketplace.json`, extracts `name`/`description`/`author` metadata into the marketplace record, calls `_upsert_plugins()`
-- `_upsert_plugins()` — Compares parsed plugin list with existing DB records: inserts new, updates changed (by `name` key), deletes removed; updates `plugin_count`
+- `create_marketplace()` — Creates `LLMPluginMarketplace` record, immediately calls `sync_marketplace()` in background; generates temp name from URL until repo metadata is read.
+- `sync_marketplace()` — Core sync method:
+  1. Sets status to `pending`.
+  2. Optionally loads SSH key via `SSHKeyService.get_decrypted_key_for_git()`.
+  3. `temp_dir = tempfile.mkdtemp(prefix="cinna_marketplace_")`.
+  4. `clone_repository(url, temp_dir, branch, ssh_key_path)`.
+  5. `get_current_commit_hash(repo)`.
+  6. `_parse_claude_marketplace(temp_dir)` → metadata + plugin data dicts.
+  7. `_upsert_plugins()` → writes to Postgres.
+  8. Updates marketplace `status`, `sync_commit_hash`, `last_sync_at`.
+  9. `finally: shutil.rmtree(temp_dir, ignore_errors=True)` — discard clone.
+- `_parse_claude_marketplace(repo_path)` — Reads `.claude-plugin/marketplace.json`, parses local and URL source types, returns `{"metadata": {...}, "plugins": [...]}`.
+- `_upsert_plugins()` — Compares parsed plugin list with existing DB records: inserts new, updates changed (by `name` key), deletes removed; updates `plugin_count`.
+- `delete_marketplace()` — Deletes DB record + cascades to plugin rows. Comment in code confirms: "No persistent cache to clean up — marketplace sync uses a throwaway temp clone that is discarded immediately after parsing."
 
 Discovery:
-- `discover_plugins(search, category)` — Queries `LLMPluginMarketplacePlugin` joined with `LLMPluginMarketplace` where `public_discovery=true` OR `owner_id = current_user`; supports text search on name/description and category filter
+- `discover_plugins(search, category)` — Queries `LLMPluginMarketplacePlugin` joined with `LLMPluginMarketplace` where `public_discovery=true` OR `owner_id = current_user`; supports text search on name/description/author/category. Reads Postgres only.
 
 ## Frontend Components
 
@@ -163,3 +176,5 @@ Empty states:
 - All marketplace mutation endpoints (`POST`, `PUT`, `DELETE`, `sync`) are guarded by `get_current_active_superuser` dependency — non-admin users cannot create or modify marketplaces
 - `GET /marketplaces` and `GET /discover` filter by ownership or `public_discovery=true` so users only see their own or explicitly shared marketplaces
 - SSH key IDs reference the `user_ssh_keys` table; private key material is never included in API responses
+- No plugin files are ever stored on the backend filesystem — only git coordinates in Postgres
+- **SSH URLs for public hosts are auto-normalized**: A marketplace (or an external `url`-type plugin) may be registered with an SSH-form Git URL (e.g. `git@github.com:org/repo.git`). When the git coordinates are later resolved for the plugin manifest, `LLMPluginService._normalize_public_git_url` rewrites such URLs for `github.com`, `gitlab.com`, and `bitbucket.org` to their HTTPS equivalents so the agent-env container (which has no SSH key for these hosts) can clone public repos without authentication. URLs for unrecognized or private hosts are left unchanged.

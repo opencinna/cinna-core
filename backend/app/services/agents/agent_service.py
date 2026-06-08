@@ -1183,24 +1183,22 @@ class AgentService:
             if agent.agent_sdk_config:
                 allowed_tools = agent.agent_sdk_config.get("allowed_tools", [])
 
-            # Prepare plugin data with allowed_tools
-            plugins_data = LLMPluginService.prepare_plugins_for_environment(
+            # Build the plugin manifest carrying allowed_tools. The container
+            # install routine merges allowed_tools into settings.json and skips
+            # re-cloning plugins already present at their pinned ref (idempotent
+            # via the per-plugin .cinna_plugin_ref marker), so a mere tool
+            # approval doesn't refetch files.
+            manifest = LLMPluginService.build_plugin_manifest(
                 session=session,
                 agent_id=agent_id,
-                allowed_tools=allowed_tools
+                allowed_tools=allowed_tools,
             )
 
             # Get lifecycle manager and adapter
             lifecycle_manager = EnvironmentLifecycleManager()
             adapter = lifecycle_manager.get_adapter(environment)
 
-            # Sync only settings (no plugin files needed for tool approval)
-            # We just send the settings_json update
-            await adapter.set_plugins({
-                "active_plugins": plugins_data.get("active_plugins", []),
-                "settings_json": plugins_data.get("settings_json", {}),
-                "plugin_files": {},  # No need to re-sync plugin files
-            })
+            await adapter.set_plugins(manifest)
 
             logger.info(f"Synced allowed_tools to environment {environment.id} for agent {agent_id}")
             return True

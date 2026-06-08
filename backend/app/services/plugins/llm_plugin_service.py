@@ -9,10 +9,10 @@ This service handles:
 - Plugin sync to agent environments
 """
 
-import base64
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -20,8 +20,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional
 
+from fastapi import HTTPException
 from sqlmodel import Session, select
 
+from app.models.agents.agent import Agent
+from app.models.users.user import User
 from app.models.plugins.llm_plugin import (
     LLMPluginMarketplace,
     LLMPluginMarketplaceCreate,
@@ -35,14 +38,15 @@ from app.models.plugins.llm_plugin import (
     AgentPluginLinkPublic,
     AgentPluginLinkWithUpdateInfo,
     MarketplaceStatus,
+    PluginSource,
     PluginSourceType,
     EnvironmentSyncStatus,
+    PluginInstallResult,
     PluginSyncResponse,
 )
 from app.models.environments.environment import AgentEnvironment
 from app.services.knowledge.git_operations import (
     clone_repository,
-    pull_repository,
     get_current_commit_hash,
     create_ssh_key_file,
     GitOperationError,
@@ -50,12 +54,6 @@ from app.services.knowledge.git_operations import (
 from app.services.users.ssh_key_service import SSHKeyService
 
 logger = logging.getLogger(__name__)
-
-# Cache directory for marketplace repositories
-MARKETPLACE_CACHE_DIR = os.environ.get("MARKETPLACE_CACHE_DIR", "/app/data/marketplaces")
-
-# Cache directory for external plugin repositories (URL-based sources)
-PLUGIN_REPO_CACHE_DIR = os.environ.get("PLUGIN_REPO_CACHE_DIR", "/app/data/plugin_repos")
 
 
 class LLMPluginService:
@@ -188,11 +186,8 @@ class LLMPluginService:
         if not marketplace:
             return False
 
-        # Clean up cached repository
-        cache_path = LLMPluginService._get_marketplace_cache_path(marketplace_id)
-        if os.path.exists(cache_path):
-            shutil.rmtree(cache_path, ignore_errors=True)
-
+        # No persistent cache to clean up — marketplace sync uses a throwaway
+        # temp clone that is discarded immediately after parsing.
         session.delete(marketplace)
         session.commit()
 
@@ -223,6 +218,54 @@ class LLMPluginService:
             statement = statement.where(LLMPluginMarketplace.user_id == user_id)
 
         return session.exec(statement).first()
+
+    @staticmethod
+    def get_marketplace_with_access_check(
+        session: Session,
+        marketplace_id: uuid.UUID,
+        user: User,
+        *,
+        require_write: bool = False,
+    ) -> LLMPluginMarketplace:
+        """Get a marketplace, enforcing access, or raise the right HTTPException.
+
+        Two access levels:
+          - read (``require_write=False``): owner OR public OR superuser.
+          - write (``require_write=True``): owner OR superuser only (NOT public).
+
+        Raises:
+            HTTPException(404): marketplace not found.
+            HTTPException(403): caller lacks the required access.
+        """
+        marketplace = session.get(LLMPluginMarketplace, marketplace_id)
+        if not marketplace:
+            raise HTTPException(status_code=404, detail="Marketplace not found")
+
+        is_owner = marketplace.user_id == user.id
+        if is_owner or user.is_superuser:
+            return marketplace
+        if not require_write and marketplace.public_discovery:
+            return marketplace
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    @staticmethod
+    def verify_agent_access(
+        session: Session,
+        agent_id: uuid.UUID,
+        user: User,
+    ) -> Agent:
+        """Verify an agent exists and the caller may access it, or raise.
+
+        Owner OR superuser. Raises:
+            HTTPException(404): agent not found.
+            HTTPException(403): caller is neither owner nor superuser.
+        """
+        agent = session.get(Agent, agent_id)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if agent.owner_id != user.id and not user.is_superuser:
+            raise HTTPException(status_code=403, detail="Not enough permissions")
+        return agent
 
     @staticmethod
     def list_marketplaces(
@@ -347,14 +390,17 @@ class LLMPluginService:
                     ssh_key_context = create_ssh_key_file(private_key, passphrase)
                     ssh_key_path = ssh_key_context.__enter__()
 
+            # Clone to a throwaway temp dir, parse, then discard — no persistent
+            # marketplace cache. Git coordinates land in Postgres; the container
+            # re-fetches plugin files at install time from those coordinates.
+            temp_dir = tempfile.mkdtemp(prefix="cinna_marketplace_")
             try:
-                # Clone or pull repository
-                cache_path = LLMPluginService._get_marketplace_cache_path(marketplace_id)
-                repo = LLMPluginService._clone_or_pull_repo(
-                    url=marketplace.url,
-                    branch=marketplace.git_branch,
-                    cache_path=cache_path,
-                    ssh_key_path=ssh_key_path
+                # Clone repository (fresh each sync)
+                repo = clone_repository(
+                    marketplace.url,
+                    temp_dir,
+                    marketplace.git_branch,
+                    ssh_key_path,
                 )
 
                 # Get current commit hash
@@ -362,7 +408,7 @@ class LLMPluginService:
 
                 # Parse marketplace based on type
                 parser = LLMPluginService._get_parser_for_type(marketplace.type)
-                parse_result = parser(cache_path)
+                parse_result = parser(temp_dir)
 
                 # Extract metadata and plugins from parse result
                 metadata = parse_result.get("metadata", {})
@@ -397,6 +443,8 @@ class LLMPluginService:
                 logger.info(f"Successfully synced marketplace '{marketplace.name}' - {len(plugins_data)} plugins")
 
             finally:
+                # Discard the throwaway clone (no persistent cache).
+                shutil.rmtree(temp_dir, ignore_errors=True)
                 # Clean up SSH key file
                 if ssh_key_context:
                     ssh_key_context.__exit__(None, None, None)
@@ -419,29 +467,6 @@ class LLMPluginService:
 
         session.refresh(marketplace)
         return marketplace
-
-    @staticmethod
-    def _get_marketplace_cache_path(marketplace_id: uuid.UUID) -> str:
-        """Get cache path for a marketplace repository."""
-        return os.path.join(MARKETPLACE_CACHE_DIR, str(marketplace_id))
-
-    @staticmethod
-    def _clone_or_pull_repo(
-        url: str,
-        branch: str,
-        cache_path: str,
-        ssh_key_path: str | None = None
-    ):
-        """Clone a new repo or pull existing one."""
-        if os.path.exists(cache_path) and os.path.exists(os.path.join(cache_path, ".git")):
-            logger.info(f"Pulling existing repository at {cache_path}")
-            return pull_repository(cache_path, branch, ssh_key_path)
-        else:
-            logger.info(f"Cloning repository to {cache_path}")
-            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-            if os.path.exists(cache_path):
-                shutil.rmtree(cache_path)
-            return clone_repository(url, cache_path, branch, ssh_key_path)
 
     @staticmethod
     def _get_parser_for_type(marketplace_type: str):
@@ -683,27 +708,8 @@ class LLMPluginService:
 
         # Convert to public schema with marketplace name
         result = [
-            LLMPluginMarketplacePluginPublic(
-                id=p.id,
-                marketplace_id=p.marketplace_id,
-                name=p.name,
-                description=p.description,
-                version=p.version,
-                author_name=p.author_name,
-                author_email=p.author_email,
-                category=p.category,
-                homepage=p.homepage,
-                source_path=p.source_path,
-                source_type=p.source_type,
-                source_url=p.source_url,
-                source_branch=p.source_branch,
-                source_commit_hash=p.source_commit_hash,
-                plugin_type=p.plugin_type,
-                commit_hash=p.commit_hash,
-                config=p.config,
-                created_at=p.created_at,
-                updated_at=p.updated_at,
-                marketplace_name=marketplace_names.get(p.marketplace_id),
+            LLMPluginService.get_plugin_public(
+                p, marketplace_name=marketplace_names.get(p.marketplace_id)
             )
             for p in plugins
         ]
@@ -716,6 +722,43 @@ class LLMPluginService:
     ) -> LLMPluginMarketplacePlugin | None:
         """Get a plugin by ID."""
         return session.get(LLMPluginMarketplacePlugin, plugin_id)
+
+    @staticmethod
+    def get_plugin_public(
+        plugin: LLMPluginMarketplacePlugin,
+        marketplace_name: str | None = None,
+    ) -> LLMPluginMarketplacePluginPublic:
+        """Project a marketplace plugin to its public schema.
+
+        Parity with ``get_marketplace_public`` / ``_link_to_public``. When
+        ``marketplace_name`` is omitted it is read from the plugin's marketplace
+        relationship.
+        """
+        if marketplace_name is None:
+            marketplace = plugin.marketplace
+            marketplace_name = marketplace.name if marketplace else None
+        return LLMPluginMarketplacePluginPublic(
+            id=plugin.id,
+            marketplace_id=plugin.marketplace_id,
+            name=plugin.name,
+            description=plugin.description,
+            version=plugin.version,
+            author_name=plugin.author_name,
+            author_email=plugin.author_email,
+            category=plugin.category,
+            homepage=plugin.homepage,
+            source_path=plugin.source_path,
+            source_type=plugin.source_type,
+            source_url=plugin.source_url,
+            source_branch=plugin.source_branch,
+            source_commit_hash=plugin.source_commit_hash,
+            plugin_type=plugin.plugin_type,
+            commit_hash=plugin.commit_hash,
+            config=plugin.config,
+            created_at=plugin.created_at,
+            updated_at=plugin.updated_at,
+            marketplace_name=marketplace_name,
+        )
 
     # ==========================================================================
     # Agent Plugin Management
@@ -828,18 +871,42 @@ class LLMPluginService:
 
         result = []
         for link in links:
-            plugin = link.plugin
+            is_bundle = link.source == PluginSource.bundle
+            plugin = None if is_bundle else link.plugin
             marketplace = plugin.marketplace if plugin else None
 
-            # Check for updates by comparing commit hashes
+            # Check for updates by comparing commit hashes. Bundle plugins never
+            # carry a marketplace "latest" to compare against — updates arrive
+            # via bundle apply-update, not marketplace upgrade.
             has_update = False
             if plugin and link.installed_commit_hash and plugin.commit_hash:
                 has_update = link.installed_commit_hash != plugin.commit_hash
+
+            # Display identity: marketplace plugins resolve from the live plugin
+            # row; bundle plugins use the frozen snapshot fields.
+            snapshot_cfg = link.snapshot_config or {}
+            display_name = (
+                plugin.name if plugin
+                else (link.snapshot_plugin_name or snapshot_cfg.get("name"))
+            )
+            display_desc = (
+                plugin.description if plugin else snapshot_cfg.get("description")
+            )
+            display_cat = (
+                plugin.category if plugin else snapshot_cfg.get("category")
+            )
+            display_mkt = (
+                marketplace.name if marketplace else link.snapshot_marketplace_name
+            )
 
             result.append(AgentPluginLinkWithUpdateInfo(
                 id=link.id,
                 agent_id=link.agent_id,
                 plugin_id=link.plugin_id,
+                source=link.source,
+                snapshot_marketplace_name=link.snapshot_marketplace_name,
+                snapshot_plugin_name=link.snapshot_plugin_name,
+                snapshot_config=link.snapshot_config,
                 installed_version=link.installed_version,
                 installed_commit_hash=link.installed_commit_hash,
                 conversation_mode=link.conversation_mode,
@@ -850,10 +917,10 @@ class LLMPluginService:
                 has_update=has_update,
                 latest_version=plugin.version if plugin else None,
                 latest_commit_hash=plugin.commit_hash if plugin else None,
-                plugin_name=plugin.name if plugin else None,
-                plugin_description=plugin.description if plugin else None,
-                plugin_category=plugin.category if plugin else None,
-                marketplace_name=marketplace.name if marketplace else None,
+                plugin_name=display_name,
+                plugin_description=display_desc,
+                plugin_category=display_cat,
+                marketplace_name=display_mkt,
             ))
 
         return result
@@ -949,321 +1016,267 @@ class LLMPluginService:
     # ==========================================================================
 
     @staticmethod
-    def prepare_plugins_for_environment(
+    def build_plugin_manifest(
         session: Session,
         agent_id: uuid.UUID,
-        mode: str | None = None,
-        allowed_tools: list[str] | None = None
+        allowed_tools: list[str] | None = None,
     ) -> dict:
-        """
-        Prepare plugin data for syncing to agent environment.
+        """Build the workspace plugin manifest for an agent.
+
+        The manifest carries git coordinates + per-mode flags (NOT file bytes).
+        The container install routine reads it to fetch/ensure plugin files and
+        regenerate ``settings.json``. This is the v2 replacement for the old
+        ``prepare_plugins_for_environment`` (which built base64 file payloads).
+
+        Per entry:
+          - ``source=marketplace``: resolve git coords from the linked
+            ``LLMPluginMarketplacePlugin`` (+ its marketplace):
+              * ``local`` plugin -> {url: marketplace.url,
+                ref: link.installed_commit_hash or plugin.commit_hash,
+                subdir: plugin.source_path}
+              * ``url`` plugin -> {url: plugin.source_url,
+                ref: plugin.source_commit_hash or plugin.commit_hash,
+                subdir: ""} (branch as fallback ref)
+          - ``source=bundle``: ``git=null``; identity from the link's snapshot
+            fields (files are seeded from the bundle snapshot, no fetch).
 
         Args:
-            session: Database session
-            agent_id: Agent ID
-            mode: Optional filter by mode ("conversation" or "building")
-            allowed_tools: Optional list of allowed tools from agent SDK config
+            session: Database session.
+            agent_id: Agent ID.
+            allowed_tools: Optional allowed-tools list (pass-through into the
+                manifest; merged into ``settings.json`` by the install routine).
 
         Returns:
-            Dictionary with plugin data for environment:
-            - all_plugins: All plugins (for file sync, includes disabled)
-            - active_plugins: Only enabled plugins (for context)
-            - settings_json: Settings containing active plugins and allowed_tools
+            ``{"plugins": [...], "allowed_tools": [...] | None}``.
         """
-        links = LLMPluginService.get_agent_plugins(session, agent_id)
+        links = session.exec(
+            select(AgentPluginLink).where(AgentPluginLink.agent_id == agent_id)
+        ).all()
 
-        # Filter by mode if specified
-        if mode == "conversation":
-            links = [l for l in links if l.conversation_mode]
-        elif mode == "building":
-            links = [l for l in links if l.building_mode]
-
-        all_plugins = []
-        active_plugins = []
+        entries: list[dict] = []
         for link in links:
-            # Get plugin and marketplace info
-            plugin = session.get(LLMPluginMarketplacePlugin, link.plugin_id)
-            if not plugin:
-                continue
+            entry: dict | None = None
 
-            marketplace = plugin.marketplace
-            if not marketplace:
-                continue
-
-            plugin_data = {
-                "marketplace_name": marketplace.name,
-                "plugin_name": plugin.name,
-                "path": f"/app/workspace/plugins/{marketplace.name}/{plugin.name}",
-                "conversation_mode": link.conversation_mode,
-                "building_mode": link.building_mode,
-                "disabled": link.disabled,
-                "version": link.installed_version,
-                "commit_hash": link.installed_commit_hash,
-            }
-            all_plugins.append(plugin_data)
-
-            # Only add to active_plugins if not disabled
-            if not link.disabled:
-                active_plugins.append(plugin_data)
-
-        # Build settings_json with active_plugins and allowed_tools
-        settings_json = {"active_plugins": active_plugins}
-        if allowed_tools is not None:
-            settings_json["allowed_tools"] = allowed_tools
-
-        return {
-            "all_plugins": all_plugins,
-            "active_plugins": active_plugins,
-            "settings_json": settings_json,
-        }
-
-    # ==========================================================================
-    # External Plugin Repository Handling (URL-based sources)
-    # ==========================================================================
-
-    @staticmethod
-    def _get_plugin_repo_cache_path(plugin_id: uuid.UUID) -> str:
-        """Get cache path for an external plugin repository."""
-        return os.path.join(PLUGIN_REPO_CACHE_DIR, str(plugin_id))
-
-    @staticmethod
-    def _clone_or_pull_plugin_repo(
-        url: str,
-        branch: str,
-        cache_path: str,
-        ssh_key_path: str | None = None
-    ):
-        """Clone a new external plugin repo or pull existing one."""
-        if os.path.exists(cache_path) and os.path.exists(os.path.join(cache_path, ".git")):
-            logger.info(f"Pulling existing plugin repository at {cache_path}")
-            return pull_repository(cache_path, branch, ssh_key_path)
-        else:
-            logger.info(f"Cloning plugin repository to {cache_path}")
-            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-            if os.path.exists(cache_path):
-                shutil.rmtree(cache_path)
-            return clone_repository(url, cache_path, branch, ssh_key_path)
-
-    @staticmethod
-    def _parse_plugin_json(repo_path: str) -> dict:
-        """
-        Parse .claude-plugin/plugin.json from a plugin repository.
-
-        This is the standard location for plugin configuration in Claude-format plugins.
-
-        Args:
-            repo_path: Path to the cloned repository
-
-        Returns:
-            Dictionary with plugin configuration, or empty dict if not found
-        """
-        plugin_json_path = os.path.join(repo_path, ".claude-plugin", "plugin.json")
-
-        if not os.path.exists(plugin_json_path):
-            logger.warning(f"No plugin.json found at {plugin_json_path}")
-            return {}
-
-        try:
-            with open(plugin_json_path, "r") as f:
-                return json.load(f)
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in plugin.json: {e}")
-            return {}
-
-    @staticmethod
-    def sync_external_plugin_repo(
-        session: Session,
-        plugin_id: uuid.UUID,
-        user_id: uuid.UUID | None = None
-    ) -> dict:
-        """
-        Sync an external plugin repository (URL-based source).
-
-        Clones/pulls the plugin's source_url repository and reads the
-        .claude-plugin/plugin.json for additional metadata.
-
-        Args:
-            session: Database session
-            plugin_id: Plugin ID
-            user_id: User ID (for SSH key access if needed)
-
-        Returns:
-            Dictionary with plugin configuration from plugin.json
-
-        Raises:
-            ValueError: If plugin not found or not URL-based
-            GitOperationError: If git operations fail
-        """
-        plugin = session.get(LLMPluginMarketplacePlugin, plugin_id)
-        if not plugin:
-            raise ValueError(f"Plugin {plugin_id} not found")
-
-        if plugin.source_type != PluginSourceType.url:
-            raise ValueError(f"Plugin {plugin_id} is not URL-based")
-
-        if not plugin.source_url:
-            raise ValueError(f"Plugin {plugin_id} has no source URL")
-
-        logger.info(f"Syncing external plugin repo for '{plugin.name}' from {plugin.source_url}")
-
-        # Clone or pull the plugin repository
-        cache_path = LLMPluginService._get_plugin_repo_cache_path(plugin_id)
-
-        try:
-            # TODO: Support SSH keys for private plugin repos
-            repo = LLMPluginService._clone_or_pull_plugin_repo(
-                url=plugin.source_url,
-                branch=plugin.source_branch,
-                cache_path=cache_path,
-                ssh_key_path=None
-            )
-
-            # Get current commit hash
-            source_commit_hash = get_current_commit_hash(repo)
-
-            # Update plugin with the commit hash
-            plugin.source_commit_hash = source_commit_hash
-            plugin.updated_at = datetime.now(UTC)
-            session.add(plugin)
-            session.commit()
-
-            # Parse plugin.json for configuration
-            plugin_config = LLMPluginService._parse_plugin_json(cache_path)
-
-            logger.info(f"Successfully synced plugin repo for '{plugin.name}' at commit {source_commit_hash}")
-            return plugin_config
-
-        except GitOperationError as e:
-            logger.error(f"Git error syncing plugin repo for '{plugin.name}': {e}")
-            raise
-
-    @staticmethod
-    def get_plugin_files(
-        session: Session,
-        plugin_id: uuid.UUID,
-        commit_hash: str | None = None,
-        user_id: uuid.UUID | None = None
-    ) -> dict[str, bytes]:
-        """
-        Get plugin files for syncing to environment.
-
-        Supports both local plugins (from marketplace repo) and URL-based plugins
-        (from external repositories).
-
-        Args:
-            session: Database session
-            plugin_id: Plugin ID
-            commit_hash: Optional specific commit hash (for reproducibility)
-            user_id: User ID (for SSH key access)
-
-        Returns:
-            Dictionary mapping file paths to contents
-        """
-        plugin = session.get(LLMPluginMarketplacePlugin, plugin_id)
-        if not plugin:
-            raise ValueError(f"Plugin {plugin_id} not found")
-
-        # Handle URL-based plugins (external repositories)
-        if plugin.source_type == PluginSourceType.url:
-            return LLMPluginService._get_url_plugin_files(session, plugin, user_id)
-
-        # Handle local plugins (from marketplace repo)
-        return LLMPluginService._get_local_plugin_files(session, plugin)
-
-    @staticmethod
-    def _get_local_plugin_files(
-        session: Session,
-        plugin: LLMPluginMarketplacePlugin
-    ) -> dict[str, bytes]:
-        """Get files for a local plugin (from marketplace repo)."""
-        marketplace = plugin.marketplace
-        if not marketplace:
-            raise ValueError(f"Marketplace not found for plugin {plugin.id}")
-
-        # Get marketplace cache path
-        cache_path = LLMPluginService._get_marketplace_cache_path(marketplace.id)
-        if not os.path.exists(cache_path):
-            raise ValueError(f"Marketplace repository not cached. Run sync first.")
-
-        # Get plugin source path
-        source_path = plugin.source_path.lstrip("./")
-        plugin_path = os.path.join(cache_path, source_path)
-
-        if not os.path.exists(plugin_path):
-            raise ValueError(f"Plugin path {plugin_path} not found")
-
-        # Collect all files in the plugin directory
-        files = {}
-        for root, dirs, filenames in os.walk(plugin_path):
-            for filename in filenames:
-                file_path = os.path.join(root, filename)
-                rel_path = os.path.relpath(file_path, plugin_path)
-
-                with open(file_path, "rb") as f:
-                    files[rel_path] = f.read()
-
-        return files
-
-    @staticmethod
-    def _get_url_plugin_files(
-        session: Session,
-        plugin: LLMPluginMarketplacePlugin,
-        user_id: uuid.UUID | None = None
-    ) -> dict[str, bytes]:
-        """
-        Get files for a URL-based plugin (from external repository).
-
-        If the repository is not cached, it will be cloned first.
-        """
-        if not plugin.source_url:
-            raise ValueError(f"Plugin {plugin.id} has no source URL")
-
-        # Get plugin repo cache path
-        cache_path = LLMPluginService._get_plugin_repo_cache_path(plugin.id)
-
-        # Clone/pull if not cached
-        if not os.path.exists(cache_path):
-            logger.info(f"Plugin repo not cached, cloning {plugin.source_url}")
-            try:
-                LLMPluginService._clone_or_pull_plugin_repo(
-                    url=plugin.source_url,
-                    branch=plugin.source_branch,
-                    cache_path=cache_path,
-                    ssh_key_path=None
-                )
-            except GitOperationError as e:
-                raise ValueError(f"Failed to clone plugin repository: {e}")
-
-        # For URL-based plugins, the entire repo is the plugin
-        # (no source_path subdir like local plugins)
-        plugin_path = cache_path
-
-        # Collect all files in the plugin directory
-        files = {}
-        for root, dirs, filenames in os.walk(plugin_path):
-            # Skip .git directory
-            if ".git" in root:
-                continue
-
-            for filename in filenames:
-                file_path = os.path.join(root, filename)
-                rel_path = os.path.relpath(file_path, plugin_path)
-
-                # Skip .git files
-                if rel_path.startswith(".git"):
+            if link.source == PluginSource.bundle:
+                # Bundle-sourced: identity from snapshot fields, no git coords.
+                if not (link.snapshot_marketplace_name and link.snapshot_plugin_name):
+                    logger.warning(
+                        f"Skipping bundle plugin link {link.id} with missing snapshot names"
+                    )
+                    continue
+                entry = {
+                    "marketplace_name": link.snapshot_marketplace_name,
+                    "plugin_name": link.snapshot_plugin_name,
+                    "source": PluginSource.bundle.value,
+                    "git": None,
+                    "conversation_mode": link.conversation_mode,
+                    "building_mode": link.building_mode,
+                    "disabled": link.disabled,
+                    "version": link.installed_version,
+                    "commit_hash": link.installed_commit_hash,
+                }
+            else:
+                # Marketplace-sourced: resolve git coordinates from DB rows.
+                plugin = link.plugin
+                if not plugin:
+                    logger.warning(
+                        f"Skipping marketplace plugin link {link.id} — plugin row not resolvable"
+                    )
+                    continue
+                marketplace = plugin.marketplace
+                if not marketplace:
+                    logger.warning(
+                        f"Skipping plugin '{plugin.name}' — marketplace not resolvable"
+                    )
                     continue
 
-                with open(file_path, "rb") as f:
-                    files[rel_path] = f.read()
+                git = LLMPluginService._resolve_plugin_git_coords(link, plugin, marketplace)
+                if git is None:
+                    logger.warning(
+                        f"Skipping plugin '{plugin.name}' — could not resolve git coordinates"
+                    )
+                    continue
 
-        return files
+                entry = {
+                    "marketplace_name": marketplace.name,
+                    "plugin_name": plugin.name,
+                    "source": PluginSource.marketplace.value,
+                    "git": git,
+                    "conversation_mode": link.conversation_mode,
+                    "building_mode": link.building_mode,
+                    "disabled": link.disabled,
+                    "version": link.installed_version,
+                    "commit_hash": link.installed_commit_hash,
+                }
+
+            if entry:
+                entries.append(entry)
+
+        manifest: dict = {"plugins": entries}
+        manifest["allowed_tools"] = allowed_tools
+        return manifest
+
+    @staticmethod
+    def _resolve_plugin_git_coords(
+        link: AgentPluginLink,
+        plugin: LLMPluginMarketplacePlugin,
+        marketplace: LLMPluginMarketplace,
+    ) -> dict | None:
+        """Resolve {url, ref, subdir} for a marketplace plugin.
+
+        For ``local`` plugins the files live in the marketplace repo at
+        ``source_path``; for ``url`` plugins they live in an external repo.
+        Returns None when no usable URL is available.
+        """
+        if plugin.source_type == PluginSourceType.url:
+            if not plugin.source_url:
+                return None
+            return {
+                # Normalize public SSH URLs → HTTPS so the keyless container can
+                # clone public repos (e.g. anthropics over git@github.com).
+                "url": LLMPluginService._normalize_public_git_url(plugin.source_url),
+                # Pin to the EXTERNAL repo's own commit (source_commit_hash) when
+                # captured, else fall back to its branch. Do NOT fall back to
+                # plugin.commit_hash here: for url plugins that field holds the
+                # MARKETPLACE repo's commit (parsed from marketplace.json), which
+                # does not exist in the external source_url repo and would make
+                # the container's `git checkout <ref>` fail with "unable to read
+                # tree". (Capturing the external HEAD into source_commit_hash at
+                # install time is a documented follow-up — it needs a network
+                # fetch the v2 design avoids, so url plugins track the branch tip.)
+                "ref": plugin.source_commit_hash or plugin.source_branch,
+                "subdir": "",
+            }
+
+        # local plugin — files are a subdir of the marketplace repo
+        subdir = (plugin.source_path or "").strip().lstrip("./")
+        return {
+            "url": LLMPluginService._normalize_public_git_url(marketplace.url),
+            # Pinned to the install-time commit for reproducibility; fall back to
+            # the plugin's parsed commit, then the marketplace branch.
+            "ref": link.installed_commit_hash or plugin.commit_hash or marketplace.git_branch,
+            "subdir": subdir,
+        }
+
+    # Well-known PUBLIC git hosts whose SSH URLs clone keyless over HTTPS. Only
+    # these are rewritten — unknown/private hosts are left untouched so the
+    # private-marketplace SSH flow (deferred) is never broken.
+    _PUBLIC_GIT_HOSTS = ("github.com", "gitlab.com", "bitbucket.org")
+    # scp-like form: [user@]host:owner/repo(.git)  e.g. git@github.com:org/repo.git
+    _SCP_GIT_RE = re.compile(r"^(?:[^@/]+@)?([^:/]+):(.+)$")
+    # ssh:// form: ssh://[user@]host[:port]/owner/repo(.git)
+    _SSH_GIT_RE = re.compile(r"^ssh://(?:[^@/]+@)?([^:/]+)(?::\d+)?/(.+)$")
+
+    @staticmethod
+    def _normalize_public_git_url(url: str | None) -> str | None:
+        """Rewrite a well-known PUBLIC host's SSH git URL to its HTTPS form.
+
+        The agent-env container has no GitHub/GitLab/Bitbucket SSH key, so an
+        SSH-form URL (``git@github.com:org/repo.git`` or
+        ``ssh://git@github.com/org/repo.git``) fails ``Permission denied
+        (publickey)`` even for a PUBLIC repo that clones fine over HTTPS. We
+        rewrite only the recognized public hosts; any other SSH URL (a genuinely
+        private host) is returned unchanged so the deferred SSH-key-injection
+        path is untouched.
+
+        Examples:
+          git@github.com:anthropics/x.git      → https://github.com/anthropics/x.git
+          ssh://git@gitlab.com/org/x           → https://gitlab.com/org/x.git
+          https://github.com/org/x.git         → unchanged (already HTTPS)
+          git@my-private-host.internal:org/x   → unchanged (unknown host)
+        """
+        if not url:
+            return url
+        candidate = url.strip()
+
+        # Already HTTP(S) / git protocol — nothing to do.
+        if candidate.startswith(("https://", "http://", "git://")):
+            return url
+
+        host = path = None
+        m = LLMPluginService._SSH_GIT_RE.match(candidate)
+        if m:
+            host, path = m.group(1), m.group(2)
+        else:
+            m = LLMPluginService._SCP_GIT_RE.match(candidate)
+            if m:
+                host, path = m.group(1), m.group(2)
+
+        if not host or host.lower() not in LLMPluginService._PUBLIC_GIT_HOSTS:
+            return url  # unknown/private host or not an SSH URL — leave as-is
+
+        path = path.lstrip("/")
+        if not path.endswith(".git"):
+            path = f"{path}.git"
+        return f"https://{host.lower()}/{path}"
+
+    @staticmethod
+    def _link_to_public(link: AgentPluginLink) -> AgentPluginLinkPublic:
+        """Project an AgentPluginLink to its public schema (source-aware)."""
+        return AgentPluginLinkPublic(
+            id=link.id,
+            agent_id=link.agent_id,
+            plugin_id=link.plugin_id,
+            source=link.source,
+            snapshot_marketplace_name=link.snapshot_marketplace_name,
+            snapshot_plugin_name=link.snapshot_plugin_name,
+            snapshot_config=link.snapshot_config,
+            installed_version=link.installed_version,
+            installed_commit_hash=link.installed_commit_hash,
+            conversation_mode=link.conversation_mode,
+            building_mode=link.building_mode,
+            disabled=link.disabled,
+            created_at=link.created_at,
+            updated_at=link.updated_at,
+        )
+
+    @staticmethod
+    def _coerce_install_results(raw: object) -> list[PluginInstallResult]:
+        """Normalize adapter `set_plugins` output into PluginInstallResult list.
+
+        Adapters return a list of result dicts; defensively tolerate a non-list
+        (e.g. an old stub) by treating it as no results.
+        """
+        if not isinstance(raw, list):
+            return []
+        results: list[PluginInstallResult] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            try:
+                results.append(PluginInstallResult(
+                    plugin_name=item.get("plugin_name", ""),
+                    marketplace_name=item.get("marketplace_name", ""),
+                    source=item.get("source", "marketplace"),
+                    status=item.get("status", "failed"),
+                    error_message=item.get("error_message"),
+                ))
+            except Exception:
+                continue
+        return results
+
+    @staticmethod
+    def _add_unique_failure(
+        bucket: list[PluginInstallResult], result: PluginInstallResult
+    ) -> None:
+        """Append `result` to `bucket` unless an equivalent entry already exists.
+
+        Dedup key = (marketplace_name, plugin_name, source) so the same plugin
+        failing across multiple environments is reported once.
+        """
+        key = (result.marketplace_name, result.plugin_name, result.source)
+        for existing in bucket:
+            if (existing.marketplace_name, existing.plugin_name, existing.source) == key:
+                return
+        bucket.append(result)
 
     @staticmethod
     async def sync_plugins_to_agent_environments(
         session: Session,
         agent_id: uuid.UUID,
         user_id: uuid.UUID,
-        plugin_link: AgentPluginLink | None = None
+        plugin_link: AgentPluginLink | None = None,
+        message_prefix: str | None = None,
     ) -> PluginSyncResponse:
         """
         Sync plugins to all running and suspended environments of an agent.
@@ -1275,16 +1288,22 @@ class LLMPluginService:
             agent_id: Agent ID
             user_id: User ID (for SSH key access)
             plugin_link: Optional plugin link that triggered the sync
+            message_prefix: Optional verb prepended to the response ``message``
+                (e.g. ``"Plugin uninstalled."``) so callers don't post-process it.
 
         Returns:
             PluginSyncResponse with detailed status per environment
         """
+        def _prefixed(msg: str) -> str:
+            return f"{message_prefix} {msg}" if message_prefix else msg
         from app.services.environments.environment_service import EnvironmentService
         from sqlalchemy import or_
 
         environments_synced = []
         successful_syncs = 0
         failed_syncs = 0
+        # Plugin-level failures aggregated across all environments (deduped).
+        aggregated_failures: list[PluginInstallResult] = []
 
         # Get all running and suspended environments
         statement = select(AgentEnvironment).where(
@@ -1300,21 +1319,10 @@ class LLMPluginService:
             logger.info(f"No running/suspended environments for agent {agent_id}, skipping plugin sync")
             plugin_link_public = None
             if plugin_link:
-                plugin_link_public = AgentPluginLinkPublic(
-                    id=plugin_link.id,
-                    agent_id=plugin_link.agent_id,
-                    plugin_id=plugin_link.plugin_id,
-                    installed_version=plugin_link.installed_version,
-                    installed_commit_hash=plugin_link.installed_commit_hash,
-                    conversation_mode=plugin_link.conversation_mode,
-                    building_mode=plugin_link.building_mode,
-                    disabled=plugin_link.disabled,
-                    created_at=plugin_link.created_at,
-                    updated_at=plugin_link.updated_at,
-                )
+                plugin_link_public = LLMPluginService._link_to_public(plugin_link)
             return PluginSyncResponse(
                 success=True,
-                message="No environments to sync",
+                message=_prefixed("No environments to sync"),
                 plugin_link=plugin_link_public,
                 environments_synced=[],
                 total_environments=0,
@@ -1322,48 +1330,13 @@ class LLMPluginService:
                 failed_syncs=0,
             )
 
-        # Prepare plugin data once
-        plugins_data = LLMPluginService.prepare_plugins_for_environment(
+        # Build the manifest once (git coordinates + flags, no file bytes). The
+        # container install routine (triggered via adapter.set_plugins) fetches
+        # the files at the pinned ref and regenerates settings.json.
+        manifest = LLMPluginService.build_plugin_manifest(
             session=session,
-            agent_id=agent_id
+            agent_id=agent_id,
         )
-
-        # Get plugin files for ALL plugins (including disabled) for file sync
-        # Files are base64 encoded for JSON transport
-        plugin_files = {}
-        for plugin_info in plugins_data.get("all_plugins", []):
-            # Find the plugin link to get plugin_id
-            link = session.exec(
-                select(AgentPluginLink).where(
-                    AgentPluginLink.agent_id == agent_id
-                ).join(LLMPluginMarketplacePlugin).where(
-                    LLMPluginMarketplacePlugin.name == plugin_info["plugin_name"]
-                )
-            ).first()
-
-            if link:
-                try:
-                    files = LLMPluginService.get_plugin_files(
-                        session=session,
-                        plugin_id=link.plugin_id,
-                        commit_hash=plugin_info.get("commit_hash"),
-                        user_id=user_id
-                    )
-                    # Base64 encode file contents for JSON serialization
-                    encoded_files = {
-                        path: base64.b64encode(content).decode('utf-8')
-                        for path, content in files.items()
-                    }
-                    plugin_key = f"{plugin_info['marketplace_name']}/{plugin_info['plugin_name']}"
-                    plugin_files[plugin_key] = encoded_files
-                except Exception as e:
-                    logger.error(f"Failed to get files for plugin {plugin_info['plugin_name']}: {e}")
-
-        # Combine plugins data with files
-        full_plugins_data = {
-            **plugins_data,
-            "plugin_files": plugin_files,
-        }
 
         # Get lifecycle manager
         lifecycle_manager = EnvironmentService.get_lifecycle_manager()
@@ -1393,8 +1366,14 @@ class LLMPluginService:
 
                 logger.info(f"Syncing plugins to environment {env.id}")
                 adapter = lifecycle_manager.get_adapter(env)
-                await adapter.set_plugins(full_plugins_data)
+                # Pushes the manifest + runs the container install routine in one
+                # call; per-plugin failures are returned (not raised) so a single
+                # bad plugin never fails the whole env sync.
+                raw_results = await adapter.set_plugins(manifest)
                 logger.info(f"Successfully synced plugins to environment {env.id}")
+
+                env_results = LLMPluginService._coerce_install_results(raw_results)
+                env_partial = any(r.status == "failed" for r in env_results)
 
                 environments_synced.append(EnvironmentSyncStatus(
                     environment_id=env.id,
@@ -1402,8 +1381,15 @@ class LLMPluginService:
                     status="activated_and_synced" if was_suspended else "success",
                     error_message=None,
                     was_suspended=was_suspended,
+                    plugin_results=env_results,
+                    partial_failures=env_partial,
                 ))
                 successful_syncs += 1
+                # Aggregate plugin-level failures across environments for the
+                # top-level response (deduped by marketplace/plugin/source).
+                for r in env_results:
+                    if r.status == "failed":
+                        LLMPluginService._add_unique_failure(aggregated_failures, r)
 
             except Exception as e:
                 logger.error(f"Failed to sync plugins to environment {env.id}: {e}")
@@ -1420,27 +1406,26 @@ class LLMPluginService:
         # Build response
         plugin_link_public = None
         if plugin_link:
-            plugin_link_public = AgentPluginLinkPublic(
-                id=plugin_link.id,
-                agent_id=plugin_link.agent_id,
-                plugin_id=plugin_link.plugin_id,
-                installed_version=plugin_link.installed_version,
-                installed_commit_hash=plugin_link.installed_commit_hash,
-                conversation_mode=plugin_link.conversation_mode,
-                building_mode=plugin_link.building_mode,
-                disabled=plugin_link.disabled,
-                created_at=plugin_link.created_at,
-                updated_at=plugin_link.updated_at,
+            plugin_link_public = LLMPluginService._link_to_public(plugin_link)
+
+        partial_failures = len(aggregated_failures) > 0
+        message = f"Synced to {successful_syncs}/{len(environments)} environments"
+        if failed_syncs > 0:
+            message += f" ({failed_syncs} failed)"
+        if partial_failures:
+            names = ", ".join(
+                f"{r.marketplace_name}/{r.plugin_name}" for r in aggregated_failures
             )
+            message += f" — {len(aggregated_failures)} plugin(s) failed to install: {names}"
 
         return PluginSyncResponse(
             success=failed_syncs == 0,
-            message=f"Synced to {successful_syncs}/{len(environments)} environments" + (
-                f" ({failed_syncs} failed)" if failed_syncs > 0 else ""
-            ),
+            message=_prefixed(message),
             plugin_link=plugin_link_public,
             environments_synced=environments_synced,
             total_environments=len(environments),
             successful_syncs=successful_syncs,
             failed_syncs=failed_syncs,
+            plugin_results=aggregated_failures,
+            partial_failures=partial_failures,
         )

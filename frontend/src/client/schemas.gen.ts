@@ -2544,6 +2544,12 @@ export const AgentBundleRevisionPublicSchema = {
             title: 'Schedules',
             default: []
         },
+        plugin_specs: {
+            items: {},
+            type: 'array',
+            title: 'Plugin Specs',
+            default: []
+        },
         published_by_user_id: {
             anyOf: [
                 {
@@ -3940,9 +3946,54 @@ export const AgentPluginLinkPublicSchema = {
             title: 'Agent Id'
         },
         plugin_id: {
-            type: 'string',
-            format: 'uuid',
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Plugin Id'
+        },
+        source: {
+            '$ref': '#/components/schemas/PluginSource',
+            default: 'marketplace'
+        },
+        snapshot_marketplace_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Snapshot Marketplace Name'
+        },
+        snapshot_plugin_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Snapshot Plugin Name'
+        },
+        snapshot_config: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Snapshot Config'
         },
         installed_version: {
             anyOf: [
@@ -4049,9 +4100,54 @@ export const AgentPluginLinkWithUpdateInfoSchema = {
             title: 'Agent Id'
         },
         plugin_id: {
-            type: 'string',
-            format: 'uuid',
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Plugin Id'
+        },
+        source: {
+            '$ref': '#/components/schemas/PluginSource',
+            default: 'marketplace'
+        },
+        snapshot_marketplace_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Snapshot Marketplace Name'
+        },
+        snapshot_plugin_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Snapshot Plugin Name'
+        },
+        snapshot_config: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Snapshot Config'
         },
         installed_version: {
             anyOf: [
@@ -9925,6 +10021,19 @@ export const EnvironmentSyncStatusSchema = {
             type: 'boolean',
             title: 'Was Suspended',
             default: false
+        },
+        plugin_results: {
+            items: {
+                '$ref': '#/components/schemas/PluginInstallResult'
+            },
+            type: 'array',
+            title: 'Plugin Results',
+            default: []
+        },
+        partial_failures: {
+            type: 'boolean',
+            title: 'Partial Failures',
+            default: false
         }
     },
     type: 'object',
@@ -15033,6 +15142,61 @@ export const PendingToolsResponseSchema = {
     description: 'Response for pending tools endpoint'
 } as const;
 
+export const PluginInstallResultSchema = {
+    properties: {
+        plugin_name: {
+            type: 'string',
+            title: 'Plugin Name'
+        },
+        marketplace_name: {
+            type: 'string',
+            title: 'Marketplace Name'
+        },
+        source: {
+            type: 'string',
+            title: 'Source',
+            default: 'marketplace'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        error_message: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error Message'
+        }
+    },
+    type: 'object',
+    required: ['plugin_name', 'marketplace_name', 'status'],
+    title: 'PluginInstallResult',
+    description: `Per-plugin result returned by the container install routine.
+
+Errors are surfaced as results, not exceptions: a \`\`failed\`\` plugin is
+excluded from \`\`settings.json\`\` (so the SDK never gets a missing path) and
+reported, never silently listed-but-absent.`
+} as const;
+
+export const PluginSourceSchema = {
+    type: 'string',
+    enum: ['marketplace', 'bundle'],
+    title: 'PluginSource',
+    description: `Origin of an installed agent plugin link.
+
+- \`\`marketplace\`\` — files fetched by the container via \`\`git clone\`\` of the
+  plugin's marketplace source at its pinned commit. \`\`plugin_id\`\` references
+  the resolvable marketplace plugin row.
+- \`\`bundle\`\` — files delivered inside the install's bundle revision snapshot
+  and seeded into the env workspace. \`\`plugin_id\`\` is NULL (no marketplace
+  needed); identity/coordinates come from the snapshot fields.`
+} as const;
+
 export const PluginSourceTypeSchema = {
     type: 'string',
     enum: ['local', 'url'],
@@ -15082,6 +15246,19 @@ export const PluginSyncResponseSchema = {
             type: 'integer',
             title: 'Failed Syncs',
             default: 0
+        },
+        plugin_results: {
+            items: {
+                '$ref': '#/components/schemas/PluginInstallResult'
+            },
+            type: 'array',
+            title: 'Plugin Results',
+            default: []
+        },
+        partial_failures: {
+            type: 'boolean',
+            title: 'Partial Failures',
+            default: false
         }
     },
     type: 'object',

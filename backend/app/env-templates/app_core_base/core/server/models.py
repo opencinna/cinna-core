@@ -179,11 +179,57 @@ class PluginInfo(BaseModel):
     commit_hash: str | None = None
 
 
-class PluginsUpdate(BaseModel):
-    """Update plugins in workspace"""
-    active_plugins: list[PluginInfo]  # List of plugins to sync
-    settings_json: dict  # Settings JSON to write
-    plugin_files: dict[str, dict[str, str]]  # {plugin_key: {relative_path: base64_content}}
+class PluginGitCoords(BaseModel):
+    """Git coordinates for fetching a marketplace plugin's files."""
+    url: str                      # Repo to clone (marketplace repo or external plugin repo)
+    ref: str | None = None        # Commit hash (preferred) or branch to check out
+    subdir: str = ""              # Subdirectory within the repo holding the plugin files
+
+
+class PluginManifestEntry(BaseModel):
+    """One plugin in the workspace plugin manifest.
+
+    Source-agnostic on-disk layout: files always land at
+    /app/workspace/plugins/<marketplace_name>/<plugin_name>/.
+    """
+    marketplace_name: str
+    plugin_name: str
+    source: str = "marketplace"   # "marketplace" | "bundle"
+    git: PluginGitCoords | None = None  # None for bundle source (files pre-seeded)
+    conversation_mode: bool = True
+    building_mode: bool = True
+    disabled: bool = False
+    version: str | None = None
+    commit_hash: str | None = None
+
+
+class PluginManifest(BaseModel):
+    """Backend-authored plugin manifest pushed to /config/plugins.
+
+    Replaces the old base64 file-push payload: carries git coordinates +
+    flags, not file bytes. The container install routine materializes files
+    and regenerates settings.json from this.
+    """
+    plugins: list[PluginManifestEntry] = []
+    allowed_tools: list[str] | None = None  # Merged into settings.json (pass-through)
+
+
+class PluginInstallResult(BaseModel):
+    """Per-plugin result returned by the container install routine."""
+    plugin_name: str
+    marketplace_name: str
+    source: str = "marketplace"
+    status: str  # "installed" | "failed" | "skipped"
+    error_message: str | None = None
+
+
+class PluginsInstallResponse(BaseModel):
+    """Response of POST /config/plugins after running the install routine."""
+    status: str
+    results: list[PluginInstallResult] = []
+    installed_count: int = 0
+    failed_count: int = 0
+    skipped_count: int = 0
 
 
 class PluginsSettingsResponse(BaseModel):

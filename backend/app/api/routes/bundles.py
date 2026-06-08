@@ -113,6 +113,7 @@ def _revision_to_public(
         model_override_conversation=revision.model_override_conversation,
         required_credential_specs=revision.required_credential_specs or [],
         schedules=revision.schedules or [],
+        plugin_specs=revision.plugin_specs or [],
         published_by_user_id=revision.published_by_user_id,
         published_at=revision.published_at,
         release_notes=revision.release_notes,

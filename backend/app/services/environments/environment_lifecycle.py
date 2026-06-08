@@ -323,7 +323,15 @@ class EnvironmentLifecycleManager:
         db_session.add(environment)
         db_session.commit()
 
-        await self._sync_plugins_to_environment(db_session, environment, agent)
+        plugin_results = await self._sync_plugins_to_environment(
+            db_session, environment, agent
+        )
+        # Surface any per-plugin install failures (non-blocking): live amber
+        # banner via realtime event + email to the agent owner. Best-effort —
+        # surfacing must never break env start.
+        await self._surface_plugin_failures(
+            db_session, environment, agent, plugin_results
+        )
 
         # Sync handover configuration to environment
         # This ensures cloned agents get empty handover config (not stale parent config)
@@ -340,70 +348,152 @@ class EnvironmentLifecycleManager:
         db_session: Session,
         environment: AgentEnvironment,
         agent: Agent
-    ):
+    ) -> list[dict]:
         """
-        Sync installed plugins to the agent environment.
+        Push the plugin manifest and run the container install routine.
+
+        Builds the manifest (git coordinates + per-mode flags, no file bytes)
+        and hands it to the adapter, which writes ``manifest.json``, fetches /
+        ensures plugin files at the pinned ref, regenerates ``settings.json``,
+        and returns a per-plugin install result list.
 
         Args:
             db_session: Database session
             environment: Environment instance
             agent: Agent instance
+
+        Returns:
+            Per-plugin install result dicts (collected for surfacing). Empty
+            list on transport failure (logged; never blocks env start).
         """
         from app.services.plugins.llm_plugin_service import LLMPluginService
 
         adapter = self.get_adapter(environment)
 
-        # Get allowed_tools from agent SDK config
+        # Get allowed_tools from agent SDK config (pass-through into manifest).
         allowed_tools = None
         if agent.agent_sdk_config:
             allowed_tools = agent.agent_sdk_config.get("allowed_tools", [])
 
-        # Prepare plugin data with allowed_tools
-        plugins_data = LLMPluginService.prepare_plugins_for_environment(
+        manifest = LLMPluginService.build_plugin_manifest(
             session=db_session,
             agent_id=agent.id,
-            allowed_tools=allowed_tools
+            allowed_tools=allowed_tools,
         )
 
-        # Get plugin files for each installed plugin
-        plugin_files = {}
-        for plugin_info in plugins_data.get("active_plugins", []):
-            # Find the plugin link to get plugin_id
-            from app.models.plugins.llm_plugin import AgentPluginLink, LLMPluginMarketplacePlugin
-            link = db_session.exec(
-                select(AgentPluginLink).where(
-                    AgentPluginLink.agent_id == agent.id
-                ).join(LLMPluginMarketplacePlugin).where(
-                    LLMPluginMarketplacePlugin.name == plugin_info["plugin_name"]
-                )
-            ).first()
+        try:
+            results = await adapter.set_plugins(manifest)
+            if not isinstance(results, list):
+                results = []
 
-            if link:
-                try:
-                    files = LLMPluginService.get_plugin_files(
-                        session=db_session,
-                        plugin_id=link.plugin_id,
-                        commit_hash=plugin_info.get("commit_hash"),
-                        user_id=agent.owner_id
+            failures = [r for r in results if r.get("status") == "failed"]
+            if failures:
+                logger.warning(
+                    f"Plugin install reported {len(failures)} failure(s) for env "
+                    f"{environment.id}: "
+                    + ", ".join(
+                        f"{r.get('marketplace_name')}/{r.get('plugin_name')}" for r in failures
                     )
-                    # Encode files as base64 for JSON transport
-                    import base64
-                    encoded_files = {
-                        path: base64.b64encode(content).decode('utf-8')
-                        for path, content in files.items()
-                    }
-                    plugin_key = f"{plugin_info['marketplace_name']}/{plugin_info['plugin_name']}"
-                    plugin_files[plugin_key] = encoded_files
-                except Exception as e:
-                    logger.warning(f"Failed to get files for plugin {plugin_info['plugin_name']}: {e}")
+                )
+            return results
+        except Exception as e:
+            # Plugin sync must never block env start / setup; per-plugin failures
+            # are returned as results (surfaced in Phase 2). A transport/endpoint
+            # error is logged and swallowed here.
+            logger.warning(
+                f"Plugin sync to environment {environment.id} failed (non-blocking): {e}"
+            )
+            return []
 
-        # Combine plugins data with files
-        full_plugins_data = {
-            **plugins_data,
-            "plugin_files": plugin_files,
-        }
+    async def _surface_plugin_failures(
+        self,
+        db_session: Session,
+        environment: AgentEnvironment,
+        agent: Agent,
+        plugin_results: list[dict],
+    ) -> None:
+        """Surface per-plugin install failures non-blockingly.
 
-        await adapter.set_plugins(full_plugins_data)
+        On start / rebuild, if any plugin failed to install in the container:
+          1. Emit a ``PLUGIN_SYNC_WARNING`` realtime event to the agent owner so
+             the plugins tab shows a live amber banner + invalidates its query.
+          2. Send a ``PLUGIN_SYNC_FAILED`` system notification (email) to the
+             owner, deduped per environment by the notification throttle.
+
+        Entirely best-effort: every failure here is logged and swallowed so it
+        can never break env start.
+        """
+        try:
+            failures = [
+                r for r in (plugin_results or []) if r.get("status") == "failed"
+            ]
+            if not failures:
+                return
+
+            # Compact, secret-free failure payload (never log/transmit file content).
+            failure_payload = [
+                {
+                    "marketplace_name": r.get("marketplace_name", ""),
+                    "plugin_name": r.get("plugin_name", ""),
+                    "source": r.get("source", "marketplace"),
+                    "error_message": r.get("error_message"),
+                }
+                for r in failures
+            ]
+            instance_name = environment.instance_name or str(environment.id)
+
+            # 1) Realtime event → live amber banner (mirror model-health/agent-api).
+            try:
+                from app.models.events.event import EventType
+                from app.services.events.event_service import event_service
+
+                await event_service.emit_event(
+                    event_type=EventType.PLUGIN_SYNC_WARNING,
+                    model_id=agent.id,
+                    user_id=agent.owner_id,
+                    meta={
+                        "agent_id": str(agent.id),
+                        "environment_id": str(environment.id),
+                        "instance_name": instance_name,
+                        "failures": failure_payload,
+                    },
+                )
+            except Exception as e:
+                logger.debug(f"Failed to emit PLUGIN_SYNC_WARNING: {e}")
+
+            # 2) System notification (email) → agent owner, deduped per env.
+            try:
+                from app.core.config import settings
+                from app.services.notifications.notification_catalog import (
+                    NotificationType,
+                )
+                from app.services.notifications.notification_service import (
+                    SystemNotificationService,
+                )
+
+                detail = "; ".join(
+                    f"{f['marketplace_name']}/{f['plugin_name']}"
+                    + (f": {f['error_message']}" if f.get("error_message") else "")
+                    for f in failure_payload
+                ) or "One or more plugins failed to install."
+
+                await SystemNotificationService.notify(
+                    db_session,
+                    user_id=agent.owner_id,
+                    notification_type=NotificationType.PLUGIN_SYNC_FAILED,
+                    context={
+                        "project_name": settings.PROJECT_NAME,
+                        "agent_name": agent.name or "your agent",
+                        "instance_name": instance_name,
+                        "environment_id": str(environment.id),
+                        "detail": detail,
+                        "link": f"{settings.FRONTEND_HOST}/agents/{agent.id}",
+                    },
+                )
+            except Exception as e:
+                logger.debug(f"Failed to dispatch PLUGIN_SYNC_FAILED notification: {e}")
+        except Exception as e:
+            logger.debug(f"Plugin failure surfacing failed for env {environment.id}: {e}")
 
     async def _setup_new_container(
         self,
@@ -443,6 +533,18 @@ class EnvironmentLifecycleManager:
         db_session.commit()
 
         await adapter.install_system_packages()
+
+        # Install plugins the same way libraries are installed: declaratively,
+        # from the workspace manifest, by the container itself. For a rebuilt
+        # container the persisted manifest + most files survive, so this is an
+        # idempotent ensure/heal step (re-fetches missing/partial plugin trees).
+        # The manifest is rebuilt from DB here so a fresh container also gets a
+        # correct manifest before the dynamic-data sync runs. Non-blocking.
+        environment.status_message = "Installing plugins..."
+        db_session.add(environment)
+        db_session.commit()
+
+        await self._sync_plugins_to_environment(db_session, environment, agent)
 
         # Seed the prompt-sync baselines for this brand-new container: the DB is
         # authoritative at first setup, so push DB prompts and initialise the

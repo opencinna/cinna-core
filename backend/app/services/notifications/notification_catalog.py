@@ -23,6 +23,7 @@ class NotificationType(str, Enum):
 
     SESSION_ERROR = "session_error"
     MODEL_DEPRECATED = "model_deprecated"
+    PLUGIN_SYNC_FAILED = "plugin_sync_failed"
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,22 @@ NOTIFICATION_CATALOG: dict[NotificationType, NotificationTypeMeta] = {
         ),
         # Dedup on the environment so we don't re-notify for the same env within
         # the throttle window (only fires on transition into a warning state).
+        dedup_scope="environment_id",
+    ),
+    NotificationType.PLUGIN_SYNC_FAILED: NotificationTypeMeta(
+        label="Plugin install failures",
+        description=(
+            "Email me when one or more plugins fail to install in an agent "
+            "environment (the environment still starts; the plugin is skipped)."
+        ),
+        default_email_enabled=True,
+        email_template="plugin_sync_failed.html",
+        subject=lambda ctx: (
+            f"{settings.PROJECT_NAME} — Plugin install failed for "
+            f"{ctx.get('instance_name', 'your environment')}"
+        ),
+        # Dedup on the environment so a flaky marketplace doesn't spam on every
+        # start/rebuild within the throttle window.
         dedup_scope="environment_id",
     ),
 }

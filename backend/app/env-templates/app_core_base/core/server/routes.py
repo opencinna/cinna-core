@@ -35,7 +35,8 @@ from .models import (
     SQLiteDatabaseSchema,
     SQLiteQueryRequest,
     SQLiteQueryResult,
-    PluginsUpdate,
+    PluginManifest,
+    PluginsInstallResponse,
     PluginsSettingsResponse,
     CommandStreamRequest,
 )
@@ -822,55 +823,51 @@ async def update_credentials(credentials: CredentialsUpdate):
         )
 
 
-@router.post("/config/plugins", dependencies=[Depends(verify_auth_token)])
-async def update_plugins(plugins: PluginsUpdate):
+@router.post(
+    "/config/plugins",
+    dependencies=[Depends(verify_auth_token)],
+    response_model=PluginsInstallResponse,
+)
+async def install_plugins(manifest: PluginManifest) -> PluginsInstallResponse:
     """
-    Update plugins in workspace plugins directory.
+    Install plugins declaratively from a manifest (container-local install).
 
-    Creates the following structure:
-    ./plugins/
-    ├── settings.json (active plugins configuration)
-    └── [marketplace_name]/
-        └── [plugin_name]/
-            └── (plugin files)
+    Repurposed from the old base64 file-push: the backend now sends only the
+    manifest (git coordinates + per-mode flags). This endpoint writes
+    ``plugins/manifest.json``, runs the install routine (git-fetches marketplace
+    plugins at the pinned ref into ``/app/workspace/plugins/``, verifies
+    bundle-seeded plugins, prunes removed ones, regenerates ``settings.json``),
+    and returns a per-plugin result list.
 
-    This is called by the backend when:
-    - Environment starts (sync plugins)
-    - User installs/updates/uninstalls plugins
+    Errors are non-blocking: a plugin that fails to fetch is reported in
+    ``results`` and excluded from ``settings.json`` — it never breaks the call.
+
+    Called by the backend on:
+    - Environment start / rebuild (re-ensure from the persisted manifest)
+    - Plugin install / uninstall / toggle / upgrade
     """
     try:
-        # Convert PluginInfo models to dicts for internal use
-        active_plugins_dicts = [
-            {
-                "marketplace_name": p.marketplace_name,
-                "plugin_name": p.plugin_name,
-                "path": p.path,
-                "conversation_mode": p.conversation_mode,
-                "building_mode": p.building_mode,
-                "version": p.version,
-                "commit_hash": p.commit_hash,
-            }
-            for p in plugins.active_plugins
-        ]
-
-        updated_files = agent_env_service.update_plugins(
-            active_plugins=active_plugins_dicts,
-            settings_json=plugins.settings_json,
-            plugin_files=plugins.plugin_files
-        )
-
-        return {
-            "status": "ok",
-            "message": f"Updated {len(updated_files)} file(s)",
-            "updated_files": updated_files,
-            "plugins_count": len(plugins.active_plugins)
-        }
-    except IOError as e:
-        logger.error(f"Failed to update plugins: {e}")
+        results = agent_env_service.install_plugins(manifest.model_dump())
+    except Exception as e:
+        # The routine is designed to return results rather than raise, but guard
+        # against unexpected failures so env start never breaks.
+        logger.error(f"Plugin install routine failed: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to update plugins: {str(e)}"
+            detail=f"Failed to install plugins: {str(e)}",
         )
+
+    installed = sum(1 for r in results if r.get("status") == "installed")
+    failed = sum(1 for r in results if r.get("status") == "failed")
+    skipped = sum(1 for r in results if r.get("status") == "skipped")
+
+    return PluginsInstallResponse(
+        status="ok",
+        results=results,
+        installed_count=installed,
+        failed_count=failed,
+        skipped_count=skipped,
+    )
 
 
 @router.get("/config/plugins/settings", dependencies=[Depends(verify_auth_token)])

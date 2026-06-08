@@ -366,6 +366,7 @@ export type AgentBundleRevisionPublic = {
     model_override_conversation?: (string | null);
     required_credential_specs?: Array<unknown>;
     schedules?: Array<unknown>;
+    plugin_specs?: Array<unknown>;
     published_by_user_id: (string | null);
     published_at: string;
     release_notes?: (string | null);
@@ -723,7 +724,13 @@ export type AgentPluginLinkCreate = {
 export type AgentPluginLinkPublic = {
     id: string;
     agent_id: string;
-    plugin_id: string;
+    plugin_id: (string | null);
+    source?: PluginSource;
+    snapshot_marketplace_name?: (string | null);
+    snapshot_plugin_name?: (string | null);
+    snapshot_config?: ({
+    [key: string]: unknown;
+} | null);
     installed_version: (string | null);
     installed_commit_hash: (string | null);
     conversation_mode: boolean;
@@ -756,7 +763,13 @@ export type AgentPluginLinkUpdate = {
 export type AgentPluginLinkWithUpdateInfo = {
     id: string;
     agent_id: string;
-    plugin_id: string;
+    plugin_id: (string | null);
+    source?: PluginSource;
+    snapshot_marketplace_name?: (string | null);
+    snapshot_plugin_name?: (string | null);
+    snapshot_config?: ({
+    [key: string]: unknown;
+} | null);
     installed_version: (string | null);
     installed_commit_hash: (string | null);
     conversation_mode: boolean;
@@ -2137,6 +2150,8 @@ export type EnvironmentSyncStatus = {
     status: string;
     error_message?: (string | null);
     was_suspended?: boolean;
+    plugin_results?: Array<PluginInstallResult>;
+    partial_failures?: boolean;
 };
 
 /**
@@ -3293,6 +3308,33 @@ export type PendingToolsResponse = {
 };
 
 /**
+ * Per-plugin result returned by the container install routine.
+ *
+ * Errors are surfaced as results, not exceptions: a ``failed`` plugin is
+ * excluded from ``settings.json`` (so the SDK never gets a missing path) and
+ * reported, never silently listed-but-absent.
+ */
+export type PluginInstallResult = {
+    plugin_name: string;
+    marketplace_name: string;
+    source?: string;
+    status: string;
+    error_message?: (string | null);
+};
+
+/**
+ * Origin of an installed agent plugin link.
+ *
+ * - ``marketplace`` — files fetched by the container via ``git clone`` of the
+ * plugin's marketplace source at its pinned commit. ``plugin_id`` references
+ * the resolvable marketplace plugin row.
+ * - ``bundle`` — files delivered inside the install's bundle revision snapshot
+ * and seeded into the env workspace. ``plugin_id`` is NULL (no marketplace
+ * needed); identity/coordinates come from the snapshot fields.
+ */
+export type PluginSource = 'marketplace' | 'bundle';
+
+/**
  * Type of plugin source.
  */
 export type PluginSourceType = 'local' | 'url';
@@ -3308,6 +3350,8 @@ export type PluginSyncResponse = {
     total_environments?: number;
     successful_syncs?: number;
     failed_syncs?: number;
+    plugin_results?: Array<PluginInstallResult>;
+    partial_failures?: boolean;
 };
 
 export type PrivateUserCreate = {

@@ -49,6 +49,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
@@ -171,6 +172,11 @@ class OpenCodeAdapter(BaseSDKAdapter):
         self._base_url: Optional[str] = None
         self._runtime_dir: Optional[Path] = None
 
+        # Plugin capabilities OpenCode can't map (skills/agents/hooks), collected
+        # at server start for non-blocking reporting at session start. List of
+        # {plugin_name, marketplace_name, capability, message}.
+        self._plugin_unsupported: list[dict] = []
+
         # Event transformer — translates raw OpenCode SSE events to SDKEvents
         self._event_transformer = OpenCodeEventTransformer(self.workspace_dir)
 
@@ -219,13 +225,25 @@ class OpenCodeAdapter(BaseSDKAdapter):
 
         # Symlink static config files from the read-only per-mode config dir
         # into the writable runtime dir so opencode finds everything in one place.
+        # opencode.json is the exception: it is MATERIALIZED (a real merged file,
+        # not a symlink) so we can fold in the active plugins' MCP servers, which
+        # change dynamically (Phase 1 install) without a rebuild.
         mode_config_dir = OPENCODE_CONFIG_DIR / self._mode
         if mode_config_dir.is_dir():
             for config_file in mode_config_dir.iterdir():
-                if config_file.is_file():
-                    link = self._runtime_dir / config_file.name
-                    if not link.exists():
-                        link.symlink_to(config_file)
+                if not config_file.is_file():
+                    continue
+                if config_file.name == "opencode.json":
+                    continue  # handled by _materialize_opencode_config below
+                link = self._runtime_dir / config_file.name
+                if not link.exists():
+                    link.symlink_to(config_file)
+
+        # Materialize opencode.json with plugin MCP servers merged in + copy
+        # plugin command files into the runtime command dir. Plugin capabilities
+        # OpenCode can't map are collected here for non-blocking reporting at
+        # session start.
+        self._plugin_unsupported = self._materialize_opencode_config(mode_config_dir)
 
         # Sessions are bound to /app/workspace as their project directory (via
         # the `directory` query param) so file tools operate in the workspace.
@@ -452,40 +470,150 @@ class OpenCodeAdapter(BaseSDKAdapter):
             backend_session_id,
         )
 
-    def _build_plugin_mcp_config(self, mode: str) -> dict:
-        """
-        Build MCP config entries for active agent plugins.
+    def _materialize_opencode_config(self, mode_config_dir: Path) -> list[dict]:
+        """Write a runtime opencode.json with active plugins' MCP servers merged in.
 
-        Mirrors the plugin loading in ClaudeCodeAdapter but produces the dict
-        format used by OpenCode's mcp config section.
+        The base config is the read-only per-mode ``opencode.json`` (model,
+        provider, permissions, the knowledge/agent_task MCP bridges). We fold in
+        each active plugin's *declared* MCP servers (from its ``.mcp.json`` /
+        ``plugin.json`` — NOT a python3 wrapper of the plugin dir) and copy the
+        plugin's ``commands/*.md`` into the runtime command dir so OpenCode loads
+        them as slash commands.
 
-        Returns:
-            Dict mapping plugin MCP server names to their config entries.
+        Returns the list of unsupported-capability reports (skills/agents/hooks)
+        for non-blocking surfacing at session start.
+
+        Writes are confined to the per-mode runtime dir (opencode.json + the
+        ``command/`` subdir); plugin files are only read.
         """
-        plugin_mcp: dict = {}
+        base_config_path = mode_config_dir / "opencode.json"
         try:
-            active_plugins = self.agent_env_service.get_active_plugins_for_mode(mode)
-            for plugin in active_plugins:
-                path = plugin.get("path", "")
-                if not path:
+            if base_config_path.is_file():
+                config = json.loads(base_config_path.read_text(encoding="utf-8"))
+            else:
+                logger.warning("No base opencode.json at %s", base_config_path)
+                config = {}
+        except (OSError, json.JSONDecodeError) as e:
+            logger.error("Failed to read base opencode.json: %s", e)
+            config = {}
+
+        unsupported: list[dict] = []
+        try:
+            artifacts = self.agent_env_service.get_opencode_plugin_artifacts(self._mode)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Could not build plugin artifacts: %s", e)
+            artifacts = {"mcp_servers": {}, "command_files": [], "unsupported": []}
+
+        # 1) Merge plugin MCP servers into the config's mcp section. Plugin keys
+        #    are namespaced (plugin_<mkt>_<plugin>_<server>) so they never clobber
+        #    the knowledge / agent_task bridges.
+        plugin_mcp = artifacts.get("mcp_servers") or {}
+        if plugin_mcp:
+            mcp_section = config.get("mcp")
+            if not isinstance(mcp_section, dict):
+                mcp_section = {}
+            mcp_section.update(plugin_mcp)
+            config["mcp"] = mcp_section
+
+        # 2) Copy plugin command markdown into the runtime command dir.
+        self._copy_plugin_commands(artifacts.get("command_files") or [])
+
+        # 3) Collect unsupported capabilities for reporting.
+        unsupported = artifacts.get("unsupported") or []
+
+        # Write the merged config into the runtime dir (real file, replaces any
+        # stale symlink/file from a prior start).
+        runtime_config = self._runtime_dir / "opencode.json"
+        try:
+            if runtime_config.is_symlink() or runtime_config.exists():
+                runtime_config.unlink()
+            runtime_config.write_text(json.dumps(config, indent=2), encoding="utf-8")
+            try:
+                os.chmod(runtime_config, 0o600)
+            except OSError:
+                pass
+        except OSError as e:
+            logger.error("Failed to write runtime opencode.json: %s", e)
+
+        if plugin_mcp or unsupported:
+            logger.info(
+                "OpenCode %s plugins: %d MCP server(s), %d command file(s), "
+                "%d unsupported capability report(s)",
+                self._mode, len(plugin_mcp),
+                len(artifacts.get("command_files") or []), len(unsupported),
+            )
+        return unsupported
+
+    def _active_plugin_mcp_keys(self) -> list[str]:
+        """Return plugin MCP server keys merged into the runtime opencode.json.
+
+        Reads the materialized config so the advertised tool names exactly match
+        what OpenCode actually loaded. Plugin servers are keyed ``plugin_*`` to
+        distinguish them from the knowledge / agent_task bridges.
+        """
+        if not self._runtime_dir:
+            return []
+        runtime_config = self._runtime_dir / "opencode.json"
+        try:
+            data = json.loads(runtime_config.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        mcp = data.get("mcp")
+        if not isinstance(mcp, dict):
+            return []
+        return [k for k in mcp if isinstance(k, str) and k.startswith("plugin_")]
+
+    def _copy_plugin_commands(self, command_files: list) -> None:
+        """Reconcile plugin command ``*.md`` files in the runtime ``command/`` dir.
+
+        OpenCode loads slash commands from ``<config_dir>/command/``. This dir is
+        entirely plugin-managed for the runtime, so it is CLEARED first (removing
+        commands left over from a prior server generation — e.g. a plugin that was
+        uninstalled then the server restarted within the same container) and then
+        repopulated from the current active plugins. Writes are confined to the
+        runtime command dir; a name collision keeps the first file and skips later
+        ones (logged) so two plugins can't silently shadow each other.
+        """
+        command_dir = self._runtime_dir / "command"
+
+        # Clear any stale plugin commands from a previous generation. Confined to
+        # the runtime command dir; only *.md files are removed (defensive).
+        if command_dir.exists():
+            try:
+                for stale in command_dir.glob("*.md"):
+                    if stale.is_file():
+                        stale.unlink()
+            except OSError as e:
+                logger.warning("Failed to clear stale command dir: %s", e)
+
+        if not command_files:
+            return
+
+        try:
+            command_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.error("Failed to create command dir %s: %s", command_dir, e)
+            return
+
+        seen: set[str] = set()
+        for src in command_files:
+            try:
+                src_path = Path(src)
+                name = src_path.name
+                if name in seen:
+                    logger.warning(
+                        "Skipping duplicate plugin command file: %s", name
+                    )
                     continue
-                plugin_name = plugin.get("name", Path(path).parent.name)
-                # Use a namespaced key to avoid collisions with bridge servers
-                key = f"plugin_{plugin_name}"
-                plugin_mcp[key] = {
-                    "type": "local",
-                    "command": ["python3", path],
-                    "enabled": True,
-                }
-            if plugin_mcp:
-                logger.info(
-                    "Built plugin MCP config for %s mode: %d plugin(s)",
-                    mode,
-                    len(plugin_mcp),
-                )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Could not build plugin MCP config: %s", exc)
-        return plugin_mcp
+                dest = command_dir / name
+                # Defence: confirm dest stays within the command dir.
+                if dest.resolve().parent != command_dir.resolve():
+                    logger.warning("Rejected unsafe command file name: %s", name)
+                    continue
+                shutil.copy2(src_path, dest)
+                seen.add(name)
+            except OSError as e:
+                logger.warning("Failed to copy plugin command %s: %s", src, e)
 
     # ------------------------------------------------------------------
     # SSE event parsing
@@ -614,11 +742,13 @@ class OpenCodeAdapter(BaseSDKAdapter):
 
             await self._write_agents_md(resolved_prompt)
 
-            # 6. Build tools list including plugin MCP servers
+            # 6. Build tools list including plugin MCP servers.
             # All tool names are normalized to unified lowercase convention.
             # OpenCode built-ins are already lowercase; MCP bridge tools use
             # the mcp__agent_task__* prefix matching Claude Code naming.
-            plugin_mcp = self._build_plugin_mcp_config(mode)
+            # Plugin MCP servers were merged into the runtime opencode.json by
+            # _materialize_opencode_config at server start; advertise each as a
+            # wildcard mcp__<server> entry so the UI shows them as available.
             all_tools = list(OPENCODE_BUILTIN_TOOLS)
             mcp_tool_names = [
                 "mcp__knowledge__query_integration_knowledge",
@@ -629,7 +759,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
                 "mcp__agent_task__get_details",
                 "mcp__agent_task__list_tasks",
             ]
-            for key in plugin_mcp:
+            for key in self._active_plugin_mcp_keys():
                 mcp_tool_names.append(f"mcp__{key}")
             all_tools.extend(mcp_tool_names)
 
@@ -639,6 +769,24 @@ class OpenCodeAdapter(BaseSDKAdapter):
                 content="",
                 data={"tools": all_tools},
             )
+
+            # 6b. Report (non-blocking) any plugin capabilities OpenCode can't
+            # map — skills/agents/hooks — as a SYSTEM event so the owner is told
+            # rather than the capability being silently dropped (mirrors the
+            # Phase 2 "report, don't drop" warning channel).
+            if self._plugin_unsupported:
+                summary = "; ".join(
+                    u.get("message", "") for u in self._plugin_unsupported
+                )
+                yield SDKEvent(
+                    type=SDKEventType.SYSTEM,
+                    subtype="plugin_capability_warning",
+                    content=(
+                        "Some installed plugin capabilities are not supported "
+                        f"under OpenCode and were skipped: {summary}"
+                    ),
+                    data={"unsupported": self._plugin_unsupported},
+                )
 
             # 7-8. Connect SSE stream FIRST, then send the message once
             #      connected so we don't miss any events.

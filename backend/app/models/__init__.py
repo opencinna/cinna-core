@@ -311,6 +311,8 @@ from .plugins.llm_plugin import (
     AgentPluginLinksPublic,
     MarketplaceStatus,
     PluginSourceType,
+    PluginSource,
+    PluginInstallResult,
 )
 from .a2a.agent_access_token import (
     AgentAccessToken,
@@ -923,6 +925,8 @@ __all__ = [
     "AgentPluginLinksPublic",
     "MarketplaceStatus",
     "PluginSourceType",
+    "PluginSource",
+    "PluginInstallResult",
     # Agent Access Tokens
     "AgentAccessToken",
     "AgentAccessTokenCreate",

@@ -260,6 +260,7 @@ class A2ARequestHandler:
         config = params.get("configuration", {})
 
         content = self._extract_text_from_parts(message_data.get("parts", []))
+        file_ids = self._extract_file_ids_from_message(message_data)
 
         task_id = message_data.get("taskId") or message_data.get("task_id")
         thread_key = self._parse_session_scope(task_id)
@@ -357,6 +358,7 @@ class A2ARequestHandler:
                 sender=SessionSender.from_a2a(token_id, self.user_id),
                 thread_key=thread_key,
                 content=content,
+                file_ids=file_ids,
                 integration_type=self._integration_type_for_new_session() or "a2a",
                 access_policy=ChannelAccessPolicy(
                     expected_owner_id=self.agent.owner_id,
@@ -465,6 +467,7 @@ class A2ARequestHandler:
 
         message_data = params.get("message", {})
         content = self._extract_text_from_parts(message_data.get("parts", []))
+        file_ids = self._extract_file_ids_from_message(message_data)
 
         task_id = message_data.get("taskId") or message_data.get("task_id")
         try:
@@ -519,7 +522,7 @@ class A2ARequestHandler:
             session_id=session_id,
             user_id=session_obj.user_id,
             content=content,
-            file_ids=None,
+            file_ids=file_ids,
             answers_to_message_id=None,
             get_fresh_db_session=self.get_db_session,
             initiate_streaming=False,
@@ -750,6 +753,39 @@ class A2ARequestHandler:
                 if "text" in root:
                     text_parts.append(root["text"])
         return "\n".join(text_parts)
+
+    def _extract_file_ids_from_message(
+        self, message_data: dict[str, Any]
+    ) -> list[UUID] | None:
+        """
+        Extract attached file ids from an inbound A2A message's metadata.
+
+        Clients (desktop / mobile) reference previously-uploaded files via the
+        vendor-namespaced ``cinna_file_ids`` key on ``message.metadata`` — a list
+        of file UUID strings. We parse them into UUIDs (skipping any malformed
+        entries) so the standard session pipeline can attach + materialise them
+        into the agent environment's uploads, exactly like the web message API's
+        ``file_ids``. Returns ``None`` when none are present.
+        """
+        metadata = message_data.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+        raw = metadata.get("cinna_file_ids")
+        if not isinstance(raw, list) or not raw:
+            return None
+        file_ids: list[UUID] = []
+        for value in raw:
+            try:
+                file_ids.append(value if isinstance(value, UUID) else UUID(str(value)))
+            except (ValueError, TypeError):
+                # Malformed entries are intentionally dropped (logged, not fatal)
+                # so one bad id doesn't reject the whole message — unlike the web
+                # API, which returns 422 on a malformed UUID.
+                logger.warning(
+                    "%s ignoring malformed cinna_file_ids entry: %r",
+                    self.log_prefix, value,
+                )
+        return file_ids or None
 
     def _format_sse_event(self, request_id: Any, result: dict) -> str:
         """Format JSON-RPC result as SSE event."""

@@ -266,9 +266,9 @@ class FileService:
                 detail=f"Environment not running (status: {environment.status})"
             )
 
-        # Get adapter
-        from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
-        lifecycle_manager = EnvironmentLifecycleManager()
+        # Get adapter (use the shared singleton — see EnvironmentService.get_lifecycle_manager)
+        from app.services.environments.environment_service import EnvironmentService
+        lifecycle_manager = EnvironmentService.get_lifecycle_manager()
         adapter = lifecycle_manager.get_adapter(environment)
 
         # Prepare files for upload

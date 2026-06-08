@@ -1388,85 +1388,405 @@ class AgentEnvService:
     # Plugin Management Methods
     # =========================================================================
 
-    def update_plugins(
-        self,
-        active_plugins: list[dict],
-        settings_json: dict,
-        plugin_files: dict[str, dict[str, str]]
-    ) -> list[str]:
-        """
-        Update plugins in workspace plugins directory.
+    # A valid plugin/marketplace dir segment: no path separators, no traversal,
+    # no leading dot. Mirrors the "simple path segment" guard required by the
+    # plan (§4) so neither manifest apply nor pruning can ever escape
+    # /app/workspace/plugins/.
+    _PLUGIN_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
-        Creates the following structure:
-        /app/workspace/plugins/
-        ├── settings.json
-        └── [marketplace_name]/
-            └── [plugin_name]/
-                └── (plugin files)
+    # Marker file written into each materialized plugin dir recording the git
+    # ref the files were checked out at. Lets the install routine skip a
+    # re-clone when the on-disk commit already matches (idempotency, §14.6).
+    _PLUGIN_REF_MARKER = ".cinna_plugin_ref"
+
+    # A full git commit hash (7-40 hex). Only immutable refs are eligible for the
+    # idempotency skip; branch/tag names always re-fetch.
+    _COMMIT_HASH_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+
+    @classmethod
+    def _is_safe_plugin_segment(cls, segment: str) -> bool:
+        """Validate a marketplace/plugin name is a single safe path segment."""
+        if not segment or segment in (".", ".."):
+            return False
+        if "/" in segment or "\\" in segment or "\x00" in segment:
+            return False
+        return bool(cls._PLUGIN_SEGMENT_RE.match(segment))
+
+    def _safe_plugin_dir(self, marketplace_name: str, plugin_name: str) -> Optional[Path]:
+        """Resolve a plugin dir under plugins_dir, returning None if unsafe.
+
+        Confirms both names are safe segments AND that the resolved path is
+        strictly contained within plugins_dir (defence in depth).
+        """
+        if not (self._is_safe_plugin_segment(marketplace_name)
+                and self._is_safe_plugin_segment(plugin_name)):
+            return None
+        candidate = (self.plugins_dir / marketplace_name / plugin_name).resolve()
+        plugins_root = self.plugins_dir.resolve()
+        try:
+            candidate.relative_to(plugins_root)
+        except ValueError:
+            return None
+        return candidate
+
+    def install_plugins(self, manifest: dict) -> list[dict]:
+        """Materialize plugins declaratively from a manifest (container-side).
+
+        This is the container-local, self-healing install routine — the plugin
+        analogue of ``uv pip install -r workspace_requirements.txt``. It runs at
+        container setup (new + post-rebuild) and on every plugin change.
+
+        Steps:
+          1. Write ``plugins/manifest.json`` (the persisted SSOT).
+          2. For each entry ensure files are present at the pinned ref:
+             - ``marketplace``: git clone @ ref into /tmp, copy subdir into
+               ``plugins/<mkt>/<plugin>/``; skip when the ``.cinna_plugin_ref``
+               marker already matches the ref.
+             - ``bundle``: verify snapshot-seeded files exist (no git fetch).
+          3. Prune plugin dirs not in the manifest (uninstall).
+          4. Regenerate ``settings.json`` from the manifest, including ONLY
+             plugins whose files are present on disk (failed/missing excluded so
+             the SDK never receives a missing path).
+          5. Return a per-plugin result list (errors are results, not raises).
+
+        All filesystem writes are confined to ``plugins_dir``; unsafe names are
+        rejected as ``failed`` results.
 
         Args:
-            active_plugins: List of plugin info dicts with marketplace_name, plugin_name, etc.
-            settings_json: Settings dictionary to write as settings.json
-            plugin_files: Dict mapping "marketplace/plugin" -> {relative_path: base64_content}
+            manifest: ``{"plugins": [...], "allowed_tools": [...]}``.
 
         Returns:
-            List of updated paths
-
-        Raises:
-            IOError: If file operations fail
+            List of PluginInstallResult dicts.
         """
-        import base64
-
-        # Ensure plugins directory exists
         self.plugins_dir.mkdir(parents=True, exist_ok=True)
 
-        updated_paths = []
+        entries = manifest.get("plugins") or []
+        allowed_tools = manifest.get("allowed_tools")
+
+        # Step 1 — persist the manifest as the SSOT.
+        try:
+            manifest_file = self.plugins_dir / "manifest.json"
+            with open(manifest_file, "w", encoding="utf-8") as f:
+                json.dump({"plugins": entries, "allowed_tools": allowed_tools}, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to write plugins/manifest.json: {e}")
+
+        results: list[dict] = []
+        # Track the (mkt, plugin) pairs that belong on disk, for pruning.
+        wanted: set[tuple[str, str]] = set()
+
+        for entry in entries:
+            marketplace_name = entry.get("marketplace_name") or ""
+            plugin_name = entry.get("plugin_name") or ""
+            source = entry.get("source") or "marketplace"
+
+            result = {
+                "marketplace_name": marketplace_name,
+                "plugin_name": plugin_name,
+                "source": source,
+                "status": "failed",
+                "error_message": None,
+            }
+
+            plugin_dir = self._safe_plugin_dir(marketplace_name, plugin_name)
+            if plugin_dir is None:
+                result["error_message"] = "Unsafe marketplace/plugin name (rejected)"
+                logger.warning(
+                    "Rejected unsafe plugin path segment(s): %r/%r",
+                    marketplace_name, plugin_name,
+                )
+                results.append(result)
+                continue
+
+            wanted.add((marketplace_name, plugin_name))
+
+            try:
+                if source == "bundle":
+                    status, error = self._ensure_bundle_plugin(plugin_dir)
+                else:
+                    status, error = self._ensure_marketplace_plugin(
+                        plugin_dir, entry.get("git") or {}
+                    )
+                result["status"] = status
+                result["error_message"] = error
+            except Exception as e:
+                logger.error(
+                    f"Unexpected error installing plugin {marketplace_name}/{plugin_name}: {e}"
+                )
+                result["status"] = "failed"
+                result["error_message"] = str(e)
+
+            results.append(result)
+
+        # Step 3 — prune plugin dirs no longer in the manifest.
+        self._prune_plugin_dirs(wanted)
+
+        # Step 4 — regenerate settings.json (files-present only).
+        self._regenerate_plugin_settings(entries, allowed_tools)
+
+        installed = sum(1 for r in results if r["status"] == "installed")
+        failed = sum(1 for r in results if r["status"] == "failed")
+        skipped = sum(1 for r in results if r["status"] == "skipped")
+        logger.info(
+            f"Plugin install complete: {installed} installed, "
+            f"{skipped} skipped, {failed} failed"
+        )
+        return results
+
+    # Well-known PUBLIC git hosts whose SSH URLs clone keyless over HTTPS. Kept
+    # in sync with the backend `LLMPluginService._normalize_public_git_url`
+    # (env-core can't import backend code — the established pattern is to
+    # duplicate this tiny helper). Only these hosts are rewritten.
+    _PUBLIC_GIT_HOSTS = ("github.com", "gitlab.com", "bitbucket.org")
+    _SCP_GIT_RE = re.compile(r"^(?:[^@/]+@)?([^:/]+):(.+)$")
+    _SSH_GIT_RE = re.compile(r"^ssh://(?:[^@/]+@)?([^:/]+)(?::\d+)?/(.+)$")
+
+    @classmethod
+    def _normalize_public_git_url(cls, url: Optional[str]) -> Optional[str]:
+        """Rewrite a well-known PUBLIC host's SSH git URL to its HTTPS form.
+
+        The container has no GitHub/GitLab/Bitbucket SSH key, so an SSH-form URL
+        (``git@github.com:org/repo.git`` or ``ssh://git@github.com/org/repo.git``)
+        fails ``Permission denied (publickey)`` even for a PUBLIC repo. Only the
+        recognized public hosts are rewritten; any other SSH URL (a genuinely
+        private host) is returned unchanged. Mirrors the backend helper.
+        """
+        if not url:
+            return url
+        candidate = url.strip()
+        if candidate.startswith(("https://", "http://", "git://")):
+            return url
+
+        host = path = None
+        m = cls._SSH_GIT_RE.match(candidate)
+        if m:
+            host, path = m.group(1), m.group(2)
+        else:
+            m = cls._SCP_GIT_RE.match(candidate)
+            if m:
+                host, path = m.group(1), m.group(2)
+
+        if not host or host.lower() not in cls._PUBLIC_GIT_HOSTS:
+            return url
+        path = path.lstrip("/")
+        if not path.endswith(".git"):
+            path = f"{path}.git"
+        return f"https://{host.lower()}/{path}"
+
+    def _ensure_marketplace_plugin(
+        self, plugin_dir: Path, git: dict
+    ) -> tuple[str, Optional[str]]:
+        """Ensure a marketplace plugin's files exist on disk at the pinned ref.
+
+        Returns (status, error_message). status is "installed" | "skipped" |
+        "failed". "skipped" means files already present at the requested ref.
+        """
+        import shutil as _shutil
+        import subprocess
+        import tempfile
+
+        url = git.get("url")
+        ref = git.get("ref")
+        subdir = (git.get("subdir") or "").strip().lstrip("./")
+
+        if not url:
+            return "failed", "Missing git url for marketplace plugin"
+
+        # Defensive: the backend manifest builder already normalizes well-known
+        # public-host SSH URLs to HTTPS, but a stale manifest or a direct caller
+        # could still carry git@github.com:… — the container has no SSH key, so
+        # rewrite recognized PUBLIC hosts here too so the keyless clone succeeds.
+        url = self._normalize_public_git_url(url)
+
+        # Reject traversal in the declared subdir before any filesystem use.
+        if ".." in Path(subdir).parts or subdir.startswith("/"):
+            return "failed", f"Unsafe plugin subdir: {subdir!r}"
+
+        marker = plugin_dir / self._PLUGIN_REF_MARKER
+
+        # Idempotency: skip when the on-disk marker already records this ref —
+        # but ONLY for immutable (commit-hash) refs. A branch/tag name is
+        # mutable, so we always re-fetch those to pick up moved tips. Marketplace
+        # plugins are normally pinned to a commit (reproducibility); branch refs
+        # are only a fallback.
+        if (
+            ref
+            and self._COMMIT_HASH_RE.match(ref)
+            and plugin_dir.exists()
+            and marker.exists()
+        ):
+            try:
+                if marker.read_text(encoding="utf-8").strip() == ref:
+                    return "skipped", None
+            except OSError:
+                pass  # fall through to re-clone
+
+        tmp_clone = Path(tempfile.mkdtemp(prefix="cinna_plugin_"))
+        try:
+            clone = subprocess.run(
+                ["git", "clone", "--no-checkout", "--depth", "1", url, str(tmp_clone)],
+                capture_output=True, text=True, timeout=120,
+            )
+            if clone.returncode != 0:
+                # Shallow clone can't always reach an arbitrary ref; retry full.
+                clone = subprocess.run(
+                    ["git", "clone", "--no-checkout", url, str(tmp_clone)],
+                    capture_output=True, text=True, timeout=300,
+                )
+                if clone.returncode != 0:
+                    return "failed", f"git clone failed: {clone.stderr.strip()[:300]}"
+
+            if ref:
+                # Ensure the ref is fetched, then check it out.
+                fetch = subprocess.run(
+                    ["git", "-C", str(tmp_clone), "fetch", "--depth", "1", "origin", ref],
+                    capture_output=True, text=True, timeout=120,
+                )
+                checkout = subprocess.run(
+                    ["git", "-C", str(tmp_clone), "checkout", ref],
+                    capture_output=True, text=True, timeout=60,
+                )
+                if checkout.returncode != 0:
+                    # Retry after unshallowing if the pinned commit isn't present.
+                    subprocess.run(
+                        ["git", "-C", str(tmp_clone), "fetch", "--unshallow"],
+                        capture_output=True, text=True, timeout=300,
+                    )
+                    checkout = subprocess.run(
+                        ["git", "-C", str(tmp_clone), "checkout", ref],
+                        capture_output=True, text=True, timeout=60,
+                    )
+                    if checkout.returncode != 0:
+                        return "failed", f"git checkout {ref} failed: {checkout.stderr.strip()[:200]}"
+            else:
+                checkout = subprocess.run(
+                    ["git", "-C", str(tmp_clone), "checkout", "HEAD"],
+                    capture_output=True, text=True, timeout=60,
+                )
+                if checkout.returncode != 0:
+                    return "failed", f"git checkout failed: {checkout.stderr.strip()[:200]}"
+
+            # Locate the plugin files within the clone.
+            src = (tmp_clone / subdir).resolve() if subdir else tmp_clone.resolve()
+            try:
+                src.relative_to(tmp_clone.resolve())
+            except ValueError:
+                return "failed", f"Resolved subdir escaped clone: {subdir!r}"
+            if not src.exists() or not src.is_dir():
+                return "failed", f"Plugin subdir not found in repo: {subdir or '.'}"
+
+            # Replace the destination atomically-ish: remove old, copy new.
+            if plugin_dir.exists():
+                _shutil.rmtree(plugin_dir, ignore_errors=True)
+            plugin_dir.parent.mkdir(parents=True, exist_ok=True)
+            _shutil.copytree(
+                src, plugin_dir,
+                ignore=_shutil.ignore_patterns(".git"),
+            )
+
+            # Write the idempotency marker.
+            try:
+                (plugin_dir / self._PLUGIN_REF_MARKER).write_text(
+                    (ref or "HEAD"), encoding="utf-8"
+                )
+            except OSError as e:
+                logger.warning(f"Could not write plugin ref marker: {e}")
+
+            return "installed", None
+
+        except subprocess.TimeoutExpired:
+            return "failed", "git operation timed out"
+        except Exception as e:
+            return "failed", str(e)
+        finally:
+            _shutil.rmtree(tmp_clone, ignore_errors=True)
+
+    def _ensure_bundle_plugin(self, plugin_dir: Path) -> tuple[str, Optional[str]]:
+        """Verify a bundle-sourced plugin's files were seeded into the workspace.
+
+        Bundle plugins have no git source — files arrive via the bundle
+        workspace snapshot. If present → installed; if missing → failed (cannot
+        fetch).
+        """
+        if plugin_dir.exists() and plugin_dir.is_dir() and any(plugin_dir.iterdir()):
+            return "installed", None
+        return "failed", "Bundle plugin files missing from workspace snapshot"
+
+    def _prune_plugin_dirs(self, wanted: set[tuple[str, str]]) -> None:
+        """Remove plugin directories under plugins_dir not present in the manifest.
+
+        Confined to plugins_dir and to two-level <mkt>/<plugin> dirs whose names
+        are safe segments. ``manifest.json`` / ``settings.json`` (files) are
+        skipped since only directories are considered.
+        """
+        if not self.plugins_dir.exists():
+            return
+        import shutil as _shutil
+        try:
+            for mkt_dir in self.plugins_dir.iterdir():
+                if not mkt_dir.is_dir():
+                    continue
+                if not self._is_safe_plugin_segment(mkt_dir.name):
+                    continue
+                for plugin_dir in mkt_dir.iterdir():
+                    if not plugin_dir.is_dir():
+                        continue
+                    if not self._is_safe_plugin_segment(plugin_dir.name):
+                        continue
+                    if (mkt_dir.name, plugin_dir.name) in wanted:
+                        continue
+                    _shutil.rmtree(plugin_dir, ignore_errors=True)
+                    logger.info(f"Pruned removed plugin: {mkt_dir.name}/{plugin_dir.name}")
+                # Drop now-empty marketplace dir.
+                try:
+                    if not any(mkt_dir.iterdir()):
+                        mkt_dir.rmdir()
+                except OSError:
+                    pass
+        except OSError as e:
+            logger.warning(f"Plugin prune enumeration failed: {e}")
+
+    def _regenerate_plugin_settings(
+        self, entries: list[dict], allowed_tools: Optional[list[str]]
+    ) -> None:
+        """Derive settings.json from the manifest, files-present only.
+
+        A plugin is included in ``active_plugins`` only when it is not disabled
+        AND its directory exists on disk — so a failed/missing plugin can never
+        reach the SDK as a dangling path.
+        """
+        active_plugins: list[dict] = []
+        for entry in entries:
+            marketplace_name = entry.get("marketplace_name") or ""
+            plugin_name = entry.get("plugin_name") or ""
+            if entry.get("disabled"):
+                continue
+            plugin_dir = self._safe_plugin_dir(marketplace_name, plugin_name)
+            if plugin_dir is None or not plugin_dir.exists():
+                continue
+            active_plugins.append({
+                "marketplace_name": marketplace_name,
+                "plugin_name": plugin_name,
+                "path": str(plugin_dir),
+                "conversation_mode": entry.get("conversation_mode", False),
+                "building_mode": entry.get("building_mode", False),
+                "version": entry.get("version"),
+                "commit_hash": entry.get("commit_hash"),
+            })
+
+        settings_json: dict = {"active_plugins": active_plugins}
+        if allowed_tools is not None:
+            settings_json["allowed_tools"] = allowed_tools
 
         try:
-            # Write plugin files
-            for plugin_key, files in plugin_files.items():
-                # plugin_key format: "marketplace_name/plugin_name"
-                parts = plugin_key.split("/", 1)
-                if len(parts) != 2:
-                    logger.warning(f"Invalid plugin key format: {plugin_key}")
-                    continue
-
-                marketplace_name, plugin_name = parts
-                plugin_dir = self.plugins_dir / marketplace_name / plugin_name
-
-                # Create plugin directory
-                plugin_dir.mkdir(parents=True, exist_ok=True)
-
-                # Write each file
-                for relative_path, base64_content in files.items():
-                    file_path = plugin_dir / relative_path
-
-                    # Create parent directories if needed
-                    file_path.parent.mkdir(parents=True, exist_ok=True)
-
-                    # Decode and write file content
-                    try:
-                        content = base64.b64decode(base64_content)
-                        file_path.write_bytes(content)
-                        updated_paths.append(str(file_path.relative_to(self.workspace_dir)))
-                        logger.debug(f"Wrote plugin file: {file_path}")
-                    except Exception as e:
-                        logger.error(f"Failed to write plugin file {file_path}: {e}")
-
-                logger.info(f"Updated plugin: {marketplace_name}/{plugin_name}")
-
-            # Write settings.json
             settings_file = self.plugins_dir / "settings.json"
-            with open(settings_file, 'w', encoding='utf-8') as f:
+            with open(settings_file, "w", encoding="utf-8") as f:
                 json.dump(settings_json, f, indent=2)
-            updated_paths.append("plugins/settings.json")
-            logger.info(f"Updated plugins/settings.json with {len(active_plugins)} active plugins")
-
-            return updated_paths
-
+            logger.info(
+                f"Regenerated plugins/settings.json with {len(active_plugins)} active plugins"
+            )
         except Exception as e:
-            logger.error(f"Failed to update plugins: {e}")
-            raise IOError(f"Failed to update plugins: {str(e)}")
+            logger.error(f"Failed to write plugins/settings.json: {e}")
 
     def get_plugins_settings(self) -> dict:
         """
@@ -1503,6 +1823,26 @@ class AgentEnvService:
         settings = self.get_plugins_settings()
         active_plugins = settings.get("active_plugins", [])
 
+        # Self-protect filter: never hand the SDK a plugin whose path is missing
+        # on disk, even if settings.json is stale. Belt-and-suspenders on top of
+        # the install routine already excluding failed plugins.
+        def _path_present(p: dict) -> bool:
+            path = p.get("path")
+            if not path:
+                return False
+            try:
+                if not Path(path).exists():
+                    logger.warning(
+                        "Excluding plugin %s/%s — path missing on disk: %s",
+                        p.get("marketplace_name"), p.get("plugin_name"), path,
+                    )
+                    return False
+            except OSError:
+                return False
+            return True
+
+        active_plugins = [p for p in active_plugins if _path_present(p)]
+
         if mode == "conversation":
             return [p for p in active_plugins if p.get("conversation_mode", False)]
         elif mode == "building":
@@ -1524,6 +1864,171 @@ class AgentEnvService:
         """
         settings = self.get_plugins_settings()
         return settings.get("allowed_tools", [])
+
+    # =========================================================================
+    # OpenCode plugin artifacts
+    # =========================================================================
+
+    # Plugin capabilities OpenCode has no equivalent for (yet). Detected and
+    # reported as "unsupported under OpenCode" rather than silently dropped.
+    # Tracked as a documented fast-follow (skills/agents/hooks parity).
+    _OPENCODE_UNSUPPORTED_DIRS = ("skills", "agents", "hooks")
+
+    def get_opencode_plugin_artifacts(self, mode: str) -> dict:
+        """Collect OpenCode-consumable artifacts from active plugins for a mode.
+
+        For each active plugin (files-present, enabled for ``mode``) this:
+          - registers MCP servers actually declared in the plugin's
+            ``.mcp.json`` (root) or ``.claude-plugin/plugin.json`` (``mcpServers``)
+            — NOT a python3 wrapper of the plugin dir;
+          - lists the plugin's ``commands/*.md`` files (to copy into OpenCode's
+            per-mode command dir);
+          - detects capabilities OpenCode can't map (skills / agents / hooks) and
+            reports them as ``unsupported`` (non-blocking) instead of dropping.
+
+        Returns:
+            ``{"mcp_servers": {name: cfg}, "command_files": [Path...],
+               "unsupported": [{plugin_name, marketplace_name, capability,
+                                message}...]}``.
+        """
+        mcp_servers: dict = {}
+        command_files: list[Path] = []
+        unsupported: list[dict] = []
+
+        try:
+            active_plugins = self.get_active_plugins_for_mode(mode)
+        except Exception as e:
+            logger.warning(f"Could not enumerate active plugins for {mode}: {e}")
+            return {"mcp_servers": {}, "command_files": [], "unsupported": []}
+
+        for plugin in active_plugins:
+            path = plugin.get("path") or ""
+            if not path:
+                continue
+            plugin_dir = Path(path)
+            if not plugin_dir.exists() or not plugin_dir.is_dir():
+                continue
+
+            marketplace_name = plugin.get("marketplace_name") or ""
+            plugin_name = plugin.get("plugin_name") or plugin_dir.name
+            # Namespaced, filesystem-safe label for collision-free server keys.
+            safe_label = re.sub(r"[^A-Za-z0-9_]", "_", f"{marketplace_name}_{plugin_name}").strip("_")
+
+            # 1) MCP servers declared by the plugin.
+            try:
+                declared = self._read_plugin_mcp_servers(plugin_dir)
+                for server_name, cfg in declared.items():
+                    safe_server = re.sub(r"[^A-Za-z0-9_]", "_", server_name).strip("_") or "server"
+                    key = f"plugin_{safe_label}_{safe_server}"
+                    mcp_servers[key] = cfg
+            except Exception as e:
+                logger.warning(
+                    f"Failed to read MCP servers for plugin {plugin_name}: {e}"
+                )
+
+            # 2) Command markdown files.
+            commands_dir = plugin_dir / "commands"
+            if commands_dir.exists() and commands_dir.is_dir():
+                for md in sorted(commands_dir.glob("*.md")):
+                    if md.is_file():
+                        command_files.append(md)
+
+            # 3) Unsupported capabilities → report, don't drop.
+            for cap in self._OPENCODE_UNSUPPORTED_DIRS:
+                cap_dir = plugin_dir / cap
+                if cap_dir.exists() and cap_dir.is_dir() and any(cap_dir.iterdir()):
+                    unsupported.append({
+                        "plugin_name": plugin_name,
+                        "marketplace_name": marketplace_name,
+                        "capability": cap,
+                        "message": (
+                            f"Plugin '{marketplace_name}/{plugin_name}' provides "
+                            f"'{cap}', which is not yet supported under OpenCode "
+                            f"(supported on Claude Code). It was skipped."
+                        ),
+                    })
+
+        return {
+            "mcp_servers": mcp_servers,
+            "command_files": command_files,
+            "unsupported": unsupported,
+        }
+
+    def _read_plugin_mcp_servers(self, plugin_dir: Path) -> dict:
+        """Parse a plugin's declared MCP servers into OpenCode mcp-config entries.
+
+        Sources (first match wins per server name):
+          - ``<plugin>/.mcp.json`` → ``{"mcpServers": {name: {command, args, env, url}}}``
+          - ``<plugin>/.claude-plugin/plugin.json`` → ``mcpServers`` key
+
+        Translates the Claude/standard MCP shape into OpenCode's:
+          - stdio → ``{"type": "local", "command": [cmd, *args], "environment": env, "enabled": True}``
+          - remote (``url``) → ``{"type": "remote", "url": url, "enabled": True}``
+
+        Only entries with a usable ``command`` or ``url`` are emitted; malformed
+        entries are skipped (logged by the caller).
+        """
+        raw_servers: dict = {}
+
+        mcp_json = plugin_dir / ".mcp.json"
+        if mcp_json.exists() and mcp_json.is_file():
+            try:
+                data = json.loads(mcp_json.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    servers = data.get("mcpServers")
+                    if isinstance(servers, dict):
+                        raw_servers.update(servers)
+            except (OSError, json.JSONDecodeError) as e:
+                logger.warning(f"Invalid .mcp.json in {plugin_dir.name}: {e}")
+
+        plugin_json = plugin_dir / ".claude-plugin" / "plugin.json"
+        if plugin_json.exists() and plugin_json.is_file():
+            try:
+                data = json.loads(plugin_json.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    servers = data.get("mcpServers")
+                    if isinstance(servers, dict):
+                        for name, cfg in servers.items():
+                            raw_servers.setdefault(name, cfg)
+            except (OSError, json.JSONDecodeError) as e:
+                logger.warning(f"Invalid plugin.json in {plugin_dir.name}: {e}")
+
+        result: dict = {}
+        for name, cfg in raw_servers.items():
+            if not isinstance(cfg, dict):
+                continue
+            translated = self._translate_mcp_server(cfg)
+            if translated is not None:
+                result[str(name)] = translated
+        return result
+
+    @staticmethod
+    def _translate_mcp_server(cfg: dict) -> Optional[dict]:
+        """Translate one standard MCP server entry into OpenCode's mcp shape.
+
+        Returns None for entries with neither a runnable command nor a url.
+        """
+        url = cfg.get("url")
+        if isinstance(url, str) and url:
+            entry = {"type": "remote", "url": url, "enabled": True}
+            headers = cfg.get("headers")
+            if isinstance(headers, dict) and headers:
+                entry["headers"] = headers
+            return entry
+
+        command = cfg.get("command")
+        if isinstance(command, str) and command:
+            args = cfg.get("args")
+            cmd_list = [command]
+            if isinstance(args, list):
+                cmd_list.extend(str(a) for a in args)
+            entry = {"type": "local", "command": cmd_list, "enabled": True}
+            env = cfg.get("env") or cfg.get("environment")
+            if isinstance(env, dict) and env:
+                entry["environment"] = {str(k): str(v) for k, v in env.items()}
+            return entry
+
+        return None
 
     # =========================================================================
     # Workspace Tarball Upload & Manifest

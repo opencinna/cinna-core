@@ -514,29 +514,38 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
             logger.error(f"Failed to set credentials: {e}")
             raise Exception(f"Failed to set credentials: {e}")
 
-    async def set_plugins(self, plugins_data: dict) -> bool:
+    async def set_plugins(self, manifest: dict) -> list[dict]:
         """
-        Update plugins in workspace via HTTP API.
+        Push the plugin manifest and run the container install routine.
+
+        The manifest carries git coordinates + per-mode flags (no file bytes).
+        The agent-env writes ``plugins/manifest.json``, fetches/ensures plugin
+        files at the pinned ref, regenerates ``settings.json``, and returns a
+        per-plugin install result list.
 
         Args:
-            plugins_data: Dictionary with keys:
-                - active_plugins: List of plugin configs
-                - settings_json: Settings file content
-                - plugin_files: Dict mapping plugin paths to file contents (base64 encoded)
+            manifest: ``{"plugins": [...], "allowed_tools": [...] | None}``.
 
         Returns:
-            True if successful
+            List of per-plugin result dicts
+            (``{plugin_name, marketplace_name, source, status, error_message}``).
+
+        Raises:
+            Exception: Only on transport/endpoint failure — per-plugin install
+            failures are returned as results, not raised.
         """
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{self.base_url}/config/plugins",
-                    json=plugins_data,
+                    json=manifest,
                     headers=self._get_headers(),
-                    timeout=30.0  # Longer timeout for plugin file transfers
+                    # Container-side git clones can take a while; allow ample time.
+                    timeout=300.0,
                 )
                 response.raise_for_status()
-                return True
+                body = response.json()
+                return body.get("results", [])
         except httpx.HTTPError as e:
             logger.error(f"Failed to set plugins: {e}")
             raise Exception(f"Failed to set plugins: {e}")

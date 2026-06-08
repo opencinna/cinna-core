@@ -31,6 +31,14 @@ _BUNDLE_FILES_INTO_WORKSPACE: tuple[tuple[str, str], ...] = (
     ("workspace_system_packages.txt", "app/workspace/workspace_system_packages.txt"),
 )
 
+# Plugins tree is merged (not wholesale-replaced) so a consumer's own
+# ``source=marketplace`` plugin dirs survive a bundle update. The per-consumer
+# derived files (settings.json / manifest.json) are never seeded — the container
+# install routine regenerates them from each install's own manifest.
+_BUNDLE_PLUGINS_SNAPSHOT_DIR = "plugins"
+_BUNDLE_PLUGINS_WS_REL = "app/workspace/plugins"
+_PLUGIN_DERIVED_FILES = frozenset({"settings.json", "manifest.json"})
+
 # When copying between two existing env workspaces (publisher install →
 # foreign install seed at install time, or env-to-env copy on rebuild) we
 # use the env-workspace-relative paths on both ends.
@@ -139,6 +147,51 @@ def seed_workspace_from_bundle_snapshot(
             shutil.copy2(src, dst)
         except OSError as e:
             logger.error("Failed to seed bundle file %s: %s", snap_rel, e)
+
+    # Plugins tree: MERGE the snapshot's plugin dirs into the consumer workspace
+    # so the consumer's own source=marketplace plugins survive. Derived files
+    # (settings.json / manifest.json) are never seeded.
+    _seed_plugins_tree(
+        snapshot_path / _BUNDLE_PLUGINS_SNAPSHOT_DIR,
+        dst_root / _BUNDLE_PLUGINS_WS_REL,
+    )
+
+
+def _seed_plugins_tree(src_plugins: Path, dst_plugins: Path) -> None:
+    """Overlay a snapshot ``plugins/`` tree onto the consumer's plugins dir.
+
+    For each top-level entry in the snapshot plugins dir:
+      - Skip derived files (settings.json / manifest.json).
+      - For a marketplace-name directory, replace the matching consumer dir
+        wholesale (so a stale bundle plugin tree is overwritten) while leaving
+        the consumer's OTHER marketplace dirs (their own plugins) untouched.
+
+    NOTE: this overlays at the marketplace-name level. A consumer that has a
+    same-named marketplace directory as a bundle marketplace would have that
+    directory replaced — collision handling lives in the manifest/install layer
+    (§6.4); the on-disk layout intentionally uses original names.
+    """
+    if not src_plugins.exists() or not src_plugins.is_dir():
+        return
+    try:
+        dst_plugins.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.error("Failed to create plugins dir %s: %s", dst_plugins, e)
+        return
+
+    for child in src_plugins.iterdir():
+        if child.is_file() and child.name in _PLUGIN_DERIVED_FILES:
+            continue
+        target = dst_plugins / child.name
+        try:
+            if child.is_dir():
+                if target.exists():
+                    shutil.rmtree(target)
+                shutil.copytree(child, target)
+            else:
+                shutil.copy2(child, target)
+        except OSError as e:
+            logger.error("Failed to seed plugin entry %s: %s", child.name, e)
 
 
 def replace_bundle_content(snapshot_path: Path, env_id: UUID) -> None:

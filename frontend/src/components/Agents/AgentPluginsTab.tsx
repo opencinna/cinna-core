@@ -49,8 +49,24 @@ import {
 } from "@/components/ui/dialog"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
+import { eventService, EventTypes } from "@/services/eventService"
 import { InstallPluginModal } from "./InstallPluginModal"
 import { PluginCard } from "./PluginCard"
+
+/** One plugin failure carried by a PLUGIN_SYNC_WARNING event. */
+interface PluginSyncFailure {
+  marketplace_name: string
+  plugin_name: string
+  source?: string
+  error_message?: string | null
+}
+
+/** Aggregated live plugin-sync warning surfaced as an amber banner. */
+interface PluginSyncWarning {
+  environmentId: string
+  instanceName: string
+  failures: PluginSyncFailure[]
+}
 
 interface AgentPluginsTabProps {
   agentId: string
@@ -80,6 +96,11 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
     syncResult: null,
   })
 
+  // Live plugin-sync warnings, keyed by environment id (latest wins per env).
+  const [syncWarnings, setSyncWarnings] = useState<
+    Record<string, PluginSyncWarning>
+  >({})
+
   // Debounce search input
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -88,6 +109,36 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
     }, 300)
     return () => clearTimeout(timer)
   }, [searchQuery])
+
+  // Subscribe to PLUGIN_SYNC_WARNING: show a live amber banner when a plugin
+  // fails to install on env start/rebuild, and refresh the installed list
+  // (mirrors the model-health / agent-api live-event pattern).
+  useEffect(() => {
+    if (!agentId) return
+    const subId = eventService.subscribe(
+      EventTypes.PLUGIN_SYNC_WARNING,
+      (event) => {
+        if (event.model_id && event.model_id !== agentId) return
+        const meta = event.meta || {}
+        const environmentId = String(meta.environment_id || "")
+        const failures = Array.isArray(meta.failures)
+          ? (meta.failures as PluginSyncFailure[])
+          : []
+        if (!environmentId || failures.length === 0) return
+        setSyncWarnings((prev) => ({
+          ...prev,
+          [environmentId]: {
+            environmentId,
+            instanceName: String(meta.instance_name || environmentId),
+            failures,
+          },
+        }))
+        queryClient.invalidateQueries({ queryKey: ["agent-plugins", agentId] })
+      },
+    )
+    return () => eventService.unsubscribe(subId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId, queryClient])
 
   // Fetch installed plugins for this agent
   const {
@@ -148,9 +199,8 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
     onSuccess: (data) => {
       setIsInstallDialogOpen(false)
       setSelectedPlugin(null)
-      // Check if sync had any failures
-      if (data.failed_syncs && data.failed_syncs > 0) {
-        // Show dialog with error details
+      // Show the dialog on env-level failures OR per-plugin install failures.
+      if ((data.failed_syncs && data.failed_syncs > 0) || data.partial_failures) {
         setSyncProgress({
           isOpen: true,
           title: "Plugin Installed",
@@ -203,9 +253,8 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
         },
       }),
     onSuccess: (data, variables) => {
-      // Check if sync had any failures
-      if (data.failed_syncs && data.failed_syncs > 0) {
-        // Show dialog with error details
+      // Show the dialog on env-level failures OR per-plugin install failures.
+      if ((data.failed_syncs && data.failed_syncs > 0) || data.partial_failures) {
         setSyncProgress({
           isOpen: true,
           title: variables.disabled !== undefined
@@ -308,8 +357,56 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
     )
   }
 
+  const activeWarnings = Object.values(syncWarnings)
+
   return (
     <div className="space-y-6">
+      {/* Plugin sync warning banner — live, non-blocking. One row per env that
+          reported a plugin install failure on start/rebuild. */}
+      {activeWarnings.length > 0 && (
+        <div className="space-y-2">
+          {activeWarnings.map((warning) => (
+            <div
+              key={warning.environmentId}
+              className="flex items-start gap-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+            >
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500" />
+              <div className="flex-1 space-y-1">
+                <p className="font-medium">
+                  Some plugins failed to install in{" "}
+                  <span className="font-semibold">{warning.instanceName}</span>.
+                  The environment started without them.
+                </p>
+                <ul className="list-inside list-disc space-y-0.5">
+                  {warning.failures.map((f, i) => (
+                    <li key={`${f.marketplace_name}/${f.plugin_name}-${i}`}>
+                      <span className="font-medium">
+                        {f.marketplace_name}/{f.plugin_name}
+                      </span>
+                      {f.error_message ? `: ${f.error_message}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-amber-700 hover:text-amber-900 dark:text-amber-300"
+                onClick={() =>
+                  setSyncWarnings((prev) => {
+                    const next = { ...prev }
+                    delete next[warning.environmentId]
+                    return next
+                  })
+                }
+              >
+                Dismiss
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Installed Plugins Section */}
       <Card>
         <CardHeader>
@@ -376,7 +473,20 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
                               v{plugin.installed_version}
                             </Badge>
                           )}
-                          {plugin.has_update && !plugin.disabled && (
+                          {/* Source badge: marketplace vs delivered-by-bundle. */}
+                          {plugin.source === "bundle" ? (
+                            <Badge
+                              variant="outline"
+                              className="text-xs border-purple-300 text-purple-700 dark:border-purple-700 dark:text-purple-300"
+                            >
+                              From bundle
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-xs">
+                              Marketplace
+                            </Badge>
+                          )}
+                          {plugin.has_update && !plugin.disabled && plugin.source !== "bundle" && (
                             <Badge
                               variant="default"
                               className="text-xs bg-blue-500 hover:bg-blue-600"
@@ -419,28 +529,37 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
                       />
                     </TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-1">
-                        {plugin.has_update && !plugin.disabled && (
+                      {/* Bundle plugins are managed by the bundle (apply-update),
+                          so marketplace Upgrade/Uninstall are hidden — enable/
+                          disable + mode toggles above remain consumer-local. */}
+                      {plugin.source === "bundle" ? (
+                        <span className="text-xs text-muted-foreground">
+                          Managed by bundle
+                        </span>
+                      ) : (
+                        <div className="flex items-center gap-1">
+                          {plugin.has_update && !plugin.disabled && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => upgradeMutation.mutate(plugin.id)}
+                              disabled={upgradeMutation.isPending}
+                              title="Upgrade to latest version"
+                            >
+                              <ArrowUpCircle className="h-4 w-4 text-blue-500" />
+                            </Button>
+                          )}
                           <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => upgradeMutation.mutate(plugin.id)}
-                            disabled={upgradeMutation.isPending}
-                            title="Upgrade to latest version"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => uninstallMutation.mutate(plugin.id)}
+                            disabled={uninstallMutation.isPending}
+                            className="text-destructive hover:text-destructive"
                           >
-                            <ArrowUpCircle className="h-4 w-4 text-blue-500" />
+                            Uninstall
                           </Button>
-                        )}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => uninstallMutation.mutate(plugin.id)}
-                          disabled={uninstallMutation.isPending}
-                          className="text-destructive hover:text-destructive"
-                        >
-                          Uninstall
-                        </Button>
-                      </div>
+                        </div>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -611,6 +730,37 @@ export function AgentPluginsTab({ agentId }: AgentPluginsTabProps) {
                   </div>
                 </div>
               )}
+              {/* Per-plugin install failures (env reached, but a plugin could
+                  not be fetched/seeded — excluded from the active set). */}
+              {syncProgress.syncResult.plugin_results &&
+                syncProgress.syncResult.plugin_results.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Plugin Failures:</p>
+                    <div className="space-y-1 max-h-60 overflow-y-auto">
+                      {syncProgress.syncResult.plugin_results.map((p, i) => (
+                        <div
+                          key={`${p.marketplace_name}/${p.plugin_name}-${i}`}
+                          className="flex items-center justify-between p-2 rounded-md bg-muted text-sm"
+                        >
+                          <div className="flex items-center gap-2">
+                            <XCircle className="h-4 w-4 text-red-500" />
+                            <span>
+                              {p.marketplace_name}/{p.plugin_name}
+                            </span>
+                          </div>
+                          {p.error_message && (
+                            <span
+                              className="text-xs text-red-500 max-w-[200px] truncate"
+                              title={p.error_message}
+                            >
+                              {p.error_message}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               <div className="flex justify-end">
                 <Button
                   onClick={() => setSyncProgress({ isOpen: false, title: "", isLoading: false, syncResult: null })}

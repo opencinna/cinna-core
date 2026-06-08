@@ -137,9 +137,20 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
         self.credentials_set = credentials
         return True
 
-    async def set_plugins(self, plugins_data: dict) -> bool:
-        self.plugins_set = plugins_data
-        return True
+    async def set_plugins(self, manifest: dict) -> list[dict]:
+        # New contract: returns a per-plugin install result list. The stub
+        # reports every manifest entry as installed (no real git fetch).
+        self.plugins_set = manifest
+        results = []
+        for entry in (manifest.get("plugins") or []):
+            results.append({
+                "marketplace_name": entry.get("marketplace_name", ""),
+                "plugin_name": entry.get("plugin_name", ""),
+                "source": entry.get("source", "marketplace"),
+                "status": "installed",
+                "error_message": None,
+            })
+        return results
 
     async def get_plugins_settings(self) -> dict:
         return {}

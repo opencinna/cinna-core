@@ -332,7 +332,9 @@ class TestOpenCodeAdapterPhase4:
     """
     Unit tests for the Phase 4 additions to OpenCodeAdapter:
     - _write_session_context writes correct data
-    - _build_plugin_mcp_config converts plugins to MCP entries
+    - plugin MCP servers are read from the plugin's .mcp.json / plugin.json and
+      merged into the runtime opencode.json (see the resilient-plugin Phase 4
+      tests in tests/api/agent_environments for the artifact builder coverage)
     """
 
     @pytest.fixture
@@ -437,3 +439,229 @@ class TestOpenCodeAdapterPhase4:
         assert "knowledge_server.py" in source
         assert "task_server.py" in source
         assert '"mcp_bridge"' in source or "'mcp_bridge'" in source or "mcp_bridge" in source
+
+
+# ---------------------------------------------------------------------------
+# Resilient-plugin Phase 4: OpenCode plugin artifact builder
+# ---------------------------------------------------------------------------
+
+_ENV_CORE_DIR = (
+    Path(__file__).parents[2]
+    / "app" / "env-templates" / "app_core_base"
+)
+
+
+def _load_agent_env_service():
+    """Import AgentEnvService from the env-template tree (not a normal package)."""
+    if str(_ENV_CORE_DIR) not in sys.path:
+        sys.path.insert(0, str(_ENV_CORE_DIR))
+    from core.server.agent_env_service import AgentEnvService  # type: ignore
+    return AgentEnvService
+
+
+def _make_plugin(plugins_root: Path, mkt: str, name: str, *,
+                 mcp: dict | None = None, commands: list[str] | None = None,
+                 caps: list[str] | None = None, path_override: str | None = None) -> Path:
+    pdir = plugins_root / mkt / name
+    (pdir / ".claude-plugin").mkdir(parents=True)
+    (pdir / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": name}))
+    if mcp is not None:
+        (pdir / ".mcp.json").write_text(json.dumps({"mcpServers": mcp}))
+    if commands:
+        (pdir / "commands").mkdir()
+        for c in commands:
+            (pdir / "commands" / c).write_text(f"# {c}")
+    for cap in (caps or []):
+        (pdir / cap).mkdir()
+        (pdir / cap / "x").write_text("x")
+    return pdir
+
+
+class TestOpenCodePluginArtifacts:
+    """get_opencode_plugin_artifacts: MCP translation, commands, unsupported caps."""
+
+    def _service_with_active_plugin(self, tmp_path, **plugin_kwargs):
+        AgentEnvService = _load_agent_env_service()
+        ws = tmp_path / "ws"
+        plugins = ws / "plugins"
+        plugins.mkdir(parents=True)
+        pdir = _make_plugin(plugins, "acme", "tool", **plugin_kwargs)
+        (plugins / "settings.json").write_text(json.dumps({"active_plugins": [
+            {"marketplace_name": "acme", "plugin_name": "tool", "path": str(pdir),
+             "conversation_mode": True, "building_mode": False}
+        ]}))
+        return AgentEnvService(str(ws)), pdir
+
+    def test_stdio_and_remote_mcp_translation(self, tmp_path):
+        svc, _ = self._service_with_active_plugin(
+            tmp_path,
+            mcp={
+                "weather": {"command": "node", "args": ["s.js"], "env": {"K": "v"}},
+                "remotey": {"url": "https://mcp.example.com/sse"},
+                "broken": {"foo": "bar"},
+            },
+        )
+        art = svc.get_opencode_plugin_artifacts("conversation")
+        servers = art["mcp_servers"]
+        assert set(servers) == {"plugin_acme_tool_weather", "plugin_acme_tool_remotey"}
+        assert servers["plugin_acme_tool_weather"] == {
+            "type": "local", "command": ["node", "s.js"], "enabled": True,
+            "environment": {"K": "v"},
+        }
+        assert servers["plugin_acme_tool_remotey"] == {
+            "type": "remote", "url": "https://mcp.example.com/sse", "enabled": True,
+        }
+
+    def test_commands_listed_and_unsupported_reported(self, tmp_path):
+        svc, _ = self._service_with_active_plugin(
+            tmp_path,
+            commands=["do.md", "go.md", "notes.txt"],  # only *.md collected
+            caps=["skills", "hooks"],
+        )
+        art = svc.get_opencode_plugin_artifacts("conversation")
+        assert sorted(Path(c).name for c in art["command_files"]) == ["do.md", "go.md"]
+        assert sorted(u["capability"] for u in art["unsupported"]) == ["hooks", "skills"]
+        # Each unsupported entry carries identifying + message fields.
+        for u in art["unsupported"]:
+            assert u["plugin_name"] == "tool"
+            assert u["marketplace_name"] == "acme"
+            assert "not yet supported under OpenCode" in u["message"]
+
+    def test_inactive_mode_returns_nothing(self, tmp_path):
+        svc, _ = self._service_with_active_plugin(
+            tmp_path, mcp={"weather": {"command": "node"}}, commands=["do.md"],
+        )
+        # Plugin is conversation-only; building mode must see nothing.
+        art = svc.get_opencode_plugin_artifacts("building")
+        assert art["mcp_servers"] == {}
+        assert art["command_files"] == []
+        assert art["unsupported"] == []
+
+    def test_missing_path_is_skipped(self, tmp_path):
+        AgentEnvService = _load_agent_env_service()
+        ws = tmp_path / "ws"
+        (ws / "plugins").mkdir(parents=True)
+        # settings.json points at a non-existent plugin dir.
+        (ws / "plugins" / "settings.json").write_text(json.dumps({"active_plugins": [
+            {"marketplace_name": "ghost", "plugin_name": "x",
+             "path": str(ws / "plugins" / "ghost" / "x"),
+             "conversation_mode": True, "building_mode": True}
+        ]}))
+        svc = AgentEnvService(str(ws))
+        art = svc.get_opencode_plugin_artifacts("conversation")
+        assert art["mcp_servers"] == {}
+        assert art["command_files"] == []
+
+
+class TestPublicGitUrlNormalization:
+    """env-core AgentEnvService._normalize_public_git_url (defensive in-container)."""
+
+    def test_scp_and_ssh_public_hosts_rewritten(self):
+        AgentEnvService = _load_agent_env_service()
+        n = AgentEnvService._normalize_public_git_url
+        assert n("git@github.com:anthropics/claude-plugins-official.git") == (
+            "https://github.com/anthropics/claude-plugins-official.git"
+        )
+        assert n("git@github.com:org/x") == "https://github.com/org/x.git"
+        assert n("ssh://git@gitlab.com/org/x.git") == "https://gitlab.com/org/x.git"
+        assert n("ssh://git@bitbucket.org/org/x") == "https://bitbucket.org/org/x.git"
+
+    def test_non_public_and_https_passthrough(self):
+        AgentEnvService = _load_agent_env_service()
+        n = AgentEnvService._normalize_public_git_url
+        # Already HTTPS / git protocol — unchanged.
+        assert n("https://github.com/org/x.git") == "https://github.com/org/x.git"
+        assert n("git://github.com/org/x.git") == "git://github.com/org/x.git"
+        # Unknown / private SSH host — left untouched (SSH-key path handles it).
+        assert n("git@git.internal.corp:team/repo.git") == "git@git.internal.corp:team/repo.git"
+        assert n("ssh://git@code.example.internal/team/repo.git") == (
+            "ssh://git@code.example.internal/team/repo.git"
+        )
+        assert n(None) is None
+        assert n("") == ""
+
+
+class TestOpenCodeConfigMaterialization:
+    """_materialize_opencode_config merges plugin MCP + reconciles commands."""
+
+    def _adapter(self, tmp_path, plugins_settings, plugin_dirs):
+        """Build a bare OpenCodeAdapter shell wired to a temp workspace."""
+        AgentEnvService = _load_agent_env_service()
+        from core.server.adapters.opencode_sdk_adapter import OpenCodeAdapter  # type: ignore
+
+        ws = tmp_path / "ws"
+        (ws / "plugins").mkdir(parents=True)
+        (ws / "plugins" / "settings.json").write_text(json.dumps(plugins_settings))
+
+        ad = OpenCodeAdapter.__new__(OpenCodeAdapter)
+        ad.workspace_dir = str(ws)
+        ad.agent_env_service = AgentEnvService(str(ws))
+        ad._mode = "conversation"
+        ad._runtime_dir = tmp_path / "runtime"
+        ad._runtime_dir.mkdir()
+        return ad, ws
+
+    def test_merge_preserves_bridges_and_adds_plugin_servers(self, tmp_path):
+        ws_plugins = tmp_path / "ws" / "plugins"
+        pdir = tmp_path / "ws" / "plugins" / "acme" / "tool"
+        # Build via service helper layout
+        ad, ws = self._adapter(
+            tmp_path,
+            plugins_settings={"active_plugins": [
+                {"marketplace_name": "acme", "plugin_name": "tool",
+                 "path": str(ws_plugins / "acme" / "tool"),
+                 "conversation_mode": True, "building_mode": True}
+            ]},
+            plugin_dirs=None,
+        )
+        _make_plugin(
+            ws / "plugins", "acme", "tool",
+            mcp={"weather": {"command": "node"}}, commands=["do.md"], caps=["skills"],
+        )
+
+        # Static base config dir with bridges only.
+        mode_cfg = tmp_path / "static" / "conversation"
+        mode_cfg.mkdir(parents=True)
+        (mode_cfg / "opencode.json").write_text(json.dumps({
+            "model": "x",
+            "mcp": {"knowledge": {"type": "local", "command": ["python3", "k.py"], "enabled": True}},
+        }))
+
+        unsupported = ad._materialize_opencode_config(mode_cfg)
+
+        runtime_cfg = json.loads((ad._runtime_dir / "opencode.json").read_text())
+        assert "knowledge" in runtime_cfg["mcp"]  # bridge preserved
+        assert "plugin_acme_tool_weather" in runtime_cfg["mcp"]  # plugin merged
+        assert (ad._runtime_dir / "command" / "do.md").exists()  # command copied
+        assert [u["capability"] for u in unsupported] == ["skills"]
+        # Advertised tool keys are only the plugin_* servers.
+        assert ad._active_plugin_mcp_keys() == ["plugin_acme_tool_weather"]
+
+    def test_stale_commands_cleared_on_reconcile(self, tmp_path):
+        ws_plugins = tmp_path / "ws" / "plugins"
+        ad, ws = self._adapter(
+            tmp_path,
+            plugins_settings={"active_plugins": [
+                {"marketplace_name": "acme", "plugin_name": "tool",
+                 "path": str(ws_plugins / "acme" / "tool"),
+                 "conversation_mode": True, "building_mode": True}
+            ]},
+            plugin_dirs=None,
+        )
+        _make_plugin(ws / "plugins", "acme", "tool", commands=["old.md"])
+        mode_cfg = tmp_path / "static" / "conversation"
+        mode_cfg.mkdir(parents=True)
+        (mode_cfg / "opencode.json").write_text(json.dumps({"model": "x"}))
+
+        ad._materialize_opencode_config(mode_cfg)
+        assert (ad._runtime_dir / "command" / "old.md").exists()
+
+        # Plugin's command set changes (old.md removed, new.md added) — a second
+        # materialize (e.g. server restart after a plugin change) must reconcile.
+        import shutil as _sh
+        _sh.rmtree(ws / "plugins" / "acme" / "tool")
+        _make_plugin(ws / "plugins", "acme", "tool", commands=["new.md"])
+
+        ad._materialize_opencode_config(mode_cfg)
+        assert not (ad._runtime_dir / "command" / "old.md").exists()  # stale removed
+        assert (ad._runtime_dir / "command" / "new.md").exists()  # fresh present

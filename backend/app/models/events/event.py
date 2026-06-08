@@ -75,6 +75,14 @@ class EventType:
     # live. Meta carries `agent_id`, `environment_id`, `state`, and `last_error`.
     AGENT_API_STATUS_CHANGED = "agent_api_status_changed"
 
+    # Plugin sync warning — fired from environment start/rebuild (`_sync_dynamic_data`)
+    # when one or more plugins failed to install in the container (non-blocking;
+    # the env still started). Drives the owner-facing amber banner + React Query
+    # invalidation on the plugins tab. Meta carries `agent_id`, `environment_id`,
+    # `instance_name`, and `failures` (list of {marketplace_name, plugin_name,
+    # source, error_message}).
+    PLUGIN_SYNC_WARNING = "plugin_sync_warning"
+
     # Workspace file change event — fired by env-core when workspace files
     # that the backend caches (prompts, CLI_COMMANDS.yaml, STATUS.md) change
     # and stabilise. Typically triggered by a Mutagen sync from the CLI, but
