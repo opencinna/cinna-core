@@ -74,11 +74,42 @@ def parse_sse_events(response_text: str) -> list[dict]:
     return events
 
 
-def _a2a_headers(a2a_token: str) -> dict[str, str]:
+def a2a_headers(a2a_token: str) -> dict[str, str]:
+    """Build A2A JSON-RPC request headers (Bearer token + JSON content type)."""
     return {
         "Authorization": f"Bearer {a2a_token}",
         "Content-Type": "application/json",
     }
+
+
+# Backwards-compatible private alias used by helpers in this module.
+_a2a_headers = a2a_headers
+
+
+def extract_parts_from_sse_event(event: dict) -> list[dict]:
+    """Return the list of parts from a status-update SSE event's message."""
+    msg = event.get("result", {}).get("status", {}).get("message") or {}
+    return msg.get("parts", [])
+
+
+def part_text(part: dict) -> str:
+    """Extract text from a part dict, handling both flat and root-wrapped shapes."""
+    return part.get("text") or (part.get("root") or {}).get("text", "")
+
+
+def part_metadata(part: dict) -> dict:
+    """Extract metadata from a part dict, handling both flat and root-wrapped shapes."""
+    return part.get("metadata") or (part.get("root") or {}).get("metadata") or {}
+
+
+def extract_task_id(events: list[dict]) -> str | None:
+    """Return the first task id found across a list of A2A SSE/JSON-RPC events."""
+    for event in events:
+        result = event.get("result", {})
+        tid = result.get("id") or result.get("taskId")
+        if tid:
+            return tid
+    return None
 
 
 def send_a2a_streaming_message(

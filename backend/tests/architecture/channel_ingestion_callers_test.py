@@ -132,12 +132,13 @@ def test_channel_ingestion_service_has_enough_callers(method: str) -> None:
         f"backend/app/ (excluding the definition site); "
         f"expected >= {EXPECTED_CALLER_THRESHOLD}.\n"
         f"Found modules:\n  {found_str if found_str else '(none)'}\n\n"
-        f"Expected callers (Phase 3 steady state):\n"
+        f"Expected production callers (steady state):\n"
         f"  backend/app/services/a2a/a2a_request_handler.py\n"
         f"  backend/app/services/app_mcp/app_mcp_request_handler.py\n"
-        f"plus the debug route backend/app/api/routes/_test_channel_ingestion.py.\n"
-        f"If a real caller is missing, restore the migration. If the threshold "
-        f"is wrong, update EXPECTED_CALLER_THRESHOLD."
+        f"(the cron scheduler and input-task executor reach ingest_inbound_message "
+        f"as additional direct callers).\n"
+        f"If a real caller was removed, that is the regression — restore it. If the "
+        f"threshold is wrong, update EXPECTED_CALLER_THRESHOLD."
     )
 
     assert n >= EXPECTED_CALLER_THRESHOLD, not_found_msg

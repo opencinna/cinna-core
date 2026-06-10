@@ -68,24 +68,23 @@ from app.models.credentials.credential import Credential
 from app.models.credentials.credential_share import CredentialShare
 from app.models.credentials.link_models import AgentCredentialLink
 from tests.utils.agent import create_agent_via_api
-from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.user import create_random_user, user_authentication_headers
+from tests.utils.bundle import (
+    get_install_context as _install_context,
+    install_bundle as _install,
+    link_bundle_credential_to_agent as _link_credential_to_agent,
+    make_bundle_public as _make_public,
+    make_user_and_headers as _make_user_and_headers,
+    publish_bundle as _publish,
+)
 
 API = settings.API_V1_STR
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def _make_user_and_headers(client: TestClient) -> tuple[dict, dict[str, str]]:
-    """Create a fresh user with a default AI credential; return (user, headers)."""
-    user = create_random_user(client)
-    headers = user_authentication_headers(
-        client=client, email=user["email"], password=user["_password"]
-    )
-    create_random_ai_credential(client, headers, set_default=True)
-    return user, headers
+# Shared bundle helpers (_make_user_and_headers, _publish, _make_public,
+# _install, _install_context, _link_credential_to_agent) are imported above
+# from tests.utils.bundle. The typed credential factories below stay local.
 
 
 def _create_api_token_credential(
@@ -144,66 +143,6 @@ def _create_odoo_credential(
     return r.json()
 
 
-def _link_credential_to_agent(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-    credential_id: str,
-) -> None:
-    r = client.post(
-        f"{API}/agents/{agent_id}/credentials",
-        headers=headers,
-        json={"credential_id": credential_id},
-    )
-    assert r.status_code in (200, 201), r.text
-
-
-def _publish(client: TestClient, headers: dict[str, str], agent_id: str) -> dict:
-    """Publish agent, drain tasks, return fresh agent row."""
-    r = client.post(f"{API}/agents/{agent_id}/publish", headers=headers, json={})
-    assert r.status_code == 200, r.text
-    drain_tasks()
-    return client.get(f"{API}/agents/{agent_id}", headers=headers).json()
-
-
-def _make_public(
-    client: TestClient, headers: dict[str, str], bundle_uuid: str
-) -> None:
-    r = client.patch(
-        f"{API}/bundles/{bundle_uuid}",
-        headers=headers,
-        json={"is_listed": True, "visibility": "public"},
-    )
-    assert r.status_code == 200, r.text
-
-
-def _install(
-    client: TestClient,
-    headers: dict[str, str],
-    bundle_id: str,
-    *,
-    request_body: dict | None = None,
-) -> dict:
-    r = client.post(
-        f"{API}/catalog/{bundle_id}/install",
-        headers=headers,
-        json=request_body or {},
-    )
-    assert r.status_code == 200, r.text
-    drain_tasks()
-    return r.json()
-
-
-def _install_context(
-    client: TestClient, headers: dict[str, str], bundle_id: str
-) -> dict:
-    r = client.get(
-        f"{API}/catalog/{bundle_id}/install-context", headers=headers
-    )
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
 def _share_credential_with_user(
     db: Session,
     *,
@@ -211,7 +150,16 @@ def _share_credential_with_user(
     credential_owner_id: uuid.UUID,
     shared_with_user_id: uuid.UUID,
 ) -> None:
-    """Directly insert a CredentialShare row to set up the 'shared' tier."""
+    """Directly insert a CredentialShare row to set up the 'shared' tier.
+
+    The public ``POST /credentials/{id}/shares`` API is deliberately NOT used
+    here: every credential shared in this file is an Odoo credential created
+    with ``allow_sharing=False`` (see ``_create_odoo_credential``), and the
+    share endpoint rejects sharing when ``allow_sharing`` is false. These
+    scenarios exercise the install-context matcher against an already-shared
+    credential regardless of the sharing toggle, so the share row is inserted
+    directly to set up that fixture state.
+    """
     existing = db.exec(
         select(CredentialShare).where(
             CredentialShare.credential_id == credential_id,

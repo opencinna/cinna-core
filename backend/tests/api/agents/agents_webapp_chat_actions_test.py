@@ -25,7 +25,6 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
-from app.services.sessions.message_service import _extract_webapp_actions
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.stubs.socketio_stub import StubSocketIOConnector
 from tests.utils.background_tasks import drain_tasks
@@ -488,71 +487,9 @@ def test_webapp_action_tag_extraction_and_emission(
     assert action_events[0]["data"]["data"]["data"]["path"] == "/dashboard"
 
 
-def test_extract_webapp_actions_unit() -> None:
-    """
-    Unit test for the _extract_webapp_actions helper.
-
-    Verifies the extraction logic in isolation — no HTTP calls, no DB.
-    """
-    # Basic: single tag, no surrounding text
-    actions, cleaned = _extract_webapp_actions(
-        '<webapp_action>{"action": "refresh_page"}</webapp_action>'
-    )
-    assert len(actions) == 1
-    assert actions[0]["action"] == "refresh_page"
-    assert actions[0]["data"] == {}
-    assert "<webapp_action>" not in cleaned
-
-    # Tag with data
-    actions, cleaned = _extract_webapp_actions(
-        'Hello <webapp_action>{"action": "navigate", "data": {"path": "/foo"}}</webapp_action> world'
-    )
-    assert len(actions) == 1
-    assert actions[0]["action"] == "navigate"
-    assert actions[0]["data"] == {"path": "/foo"}
-    assert "Hello" in cleaned
-    assert "world" in cleaned
-    assert "<webapp_action>" not in cleaned
-
-    # Multiple tags
-    actions, cleaned = _extract_webapp_actions(
-        '<webapp_action>{"action": "update_form", "data": {"form_id": "f1"}}</webapp_action>'
-        "Some text"
-        '<webapp_action>{"action": "show_notification", "data": {"message": "Done", "type": "success"}}</webapp_action>'
-    )
-    assert len(actions) == 2
-    assert actions[0]["action"] == "update_form"
-    assert actions[1]["action"] == "show_notification"
-    assert "<webapp_action>" not in cleaned
-    assert "Some text" in cleaned
-
-    # Malformed JSON: tag is stripped but action skipped
-    actions, cleaned = _extract_webapp_actions(
-        '<webapp_action>not json</webapp_action>'
-        "visible text"
-    )
-    assert len(actions) == 0  # malformed → skipped
-    assert "<webapp_action>" not in cleaned
-    assert "visible text" in cleaned
-
-    # Missing action field: tag stripped, action skipped
-    actions, cleaned = _extract_webapp_actions(
-        '<webapp_action>{"foo": "bar"}</webapp_action>'
-    )
-    assert len(actions) == 0
-    assert "<webapp_action>" not in cleaned
-
-    # No tags: no change
-    actions, cleaned = _extract_webapp_actions("plain text without tags")
-    assert len(actions) == 0
-    assert cleaned == "plain text without tags"
-
-    # Multiline content inside tag
-    actions, cleaned = _extract_webapp_actions(
-        '<webapp_action>\n{"action": "refresh_page"}\n</webapp_action>'
-    )
-    assert len(actions) == 1
-    assert actions[0]["action"] == "refresh_page"
+# Unit tests for the _extract_webapp_actions helper (extraction logic, no HTTP/DB)
+# live in tests/unit/test_message_extraction_helpers.py. This file covers the
+# API-observable behavior (webapp_action events emitted on the stream).
 
 
 # ── K2. Streaming events post-processing ───────────────────────────────────

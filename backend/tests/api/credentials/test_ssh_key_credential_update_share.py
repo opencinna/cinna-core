@@ -19,7 +19,6 @@ Covers:
       longer contains the credential in the ssh_keys bundle.
 """
 from fastapi.testclient import TestClient
-from sqlmodel import Session
 
 from app.core.config import settings
 from tests.stubs.environment_adapter_stub import EnvironmentTestAdapter
@@ -104,7 +103,6 @@ def _create_second_user_with_headers(
 def test_ssh_key_rotate_via_patch(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
     patch_environment_adapter,
 ) -> None:
     """
@@ -260,7 +258,6 @@ def test_ssh_key_patch_rogue_field_returns_422(
 def test_ssh_key_delete_removes_from_env_bundle(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
     patch_environment_adapter,
 ) -> None:
     """
@@ -316,7 +313,6 @@ def test_ssh_key_delete_removes_from_env_bundle(
 def test_ssh_key_sharing_and_revocation(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
     patch_environment_adapter,
 ) -> None:
     """

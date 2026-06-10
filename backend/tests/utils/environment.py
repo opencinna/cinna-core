@@ -1,5 +1,8 @@
 """Helper functions for agent environment API calls in tests."""
+import uuid
+
 from fastapi.testclient import TestClient
+from sqlmodel import Session
 
 from app.core.config import settings
 
@@ -83,6 +86,70 @@ def delete_environment(
     )
     assert r.status_code == 200, f"Delete environment failed: {r.text}"
     return r.json()
+
+
+def set_environment_status(
+    db: Session,
+    env_id: str | uuid.UUID,
+    status: str,
+) -> None:
+    """Force an agent environment's runtime ``status`` directly on the test DB.
+
+    There is no public API seam for setting a running/stopped status: the
+    lifecycle status is driven by the real Docker build/start path, which the
+    test suite stubs out. Tests that need a deterministic env status (e.g. to
+    exercise the upload "environment must be running" gate) poke it here so the
+    DB write lives in one documented place rather than being copy-pasted.
+
+    TODO: replace with a lifecycle/test-only status API if one is introduced.
+    """
+    from app.models import AgentEnvironment
+
+    if isinstance(env_id, str):
+        env_id = uuid.UUID(env_id)
+    env = db.get(AgentEnvironment, env_id)
+    assert env is not None, f"Environment {env_id} not found"
+    env.status = status
+    db.add(env)
+    db.flush()
+
+
+def link_ai_credential_to_environment(
+    db: Session,
+    environment_id: str | uuid.UUID,
+    credential_id: str | uuid.UUID,
+    *,
+    conversation: bool = False,
+    building: bool = False,
+) -> None:
+    """Stamp a per-mode AI credential id directly onto an environment row.
+
+    There IS a public seam — ``POST /environments/{id}/reconfigure`` accepts
+    ``conversation_ai_credential_id`` / ``building_ai_credential_id`` — but it
+    validates SDK↔credential pairings and triggers a (stubbed) rebuild, which is
+    far heavier than these query-only ``get_affected_environments`` tests need.
+    Until a lightweight link endpoint exists, the column write lives here in one
+    documented place.
+
+    TODO: switch to the reconfigure endpoint (or a dedicated link route) if the
+    AI-credential / environment linkage gets a lighter-weight API seam.
+    """
+    from app.models.environments.environment import AgentEnvironment
+
+    if isinstance(environment_id, str):
+        environment_id = uuid.UUID(environment_id)
+    if isinstance(credential_id, str):
+        credential_id = uuid.UUID(credential_id)
+
+    env = db.get(AgentEnvironment, environment_id)
+    assert env is not None, f"Environment {environment_id} not found"
+    if conversation:
+        env.conversation_ai_credential_id = credential_id
+    if building:
+        env.building_ai_credential_id = credential_id
+    db.add(env)
+    db.commit()
+    db.refresh(env)
 
 
 def activate_environment(

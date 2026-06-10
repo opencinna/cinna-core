@@ -31,9 +31,12 @@ from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from tests.utils.agent import create_agent_via_api
-from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.user import create_random_user, user_authentication_headers
+from tests.utils.bundle import (
+    install_bundle as _install,
+    make_user_and_headers as _make_user_and_headers,
+    publish_bundle_and_make_public,
+)
 
 API = settings.API_V1_STR
 
@@ -41,16 +44,9 @@ API = settings.API_V1_STR
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_user_and_headers(client: TestClient) -> tuple[dict, dict[str, str]]:
-    """Create a fresh user with a default AI credential and return (user, headers)."""
-    user = create_random_user(client)
-    headers = user_authentication_headers(
-        client=client, email=user["email"], password=user["_password"]
-    )
-    create_random_ai_credential(client, headers, set_default=True)
-    return user, headers
+# _make_user_and_headers and _install come from tests.utils.bundle (imported
+# above). _publish stays local because it has an extra router-trigger-prompt
+# pre-step before delegating to the shared publish-and-make-public helper.
 
 
 def _publish(
@@ -63,7 +59,7 @@ def _publish(
     is_listed: bool = True,
     router_trigger_prompt: str | None = None,
 ) -> dict:
-    """Update agent fields, publish, and make the bundle catalog-visible.
+    """Optionally set router_trigger_prompt, then publish + make public.
 
     Setting ``router_trigger_prompt`` before publish ensures the snapshot
     carries the value into the revision's ``router_trigger_prompt`` column.
@@ -77,42 +73,14 @@ def _publish(
         )
         assert r.status_code == 200, f"Setting router_trigger_prompt failed: {r.text}"
 
-    r = client.post(
-        f"{API}/agents/{agent_id}/publish",
-        headers=headers,
-        json={"release_notes": notes} if notes else {},
+    return publish_bundle_and_make_public(
+        client,
+        headers,
+        agent_id,
+        notes=notes,
+        visibility=visibility,
+        is_listed=is_listed,
     )
-    assert r.status_code == 200, r.text
-    revision = r.json()
-    drain_tasks()
-
-    fresh = client.get(f"{API}/agents/{agent_id}", headers=headers).json()
-    bundle_uuid = fresh["bundle_uuid"]
-    assert bundle_uuid is not None
-    r = client.patch(
-        f"{API}/bundles/{bundle_uuid}",
-        headers=headers,
-        json={"is_listed": is_listed, "visibility": visibility},
-    )
-    assert r.status_code == 200, r.text
-    return revision
-
-
-def _install(
-    client: TestClient,
-    headers: dict,
-    bundle_id: str,
-) -> dict:
-    """Install a bundle from the catalog and return the install dict."""
-    r = client.post(
-        f"{API}/catalog/{bundle_id}/install",
-        headers=headers,
-        json={},
-    )
-    assert r.status_code == 200, r.text
-    install = r.json()
-    drain_tasks()
-    return install
 
 
 def _list_agent_routes(

@@ -184,6 +184,38 @@ def exchange_code_for_tokens(
     return r.json()
 
 
+def obtain_desktop_tokens(
+    client: TestClient,
+    headers: dict[str, str],
+    device_name: str = "Test Device",
+) -> dict:
+    """Run the full consent flow end-to-end and return the issued token bundle.
+
+    Steps: generate PKCE → GET /authorize → POST /consent → look up the lazily
+    registered client by ``device_name`` → exchange the code for tokens.
+
+    Returns a dict with:
+      - ``client_id``      — the public client_id of the registered desktop client
+      - ``access_token``   — bearer access token
+      - ``refresh_token``  — rotating refresh token
+      - ``tokens``         — the full /token response body
+    """
+    verifier, challenge = generate_pkce_pair()
+    code = get_authorization_code(
+        client, headers, code_challenge=challenge, device_name=device_name
+    )
+    clients = list_desktop_clients(client, headers)
+    reg = next(c for c in clients if c["device_name"] == device_name)
+    client_id = reg["client_id"]
+    tokens = exchange_code_for_tokens(client, client_id, code, verifier)
+    return {
+        "client_id": client_id,
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens["refresh_token"],
+        "tokens": tokens,
+    }
+
+
 def refresh_access_token(
     client: TestClient,
     client_id: str,

@@ -32,7 +32,6 @@ _BASE = f"{settings.API_V1_STR}/users/me/app-data"
 def test_app_data_volume_lifecycle(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db,
 ) -> None:
     """
     App-data lifecycle:

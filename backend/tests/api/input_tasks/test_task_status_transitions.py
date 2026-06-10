@@ -11,13 +11,13 @@ Two status update mechanisms exist:
    Validates transitions, creates TaskStatusHistory, posts a system comment,
    and emits TASK_STATUS_CHANGED. Transition rules enforced.
 
-The archive endpoint (POST /{id}/archive) uses the legacy method.
-The agent status API (POST /agent/tasks/{id}/status) uses the new method.
-Status history and system comments are only created via the new method.
+The archive endpoint (POST /{id}/archive) uses the new validating method
+(``update_task_status()``). The agent status API (POST /agent/tasks/{id}/status)
+uses it too. Status history and system comments are only created via this method.
 
 Scenarios tested here (archive endpoint):
   1. Archive a 'new' task — succeeds (new→archived is a valid transition)
-  2. Archive a task that's already archived fails (archived has no valid transitions)
+  2. Archive a task that's already archived — idempotent 200 (same-status no-op)
   3. Non-existent task → 404
   4. Other user's task → 404
 
@@ -83,26 +83,39 @@ def test_archive_idempotency_and_terminal_state(
     normal_user_token_headers: dict[str, str],
 ) -> None:
     """
-    Archived is a terminal state — further transitions are rejected:
-      1. Archive task
-      2. Archive again — should fail (archived → archived invalid, no valid transitions)
+    Archive is idempotent for an already-archived task (returns 200, no change):
+
+      1. Archive task → 200, status 'archived'
+      2. Archive again → 200, status still 'archived'
+
+    Semantics decision (Phase 3c): the archive endpoint routes through the
+    validating ``update_task_status()`` (NOT the legacy ``update_status()``).
+    That method treats ``new_status == from_status`` as an explicit idempotent
+    no-op — it short-circuits before the transition-validity check and returns
+    the unchanged task. So archive-of-archived is a deterministic 200, not a
+    400: re-archiving a terminal task is a safe no-op rather than an error.
+    ``archived → archived`` is therefore pinned to ONE expected status code (200).
     """
     headers = normal_user_token_headers
 
     task = create_task(client, headers, original_message="Archive terminal state test")
     task_id = task["id"]
 
-    # Archive once
+    # ── Phase 1: Archive once ─────────────────────────────────────────────
     r = client.post(f"{_BASE}/{task_id}/archive", headers=headers)
-    assert r.status_code == 200
+    assert r.status_code == 200, f"First archive failed: {r.text}"
+    assert r.json()["status"] == "archived"
 
-    # Archive again — archived has no valid transitions, so this should fail
+    # ── Phase 2: Archive again — idempotent no-op, still 200 / archived ────
     r = client.post(f"{_BASE}/{task_id}/archive", headers=headers)
-    # The legacy update_status() does NOT validate transitions, so it may succeed.
-    # What matters is that the task remains archived either way.
-    if r.status_code == 200:
-        assert r.json()["status"] == "archived"
-    # A 400 would also be acceptable if the route validates transitions
+    assert r.status_code == 200, (
+        f"Re-archiving an archived task must be an idempotent 200, got "
+        f"{r.status_code}: {r.text}"
+    )
+    assert r.json()["status"] == "archived"
+
+    # ── Phase 3: Confirm via GET — status unchanged ───────────────────────
+    assert get_task(client, headers, task_id)["status"] == "archived"
 
 
 def test_archive_non_existent_task_404(

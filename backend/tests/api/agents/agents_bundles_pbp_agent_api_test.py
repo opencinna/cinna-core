@@ -25,37 +25,35 @@ with their owner in the cross-user install scenario.
 import uuid
 from urllib.parse import urlsplit
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models.credentials.credential import Credential
 from app.models.credentials.credential_share import CredentialShare
 from app.models.credentials.link_models import AgentCredentialLink
-from app.services.credentials.credentials_service import CredentialsService
 from app.services.environments.environment_service import EnvironmentService
 from tests.stubs.environment_adapter_stub import EnvironmentTestAdapter
 from tests.utils.agent import create_agent_via_api, update_agent
-from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.credential import get_credential_with_data
-from tests.utils.user import create_random_user, user_authentication_headers
+from tests.utils.bundle import (
+    install_bundle as _install,
+    link_bundle_credential_to_agent as _link_credential_to_agent,
+    make_bundle_public as _make_public,
+    make_user_and_headers as _make_user_and_headers,
+    publish_bundle as _publish,
+)
+from tests.utils.credential import (
+    get_credential_with_data,
+    unlink_credential_from_agent,
+)
 
 API = settings.API_V1_STR
 
 
 # ── Module-level helpers ──────────────────────────────────────────────────────
-
-
-def _make_user_and_headers(client: TestClient) -> tuple[dict, dict[str, str]]:
-    """Create a fresh user with a default AI credential; return (user, headers)."""
-    user = create_random_user(client)
-    headers = user_authentication_headers(
-        client=client, email=user["email"], password=user["_password"]
-    )
-    create_random_ai_credential(client, headers, set_default=True)
-    return user, headers
+# Shared bundle helpers (_make_user_and_headers, _publish, _make_public,
+# _install, _link_credential_to_agent) are imported above from
+# tests.utils.bundle. The agent-api-specific helpers below stay local.
 
 
 def _setup_api_agent(
@@ -98,54 +96,6 @@ def _mint_token(
         "spec_url": conn["spec_url"],
         "agent_id": agent_id,
     }
-
-
-def _link_credential_to_agent(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-    credential_id: str,
-) -> None:
-    r = client.post(
-        f"{API}/agents/{agent_id}/credentials",
-        headers=headers,
-        json={"credential_id": credential_id},
-    )
-    assert r.status_code in (200, 201), r.text
-
-
-def _publish(client: TestClient, headers: dict[str, str], agent_id: str) -> dict:
-    """Publish agent, drain tasks, return fresh agent row."""
-    r = client.post(f"{API}/agents/{agent_id}/publish", headers=headers, json={})
-    assert r.status_code == 200, r.text
-    drain_tasks()
-    return client.get(f"{API}/agents/{agent_id}", headers=headers).json()
-
-
-def _make_public(client: TestClient, headers: dict[str, str], bundle_uuid: str) -> None:
-    r = client.patch(
-        f"{API}/bundles/{bundle_uuid}",
-        headers=headers,
-        json={"is_listed": True, "visibility": "public"},
-    )
-    assert r.status_code == 200, r.text
-
-
-def _install(
-    client: TestClient,
-    headers: dict[str, str],
-    bundle_id: str,
-    *,
-    request_body: dict | None = None,
-) -> dict:
-    r = client.post(
-        f"{API}/catalog/{bundle_id}/install",
-        headers=headers,
-        json=request_body or {},
-    )
-    assert r.status_code == 200, r.text
-    drain_tasks()
-    return r.json()
 
 
 def _consumer_proxy_url(agent_id: str, path: str) -> str:
@@ -292,45 +242,55 @@ def test_pbp_agent_api_bundle_install_share_link_sync_proxy(
     cred_resp = r.json()
     assert cred_resp["type"] == "agent_api"
 
-    # ── Phase 8: prepare_credentials_for_environment syncs {base_url, token} ──
-    # This mirrors the agent_api URL-rewrite test in agents_agent_api_test.py.
-    prepared = CredentialsService.prepare_credentials_for_environment(
-        db, install_id
-    )
-    api_creds = [
-        c for c in prepared["credentials_json"] if c["type"] == "agent_api"
-    ]
-    assert len(api_creds) == 1, (
-        f"Expected 1 agent_api credential in prepared env creds; got {api_creds}"
-    )
-    synced = api_creds[0]["credential_data"]
-    assert "base_url" in synced, "synced agent_api cred must have base_url"
-    assert "token" in synced, "synced agent_api cred must have token"
-    # Token value is preserved (URL rewriting does not touch the token)
-    assert synced["token"] == token_value, (
-        f"Synced token must equal the minted token; "
-        f"got {synced['token'][:8]}... expected {token_value[:8]}..."
-    )
-    # URL is rewritten to the internal backend origin for container reach
-    internal_netloc = urlsplit(settings.AGENT_ENV_BACKEND_URL).netloc
-    assert urlsplit(synced["base_url"]).netloc == internal_netloc, (
-        f"Synced base_url must point at the internal backend origin "
-        f"({internal_netloc}); got {synced['base_url']}"
-    )
-    # Path still targets the producer agent (same as stored)
-    assert producer_id in synced["base_url"], (
-        f"Synced base_url must contain the producer agent id ({producer_id}); "
-        f"got {synced['base_url']}"
-    )
-
-    # ── Phase 9: Consumer proxy call authenticates on the shared token → 200 ──
-    # We use the EnvironmentTestAdapter stub, same as agents_agent_api_test.py.
+    # ── Phase 8: env credential sync pushes {base_url, token} to the adapter ──
+    # This mirrors the agent_api URL-rewrite test in agents_agent_api_test.py:
+    # we observe the rewritten payload via the adapter's captured set_credentials
+    # call rather than invoking the credentials service directly. A re-link of
+    # the shared cred fires sync_credentials_to_agent_environments.
     persistent = EnvironmentTestAdapter()
     lm = EnvironmentService._lifecycle_manager
     original_get_adapter = lm.get_adapter
     lm.get_adapter = lambda env: persistent
 
     try:
+        unlink_credential_from_agent(
+            client, installer_headers, install["id"], agent_api_cred_id
+        )
+        drain_tasks()
+        _link_credential_to_agent(
+            client, installer_headers, install["id"], agent_api_cred_id
+        )
+        drain_tasks()
+
+        captured = persistent.credentials_set
+        assert captured is not None, "credential sync never reached the env adapter"
+        api_creds = [
+            c for c in captured["credentials_json"] if c["type"] == "agent_api"
+        ]
+        assert len(api_creds) == 1, (
+            f"Expected 1 agent_api credential in synced env creds; got {api_creds}"
+        )
+        synced = api_creds[0]["credential_data"]
+        assert "base_url" in synced, "synced agent_api cred must have base_url"
+        assert "token" in synced, "synced agent_api cred must have token"
+        # Token value is preserved (URL rewriting does not touch the token)
+        assert synced["token"] == token_value, (
+            f"Synced token must equal the minted token; "
+            f"got {synced['token'][:8]}... expected {token_value[:8]}..."
+        )
+        # URL is rewritten to the internal backend origin for container reach
+        internal_netloc = urlsplit(settings.AGENT_ENV_BACKEND_URL).netloc
+        assert urlsplit(synced["base_url"]).netloc == internal_netloc, (
+            f"Synced base_url must point at the internal backend origin "
+            f"({internal_netloc}); got {synced['base_url']}"
+        )
+        # Path still targets the producer agent (same as stored)
+        assert producer_id in synced["base_url"], (
+            f"Synced base_url must contain the producer agent id ({producer_id}); "
+            f"got {synced['base_url']}"
+        )
+
+        # ── Phase 9: Consumer proxy call authenticates on the shared token → 200
         r = client.get(
             _consumer_proxy_url(producer_id, "ping"),
             headers=_bearer_headers(token_value),

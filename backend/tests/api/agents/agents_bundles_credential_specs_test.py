@@ -40,75 +40,28 @@ Notes:
     service method directly for this one scenario and call it out clearly.
 """
 import json
-import uuid
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from tests.utils.agent import create_agent_via_api
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.user import create_random_user, user_authentication_headers
+from tests.utils.bundle import (
+    create_bundle_credential as _create_credential,
+    link_bundle_credential_to_agent as _link_credential_to_agent,
+    make_user_and_headers as _make_user_and_headers,
+)
 
 
 API = settings.API_V1_STR
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
-
-
-def _make_user_and_headers(client: TestClient) -> tuple[dict, dict[str, str]]:
-    """Create a random user with a default AI credential and return both."""
-    user = create_random_user(client)
-    headers = user_authentication_headers(
-        client=client, email=user["email"], password=user["_password"]
-    )
-    create_random_ai_credential(client, headers, set_default=True)
-    return user, headers
-
-
-def _create_credential(
-    client: TestClient,
-    headers: dict[str, str],
-    *,
-    name: str | None = None,
-    allow_sharing: bool = False,
-) -> dict:
-    """Create a service credential (api_token type) via the credentials API."""
-    name = name or f"cred-{uuid.uuid4().hex[:8]}"
-    r = client.post(
-        f"{API}/credentials/",
-        headers=headers,
-        json={
-            "name": name,
-            "type": "api_token",
-            "allow_sharing": allow_sharing,
-            "credential_data": {
-                "api_token_type": "bearer",
-                "api_token_template": "Authorization: Bearer {TOKEN}",
-                "api_token": "test-token-value",
-            },
-        },
-    )
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
-def _link_credential_to_agent(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-    credential_id: str,
-) -> None:
-    """Link a credential to an agent via POST /agents/{id}/credentials."""
-    r = client.post(
-        f"{API}/agents/{agent_id}/credentials",
-        headers=headers,
-        json={"credential_id": credential_id},
-    )
-    assert r.status_code == 200, r.text
+# Shared bundle helpers (_make_user_and_headers, _create_credential,
+# _link_credential_to_agent) are imported above from tests.utils.bundle.
+# _publish_and_list is a local composite (publish → list revision specs).
 
 
 def _publish_and_list(
@@ -317,18 +270,9 @@ def test_old_shape_revision_installs_cleanly(
     is semantically identical to an old-shape spec so this test exercises the
     same install path.
 
-    NOTE: The assertion that placeholder credentials are visible via
-    ``GET /agents/{id}/credentials`` is intentionally omitted.  As of the
-    current implementation, ``InstallService._setup_install_credentials``
-    calls ``CredentialsService._encrypt_data(...)`` — a method that does not
-    exist on ``CredentialsService`` (the service uses ``encrypt_field`` from
-    ``app.core.security`` directly).  This causes an ``AttributeError`` that
-    is silently swallowed by the surrounding ``try/except``, so the placeholder
-    row is never created.  This is a **source code bug** that should be fixed
-    in ``install_service.py``: replace ``CredentialsService._encrypt_data(...)``
-    with ``encrypt_field(json.dumps(...))`` (imported from
-    ``app.core.security``).  The test asserts only the observable contract
-    (install activates, HTTP 200) and documents the bug for the implementing team.
+    The install must also create a placeholder credential for the recipient to
+    fill in, visible via ``GET /agents/{install_id}/credentials`` with
+    ``is_placeholder=True`` and ``status="incomplete"``.
     """
     # ── Phase 1: publish a bundle with a non-shareable credential ────────────
     publisher_agent = create_agent_via_api(
@@ -375,6 +319,27 @@ def test_old_shape_revision_installs_cleanly(
     assert install["bundle_uuid"] == fresh["bundle_uuid"]
     assert install["installed_revision_id"] == fresh["installed_revision_id"]
     assert install["is_publisher_install"] is False
+
+    # The install created a placeholder credential for the recipient to fill in,
+    # observable via the agent-credentials endpoint (regression for the former
+    # ``_encrypt_data`` bug that silently skipped placeholder creation).
+    creds = client.get(
+        f"{API}/agents/{install['id']}/credentials",
+        headers=recipient_headers,
+    )
+    assert creds.status_code == 200, creds.text
+    cred_rows = creds.json()["data"]
+    placeholder = next(
+        (c for c in cred_rows if "legacy-mailbox" in c["name"]), None
+    )
+    assert placeholder is not None, (
+        f"Placeholder credential for 'legacy-mailbox' must be visible to the "
+        f"recipient after install; got: {cred_rows}"
+    )
+    assert placeholder["is_placeholder"] is True
+    assert placeholder["status"] == "incomplete", (
+        "An unfilled placeholder credential must report status='incomplete'"
+    )
 
     # The install is idempotent — a second call returns the same row.
     r2 = client.post(
@@ -624,77 +589,10 @@ def test_catalog_entry_surfaces_publisher_ai_credential_fields(
     )
 
 
-# ── Scenario I: _validate_publisher_provides contract ─────────────────────────
-
-
-def test_validate_publisher_provides_raises_for_non_shareable_publisher_spec(
-    client: TestClient,
-    superuser_token_headers: dict[str, str],
-) -> None:
-    """I. _validate_publisher_provides raises ValueError when the publisher's
-    override map marks a non-shareable credential as ``provided_by="publisher"``.
-
-    NOTE: This test imports from app.services — a deliberate exception to the
-    API-only rule documented in backend/tests/README.md. The invariant tested
-    here is the contract: a publisher override map can claim a credential is
-    publisher-provided even though the credential's ``allow_sharing=False``
-    flag says otherwise. ``_validate_publisher_provides`` must catch this at
-    publish time so we never ship a bundle that no foreign install can resolve.
-
-    The override path is the only way this state can occur in production:
-    the inference rule alone (``allow_sharing → "publisher"``) trivially
-    upholds the invariant, so we drive the validator via the real override
-    mechanism it exists to guard.
-    """
-    from app.services.bundles.publish_service import PublishService
-
-    agent = create_agent_via_api(
-        client, superuser_token_headers, name="CredSpec-I-Agent"
-    )
-    drain_tasks()
-
-    non_shareable = _create_credential(
-        client, superuser_token_headers, name="private-cred", allow_sharing=False
-    )
-    _link_credential_to_agent(
-        client, superuser_token_headers, agent["id"], non_shareable["id"]
-    )
-
-    # Publish once to create the bundle + promote the install. The
-    # post-publish row is what the validator runs against on subsequent
-    # publishes — the install must be is_publisher_install=True for
-    # publish_settings to apply.
-    r = client.post(
-        f"{API}/agents/{agent['id']}/publish",
-        headers=superuser_token_headers,
-        json={},
-    )
-    assert r.status_code == 200, r.text
-    drain_tasks()
-
-    # Drive the bad state via the real override map — same path that ships in production.
-    from app.models.agents.agent import Agent
-    from app.core.db import create_session
-
-    with create_session() as db:
-        install_row = db.get(Agent, uuid.UUID(agent["id"]))
-        assert install_row is not None
-        install_row.publish_settings = {
-            "credential_overrides": {
-                "private-cred": {"provided_by": "publisher"},
-            }
-        }
-        db.add(install_row)
-        db.commit()
-        db.refresh(install_row)
-
-        with pytest.raises(ValueError) as exc_info:
-            PublishService._validate_publisher_provides(db, install_row)
-
-    err_msg = str(exc_info.value).lower()
-    assert "not shareable" in err_msg or "allow_sharing" in err_msg, (
-        f"Expected an error about sharing; got: {exc_info.value}"
-    )
+# Scenario I (white-box _validate_publisher_provides contract) was removed: the
+# "publisher marks a non-shareable credential as provided_by=publisher → rejected
+# at publish time" invariant is covered end-to-end via the publish flow in
+# tests/api/agents/agents_bundles_publish_settings_test.py.
 
 
 # ── Scenario J: manifest.json on disk mirrors new spec shape ──────────────────

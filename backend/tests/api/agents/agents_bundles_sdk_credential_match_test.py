@@ -26,35 +26,20 @@ falling through to ``sdk_constants.DEFAULT_SDK``). Mismatch scenarios
 exploit that default by trying to pair it with an ``openai``-typed
 credential.
 """
-import uuid
-
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from tests.utils.agent import create_agent_via_api
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
+from tests.utils.bundle import publish_bundle as _publish
 
 API = settings.API_V1_STR
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
-
-
-def _publish(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-) -> dict:
-    """Publish an agent and return the refreshed agent row."""
-    r = client.post(
-        f"{API}/agents/{agent_id}/publish",
-        headers=headers,
-        json={},
-    )
-    assert r.status_code == 200, r.text
-    drain_tasks()
-    return client.get(f"{API}/agents/{agent_id}", headers=headers).json()
+# _publish (publish + drain → fresh agent row) is imported from
+# tests.utils.bundle above.
 
 
 # ── Scenario 1: PATCH /bundles rejects mismatched conversation credential ────

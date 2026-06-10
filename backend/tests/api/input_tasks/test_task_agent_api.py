@@ -53,7 +53,6 @@ from tests.utils.input_task import (
     get_task_by_code,
     get_task_detail,
     add_comment,
-    list_comments,
     execute_task,
 )
 from tests.utils.user import create_random_user, user_authentication_headers
@@ -664,16 +663,16 @@ def test_session_resolved_subtask_creation(
 def test_session_resolved_subtask_survives_reexecution(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: "Session",
 ) -> None:
     """
-    After task.session_id is overwritten (simulating re-execution), the OLD
+    After task.session_id moves to a new session (re-execution), the OLD
     session can still create subtasks because resolution uses
     Session.source_task_id (immutable) instead of InputTask.session_id.
 
       1. Create team with lead + worker agents and connection
       2. Create team-scoped task, execute → session S1
-      3. Overwrite task.session_id to a different UUID (simulating re-execution)
+      3. Re-execute the task via the execute API → session S2; task.session_id
+         now points at S2, no longer S1
       4. POST /agent/tasks/current/subtask with source_session_id = S1
       5. Subtask still created with correct parent_task_id
     """
@@ -706,25 +705,26 @@ def test_session_resolved_subtask_survives_reexecution(
     )
     parent_id = parent["id"]
 
+    # Execute WITHOUT draining: the execute call links session S1 and moves the
+    # task to in_progress synchronously, but we leave it streaming so a second
+    # execute is still permitted (in_progress → in_progress is a no-op). Draining
+    # here would auto-complete the task and lock out re-execution.
     with patch(_AGENT_ENV_PATCH, StubAgentEnvConnector(response_text="First run")):
         exec_result = execute_task(client, headers, parent_id)
-        drain_tasks()
 
     session_s1 = str(exec_result["session_id"])
 
-    # ── Phase 3: Overwrite task.session_id directly (simulate re-execution) ─
-    from app.models import InputTask as InputTaskModel
-    task_obj = db.get(InputTaskModel, uuid.UUID(parent_id))
-    assert task_obj is not None
-    task_obj.session_id = None  # clear — simulates session_id being overwritten to a different session
-    task_obj.status = "in_progress"  # keep it in a valid state
-    db.add(task_obj)
-    db.commit()
-    db.refresh(task_obj)
+    # ── Phase 3: Re-execute the task → session S2 (task.session_id moves off S1)
+    with patch(_AGENT_ENV_PATCH, StubAgentEnvConnector(response_text="Second run")):
+        exec_result_2 = execute_task(client, headers, parent_id)
 
-    # Verify task.session_id is no longer S1
+    session_s2 = str(exec_result_2["session_id"])
+    assert session_s2 != session_s1, "Re-execution must create a new session"
+
+    # Verify task.session_id is now S2, no longer S1
     parent_after = get_task(client, headers, parent_id)
     assert parent_after["session_id"] != session_s1
+    assert parent_after["session_id"] == session_s2
 
     # ── Phase 4: Old session S1 still resolves for subtask creation ─────────
     r = client.post(
@@ -746,3 +746,7 @@ def test_session_resolved_subtask_survives_reexecution(
     # ── Phase 5: Subtask has correct parent link ────────────────────────────
     subtask = get_task_by_code(client, headers, result["task"])
     assert subtask["parent_task_id"] == parent_id
+
+    # Flush any background tasks collected during the un-drained executes.
+    with patch(_AGENT_ENV_PATCH, StubAgentEnvConnector(response_text="drain")):
+        drain_tasks()

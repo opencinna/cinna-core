@@ -16,28 +16,27 @@ Tests the full feature surface for Agent Webhooks:
   Public execution endpoint (no JWT; token-auth only):
   - POST /agent-hooks/{webhook_id}
 
-Note on the public endpoint: it uses Session(engine) directly — bypassing the
-test session. We therefore mock the AgentWebhookService layer when testing that
-endpoint so that route-level behaviour (token extraction, payload size guard,
-response shape) is exercised without needing real data visible to the engine
-session. The service methods themselves are integration-tested via the CRUD
-endpoints and the logs they produce.
+The public endpoint uses ``create_session()`` (patched to the test session in
+the agents conftest), so it operates on the same rolled-back transaction as the
+CRUD endpoints. We therefore hit the real public endpoint with the real token
+and verify the real ``AgentWebhookLog`` rows it produces (via the logs API) —
+no service-layer mocking. Script-type fires patch only the agent-env connector's
+``exec_command`` (the one true external boundary — there is no real container in
+tests); session-type fires run the real session/message creation path.
 """
 import uuid
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
-from tests.utils.agent import create_agent_via_api
+from tests.utils.agent import create_agent_via_api, get_agent
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.user import create_random_user_with_headers
 from tests.utils.webhook import (
     create_script_webhook,
     create_session_webhook,
     delete_webhook,
-    fire_webhook,
     get_webhook,
     list_webhook_logs,
     list_webhooks,
@@ -46,6 +45,26 @@ from tests.utils.webhook import (
 )
 
 API = settings.API_V1_STR
+
+# Patch target for the agent-env connector used by script-type webhook fires.
+_EXEC_TARGET = (
+    "app.services.environments.agent_env_connector.agent_env_connector.exec_command"
+)
+
+
+def _stub_exec_command(
+    *, exit_code: int = 0, stdout: str = "", stderr: str = ""
+) -> AsyncMock:
+    """Build an AsyncMock standing in for ``agent_env_connector.exec_command``.
+
+    Script-type webhook fires shell out to the agent environment over HTTP;
+    there is no real container in tests, so this is the single external boundary
+    we replace. Everything else (token validation, log creation, env resolution)
+    runs for real against the test transaction.
+    """
+    return AsyncMock(
+        return_value={"exit_code": exit_code, "stdout": stdout, "stderr": stderr}
+    )
 
 # ── Inline URL builders ───────────────────────────────────────────────────────
 
@@ -78,42 +97,6 @@ def _make_agent(client: TestClient, headers: dict, name: str = "Webhook Agent") 
     agent = create_agent_via_api(client, headers, name=name)
     drain_tasks()
     return agent
-
-
-def _make_mock_log(
-    webhook_id_fk: str | None = None,
-    agent_id: str | None = None,
-    status: str = "session_started",
-    webhook_type: str = "session",
-    session_id: str | None = None,
-    command_executed: str | None = None,
-    command_output: str | None = None,
-    command_stderr: str | None = None,
-    command_exit_code: int | None = None,
-    error_message: str | None = None,
-    payload_received: str | None = None,
-    prompt_used: str | None = None,
-) -> MagicMock:
-    """Build a minimal mock AgentWebhookLog for use when patching fire_webhook."""
-    log = MagicMock()
-    log.id = uuid.uuid4()
-    log.webhook_id_fk = uuid.UUID(webhook_id_fk) if webhook_id_fk else uuid.uuid4()
-    log.agent_id = uuid.UUID(agent_id) if agent_id else uuid.uuid4()
-    log.webhook_type = webhook_type
-    log.status = status
-    log.session_id = uuid.UUID(session_id) if session_id else None
-    log.command_executed = command_executed
-    log.command_output = command_output
-    log.command_stderr = command_stderr
-    log.command_exit_code = command_exit_code
-    log.error_message = error_message
-    log.payload_received = payload_received
-    log.prompt_used = prompt_used
-    log.headers_subset = {}
-    log.remote_ip = None
-    log.payload_content_type = None
-    log.duration_ms = 10
-    return log
 
 
 # ── CRUD lifecycle ────────────────────────────────────────────────────────────
@@ -408,21 +391,19 @@ def test_regenerate_token_produces_new_token_same_slug(
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
-    Regenerating a token:
-      1. Creates webhook, saves original token + webhook_id + prefix
-      2. Regenerates — response includes webhook_token (new plaintext)
+    Regenerating a token (verified end-to-end against the real public endpoint):
+      1. Create webhook, save original token + webhook_id + prefix
+      2. Regenerate — response includes webhook_token (new plaintext)
       3. Same webhook_id slug (URL unchanged)
-      4. New token != old token
-      5. New prefix != old prefix
-      6. Verify via service that old token no longer validates, new one does
-
-    Note: the public /agent-hooks endpoint uses Session(engine) which bypasses
-    the test transaction, so we verify token invalidation at the service level
-    via validate_webhook_token directly rather than through the HTTP endpoint.
+      4. New token != old token; new prefix != old prefix
+      5. Fire the real public endpoint with the OLD token → 401 (rejected)
+      6. Fire the real public endpoint with the NEW token → 200, real log row
     """
     headers = superuser_token_headers
     agent = _make_agent(client, headers, name="Regen Token Agent")
-    webhook = create_session_webhook(client, headers, agent["id"], name="Regen Hook")
+    webhook = create_script_webhook(
+        client, headers, agent["id"], name="Regen Hook", command="echo hi"
+    )
 
     original_token = webhook["webhook_token"]
     original_prefix = webhook["webhook_token_prefix"]
@@ -437,64 +418,36 @@ def test_regenerate_token_produces_new_token_same_slug(
     assert new_token, "New token must be non-empty"
     assert new_token != original_token, "Token must change after regenerate"
     assert regen["webhook_id"] == webhook_slug, "webhook_id slug must remain the same"
-    # The prefix is the first 8 chars of the new token — must also differ
     assert new_prefix != original_prefix, "Token prefix must change after regenerate"
-    # Verify the new prefix matches the new token's first 8 chars
     assert new_token.startswith(new_prefix), "New prefix must be first 8 chars of new token"
 
-    # ── Old token is now stale — verify via the service directly ──────────
-    # The public HTTP endpoint uses Session(engine) (bypasses test transaction),
-    # so we probe the service layer via the CRUD PATCH endpoint which does use
-    # the test session: a GET with the old token embedded in the Authorization
-    # header would fail 401. Instead we verify structurally: the DB row now
-    # holds the new encrypted token (confirmed by the new prefix changing) and
-    # the old token cannot validate via the public route (we simulate this via
-    # a mock that raises WebhookTokenInvalidError for the old value).
-
-    from app.services.agents.agent_webhook_errors import WebhookTokenInvalidError as _Err
-
-    def _reject_old_token(db_session, webhook_id, provided_token):
-        # Simulate the service rejecting the old token and accepting the new one
-        if provided_token == original_token:
-            raise _Err()
-        # Return a minimal mock webhook for the new token
-        m = MagicMock()
-        m.id = uuid.UUID(webhook_pk)
-        m.type = "session"
-        m.webhook_id = webhook_slug
-        return m
-
-    mock_log = _make_mock_log(
-        webhook_id_fk=webhook_pk,
-        status="session_started",
-        webhook_type="session",
+    # ── Old token is rejected by the real public endpoint → 401 ───────────
+    r_old = client.post(
+        _public_url(webhook_slug),
+        headers={"Authorization": f"Bearer {original_token}"},
+    )
+    assert r_old.status_code == 401, (
+        f"Old token should be rejected after regenerate, got {r_old.status_code}: {r_old.text}"
     )
 
-    with patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.validate_webhook_token",
-        side_effect=_reject_old_token,
-    ), patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.fire_webhook",
-        new=AsyncMock(return_value=mock_log),
-    ):
-        # Old token → 401
-        r_old = client.post(
-            _public_url(webhook_slug),
-            headers={"Authorization": f"Bearer {original_token}"},
-        )
-        assert r_old.status_code == 401, (
-            f"Old token should be rejected after regenerate, got {r_old.status_code}"
-        )
-
-        # New token → 200
+    # ── New token is accepted → 200 and produces a real log row ───────────
+    with patch(_EXEC_TARGET, _stub_exec_command(exit_code=0, stdout="ok\n")):
         r_new = client.post(
             _public_url(webhook_slug),
             headers={"Authorization": f"Bearer {new_token}"},
         )
-        assert r_new.status_code == 200, (
-            f"New token should be accepted after regenerate, got {r_new.status_code}"
-        )
-        assert r_new.json()["success"] is True
+    assert r_new.status_code == 200, (
+        f"New token should be accepted after regenerate, got {r_new.status_code}: {r_new.text}"
+    )
+    assert r_new.json()["success"] is True
+    new_log_id = r_new.json()["log_id"]
+    assert new_log_id is not None
+
+    # The fire is recorded as a real AgentWebhookLog visible via the logs API.
+    logs = list_webhook_logs(client, headers, agent["id"], webhook_pk)
+    assert any(log["id"] == new_log_id for log in logs), (
+        "The successful fire with the new token must appear in the webhook logs"
+    )
 
 
 # ── Authorization / ownership ─────────────────────────────────────────────────
@@ -770,34 +723,18 @@ def test_public_endpoint_bearer_header_and_query_param_both_accepted(
 ) -> None:
     """
     Both Authorization: Bearer <token> header and ?token=<token> query param
-    are accepted by the public endpoint. Test both paths with a mocked service.
+    are accepted by the real public endpoint and each produces a real log row.
     """
     headers = superuser_token_headers
     agent = _make_agent(client, headers, name="Dual Auth Agent")
-    webhook = create_session_webhook(client, headers, agent["id"], name="Dual Auth Hook")
+    webhook = create_script_webhook(
+        client, headers, agent["id"], name="Dual Auth Hook", command="echo hi"
+    )
     webhook_slug = webhook["webhook_id"]
     token = webhook["webhook_token"]
     webhook_pk = webhook["id"]
 
-    mock_log = _make_mock_log(
-        webhook_id_fk=webhook_pk,
-        status="session_started",
-        webhook_type="session",
-    )
-    # A MagicMock that looks like an AgentWebhook and passes the slug / enabled check
-    mock_webhook_obj = MagicMock()
-    mock_webhook_obj.id = uuid.UUID(webhook_pk)
-    mock_webhook_obj.type = "session"
-    mock_webhook_obj.webhook_id = webhook_slug
-    mock_webhook_obj.enabled = True
-
-    with patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.validate_webhook_token",
-        return_value=mock_webhook_obj,
-    ), patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.fire_webhook",
-        new=AsyncMock(return_value=mock_log),
-    ):
+    with patch(_EXEC_TARGET, _stub_exec_command(exit_code=0, stdout="ok\n")):
         # Bearer header
         r1 = client.post(
             _public_url(webhook_slug),
@@ -812,6 +749,14 @@ def test_public_endpoint_bearer_header_and_query_param_both_accepted(
         )
         assert r2.status_code == 200, f"Query param token failed: {r2.text}"
         assert r2.json()["success"] is True
+
+    # Both fires produced distinct real log rows.
+    log_ids = {r1.json()["log_id"], r2.json()["log_id"]}
+    assert None not in log_ids
+    assert len(log_ids) == 2, "Each fire must produce a distinct log row"
+    logs = list_webhook_logs(client, headers, agent["id"], webhook_pk)
+    persisted = {log["id"] for log in logs}
+    assert log_ids <= persisted, "Both fire log rows must be persisted and visible via the logs API"
 
 
 def test_public_endpoint_payload_too_large_returns_413(
@@ -868,29 +813,32 @@ def test_public_endpoint_token_mismatch_returns_401(
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
-    POST /agent-hooks/{id} with wrong token → 401.
+    POST /agent-hooks/{id} on a real, existing webhook with the WRONG token → 401.
 
-    The public endpoint uses Session(engine) directly (not the test session),
-    so we mock validate_webhook_token to raise WebhookTokenInvalidError —
-    which is exactly what the real service does when the token doesn't match
-    the stored Fernet-decrypted value.
+    The real service decrypts the stored Fernet ciphertext and timing-safe
+    compares it against the provided token; a mismatch raises
+    WebhookTokenInvalidError, which the route maps to 401. No mocking — the
+    wrong token is rejected for real, and no log row is created.
     """
-    from app.services.agents.agent_webhook_errors import WebhookTokenInvalidError as _Err
+    headers = superuser_token_headers
+    agent = _make_agent(client, headers, name="Token Mismatch Agent")
+    webhook = create_session_webhook(client, headers, agent["id"], name="Mismatch Hook")
+    webhook_slug = webhook["webhook_id"]
+    webhook_pk = webhook["id"]
 
-    with patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.validate_webhook_token",
-        side_effect=_Err(),
-    ):
-        r = client.post(
-            _public_url("someknownslug"),
-            headers={"Authorization": "Bearer wrongtoken123"},
-        )
-
+    r = client.post(
+        _public_url(webhook_slug),
+        headers={"Authorization": "Bearer wrongtoken123"},
+    )
     assert r.status_code == 401
     assert "token" in r.json()["detail"].lower() or "invalid" in r.json()["detail"].lower()
 
+    # A rejected token never fires the webhook — no log row exists.
+    logs = list_webhook_logs(client, headers, agent["id"], webhook_pk)
+    assert logs == [], "A token mismatch must not create a webhook log row"
 
-# ── Public endpoint — execution outcomes (service mocked) ────────────────────
+
+# ── Public endpoint — execution outcomes (real fire, log verified via API) ───
 
 
 def test_public_endpoint_session_type_success_response_shape(
@@ -898,8 +846,9 @@ def test_public_endpoint_session_type_success_response_shape(
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
-    Successful session-type webhook fire returns:
+    A real session-type webhook fire creates a session and a real log row:
       { "success": true, "webhook_type": "session", "log_id": "<uuid>" }
+    The log is then visible via the logs API with status "session_started".
     """
     headers = superuser_token_headers
     agent = _make_agent(client, headers, name="Session Fire Agent")
@@ -908,40 +857,30 @@ def test_public_endpoint_session_type_success_response_shape(
     webhook_slug = webhook["webhook_id"]
     webhook_pk = webhook["id"]
 
-    session_id = str(uuid.uuid4())
-    mock_log = _make_mock_log(
-        webhook_id_fk=webhook_pk,
-        status="session_started",
-        webhook_type="session",
-        session_id=session_id,
+    r = client.post(
+        _public_url(webhook_slug),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        content=b'{"event": "push"}',
     )
-    mock_webhook_obj = MagicMock()
-    mock_webhook_obj.id = uuid.UUID(webhook_pk)
-    mock_webhook_obj.type = "session"
-    mock_webhook_obj.webhook_id = webhook_slug
-    mock_webhook_obj.enabled = True
+    drain_tasks()
 
-    with patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.validate_webhook_token",
-        return_value=mock_webhook_obj,
-    ), patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.fire_webhook",
-        new=AsyncMock(return_value=mock_log),
-    ):
-        r = client.post(
-            _public_url(webhook_slug),
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            content=b'{"event": "push"}',
-        )
-
-    assert r.status_code == 200
+    assert r.status_code == 200, r.text
     body = r.json()
     assert body["success"] is True
     assert body["webhook_type"] == "session"
-    assert "log_id" in body and body["log_id"] is not None
+    log_id = body["log_id"]
+    assert log_id is not None
+
+    # The fire created a real log row reachable via the logs API.
+    logs = list_webhook_logs(client, headers, agent["id"], webhook_pk)
+    log = next((l for l in logs if l["id"] == log_id), None)
+    assert log is not None, "Session fire must persist a real log row"
+    assert log["status"] == "session_started"
+    assert log["webhook_type"] == "session"
+    assert log["session_id"] is not None, "A session-started log references its session"
 
 
 def test_public_endpoint_script_type_exit0_response_shape(
@@ -949,8 +888,9 @@ def test_public_endpoint_script_type_exit0_response_shape(
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
-    Successful script-type webhook fire (exit 0) returns:
+    A real script-type webhook fire (exit 0) records a "success" log row:
       { "success": true, "webhook_type": "script", "log_id": "<uuid>" }
+    Only ``exec_command`` (the container boundary) is stubbed.
     """
     headers = superuser_token_headers
     agent = _make_agent(client, headers, name="Script Fire Agent")
@@ -961,37 +901,25 @@ def test_public_endpoint_script_type_exit0_response_shape(
     webhook_slug = webhook["webhook_id"]
     webhook_pk = webhook["id"]
 
-    mock_log = _make_mock_log(
-        webhook_id_fk=webhook_pk,
-        status="success",
-        webhook_type="script",
-        command_executed="echo ok",
-        command_output="ok\n",
-        command_exit_code=0,
-    )
-    mock_webhook_obj = MagicMock()
-    mock_webhook_obj.id = uuid.UUID(webhook_pk)
-    mock_webhook_obj.type = "script"
-    mock_webhook_obj.webhook_id = webhook_slug
-    mock_webhook_obj.enabled = True
-
-    with patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.validate_webhook_token",
-        return_value=mock_webhook_obj,
-    ), patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.fire_webhook",
-        new=AsyncMock(return_value=mock_log),
-    ):
+    with patch(_EXEC_TARGET, _stub_exec_command(exit_code=0, stdout="ok\n")):
         r = client.post(
             _public_url(webhook_slug),
             headers={"Authorization": f"Bearer {token}"},
         )
 
-    assert r.status_code == 200
+    assert r.status_code == 200, r.text
     body = r.json()
     assert body["success"] is True
     assert body["webhook_type"] == "script"
-    assert body["log_id"] is not None
+    log_id = body["log_id"]
+    assert log_id is not None
+
+    logs = list_webhook_logs(client, headers, agent["id"], webhook_pk)
+    log = next((l for l in logs if l["id"] == log_id), None)
+    assert log is not None
+    assert log["status"] == "success"
+    assert log["command_exit_code"] == 0
+    assert log["command_output"] == "ok\n"
 
 
 def test_public_endpoint_script_nonzero_exit_returns_200_with_log(
@@ -999,8 +927,9 @@ def test_public_endpoint_script_nonzero_exit_returns_200_with_log(
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
-    Script-type webhook with non-zero exit code: response is still 200 (caller
-    gets receipt). The mock log has status="script_error".
+    Script-type webhook with non-zero exit: HTTP is still 200 (caller gets a
+    receipt) and the real log row has status "script_error" with the captured
+    stderr and exit code.
     """
     headers = superuser_token_headers
     agent = _make_agent(client, headers, name="NonZero Exit Agent")
@@ -1011,36 +940,28 @@ def test_public_endpoint_script_nonzero_exit_returns_200_with_log(
     webhook_slug = webhook["webhook_id"]
     webhook_pk = webhook["id"]
 
-    mock_log = _make_mock_log(
-        webhook_id_fk=webhook_pk,
-        status="script_error",
-        webhook_type="script",
-        command_executed="exit 1",
-        command_output="",
-        command_stderr="error: command failed\n",
-        command_exit_code=1,
-    )
-    mock_webhook_obj = MagicMock()
-    mock_webhook_obj.type = "script"
-    mock_webhook_obj.webhook_id = webhook_slug
-
     with patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.validate_webhook_token",
-        return_value=mock_webhook_obj,
-    ), patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.fire_webhook",
-        new=AsyncMock(return_value=mock_log),
+        _EXEC_TARGET,
+        _stub_exec_command(exit_code=1, stderr="error: command failed\n"),
     ):
         r = client.post(
             _public_url(webhook_slug),
             headers={"Authorization": f"Bearer {token}"},
         )
 
-    assert r.status_code == 200
+    assert r.status_code == 200, r.text
     body = r.json()
     assert body["success"] is True
     assert body["webhook_type"] == "script"
-    assert body["log_id"] is not None
+    log_id = body["log_id"]
+    assert log_id is not None
+
+    logs = list_webhook_logs(client, headers, agent["id"], webhook_pk)
+    log = next((l for l in logs if l["id"] == log_id), None)
+    assert log is not None
+    assert log["status"] == "script_error"
+    assert log["command_exit_code"] == 1
+    assert log["command_stderr"] == "error: command failed\n"
 
 
 def test_public_endpoint_error_status_still_returns_200(
@@ -1048,95 +969,52 @@ def test_public_endpoint_error_status_still_returns_200(
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
-    Infrastructure error (e.g. no active env) still returns HTTP 200 with log_id.
-    Caller always gets a receipt; they can inspect the log for the error detail.
+    Infrastructure error (script webhook with no active environment) still
+    returns HTTP 200 with a real log row whose status is "error". The agent's
+    environment is deactivated via the env-management API so ``_fire_script``
+    hits the "no active environment" branch for real.
     """
     headers = superuser_token_headers
     agent = _make_agent(client, headers, name="Error Status Agent")
-    webhook = create_session_webhook(client, headers, agent["id"], name="Error Status")
+    webhook = create_script_webhook(
+        client, headers, agent["id"], name="Error Status", command="echo hi"
+    )
     token = webhook["webhook_token"]
     webhook_slug = webhook["webhook_id"]
     webhook_pk = webhook["id"]
 
-    mock_log = _make_mock_log(
-        webhook_id_fk=webhook_pk,
-        status="error",
-        webhook_type="session",
-        error_message="Could not create session — no active environment",
+    # Tear down the active environment so the script fire finds no env.
+    # delete_environment clears agent.active_environment_id, so
+    # get_active_environment() returns None and _fire_script logs "error".
+    # The active env id is assigned during the (drained) startup background
+    # task, so re-fetch the agent to read it.
+    env_id = get_agent(client, headers, agent["id"]).get("active_environment_id")
+    assert env_id, "Agent must start with an active environment"
+    r_del = client.delete(f"{API}/environments/{env_id}", headers=headers)
+    assert r_del.status_code in (200, 204), f"Env teardown failed: {r_del.text}"
+
+    r = client.post(
+        _public_url(webhook_slug),
+        headers={"Authorization": f"Bearer {token}"},
     )
-    mock_webhook_obj = MagicMock()
-    mock_webhook_obj.type = "session"
-    mock_webhook_obj.webhook_id = webhook_slug
 
-    with patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.validate_webhook_token",
-        return_value=mock_webhook_obj,
-    ), patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.fire_webhook",
-        new=AsyncMock(return_value=mock_log),
-    ):
-        r = client.post(
-            _public_url(webhook_slug),
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    assert r.status_code == 200
+    assert r.status_code == 200, r.text
     body = r.json()
     assert body["success"] is True
-    assert body["log_id"] is not None
+    log_id = body["log_id"]
+    assert log_id is not None
+
+    logs = list_webhook_logs(client, headers, agent["id"], webhook_pk)
+    log = next((l for l in logs if l["id"] == log_id), None)
+    assert log is not None
+    assert log["status"] == "error"
+    assert log["error_message"] is not None
 
 
-# ── Header allowlist ──────────────────────────────────────────────────────────
-
-
-def test_header_allowlist_strips_sensitive_headers() -> None:
-    """
-    AgentWebhookService.filter_headers keeps only the allowlisted headers
-    and strips authorization / cookie and any other non-allowlisted header.
-    This unit-level test imports only the service class — no DB / HTTP needed.
-    """
-    from app.services.agents.agent_webhook_service import AgentWebhookService
-
-    incoming = {
-        "Authorization": "Bearer super-secret-token",
-        "Cookie": "session=abc123",
-        "User-Agent": "GitHub-Hookshot/abc",
-        "X-GitHub-Event": "push",
-        "X-Hub-Signature-256": "sha256=abc",
-        "X-Custom-Header": "should be stripped",
-        "Content-Type": "application/json",
-    }
-    filtered = AgentWebhookService.filter_headers(incoming)
-
-    # Sensitive headers must be absent
-    assert "authorization" not in filtered
-    assert "cookie" not in filtered
-    # Non-allowlisted headers must be absent
-    assert "x-custom-header" not in filtered
-    assert "content-type" not in filtered
-    # Allowlisted headers must be present (canonical lowercase)
-    assert filtered.get("user-agent") == "GitHub-Hookshot/abc"
-    assert filtered.get("x-github-event") == "push"
-    assert filtered.get("x-hub-signature-256") == "sha256=abc"
-
-
-def test_header_allowlist_preserves_all_allowed_headers() -> None:
-    """All headers in FORWARDED_HEADERS are passed through when present."""
-    from app.services.agents.agent_webhook_service import AgentWebhookService
-
-    incoming = {
-        "user-agent": "test-agent",
-        "x-forwarded-for": "1.2.3.4, 5.6.7.8",
-        "x-real-ip": "1.2.3.4",
-        "x-github-event": "push",
-        "x-gitlab-event": "Push Hook",
-        "x-hub-signature-256": "sha256=deadbeef",
-        "x-event-key": "repo:push",
-    }
-    filtered = AgentWebhookService.filter_headers(incoming)
-    for h in AgentWebhookService.FORWARDED_HEADERS:
-        if h in incoming:
-            assert h in filtered, f"Expected allowlisted header '{h}' to be present"
+# Unit tests for AgentWebhookService.filter_headers (header allowlist) and
+# _assemble_session_prompt (prompt assembly) live in
+# tests/unit/test_agent_webhook_helpers.py. This file covers the API-observable
+# public-endpoint fire flow.
 
 
 # ── Cascade behavior ──────────────────────────────────────────────────────────
@@ -1243,46 +1121,20 @@ def test_two_concurrent_fires_produce_independent_logs(
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
-    Two simultaneous calls to the public endpoint with valid tokens produce
-    two independent log entries. We simulate this sequentially with mocked
-    fire_webhook that returns a unique log each call.
+    Two successive fires of the same webhook produce two independent, real log
+    rows (distinct ids, both persisted and visible via the logs API). No mocking
+    of the service — only the script ``exec_command`` boundary is stubbed.
     """
     headers = superuser_token_headers
     agent = _make_agent(client, headers, name="Concurrent Fires Agent")
-    webhook = create_session_webhook(client, headers, agent["id"], name="Concurrent")
+    webhook = create_script_webhook(
+        client, headers, agent["id"], name="Concurrent", command="echo hi"
+    )
     token = webhook["webhook_token"]
     webhook_slug = webhook["webhook_id"]
     webhook_pk = webhook["id"]
 
-    log_id_1 = str(uuid.uuid4())
-    log_id_2 = str(uuid.uuid4())
-
-    mock_logs = [
-        _make_mock_log(webhook_id_fk=webhook_pk, status="session_started", webhook_type="session"),
-        _make_mock_log(webhook_id_fk=webhook_pk, status="session_started", webhook_type="session"),
-    ]
-    mock_logs[0].id = uuid.UUID(log_id_1)
-    mock_logs[1].id = uuid.UUID(log_id_2)
-
-    call_count = 0
-
-    async def _fire_side_effect(*args, **kwargs):
-        nonlocal call_count
-        log = mock_logs[call_count]
-        call_count += 1
-        return log
-
-    mock_webhook_obj = MagicMock()
-    mock_webhook_obj.type = "session"
-    mock_webhook_obj.webhook_id = webhook_slug
-
-    with patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.validate_webhook_token",
-        return_value=mock_webhook_obj,
-    ), patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.fire_webhook",
-        side_effect=_fire_side_effect,
-    ):
+    with patch(_EXEC_TARGET, _stub_exec_command(exit_code=0, stdout="hi\n")):
         r1 = client.post(
             _public_url(webhook_slug),
             headers={"Authorization": f"Bearer {token}"},
@@ -1292,127 +1144,20 @@ def test_two_concurrent_fires_produce_independent_logs(
             headers={"Authorization": f"Bearer {token}"},
         )
 
-    assert r1.status_code == 200
-    assert r2.status_code == 200
-    # Each fire produces a distinct log_id
-    assert r1.json()["log_id"] == log_id_1
-    assert r2.json()["log_id"] == log_id_2
-    assert r1.json()["log_id"] != r2.json()["log_id"]
+    assert r1.status_code == 200, r1.text
+    assert r2.status_code == 200, r2.text
+    log_id_1 = r1.json()["log_id"]
+    log_id_2 = r2.json()["log_id"]
+    assert log_id_1 and log_id_2
+    assert log_id_1 != log_id_2, "Each fire must produce a distinct log id"
 
-
-# ── Prompt assembly (unit-level, no DB) ───────────────────────────────────────
-
-
-def test_session_prompt_contains_payload_and_headers() -> None:
-    """
-    AgentWebhookService._assemble_session_prompt includes the payload body
-    and allowlisted headers in the returned string, and uses the configured
-    webhook prompt as the base.
-    """
-    from app.services.agents.agent_webhook_service import AgentWebhookService
-
-    webhook = MagicMock()
-    webhook.name = "GitHub Push"
-    webhook.prompt = "Analyze the push."
-    webhook.payload_template = None
-
-    agent = MagicMock()
-    agent.entrypoint_prompt = None
-
-    prompt = AgentWebhookService._assemble_session_prompt(
-        webhook=webhook,
-        agent=agent,
-        payload_text='{"ref": "refs/heads/main"}',
-        payload_content_type="application/json",
-        headers_subset={"x-github-event": "push"},
+    # Both fires are persisted as independent rows reachable via the logs API.
+    logs = list_webhook_logs(client, headers, agent["id"], webhook_pk)
+    persisted_ids = {log["id"] for log in logs}
+    assert {log_id_1, log_id_2} <= persisted_ids, (
+        "Both independent fire log rows must be persisted and visible via the logs API"
     )
-
-    assert "Analyze the push." in prompt
-    assert '{"ref": "refs/heads/main"}' in prompt
-    assert "x-github-event" in prompt
-    assert "GitHub Push" in prompt
-
-
-def test_session_prompt_truncated_when_too_large() -> None:
-    """
-    _assemble_session_prompt truncates the combined prompt at 20,000 chars
-    and appends a [truncated] marker.
-    """
-    from app.services.agents.agent_webhook_service import AgentWebhookService
-
-    webhook = MagicMock()
-    webhook.name = "Big Payload"
-    webhook.prompt = "Base prompt."
-    webhook.payload_template = None
-
-    agent = MagicMock()
-    agent.entrypoint_prompt = None
-
-    # 30 KB payload — well above the 20,000 char cap
-    large_payload = "x" * 30_000
-
-    prompt = AgentWebhookService._assemble_session_prompt(
-        webhook=webhook,
-        agent=agent,
-        payload_text=large_payload,
-        payload_content_type="text/plain",
-        headers_subset={},
-    )
-
-    assert len(prompt) <= 20_000
-    assert prompt.endswith("[truncated]")
-
-
-def test_session_prompt_uses_agent_entrypoint_prompt_as_fallback() -> None:
-    """
-    When webhook.prompt is None, _assemble_session_prompt falls back to
-    agent.entrypoint_prompt.
-    """
-    from app.services.agents.agent_webhook_service import AgentWebhookService
-
-    webhook = MagicMock()
-    webhook.name = "Fallback Test"
-    webhook.prompt = None
-    webhook.payload_template = None
-
-    agent = MagicMock()
-    agent.entrypoint_prompt = "You are a helpful code reviewer."
-
-    prompt = AgentWebhookService._assemble_session_prompt(
-        webhook=webhook,
-        agent=agent,
-        payload_text="some payload",
-        payload_content_type="text/plain",
-        headers_subset={},
-    )
-
-    assert "You are a helpful code reviewer." in prompt
-
-
-def test_session_prompt_uses_default_when_both_prompts_none() -> None:
-    """
-    When both webhook.prompt and agent.entrypoint_prompt are None, the
-    default string 'Start webhook-triggered execution.' is used.
-    """
-    from app.services.agents.agent_webhook_service import AgentWebhookService
-
-    webhook = MagicMock()
-    webhook.name = "Default Prompt Test"
-    webhook.prompt = None
-    webhook.payload_template = None
-
-    agent = MagicMock()
-    agent.entrypoint_prompt = None
-
-    prompt = AgentWebhookService._assemble_session_prompt(
-        webhook=webhook,
-        agent=agent,
-        payload_text=None,
-        payload_content_type=None,
-        headers_subset={},
-    )
-
-    assert "Start webhook-triggered execution." in prompt
+    assert len([l for l in logs if l["id"] in {log_id_1, log_id_2}]) == 2
 
 
 # ── Public endpoint response has log_id from service ─────────────────────────
@@ -1423,8 +1168,9 @@ def test_public_endpoint_response_includes_log_id(
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
-    The public endpoint always includes log_id in its 200 response so callers
-    can correlate the invocation with the log entry visible in the UI.
+    The public endpoint's 200 response includes the log_id of the real log row
+    it just created, so callers can correlate the invocation with the log entry
+    visible in the UI. The returned id resolves to an actual row via the logs API.
     """
     headers = superuser_token_headers
     agent = _make_agent(client, headers, name="Log ID Test Agent")
@@ -1434,31 +1180,18 @@ def test_public_endpoint_response_includes_log_id(
     token = webhook["webhook_token"]
     webhook_slug = webhook["webhook_id"]
     webhook_pk = webhook["id"]
-    expected_log_id = str(uuid.uuid4())
 
-    mock_log = _make_mock_log(
-        webhook_id_fk=webhook_pk,
-        status="success",
-        webhook_type="script",
-    )
-    mock_log.id = uuid.UUID(expected_log_id)
-
-    mock_webhook_obj = MagicMock()
-    mock_webhook_obj.type = "script"
-    mock_webhook_obj.webhook_id = webhook_slug
-
-    with patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.validate_webhook_token",
-        return_value=mock_webhook_obj,
-    ), patch(
-        "app.api.routes.agent_hooks.AgentWebhookService.fire_webhook",
-        new=AsyncMock(return_value=mock_log),
-    ):
+    with patch(_EXEC_TARGET, _stub_exec_command(exit_code=0, stdout="hi\n")):
         r = client.post(
             _public_url(webhook_slug),
             headers={"Authorization": f"Bearer {token}"},
         )
 
-    assert r.status_code == 200
-    body = r.json()
-    assert body["log_id"] == expected_log_id
+    assert r.status_code == 200, r.text
+    log_id = r.json()["log_id"]
+    assert log_id is not None
+
+    logs = list_webhook_logs(client, headers, agent["id"], webhook_pk)
+    assert any(log["id"] == log_id for log in logs), (
+        "The response log_id must correspond to a real persisted log row"
+    )

@@ -21,38 +21,34 @@ Group 4 — Credential sharing via UI ordering
       token via the Credentials tab path (``PUT /agents/{id}/setup-credentials``),
       the gate flips to ``ready``.
 
-Direct DB access via the ``db`` fixture is used only for inserting
-``CredentialShare`` rows (same established pattern as other bundle context tests).
-Setup-credential PUT path is tested through the API surface.
+Credential sharing goes through the public ``POST /credentials/{id}/shares``
+API; every shared token in this file is created with ``allow_sharing=True``.
+The setup-credential PUT path is also tested through the API surface.
 """
 import uuid
 
 from fastapi.testclient import TestClient
-from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models.credentials.credential import Credential
-from app.models.credentials.credential_share import CredentialShare
-from app.models.credentials.link_models import AgentCredentialLink
 from tests.utils.agent import create_agent_via_api
-from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.user import create_random_user, user_authentication_headers
+from tests.utils.bundle import (
+    get_install_context as _install_context,
+    install_bundle as _install,
+    link_bundle_credential_to_agent as _link_credential_to_agent,
+    make_bundle_public as _make_public,
+    make_user_and_headers as _make_user_and_headers,
+    publish_bundle as _publish,
+)
+from tests.utils.credential import share_credential_via_api
 
 API = settings.API_V1_STR
 
 
 # ── Module-level helpers ──────────────────────────────────────────────────────
-
-
-def _make_user_and_headers(client: TestClient) -> tuple[dict, dict[str, str]]:
-    """Create a fresh user with a default AI credential; return (user, headers)."""
-    user = create_random_user(client)
-    headers = user_authentication_headers(
-        client=client, email=user["email"], password=user["_password"]
-    )
-    create_random_ai_credential(client, headers, set_default=True)
-    return user, headers
+# Shared bundle helpers (_make_user_and_headers, _publish, _make_public,
+# _install, _install_context, _link_credential_to_agent) are imported above
+# from tests.utils.bundle. Only the service_uri-aware credential factory is local.
 
 
 def _create_api_token_credential(
@@ -80,65 +76,6 @@ def _create_api_token_credential(
     return r.json()
 
 
-def _link_credential_to_agent(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-    credential_id: str,
-) -> None:
-    r = client.post(
-        f"{API}/agents/{agent_id}/credentials",
-        headers=headers,
-        json={"credential_id": credential_id},
-    )
-    assert r.status_code in (200, 201), r.text
-
-
-def _publish(client: TestClient, headers: dict[str, str], agent_id: str) -> dict:
-    """Publish agent, drain tasks, return fresh agent row."""
-    r = client.post(f"{API}/agents/{agent_id}/publish", headers=headers, json={})
-    assert r.status_code == 200, r.text
-    drain_tasks()
-    return client.get(f"{API}/agents/{agent_id}", headers=headers).json()
-
-
-def _make_public(client: TestClient, headers: dict[str, str], bundle_uuid: str) -> None:
-    r = client.patch(
-        f"{API}/bundles/{bundle_uuid}",
-        headers=headers,
-        json={"is_listed": True, "visibility": "public"},
-    )
-    assert r.status_code == 200, r.text
-
-
-def _install(
-    client: TestClient,
-    headers: dict[str, str],
-    bundle_id: str,
-    *,
-    request_body: dict | None = None,
-) -> dict:
-    r = client.post(
-        f"{API}/catalog/{bundle_id}/install",
-        headers=headers,
-        json=request_body or {},
-    )
-    assert r.status_code == 200, r.text
-    drain_tasks()
-    return r.json()
-
-
-def _install_context(
-    client: TestClient, headers: dict[str, str], bundle_id: str
-) -> dict:
-    r = client.get(
-        f"{API}/catalog/{bundle_id}/install-context",
-        headers=headers,
-    )
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
 def _get_setup_status(
     client: TestClient, headers: dict[str, str], install_id: str
 ) -> dict:
@@ -147,37 +84,12 @@ def _get_setup_status(
     return r.json()
 
 
-def _share_credential_with_user(
-    db: Session,
-    *,
-    credential_id: uuid.UUID,
-    credential_owner_id: uuid.UUID,
-    shared_with_user_id: uuid.UUID,
-) -> None:
-    """Directly insert a CredentialShare row to set up the 'shared' tier."""
-    existing = db.exec(
-        select(CredentialShare).where(
-            CredentialShare.credential_id == credential_id,
-            CredentialShare.shared_with_user_id == shared_with_user_id,
-        )
-    ).first()
-    if existing is None:
-        db.add(CredentialShare(
-            credential_id=credential_id,
-            shared_with_user_id=shared_with_user_id,
-            shared_by_user_id=credential_owner_id,
-            access_level="read",
-        ))
-        db.commit()
-
-
 # ── Group 3 — Per-user scoped end-to-end ─────────────────────────────────────
 
 
 def test_per_user_scoped_install_two_installers_correct_token_suggested(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
     """3a-3b. Two installers with distinct per-user tokens sharing the same service_uri.
 
@@ -216,10 +128,6 @@ def test_per_user_scoped_install_two_installers_correct_token_suggested(
     bundle_id = fresh_pub["bundle_id"]
 
     # ── Phase 2: Publisher pre-creates per-user tokens ────────────────────────
-    pub_user_id = uuid.UUID(
-        client.get(f"{API}/users/me", headers=superuser_token_headers).json()["id"]
-    )
-
     token_a = _create_api_token_credential(
         client,
         superuser_token_headers,
@@ -240,23 +148,14 @@ def test_per_user_scoped_install_two_installers_correct_token_suggested(
 
     # ── Phase 3: Set up the two installers ────────────────────────────────────
     installer_a, installer_a_headers = _make_user_and_headers(client)
-    installer_a_id = uuid.UUID(installer_a["id"])
-
     installer_b, installer_b_headers = _make_user_and_headers(client)
-    installer_b_id = uuid.UUID(installer_b["id"])
 
     # Share token A with installer A only; token B with installer B only
-    _share_credential_with_user(
-        db,
-        credential_id=token_a_id,
-        credential_owner_id=pub_user_id,
-        shared_with_user_id=installer_a_id,
+    share_credential_via_api(
+        client, superuser_token_headers, token_a["id"], installer_a["email"]
     )
-    _share_credential_with_user(
-        db,
-        credential_id=token_b_id,
-        credential_owner_id=pub_user_id,
-        shared_with_user_id=installer_b_id,
+    share_credential_via_api(
+        client, superuser_token_headers, token_b["id"], installer_b["email"]
     )
 
     # ── Phase 3: install-context suggests correct token per installer ──────────
@@ -318,7 +217,6 @@ def test_per_user_scoped_install_two_installers_correct_token_suggested(
 def test_per_user_scoped_no_token_lands_in_needs_setup(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
     """3c. An installer with NO pre-shared token lands in needs_setup (I3).
 
@@ -387,7 +285,6 @@ def test_per_user_scoped_no_token_lands_in_needs_setup(
 def test_share_before_install_auto_links_via_service_uri_gate_ready(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
     """4a. Share-before-install: token shared first → install auto-links it → gate ready.
 
@@ -420,9 +317,6 @@ def test_share_before_install_auto_links_via_service_uri_gate_ready(
     bundle_id = fresh_pub["bundle_id"]
 
     # ── Phase 2: Publisher creates + shares the per-user token BEFORE install ──
-    pub_user_id = uuid.UUID(
-        client.get(f"{API}/users/me", headers=superuser_token_headers).json()["id"]
-    )
     user_token = _create_api_token_credential(
         client,
         superuser_token_headers,
@@ -433,14 +327,10 @@ def test_share_before_install_auto_links_via_service_uri_gate_ready(
     user_token_id = uuid.UUID(user_token["id"])
 
     installer, installer_headers = _make_user_and_headers(client)
-    installer_id = uuid.UUID(installer["id"])
 
     # Share BEFORE install
-    _share_credential_with_user(
-        db,
-        credential_id=user_token_id,
-        credential_owner_id=pub_user_id,
-        shared_with_user_id=installer_id,
+    share_credential_via_api(
+        client, superuser_token_headers, user_token["id"], installer["email"]
     )
 
     # ── Phase 3: GET install-context → suggestion = the pre-shared token ──────
@@ -478,7 +368,6 @@ def test_share_before_install_auto_links_via_service_uri_gate_ready(
 def test_share_after_install_placeholder_then_manual_link_flips_gate_ready(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
     """4b. Manual-link-after fallback: token shared after install → needs_setup →
     user fills placeholder via setup-credentials PUT → gate ready.
@@ -516,7 +405,6 @@ def test_share_after_install_placeholder_then_manual_link_flips_gate_ready(
 
     # ── Phase 2: Installer installs WITHOUT the pre-shared token ──────────────
     installer, installer_headers = _make_user_and_headers(client)
-    installer_id = uuid.UUID(installer["id"])
 
     # No token shared yet → install-context has no suggestion
     ctx_before = _install_context(client, installer_headers, bundle_id)
@@ -536,9 +424,6 @@ def test_share_after_install_placeholder_then_manual_link_flips_gate_ready(
     )
 
     # ── Phase 3: Publisher now shares the per-user token (AFTER install) ──────
-    pub_user_id = uuid.UUID(
-        client.get(f"{API}/users/me", headers=superuser_token_headers).json()["id"]
-    )
     user_token = _create_api_token_credential(
         client,
         superuser_token_headers,
@@ -546,14 +431,10 @@ def test_share_after_install_placeholder_then_manual_link_flips_gate_ready(
         allow_sharing=True,
         service_uri=slot_uri,
     )
-    user_token_id = uuid.UUID(user_token["id"])
 
     # Share after the install already happened
-    _share_credential_with_user(
-        db,
-        credential_id=user_token_id,
-        credential_owner_id=pub_user_id,
-        shared_with_user_id=installer_id,
+    share_credential_via_api(
+        client, superuser_token_headers, user_token["id"], installer["email"]
     )
 
     # The install-context now would suggest the token (for informational purposes),
@@ -561,27 +442,19 @@ def test_share_after_install_placeholder_then_manual_link_flips_gate_ready(
     # The user must manually fill the placeholder via the Credentials tab path.
 
     # ── Phase 4: Find the placeholder credential linked to the install ─────────
-    db.expire_all()
-    links = db.exec(
-        select(AgentCredentialLink).where(
-            AgentCredentialLink.agent_id == uuid.UUID(install_id)
-        )
-    ).all()
-    # Find the placeholder link (there should be exactly one PBU placeholder)
-    placeholder_link = None
-    placeholder_cred = None
-    for link in links:
-        cred = db.get(Credential, link.credential_id)
-        if cred and cred.is_placeholder and cred.owner_id == installer_id:
-            placeholder_link = link
-            placeholder_cred = cred
-            break
-
-    assert placeholder_cred is not None, (
+    creds = client.get(
+        f"{API}/agents/{install_id}/credentials", headers=installer_headers
+    )
+    assert creds.status_code == 200, creds.text
+    placeholders = [
+        c for c in creds.json()["data"]
+        if c["is_placeholder"] and c["owner_id"] == installer["id"]
+    ]
+    assert placeholders, (
         "Expected a placeholder Credential linked to the install after quick-install "
         "with no pre-shared token"
     )
-    placeholder_id = str(placeholder_cred.id)
+    placeholder_id = placeholders[0]["id"]
 
     # ── Phase 5: User manually fills the placeholder via PUT setup-credentials ─
     r = client.put(

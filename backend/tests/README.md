@@ -78,22 +78,37 @@ This means:
 
 ```
 tests/
-  conftest.py              # Fixtures: db, client, auth headers
-  api/
-    auth/
-      test_login.py        # Login, password recovery, password reset
-      test_users.py        # User CRUD, signup, password management
-    items/
-      test_items.py        # Item CRUD
-    agents/
-      conftest.py          # Environment stubs, background task collector
-      agents_email_integration_test.py
-    ai_credentials/
-      conftest.py          # Environment stubs for credential propagation tests
-      test_ai_credentials.py
-      test_ai_credentials_propagation.py
+  conftest.py              # Root fixtures: db, client, auth headers (full app lifespan, test DB)
+  api/                     # API-only integration tests (TestClient), one dir per route domain.
+    a2a_integration/       #   See "Rules" — these tests hit HTTP only, never app internals.
+    agent_environments/
+    agentic_teams/
+    agents/                # conftest.py: env stubs, background task collector, create_session patches
+    ai_credentials/        # conftest.py: env stubs for credential propagation tests
+    app_auth/
+    app_data/
+    app_mcp/
+    app_sync/
+    auth/                  # test_login.py, test_users.py — login, signup, password mgmt
+    cli/
+    credentials/           # conftest.py: heavy env/background stubs (scoped to files that need them)
+    dashboards/
+    desktop_auth/
+    external/
+    identity/
+    input_tasks/
     knowledge_sources/
-      test_knowledge_sources.py  # Source lifecycle, check-access/refresh, discoverable flow
+    mcp_integration/       # conftest.py: MCP OAuth + tool-handler create_session patches
+    notifications/
+    security_events/
+    ssh_keys/
+    users/                 # conftest.py: env stubs + MFA rate-limit bucket reset
+    workspaces/
+    (items/ is empty — the items feature/test was removed; see "Deferred" in the refactor plan)
+  unit/                    # Pure unit tests — see "Unit Tests" below. No DB, no TestClient.
+    conftest.py            # No-op setup_db override + env-template sys.path
+    test_*.py
+  architecture/            # Contract / drift tests — see "Architecture Tests" below.
   stubs/                   # Test doubles for external services
     environment_adapter_stub.py
     email_stubs.py
@@ -102,16 +117,72 @@ tests/
   utils/
     utils.py               # random_lower_string(), random_email(), get_superuser_token_headers()
     user.py                # create_random_user(), user_authentication_headers()
-    item.py                # create_random_item()
     agent.py               # create_agent_via_api(), get_agent(), enable_a2a(), configure/enable_email_integration()
     ai_credential.py       # create_random_ai_credential(), set/update/delete/get helpers
-    a2a.py                 # setup_a2a_agent(), send_a2a_streaming_message(), create_access_token(), etc.
+    a2a.py                 # setup_a2a_agent(), a2a_headers(), extract_parts_from_sse_event(), extract_task_id(), etc.
     background_tasks.py    # drain_tasks() for deferred background task execution
+    bundle.py              # publish_bundle(), install_bundle(), make_bundle_public(), bundle credential helpers
+    credential.py          # create_random_credential(), share_credential_via_api(), set_credential_sharing(), get_credential()
+    desktop_auth.py        # obtain_desktop_tokens() — full authorize/consent/exchange dance
+    environment.py         # set_environment_status(), link_ai_credential_to_environment() (documented DB-seam helpers)
+    fixtures.py            # shared stub fixtures, CREATE_SESSION_TARGETS_*, BACKGROUND_TASK_TARGETS_* patch lists
     mail_server.py         # create_imap_server(), create_smtp_server(), process_emails_with_stub()
-    session.py             # get_agent_session(), list_sessions()
+    platform_token.py      # mint_platform_token() — raw/expired/scoped JWTs (documented app.core.security exemption)
+    session.py             # get_agent_session(), get_session(), list_sessions()
     message.py             # get_messages_by_role(), list_messages()
     knowledge_source.py    # create/get/list/update/delete/enable/disable_knowledge_source()
 ```
+
+## Unit Tests (`tests/unit/`)
+
+The API-only rule (Rule 1 below) applies to **`tests/api/` only**. `tests/unit/` is the home for
+pure unit tests, and the rules there are different:
+
+- **Allowed here**: importing from `app.services`, `app.core`, adapters, and env-template modules
+  directly, and calling functions/classes in isolation. There is **no `client` and no `db`** — the
+  unit conftest (`tests/unit/conftest.py`) overrides `setup_db` to a no-op, so no Postgres connection
+  is opened.
+- **What belongs in `tests/unit/`**: pure logic with no I/O — event transformers, parsers, decision
+  tables, similarity/scoring functions, URL/path helpers, private `_helper` functions, egress-guard
+  predicates, MagicMock-driven defensive-branch tests, and anything that asserts module-level
+  constants. If a test only needs a function and some plain Python inputs, it goes here.
+- **What does NOT belong here**: anything that needs the database, a real HTTP round-trip, the full
+  app lifespan, or background-task draining. Those are integration tests and live in `tests/api/`.
+  Litmus test: **if a "unit" test secretly needs `db` or `client`, it is not a pure unit test** —
+  move it back to `tests/api/` (or split it). New unit files must run green under
+  `tests/unit/conftest.py` with no DB engine.
+
+### Cross-reference convention
+
+When a private helper is unit-tested in `tests/unit/` but its API-observable behavior is covered by a
+scenario in `tests/api/`, leave a one-line pointer in **both** directions so the pair stays
+discoverable:
+
+- In the api test file (module docstring or a comment near the related scenario):
+  `# Unit tests for parse_commands_file live in tests/unit/test_cli_commands_service.py`
+- In the unit test file: a docstring note that the end-to-end / API-observable path is covered in the
+  corresponding `tests/api/<domain>/..._test.py`.
+
+See `tests/api/agents/agents_cli_commands_test.py` (module docstring "Notes") for the established
+pattern.
+
+```bash
+docker compose exec backend python -m pytest tests/unit/ -q
+```
+
+## Architecture Tests (`tests/architecture/`)
+
+Contract / drift tests that assert structural invariants about the **application source tree** rather
+than runtime behavior. They scan `backend/app/` and fail when the codebase drifts away from an
+assumption the test suite relies on. Examples:
+
+- `patch_target_drift_test.py` — every `app` module that imports `create_session` /
+  `create_task_with_error_logging` must appear in the corresponding patch-target list in
+  `tests/utils/fixtures.py` (or an explicit, commented allowlist). Otherwise a service silently opens
+  sessions on the real engine during tests.
+- `channel_ingestion_callers_test.py` — guards the set of modules participating in channel ingestion.
+
+These tests import and inspect `app` modules directly; the API-only rule does not apply to them.
 
 ## Writing New Tests
 
@@ -286,7 +357,7 @@ def test_password_recovery(client: TestClient) -> None:
 
 ## Rules
 
-1. **No imports from `app.crud`, `app.services`, or `app.core.security`** in test files. The only allowed app imports are `app.core.config.settings` (for API URL prefix and config values) and `app.utils` (for token generation in password-reset tests).
+1. **No imports from `app.crud`, `app.services`, or `app.core.security`** in `tests/api/` files. The only allowed app imports are `app.core.config.settings` (for API URL prefix and config values) and `app.utils` (for token generation in password-reset tests). This rule applies to `tests/api/` only — `tests/unit/` and `tests/architecture/` may import app internals (see "Unit Tests" and "Architecture Tests" above).
 2. **All test data created via API endpoints.** Use the helpers in `tests/utils/`.
 3. **All verification via API responses.** Check status codes and JSON bodies. Verify side-effects by calling other endpoints (e.g., log in to verify a password change).
 4. **Each test is independent.** Transaction rollback ensures no state leaks. Do not rely on test execution order.

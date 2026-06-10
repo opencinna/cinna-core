@@ -165,10 +165,11 @@ def test_backfill_idempotency(
     assert counters1["generated_and_routed"] >= 2, (
         f"Expected >= 2 routes created, got {counters1}"
     )
-    assert counters1["skipped_already_routed"] == 0 or (
-        # May be > 0 if a previous test left routes behind (transaction rollback
-        # should prevent this, but be defensive about shared seeded data)
-        counters1["generated_and_routed"] + counters1["skipped_already_routed"] >= 2
+    # Nothing was routed before this run (each test starts on a clean rolled-back
+    # transaction with only the seeded superuser), so the first run skips nothing.
+    assert counters1["skipped_already_routed"] == 0, (
+        f"First backfill run must skip nothing (no pre-existing routes), got "
+        f"skipped_already_routed={counters1['skipped_already_routed']}: {counters1}"
     )
 
     # Routes now exist for both installs

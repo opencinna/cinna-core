@@ -120,6 +120,13 @@ class Settings(BaseSettings):
             path=self.POSTGRES_DB,
         )
 
+    # Test mode. Defaults to False (full production behavior). The pytest
+    # harness (`tests/conftest.py`) flips this to True *before* importing the
+    # app so the lifespan can skip background schedulers and other heavy startup
+    # that tests never need (and which would otherwise bind jobs to the real
+    # application DB engine — an isolation escape). Never set in production.
+    TESTING: bool = False
+
     # Test database settings (separate DB for pytest)
     TEST_DB_SERVER: str | None = None
     TEST_DB_PORT: int = 5432

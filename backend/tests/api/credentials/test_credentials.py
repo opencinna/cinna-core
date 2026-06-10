@@ -5,6 +5,11 @@ from fastapi.testclient import TestClient
 from app.core.config import settings
 from tests.utils.credential import create_random_credential
 
+# Pure-CRUD suite: never creates an agent/environment, so skip the heavy
+# agent/env stubs and the default-AI-credential setup from the dir conftest.
+NEEDS_AGENT_STUBS = False
+NEEDS_DEFAULT_CREDENTIALS = False
+
 
 # ---------------------------------------------------------------------------
 # CREATE

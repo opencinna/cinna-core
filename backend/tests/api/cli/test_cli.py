@@ -323,16 +323,26 @@ def test_cli_environment_keep_alive_and_auto_activation(
     db.add(env)
     db.flush()
 
-    # The route calls CLIService.ensure_environment_running() which activates the env.
-    # activate_suspended_environment() writes to a fresh Session(engine) outside the
-    # test transaction, so we cannot assert DB state from here.  What we CAN assert is
-    # that the response is NOT a 404 (no env) or 409 (bad state) — those would mean
-    # the auto-activation path was skipped or rejected.
-    # A 502 is acceptable: it means activation succeeded but the workspace download
-    # failed because there is no real Docker container in tests.
+    # The route calls CLIService.ensure_environment_running(), which now activates
+    # the env via create_session() (patched to the test session) using the test
+    # environment adapter — so the suspended → running transition actually happens
+    # against the test DB and is observable here.
+    #
+    # The activation succeeds; only the subsequent workspace tarball download
+    # fails (no real Docker container behind the stub adapter), which the route
+    # maps to a deterministic 502. A 404 (no env) or 409 (bad state) would mean
+    # the auto-activation path was skipped or rejected — those must NOT occur.
     r = client.get(f"{_BASE}/agents/{agent_id}/workspace", headers=cli_headers)
-    assert r.status_code not in (404, 409), (
-        f"Expected auto-activation to proceed (not 404/409), got {r.status_code}: {r.text}"
+    assert r.status_code == 502, (
+        f"Expected 502 (env activated, tarball download has no real container), "
+        f"got {r.status_code}: {r.text}"
+    )
+
+    # The environment must have actually transitioned suspended → running.
+    db.expire(env)
+    env = db.get(AgentEnvironment, env_id)
+    assert env.status == "running", (
+        f"Auto-activation must transition the env to 'running', got {env.status!r}"
     )
 
     # ── Phase 4: Non-recoverable state → 409 ─────────────────────────────

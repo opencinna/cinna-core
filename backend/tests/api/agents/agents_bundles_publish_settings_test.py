@@ -28,8 +28,6 @@ Scenarios:
      still works (confirms the new shape is the only accepted path after shim
      removal).
 """
-import uuid
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -37,63 +35,23 @@ from app.core.config import settings
 from tests.utils.agent import create_agent_via_api
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
+from tests.utils.bundle import (
+    create_bundle_credential as _create_credential,
+    link_bundle_credential_to_agent as _link_credential,
+    make_bundle_public as _make_public,
+    make_user_and_headers as _make_user_and_headers,
+    publish_bundle as _publish,
+)
 from tests.utils.user import create_random_user, user_authentication_headers
 
 API = settings.API_V1_STR
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
-
-
-def _make_user_and_headers(client: TestClient) -> tuple[dict, dict[str, str]]:
-    """Create a random user with a default AI credential and return both."""
-    user = create_random_user(client)
-    headers = user_authentication_headers(
-        client=client, email=user["email"], password=user["_password"]
-    )
-    create_random_ai_credential(client, headers, set_default=True)
-    return user, headers
-
-
-def _create_credential(
-    client: TestClient,
-    headers: dict[str, str],
-    *,
-    name: str | None = None,
-    allow_sharing: bool = False,
-) -> dict:
-    """Create an api_token credential via the credentials API."""
-    name = name or f"cred-{uuid.uuid4().hex[:8]}"
-    r = client.post(
-        f"{API}/credentials/",
-        headers=headers,
-        json={
-            "name": name,
-            "type": "api_token",
-            "allow_sharing": allow_sharing,
-            "credential_data": {
-                "api_token_type": "bearer",
-                "api_token_template": "Authorization: Bearer {TOKEN}",
-                "api_token": "test-token-value",
-            },
-        },
-    )
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
-def _link_credential(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-    credential_id: str,
-) -> None:
-    r = client.post(
-        f"{API}/agents/{agent_id}/credentials",
-        headers=headers,
-        json={"credential_id": credential_id},
-    )
-    assert r.status_code == 200, r.text
+# Shared bundle helpers (_make_user_and_headers, _create_credential,
+# _link_credential, _publish, _make_public) are imported above from
+# tests.utils.bundle. _install stays local (no post-install drain), alongside
+# the publish-settings-specific helpers below.
 
 
 def _patch_publish_settings(
@@ -109,24 +67,6 @@ def _patch_publish_settings(
         json={"credential_overrides": credential_overrides},
     )
     return r
-
-
-def _publish(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-) -> dict:
-    """Publish and return the agent dict (with bundle_uuid)."""
-    r = client.post(
-        f"{API}/agents/{agent_id}/publish",
-        headers=headers,
-        json={},
-    )
-    assert r.status_code == 200, r.text
-    drain_tasks()
-    # Return fresh agent with bundle_uuid
-    fresh = client.get(f"{API}/agents/{agent_id}", headers=headers).json()
-    return fresh
 
 
 def _promote_to_publisher_install(
@@ -171,19 +111,6 @@ def _get_latest_specs(
     data = revs.json()["data"]
     assert data, "Expected at least one revision"
     return data[0]["required_credential_specs"]
-
-
-def _make_public(
-    client: TestClient,
-    headers: dict[str, str],
-    bundle_uuid: str,
-) -> None:
-    r = client.patch(
-        f"{API}/bundles/{bundle_uuid}",
-        headers=headers,
-        json={"is_listed": True, "visibility": "public"},
-    )
-    assert r.status_code == 200, r.text
 
 
 def _install(

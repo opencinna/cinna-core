@@ -27,6 +27,9 @@ def patch_create_session(db):
         "app.services.agents.commands.session_reset_command.create_db_session",
         "app.services.agents.commands.webapp_command.create_session",
         "app.services.agents.commands.agent_status_command.create_session",
+        # rebuild_env_command imports create_session under the `create_db_session`
+        # alias; the /rebuild slash command is exercised by the agent CLI tests.
+        "app.services.agents.commands.rebuild_env_command.create_db_session",
     ]):
         yield
 

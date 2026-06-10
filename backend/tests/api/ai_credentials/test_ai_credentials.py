@@ -13,6 +13,11 @@ from tests.utils.ai_credential import (
 )
 from tests.utils.user import create_random_user, user_authentication_headers
 
+# Pure-CRUD suite: never creates an agent/environment, so skip the heavy
+# agent/env stubs and the default-AI-credential setup from the dir conftest.
+NEEDS_AGENT_STUBS = False
+NEEDS_DEFAULT_CREDENTIALS = False
+
 
 # ---------------------------------------------------------------------------
 # CREATE

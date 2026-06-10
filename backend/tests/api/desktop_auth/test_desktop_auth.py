@@ -33,6 +33,7 @@ from tests.utils.desktop_auth import (
     get_authorization_code,
     initiate_authorize,
     list_desktop_clients,
+    obtain_desktop_tokens,
     refresh_access_token,
     revoke_desktop_client,
     submit_consent,
@@ -1290,16 +1291,13 @@ def _obtain_tokens(
     headers: dict[str, str],
     device_name: str,
 ) -> tuple[str, str]:
-    """Full consent flow → exchange → return (client_id, refresh_token)."""
-    verifier, challenge = generate_pkce_pair()
-    code = get_authorization_code(
-        client, headers, code_challenge=challenge, device_name=device_name
-    )
-    clients = list_desktop_clients(client, headers)
-    reg = next(c for c in clients if c["device_name"] == device_name)
-    client_id = reg["client_id"]
-    tokens = exchange_code_for_tokens(client, client_id, code, verifier)
-    return client_id, tokens["refresh_token"]
+    """Full consent flow → exchange → return (client_id, refresh_token).
+
+    Thin adapter over the shared ``obtain_desktop_tokens`` helper, preserving
+    the ``(client_id, refresh_token)`` tuple shape this file's tests expect.
+    """
+    bundle = obtain_desktop_tokens(client, headers, device_name=device_name)
+    return bundle["client_id"], bundle["refresh_token"]
 
 
 def test_grace_rerotation_happy_path(

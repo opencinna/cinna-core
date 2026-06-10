@@ -154,19 +154,25 @@ from app.services.credentials.model_discovery_scheduler import (
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown."""
     # --- Startup ---
-    start_file_cleanup_scheduler()
-    start_suspension_scheduler()
-    start_task_trigger_scheduler()
-    start_agent_schedule_scheduler()
-    start_email_polling_scheduler()
-    start_email_sending_scheduler()
-    start_env_status_scheduler()
-    start_cli_cleanup_scheduler()
-    start_desktop_auth_cleanup_scheduler()
-    start_app_data_orphan_scheduler()
-    start_app_data_gc_scheduler()
-    start_mfa_cleanup_scheduler()
-    start_model_discovery_scheduler()
+    # Background schedulers run real APScheduler BackgroundSchedulers whose jobs
+    # bind to the application DB engine. The pytest harness sets
+    # ``settings.TESTING`` so they never start under test (an isolation escape:
+    # a job firing mid-run would mutate the dev DB from inside a test). In
+    # production ``TESTING`` is False, so every scheduler starts as before.
+    if not settings.TESTING:
+        start_file_cleanup_scheduler()
+        start_suspension_scheduler()
+        start_task_trigger_scheduler()
+        start_agent_schedule_scheduler()
+        start_email_polling_scheduler()
+        start_email_sending_scheduler()
+        start_env_status_scheduler()
+        start_cli_cleanup_scheduler()
+        start_desktop_auth_cleanup_scheduler()
+        start_app_data_orphan_scheduler()
+        start_app_data_gc_scheduler()
+        start_mfa_cleanup_scheduler()
+        start_model_discovery_scheduler()
 
     # Register backend event handlers
     from app.models.events.event import EventType
@@ -343,19 +349,20 @@ async def lifespan(app: FastAPI):
         yield
 
     # --- Shutdown ---
-    shutdown_file_cleanup_scheduler()
-    shutdown_suspension_scheduler()
-    shutdown_task_trigger_scheduler()
-    shutdown_agent_schedule_scheduler()
-    shutdown_email_polling_scheduler()
-    shutdown_email_sending_scheduler()
-    shutdown_env_status_scheduler()
-    shutdown_cli_cleanup_scheduler()
-    shutdown_desktop_auth_cleanup_scheduler()
-    shutdown_app_data_orphan_scheduler()
-    shutdown_app_data_gc_scheduler()
-    shutdown_mfa_cleanup_scheduler()
-    shutdown_model_discovery_scheduler()
+    if not settings.TESTING:
+        shutdown_file_cleanup_scheduler()
+        shutdown_suspension_scheduler()
+        shutdown_task_trigger_scheduler()
+        shutdown_agent_schedule_scheduler()
+        shutdown_email_polling_scheduler()
+        shutdown_email_sending_scheduler()
+        shutdown_env_status_scheduler()
+        shutdown_cli_cleanup_scheduler()
+        shutdown_desktop_auth_cleanup_scheduler()
+        shutdown_app_data_orphan_scheduler()
+        shutdown_app_data_gc_scheduler()
+        shutdown_mfa_cleanup_scheduler()
+        shutdown_model_discovery_scheduler()
     event_service.shutdown()
     logger.info("Application shutdown complete")
 

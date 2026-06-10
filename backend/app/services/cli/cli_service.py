@@ -20,7 +20,7 @@ from sqlmodel import Session, select
 from starlette.websockets import WebSocketState
 
 from app.core.config import settings
-from app.core.db import engine
+from app.core.db import create_session, engine
 from app.models import Agent, AgentEnvironment
 from app.models.cli.cli_setup_token import CLISetupToken, CLISetupTokenCreated
 from app.models.cli.cli_token import CLIToken, CLITokenPublic
@@ -117,12 +117,19 @@ class CLIService:
                 f"CLI auto-activating suspended environment {environment.id} "
                 f"for agent {agent.id}"
             )
-            from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
+            from app.services.environments.environment_service import EnvironmentService
 
-            lifecycle = EnvironmentLifecycleManager()
-            from app.core.db import engine
+            # Project invariant: resolve the lifecycle manager via the
+            # EnvironmentService singleton rather than instantiating
+            # EnvironmentLifecycleManager() directly, so the configured adapter
+            # (Docker in prod, the stub in tests) is used.
+            lifecycle = EnvironmentService.get_lifecycle_manager()
 
-            with Session(engine) as fresh_db:
+            # ``create_session()`` (not ``Session(engine)``) so the activation
+            # write participates in the rolled-back test transaction and is
+            # patchable — otherwise the status change is invisible to callers
+            # bound to a different session (and to tests).
+            with create_session() as fresh_db:
                 fresh_env = fresh_db.get(AgentEnvironment, environment.id)
                 fresh_agent = fresh_db.get(Agent, agent.id)
                 if not fresh_env or not fresh_agent:
@@ -139,11 +146,10 @@ class CLIService:
 
         # Poll until running (handles both just-activated and already-activating cases)
         import asyncio
-        from app.core.db import engine
 
         deadline = asyncio.get_event_loop().time() + 120
         while asyncio.get_event_loop().time() < deadline:
-            with Session(engine) as fresh_db:
+            with create_session() as fresh_db:
                 fresh_env = fresh_db.get(AgentEnvironment, environment.id)
                 if not fresh_env:
                     raise RuntimeError("Environment disappeared during activation")

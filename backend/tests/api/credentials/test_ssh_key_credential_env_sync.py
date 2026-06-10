@@ -14,7 +14,6 @@ Covers:
      REDACTED) in the generated credentials_readme text
 """
 from fastapi.testclient import TestClient
-from sqlmodel import Session
 
 from tests.stubs.environment_adapter_stub import EnvironmentTestAdapter
 from tests.utils.agent import create_agent_via_api, get_agent
@@ -59,7 +58,6 @@ def _create_agent_with_shared_adapter(
 def test_ssh_key_env_sync_whitelist_and_bundle(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
     patch_environment_adapter,
 ) -> None:
     """
@@ -165,7 +163,6 @@ def test_ssh_key_env_sync_whitelist_and_bundle(
 def test_ssh_key_env_sync_empty_bundle_when_no_ssh_keys(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
     patch_environment_adapter,
 ) -> None:
     """
@@ -200,7 +197,6 @@ def test_ssh_key_env_sync_empty_bundle_when_no_ssh_keys(
 def test_ssh_key_env_sync_multiple_credentials_in_bundle(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
     patch_environment_adapter,
 ) -> None:
     """
@@ -255,7 +251,6 @@ def test_ssh_key_env_sync_multiple_credentials_in_bundle(
 def test_ssh_key_env_sync_null_host_aliases_defaults_to_wildcard(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
     patch_environment_adapter,
 ) -> None:
     """

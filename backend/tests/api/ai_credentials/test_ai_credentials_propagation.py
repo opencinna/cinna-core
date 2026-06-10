@@ -5,12 +5,9 @@ Tests that AI credentials propagate correctly to:
 1. User profile (via set-default → auto-sync to ai_credentials_encrypted)
 2. Agent environments (via explicit linking with conversation/building credential IDs)
 """
-import uuid
-
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from app.models.environments.environment import AgentEnvironment
 from app.services.environments.environment_service import EnvironmentService
 from tests.utils.ai_credential import (
     create_random_ai_credential,
@@ -22,6 +19,10 @@ from tests.utils.ai_credential import (
 )
 from tests.utils.agent import create_agent_via_api
 from tests.utils.background_tasks import drain_tasks
+from tests.utils.environment import (
+    get_environment,
+    link_ai_credential_to_environment as _link_credential_to_environment,
+)
 from tests.utils.user import create_random_user, user_authentication_headers
 
 
@@ -168,25 +169,6 @@ def test_credentials_status_reflects_defaults(
 # ---------------------------------------------------------------------------
 
 
-def _link_credential_to_environment(
-    db: Session,
-    environment_id: uuid.UUID,
-    credential_id: uuid.UUID,
-    conversation: bool = False,
-    building: bool = False,
-) -> None:
-    """Directly set credential IDs on an environment via DB (not exposed via API)."""
-    env = db.get(AgentEnvironment, environment_id)
-    assert env is not None, f"Environment {environment_id} not found"
-    if conversation:
-        env.conversation_ai_credential_id = credential_id
-    if building:
-        env.building_ai_credential_id = credential_id
-    db.add(env)
-    db.commit()
-    db.refresh(env)
-
-
 def test_affected_environments_empty(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
@@ -284,7 +266,6 @@ def test_affected_environments_multiple_envs(
 
 def test_affected_environments_includes_default_credential_envs(
     client: TestClient,
-    db: Session,
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
@@ -307,11 +288,10 @@ def test_affected_environments_includes_default_credential_envs(
     assert env_id is not None
 
     # Verify the environment uses default credentials (credential IDs are null)
-    env = db.get(AgentEnvironment, env_id)
-    assert env is not None
-    assert env.use_default_ai_credentials is True
-    assert env.conversation_ai_credential_id is None
-    assert env.building_ai_credential_id is None
+    env = get_environment(client, superuser_token_headers, env_id)
+    assert env["use_default_ai_credentials"] is True
+    assert env["conversation_ai_credential_id"] is None
+    assert env["building_ai_credential_id"] is None
 
     # Query affected environments for the default credential
     body = get_affected_environments(client, superuser_token_headers, cred["id"])

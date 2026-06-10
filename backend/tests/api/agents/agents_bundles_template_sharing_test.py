@@ -45,37 +45,34 @@ Scenarios:
    ``allow_template_sharing`` back to ``False`` but keeping the override as
    ``"template"``; publish must fail with HTTP 400.
 
-Direct DB access (``db`` fixture) is used for reading credential + link rows
-not exposed via listing endpoints, consistent with the Phase 3/4 test precedent.
+Credential and linked-credential state is verified through the API:
+``GET /credentials/{id}`` (public projection) and
+``GET /agents/{id}/credentials`` expose ``owner_id``, ``is_placeholder``,
+``allow_sharing``, ``allow_template_sharing`` and ``template_private_fields``.
 """
 import uuid
 
-import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models.credentials.credential import Credential
-from app.models.credentials.link_models import AgentCredentialLink
 from tests.utils.agent import create_agent_via_api
-from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.user import create_random_user, user_authentication_headers
+from tests.utils.bundle import (
+    install_bundle as _install,
+    link_bundle_credential_to_agent as _link_credential_to_agent,
+    make_bundle_public as _make_public,
+    make_user_and_headers as _make_user_and_headers,
+    publish_bundle_revision as _publish,
+)
+from tests.utils.credential import get_agent_credentials, get_credential
 
 API = settings.API_V1_STR
 
 
 # ── Module-level helpers ──────────────────────────────────────────────────────
-
-
-def _make_user_and_headers(client: TestClient) -> tuple[dict, dict[str, str]]:
-    """Create a random user with a default AI credential and return both."""
-    user = create_random_user(client)
-    headers = user_authentication_headers(
-        client=client, email=user["email"], password=user["_password"]
-    )
-    create_random_ai_credential(client, headers, set_default=True)
-    return user, headers
+# Shared bundle helpers (_make_user_and_headers, _publish, _make_public,
+# _install, _link_credential_to_agent) are imported above from
+# tests.utils.bundle. The Odoo credential factory stays local.
 
 
 def _create_odoo_credential(
@@ -108,76 +105,6 @@ def _create_odoo_credential(
         body["template_private_fields"] = template_private_fields
     r = client.post(f"{API}/credentials/", headers=headers, json=body)
     assert r.status_code == 200, r.text
-    return r.json()
-
-
-def _link_credential_to_agent(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-    credential_id: str,
-) -> None:
-    r = client.post(
-        f"{API}/agents/{agent_id}/credentials",
-        headers=headers,
-        json={"credential_id": credential_id},
-    )
-    assert r.status_code in (200, 201), r.text
-
-
-def _publish(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-    *,
-    expected_status: int = 200,
-) -> dict:
-    """Publish agent; return the parsed response body."""
-    r = client.post(
-        f"{API}/agents/{agent_id}/publish",
-        headers=headers,
-        json={},
-    )
-    assert r.status_code == expected_status, (
-        f"Expected {expected_status}; got {r.status_code}: {r.text}"
-    )
-    if r.status_code == 200:
-        drain_tasks()
-        return r.json()
-    return r.json()
-
-
-def _make_public(
-    client: TestClient,
-    headers: dict[str, str],
-    bundle_uuid: str,
-) -> None:
-    r = client.patch(
-        f"{API}/bundles/{bundle_uuid}",
-        headers=headers,
-        json={"is_listed": True, "visibility": "public"},
-    )
-    assert r.status_code == 200, r.text
-
-
-def _install(
-    client: TestClient,
-    headers: dict[str, str],
-    bundle_id: str,
-    *,
-    request_body: dict | None = None,
-    expected_status: int = 200,
-) -> dict:
-    r = client.post(
-        f"{API}/catalog/{bundle_id}/install",
-        headers=headers,
-        json=request_body or {},
-    )
-    assert r.status_code == expected_status, (
-        f"Expected {expected_status}; got {r.status_code}: {r.text}"
-    )
-    if r.status_code == 200:
-        drain_tasks()
     return r.json()
 
 
@@ -460,7 +387,6 @@ def test_publish_template_override_rejects_when_allow_template_sharing_false(
 def test_install_template_credential_happy_path(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
     """4. Install of a bundle with a template credential — full install flow.
 
@@ -503,7 +429,6 @@ def test_install_template_credential_happy_path(
 
     # ── Phase 3: Foreign user installs ────────────────────────────────────────
     installer, installer_headers = _make_user_and_headers(client)
-    installer_id = uuid.UUID(installer["id"])
     install = _install(client, installer_headers, bundle_id)
     install_id = install["id"]
 
@@ -546,28 +471,25 @@ def test_install_template_credential_happy_path(
         f"Expected ['api_token','login'] in template_private_fields; got {private_fields}"
     )
 
-    # ── Phase 4c: DB verification of materialised Credential ──────────────────
-    db.expire_all()
-    cred_id_installed = uuid.UUID(entry["id"])
-    installed_cred = db.get(Credential, cred_id_installed)
-    assert installed_cred is not None, "Materialised Credential row must exist in DB"
-    assert installed_cred.owner_id == installer_id, (
-        f"Credential must be owned by installer {installer_id}; "
-        f"got {installed_cred.owner_id}"
+    # ── Phase 4c: API verification of the materialised Credential ─────────────
+    installed_cred = get_credential(client, installer_headers, entry["id"])
+    assert installed_cred["owner_id"] == installer["id"], (
+        f"Credential must be owned by installer {installer['id']}; "
+        f"got {installed_cred['owner_id']}"
     )
-    assert installed_cred.is_placeholder is True, (
+    assert installed_cred["is_placeholder"] is True, (
         "Materialised template credential must be a placeholder"
     )
-    assert installed_cred.allow_sharing is False, (
+    assert installed_cred["allow_sharing"] is False, (
         "Template credential must have allow_sharing=False"
     )
-    assert installed_cred.allow_template_sharing is False, (
+    assert installed_cred["allow_template_sharing"] is False, (
         "Template credential must have allow_template_sharing=False (no downstream re-sharing)"
     )
     # template_private_fields must be mirrored onto the installer's row.
-    assert sorted(installed_cred.template_private_fields or []) == ["api_token", "login"], (
-        f"template_private_fields mismatch on DB row; "
-        f"got {installed_cred.template_private_fields}"
+    assert sorted(installed_cred["template_private_fields"] or []) == ["api_token", "login"], (
+        f"template_private_fields mismatch; "
+        f"got {installed_cred['template_private_fields']}"
     )
 
 
@@ -577,7 +499,6 @@ def test_install_template_credential_happy_path(
 def test_setup_completion_flips_placeholder_and_gate_ready(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
     """5. PUT setup-credentials/{id} with ALL four fields flips is_placeholder
     to False; GET setup-status returns ready.
@@ -637,11 +558,9 @@ def test_setup_completion_flips_placeholder_and_gate_ready(
     )
     assert put_resp["id"] == placeholder_id
 
-    # ── Phase 5: DB — is_placeholder must be False ────────────────────────────
-    db.expire_all()
-    updated_cred = db.get(Credential, uuid.UUID(placeholder_id))
-    assert updated_cred is not None
-    assert updated_cred.is_placeholder is False, (
+    # ── Phase 5: is_placeholder must be False ─────────────────────────────────
+    updated_cred = get_credential(client, installer_headers, placeholder_id)
+    assert updated_cred["is_placeholder"] is False, (
         "Expected is_placeholder=False after filling all required fields"
     )
 
@@ -659,7 +578,6 @@ def test_setup_completion_flips_placeholder_and_gate_ready(
 def test_setup_partial_keeps_placeholder_and_needs_setup(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
     """6. Submitting only ``login`` (missing ``api_token``) keeps is_placeholder=True
     and gate still returns needs_setup.
@@ -716,11 +634,9 @@ def test_setup_partial_keeps_placeholder_and_needs_setup(
         },
     )
 
-    # ── Phase 4: DB — is_placeholder must still be True ──────────────────────
-    db.expire_all()
-    cred_row = db.get(Credential, uuid.UUID(placeholder_id))
-    assert cred_row is not None
-    assert cred_row.is_placeholder is True, (
+    # ── Phase 4: is_placeholder must still be True ───────────────────────────
+    cred_row = get_credential(client, installer_headers, placeholder_id)
+    assert cred_row["is_placeholder"] is True, (
         "is_placeholder must remain True when api_token is missing"
     )
 
@@ -742,7 +658,6 @@ def test_setup_partial_keeps_placeholder_and_needs_setup(
 def test_install_use_existing_skips_template_materialisation(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
     """7. Installer sends mode='use_existing' for a template spec.
 
@@ -782,7 +697,6 @@ def test_install_use_existing_skips_template_materialisation(
 
     # ── Phase 2: Installer creates their own fully-filled Odoo credential ──────
     installer, installer_headers = _make_user_and_headers(client)
-    installer_id = uuid.UUID(installer["id"])
 
     own_cred = _create_odoo_credential(
         client,
@@ -794,8 +708,6 @@ def test_install_use_existing_skips_template_materialisation(
         login="my_own_login",
         api_token="my_own_token",
     )
-    own_cred_id = uuid.UUID(own_cred["id"])
-
     # ── Phase 3: Install with use_existing ────────────────────────────────────
     install = _install(
         client,
@@ -810,43 +722,35 @@ def test_install_use_existing_skips_template_materialisation(
             }
         },
     )
-    install_id = uuid.UUID(install["id"])
+    install_id = install["id"]
 
     # ── Phase 4: Link points at the installer's credential ────────────────────
-    db.expire_all()
-    links = db.exec(
-        select(AgentCredentialLink).where(
-            AgentCredentialLink.agent_id == install_id
-        )
-    ).all()
-    assert len(links) == 1, f"Expected 1 link; got {len(links)}"
-    linked_cred_id = links[0].credential_id
-    assert linked_cred_id == own_cred_id, (
-        f"Link must point at installer's own credential {own_cred_id}; "
-        f"got {linked_cred_id}"
+    linked = get_agent_credentials(
+        client, installer_headers, install_id
+    )["data"]
+    assert len(linked) == 1, f"Expected 1 link; got {len(linked)}"
+    linked_cred = linked[0]
+    assert linked_cred["id"] == own_cred["id"], (
+        f"Link must point at installer's own credential {own_cred['id']}; "
+        f"got {linked_cred['id']}"
     )
-
-    linked_cred = db.get(Credential, linked_cred_id)
-    assert linked_cred is not None
-    assert linked_cred.is_placeholder is False, (
+    assert linked_cred["is_placeholder"] is False, (
         "Linked credential must NOT be a placeholder when use_existing was provided"
     )
-    assert linked_cred.owner_id == installer_id, (
+    assert linked_cred["owner_id"] == installer["id"], (
         "Linked credential must be owned by the installer"
     )
 
     # ── Phase 5: No template placeholder must have been created ───────────────
-    # No placeholder Credentials should be owned by the installer AND linked
-    # to this install.
-    all_linked_creds = [db.get(Credential, lnk.credential_id) for lnk in links]
-    placeholder_creds = [c for c in all_linked_creds if c and c.is_placeholder]
+    # No placeholder Credentials should be linked to this install.
+    placeholder_creds = [c for c in linked if c["is_placeholder"]]
     assert len(placeholder_creds) == 0, (
         f"No placeholder should exist when installer opted out with use_existing; "
-        f"got {[c.id for c in placeholder_creds]}"
+        f"got {[c['id'] for c in placeholder_creds]}"
     )
 
     # ── Phase 6: setup-status must be ready ───────────────────────────────────
-    status_resp = _get_setup_status(client, installer_headers, str(install_id))
+    status_resp = _get_setup_status(client, installer_headers, install_id)
     assert status_resp["status"] == "ready", (
         f"Gate should be ready when own full credential was linked; "
         f"got {status_resp['status']} missing={status_resp.get('missing')}"

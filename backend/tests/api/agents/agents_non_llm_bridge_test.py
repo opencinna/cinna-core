@@ -463,35 +463,8 @@ def test_per_block_size_cap_truncates_large_output(
     assert oversized_content not in user_content, "Oversized content should have been truncated"
 
 
-def test_include_in_llm_context_attributes_are_set_correctly() -> None:
-    """
-    Unit-level check: verify handler class attributes match the plan spec.
-
-    This test imports the handler classes directly and checks their
-    include_in_llm_context attribute without running any I/O.
-    """
-    from app.services.agents.commands.files_command import (
-        FilesCommandHandler,
-        FilesAllCommandHandler,
-    )
-    from app.services.agents.commands.agent_status_command import AgentStatusCommandHandler
-    from app.services.agents.commands.webapp_command import WebappCommandHandler
-    from app.services.agents.commands.session_recover_command import SessionRecoverCommandHandler
-    from app.services.agents.commands.session_reset_command import SessionResetCommandHandler
-    from app.services.agents.commands.rebuild_env_command import RebuildEnvCommandHandler
-    from app.services.agents.commands.run_command import RunCommandHandler
-
-    # Opted-in (default True)
-    assert FilesCommandHandler.include_in_llm_context is True
-    assert FilesAllCommandHandler.include_in_llm_context is True
-    assert AgentStatusCommandHandler.include_in_llm_context is True
-    assert RunCommandHandler.include_in_llm_context is True
-
-    # Opted-out (False)
-    assert WebappCommandHandler.include_in_llm_context is False
-    assert SessionRecoverCommandHandler.include_in_llm_context is False
-    assert SessionResetCommandHandler.include_in_llm_context is False
-    assert RebuildEnvCommandHandler.include_in_llm_context is False
+# Unit test for the include_in_llm_context handler class attributes lives in
+# tests/unit/test_command_handler_attributes.py (pure attribute introspection).
 
 
 def test_get_handler_returns_correct_handler_or_none() -> None:
@@ -499,11 +472,19 @@ def test_get_handler_returns_correct_handler_or_none() -> None:
     Unit-level check: CommandService.get_handler returns the registered handler
     for known command names and None for unknown names.
     """
+    # Importing the commands package registers all handlers (its module-level
+    # side effects call CommandService.register). This is the same import the
+    # service performs lazily before listing handlers.
+    import app.services.agents.commands  # noqa: F401
     from app.services.agents.command_service import CommandService
+    from app.services.agents.commands.files_command import FilesCommandHandler
 
-    # /files is registered (loaded on startup via commands/__init__.py)
+    # /files must resolve to the registered FilesCommandHandler.
     handler = CommandService.get_handler("/files")
-    # May be None if not yet registered in test environment (no app startup)
-    # — acceptable; the test verifies the None return path works
+    assert isinstance(handler, FilesCommandHandler), (
+        f"Expected /files to resolve to FilesCommandHandler, got {handler!r}"
+    )
+
+    # An unknown command name returns None.
     result_none = CommandService.get_handler("/definitely-not-a-real-command-xyz")
     assert result_none is None, "Expected None for unknown command name"

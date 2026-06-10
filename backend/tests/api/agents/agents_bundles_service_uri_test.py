@@ -25,9 +25,11 @@ Scenarios:
      a ``service_uri`` but have distinct human names — the matcher surfaces
      the suggestion (the original name-match blocker is gone).
 
-Direct DB access via the ``db`` fixture is used only for inserting
-``CredentialShare`` rows (same established pattern as the other bundle
-context tests — there is no public share-by-id API).
+api_token credential shares go through the public
+``POST /credentials/{id}/shares`` API (``share_credential_via_api``). Direct
+``CredentialShare`` inserts via the ``db`` fixture are retained only for the
+Odoo scenario (D), whose credentials are ``allow_sharing=False`` and so cannot
+be shared through that API (see ``_share_credential_with_user``).
 """
 import uuid
 
@@ -35,27 +37,25 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models.credentials.credential import Credential
 from app.models.credentials.credential_share import CredentialShare
 from tests.utils.agent import create_agent_via_api
-from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.user import create_random_user, user_authentication_headers
+from tests.utils.bundle import (
+    get_install_context as _install_context,
+    link_bundle_credential_to_agent as _link_credential_to_agent,
+    make_bundle_public as _make_public,
+    make_user_and_headers as _make_user_and_headers,
+    publish_bundle as _publish,
+)
+from tests.utils.credential import share_credential_via_api
 
 API = settings.API_V1_STR
 
 
 # ── Module-level helpers ──────────────────────────────────────────────────────
-
-
-def _make_user_and_headers(client: TestClient) -> tuple[dict, dict[str, str]]:
-    """Create a fresh user with a default AI credential; return (user, headers)."""
-    user = create_random_user(client)
-    headers = user_authentication_headers(
-        client=client, email=user["email"], password=user["_password"]
-    )
-    create_random_ai_credential(client, headers, set_default=True)
-    return user, headers
+# Shared bundle helpers (_make_user_and_headers, _publish, _make_public,
+# _install_context, _link_credential_to_agent) are imported above from
+# tests.utils.bundle. The service_uri-aware credential factories stay local.
 
 
 def _create_api_token_credential(
@@ -118,48 +118,6 @@ def _create_odoo_credential(
     return r.json()
 
 
-def _link_credential_to_agent(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-    credential_id: str,
-) -> None:
-    r = client.post(
-        f"{API}/agents/{agent_id}/credentials",
-        headers=headers,
-        json={"credential_id": credential_id},
-    )
-    assert r.status_code in (200, 201), r.text
-
-
-def _publish(client: TestClient, headers: dict[str, str], agent_id: str) -> dict:
-    """Publish agent, drain tasks, return fresh agent row."""
-    r = client.post(f"{API}/agents/{agent_id}/publish", headers=headers, json={})
-    assert r.status_code == 200, r.text
-    drain_tasks()
-    return client.get(f"{API}/agents/{agent_id}", headers=headers).json()
-
-
-def _make_public(client: TestClient, headers: dict[str, str], bundle_uuid: str) -> None:
-    r = client.patch(
-        f"{API}/bundles/{bundle_uuid}",
-        headers=headers,
-        json={"is_listed": True, "visibility": "public"},
-    )
-    assert r.status_code == 200, r.text
-
-
-def _install_context(
-    client: TestClient, headers: dict[str, str], bundle_id: str
-) -> dict:
-    r = client.get(
-        f"{API}/catalog/{bundle_id}/install-context",
-        headers=headers,
-    )
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
 def _share_credential_with_user(
     db: Session,
     *,
@@ -167,7 +125,15 @@ def _share_credential_with_user(
     credential_owner_id: uuid.UUID,
     shared_with_user_id: uuid.UUID,
 ) -> None:
-    """Directly insert a CredentialShare row to set up the 'shared' tier."""
+    """Directly insert a CredentialShare row to set up the 'shared' tier.
+
+    Retained only for the Odoo-credential scenario (D): those credentials are
+    created with ``allow_sharing=False`` (see ``_create_odoo_credential``), which
+    the public ``POST /credentials/{id}/shares`` endpoint rejects. The scenario
+    needs the credential in the installer's shared set regardless of the sharing
+    toggle, so the share row is inserted directly. All api_token shares in this
+    file go through the public API (``share_credential_via_api``).
+    """
     existing = db.exec(
         select(CredentialShare).where(
             CredentialShare.credential_id == credential_id,
@@ -190,7 +156,6 @@ def _share_credential_with_user(
 def test_service_uri_beats_name_for_match(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
     """A. ``service_uri`` tier takes precedence over the name tier.
 
@@ -237,7 +202,6 @@ def test_service_uri_beats_name_for_match(
 
     # ── Phase 2: Installer creates two credentials ────────────────────────────
     sharer, sharer_headers = _make_user_and_headers(client)
-    sharer_id = uuid.UUID(sharer["id"])
 
     # Credential with matching service_uri but different name (shared by a third user)
     diff_name_uri_cred = _create_api_token_credential(
@@ -250,7 +214,6 @@ def test_service_uri_beats_name_for_match(
     diff_name_uri_id = uuid.UUID(diff_name_uri_cred["id"])
 
     installer, installer_headers = _make_user_and_headers(client)
-    installer_id = uuid.UUID(installer["id"])
 
     # Credential with the SAME name but no service_uri (owned by installer)
     same_name_cred = _create_api_token_credential(
@@ -262,11 +225,8 @@ def test_service_uri_beats_name_for_match(
     )
 
     # Share the service_uri-matching credential with the installer
-    _share_credential_with_user(
-        db,
-        credential_id=diff_name_uri_id,
-        credential_owner_id=sharer_id,
-        shared_with_user_id=installer_id,
+    share_credential_via_api(
+        client, sharer_headers, diff_name_uri_cred["id"], installer["email"]
     )
 
     # ── Phase 3: GET install-context — service_uri tier must win ──────────────
@@ -290,7 +250,6 @@ def test_service_uri_beats_name_for_match(
 def test_service_uri_owned_before_shared(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
     """B. Tier 0a (owned) beats Tier 0b (shared) when both carry service_uri=S.
 
@@ -326,7 +285,6 @@ def test_service_uri_owned_before_shared(
 
     # ── Phase 2: Third party creates a shareable credential with service_uri ──
     third, third_headers = _make_user_and_headers(client)
-    third_id = uuid.UUID(third["id"])
     shared_cred = _create_api_token_credential(
         client,
         third_headers,
@@ -338,7 +296,6 @@ def test_service_uri_owned_before_shared(
 
     # ── Phase 3: Installer creates an OWNED credential with the same service_uri
     installer, installer_headers = _make_user_and_headers(client)
-    installer_id = uuid.UUID(installer["id"])
     owned_cred = _create_api_token_credential(
         client,
         installer_headers,
@@ -349,11 +306,8 @@ def test_service_uri_owned_before_shared(
     owned_cred_id = uuid.UUID(owned_cred["id"])
 
     # Share the third-party credential with the installer (Tier 0b)
-    _share_credential_with_user(
-        db,
-        credential_id=shared_cred_id,
-        credential_owner_id=third_id,
-        shared_with_user_id=installer_id,
+    share_credential_via_api(
+        client, third_headers, shared_cred["id"], installer["email"]
     )
 
     # ── Phase 4: GET install-context — owned must win ─────────────────────────
@@ -585,7 +539,6 @@ def test_service_uri_short_circuits_pbt_value_anchor(
 def test_divergent_name_per_user_tokens_auto_detect(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
     """E. The original blocker is gone: two specs/credentials share a service_uri
     but have distinct human names — each matcher call now surfaces the correct
@@ -651,26 +604,14 @@ def test_divergent_name_per_user_tokens_auto_detect(
 
     # ── Phase 3: Set up installers ────────────────────────────────────────────
     installer_a, installer_a_headers = _make_user_and_headers(client)
-    installer_a_id = uuid.UUID(installer_a["id"])
-
     installer_b, installer_b_headers = _make_user_and_headers(client)
-    installer_b_id = uuid.UUID(installer_b["id"])
 
     # Publisher shares each token to the correct installer
-    publisher_user_id = uuid.UUID(
-        client.get(f"{API}/users/me", headers=superuser_token_headers).json()["id"]
+    share_credential_via_api(
+        client, superuser_token_headers, token_a["id"], installer_a["email"]
     )
-    _share_credential_with_user(
-        db,
-        credential_id=token_a_id,
-        credential_owner_id=publisher_user_id,
-        shared_with_user_id=installer_a_id,
-    )
-    _share_credential_with_user(
-        db,
-        credential_id=token_b_id,
-        credential_owner_id=publisher_user_id,
-        shared_with_user_id=installer_b_id,
+    share_credential_via_api(
+        client, superuser_token_headers, token_b["id"], installer_b["email"]
     )
 
     # ── Phase 4: GET install-context for each installer ───────────────────────

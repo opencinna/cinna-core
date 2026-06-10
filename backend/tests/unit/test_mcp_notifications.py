@@ -47,7 +47,7 @@ def _make_mock_session(*, fail: bool = False):
 # ── Capability declaration ───────────────────────────────────────────────────
 
 
-def test_resource_list_changed_capability_declared(db):
+def test_resource_list_changed_capability_declared():
     """create_mcp_server_for_connector() produces init options with
     resources.listChanged: true.
     """
@@ -66,7 +66,7 @@ def test_resource_list_changed_capability_declared(db):
 # ── notify_resource_list_changed ─────────────────────────────────────────────
 
 
-def test_notify_resource_list_changed_calls_session(db):
+def test_notify_resource_list_changed_calls_session():
     """notify_resource_list_changed calls session.send_resource_list_changed."""
     session = _make_mock_session()
     _run_async(notify_resource_list_changed(session))
@@ -76,7 +76,7 @@ def test_notify_resource_list_changed_calls_session(db):
 # ── send_message notification ────────────────────────────────────────────────
 
 
-def test_send_message_sends_resource_notification(db):
+def test_send_message_sends_resource_notification():
     """After handle_send_message, the tool wrapper calls
     session.send_resource_list_changed via ctx.session.
     """
@@ -114,7 +114,7 @@ def test_send_message_sends_resource_notification(db):
     mock_session.send_resource_list_changed.assert_awaited_once()
 
 
-def test_send_message_notification_failure_non_fatal(db):
+def test_send_message_notification_failure_non_fatal():
     """If notification raises, the tool still returns the valid result."""
     from app.mcp.tools import register_mcp_tools
 
@@ -147,7 +147,7 @@ def test_send_message_notification_failure_non_fatal(db):
     mock_session.send_resource_list_changed.assert_awaited_once()
 
 
-def test_send_message_no_notification_without_ctx(db):
+def test_send_message_no_notification_without_ctx():
     """When ctx is None, no notification is attempted."""
     from app.mcp.tools import register_mcp_tools
 
@@ -177,7 +177,7 @@ def test_send_message_no_notification_without_ctx(db):
 # ── broadcast_resource_list_changed ──────────────────────────────────────────
 
 
-def test_broadcast_with_active_sessions(db):
+def test_broadcast_with_active_sessions():
     """broadcast_resource_list_changed notifies all sessions for a connector."""
     session1 = _make_mock_session()
     session2 = _make_mock_session()
@@ -190,7 +190,7 @@ def test_broadcast_with_active_sessions(db):
     session2.send_resource_list_changed.assert_awaited_once()
 
 
-def test_broadcast_no_sessions(db):
+def test_broadcast_no_sessions():
     """broadcast_resource_list_changed is a no-op when there are no sessions."""
     with patch("app.mcp.server.mcp_registry") as mock_registry:
         mock_registry.get_sessions_for_connector.return_value = []
@@ -198,7 +198,7 @@ def test_broadcast_no_sessions(db):
         _run_async(broadcast_resource_list_changed("connector-no-sessions"))
 
 
-def test_broadcast_partial_failure(db):
+def test_broadcast_partial_failure():
     """If one session fails, other sessions are still notified."""
     session_ok = _make_mock_session()
     session_fail = _make_mock_session(fail=True)
@@ -219,7 +219,7 @@ def test_broadcast_partial_failure(db):
 # ── Session registration and cleanup ─────────────────────────────────────────
 
 
-def test_session_registration_and_retrieval(db):
+def test_session_registration_and_retrieval():
     """register_session stores sessions; get_sessions_for_connector retrieves them."""
     registry = MCPServerRegistry()
     session1 = _make_mock_session()
@@ -234,7 +234,7 @@ def test_session_registration_and_retrieval(db):
     assert session2 in sessions
 
 
-def test_session_registration_idempotent(db):
+def test_session_registration_idempotent():
     """Re-registering the same session ID overwrites without duplicates."""
     registry = MCPServerRegistry()
     session_old = _make_mock_session()
@@ -248,13 +248,13 @@ def test_session_registration_idempotent(db):
     assert sessions[0] is session_new
 
 
-def test_get_sessions_empty_connector(db):
+def test_get_sessions_empty_connector():
     """get_sessions_for_connector returns empty list for unknown connector."""
     registry = MCPServerRegistry()
     assert registry.get_sessions_for_connector("nonexistent") == []
 
 
-def test_session_cleanup_on_remove(db):
+def test_session_cleanup_on_remove():
     """remove() cleans up active sessions for the connector."""
     registry = MCPServerRegistry()
     session = _make_mock_session()
@@ -265,7 +265,7 @@ def test_session_cleanup_on_remove(db):
     assert registry.get_sessions_for_connector("conn-a") == []
 
 
-def test_session_cleanup_on_clear(db):
+def test_session_cleanup_on_clear():
     """clear() cleans up all active sessions."""
     registry = MCPServerRegistry()
     registry.register_session("conn-a", "sess-1", _make_mock_session())
@@ -277,7 +277,7 @@ def test_session_cleanup_on_clear(db):
     assert registry.get_sessions_for_connector("conn-b") == []
 
 
-def test_send_message_registers_session(db):
+def test_send_message_registers_session():
     """send_message registers ctx.session in mcp_registry for later broadcast."""
     from app.mcp.tools import register_mcp_tools
 

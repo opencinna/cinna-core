@@ -15,9 +15,8 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
-from sqlmodel import Session
 
-from app.core.db import engine
+from app.core.db import create_session
 from app.services.agents.agent_webhook_errors import (
     WebhookError,
     WebhookNotFoundError,
@@ -115,7 +114,9 @@ async def execute_agent_webhook(
     headers_snapshot: dict[str, str] = dict(request.headers)
 
     # ---- Token validation + dispatch ----
-    with Session(engine) as db_session:
+    # ``create_session()`` (not ``Session(engine)``) so the public endpoint is
+    # patchable in tests and participates in the rolled-back test transaction.
+    with create_session() as db_session:
         try:
             webhook = AgentWebhookService.validate_webhook_token(
                 db_session=db_session,

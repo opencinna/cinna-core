@@ -13,15 +13,14 @@ the FastAPI TestClient for the upload endpoint.
 """
 import asyncio
 import io
-import time
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from app.core.config import settings
 from app.mcp.upload_token import create_file_upload_token, verify_file_upload_token
 from tests.utils.agent import create_agent_via_api, get_agent
 from tests.utils.background_tasks import drain_tasks
+from tests.utils.environment import set_environment_status
 from tests.utils.mcp import create_mcp_connector, update_mcp_connector
 
 
@@ -150,11 +149,7 @@ def test_file_upload_endpoint_success(
     connector_id = connector["id"]
 
     # Set environment status to "running" so the endpoint accepts uploads
-    from app.models import AgentEnvironment
-    env = db.get(AgentEnvironment, agent["active_environment_id"])
-    env.status = "running"
-    db.add(env)
-    db.flush()
+    set_environment_status(db, agent["active_environment_id"], "running")
 
     token = create_file_upload_token(connector_id)
 
@@ -186,10 +181,9 @@ def test_file_upload_expired_token_rejected(
     )
     connector_id = connector["id"]
 
-    # Create a token that expires immediately
-    token = create_file_upload_token(connector_id, expires_minutes=0)
-    # Wait a moment to ensure it's expired
-    time.sleep(1)
+    # Mint an already-expired token (negative expiry → exp in the past) so the
+    # test needs no real sleep to observe expiry.
+    token = create_file_upload_token(connector_id, expires_minutes=-1)
 
     response = client.post(
         f"/mcp/{connector_id}/upload",
@@ -274,17 +268,14 @@ def test_file_upload_too_large_rejected(
 
     token = create_file_upload_token(connector_id)
 
-    # Temporarily set a very small max file size
-    original_mb = settings.UPLOAD_MAX_FILE_SIZE_MB
-    settings.UPLOAD_MAX_FILE_SIZE_MB = 0
-    try:
+    # Temporarily set a very small max file size via patch so the override is
+    # always restored (no raw settings mutation that could leak on assert fail).
+    with patch("app.core.config.settings.UPLOAD_MAX_FILE_SIZE_MB", 0):
         response = client.post(
             f"/mcp/{connector_id}/upload",
             headers={"Authorization": f"Bearer {token}"},
             files={"file": ("big.txt", io.BytesIO(b"x" * 100), "text/plain")},
         )
-    finally:
-        settings.UPLOAD_MAX_FILE_SIZE_MB = original_mb
 
     assert response.status_code == 413
 
@@ -302,11 +293,7 @@ def test_file_upload_environment_not_running(
     connector_id = connector["id"]
 
     # Ensure environment is NOT running (default stub status is "stopped")
-    from app.models import AgentEnvironment
-    env = db.get(AgentEnvironment, agent["active_environment_id"])
-    env.status = "stopped"
-    db.add(env)
-    db.flush()
+    set_environment_status(db, agent["active_environment_id"], "stopped")
 
     token = create_file_upload_token(connector_id)
 

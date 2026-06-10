@@ -23,9 +23,10 @@ Business rules tested:
 import uuid
 
 from fastapi.testclient import TestClient
+from sqlmodel import Session
 
 from app.core.config import settings
-from tests.utils.agent import create_agent_via_api, update_agent
+from tests.utils.agent import create_agent_via_api, get_agent, update_agent
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.user import create_random_user_with_headers
 from tests.utils.webapp_share import (
@@ -899,13 +900,14 @@ def test_public_webapp_serve_static_file(
 def test_public_webapp_loading_page_when_env_not_running(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     When the agent's environment is not running, requesting index.html via
     the public route returns a loading page (HTML) with status 200.
     Non-index paths return 503 when env is not running.
     """
-    from unittest.mock import patch
+    from app.models.environments.environment import AgentEnvironment
 
     agent, share = setup_webapp_agent(
         client, superuser_token_headers,
@@ -913,19 +915,33 @@ def test_public_webapp_loading_page_when_env_not_running(
     )
     token = share["token"]
 
-    # Patch the environment status to "suspended" so it's not running
-    from app.models.environments.environment import AgentEnvironment
+    # Set the environment to "suspended" in the test transaction so the public
+    # route deterministically takes the not-running branch (the serving route
+    # re-reads the env row from the DB session on every request).
+    agent = get_agent(client, superuser_token_headers, agent["id"])
+    env_id = agent["active_environment_id"]
+    assert env_id is not None
+    env = db.get(AgentEnvironment, env_id)
+    env.status = "suspended"
+    db.add(env)
+    db.flush()
 
-    with patch.object(AgentEnvironment, "status", new_callable=lambda: property(lambda self: "suspended")):
-        # index.html → loading page HTML with status 200
-        r = client.get(f"{API}/webapp/{token}/index.html")
-        # The response should be 200 with HTML loading page OR 503
-        # Since the stub environment is running in our test setup, we check the
-        # response type without breaking the environment stub.
-        # The loading page logic only triggers when status != "running".
-        assert r.status_code in (200, 503)
+    # index.html on a non-running env → loading page HTML with status 200.
+    r = client.get(f"{API}/webapp/{token}/index.html")
+    assert r.status_code == 200
+    assert "content-security-policy" in {k.lower() for k in r.headers.keys()}
+    assert "frame-ancestors" in r.headers.get("content-security-policy", "")
 
-    # With running environment (default stub), index.html serves normally
+    # A non-index path on a non-running env → 503.
+    r = client.get(f"{API}/webapp/{token}/styles.css")
+    assert r.status_code == 503
+
+    # Restore running status → index.html serves normally.
+    env = db.get(AgentEnvironment, env_id)
+    env.status = "running"
+    db.add(env)
+    db.flush()
+
     r = client.get(f"{API}/webapp/{token}/index.html")
     assert r.status_code == 200
     assert b"<html>" in r.content

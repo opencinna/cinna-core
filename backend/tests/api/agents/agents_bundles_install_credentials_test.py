@@ -14,7 +14,6 @@ visibility is guaranteed.
 """
 import uuid
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
@@ -27,110 +26,23 @@ from app.models.credentials.link_models import AgentCredentialLink
 from tests.utils.agent import create_agent_via_api
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.user import create_random_user, user_authentication_headers
+from tests.utils.bundle import (
+    create_bundle_credential as _create_credential,
+    install_bundle as _install,
+    link_bundle_credential_to_agent as _link_credential_to_agent,
+    make_bundle_public as _make_public,
+    make_user_and_headers as _make_user_and_headers,
+    publish_bundle as _publish,
+)
+from tests.utils.credential import set_credential_sharing
 
 API = settings.API_V1_STR
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
-
-
-def _make_user_and_headers(client: TestClient) -> tuple[dict, dict[str, str]]:
-    """Create a fresh user with a default AI credential and return (user, headers)."""
-    user = create_random_user(client)
-    headers = user_authentication_headers(
-        client=client, email=user["email"], password=user["_password"]
-    )
-    create_random_ai_credential(client, headers, set_default=True)
-    return user, headers
-
-
-def _create_credential(
-    client: TestClient,
-    headers: dict[str, str],
-    *,
-    name: str | None = None,
-    allow_sharing: bool = False,
-) -> dict:
-    name = name or f"cred-{uuid.uuid4().hex[:8]}"
-    r = client.post(
-        f"{API}/credentials/",
-        headers=headers,
-        json={
-            "name": name,
-            "type": "api_token",
-            "allow_sharing": allow_sharing,
-            "credential_data": {
-                "api_token_type": "bearer",
-                "api_token_template": "Authorization: Bearer {TOKEN}",
-                "api_token": "test-token-value",
-            },
-        },
-    )
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
-def _link_credential_to_agent(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-    credential_id: str,
-) -> None:
-    r = client.post(
-        f"{API}/agents/{agent_id}/credentials",
-        headers=headers,
-        json={"credential_id": credential_id},
-    )
-    assert r.status_code == 200, r.text
-
-
-def _publish(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-) -> dict:
-    """Publish agent and drain tasks; return the agent's fresh row."""
-    r = client.post(
-        f"{API}/agents/{agent_id}/publish",
-        headers=headers,
-        json={},
-    )
-    assert r.status_code == 200, r.text
-    drain_tasks()
-    fresh = client.get(f"{API}/agents/{agent_id}", headers=headers).json()
-    return fresh
-
-
-def _make_public(
-    client: TestClient,
-    headers: dict[str, str],
-    bundle_uuid: str,
-) -> None:
-    r = client.patch(
-        f"{API}/bundles/{bundle_uuid}",
-        headers=headers,
-        json={"is_listed": True, "visibility": "public"},
-    )
-    assert r.status_code == 200, r.text
-
-
-def _install(
-    client: TestClient,
-    headers: dict[str, str],
-    bundle_id: str,
-    *,
-    request_body: dict | None = None,
-) -> dict:
-    r = client.post(
-        f"{API}/catalog/{bundle_id}/install",
-        headers=headers,
-        json=request_body or {},
-    )
-    assert r.status_code == 200, r.text
-    install = r.json()
-    drain_tasks()
-    return install
+# Shared bundle helpers (_make_user_and_headers, _create_credential, _publish,
+# _make_public, _install, _link_credential_to_agent) are imported above from
+# tests.utils.bundle.
 
 
 def _get_install(
@@ -374,13 +286,10 @@ def test_pbp_revoked_sharing_falls_through_to_placeholder_degraded(
     fresh_pub = _publish(client, superuser_token_headers, publisher_agent["id"])
     _make_public(client, superuser_token_headers, fresh_pub["bundle_uuid"])
 
-    # Revoke sharing BEFORE install (mutate via db — no PATCH endpoint exists).
-    revoked_id = uuid.UUID(shared_cred["id"])
-    cred_to_revoke = db.get(Credential, revoked_id)
-    assert cred_to_revoke is not None
-    cred_to_revoke.allow_sharing = False
-    db.add(cred_to_revoke)
-    db.commit()
+    # Revoke sharing BEFORE install via the public sharing toggle endpoint.
+    set_credential_sharing(
+        client, superuser_token_headers, shared_cred["id"], allow_sharing=False
+    )
 
     # ── Phase 2: foreign user installs ───────────────────────────────────────
     installer, installer_headers = _make_user_and_headers(client)

@@ -28,6 +28,10 @@ from tests.utils.utils import random_lower_string
 _SEARCH = f"{settings.API_V1_STR}/users/search"
 _ADMIN_ROUTES = f"{settings.API_V1_STR}/admin/app-agent-routes"
 
+# This file creates users + routes/assignments but no agents; opt out of the
+# heavy agent/env stubs in tests/api/users/conftest.py.
+NEEDS_AGENT_STUBS = False
+
 
 # ---------------------------------------------------------------------------
 # Helper

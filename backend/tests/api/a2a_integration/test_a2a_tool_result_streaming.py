@@ -30,7 +30,10 @@ from app.core.config import settings
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.utils.a2a import (
     build_streaming_request,
+    extract_parts_from_sse_event as _extract_parts_from_sse_event,
     parse_sse_events,
+    part_metadata as _part_metadata,
+    part_text as _part_text,
     post_a2a_jsonrpc,
     setup_a2a_agent,
 )
@@ -50,22 +53,8 @@ _STREAM_STDERR = "stderr"
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
-
-
-def _extract_parts_from_sse_event(event: dict) -> list[dict]:
-    """Return the list of parts from a status-update SSE event's message."""
-    msg = event.get("result", {}).get("status", {}).get("message") or {}
-    return msg.get("parts", [])
-
-
-def _part_text(part: dict) -> str:
-    """Extract text from a part dict, handling both flat and root-wrapped shapes."""
-    return part.get("text") or (part.get("root") or {}).get("text", "")
-
-
-def _part_metadata(part: dict) -> dict:
-    """Extract metadata from a part dict, handling both flat and root-wrapped shapes."""
-    return part.get("metadata") or (part.get("root") or {}).get("metadata") or {}
+# SSE part extractors (_extract_parts_from_sse_event / _part_text /
+# _part_metadata) live in tests/utils/a2a.py and are imported above.
 
 
 def _build_tool_result_events(

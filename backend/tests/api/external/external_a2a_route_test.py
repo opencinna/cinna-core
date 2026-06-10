@@ -20,7 +20,11 @@ from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
-from tests.utils.a2a import build_streaming_request, parse_sse_events
+from tests.utils.a2a import (
+    build_streaming_request,
+    extract_task_id as _extract_task_id,
+    parse_sse_events,
+)
 from tests.utils.agent import create_agent_via_api, get_agent
 from tests.utils.app_agent_route import (
     create_admin_route,
@@ -130,13 +134,7 @@ def _send_route_streaming(
     return resp, events
 
 
-def _extract_task_id(events: list[dict]) -> str | None:
-    for event in events:
-        result = event.get("result", {})
-        tid = result.get("id") or result.get("taskId")
-        if tid:
-            return tid
-    return None
+# _extract_task_id lives in tests/utils/a2a.py and is imported above.
 
 
 # ---------------------------------------------------------------------------

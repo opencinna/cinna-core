@@ -39,7 +39,6 @@ import pyotp
 from fastapi.testclient import TestClient
 
 import pytest
-import app.services.users.mfa_service as _mfa_svc
 from app.core.config import settings
 from tests.utils.mfa import (
     assert_security_event_written,
@@ -68,28 +67,10 @@ from tests.utils.mfa import (
 
 _BASE = settings.API_V1_STR
 
-
-@pytest.fixture(autouse=True)
-def _clear_rate_limit_buckets():
-    """Clear the in-memory rate-limit logs before each test.
-
-    ``/login/mfa/verify`` has two in-memory guards:
-    - per-user bucket  (``_verify_rate_limit_log``, keyed by ``user.id``)
-    - per-source bucket (``_anonymous_verify_rate_limit_log``, keyed by
-      client IP — always ``"testclient"`` in TestClient runs)
-
-    These are module-level dicts that accumulate across tests in the same
-    process.  The existing rate-limit test (``test_rate_limit_per_user_triggers_429``)
-    already clears the per-user bucket manually.  We clear both here so that
-    tests in this file do not trip the anonymous limit after the Nth verify
-    call across the session (anonymous cap = 20 / 5 min).  We also clean up
-    after the test to avoid contaminating subsequent tests.
-    """
-    _mfa_svc._verify_rate_limit_log.clear()
-    _mfa_svc._anonymous_verify_rate_limit_log.clear()
-    yield
-    _mfa_svc._verify_rate_limit_log.clear()
-    _mfa_svc._anonymous_verify_rate_limit_log.clear()
+# MFA tests never create agents; opt out of the heavy agent/env stubs in
+# tests/api/users/conftest.py.  The MFA rate-limit-bucket clearing fixture
+# there (autouse) keeps this file order-independent.
+NEEDS_AGENT_STUBS = False
 
 
 # ── 1. Mint on verify — with duration ──────────────────────────────────

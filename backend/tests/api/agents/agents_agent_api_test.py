@@ -49,7 +49,6 @@ from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models import AgentEnvironment
-from app.services.credentials.credentials_service import CredentialsService
 from app.services.environments.environment_service import EnvironmentService
 from tests.stubs.environment_adapter_stub import EnvironmentTestAdapter
 from tests.utils.agent import create_agent_via_api, get_agent, update_agent
@@ -180,6 +179,26 @@ def _disconnect(
 
 def _bearer_headers(token_value: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token_value}"}
+
+
+def _set_policy_cache(db: Session, agent_id: str, policy: dict) -> None:
+    """Force an agent env's parsed ``agent_api_policy_cache`` on the test DB.
+
+    The policy cache is the env's parsed ``policy.yaml`` — populated by the
+    real environment sync, which the suite stubs out. There is no API seam to
+    set it directly, so policy-enforcement tests inject it here. Unlike the old
+    inline ``if env:`` blocks, this asserts the env exists so a missing env
+    fails loudly instead of silently skipping the policy setup.
+    """
+    env = db.exec(
+        select(AgentEnvironment).where(
+            AgentEnvironment.agent_id == uuid.UUID(agent_id)
+        )
+    ).first()
+    assert env is not None, f"No environment for agent {agent_id}"
+    env.agent_api_policy_cache = policy
+    db.add(env)
+    db.commit()
 
 
 # ── A. Owner-preview routes ───────────────────────────────────────────────────
@@ -800,23 +819,15 @@ def test_policy_read_only_override_on_token_only_narrows(
     agent = _setup_api_agent(client, superuser_token_headers, name="Narrow Override Agent")
     agent_id = agent["id"]
 
-    # Set the env's policy cache to allow POST (read_only=False) via db fixture
-    env = db.exec(
-        select(AgentEnvironment).where(
-            AgentEnvironment.agent_id == uuid.UUID(agent_id)
-        )
-    ).first()
-    if env:
-        env.agent_api_policy_cache = {
-            "read_only": False,
-            "auth": "required",
-            "max_body_bytes": 10 * 1024 * 1024,
-            "rate_limit": "60/min",
-            "expose_spec": True,
-            "allowed_paths": ["*"],
-        }
-        db.add(env)
-        db.commit()
+    # Set the env's policy cache to allow POST (read_only=False).
+    _set_policy_cache(db, agent_id, {
+        "read_only": False,
+        "auth": "required",
+        "max_body_bytes": 10 * 1024 * 1024,
+        "rate_limit": "60/min",
+        "expose_spec": True,
+        "allowed_paths": ["*"],
+    })
 
     # Token with NO override — should inherit wide policy (POST allowed)
     wide_token = _mint_token(
@@ -867,23 +878,15 @@ def test_policy_body_cap_413(
     agent = _setup_api_agent(client, superuser_token_headers, name="Body Cap Agent")
     agent_id = agent["id"]
 
-    # Set a tiny body cap and allow POST via db fixture
-    env = db.exec(
-        select(AgentEnvironment).where(
-            AgentEnvironment.agent_id == uuid.UUID(agent_id)
-        )
-    ).first()
-    if env:
-        env.agent_api_policy_cache = {
-            "read_only": False,
-            "auth": "required",
-            "max_body_bytes": 10,
-            "rate_limit": "600/min",
-            "expose_spec": True,
-            "allowed_paths": ["*"],
-        }
-        db.add(env)
-        db.commit()
+    # Set a tiny body cap and allow POST.
+    _set_policy_cache(db, agent_id, {
+        "read_only": False,
+        "auth": "required",
+        "max_body_bytes": 10,
+        "rate_limit": "600/min",
+        "expose_spec": True,
+        "allowed_paths": ["*"],
+    })
 
     token = _mint_token(client, superuser_token_headers, agent_id, label="body-cap")
     token_value = token["token"]
@@ -917,23 +920,15 @@ def test_policy_rate_limit_429(
     agent = _setup_api_agent(client, superuser_token_headers, name="Rate Limit Agent")
     agent_id = agent["id"]
 
-    # Set a rate limit of 1 request/min via db fixture
-    env = db.exec(
-        select(AgentEnvironment).where(
-            AgentEnvironment.agent_id == uuid.UUID(agent_id)
-        )
-    ).first()
-    if env:
-        env.agent_api_policy_cache = {
-            "read_only": True,
-            "auth": "required",
-            "max_body_bytes": 10 * 1024 * 1024,
-            "rate_limit": "1/min",
-            "expose_spec": True,
-            "allowed_paths": ["*"],
-        }
-        db.add(env)
-        db.commit()
+    # Set a rate limit of 1 request/min.
+    _set_policy_cache(db, agent_id, {
+        "read_only": True,
+        "auth": "required",
+        "max_body_bytes": 10 * 1024 * 1024,
+        "rate_limit": "1/min",
+        "expose_spec": True,
+        "allowed_paths": ["*"],
+    })
 
     token = _mint_token(client, superuser_token_headers, agent_id, label="rate-limit")
     token_value = token["token"]
@@ -981,16 +976,8 @@ def test_policy_fail_closed_on_invalid_policy_yaml(
     agent = _setup_api_agent(client, superuser_token_headers, name="Fail Closed Agent")
     agent_id = agent["id"]
 
-    # Inject the fail-closed policy via db fixture
-    env = db.exec(
-        select(AgentEnvironment).where(
-            AgentEnvironment.agent_id == uuid.UUID(agent_id)
-        )
-    ).first()
-    if env:
-        env.agent_api_policy_cache = fail_closed
-        db.add(env)
-        db.commit()
+    # Inject the fail-closed policy.
+    _set_policy_cache(db, agent_id, fail_closed)
 
     token = _mint_token(client, superuser_token_headers, agent_id, label="fail-closed")
     token_value = token["token"]
@@ -1019,23 +1006,15 @@ def test_policy_expose_spec_false_blocks_consumer_spec(
     agent = _setup_api_agent(client, superuser_token_headers, name="No Spec Agent")
     agent_id = agent["id"]
 
-    # Set expose_spec=False in cached policy via db fixture
-    env = db.exec(
-        select(AgentEnvironment).where(
-            AgentEnvironment.agent_id == uuid.UUID(agent_id)
-        )
-    ).first()
-    if env:
-        env.agent_api_policy_cache = {
-            "read_only": True,
-            "auth": "required",
-            "max_body_bytes": 10 * 1024 * 1024,
-            "rate_limit": "60/min",
-            "expose_spec": False,
-            "allowed_paths": ["*"],
-        }
-        db.add(env)
-        db.commit()
+    # Set expose_spec=False in cached policy.
+    _set_policy_cache(db, agent_id, {
+        "read_only": True,
+        "auth": "required",
+        "max_body_bytes": 10 * 1024 * 1024,
+        "rate_limit": "60/min",
+        "expose_spec": False,
+        "allowed_paths": ["*"],
+    })
 
     token = _mint_token(client, superuser_token_headers, agent_id, label="no-spec")
 
@@ -1293,15 +1272,18 @@ def test_agent_api_credential_syncs_to_consumer_agent(
 def test_agent_api_urls_rewritten_to_internal_backend_for_env_sync(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
     """
     The stored agent_api credential holds the PUBLIC proxy URL (built from
-    FRONTEND_HOST), but when prepared for an agent environment the host is
+    FRONTEND_HOST), but when synced to an agent environment the host is
     rewritten to the container-reachable backend origin (AGENT_ENV_BACKEND_URL),
     preserving the /api/v1/agent-api/{id}[/openapi.json] path. Without this a
     consumer container calling base_url (e.g. http://localhost:5173 in local
     dev) would fail — localhost is the container itself, not the backend.
+
+    The rewritten payload is observed via the env adapter's captured
+    ``set_credentials`` call (the credential sync that fires on link), not by
+    invoking the credentials service directly.
     """
     # Producer with API enabled + a consumer agent linked via the connect helper.
     producer = _setup_api_agent(client, superuser_token_headers, name="Rewrite Producer")
@@ -1320,11 +1302,24 @@ def test_agent_api_urls_rewritten_to_internal_backend_for_env_sync(
     stored_base_url = token["base_url"]  # public URL from the connect response
     stored_spec_url = token["spec_url"]
 
-    # Prepare creds for the consumer env → agent_api URLs rewritten to internal backend.
-    prepared = CredentialsService.prepare_credentials_for_environment(
-        db, uuid.UUID(consumer_id)
-    )
-    api_creds = [c for c in prepared["credentials_json"] if c["type"] == "agent_api"]
+    # Capture what the credential sync pushes to the consumer's environment.
+    persistent = EnvironmentTestAdapter()
+    lm = EnvironmentService._lifecycle_manager
+    original_get_adapter = lm.get_adapter
+    lm.get_adapter = lambda env: persistent
+    try:
+        # Linking the agent_api credential fires sync_credentials_to_agent_
+        # environments → adapter.set_credentials(...) with the rewritten URLs.
+        link_credential_to_agent(
+            client, superuser_token_headers, consumer_id, token["credential_id"]
+        )
+        drain_tasks()
+    finally:
+        lm.get_adapter = original_get_adapter
+
+    captured = persistent.credentials_set
+    assert captured is not None, "credential sync never reached the env adapter"
+    api_creds = [c for c in captured["credentials_json"] if c["type"] == "agent_api"]
     assert len(api_creds) == 1, f"expected one synced agent_api cred, got {api_creds}"
     synced = api_creds[0]["credential_data"]
 

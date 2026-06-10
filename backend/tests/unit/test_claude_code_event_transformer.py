@@ -82,8 +82,17 @@ class UserMessage:
     content: Any = ""
 
 
-# Install mock module before importing transformer
-_mock_sdk = MagicMock()
+# Install a mock claude_agent_sdk module before importing the transformer.
+# The real SDK only exists inside the env-core image, not the backend test
+# container, so a stand-in is required for the module-level import below.
+#
+# Use ``setdefault`` (pattern: tests/unit/test_opencode_mcp_bridge.py:392) so we
+# never clobber an already-registered module process-wide — an unconditional
+# ``sys.modules[...] = MagicMock()`` leaks into any later-collected test that
+# imports the real SDK. We then attach the mock message/block classes onto
+# whichever module object is registered, so the transformer sees the interfaces
+# it expects either way.
+_mock_sdk = sys.modules.setdefault("claude_agent_sdk", MagicMock())
 _mock_sdk.AssistantMessage = AssistantMessage
 _mock_sdk.TextBlock = TextBlock
 _mock_sdk.ToolUseBlock = ToolUseBlock
@@ -92,7 +101,6 @@ _mock_sdk.ResultMessage = ResultMessage
 _mock_sdk.ThinkingBlock = ThinkingBlock
 _mock_sdk.SystemMessage = SystemMessage
 _mock_sdk.UserMessage = UserMessage
-sys.modules["claude_agent_sdk"] = _mock_sdk
 
 # sys.path setup is handled by tests/unit/conftest.py
 from core.server.adapters.claude_code_event_transformer import ClaudeCodeEventTransformer

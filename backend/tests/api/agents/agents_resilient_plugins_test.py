@@ -351,9 +351,10 @@ def test_failed_plugin_surfaces_partial_failures(
     drain_tasks()
 
     envs = list_environments(client, superuser_token_headers, agent_id)
-    if not any(e["status"] == "running" for e in envs["data"]):
-        # No running env → no sync → partial_failures is irrelevant. Skip.
-        return
+    assert any(e["status"] == "running" for e in envs["data"]), (
+        "Agent must have a running environment (the conftest env stub creates "
+        "one with status=running) so the plugin sync actually fires"
+    )
 
     # ── Phase 2: Create marketplace + seed plugin ─────────────────────────
     mkt = _create_marketplace(client, superuser_token_headers)
@@ -426,12 +427,10 @@ def test_build_plugin_manifest_local_marketplace_plugin(
     build_plugin_manifest for a ``local`` marketplace plugin carries correct git coords:
       1. Create marketplace with a local plugin (source_type=local, source_path set).
       2. Install the plugin for an agent.
-      3. Call build_plugin_manifest via the service directly (imported once here).
+      3. Capture the manifest the adapter receives during install/sync.
       4. Verify: source=marketplace, git.url=marketplace.url,
          git.subdir=plugin.source_path, git.ref=installed_commit_hash.
     """
-    from app.services.plugins.llm_plugin_service import LLMPluginService
-
     agent = create_agent_via_api(client, superuser_token_headers, name="ManifestLocal")
     agent_id = agent["id"]
     drain_tasks()
@@ -453,20 +452,10 @@ def test_build_plugin_manifest_local_marketplace_plugin(
 
     _install_plugin(client, superuser_token_headers, agent_id, plugin_id)
 
-    # ── Phase 3: Inspect manifest via service ────────────────────────────
-    # NOTE: the test README says no imports from app.services in test files.
-    # However, build_plugin_manifest is a pure read from the DB and is the
-    # single function we are probing — no state mutation. The manifest is NOT
-    # exposed via an API endpoint, so this is the only way to verify its shape.
-    # We import only the service method, not crud/session/security.
-    from tests.utils.db_proxy import NonClosingSessionProxy  # noqa: F401 — test-only
-
-    # Access the manifest via a lightweight API call that exercises the same
-    # code path: plugin install → sync → adapter.set_plugins(manifest). We
-    # inspect the manifest the adapter received during install.
-    #
-    # Strategy: re-install on an adapter that captures the manifest, then
-    # verify its structure.
+    # ── Phase 3: Capture the manifest the adapter receives ───────────────
+    # The manifest is not exposed via an API endpoint, so we observe it through
+    # the real install → sync → adapter.set_plugins(manifest) path by swapping in
+    # a capturing adapter. No service/CRUD imports needed.
 
     # First uninstall the existing link.
     plugins = _list_agent_plugins(client, superuser_token_headers, agent_id)
@@ -501,10 +490,10 @@ def test_build_plugin_manifest_local_marketplace_plugin(
         lm.get_adapter = original_get_adapter
 
     envs = list_environments(client, superuser_token_headers, agent_id)
-    has_running_env = any(e["status"] == "running" for e in envs["data"])
-    if not has_running_env:
-        # No env to sync — cannot inspect manifest via adapter. Skip.
-        return
+    assert any(e["status"] == "running" for e in envs["data"]), (
+        "Agent must have a running environment so the install syncs the "
+        "manifest to the capturing adapter"
+    )
 
     assert captured, "Adapter.set_plugins was not called — no running env?"
     manifest = captured[0]

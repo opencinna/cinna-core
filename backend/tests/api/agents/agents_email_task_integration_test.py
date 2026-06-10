@@ -36,8 +36,6 @@ from tests.utils.mail_server import (
     create_smtp_server,
     process_emails_with_stub,
 )
-from app.services.tasks.input_task_service import InputTaskService
-from app.models.tasks.input_task import InputTask
 from tests.utils.message import get_messages_by_role
 from tests.utils.session import get_agent_session
 
@@ -274,15 +272,18 @@ def test_email_task_mode_full_flow(
     # automatically syncs the task to "completed" after drain_tasks(). This
     # replaces the manual update_status("completed") that was needed before.
 
-    task_obj = db.get(InputTask, uuid.UUID(task_id))
-    assert task_obj is not None
-    # If session-driven completion didn't fire (event handlers silently failed),
-    # complete manually as fallback
-    if task_obj.status != "completed":
-        InputTaskService.update_status(
-            db_session=db, task=task_obj, status="completed",
-        )
-        drain_tasks()
+    # Session-driven completion (event handlers using create_session()) must
+    # have synced the task to "completed" after drain_tasks() — a single-message
+    # session with no subtasks completes on its own. Assert it via the API.
+    completed_task = client.get(
+        f"{settings.API_V1_STR}/tasks/{task_id}",
+        headers=superuser_token_headers,
+    )
+    assert completed_task.status_code == 200
+    assert completed_task.json()["status"] == "completed", (
+        "Task must auto-complete via session lifecycle events; if it did not, "
+        "investigate create_session patch targets (see Phase 2 drift test)."
+    )
 
     # email_task_incoming should be deleted (status is no longer "new")
     incoming_after_complete = _get_activities(

@@ -22,6 +22,11 @@ from tests.utils.ssh_key_credential import (
     get_test_ed25519_pair,
 )
 
+# Pure-CRUD suite: never creates an agent/environment, so skip the heavy
+# agent/env stubs and the default-AI-credential setup from the dir conftest.
+NEEDS_AGENT_STUBS = False
+NEEDS_DEFAULT_CREDENTIALS = False
+
 
 # ---------------------------------------------------------------------------
 # Case 1: generate mode — RSA (default)

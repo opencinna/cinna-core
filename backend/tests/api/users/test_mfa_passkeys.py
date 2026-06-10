@@ -68,6 +68,11 @@ from tests.utils.mfa import (
 
 _BASE = settings.API_V1_STR
 
+# MFA tests never create agents; opt out of the heavy agent/env stubs in
+# tests/api/users/conftest.py (which also provides autouse rate-limit-bucket
+# clearing, keeping this file order-independent).
+NEEDS_AGENT_STUBS = False
+
 
 # ── 8. Passkey enrollment (registration) ─────────────────────────────
 
@@ -465,24 +470,35 @@ def test_user_public_flags_passkey(client: TestClient) -> None:
 # ── 3. Google OAuth MFA branch ────────────────────────────────────────
 
 
-def test_google_oauth_mfa_branch(client: TestClient) -> None:
-    """Google OAuth callback returns MfaChallenge when user has 2FA enabled.
-    We cannot mock the full Google OAuth exchange, so we verify the branch
-    logic by checking the route signature in the OpenAPI spec (smoke-level).
-    The production coverage for this path requires an integration test
-    with a real Google IdP token — documented as a gap here.
+def test_google_oauth_callback_gatekeeping(client: TestClient) -> None:
+    """Google OAuth callback gatekeeping, pinned to one outcome per config state:
 
-    What we DO test: when Google OAuth is disabled, the endpoint is 501.
+      1. Google OAuth disabled (no client id) → 501 not_implemented.
+      2. Google OAuth enabled + an invalid code → 400 (the exchange fails before
+         any MFA branch is reached).
+
+    The actual MfaChallenge branch (2FA-enabled user, valid Google identity)
+    cannot be driven through the API without a real Google IdP token; that path
+    is exercised by the shared /login/mfa/verify flow in test_mfa_totp_login.py
+    and remains an integration gap here (documented).
     """
-    r = client.post(
-        f"{_BASE}/auth/google/callback",
-        json={"code": "fake_code", "state": "fake_state"},
-    )
-    # Either 501 (Google OAuth not configured) or 400 (invalid token) —
-    # both confirm the route is registered and gatekeeps correctly.
-    assert r.status_code in (400, 501), (
-        f"Unexpected status {r.status_code}: {r.text}"
-    )
+    # ── Phase 1: Google OAuth disabled → deterministic 501 ────────────────
+    with patch.object(settings, "GOOGLE_CLIENT_ID", None):
+        r = client.post(
+            f"{_BASE}/auth/google/callback",
+            json={"code": "fake_code", "state": "fake_state"},
+        )
+        assert r.status_code == 501, f"Expected 501, got {r.status_code}: {r.text}"
+
+    # ── Phase 2: Google OAuth enabled + invalid code → deterministic 400 ──
+    with patch.object(settings, "GOOGLE_CLIENT_ID", "test-client-id"), patch.object(
+        settings, "GOOGLE_CLIENT_SECRET", "test-client-secret"
+    ):
+        r = client.post(
+            f"{_BASE}/auth/google/callback",
+            json={"code": "fake_code", "state": "fake_state"},
+        )
+        assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.text}"
 
 
 # ── 16. Disable 2FA with TOTP step-up (passkey enrolled) ─────────────

@@ -47,6 +47,10 @@ def test_recovery_password(
     with (
         patch("app.core.config.settings.SMTP_HOST", "smtp.example.com"),
         patch("app.core.config.settings.SMTP_USER", "admin@example.com"),
+        # Patch send_email at its import site so the test never opens a real
+        # SMTP connection to smtp.example.com (hangs offline; only "passes"
+        # online because the emails lib swallows the failure).
+        patch("app.services.users.user_service.send_email") as mock_send_email,
     ):
         email = "test@example.com"
         r = client.post(
@@ -55,6 +59,7 @@ def test_recovery_password(
         )
         assert r.status_code == 200
         assert r.json() == {"message": "Password recovery email sent"}
+        mock_send_email.assert_called_once()
 
 
 def test_recovery_password_user_not_exits(

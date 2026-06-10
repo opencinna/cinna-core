@@ -26,159 +26,43 @@ Scenarios:
   L. Legacy ``{name: uuid_string}`` install payload rejected (the shim was
      dropped; typed ``InstallCredentialSelection`` is the only accepted form).
 
-Direct DB access via the ``db`` fixture is used for verifying
-AgentCredentialLink and Credential rows that have no listing API endpoints.
+Direct DB access via the ``db`` fixture is retained only where the API cannot
+serve the assertion: scenario J asserts the ``encrypted_data`` invariant on a
+placeholder credential (a field no projection exposes), and scenarios K/L assert
+the *absence* of an Agent row after a rejected install (the rejection's
+request-session rollback unwinds the test savepoint past the installer's own
+creation, so the installer can no longer authenticate). Everything else is
+verified via the API.
 """
-import json
 import uuid
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models.agents.agent import Agent
 from app.models.credentials.credential import Credential
-from app.models.credentials.credential_share import CredentialShare
-from app.models.credentials.link_models import AgentCredentialLink
 from tests.utils.agent import create_agent_via_api
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.user import create_random_user, user_authentication_headers
+from tests.utils.bundle import (
+    create_bundle_credential as _create_credential,
+    install_bundle as _install,
+    link_bundle_credential_to_agent as _link_credential_to_agent,
+    make_bundle_public as _make_public,
+    make_user_and_headers as _make_user_and_headers,
+    publish_bundle as _publish,
+)
+from tests.utils.credential import share_credential_via_api
 
 API = settings.API_V1_STR
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def _make_user_and_headers(client: TestClient) -> tuple[dict, dict[str, str]]:
-    """Create a fresh user with a default AI credential; return (user, headers)."""
-    user = create_random_user(client)
-    headers = user_authentication_headers(
-        client=client, email=user["email"], password=user["_password"]
-    )
-    create_random_ai_credential(client, headers, set_default=True)
-    return user, headers
-
-
-def _create_credential(
-    client: TestClient,
-    headers: dict[str, str],
-    *,
-    name: str | None = None,
-    cred_type: str = "api_token",
-    allow_sharing: bool = False,
-) -> dict:
-    """Create a service credential via the credentials API."""
-    name = name or f"cred-{uuid.uuid4().hex[:8]}"
-    r = client.post(
-        f"{API}/credentials/",
-        headers=headers,
-        json={
-            "name": name,
-            "type": cred_type,
-            "allow_sharing": allow_sharing,
-            "credential_data": {
-                "api_token_type": "bearer",
-                "api_token_template": "Authorization: Bearer {TOKEN}",
-                "api_token": "test-token-value",
-            },
-        },
-    )
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
-def _link_credential_to_agent(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-    credential_id: str,
-) -> None:
-    r = client.post(
-        f"{API}/agents/{agent_id}/credentials",
-        headers=headers,
-        json={"credential_id": credential_id},
-    )
-    assert r.status_code == 200, r.text
-
-
-def _publish(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-) -> dict:
-    """Publish agent, drain tasks, return fresh agent row."""
-    r = client.post(
-        f"{API}/agents/{agent_id}/publish",
-        headers=headers,
-        json={},
-    )
-    assert r.status_code == 200, r.text
-    drain_tasks()
-    fresh = client.get(f"{API}/agents/{agent_id}", headers=headers).json()
-    return fresh
-
-
-def _make_public(
-    client: TestClient,
-    headers: dict[str, str],
-    bundle_uuid: str,
-) -> None:
-    r = client.patch(
-        f"{API}/bundles/{bundle_uuid}",
-        headers=headers,
-        json={"is_listed": True, "visibility": "public"},
-    )
-    assert r.status_code == 200, r.text
-
-
-def _install(
-    client: TestClient,
-    headers: dict[str, str],
-    bundle_id: str,
-    *,
-    request_body: dict | None = None,
-    expected_status: int = 200,
-) -> dict:
-    r = client.post(
-        f"{API}/catalog/{bundle_id}/install",
-        headers=headers,
-        json=request_body or {},
-    )
-    assert r.status_code == expected_status, (
-        f"Expected {expected_status}; got {r.status_code}: {r.text}"
-    )
-    if r.status_code == 200:
-        install = r.json()
-        drain_tasks()
-        return install
-    return r.json()
-
-
-def _share_credential_with_user(
-    db: Session,
-    *,
-    credential_id: uuid.UUID,
-    credential_owner_id: uuid.UUID,
-    shared_with_user_id: uuid.UUID,
-) -> None:
-    """Directly insert a CredentialShare row to set up the 'shared' tier."""
-    existing = db.exec(
-        select(CredentialShare).where(
-            CredentialShare.credential_id == credential_id,
-            CredentialShare.shared_with_user_id == shared_with_user_id,
-        )
-    ).first()
-    if existing is None:
-        db.add(CredentialShare(
-            credential_id=credential_id,
-            shared_with_user_id=shared_with_user_id,
-            shared_by_user_id=credential_owner_id,
-            access_level="read",
-        ))
-        db.commit()
+# Shared bundle helpers (_make_user_and_headers, _create_credential, _publish,
+# _make_public, _install, _link_credential_to_agent) are imported above from
+# tests.utils.bundle. Credential sharing goes through the public
+# POST /credentials/{id}/shares API (share_credential_via_api).
 
 
 # ── Scenario A: 404 for non-visible bundle ────────────────────────────────────
@@ -476,7 +360,6 @@ def test_install_context_case_insensitive_name_match(
 def test_install_context_owned_preferred_over_shared(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
     """F. When the user has BOTH an owned credential and a shared credential
     matching the spec, the owned one is returned as the suggestion.
@@ -509,15 +392,9 @@ def test_install_context_owned_preferred_over_shared(
         client, third_headers, name="crm-key", allow_sharing=True
     )
     installer, installer_headers = _make_user_and_headers(client)
-    installer_id = uuid.UUID(installer["id"])
-    third_user_id = uuid.UUID(third_user["id"])
-    shared_cred_id = uuid.UUID(shared_cred["id"])
 
-    _share_credential_with_user(
-        db,
-        credential_id=shared_cred_id,
-        credential_owner_id=third_user_id,
-        shared_with_user_id=installer_id,
+    share_credential_via_api(
+        client, third_headers, shared_cred["id"], installer["email"]
     )
 
     # ── Phase 3: installer also owns a credential with same (name, type) ──────
@@ -546,7 +423,6 @@ def test_install_context_owned_preferred_over_shared(
 def test_install_context_most_recent_shared_wins_when_no_owned(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
     """G. User has two shared credentials matching (name, type), no owned one.
 
@@ -575,18 +451,14 @@ def test_install_context_most_recent_shared_wins_when_no_owned(
 
     # ── Phase 2: two third parties share matching credentials with installer ───
     installer, installer_headers = _make_user_and_headers(client)
-    installer_id = uuid.UUID(installer["id"])
 
     third_a, third_a_headers = _make_user_and_headers(client)
     cred_a = _create_credential(
         client, third_a_headers, name="newsletter", allow_sharing=True
     )
     cred_a_id = uuid.UUID(cred_a["id"])
-    _share_credential_with_user(
-        db,
-        credential_id=cred_a_id,
-        credential_owner_id=uuid.UUID(third_a["id"]),
-        shared_with_user_id=installer_id,
+    share_credential_via_api(
+        client, third_a_headers, cred_a["id"], installer["email"]
     )
 
     third_b, third_b_headers = _make_user_and_headers(client)
@@ -594,11 +466,8 @@ def test_install_context_most_recent_shared_wins_when_no_owned(
         client, third_b_headers, name="newsletter", allow_sharing=True
     )
     cred_b_id = uuid.UUID(cred_b["id"])
-    _share_credential_with_user(
-        db,
-        credential_id=cred_b_id,
-        credential_owner_id=uuid.UUID(third_b["id"]),
-        shared_with_user_id=installer_id,
+    share_credential_via_api(
+        client, third_b_headers, cred_b["id"], installer["email"]
     )
 
     # ── Phase 3: GET install-context ──────────────────────────────────────────
@@ -691,13 +560,12 @@ def test_install_context_pbp_spec_exposes_publisher_summary(
 def test_install_new_payload_use_existing_links_credential(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
     """I. POST install with new payload mode="use_existing" + credential_id.
 
     Assert:
     - Install returns HTTP 200 and activates.
-    - AgentCredentialLink points at the supplied credential id.
+    - The installed agent's credential link points at the supplied credential.
     - No placeholder created (the user supplied an explicit credential).
     """
     # ── Phase 1: publish bundle with one PBU spec ─────────────────────────────
@@ -717,12 +585,10 @@ def test_install_new_payload_use_existing_links_credential(
 
     # ── Phase 2: installer creates their own credential then installs ─────────
     installer, installer_headers = _make_user_and_headers(client)
-    installer_id = uuid.UUID(installer["id"])
 
     user_cred = _create_credential(
         client, installer_headers, name="ic-i-cred", allow_sharing=False
     )
-    user_cred_id = uuid.UUID(user_cred["id"])
 
     install = _install(
         client,
@@ -737,24 +603,19 @@ def test_install_new_payload_use_existing_links_credential(
             }
         },
     )
-    install_id = uuid.UUID(install["id"])
+    install_id = install["id"]
 
     # ── Phase 3: verify link points at supplied credential ────────────────────
-    db.expire_all()
-    links = db.exec(
-        select(AgentCredentialLink).where(
-            AgentCredentialLink.agent_id == install_id
-        )
-    ).all()
-    assert len(links) == 1, f"Expected 1 link; got {len(links)}"
-    assert links[0].credential_id == user_cred_id, (
-        f"Link points at {links[0].credential_id}; expected {user_cred_id}"
+    creds = client.get(
+        f"{API}/agents/{install_id}/credentials", headers=installer_headers
     )
-
-    # The linked credential must NOT be a placeholder.
-    linked = db.get(Credential, links[0].credential_id)
-    assert linked is not None
-    assert linked.is_placeholder is False, (
+    assert creds.status_code == 200, creds.text
+    linked = creds.json()["data"]
+    assert len(linked) == 1, f"Expected 1 linked credential; got {len(linked)}"
+    assert linked[0]["id"] == user_cred["id"], (
+        f"Link points at {linked[0]['id']}; expected {user_cred['id']}"
+    )
+    assert linked[0]["is_placeholder"] is False, (
         "Linked credential must not be a placeholder when mode='use_existing'"
     )
 
@@ -803,27 +664,29 @@ def test_install_new_payload_placeholder_creates_placeholder(
             }
         },
     )
-    install_id = uuid.UUID(install["id"])
+    install_id = install["id"]
 
     # ── Phase 3: verify placeholder created and linked ────────────────────────
-    db.expire_all()
-    links = db.exec(
-        select(AgentCredentialLink).where(
-            AgentCredentialLink.agent_id == install_id
-        )
-    ).all()
-    assert len(links) == 1, f"Expected 1 link; got {len(links)}"
-
-    placeholder = db.get(Credential, links[0].credential_id)
-    assert placeholder is not None, "Placeholder Credential row must exist"
-    assert placeholder.is_placeholder is True, (
-        f"Expected is_placeholder=True; got {placeholder.is_placeholder}"
+    creds = client.get(
+        f"{API}/agents/{install_id}/credentials", headers=installer_headers
     )
-    assert placeholder.owner_id == installer_id, (
+    assert creds.status_code == 200, creds.text
+    linked = creds.json()["data"]
+    assert len(linked) == 1, f"Expected 1 linked credential; got {len(linked)}"
+    placeholder = linked[0]
+    assert placeholder["is_placeholder"] is True, (
+        f"Expected is_placeholder=True; got {placeholder['is_placeholder']}"
+    )
+    assert uuid.UUID(placeholder["owner_id"]) == installer_id, (
         f"Placeholder must be owned by installer {installer_id}; "
-        f"got {placeholder.owner_id}"
+        f"got {placeholder['owner_id']}"
     )
-    assert placeholder.encrypted_data, (
+
+    # encrypted_data is intentionally not exposed by any credential projection
+    # (secret-stripped), so its non-empty invariant is verified via the db
+    # fixture. No API surface reveals this field.
+    placeholder_row = db.get(Credential, uuid.UUID(placeholder["id"]))
+    assert placeholder_row is not None and placeholder_row.encrypted_data, (
         "encrypted_data must be non-empty on a placeholder credential"
     )
 
@@ -843,6 +706,13 @@ def test_install_use_existing_rejected_for_publisher_provided_spec(
     - Response status 422.
     - Response detail mentions the spec name or a friendly message.
     - No Agent row (install) created for the installer.
+
+    The "no agent created" check uses the ``db`` fixture rather than
+    ``GET /agents/``: the rejected install raises an HTTPException whose
+    request-session rollback unwinds the test savepoint past the installer's
+    own creation, so the installer can no longer authenticate. The outer
+    ``db`` session still sees committed rows and is the only reliable surface
+    for asserting absence after a failed request.
     """
     # ── Phase 1: publish bundle with one PBP credential ───────────────────────
     agent = create_agent_via_api(
@@ -897,11 +767,9 @@ def test_install_use_existing_rejected_for_publisher_provided_spec(
     ), f"Expected a helpful 422 detail about publisher spec; got: {detail}"
 
     # ── Phase 4: verify no Agent row was created ──────────────────────────────
-    from sqlmodel import select as sql_select
-
     db.expire_all()
     agent_rows = db.exec(
-        sql_select(Agent).where(
+        select(Agent).where(
             Agent.owner_id == installer_id,
             Agent.bundle_uuid == uuid.UUID(fresh["bundle_uuid"]),
         )
@@ -929,6 +797,12 @@ def test_install_legacy_uuid_string_payload_rejected(
     isn't a typed :class:`InstallCredentialSelection` body.
 
     Assert: the install endpoint returns HTTP 422 and creates no Agent row.
+
+    The "no Agent row" check uses the ``db`` fixture (see scenario K): the
+    rejected install's request-session rollback unwinds the test savepoint past
+    the installer's creation, so ``GET /agents/`` can no longer authenticate the
+    installer. The outer ``db`` session is the only reliable surface for
+    asserting absence after a failed request.
     """
     # Publish a bundle with one PBU spec.
     agent = create_agent_via_api(
@@ -966,6 +840,7 @@ def test_install_legacy_uuid_string_payload_rejected(
 
     # And no Install row should have been created on the rejected request.
     installer_id = uuid.UUID(installer["id"])
+    db.expire_all()
     agent_rows = db.exec(
         select(Agent).where(
             Agent.owner_id == installer_id,

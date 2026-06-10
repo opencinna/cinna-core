@@ -418,54 +418,6 @@ def test_environment_permission_denied_returns_403(
     assert r.status_code == 200
 
 
-def test_environment_exception_classes() -> None:
-    """
-    Unit test for the AgentEnvironmentError exception hierarchy.
-
-    Verifies correct status codes and message attributes on each exception class.
-    """
-    from app.services.environments.environment_service import (
-        AgentEnvironmentError,
-        EnvironmentNotFoundError,
-        AgentNotFoundError,
-        EnvironmentPermissionDeniedError,
-        EnvironmentCredentialError,
-    )
-
-    # Base class
-    err = AgentEnvironmentError("something went wrong", status_code=400)
-    assert err.status_code == 400
-    assert err.message == "something went wrong"
-    assert str(err) == "something went wrong"
-
-    # Default status codes
-    err = AgentEnvironmentError("oops")
-    assert err.status_code == 400
-
-    # EnvironmentNotFoundError
-    err = EnvironmentNotFoundError()
-    assert err.status_code == 404
-    assert err.message == "Environment not found"
-    assert isinstance(err, AgentEnvironmentError)
-
-    err = EnvironmentNotFoundError("custom not found message")
-    assert err.status_code == 404
-    assert err.message == "custom not found message"
-
-    # AgentNotFoundError
-    err = AgentNotFoundError()
-    assert err.status_code == 404
-    assert err.message == "Agent not found"
-    assert isinstance(err, AgentEnvironmentError)
-
-    # EnvironmentPermissionDeniedError
-    err = EnvironmentPermissionDeniedError()
-    assert err.status_code == 403
-    assert err.message == "Not enough permissions"
-    assert isinstance(err, AgentEnvironmentError)
-
-    # EnvironmentCredentialError
-    err = EnvironmentCredentialError("Missing API key")
-    assert err.status_code == 400
-    assert err.message == "Missing API key"
-    assert isinstance(err, AgentEnvironmentError)
+# Unit test for the AgentEnvironmentError exception hierarchy (status codes +
+# default messages) lives in tests/unit/test_environment_exceptions.py. The
+# 403/404 HTTP behavior these map to is covered by the ownership scenarios above.

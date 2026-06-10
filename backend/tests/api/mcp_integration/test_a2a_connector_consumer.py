@@ -243,11 +243,9 @@ def test_connect_agent_full_lifecycle(
     assert "encrypted_data" not in cred
     assert "token" not in str(cred)
 
-    # ── Phase 6: Credential pipeline — excluded from credentials.json ─────
-    from app.services.credentials.credentials_service import CredentialsService
-    assert CredentialsService.AGENT_ENV_ALLOWED_FIELDS.get("mcp_provider") == [], (
-        "MCP_PROVIDER must have empty whitelist so it is never in credentials.json"
-    )
+    # Phase 6 (mcp_provider excluded from credentials.json — the
+    # AGENT_ENV_ALLOWED_FIELDS["mcp_provider"] == [] constant) is asserted in
+    # tests/unit/test_mcp_provider_credential_constants.py.
 
     # ── Phase 7: manifest collector includes entry for conversation mode ──
     # Verify via credentials listing that the linked cred is present.
@@ -451,7 +449,6 @@ def test_connect_agent_both_modes_off_rejected(
 def test_connect_agent_token_binding_cascade_revoke(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
     """
     Per-connection bound token (RD-2): deleting the consumer credential
@@ -461,11 +458,6 @@ def test_connect_agent_token_binding_cascade_revoke(
     test file), but we can confirm via the mcp_token list that the token is gone
     after credential deletion.
     """
-    import asyncio
-    from contextlib import contextmanager
-    from tests.utils.db_proxy import NonClosingSessionProxy
-    from unittest.mock import patch as mp
-
     producer_agent = _setup_agent(
         client, superuser_token_headers, "Cascade Revoke Producer Agent"
     )
@@ -837,31 +829,9 @@ def test_status_nonexistent_credential_gets_404(
 
 
 # ── Tests: per-mode manifest ──────────────────────────────────────────────────
-
-
-def test_mcp_provider_excluded_from_credentials_json_whitelist() -> None:
-    """
-    AGENT_ENV_ALLOWED_FIELDS["mcp_provider"] must be an empty list so the
-    credential is never written to credentials.json.
-    """
-    from app.services.credentials.credentials_service import CredentialsService
-    allowed = CredentialsService.AGENT_ENV_ALLOWED_FIELDS.get("mcp_provider")
-    assert allowed == [], (
-        f"MCP_PROVIDER must have empty whitelist, got {allowed!r}"
-    )
-
-
-def test_mcp_provider_sensitive_fields_includes_token() -> None:
-    """
-    SENSITIVE_FIELDS["mcp_provider"] must include token, oauth_client_secret,
-    and oauth_refresh_token so they are redacted in prompts.
-    """
-    from app.services.credentials.credentials_service import CredentialsService
-    sensitive = CredentialsService.SENSITIVE_FIELDS.get("mcp_provider", [])
-    for field in ("token", "oauth_client_secret", "oauth_refresh_token"):
-        assert field in sensitive, (
-            f"'{field}' must be in SENSITIVE_FIELDS['mcp_provider'], got {sensitive}"
-        )
+# Unit tests for the mcp_provider credential-type constants
+# (AGENT_ENV_ALLOWED_FIELDS / SENSITIVE_FIELDS) live in
+# tests/unit/test_mcp_provider_credential_constants.py.
 
 
 def test_mcp_provider_manifest_includes_conversation_entry(

@@ -517,37 +517,40 @@ def test_pairing_inbox_excludes_terminal_rows(
 
 
 # ---------------------------------------------------------------------------
-# Scenario 7: TTL expiry — skipped if no API mechanism available
+# Scenario 7: TTL expiry → 410 on an expired pairing row
 # ---------------------------------------------------------------------------
-#
-# The hardening plan specifies 410 on expired rows. Forcing expiry without DB
-# access requires either a settings override (APP_SYNC_PAIRING_TTL_SECONDS → 0)
-# or time travel. The `pairing_start` service uses
-#   datetime.now(UTC) + timedelta(seconds=settings.APP_SYNC_PAIRING_TTL_SECONDS)
-# at the point of the HTTP request, so patching the setting after the fact has
-# no effect on already-created rows.
-#
-# The `_enforce_pairing_ttl` service method IS exercised indirectly by every
-# scenario above (it is called on every load); TTL-specific 410 behavior is
-# therefore covered in manual/integration testing per the Priority 1 plan:
-#   "confirm a wrong source-state call is rejected and TTL expiry works"
-#
-# We do include a lightweight assertion: that the TTL config is positive and
-# sane, so the underlying mechanism is plausibly correct.
 
 
-def test_pairing_ttl_config_sanity(
-    client: TestClient, superuser_token_headers: dict[str, str]
+def test_pairing_get_returns_410_when_expired(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    monkeypatch,
 ) -> None:
     """
-    Assert APP_SYNC_PAIRING_TTL_SECONDS is a positive integer, so pairing rows
-    do eventually expire. The actual 410 response is verified via manual curl
-    per the Priority 1 validation plan (requires time manipulation not available
-    in the API-only test suite without direct DB writes).
+    A pairing row whose TTL has elapsed is lazily flipped to ``expired`` and the
+    joiner's GET is rejected with 410.
+
+    Born-expired technique: patch APP_SYNC_PAIRING_TTL_SECONDS to 0 BEFORE
+    pairing_start, so the row's expires_at == now (already in the past on the
+    next load). Mirrors the grace-window=0 trick in test_desktop_auth.py.
+
+      1. With TTL=0, start a pairing → row is created already expired.
+      2. Joiner GET on the code → 410 (PairingError → _enforce_pairing_ttl).
+      3. The expired row is terminal → it no longer appears in the inbox.
     """
-    assert hasattr(settings, "APP_SYNC_PAIRING_TTL_SECONDS"), (
-        "settings.APP_SYNC_PAIRING_TTL_SECONDS must exist"
-    )
-    assert settings.APP_SYNC_PAIRING_TTL_SECONDS > 0, (
-        f"APP_SYNC_PAIRING_TTL_SECONDS must be positive; got {settings.APP_SYNC_PAIRING_TTL_SECONDS}"
+    headers = superuser_token_headers
+
+    # ── Phase 1: Born-expired row (TTL=0 at start time) ───────────────────
+    monkeypatch.setattr(settings, "APP_SYNC_PAIRING_TTL_SECONDS", 0)
+    start_resp = pairing_start(client, headers, device_label="Expired Device")
+    code = start_resp["pairing_code"]
+
+    # ── Phase 2: Joiner GET → 410 expired ─────────────────────────────────
+    pairing_get(client, headers, code=code, expect_status=410)
+
+    # ── Phase 3: Expired row is terminal → absent from inbox ──────────────
+    inbox = pairing_inbox(client, headers)
+    labels = {item["device_label"] for item in inbox}
+    assert "Expired Device" not in labels, (
+        "An expired (terminal) pairing row must not appear in the inbox"
     )

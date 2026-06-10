@@ -22,57 +22,18 @@ from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from tests.utils.agent import create_agent_via_api
-from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.user import create_random_user, user_authentication_headers
+from tests.utils.bundle import (
+    make_user_and_headers as _make_user_and_headers,
+    publish_bundle_and_make_public as _publish,
+)
 
 
 API = settings.API_V1_STR
 APP_DATA_BASE = f"{API}/users/me/app-data"
 
-
-def _make_user_and_headers(client: TestClient) -> tuple[dict, dict[str, str]]:
-    user = create_random_user(client)
-    headers = user_authentication_headers(
-        client=client, email=user["email"], password=user["_password"]
-    )
-    # Install needs an AI credential default to provision the env. Mirrors
-    # the pattern used by the agent management tests for fresh users.
-    create_random_ai_credential(client, headers, set_default=True)
-    return user, headers
-
-
-def _publish(
-    client: TestClient,
-    headers: dict,
-    agent_id: str,
-    *,
-    notes: str | None = None,
-    visibility: str = "public",
-    is_listed: bool = True,
-) -> dict:
-    """Publish an install + (default) flip listing/visibility for catalog tests."""
-    r = client.post(
-        f"{API}/agents/{agent_id}/publish",
-        headers=headers,
-        json={"release_notes": notes} if notes else {},
-    )
-    assert r.status_code == 200, r.text
-    revision = r.json()
-    drain_tasks()
-
-    # Make the bundle catalog-visible. The publish endpoint produces the
-    # revision; bundle metadata edit is on /bundles/{uuid}.
-    fresh = client.get(f"{API}/agents/{agent_id}", headers=headers).json()
-    bundle_uuid = fresh["bundle_uuid"]
-    assert bundle_uuid is not None
-    r = client.patch(
-        f"{API}/bundles/{bundle_uuid}",
-        headers=headers,
-        json={"is_listed": is_listed, "visibility": visibility},
-    )
-    assert r.status_code == 200, r.text
-    return revision
+# _make_user_and_headers and _publish (publish + flip visibility → revision)
+# are imported from tests.utils.bundle above.
 
 
 def test_publish_creates_bundle_and_revision(

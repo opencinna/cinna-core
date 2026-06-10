@@ -44,6 +44,7 @@ from tests.utils.mfa import (
     assert_security_event_written,
     delete_with_body,
     enroll_totp,
+    enroll_totp_and_get_secret,
     get_me,
     get_mfa_status,
     headers_from_token,
@@ -54,10 +55,14 @@ from tests.utils.mfa import (
     totp_begin,
     totp_finish,
     verify_challenge_recovery,
-    verify_challenge_totp,
 )
 
 _BASE = settings.API_V1_STR
+
+# MFA tests never create agents; opt out of the heavy agent/env stubs in
+# tests/api/users/conftest.py (which also provides autouse rate-limit-bucket
+# clearing, keeping this file order-independent).
+NEEDS_AGENT_STUBS = False
 
 
 # ── 1. Login regression — no 2FA ──────────────────────────────────────
@@ -84,14 +89,15 @@ def test_login_without_2fa_returns_token(client: TestClient) -> None:
 
 def test_login_with_2fa_returns_mfa_challenge(client: TestClient) -> None:
     """Password login with two_factor_enabled=True returns MfaChallenge
-    (kind='mfa_challenge') — never an access token at step 1."""
+    (kind='mfa_challenge') — never an access token at step 1 — and a valid TOTP
+    code at step 2 yields a full access token."""
     user = signup_user(client)
     headers = login(client, user["email"], user["_password"])
 
-    # ── Phase 1: Enroll TOTP → flips two_factor_enabled
-    enroll_totp(client, headers)
+    # ── Phase 1: Enroll TOTP → flips two_factor_enabled (keep the secret) ──
+    secret = enroll_totp_and_get_secret(client, headers)
 
-    # ── Phase 2: Login → expect MFA challenge
+    # ── Phase 2: Login → expect MFA challenge ─────────────────────────────
     r = client.post(
         f"{_BASE}/login/access-token",
         data={"username": user["email"], "password": user["_password"]},
@@ -106,12 +112,29 @@ def test_login_with_2fa_returns_mfa_challenge(client: TestClient) -> None:
     assert "allowed_methods" in body
     assert "totp" in body["allowed_methods"]
 
-    # ── Phase 3: Verify with a valid TOTP → full access token
-    # We need a fresh code against the same secret used at enrollment.
-    # Begin a new enrollment-begin call to recover the secret is not possible
-    # (only one TOTP per user), so we complete the verify via recovery codes
-    # returned by enroll_totp above (if available).
-    # Simpler: use the recovery codes from enroll_totp response.
+    # ── Phase 3: Verify with a valid TOTP → full access token ─────────────
+    # Enrollment already consumed the current step's code (replay protection
+    # records last_used_step), so verify with the NEXT step's code — still
+    # within the ±1 acceptance window but past last_used_step.
+    next_step_code = pyotp.TOTP(secret).at(
+        datetime.now(UTC) + timedelta(seconds=30)
+    )
+    r = client.post(
+        f"{_BASE}/login/mfa/verify",
+        json={
+            "challenge_token": body["challenge_token"],
+            "method": "totp",
+            "payload": {"code": next_step_code},
+        },
+    )
+    assert r.status_code == 200, f"mfa/verify failed: {r.text}"
+    verified = r.json()
+    assert verified["kind"] == "token", f"Expected kind=token, got {verified}"
+    assert verified["access_token"]
+
+    # The issued token authenticates as the enrolled user.
+    me = get_me(client, headers_from_token(verified))
+    assert me["email"] == user["email"]
 
 
 # ── 4. TOTP enrollment success ────────────────────────────────────────
@@ -222,14 +245,18 @@ def test_totp_verify_accepts_adjacent_steps(client: TestClient) -> None:
 
     begin = totp_begin(client, headers)
     secret = begin["secret_base32"]
-    code_now = pyotp.TOTP(secret).now()
-    totp_finish(client, headers, begin["secret_token"], code_now)
-
-    # Build a code for 'one step in the future' (offset +1 from current step).
     totp = pyotp.TOTP(secret)
+
+    # Anchor both the enrollment code and the verification code to a single
+    # fixed timestamp so a 30 s step boundary crossing mid-test cannot shift
+    # the relative offset (wall-clock flake).
     import time
-    ts = int(time.time())
-    code_plus1 = totp.at(ts, counter_offset=1)
+    anchor_ts = int(time.time())
+    enroll_code = totp.at(anchor_ts)
+    totp_finish(client, headers, begin["secret_token"], enroll_code)
+
+    # Build a code for 'one step in the future' (offset +1 from the anchor step).
+    code_plus1 = totp.at(anchor_ts, counter_offset=1)
 
     # Obtain a fresh login challenge (2FA is now on).
     challenge_body = login_get_challenge(client, user["email"], user["_password"])
@@ -261,20 +288,23 @@ def test_totp_replay_rejection(client: TestClient) -> None:
 
     begin = totp_begin(client, headers)
     secret = begin["secret_base32"]
-    enroll_code = pyotp.TOTP(secret).now()
+    totp = pyotp.TOTP(secret)
+
+    # Anchor enrollment and the verification code to a single fixed timestamp
+    # so a 30 s step boundary crossing mid-test cannot shift the relative
+    # offset (wall-clock flake).
+    import time
+    anchor_ts = int(time.time())
+    enroll_code = totp.at(anchor_ts)
     totp_finish(client, headers, begin["secret_token"], enroll_code)
 
     # Get two separate login challenges.
     challenge1 = login_get_challenge(client, user["email"], user["_password"])
     challenge2 = login_get_challenge(client, user["email"], user["_password"])
 
-    # Compute a fresh code (different from enrollment code) so last_used_step
-    # does not auto-block it from the start.
-    import time
-    totp = pyotp.TOTP(secret)
-    ts = int(time.time())
-    # Use offset +1 to ensure it differs from the enrollment step.
-    fresh_code = totp.at(ts, counter_offset=1)
+    # Compute a fresh code (offset +1 from the anchor step) so it differs from
+    # the enrollment code and last_used_step does not auto-block it.
+    fresh_code = totp.at(anchor_ts, counter_offset=1)
 
     # ── First verify should succeed.
     r1 = client.post(

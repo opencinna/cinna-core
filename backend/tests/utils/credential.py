@@ -110,6 +110,25 @@ def update_credential(
     return r.json()
 
 
+def get_credential(
+    client: TestClient,
+    token_headers: dict[str, str],
+    credential_id: str,
+) -> dict:
+    """Get a credential (public projection) via GET /credentials/{id}.
+
+    Returns the ``CredentialPublic`` JSON, which carries ``owner_id``,
+    ``is_placeholder``, ``allow_sharing``, ``allow_template_sharing`` and
+    ``template_private_fields`` (but no secret data).
+    """
+    r = client.get(
+        f"{settings.API_V1_STR}/credentials/{credential_id}",
+        headers=token_headers,
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
 def get_credential_with_data(
     client: TestClient,
     token_headers: dict[str, str],
@@ -166,4 +185,40 @@ def get_agent_credentials(
         headers=token_headers,
     )
     assert r.status_code == 200
+    return r.json()
+
+
+def share_credential_via_api(
+    client: TestClient,
+    owner_headers: dict[str, str],
+    credential_id: str,
+    shared_with_email: str,
+) -> dict:
+    """Share a credential with another user via POST /credentials/{id}/shares.
+
+    The credential must have ``allow_sharing=True`` (the API enforces this) and
+    is shared using the *owner's* headers, targeting the recipient by email.
+    """
+    r = client.post(
+        f"{settings.API_V1_STR}/credentials/{credential_id}/shares",
+        headers=owner_headers,
+        json={"shared_with_email": shared_with_email},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def set_credential_sharing(
+    client: TestClient,
+    owner_headers: dict[str, str],
+    credential_id: str,
+    allow_sharing: bool,
+) -> dict:
+    """Enable/disable sharing for a credential via PATCH /credentials/{id}/sharing."""
+    r = client.patch(
+        f"{settings.API_V1_STR}/credentials/{credential_id}/sharing",
+        headers=owner_headers,
+        json={"allow_sharing": allow_sharing},
+    )
+    assert r.status_code == 200, r.text
     return r.json()

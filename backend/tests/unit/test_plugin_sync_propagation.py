@@ -17,7 +17,12 @@ DB so the behavioral-signature merge contract is locked:
   4. A bundle plugin colliding with a consumer source=marketplace plugin of the
      same (mkt, name) is skipped.
 
-All DB access goes through the ``db`` session fixture (no network / API).
+All DB access goes through the ``db`` session fixture (no network / API / TestClient).
+This is a service-level test, not a pure-logic unit test: it uses the shared ``db``
+fixture and therefore requires the migrated ``app_test`` database (see the
+"service-level tests" note in tests/unit/README.md). The full
+publish→install→apply-update API flow that also reaches these merge scenarios is
+future coverage (it needs a marketplace + running agent env).
 """
 import uuid
 

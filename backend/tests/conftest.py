@@ -7,12 +7,20 @@ from fastapi.testclient import TestClient
 from sqlalchemy import event, create_engine
 from sqlmodel import Session
 
-from app.api.deps import get_db
 from app.core.config import settings
-from app.core.db import init_db
-from app.main import app
-from tests.utils.user import authentication_token_from_email
-from tests.utils.utils import get_superuser_token_headers
+
+# Enable test mode BEFORE importing the app. ``app.main.lifespan`` reads this
+# flag to skip starting background schedulers (APScheduler jobs bind to the
+# application DB engine and would mutate the dev DB from inside a test — an
+# isolation escape). Setting it here guarantees it is True at the time the
+# lifespan runs (when the per-test ``TestClient(app)`` context is entered).
+settings.TESTING = True
+
+from app.api.deps import get_db  # noqa: E402
+from app.core.db import init_db  # noqa: E402
+from app.main import app  # noqa: E402
+from tests.utils.user import authentication_token_from_email  # noqa: E402
+from tests.utils.utils import get_superuser_token_headers  # noqa: E402
 
 
 def _get_test_engine():
@@ -101,9 +109,29 @@ def client(db: Session) -> Generator[TestClient, None, None]:
     app.dependency_overrides.pop(get_db, None)
 
 
-@pytest.fixture(scope="function")
-def superuser_token_headers(client: TestClient) -> dict[str, str]:
-    return get_superuser_token_headers(client)
+@pytest.fixture(scope="session")
+def superuser_token_headers(setup_db: None) -> dict[str, str]:
+    """Auth headers for the seeded superuser, minted once per session.
+
+    JWTs are stateless and the superuser is seeded by ``setup_db`` (committed to
+    the test DB outside any rollback transaction), so its login token is stable
+    for the whole session. Minting it once avoids a login round-trip on every
+    test. We use a short-lived ``TestClient`` whose ``get_db`` yields a plain
+    session on the test engine (not the per-test savepoint session) so this
+    fixture has no dependency on the function-scoped ``db``/``client`` fixtures.
+    """
+    engine = _ensure_test_engine()
+
+    def _get_session_db() -> Generator[Session, None, None]:
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_db] = _get_session_db
+    try:
+        with TestClient(app) as c:
+            return get_superuser_token_headers(c)
+    finally:
+        app.dependency_overrides.pop(get_db, None)
 
 
 @pytest.fixture(scope="function")

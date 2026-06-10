@@ -42,6 +42,24 @@ def create_session_via_api(
     return r.json()
 
 
+def get_session(
+    client: TestClient,
+    token_headers: dict[str, str],
+    session_id: str,
+) -> dict:
+    """Get a single session via GET /api/v1/sessions/{id}.
+
+    Returns the ``SessionPublicExtended`` JSON, which carries ``title`` and
+    ``interaction_status`` among other fields.
+    """
+    r = client.get(
+        f"{settings.API_V1_STR}/sessions/{session_id}",
+        headers=token_headers,
+    )
+    assert r.status_code == 200, f"Get session failed: {r.text}"
+    return r.json()
+
+
 def get_agent_session(
     client: TestClient,
     token_headers: dict[str, str],

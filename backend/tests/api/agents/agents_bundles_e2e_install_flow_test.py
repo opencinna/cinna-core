@@ -36,24 +36,22 @@ from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.utils.agent import create_agent_via_api
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
+from tests.utils.bundle import (
+    install_bundle as _install,
+    link_bundle_credential_to_agent as _link_credential_to_agent,
+    make_user_and_headers as _make_user_and_headers,
+    publish_bundle as _publish,
+)
 from tests.utils.message import list_messages, send_message
 from tests.utils.session import create_session_via_api
-from tests.utils.user import create_random_user, user_authentication_headers
 
 API = settings.API_V1_STR
 
 
 # ── Module-level helpers ──────────────────────────────────────────────────────
-
-
-def _make_user_and_headers(client: TestClient) -> tuple[dict, dict[str, str]]:
-    """Create a random user with a default AI credential; return (user, headers)."""
-    user = create_random_user(client)
-    headers = user_authentication_headers(
-        client=client, email=user["email"], password=user["_password"]
-    )
-    create_random_ai_credential(client, headers, set_default=True)
-    return user, headers
+# Shared bundle helpers (_make_user_and_headers, _publish,
+# _install, _link_credential_to_agent) are imported above from
+# tests.utils.bundle. The typed credential factories below stay local.
 
 
 def _create_api_token_credential(
@@ -109,64 +107,6 @@ def _create_odoo_credential(
     r = client.post(f"{API}/credentials/", headers=headers, json=body)
     assert r.status_code == 200, r.text
     return r.json()
-
-
-def _link_credential_to_agent(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-    credential_id: str,
-) -> None:
-    r = client.post(
-        f"{API}/agents/{agent_id}/credentials",
-        headers=headers,
-        json={"credential_id": credential_id},
-    )
-    assert r.status_code in (200, 201), r.text
-
-
-def _publish(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-) -> dict:
-    """Publish agent and drain; return fresh agent row."""
-    r = client.post(f"{API}/agents/{agent_id}/publish", headers=headers, json={})
-    assert r.status_code == 200, r.text
-    drain_tasks()
-    fresh = client.get(f"{API}/agents/{agent_id}", headers=headers).json()
-    return fresh
-
-
-def _make_public(
-    client: TestClient,
-    headers: dict[str, str],
-    bundle_uuid: str,
-) -> None:
-    r = client.patch(
-        f"{API}/bundles/{bundle_uuid}",
-        headers=headers,
-        json={"is_listed": True, "visibility": "public"},
-    )
-    assert r.status_code == 200, r.text
-
-
-def _install(
-    client: TestClient,
-    headers: dict[str, str],
-    bundle_id: str,
-    *,
-    request_body: dict | None = None,
-) -> dict:
-    r = client.post(
-        f"{API}/catalog/{bundle_id}/install",
-        headers=headers,
-        json=request_body or {},
-    )
-    assert r.status_code == 200, r.text
-    install = r.json()
-    drain_tasks()
-    return install
 
 
 def _get_setup_status(

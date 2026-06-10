@@ -15,12 +15,12 @@ from unittest.mock import patch
 from urllib.parse import urlparse
 
 from fastapi.testclient import TestClient
-from sqlmodel import Session
 
 from app.core.config import settings
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.stubs.environment_adapter_stub import EnvironmentTestAdapter
 from tests.utils.a2a import (
+    a2a_headers as _a2a_headers,
     build_streaming_request,
     parse_sse_events,
     setup_a2a_agent,
@@ -49,10 +49,6 @@ _WORKSPACE_TREE_WITH_FILE = {
 _FILE_CONTENT = b"id,name,value\n1,test,42\n"
 
 
-def _a2a_headers(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-
 def _extract_event_text(events: list[dict]) -> str:
     """Extract concatenated text from A2A SSE event status message parts."""
     parts_text: list[str] = []
@@ -70,7 +66,6 @@ def _extract_event_text(events: list[dict]) -> str:
 def test_files_command_a2a_full_flow(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
     patch_environment_adapter,
 ) -> None:
     """

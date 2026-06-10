@@ -39,6 +39,12 @@ from tests.utils.ai_credential import (
 )
 from tests.utils.user import create_random_user, user_authentication_headers
 
+# Does its own targeted ``probe_models`` patching and never creates an
+# agent/environment, so skip the heavy agent/env stubs and the
+# default-AI-credential setup from the dir conftest.
+NEEDS_AGENT_STUBS = False
+NEEDS_DEFAULT_CREDENTIALS = False
+
 _BASE = f"{settings.API_V1_STR}/ai-credentials"
 _PROBE_TARGET = "app.services.credentials.model_discovery_service.probe_models"
 

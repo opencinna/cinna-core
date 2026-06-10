@@ -4,14 +4,17 @@ Covers the pre-LLM gate (InstallReadinessGate), setup endpoints
 (setup-status, setup-credentials), and the chat/MCP short-circuit behaviour
 for installs that are not yet ready.
 
-Scenarios:
-  A. Gate check — ready when no missing (fully-filled, owner-installed credential).
-  B. Gate check — needs_setup with placeholder PBU credential.
-  C. Gate check — publisher_broken when PBP credential deleted.
-  D. Gate check — publisher_broken when sharing revoked (allow_sharing=False).
-  E. Gate check — publisher AI credential missing (row deleted).
-  F. Gate check — publisher AI share missing (AICredentialShare deleted).
-  G. Gate check — publisher installs own bundle, no share needed → ready.
+Scenarios (A/B/D/F/G assert readiness through GET /agents/{id}/setup-status,
+which surfaces the same gate verdict that the runtime gate uses):
+  A. setup-status — ready when no missing (fully-filled, owner-installed credential).
+  B. setup-status — needs_setup with placeholder PBU credential.
+  C. (moved) publisher_broken when PBP credential row missing — defensive
+     DB-corruption branch, MagicMock unit test in
+     tests/unit/test_install_readiness_gate_defensive.py.
+  D. setup-status — publisher_broken when sharing revoked (allow_sharing=False).
+  E. (moved) publisher AI credential row missing — defensive branch, same unit file as C.
+  F. setup-status — publisher_broken when publisher AI share missing (AICredentialShare deleted).
+  G. setup-status — publisher installs own bundle, no share needed → ready.
   H. GET /agents/{id}/setup-status — happy path (needs_setup install).
   I. GET /agents/{id}/setup-status — auth: another user gets 403/404.
   J. GET /agents/{id}/setup-credentials — returns only owner-placeholder creds.
@@ -40,39 +43,34 @@ from sqlmodel import Session, select
 from app.core.config import settings
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import AgentBundle
-from app.models.credentials.ai_credential import AICredential
 from app.models.credentials.ai_credential_share import AICredentialShare
 from app.models.credentials.credential import Credential
-from app.models.credentials.credential_share import CredentialShare
 from app.models.credentials.link_models import AgentCredentialLink
 from app.models.environments.environment import AgentEnvironment
 from app.models.mcp.mcp_connector import MCPConnector
-from app.services.bundles.install_readiness_gate import (
-    GateMissingItem,
-    GateResult,
-    InstallReadinessGate,
-)
+from app.services.bundles.install_readiness_gate import InstallReadinessGate
 from tests.utils.agent import create_agent_via_api
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
+from tests.utils.bundle import (
+    install_bundle as _install,
+    link_bundle_credential_to_agent as _link_credential_to_agent,
+    make_bundle_public as _make_public,
+    make_user_and_headers as _make_user_and_headers,
+    publish_bundle as _publish,
+)
+from tests.utils.credential import set_credential_sharing
 from tests.utils.message import list_messages, send_message
-from tests.utils.session import create_session_via_api
-from tests.utils.user import create_random_user, user_authentication_headers
+from tests.utils.session import create_session_via_api, get_session
 
 API = settings.API_V1_STR
 
 
 # ── Module-level helpers ──────────────────────────────────────────────────────
-
-
-def _make_user_and_headers(client: TestClient) -> tuple[dict, dict[str, str]]:
-    """Create a random user with a default AI credential and return both."""
-    user = create_random_user(client)
-    headers = user_authentication_headers(
-        client=client, email=user["email"], password=user["_password"]
-    )
-    create_random_ai_credential(client, headers, set_default=True)
-    return user, headers
+# Shared bundle helpers (_make_user_and_headers, _publish, _make_public,
+# _install, _link_credential_to_agent) are imported above from
+# tests.utils.bundle. _create_credential stays local — it carries a positional
+# name default and a ``notes`` field the shared factory does not expose.
 
 
 def _create_credential(
@@ -100,65 +98,6 @@ def _create_credential(
     return r.json()
 
 
-def _link_credential_to_agent(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-    credential_id: str,
-) -> None:
-    r = client.post(
-        f"{API}/agents/{agent_id}/credentials",
-        headers=headers,
-        json={"credential_id": credential_id},
-    )
-    assert r.status_code in (200, 201), r.text
-
-
-def _publish(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-) -> dict:
-    """Publish agent and drain tasks; return the fresh agent row."""
-    r = client.post(
-        f"{API}/agents/{agent_id}/publish",
-        headers=headers,
-        json={},
-    )
-    assert r.status_code == 200, r.text
-    drain_tasks()
-    fresh = client.get(f"{API}/agents/{agent_id}", headers=headers).json()
-    return fresh
-
-
-def _make_public(
-    client: TestClient,
-    headers: dict[str, str],
-    bundle_uuid: str,
-) -> None:
-    r = client.patch(
-        f"{API}/bundles/{bundle_uuid}",
-        headers=headers,
-        json={"is_listed": True, "visibility": "public"},
-    )
-    assert r.status_code == 200, r.text
-
-
-def _install(
-    client: TestClient,
-    headers: dict[str, str],
-    bundle_id: str,
-    *,
-    request_body: dict | None = None,
-) -> dict:
-    r = client.post(
-        f"{API}/catalog/{bundle_id}/install",
-        headers=headers,
-        json=request_body or {},
-    )
-    assert r.status_code == 200, r.text
-    drain_tasks()
-    return r.json()
 
 
 def _get_placeholder_link(
@@ -233,9 +172,8 @@ def _setup_pbp_install(
 def test_gate_ready_when_no_missing(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
 ) -> None:
-    """A. Fully-filled credential owned by installer → gate says ready."""
+    """A. Fully-filled credential owned by installer → setup-status says ready."""
     # Superuser installs their own agent (publisher = installer).
     publisher_agent = create_agent_via_api(
         client, superuser_token_headers, name="IR-A-Publisher"
@@ -247,16 +185,16 @@ def test_gate_ready_when_no_missing(
         client, superuser_token_headers, publisher_agent["id"], cred["id"]
     )
 
-    db.expire_all()
-    install = db.get(Agent, uuid.UUID(publisher_agent["id"]))
-    assert install is not None
+    r = client.get(
+        f"{API}/agents/{publisher_agent['id']}/setup-status",
+        headers=superuser_token_headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
 
-    result = InstallReadinessGate.check(db, install)
-
-    assert result.status == "ready"
-    assert result.missing == []
-    assert result.setup_url is None
-    assert result.user_message == ""
+    assert body["status"] == "ready"
+    assert body["missing"] == []
+    assert body["setup_url"] is None
 
 
 # ── Scenario B — Gate: needs_setup with PBU placeholder ─────────────────────
@@ -271,75 +209,27 @@ def test_gate_needs_setup_with_placeholder_pbu_credential(
     install_dict, installer, installer_headers = _setup_pbu_install(
         client, superuser_token_headers, db
     )
-    install_id = uuid.UUID(install_dict["id"])
-    install = db.get(Agent, install_id)
-    assert install is not None
+    install_id = install_dict["id"]
 
-    result = InstallReadinessGate.check(db, install)
-
-    assert result.status == "needs_setup"
-    assert len(result.missing) == 1
-    assert result.missing[0].reason == "placeholder_empty"
-    assert result.missing[0].is_ai is False
-    assert result.setup_url is not None
-    assert f"/agent/{install_id}#credentials" in result.setup_url
-    assert result.user_message != ""
-
-
-# ── Scenario C — Gate: publisher_broken when PBP credential missing ──────────
-
-
-def test_gate_publisher_broken_when_pbp_credential_missing() -> None:
-    """C. AgentCredentialLink points at a non-existent credential → publisher_broken.
-
-    NOTE: In production, deleting a Credential cascades to AgentCredentialLink
-    (ondelete="CASCADE"), so the link disappears with the credential. The
-    ``publisher_credential_missing`` reason is therefore a defensive code path
-    reachable only if the DB is manipulated below the ORM or the FK is bypassed.
-
-    We exercise it here via a unit-level call: mock the DB session so that
-    ``session.get(Credential, ...)`` returns ``None`` while the link still
-    exists. This validates the gate's defensive branch without needing
-    client/db fixtures.
-    """
-    install_id = uuid.uuid4()
-    owner_id = uuid.uuid4()
-    missing_cred_id = uuid.uuid4()
-
-    # Use MagicMock for the install to avoid SQLModel/SA __init__ issues.
-    stub_install = MagicMock(spec=["id", "owner_id", "bundle_uuid", "installed_revision_id"])
-    stub_install.id = install_id
-    stub_install.owner_id = owner_id
-    stub_install.bundle_uuid = None
-    stub_install.installed_revision_id = None
-
-    # Stub link pointing at the non-existent credential.
-    stub_link = MagicMock(spec=["agent_id", "credential_id"])
-    stub_link.agent_id = install_id
-    stub_link.credential_id = missing_cred_id
-
-    # Mock DB session: exec returns link list; get(Credential) returns None.
-    mock_db = MagicMock()
-
-    class _ExecResult:
-        def all(self):
-            return [stub_link]
-
-        def first(self):
-            return None
-
-    mock_db.exec.return_value = _ExecResult()
-    mock_db.get.return_value = None  # credential row doesn't exist
-
-    result = InstallReadinessGate.check(mock_db, stub_install)
-
-    assert result.status == "publisher_broken", (
-        f"Expected publisher_broken; got {result.status}"
+    r = client.get(
+        f"{API}/agents/{install_id}/setup-status",
+        headers=installer_headers,
     )
-    assert len(result.missing) >= 1
-    reasons = {m.reason for m in result.missing}
-    assert "publisher_credential_missing" in reasons
-    assert all(not m.is_ai for m in result.missing)
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    assert body["status"] == "needs_setup"
+    assert len(body["missing"]) == 1
+    assert body["missing"][0]["reason"] == "placeholder_empty"
+    assert body["missing"][0]["is_ai"] is False
+    assert body["setup_url"] is not None
+    assert f"/agent/{install_id}#credentials" in body["setup_url"]
+
+
+# Scenario C (publisher_broken when an AgentCredentialLink points at a missing
+# Credential) and scenario E (publisher AI credential row missing) are defensive
+# DB-corruption branches unreachable through the API. Their MagicMock unit tests
+# live in tests/unit/test_install_readiness_gate_defensive.py.
 
 
 # ── Scenario D — Gate: publisher_broken when sharing revoked ─────────────────
@@ -354,97 +244,29 @@ def test_gate_publisher_broken_when_sharing_revoked(
     install_dict, installer, installer_headers, shared_cred = _setup_pbp_install(
         client, superuser_token_headers, db
     )
-    install_id = uuid.UUID(install_dict["id"])
+    install_id = install_dict["id"]
 
-    # Flip allow_sharing=False directly (publisher revokes sharing).
-    cred_row = db.get(Credential, uuid.UUID(shared_cred["id"]))
-    assert cred_row is not None
-    cred_row.allow_sharing = False
-    db.add(cred_row)
-    db.commit()
+    # Flip allow_sharing=False via the public sharing toggle (publisher revokes).
+    set_credential_sharing(
+        client, superuser_token_headers, shared_cred["id"], allow_sharing=False
+    )
     db.expire_all()
 
-    install = db.get(Agent, install_id)
-    assert install is not None
+    r = client.get(
+        f"{API}/agents/{install_id}/setup-status",
+        headers=installer_headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
 
-    result = InstallReadinessGate.check(db, install)
-
-    assert result.status == "publisher_broken"
-    reasons = {m.reason for m in result.missing}
+    assert body["status"] == "publisher_broken"
+    reasons = {m["reason"] for m in body["missing"]}
     assert "publisher_credential_unshared" in reasons
-    assert all(not m.is_ai for m in result.missing)
+    assert all(not m["is_ai"] for m in body["missing"])
 
 
-# ── Scenario E — Gate: publisher AI credential missing ───────────────────────
-
-
-def test_gate_publisher_broken_when_publisher_ai_credential_missing() -> None:
-    """E. Bundle has publisher_ai_credential_conversation_id; AI cred row doesn't exist → publisher_broken.
-
-    NOTE: In production, deleting an AICredential row NULLs the bundle FK
-    (ondelete="SET NULL"), so the gate never sees the stale reference. The
-    ``publisher_credential_missing`` (is_ai=True) branch is a defensive path.
-
-    We exercise it here via a unit-level call: mock the DB session so that
-    ``session.get(AICredential, id)`` returns ``None`` while the bundle's
-    field is still set. This validates the gate's defensive AI-credential branch.
-    """
-    install_id = uuid.uuid4()
-    bundle_id = uuid.uuid4()
-    owner_id = uuid.uuid4()
-    stale_ai_cred_id = uuid.uuid4()
-
-    # Use MagicMock for the install and bundle.
-    stub_install = MagicMock(
-        spec=["id", "owner_id", "bundle_uuid", "installed_revision_id"]
-    )
-    stub_install.id = install_id
-    stub_install.owner_id = owner_id
-    stub_install.bundle_uuid = bundle_id
-    stub_install.installed_revision_id = None
-
-    stub_bundle = MagicMock(
-        spec=[
-            "id",
-            "publisher_ai_credential_conversation_id",
-            "publisher_ai_credential_building_id",
-        ]
-    )
-    stub_bundle.id = bundle_id
-    stub_bundle.publisher_ai_credential_conversation_id = stale_ai_cred_id
-    stub_bundle.publisher_ai_credential_building_id = None
-
-    # Mock DB session:
-    #   exec (AgentCredentialLink scan) → empty list
-    #   get(AgentBundle, bundle_id) → stub_bundle
-    #   get(AICredential, stale_ai_cred_id) → None
-    mock_db = MagicMock()
-
-    class _EmptyExecResult:
-        def all(self):
-            return []
-
-        def first(self):
-            return None
-
-    mock_db.exec.return_value = _EmptyExecResult()
-
-    def _mock_get(model_class, model_id):
-        if model_class is AgentBundle:
-            return stub_bundle
-        return None  # AICredential row doesn't exist
-
-    mock_db.get.side_effect = _mock_get
-
-    result = InstallReadinessGate.check(mock_db, stub_install)
-
-    assert result.status == "publisher_broken", (
-        f"Expected publisher_broken; got {result.status}"
-    )
-    ai_missing = [m for m in result.missing if m.is_ai]
-    assert len(ai_missing) >= 1, f"Expected AI missing item; got {result.missing}"
-    assert ai_missing[0].reason == "publisher_credential_missing"
-    assert ai_missing[0].is_ai is True
+# Scenario E moved to tests/unit/test_install_readiness_gate_defensive.py
+# (see the C/E note above).
 
 
 # ── Scenario F — Gate: publisher AI share missing ────────────────────────────
@@ -479,45 +301,37 @@ def test_gate_publisher_broken_when_ai_share_deleted(
     installer_id = uuid.UUID(installer["id"])
     db.expire_all()
 
-    # Ensure a share row was created (install_service should have created it).
-    # If not, create one manually so the gate can then detect its absence.
+    # Install must have auto-created the AICredentialShare so the publisher's
+    # conversation credential is usable by the installer (the precondition this
+    # scenario then breaks by deleting the share).
     share = db.exec(
         select(AICredentialShare).where(
             AICredentialShare.ai_credential_id == ai_cred_id,
             AICredentialShare.shared_with_user_id == installer_id,
         )
     ).first()
-    if share is None:
-        # Install didn't create the share automatically — create it so we can
-        # then delete it and confirm the gate detects the absence.
-        share = AICredentialShare(
-            ai_credential_id=ai_cred_id,
-            shared_with_user_id=installer_id,
-        )
-        db.add(share)
-        db.commit()
-        db.expire_all()
-        share = db.exec(
-            select(AICredentialShare).where(
-                AICredentialShare.ai_credential_id == ai_cred_id,
-                AICredentialShare.shared_with_user_id == installer_id,
-            )
-        ).first()
+    assert share is not None, (
+        "Install must auto-create an AICredentialShare for the publisher's "
+        "conversation credential; the readiness gate's unshared detection "
+        "depends on this share existing first."
+    )
 
     db.delete(share)
     db.commit()
     db.expire_all()
 
-    install = db.get(Agent, install_id)
-    assert install is not None
+    r = client.get(
+        f"{API}/agents/{install_id}/setup-status",
+        headers=installer_headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
 
-    result = InstallReadinessGate.check(db, install)
-
-    assert result.status == "publisher_broken"
-    ai_missing = [m for m in result.missing if m.is_ai]
+    assert body["status"] == "publisher_broken"
+    ai_missing = [m for m in body["missing"] if m["is_ai"]]
     assert len(ai_missing) >= 1
-    assert ai_missing[0].reason == "publisher_credential_unshared"
-    assert ai_missing[0].is_ai is True
+    assert ai_missing[0]["reason"] == "publisher_credential_unshared"
+    assert ai_missing[0]["is_ai"] is True
 
 
 # ── Scenario G — Gate: publisher installs own bundle, no share needed ─────────
@@ -546,15 +360,17 @@ def test_gate_ready_when_publisher_installs_own_bundle(
     db.commit()
     db.expire_all()
 
-    # The publisher_agent row IS the publisher install.
-    install = db.get(Agent, uuid.UUID(publisher_agent["id"]))
-    assert install is not None
+    # The publisher_agent row IS the publisher install (owned by superuser).
+    r = client.get(
+        f"{API}/agents/{publisher_agent['id']}/setup-status",
+        headers=superuser_token_headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
 
-    result = InstallReadinessGate.check(db, install)
-
-    assert result.status == "ready", (
-        f"Expected ready for publisher's own install; got {result.status} "
-        f"missing={result.missing}"
+    assert body["status"] == "ready", (
+        f"Expected ready for publisher's own install; got {body['status']} "
+        f"missing={body['missing']}"
     )
 
 
@@ -806,13 +622,10 @@ def test_chat_short_circuit_persists_system_message_for_placeholder_install(
     assert isinstance(metadata["missing"], list)
 
     # interaction_status must NOT be running (env was never engaged).
-    db.expire_all()
-    from app.models.sessions.session import Session as ChatSessionModel
-    chat_session = db.get(ChatSessionModel, uuid.UUID(session_id))
-    assert chat_session is not None, f"Chat session {session_id} not found in DB"
-    assert chat_session.interaction_status != "running", (
+    chat_session = get_session(client, installer_headers, session_id)
+    assert chat_session["interaction_status"] != "running", (
         f"interaction_status should not be 'running' after gate short-circuit; "
-        f"got {chat_session.interaction_status}"
+        f"got {chat_session['interaction_status']}"
     )
 
 
@@ -853,11 +666,8 @@ def test_chat_gate_block_still_generates_session_title(
 
     # The session should now have a title derived from the user message,
     # even though the gate blocked LLM dispatch.
-    from app.models.sessions.session import Session as ChatSessionModel
-    db.expire_all()
-    chat_session = db.get(ChatSessionModel, uuid.UUID(session_id))
-    assert chat_session is not None
-    title = (chat_session.title or "").strip()
+    chat_session = get_session(client, installer_headers, session_id)
+    title = (chat_session["title"] or "").strip()
     assert title != "", (
         f"Expected a non-empty title after gate-blocked first message; got {title!r}"
     )

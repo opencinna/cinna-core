@@ -40,6 +40,7 @@ from fastapi.testclient import TestClient
 from app.core.config import settings
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.utils.a2a import (
+    a2a_headers as _a2a_headers,
     parse_sse_events,
     setup_a2a_agent,
 )
@@ -53,13 +54,6 @@ _API = settings.API_V1_STR
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _a2a_headers(a2a_token: str) -> dict[str, str]:
-    return {
-        "Authorization": f"Bearer {a2a_token}",
-        "Content-Type": "application/json",
-    }
 
 
 def _build_streaming_request_with_file_ids(

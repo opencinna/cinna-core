@@ -11,7 +11,6 @@ Tests the full workflow:
   7. Verify the agent-env no longer has the credential
 """
 from fastapi.testclient import TestClient
-from sqlmodel import Session
 
 from tests.stubs.environment_adapter_stub import EnvironmentTestAdapter
 from tests.utils.agent import create_agent_via_api, get_agent
@@ -41,7 +40,6 @@ _SA_JSON = {
 def test_service_account_credential_agent_env_sync(
     client: TestClient,
     superuser_token_headers: dict[str, str],
-    db: Session,
     patch_environment_adapter,
 ) -> None:
     """

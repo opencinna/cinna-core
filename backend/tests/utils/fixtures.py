@@ -42,6 +42,12 @@ CREATE_SESSION_TARGETS_AGENT = CREATE_SESSION_TARGETS_BASE + [
     "app.services.agents.commands.files_command.create_session",
     "app.services.events.activity_service.create_session",
     "app.services.agent_api.agent_api_service.create_session",
+    # Public agent-webhook execution route opens its own session (no SessionDep
+    # on the public /agent-hooks endpoint).
+    "app.api.routes.agent_hooks.create_session",
+    # CLIService.ensure_environment_running activates a suspended env via a fresh
+    # session (CLI workspace/manifest auto-activation path).
+    "app.services.cli.cli_service.create_session",
 ]
 
 BACKGROUND_TASK_TARGETS_BASE = [
@@ -59,6 +65,9 @@ BACKGROUND_TASK_TARGETS_FULL = BACKGROUND_TASK_TARGETS_BASE + [
     "app.api.routes.input_tasks.create_task_with_error_logging",
     # Notification service offloads the blocking SMTP send via this target.
     "app.services.notifications.notification_service.create_task_with_error_logging",
+    # rebuild_env_command schedules the rebuild as a background task (agent CLI
+    # /rebuild slash command); collect it so the deferred coroutine is captured.
+    "app.services.agents.commands.rebuild_env_command.create_task_with_error_logging",
 ]
 
 
@@ -75,8 +84,25 @@ def patch_asyncio_to_thread():
 
 
 @pytest.fixture(autouse=True)
-def setup_default_credentials(client, superuser_token_headers):
-    """Create a default anthropic AI credential so create_environment validation passes."""
+def setup_default_credentials(request, client, superuser_token_headers):
+    """Create a default anthropic AI credential so create_environment validation passes.
+
+    Autouse across the domains that import it, but **opt-out per file**: a test
+    module that never creates an agent/environment (pure-CRUD suites such as
+    ``test_credentials.py``, ``test_credentials_sharing.py``,
+    ``test_ai_credentials.py``) can set the module-level flag::
+
+        NEEDS_DEFAULT_CREDENTIALS = False
+
+    to skip the two-call credential setup (create + set-default + encryption) on
+    every test. The flag defaults to True, so files that don't set it keep the
+    original behavior — no churn for the ~13 other conftests that import this
+    fixture.
+    """
+    needs = getattr(request.module, "NEEDS_DEFAULT_CREDENTIALS", True)
+    if not needs:
+        yield None
+        return
     yield create_default_ai_credential(client, superuser_token_headers)
 
 

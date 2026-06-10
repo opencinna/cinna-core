@@ -6,6 +6,11 @@ from app.core.config import settings
 from tests.utils.credential import create_random_credential
 from tests.utils.user import create_random_user, user_authentication_headers
 
+# Pure-CRUD suite: never creates an agent/environment, so skip the heavy
+# agent/env stubs and the default-AI-credential setup from the dir conftest.
+NEEDS_AGENT_STUBS = False
+NEEDS_DEFAULT_CREDENTIALS = False
+
 
 def _create_shareable_credential(
     client: TestClient, token_headers: dict[str, str]

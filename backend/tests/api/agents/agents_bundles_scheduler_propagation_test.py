@@ -28,14 +28,17 @@ Covers the full lifecycle of schedule propagation through bundles:
 
 All tests are API-only; no direct DB access.
 """
-import uuid
-
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from tests.utils.agent import create_agent_via_api
-from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
+from tests.utils.bundle import (
+    install_bundle as _install,
+    make_bundle_public as _make_public,
+    make_user_and_headers as _make_user_and_headers,
+    publish_bundle_revision as _publish,
+)
 from tests.utils.schedule import (
     create_schedule,
     delete_schedule,
@@ -43,7 +46,6 @@ from tests.utils.schedule import (
     list_schedules,
     update_schedule,
 )
-from tests.utils.user import create_random_user, user_authentication_headers
 
 API = settings.API_V1_STR
 
@@ -56,62 +58,8 @@ _CRON_C = "30 7 * * *"     # daily at 07:30 UTC
 # ── Module-level helpers ──────────────────────────────────────────────────────
 
 
-def _make_user_and_headers(client: TestClient) -> tuple[dict, dict[str, str]]:
-    """Create a random user with a default AI credential; return (user, headers)."""
-    user = create_random_user(client)
-    headers = user_authentication_headers(
-        client=client, email=user["email"], password=user["_password"]
-    )
-    create_random_ai_credential(client, headers, set_default=True)
-    return user, headers
-
-
-def _publish(
-    client: TestClient,
-    headers: dict[str, str],
-    agent_id: str,
-    *,
-    notes: str | None = None,
-) -> dict:
-    """Publish an agent; return the revision JSON.  Does NOT flip visibility."""
-    r = client.post(
-        f"{API}/agents/{agent_id}/publish",
-        headers=headers,
-        json={"release_notes": notes} if notes else {},
-    )
-    assert r.status_code == 200, r.text
-    revision = r.json()
-    drain_tasks()
-    return revision
-
-
-def _make_public(
-    client: TestClient,
-    headers: dict[str, str],
-    bundle_uuid: str,
-) -> None:
-    r = client.patch(
-        f"{API}/bundles/{bundle_uuid}",
-        headers=headers,
-        json={"is_listed": True, "visibility": "public"},
-    )
-    assert r.status_code == 200, r.text
-
-
-def _install(
-    client: TestClient,
-    headers: dict[str, str],
-    bundle_id: str,
-) -> dict:
-    r = client.post(
-        f"{API}/catalog/{bundle_id}/install",
-        headers=headers,
-        json={},
-    )
-    assert r.status_code == 200, r.text
-    install = r.json()
-    drain_tasks()
-    return install
+# _make_user_and_headers, _publish (revision, no flip), _make_public, _install
+# are imported from tests.utils.bundle above.
 
 
 def _get_revision(
@@ -467,9 +415,11 @@ def test_apply_update_merge_scenarios(
     assert changing_after["enabled"] is True, (
         "Reinstalled schedule must carry publisher's enabled=True"
     )
-    assert changing_after["cron_string"] == sched_b["cron_string"] or True, (
-        # The consumer sees the updated cron (CRON_B); exact UTC value may differ
-        # but we confirm the row is new (different ID from v1 if row was recreated).
+    # The consumer must see the publisher's UPDATED cron (CRON_B), not the
+    # original CRON_A the schedule was first published with.
+    assert changing_after["cron_string"] == _CRON_B, (
+        f"Reinstalled schedule must carry publisher's updated cron {_CRON_B!r}; "
+        f"got {changing_after['cron_string']!r}"
     )
 
     # (c) "New Schedule" appears (added by publisher).

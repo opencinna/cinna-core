@@ -428,58 +428,7 @@ def test_conflict_detection_returns_empty_for_dissimilar_route(
 # ---------------------------------------------------------------------------
 # Conflict detection — threshold boundary
 # ---------------------------------------------------------------------------
-
-
-def test_conflict_detection_threshold_boundary(
-    client: TestClient,
-    superuser_token_headers: dict[str, str],
-) -> None:
-    """
-    The Jaccard threshold is 0.45.
-
-    Case A: prompts with ~0.6 token overlap → match returned.
-    Case B: prompts with ~0.1 token overlap → no match.
-
-    We use the service's static methods directly for the boundary arithmetic
-    (unit-level, no DB), then confirm the API endpoint correctly returns
-    empty for the below-threshold case.
-    """
-    from app.services.app_mcp.app_agent_route_service import AppAgentRouteService
-
-    # ── Case A: above threshold ────────────────────────────────────────────
-    tokens_a = AppAgentRouteService._tokens_for_similarity(
-        "schedule meetings reminders calendar events"
-    )
-    tokens_b = AppAgentRouteService._tokens_for_similarity(
-        "schedule calendar meetings reminders weekly"
-    )
-    sim_above = AppAgentRouteService._jaccard_similarity(tokens_a, tokens_b)
-    assert sim_above >= 0.45, (
-        f"Expected similarity >= 0.45 for overlapping prompts, got {sim_above:.3f}"
-    )
-
-    # ── Case B: below threshold ────────────────────────────────────────────
-    tokens_x = AppAgentRouteService._tokens_for_similarity(
-        "draft legal contracts review compliance"
-    )
-    tokens_y = AppAgentRouteService._tokens_for_similarity(
-        "suggest baking recipes cooking techniques"
-    )
-    sim_below = AppAgentRouteService._jaccard_similarity(tokens_x, tokens_y)
-    assert sim_below < 0.45, (
-        f"Expected similarity < 0.45 for unrelated prompts, got {sim_below:.3f}"
-    )
-
-    # ── Case C: exact boundary (== 0.45 triggers, < 0.45 does not) ────────
-    # "aaa bbb ccc" vs "aaa bbb ddd" → intersection={aaa,bbb}, union={aaa,bbb,ccc,ddd}
-    # Jaccard = 2/4 = 0.5 → should match
-    tokens_c = AppAgentRouteService._tokens_for_similarity("aaa bbb ccc")
-    tokens_d = AppAgentRouteService._tokens_for_similarity("aaa bbb ddd")
-    sim_exact = AppAgentRouteService._jaccard_similarity(tokens_c, tokens_d)
-    assert sim_exact >= 0.45, f"Expected >= 0.45, got {sim_exact:.3f}"
-
-    # "aaa bbb" vs "ccc ddd eee fff ggg" → intersection={}, Jaccard = 0 → no match
-    tokens_e = AppAgentRouteService._tokens_for_similarity("aaa bbb")
-    tokens_f = AppAgentRouteService._tokens_for_similarity("ccc ddd eee fff ggg")
-    sim_zero = AppAgentRouteService._jaccard_similarity(tokens_e, tokens_f)
-    assert sim_zero < 0.45, f"Expected < 0.45, got {sim_zero:.3f}"
+# Unit tests for the Jaccard similarity helpers (_tokens_for_similarity /
+# _jaccard_similarity, the boundary arithmetic) live in
+# tests/unit/test_app_agent_route_similarity.py. The endpoint-level conflict
+# match/empty behavior is covered by the other tests in this file.

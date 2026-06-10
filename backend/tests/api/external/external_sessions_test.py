@@ -30,19 +30,17 @@ import jwt as pyjwt
 
 from fastapi.testclient import TestClient
 
-from app.core import security as core_security
 from app.core.config import settings
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
-from tests.utils.a2a import build_streaming_request, parse_sse_events
-from tests.utils.agent import create_agent_via_api, get_agent
-from tests.utils.app_agent_route import create_admin_route, toggle_admin_assignment
-from tests.utils.background_tasks import drain_tasks
-from tests.utils.desktop_auth import (
-    exchange_code_for_tokens,
-    generate_pkce_pair,
-    get_authorization_code,
-    list_desktop_clients,
+from tests.utils.a2a import (
+    build_streaming_request,
+    extract_task_id as _extract_task_id,
+    parse_sse_events,
 )
+from tests.utils.agent import create_agent_via_api, get_agent
+from tests.utils.app_agent_route import create_admin_route
+from tests.utils.background_tasks import drain_tasks
+from tests.utils.desktop_auth import obtain_desktop_tokens
 from tests.utils.identity import create_identity_binding
 from tests.utils.user import create_random_user_with_headers
 
@@ -263,13 +261,7 @@ def _setup_identity(
     return owner_id, owner_agent, binding
 
 
-def _extract_task_id(events: list[dict]) -> str | None:
-    for event in events:
-        result = event.get("result", {})
-        tid = result.get("id") or result.get("taskId")
-        if tid:
-            return tid
-    return None
+# _extract_task_id lives in tests/utils/a2a.py and is imported above.
 
 
 def _get_current_user_id(client: TestClient, headers: dict) -> str:
@@ -811,27 +803,20 @@ def test_desktop_jwt_claims_stamped_into_session_metadata(
     agent_id = agent["id"]
 
     # ── Phase 2: Obtain a real desktop access token ──────────────────────
-    verifier, challenge = generate_pkce_pair()
-    code = get_authorization_code(
+    bundle = obtain_desktop_tokens(
         client,
         superuser_token_headers,
-        code_challenge=challenge,
         device_name="External Attribution Device",
     )
-    clients_list = list_desktop_clients(client, superuser_token_headers)
-    reg = next(
-        c for c in clients_list if c["device_name"] == "External Attribution Device"
-    )
-    tokens = exchange_code_for_tokens(client, reg["client_id"], code, verifier)
-    desktop_hdrs = {"Authorization": f"Bearer {tokens['access_token']}"}
+    access_token = bundle["access_token"]
+    desktop_hdrs = {"Authorization": f"Bearer {access_token}"}
 
     # Extract the external_client_id claim (UUID PK of DesktopOAuthClient,
     # not the public client_id string) from the access token so we can
     # cross-check it against session_metadata below.
     decoded = pyjwt.decode(
-        tokens["access_token"],
-        settings.SECRET_KEY,
-        algorithms=[core_security.ALGORITHM],
+        access_token,
+        options={"verify_signature": False},
     )
     expected_external_client_id = decoded["external_client_id"]
 

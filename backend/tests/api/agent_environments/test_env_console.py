@@ -41,14 +41,15 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
+from starlette.websockets import WebSocketDisconnect
 
 from app.core.config import settings
-from app.core.security import create_access_token
 from app.models.environments.environment import AgentEnvironment
 from tests.utils.agent import create_agent_via_api, get_agent
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.environment import list_environments
+from tests.utils.platform_token import mint_platform_token
 from tests.utils.user import (
     create_random_user,
     create_random_user_with_headers,
@@ -101,22 +102,40 @@ def _set_env_status(db: Session, env_id: str, status: str) -> None:
 
 def _platform_token_for_user(user_id: str, extra_claims: dict | None = None) -> str:
     """Build a valid signed platform JWT for the given user id."""
-    claims = extra_claims or {}
-    return create_access_token(
-        subject=user_id,
-        expires_delta=timedelta(hours=1),
-        extra_claims=claims,
-    )
+    return mint_platform_token(user_id, extra_claims=extra_claims)
 
 
 def _scoped_token(token_type: str, role: str, subject: str | None = None) -> str:
     """Build a JWT that carries a scoped token_type / role (guest or webapp viewer)."""
     sub = subject or str(uuid.uuid4())
-    return create_access_token(
-        subject=sub,
-        expires_delta=timedelta(hours=1),
-        extra_claims={"token_type": token_type, "role": role},
+    return mint_platform_token(
+        sub, extra_claims={"token_type": token_type, "role": role}
     )
+
+
+def _assert_ws_close_code(
+    client: TestClient, ws_url: str, expected_code: int
+) -> None:
+    """Connect to a WS that the server rejects/closes, asserting the close code.
+
+    The server closes the socket (before or after accept); TestClient surfaces
+    this as ``WebSocketDisconnect`` carrying the server's close ``code``.
+    """
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect(ws_url) as ws:
+            ws.receive_text()
+    assert exc.value.code == expected_code, (
+        f"Expected WS close code {expected_code} for {ws_url}, "
+        f"got {exc.value.code}"
+    )
+
+
+# Close codes (see EnvironmentConsoleService): 1008 auth/dep rejection,
+# 4404 env-not-running status guard, 1011 dep+status passed but the service
+# could not reach env-core (i.e. the security boundary yielded successfully).
+_WS_CLOSE_AUTH = 1008
+_WS_CLOSE_ENV_NOT_RUNNING = 4404
+_WS_CLOSE_ENV_UNREACHABLE = 1011
 
 
 # ── Scenario 1: WS auth boundary ─────────────────────────────────────────────
@@ -145,51 +164,40 @@ def test_console_ws_auth_rejects(
     logs_url = f"{_ENV_BASE}/{env_id}/logs/stream"
 
     for ws_url in (terminal_url, logs_url):
-        label = "terminal" if "terminal" in ws_url else "logs"
+        # ── Phase 2: No token → 1008 ────────────────────────────────────
+        _assert_ws_close_code(client, ws_url, _WS_CLOSE_AUTH)
 
-        # ── Phase 2: No token ───────────────────────────────────────────
-        with pytest.raises(Exception):
-            with client.websocket_connect(ws_url) as ws:
-                ws.receive_text()
+        # ── Phase 3: Garbage string → 1008 ─────────────────────────────
+        _assert_ws_close_code(
+            client, f"{ws_url}?token=not-a-valid-jwt-at-all", _WS_CLOSE_AUTH
+        )
 
-        # ── Phase 3: Garbage string → reject ───────────────────────────
-        with pytest.raises(Exception):
-            with client.websocket_connect(
-                f"{ws_url}?token=not-a-valid-jwt-at-all"
-            ) as ws:
-                ws.receive_text()
-
-        # ── Phase 4: Expired JWT → reject ──────────────────────────────
+        # ── Phase 4: Expired JWT → 1008 ────────────────────────────────
         superuser_id = _get_superuser_id(client, superuser_token_headers)
-        expired_token = create_access_token(
-            subject=superuser_id,
+        expired_token = mint_platform_token(
+            superuser_id,
             expires_delta=timedelta(seconds=-1),  # already expired
         )
-        with pytest.raises(Exception):
-            with client.websocket_connect(
-                f"{ws_url}?token={expired_token}"
-            ) as ws:
-                ws.receive_text()
+        _assert_ws_close_code(
+            client, f"{ws_url}?token={expired_token}", _WS_CLOSE_AUTH
+        )
 
-        # ── Phase 5: Non-owner (other user, valid token) → reject ───────
+        # ── Phase 5: Non-owner (other user, valid token) → 1008 ─────────
         other_user, other_headers = create_random_user_with_headers(client)
         promote_to_developer(client, superuser_token_headers, other_user["id"])
         other_token = _platform_token_for_user(other_user["id"])
+        _assert_ws_close_code(
+            client, f"{ws_url}?token={other_token}", _WS_CLOSE_AUTH
+        )
 
-        with pytest.raises(Exception, match=""):
-            with client.websocket_connect(
-                f"{ws_url}?token={other_token}"
-            ) as ws:
-                ws.receive_text()
-
-        # ── Phase 6: Non-existent env id → reject ──────────────────────
+        # ── Phase 6: Non-existent env id → 1008 (no existence leak) ─────
         ghost_id = str(uuid.uuid4())
         ghost_url = ws_url.replace(str(env_id), ghost_id)
-        with pytest.raises(Exception):
-            with client.websocket_connect(
-                f"{ghost_url}?token={_get_superuser_raw_token(client)}"
-            ) as ws:
-                ws.receive_text()
+        _assert_ws_close_code(
+            client,
+            f"{ghost_url}?token={_get_superuser_raw_token(client)}",
+            _WS_CLOSE_AUTH,
+        )
 
 
 def _get_superuser_id(
@@ -254,11 +262,9 @@ def test_scoped_token_types_rejected(
         (webapp_token, "webapp_share"),
     ):
         for ws_url, ep_label in ((terminal_url, "terminal"), (logs_url, "logs")):
-            with pytest.raises(Exception):
-                with client.websocket_connect(
-                    f"{ws_url}?token={bad_token}"
-                ) as ws:
-                    ws.receive_text()
+            _assert_ws_close_code(
+                client, f"{ws_url}?token={bad_token}", _WS_CLOSE_AUTH
+            )
 
 
 # ── Scenario 3: Terminal role gate ───────────────────────────────────────────
@@ -322,36 +328,29 @@ def test_terminal_role_gate(
 
     # ── Phase 2: Terminal rejects agent-user owner (1008 at dep layer) ───
     user_raw_token = _get_user_raw_token(client, user["email"], user["_password"])
-
-    with pytest.raises(Exception):
-        with client.websocket_connect(
-            f"{terminal_url}?token={user_raw_token}"
-        ) as ws:
-            ws.receive_text()
+    _assert_ws_close_code(
+        client, f"{terminal_url}?token={user_raw_token}", _WS_CLOSE_AUTH
+    )
 
     # ── Phase 3: Promote to developer ────────────────────────────────────
     promote_to_developer(client, superuser_token_headers, user_id)
     # Refresh token after role change so the new role is encoded
     user_raw_token = _get_user_raw_token(client, user["email"], user["_password"])
 
-    # ── Phase 4: Terminal passes the dep now (patched service so no env-core needed)
-    # The service will try to open a shell WS to env-core; we patch it to raise
-    # RuntimeError (env-core unreachable) so the browser WS is cleanly closed
-    # after the dep passes — we just confirm no 1008 dep-level rejection.
+    # ── Phase 4: Terminal passes the dep now (developer owner) ───────────
+    # The dep yields; the service accepts the socket then tries to open a shell
+    # WS to env-core. We patch that to raise RuntimeError so the service closes
+    # with 1011 (env_unreachable). Observing 1011 (NOT 1008/4404) proves the
+    # security boundary passed and the service ran past the status guard.
     with patch(
         "app.services.environments.agent_env_connector.agent_env_connector.open_shell_websocket",
         new=AsyncMock(side_effect=RuntimeError("no env-core in test")),
     ):
-        # Service closes the socket with 1011 (env_unreachable) after dep passes.
-        # TestClient may raise on disconnect — catch it; what matters is no 1008
-        # was thrown at the dep layer (i.e., the dep yielded).
-        try:
-            with client.websocket_connect(
-                f"{terminal_url}?token={user_raw_token}"
-            ) as ws:
-                ws.receive_text()
-        except Exception:
-            pass  # expected — service closes the socket after dep passes
+        _assert_ws_close_code(
+            client,
+            f"{terminal_url}?token={user_raw_token}",
+            _WS_CLOSE_ENV_UNREACHABLE,
+        )
 
     # ── Phase 5: Demote again; logs still accept an agent-user owner ─────
     r = client.patch(
@@ -362,37 +361,37 @@ def test_terminal_role_gate(
     assert r.status_code == 200
     user_raw_token = _get_user_raw_token(client, user["email"], user["_password"])
 
-    # Logs follow: the dep passes (no developer gate on logs); the service will
-    # try to stream logs but will close because the Docker adapter isn't available.
-    # We patch the service's follow_logs method via string path to accept and
-    # immediately close — the dep must pass (no 1008) for the service to be called.
+    # Logs follow: the dep passes (no developer gate on logs). We patch the
+    # service's follow_logs to accept then close — observing that it was CALLED
+    # (and the WS was accepted → close code 1000) proves the dep yielded for an
+    # agent-user owner. A 1008 here would mean the dep wrongly rejected.
+    follow_logs_called: list[bool] = []
+
     async def _accept_and_close(*args, **kwargs):
+        follow_logs_called.append(True)
         # Route calls follow_logs(websocket=ws, environment=..., user=..., ...)
         ws = kwargs.get("websocket")
         if ws is None:
-            # Fallback: scan positional args for something with an accept() method
             for a in args:
                 if hasattr(a, "accept") and callable(a.accept):
                     ws = a
                     break
-        if ws is not None:
-            try:
-                await ws.accept()
-                await ws.close()
-            except Exception:
-                pass
+        assert ws is not None, "follow_logs must receive the websocket"
+        await ws.accept()
+        await ws.close(code=1000)
 
     with patch(
         "app.services.environments.environment_console_service.EnvironmentConsoleService.follow_logs",
         new=_accept_and_close,
     ):
-        try:
-            with client.websocket_connect(
-                f"{logs_url}?token={user_raw_token}"
-            ) as ws:
-                ws.receive_text()
-        except Exception:
-            pass  # closed by the fake service — dep passed (no 1008)
+        _assert_ws_close_code(
+            client, f"{logs_url}?token={user_raw_token}", 1000
+        )
+
+    assert follow_logs_called, (
+        "follow_logs was never reached — the dep rejected an agent-user "
+        "owner on the logs endpoint (logs has no developer gate)"
+    )
 
 
 def _get_user_raw_token(client: TestClient, email: str, password: str) -> str:
@@ -441,156 +440,32 @@ def test_console_status_guard_not_running(
     logs_url = f"{_ENV_BASE}/{env_id}/logs/stream"
 
     # ── Phase 3: Terminal → rejected (4404) ──────────────────────────────
-    with pytest.raises(Exception):
-        with client.websocket_connect(
-            f"{terminal_url}?token={su_token}"
-        ) as ws:
-            ws.receive_text()
+    _assert_ws_close_code(
+        client, f"{terminal_url}?token={su_token}", _WS_CLOSE_ENV_NOT_RUNNING
+    )
 
     # ── Phase 4: Logs → rejected (4404) ──────────────────────────────────
-    with pytest.raises(Exception):
-        with client.websocket_connect(
-            f"{logs_url}?token={su_token}"
-        ) as ws:
-            ws.receive_text()
+    _assert_ws_close_code(
+        client, f"{logs_url}?token={su_token}", _WS_CLOSE_ENV_NOT_RUNNING
+    )
 
-    # ── Phase 5: Verify running again is accepted (dep passes, service runs) ─
+    # ── Phase 5: Running again → status guard passes (close 1011, not 4404) ─
     _set_env_status(db, env_id, "running")
-    # Patch the service so no env-core is needed — just confirm dep+status guard pass
+    # Patch the connector so no env-core is needed. A 1011 close proves the
+    # status guard passed (the service ran past it); 4404 would mean it didn't.
     with patch(
         "app.services.environments.agent_env_connector.agent_env_connector.open_shell_websocket",
         new=AsyncMock(side_effect=RuntimeError("no env-core in test")),
     ):
-        try:
-            with client.websocket_connect(
-                f"{terminal_url}?token={su_token}"
-            ) as ws:
-                ws.receive_text()
-        except Exception:
-            pass  # runtime error from stub → expected; 1008 would mean dep rejected
+        _assert_ws_close_code(
+            client,
+            f"{terminal_url}?token={su_token}",
+            _WS_CLOSE_ENV_UNREACHABLE,
+        )
 
 
-# ── Scenario 5: Open-rate cap (tracker unit-style) ───────────────────────────
-
-
-def test_open_rate_cap_enforced_and_resets() -> None:
-    """
-    EnvConsoleActivityTracker.enforce_open_rate:
-      1. Allows opens up to the limit within the window.
-      2. Raises ConsoleRateLimitError on the (limit+1)th open.
-      3. After reset(), the window is clear and opens are allowed again.
-      4. Prunes stale events — a window that has fully elapsed allows more opens.
-
-    This is a pure in-memory unit test — no HTTP client needed.
-    """
-    from app.services.environments.env_console_activity_tracker import (
-        ConsoleRateLimitError,
-        EnvConsoleActivityTracker,
-    )
-
-    tracker = EnvConsoleActivityTracker()
-    user_id = uuid.uuid4()
-
-    # ── Phase 1: Allow opens up to limit=3 ───────────────────────────────
-    for _ in range(3):
-        tracker.enforce_open_rate(user_id, limit=3, window=60.0)
-
-    # ── Phase 2: 4th open raises ConsoleRateLimitError ───────────────────
-    with pytest.raises(ConsoleRateLimitError):
-        tracker.enforce_open_rate(user_id, limit=3, window=60.0)
-
-    # ── Phase 3: reset() clears state; opens are allowed again ───────────
-    tracker.reset()
-    tracker.enforce_open_rate(user_id, limit=3, window=60.0)  # should not raise
-
-    # ── Phase 4: A different user is unaffected by the first user's window ─
-    other_user = uuid.uuid4()
-    tracker.reset()
-    for _ in range(3):
-        tracker.enforce_open_rate(user_id, limit=3, window=60.0)
-    # other_user has no events yet — should not raise
-    for _ in range(3):
-        tracker.enforce_open_rate(other_user, limit=3, window=60.0)
-
-    tracker.reset()
-
-
-# ── Scenario 6: Concurrency cap (tracker unit-style) ─────────────────────────
-
-
-def test_concurrency_cap_and_tracker_invariants() -> None:
-    """
-    EnvConsoleActivityTracker register/unregister/count/is_console_warm:
-      1. Freshly reset tracker has no connections.
-      2. register_connection increments count_for_env and is_console_warm=True.
-      3. Multiple connections to same env are all tracked.
-      4. unregister_connection decrements; last unregister → is_console_warm=False.
-      5. count_for_user aggregates across multiple env ids.
-      6. attached_env_ids returns only envs with ≥1 connection.
-      7. reset() clears everything.
-
-    This is a pure in-memory unit test with a fresh tracker instance.
-    """
-    from app.services.environments.env_console_activity_tracker import (
-        EnvConsoleActivityTracker,
-    )
-
-    tracker = EnvConsoleActivityTracker()
-
-    # Prevent the _update_env_activity DB call (no DB in a unit test).
-    # Patch the staticmethod on the class — side_effect=None means it does nothing.
-    with patch.object(
-        EnvConsoleActivityTracker, "_update_env_activity", return_value=None
-    ):
-        env_a = uuid.uuid4()
-        env_b = uuid.uuid4()
-        conn1 = "conn-1"
-        conn2 = "conn-2"
-        conn3 = "conn-3"
-
-        # ── Phase 1: Fresh tracker ────────────────────────────────────────
-        assert tracker.count_for_env(env_a) == 0
-        assert tracker.is_console_warm(env_a) is False
-        assert tracker.attached_env_ids() == set()
-
-        # ── Phase 2: Register one connection ─────────────────────────────
-        tracker.register_connection(env_a, conn1)
-        assert tracker.count_for_env(env_a) == 1
-        assert tracker.is_console_warm(env_a) is True
-
-        # ── Phase 3: Register two more to the same env ────────────────────
-        tracker.register_connection(env_a, conn2)
-        tracker.register_connection(env_a, conn3)
-        assert tracker.count_for_env(env_a) == 3
-
-        # ── Phase 4: Unregister each; last one clears warm state ──────────
-        tracker.unregister_connection(env_a, conn1)
-        assert tracker.count_for_env(env_a) == 2
-        assert tracker.is_console_warm(env_a) is True
-
-        tracker.unregister_connection(env_a, conn2)
-        tracker.unregister_connection(env_a, conn3)
-        assert tracker.count_for_env(env_a) == 0
-        assert tracker.is_console_warm(env_a) is False
-
-        # ── Phase 5: count_for_user across two envs ───────────────────────
-        tracker.register_connection(env_a, conn1)
-        tracker.register_connection(env_b, conn2)
-        assert tracker.count_for_user({env_a, env_b}) == 2
-        assert tracker.count_for_user({env_a}) == 1
-        assert tracker.count_for_user({env_b}) == 1
-
-        # ── Phase 6: attached_env_ids ─────────────────────────────────────
-        ids = tracker.attached_env_ids()
-        assert env_a in ids
-        assert env_b in ids
-        assert len(ids) == 2
-
-        # ── Phase 7: reset clears everything ─────────────────────────────
-        tracker.reset()
-        assert tracker.count_for_env(env_a) == 0
-        assert tracker.count_for_env(env_b) == 0
-        assert tracker.attached_env_ids() == set()
+# Unit tests for EnvConsoleActivityTracker (open-rate cap + concurrency/warm
+# invariants, pure in-memory) live in tests/unit/test_env_console_tracker.py.
 
 
 # ── Scenario 7: Suspension scheduler gate ────────────────────────────────────

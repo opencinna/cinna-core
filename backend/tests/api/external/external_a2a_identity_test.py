@@ -24,7 +24,7 @@ import uuid
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from sqlmodel import Session as DBSession, select
+from sqlmodel import Session as DBSession
 
 from app.core.config import settings
 from app.models.identity.identity_models import (
@@ -32,7 +32,11 @@ from app.models.identity.identity_models import (
     IdentityBindingAssignment,
 )
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
-from tests.utils.a2a import build_streaming_request, parse_sse_events
+from tests.utils.a2a import (
+    build_streaming_request,
+    extract_task_id as _extract_task_id,
+    parse_sse_events,
+)
 from tests.utils.agent import create_agent_via_api, get_agent
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.identity import create_identity_binding, toggle_identity_contact
@@ -133,13 +137,7 @@ def _send_identity_streaming(
     return resp, events
 
 
-def _extract_task_id(events: list[dict]) -> str | None:
-    for event in events:
-        result = event.get("result", {})
-        tid = result.get("id") or result.get("taskId")
-        if tid:
-            return tid
-    return None
+# _extract_task_id lives in tests/utils/a2a.py and is imported above.
 
 
 # ---------------------------------------------------------------------------
@@ -282,14 +280,13 @@ def test_identity_streaming_creates_identity_mcp_session(
 def test_identity_task_resume_stays_on_same_binding(
     client: TestClient,
     superuser_token_headers: dict,
-    db: DBSession,
 ) -> None:
     """Subsequent messages on the same task_id resume the same identity session.
 
     No new session is created; identity_binding_id remains unchanged.
     """
     caller, caller_headers = create_random_user_with_headers(client)
-    owner_id, _, binding = _setup_identity(
+    owner_id, owner_agent, binding = _setup_identity(
         client, superuser_token_headers, caller_id=caller["id"]
     )
 
@@ -316,18 +313,28 @@ def test_identity_task_resume_stays_on_same_binding(
         f"Resume must keep the same task_id; got {task_id_2} vs {task_id_1}"
     )
 
-    # Exactly one identity_mcp session should exist with this identity_caller.
-    stmt = select(IdentityAgentBinding).where(
-        IdentityAgentBinding.id == uuid.UUID(binding["id"])
+    # The resume must NOT spawn a second session: the owner should see exactly
+    # one identity_mcp session for this agent, identified by the single task_id.
+    r = client.get(f"{_SESSIONS_BASE}/?limit=100", headers=superuser_token_headers)
+    assert r.status_code == 200, r.text
+    identity_sessions = [
+        s for s in r.json()["data"]
+        if s.get("integration_type") == "identity_mcp"
+        and s["agent_id"] == owner_agent["id"]
+    ]
+    assert len(identity_sessions) == 1, (
+        f"Resume must reuse the same identity session; expected exactly 1, "
+        f"got {len(identity_sessions)}: {[s['id'] for s in identity_sessions]}"
     )
-    b = db.exec(stmt).first()
-    assert b is not None, "Binding row should still exist"
+    assert identity_sessions[0]["id"] == task_id_1, (
+        f"The single identity session id should equal the task id {task_id_1}; "
+        f"got {identity_sessions[0]['id']}"
+    )
 
 
 def test_identity_binding_disabled_mid_conversation(
     client: TestClient,
     superuser_token_headers: dict,
-    db: DBSession,
 ) -> None:
     """After first message, disabling the assignment causes follow-ups to fail.
 
@@ -348,17 +355,9 @@ def test_identity_binding_disabled_mid_conversation(
     task_id = _extract_task_id(events1)
     assert task_id
 
-    # Disable the assignment directly in the DB (simulating the owner revoking
-    # the caller's access while they have a live task).
-    stmt = select(IdentityBindingAssignment).where(
-        IdentityBindingAssignment.binding_id == uuid.UUID(binding["id"]),
-        IdentityBindingAssignment.target_user_id == uuid.UUID(caller["id"]),
-    )
-    assignment = db.exec(stmt).first()
-    assert assignment is not None
-    assignment.is_enabled = False
-    db.add(assignment)
-    db.commit()
+    # Disable the assignment via the contacts API (the caller turns the owner's
+    # identity contact off, revoking their own access while a task is live).
+    toggle_identity_contact(client, caller_headers, owner_id, is_enabled=False)
 
     # Follow-up with the same task_id — should get a revocation error.
     resp2, events2 = _send_identity_streaming(
@@ -497,7 +496,6 @@ def test_identity_streaming_rejects_non_assigned_user(
 def test_identity_streaming_rejects_disabled_assignment(
     client: TestClient,
     superuser_token_headers: dict,
-    db: DBSession,
 ) -> None:
     """Caller whose assignment is disabled before first message is rejected."""
     caller, caller_headers = create_random_user_with_headers(client)
@@ -507,16 +505,9 @@ def test_identity_streaming_rejects_disabled_assignment(
         caller_id=caller["id"],
     )
 
-    # Disable the assignment before the caller tries to use it.
-    stmt = select(IdentityBindingAssignment).where(
-        IdentityBindingAssignment.binding_id == uuid.UUID(binding["id"]),
-        IdentityBindingAssignment.target_user_id == uuid.UUID(caller["id"]),
-    )
-    assignment = db.exec(stmt).first()
-    assert assignment is not None
-    assignment.is_enabled = False
-    db.add(assignment)
-    db.commit()
+    # Disable the assignment before the caller tries to use it (via the
+    # contacts API — the caller turns the owner's identity contact off).
+    toggle_identity_contact(client, caller_headers, owner_id, is_enabled=False)
 
     # Card 404
     status, _ = _get_identity_card(client, caller_headers, owner_id)
