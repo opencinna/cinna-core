@@ -265,10 +265,24 @@ Each mode has its own `opencode serve` process. Model is baked into the config �
 6. Resolve and write system prompt as `AGENTS.md` to the runtime dir (loaded via the config's `instructions` entry, not cwd auto-discovery)
 7. Build plugin MCP config; yield `SYSTEM` event with `subtype="tools_init"` and full tool list
 8. Open SSE stream on `GET /global/event` first
-9. On first SSE event (any type), fire `POST /session/{id}/message` as a background `asyncio.Task` — this avoids missing events from fast models and prevents deadlock (POST blocks until LLM completes)
-10. For each SSE chunk: check for interrupt flag, check progress timeout, parse and translate via `OpenCodeEventTransformer`
+9. On first SSE event (any type — including foreign-session events, which still prove the socket is live), fire `POST /session/{id}/message` as a background `asyncio.Task` — this avoids missing events from fast models and prevents deadlock (POST blocks until LLM completes)
+10. For each SSE chunk: demultiplex by session ID (see **Global event stream demultiplexing** below), check for interrupt flag, check progress timeout, parse and translate via `OpenCodeEventTransformer`
 11. Yield translated `SDKEvent` objects; stop on `DONE`, `ERROR`, or `INTERRUPTED`
 12. In `finally`: cancel pending POST task if needed; unregister session from `active_session_manager`
+
+**Global event stream demultiplexing:**
+
+`GET /global/event` is a **serve-wide** SSE stream shared by every session of the mode's `opencode serve` process (one process per mode, shared by all backend sessions). Each event must be matched against the session currently being streamed. The `_event_session_id(event_data)` static helper extracts the session ID from the event payload:
+
+- `properties.sessionID` — most message / session events
+- `properties.part.sessionID` — `message.part.updated` / `message.part.delta`
+- `properties.info.sessionID` — some `session.*` snapshots
+
+Events whose extracted ID differs from the current session's ID are **dropped before** the progress-timer reset and `translate()`. This prevents a concurrently running (or orphaned) session from bleeding its text or its `session.idle`→DONE into an unrelated stream. Server lifecycle events (`server.connected`, `server.heartbeat`, `project.updated`, etc.) carry no session ID and fall through unchanged — they are still valid triggers for the "first event → POST message" handshake.
+
+**Orphan cancellation on stream teardown:**
+
+When the adapter's SSE loop exits via `asyncio.CancelledError` (e.g., the user deleted the backend session while a slow model was still responding), the adapter fires a best-effort background `DELETE /session/{id}` on the OpenCode server. This stops the in-flight generation so it does not continue running as an orphan and later bleed its events into a different session's serve-wide stream. The `DELETE` is dispatched via `_spawn_background` because `await` is not possible inside a cancelled context; a `RuntimeError` (no running loop) is swallowed with a debug log.
 
 **Progress timeout (`OPENCODE_PROGRESS_TIMEOUT = 120s`):**
 - Tracks the last time any meaningful SSE event arrived (not heartbeats)

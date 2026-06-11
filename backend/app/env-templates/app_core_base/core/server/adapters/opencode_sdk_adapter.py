@@ -664,6 +664,47 @@ class OpenCodeAdapter(BaseSDKAdapter):
             logger.debug("Skipping non-JSON SSE data: %s", stripped[:100])
             return None
 
+    @staticmethod
+    def _event_session_id(event_data: dict) -> Optional[str]:
+        """
+        Extract the opencode session ID an event belongs to, if any.
+
+        ``GET /global/event`` is a serve-wide stream shared by every session on
+        the mode's serve process, so each event must be matched against the
+        session we are actually streaming for. Different event shapes nest the
+        session ID differently:
+
+            properties.sessionID          — most message / session events
+            properties.part.sessionID     — message.part.updated / .delta
+            properties.info.sessionID     — some session.* snapshots
+
+        Server lifecycle events (server.connected, server.heartbeat,
+        project.updated, …) carry NO session ID — those return None and must be
+        treated as session-agnostic by the caller (they still drive the
+        "first event triggers the POST" handshake in the SSE loop).
+        """
+        properties = event_data.get("properties")
+        if not isinstance(properties, dict):
+            return None
+
+        sid = properties.get("sessionID")
+        if sid:
+            return sid
+
+        part = properties.get("part")
+        if isinstance(part, dict):
+            sid = part.get("sessionID")
+            if sid:
+                return sid
+
+        info = properties.get("info")
+        if isinstance(info, dict):
+            sid = info.get("sessionID")
+            if sid:
+                return sid
+
+        return None
+
     # ------------------------------------------------------------------
     # Main send/stream
     # ------------------------------------------------------------------
@@ -899,6 +940,10 @@ class OpenCodeAdapter(BaseSDKAdapter):
                                         # because on session resume opencode may
                                         # send project.updated instead of
                                         # server.connected as the first event.
+                                        # Any event proves the socket is live, so
+                                        # even a foreign-session event (the
+                                        # /global/event stream is serve-wide) is a
+                                        # valid "SSE alive" trigger here.
                                         # Fired as background task — POST can block
                                         # until the LLM finishes responding.
                                         if not message_posted:
@@ -918,9 +963,35 @@ class OpenCodeAdapter(BaseSDKAdapter):
                                         if event_type == "server.heartbeat":
                                             continue
 
+                                        # Demultiplex the serve-wide stream: GET
+                                        # /global/event carries events for EVERY
+                                        # session on this mode's serve process
+                                        # (one serve per mode, shared by all
+                                        # backend sessions). Drop any event that
+                                        # belongs to a different opencode session —
+                                        # e.g. an orphaned generation from a
+                                        # since-deleted backend session — so it
+                                        # neither bleeds its text into this stream
+                                        # nor terminates it early via that
+                                        # session's session.idle. Events with no
+                                        # session ID (server/project lifecycle)
+                                        # fall through unchanged. Crucially this
+                                        # runs BEFORE the progress-timer reset and
+                                        # translate() so foreign events do not
+                                        # count as progress for this session.
+                                        event_sid = self._event_session_id(event_data)
+                                        if event_sid and event_sid != session_id:
+                                            logger.debug(
+                                                "Dropping foreign-session event %s "
+                                                "(event session=%s, stream session=%s)",
+                                                event_type, event_sid, session_id,
+                                            )
+                                            continue
+
                                         # Reset progress timer on meaningful events
                                         # (anything except heartbeats, which are
-                                        # already filtered above)
+                                        # already filtered above, and foreign-session
+                                        # events dropped just above)
                                         last_progress_time = now
 
                                         # Translate via event adapter
@@ -983,6 +1054,22 @@ class OpenCodeAdapter(BaseSDKAdapter):
             )
             if session_id:
                 await active_session_manager.unregister_session(session_id)
+                # Stop the in-flight opencode generation so it doesn't keep
+                # running as an orphan after the backend stream is gone (e.g.
+                # the user deleted the session while a slow model was still
+                # answering). An orphan would otherwise bleed its events into
+                # the next session via the serve-wide /global/event stream.
+                # We can't await DELETE here: this is a cancelled context, so an
+                # await would be re-cancelled immediately. Fire it on a
+                # background task instead. The loop may be tearing down, so guard
+                # against "no running loop" and let it be best-effort.
+                try:
+                    self._spawn_background(self._delete_session(session_id))
+                except RuntimeError:
+                    logger.debug(
+                        "Could not schedule orphan delete for session %s "
+                        "(event loop unavailable)", session_id,
+                    )
             yield SDKEvent(
                 type=SDKEventType.INTERRUPTED,
                 session_id=session_id,

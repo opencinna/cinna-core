@@ -560,6 +560,57 @@ class SessionService:
         return count, latest_session_id
 
     @staticmethod
+    def _interrupt_external_session_best_effort(
+        db_session: DBSession, session: Session
+    ) -> None:
+        """Best-effort cancel of the SDK generation behind a session.
+
+        Deleting a backend session must also stop any in-flight generation in the
+        agent environment, otherwise (for OpenCode) ``opencode serve`` keeps
+        producing the orphaned answer and — because the SSE stream is serve-wide —
+        it can bleed into the next session's stream. We reuse the existing chat
+        interrupt plumbing (``/chat/interrupt/{external_session_id}`` on the env,
+        which flags the active session and, for OpenCode, makes the streaming loop
+        delete the opencode session).
+
+        This is fire-and-forget: any failure (no external id, detached/unreachable
+        environment, env down) is swallowed with a warning so deletion always
+        succeeds. Called BEFORE the DB row is deleted so the session metadata and
+        environment are still resolvable.
+        """
+        external_session_id = (session.session_metadata or {}).get("external_session_id")
+        if not external_session_id:
+            return
+        if not session.environment_id:
+            return
+
+        environment = db_session.get(AgentEnvironment, session.environment_id)
+        if not environment:
+            return
+
+        try:
+            from app.services.sessions.message_service import MessageService
+
+            base_url = MessageService.get_environment_url(environment)
+            auth_headers = MessageService.get_auth_headers(environment)
+
+            # Route is sync (runs in a threadpool worker), so there is no running
+            # loop here — asyncio.run is safe. forward_interrupt_to_environment
+            # has its own 5s timeout; we still guard the whole thing.
+            asyncio.run(
+                MessageService.forward_interrupt_to_environment(
+                    base_url=base_url,
+                    auth_headers=auth_headers,
+                    external_session_id=external_session_id,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort, never block delete
+            logger.warning(
+                "Best-effort interrupt for deleted session %s failed: %s",
+                session.id, exc,
+            )
+
+    @staticmethod
     def delete_session(db_session: DBSession, session_id: UUID) -> UUID | None:
         """Delete session.
 
@@ -570,6 +621,10 @@ class SessionService:
         session = db_session.get(Session, session_id)
         if not session:
             return None
+
+        # Stop any in-flight SDK generation before removing the row so it does
+        # not keep running as an orphan (best-effort; never blocks deletion).
+        SessionService._interrupt_external_session_best_effort(db_session, session)
 
         source_task_id = session.source_task_id
         db_session.delete(session)

@@ -187,6 +187,7 @@ After streaming completes, assistant events containing `<webapp_action>` tags ar
 
 **Session lifecycle:**
 - `create_session(db, agent_id, user_id, ...)` — Resolves active environment, creates `Session` record; handles `access_token_id`, `source_task_id`, `guest_share_id`, `email_thread_id`
+- `delete_session(db, session_id)` — Deletes session and cascades messages. Before removing the row, calls `_interrupt_external_session_best_effort()` to stop any in-flight SDK generation in the agent environment (via `MessageService.forward_interrupt_to_environment`); failure is swallowed so deletion always proceeds. Both the single `DELETE /{id}` route and `POST /bulk-delete` go through this path. The interrupt is needed because the OpenCode SSE stream is serve-wide — an orphaned generation would otherwise bleed its events into the next session.
 - `update_session(db, session, data)` — Apply `SessionUpdate` fields
 - `update_session_status(db, session_id, status)` — Set `status` field
 - `update_interaction_status(db, session_id, interaction_status)` — Set `interaction_status`; also updates `streaming_started_at`

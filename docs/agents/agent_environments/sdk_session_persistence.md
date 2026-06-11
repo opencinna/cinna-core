@@ -57,6 +57,8 @@ OpenCode stores all session state in a SQLite database at `/root/.local/share/op
 3. **Follow-up messages** — Backend passes the `ses_` ID. `OpenCodeAdapter` calls `POST /session/{id}/message` on the serve instance, which looks up the session in the SQLite DB.
 4. **After rebuild** — Because `opencode_sessions/` is mounted to `/root/.local/share/opencode`, the SQLite DB survives. When OpenCode serve starts in the new container, it opens the existing DB and can resume sessions by their `ses_` IDs.
 
+Note: `GET /global/event` is a serve-wide SSE stream shared by every session on the mode's process. The adapter demultiplexes it by session ID so events from a different (e.g. orphaned) session are dropped before they reach the current stream. See [multi_sdk_tech.md](../agent_environment_core/multi_sdk_tech.md) for the full filtering logic.
+
 ## Hooks Settings File
 
 The Claude Code credential guard hook requires a `settings.json` at the Claude CLI's "user" settings path. That path is `~/.claude/settings.json`, which inside the container resolves to `/root/.claude/settings.json`.
