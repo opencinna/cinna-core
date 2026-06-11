@@ -233,7 +233,8 @@ Unique constraints on `agent`:
 |--------|-------|
 | `publish(session, install, publisher_user_id, release_notes, display_name, description, bundle_id_override, version)` | Async; acquires per-bundle lock. `bundle_id_override` is honoured only on the first publish (delegates to `InstallService.edit_bundle_id` for validation/uniqueness; rejected with 409 once a bundle row exists). `version` is stored on the new revision and surfaced via `AgentBundleRevisionPublic.version` |
 | `notify_installs(session, bundle, revision)` | Marks all foreign installs `pending_update=True`, emits `INSTALL_UPDATE_AVAILABLE` events |
-| `_copy_bundle_tree(env_workspace_root, dest)` | Copies `scripts/`, `docs/`, `knowledge/`, `files/`, `workspace_requirements.txt`, `workspace_system_packages.txt` |
+| `_snapshot_workspace_tree(env_workspace_root, dest)` | Full-tree capture into `dest/workspace/`. Iterates `iter_bundle_toplevel(env_workspace_root)` from `workspace_classification`; copies every bundle-owned top-level entry — including `webapp/`, `agent_api/`, and any custom top-level dir — while skipping `BUNDLE_EXCLUDED_TOPLEVEL` and runtime-name-denylisted entries. Top-level symlinks are skipped by `iter_bundle_toplevel`; nested symlinks are skipped by `safe_copytree`. `plugins/` routes through `_copy_plugins_tree` to strip derived files. When `env_workspace_root is None` (no active env), leaves `workspace/` empty. |
+| `_assert_workspace_readable(env, env_workspace_root)` | Pre-flight guard called in `_publish_locked` before any snapshot work. Raises `ValueError` (mapped to 400 at the route) naming the env and path when an active env's `app/workspace/` directory is missing or unreadable. No-active-env (`env is None`) is allowed. An empty workspace dir (no bundle-owned entries) is NOT an error — that is handled by the empty-workspace-publish UI warning. |
 | `_hash_tree_with_manifest(root, manifest)` | SHA-256 over sorted file paths + content + manifest body |
 | `resolve_provided_by(credential, publisher_install)` | Single source of truth for `provided_by` resolution — public static method. Order: (1) `publisher_install.publish_settings["credential_overrides"][credential.name]["provided_by"]` if it equals `"user"`, `"publisher"`, or `"template"`; (2) inference — `allow_sharing=True` → `"publisher"`; else `allow_template_sharing=True` → `"template"`; else `"user"`. Used by both `_collect_credential_specs` (publish-time spec emission) and `CredentialsService.list_bundle_usages` (`GET /credentials/{id}/bundles` projection) so the two paths cannot disagree |
 | `_collect_credential_specs(session, install)` | Reads linked `AgentCredentialLink` rows and emits the evolved per-spec shape: `{name, type, allow_sharing, allow_template_sharing, description, provided_by, publisher_credential_id, template_data?, template_private_fields?, service_uri?}`. Delegates `provided_by` resolution to `resolve_provided_by`. For `"template"` specs, calls `_template_payload_for` to attach `template_data` and `template_private_fields`. Emits `"service_uri": cred.service_uri` for every linked credential (None values are serialised as absent from the spec JSON). Because `service_uri` contributes to the manifest hash, stamping a new slot id on a linked credential and re-publishing yields a new `content_hash` → pending-update on existing installs (expected) |
@@ -248,8 +249,11 @@ Publish flow detail:
 1. Lock acquired on `bundle_id` string
 2. Bundle row resolved or created (first publish). On first publish, `_apply_pre_publish_ai_drafts` transfers any pre-publish AI credential draft from `install.publish_settings["ai_credentials"]` onto the new bundle's FK columns
 3. Next `revision_number = MAX(existing) + 1`
-4. `_validate_publisher_ai_credentials_sdk(session, install, bundle, env)` pre-flight runs before any snapshot work — rejects with `ValueError` (400) if a publisher AI credential's type no longer matches the env's per-mode SDK
-5. Snapshot written to `<tmp_dir>` then renamed to `<snapshot_dir>`. The manifest's `prompts` block includes `router_trigger` from `install.router_trigger_prompt` alongside `workflow`, `entrypoint`, and `refiner`. `_collect_schedule_specs` snapshots the publisher install's `AgentSchedule` rows into `manifest["schedules"]`
+4. Pre-flight validators run **before** the `<rev>.tmp` directory is created (a failed pre-flight leaves no orphan temp dir):
+   - `_assert_workspace_readable`: raises `ValueError` (400) when the publisher has an active env but its `app/workspace/` is missing or unreadable on disk
+   - `_validate_publisher_ai_credentials_sdk`: rejects when a publisher AI credential's type no longer matches the env's per-mode SDK
+   - `_ensure_publisher_plugin_files`: hard-blocks when any declared plugin's files are absent from the publisher env workspace
+5. `<rev>.tmp` directory created; `_snapshot_workspace_tree` captures the full `app/workspace/` tree into `tmp/workspace/` (schema_version 2); `manifest.json` written with `"schema_version": 2`; `<rev>.tmp` renamed to `<rev>`. The manifest's `prompts` block includes `router_trigger` from `install.router_trigger_prompt` alongside `workflow`, `entrypoint`, and `refiner`. `_collect_schedule_specs` snapshots the publisher install's `AgentSchedule` rows into `manifest["schedules"]`
 6. `AgentBundleRevision` row inserted with `router_trigger_prompt=install.router_trigger_prompt` and `schedules=schedule_specs`
 7. `bundle.latest_revision_id` and `install.installed_revision_id` updated
 8. `BUNDLE_PUBLISHED` event emitted
@@ -360,19 +364,32 @@ The install-context response never carries credential secrets — only `(name, t
 
 ## Bundle Storage Layout (Filesystem)
 
+New revisions use schema_version 2 with a `workspace/` subtree. Legacy schema_version 1 revisions (flat allowlist layout) remain on disk and are fully readable by the seed and apply-update paths.
+
 ```
 ${BUNDLE_STORAGE_DIR}/                       # config: defaults to <DATA_DIR>/bundles/
 ├── io.opencinna.cinna.a1b2c3d4/            # one dir per bundle_id string
-│   ├── 1/                                  # one dir per revision_number
-│   │   ├── manifest.json
-│   │   ├── scripts/
+│   ├── 1/                                  # schema_version 1 (legacy flat layout)
+│   │   ├── manifest.json                   #   "schema_version": 1
+│   │   ├── scripts/                        #   allowlisted folders at snapshot root
 │   │   ├── docs/
 │   │   ├── knowledge/
 │   │   ├── files/
 │   │   ├── workspace_requirements.txt
 │   │   └── workspace_system_packages.txt
-│   ├── 2/
-│   │   └── ...
+│   ├── 2/                                  # schema_version 2 (full-tree workspace/ subtree)
+│   │   ├── manifest.json                   #   "schema_version": 2
+│   │   └── workspace/                      #   verbatim copy of app/workspace/ minus the denylist
+│   │       ├── scripts/
+│   │       ├── docs/
+│   │       ├── knowledge/
+│   │       ├── files/
+│   │       ├── webapp/                     #   now captured (was silently dropped in v1)
+│   │       ├── agent_api/                  #   now captured
+│   │       ├── plugins/                    #   minus settings.json / manifest.json
+│   │       ├── <any custom top-level dir>/ #   now captured
+│   │       ├── workspace_requirements.txt
+│   │       └── workspace_system_packages.txt
 │   └── 3.tmp/                              # leftover from failed publish (debug)
 └── io.opencinna.cinna.deadbeef/
     └── ...
@@ -384,7 +401,7 @@ Each revision writes `manifest.json` into the snapshot directory:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "bundle_id": "io.opencinna.cinna.a1b2c3d4",
   "revision_number": 3,
   "version": "1.2",
@@ -450,7 +467,43 @@ Each revision writes `manifest.json` into the snapshot directory:
 }
 ```
 
-The `content_hash` is SHA-256 over (sorted file paths + content + manifest body excluding `content_hash` itself). This is the same value stored in `AgentBundleRevision.content_hash`.
+The `content_hash` is SHA-256 over (sorted file paths + content + manifest body excluding `content_hash` itself). With the `workspace/` subtree, relative paths inside the hash simply become `workspace/...` — no special logic is required. This is the same value stored in `AgentBundleRevision.content_hash`.
+
+`schema_version` is a JSON-internal field inside `manifest.json` (and mirrored in the `AgentBundleRevision.manifest` JSON column). There is no Alembic migration for this change — the `snapshot_path` and `content_hash` columns are unchanged; only the value written to the manifest JSON changes from `1` to `2` on new revisions.
+
+The consumer reader dispatches on layout shape: when `snapshot_path/workspace/` is a directory the snapshot is v2; otherwise it is v1. Prefer dispatching on the manifest `schema_version` when the manifest is already loaded.
+
+## Workspace Classification (Single Source of Truth)
+
+`backend/app/services/environments/workspace_classification.py` is the single module that defines what counts as bundle content vs. per-user/runtime data. It replaced four divergent allowlists that previously drifted out of sync.
+
+**Public API:**
+
+| Symbol | Description |
+|--------|-------------|
+| `BUNDLE_EXCLUDED_TOPLEVEL` | `frozenset` of top-level `app/workspace/` names that are NEVER bundle content: `app-data`, `credentials`, `logs`, `databases`, `uploads`, `__init__.py` |
+| `RUNTIME_NAME_DENYLIST` | `frozenset` of name patterns (any depth) that are per-env runtime/dotfile state: `.opencode`, `.cache` |
+| `ENV_MIGRATION_EXTRA` | `frozenset` of names added by the `ENV_MIGRATION` profile on top of `BUNDLE_OWNED`: `credentials`, `uploads` |
+| `PLUGIN_DERIVED_FILES` | `frozenset` of plugins-root derived filenames: `settings.json`, `manifest.json` — regenerated per consumer, never snapshotted |
+| `safe_copytree(src, dst)` | `shutil.copytree` wrapper that never follows or copies symlinks at any depth. All workspace copy operations (publish, seed, apply-update, env migration) use this single primitive to prevent symlink-based denylist bypass and host-file exfiltration. Top-level symlinks are additionally skipped before reaching `safe_copytree` by the `iter_*` helpers |
+| `iter_bundle_toplevel(workspace_root)` | Yields bundle-owned top-level entries — skips `BUNDLE_EXCLUDED_TOPLEVEL`, runtime-name-denylisted names, and symlinks |
+| `iter_env_migration_toplevel(workspace_root)` | Yields `ENV_MIGRATION`-profile top-level entries — superset of `iter_bundle_toplevel` plus `credentials/` and `uploads/`; still skips `logs/`, `databases/`, `app-data/`, and symlinks |
+| `snapshot_layout(snapshot_path)` | Returns `"v2_workspace"` when `snapshot_path/workspace/` exists and is a directory, else `"v1_flat"` |
+| `is_bundle_owned_toplevel(name)` | True when `name` is not in `BUNDLE_EXCLUDED_TOPLEVEL` and not runtime-denylisted |
+| `is_env_migration_toplevel(name)` | True when `name` passes `is_bundle_owned_toplevel` or is in `ENV_MIGRATION_EXTRA` |
+
+**Two profiles:**
+
+- **`BUNDLE_OWNED`** — used by publish (`_snapshot_workspace_tree`), install-seed (`seed_workspace_from_bundle_snapshot`), and apply-update (`replace_bundle_content`). Everything under `app/workspace/` except `BUNDLE_EXCLUDED_TOPLEVEL` and runtime-name-denylisted entries. `plugins/` keeps special derived-file exclusion and merge-on-seed semantics. `uploads/` is excluded.
+- **`ENV_MIGRATION`** — used by `copy_env_to_env` and `copy_workspace_between_environments` (env switch). Superset of `BUNDLE_OWNED` plus `credentials/` and `uploads/`. `logs/`, `databases/`, and `app-data/` are still excluded. Same-user same-agent migration carries credentials and uploads across; this is the correct and intended behaviour for env switch/rebuild.
+
+**v1/v2 dispatch in `workspace_copy.py`:**
+
+`seed_workspace_from_bundle_snapshot` and `replace_bundle_content` call `snapshot_layout(snapshot_path)` to dispatch:
+- v2: source is `snapshot_path/workspace/`; every top-level entry is copied/overwritten; `plugins/` is merged via `_seed_plugins_tree`.
+- v1 (legacy): the frozen `_V1_FLAT_FOLDERS` / `_V1_FLAT_FILES` tuples (the exact pre-refactor allowlist) are used. v1 snapshots never trigger the apply-update prune pass (overwrite-only legacy semantics preserved).
+
+`replace_bundle_content` additionally runs a prune pass on v2 snapshots: any install-workspace top-level entry that is not in the new snapshot, not in `BUNDLE_EXCLUDED_TOPLEVEL`, not runtime-denylisted, and not `plugins/` is removed. This implements the "snapshot is authoritative for bundle-owned top-level entries" rule (D5). The prune pass is best-effort per entry — a failed removal is logged and does not abort the update.
 
 ## Frontend Components
 
@@ -529,6 +582,8 @@ The dedicated setup-credentials route (`frontend/src/routes/_layout/agent/$agent
 | `HOST_APP_DATA_DIR` | `""` | Set in Docker-in-Docker; see AppDataService path translation |
 
 ## Migrations
+
+The full-workspace bundle snapshot change (schema_version 1 → 2) required **no Alembic migration**. `schema_version` is a JSON-internal field inside `manifest.json` and the `AgentBundleRevision.manifest` JSON column; the `snapshot_path` and `content_hash` column types and the overall table schema are unchanged.
 
 | File | Description |
 |------|-------------|

@@ -2377,23 +2377,23 @@ MODEL_CONVERSATION={model_conversation}
         """
         Copy workspace from source to target environment.
 
-        Used when switching environments for the same agent to maintain workspace state.
-        This ensures the same agent state across environments.
+        Used when switching environments for the same agent to maintain workspace
+        state. Both envs belong to the SAME install (same user, same agent), so
+        this is a full workspace clone — it uses the ENV_MIGRATION profile from
+        ``workspace_classification``:
 
-        Copies (all workspace data):
-        - app/workspace/scripts/ (agent scripts)
-        - app/workspace/docs/ (WORKFLOW_PROMPT.md, ENTRYPOINT_PROMPT.md)
-        - app/workspace/knowledge/ (integration docs)
-        - app/workspace/files/ (reports, caches, CSVs)
-        - app/workspace/uploads/ (user-uploaded files)
-        - app/workspace/credentials/ (integration credentials)
-        - app/workspace/plugins/ (LLM plugins)
-        - app/workspace/workspace_requirements.txt (Python packages)
-        - app/workspace/workspace_system_packages.txt (OS packages)
+        Copies every top-level ``app/workspace/`` entry EXCEPT the runtime dirs
+        ``logs/`` + ``databases/``, the ``app-data/`` bind mount (which follows
+        the volume, not the copy), and the ``__init__.py`` template marker. This
+        means the bundle-owned set (``scripts/``, ``docs/``, ``knowledge/``,
+        ``files/``, ``webapp/``, ``agent_api/``, ``plugins/``, the two
+        ``workspace_*.txt`` files) PLUS ``credentials/`` + ``uploads/`` PLUS any
+        custom top-level dir the agent created — the old static list missed
+        custom dirs.
 
-        Does NOT copy (Environment Runtime - environment-specific):
-        - app/workspace/logs/ (session logs)
-        - app/workspace/databases/ (runtime SQLite DBs, session state)
+        ``plugins/`` is a straight copy here (no merge): env-switch is same-user
+        same-agent and never cross-revision, so there are no foreign consumer
+        plugins to preserve.
 
         Args:
             source_env: Source environment to copy from
@@ -2402,6 +2402,12 @@ MODEL_CONVERSATION={model_conversation}
         Returns:
             True if copy successful
         """
+        from app.services.environments.workspace_classification import (
+            WORKSPACE_ROOT_REL,
+            iter_env_migration_toplevel,
+            safe_copytree,
+        )
+
         source_dir = self.instances_dir / str(source_env.id)
         target_dir = self.instances_dir / str(target_env.id)
 
@@ -2413,51 +2419,27 @@ MODEL_CONVERSATION={model_conversation}
             logger.warning(f"Target environment directory not found: {target_dir}")
             return False
 
-        # Directories to copy (workspace data - synced between environments)
-        dirs_to_copy = [
-            "app/workspace/scripts",
-            "app/workspace/docs",
-            "app/workspace/knowledge",
-            "app/workspace/files",
-            "app/workspace/uploads",
-            "app/workspace/credentials",
-            "app/workspace/plugins",
-            "app/workspace/webapp",
-            "app/workspace/agent_api",
-        ]
-
-        # Single files to copy
-        files_to_copy = [
-            "app/workspace/workspace_requirements.txt",
-            "app/workspace/workspace_system_packages.txt",
-        ]
+        source_workspace = source_dir / WORKSPACE_ROOT_REL
+        target_workspace = target_dir / WORKSPACE_ROOT_REL
 
         def _copy_sync():
             """Synchronous copy operation to run in thread pool."""
-            for dir_rel in dirs_to_copy:
-                src = source_dir / dir_rel
-                dst = target_dir / dir_rel
-
-                if src.exists():
-                    try:
+            # Top-level symlinks are skipped by iter_env_migration_toplevel and
+            # nested ones by safe_copytree — the source workspace is
+            # agent-controlled (denylist-bypass / host-exfil guard).
+            for src in iter_env_migration_toplevel(source_workspace):
+                dst = target_workspace / src.name
+                try:
+                    if src.is_dir():
                         if dst.exists():
                             shutil.rmtree(dst)
-                        shutil.copytree(src, dst)
-                        logger.info(f"Copied {dir_rel} to target environment")
-                    except Exception as e:
-                        logger.error(f"Failed to copy {dir_rel}: {e}")
-
-            for file_rel in files_to_copy:
-                src = source_dir / file_rel
-                dst = target_dir / file_rel
-
-                if src.exists():
-                    try:
+                        safe_copytree(src, dst)
+                    else:
                         dst.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(src, dst)
-                        logger.info(f"Copied {file_rel} to target environment")
-                    except Exception as e:
-                        logger.error(f"Failed to copy {file_rel}: {e}")
+                    logger.info(f"Copied {src.name} to target environment")
+                except Exception as e:
+                    logger.error(f"Failed to copy {src.name}: {e}")
 
         # Run blocking I/O operation in thread pool executor
         await asyncio.to_thread(_copy_sync)
@@ -2469,19 +2451,21 @@ MODEL_CONVERSATION={model_conversation}
     ) -> None:
         """Replace bundle-owned folders in ``environment`` with snapshot content.
 
-        Phase 2 — called by ``InstallService.apply_update`` to land a new
-        published revision on a foreign install. Preserves
-        ``app/workspace/credentials/`` (synced separately) and
-        ``app/workspace/app-data/`` (per-user persistent data; never touched
-        by updates) by deliberately *not* listing them in the swap set.
-        Runs the blocking I/O in a thread pool to keep the event loop free.
+        Called by ``InstallService.apply_update`` to land a new published
+        revision on a foreign install. Delegates to
+        ``workspace_copy.replace_bundle_content`` which copies/overwrites the
+        new snapshot content **and** prunes stale bundle-owned top-level entries
+        (D5). Preserves the denylist (``credentials/``, ``app-data/``,
+        ``logs/``, ``databases/``, ``uploads/``) and the consumer's own
+        ``plugins/`` marketplace dirs. Runs the blocking I/O in a thread pool to
+        keep the event loop free.
         """
         from app.services.environments.workspace_copy import (
-            seed_workspace_from_bundle_snapshot,
+            replace_bundle_content as _replace_bundle_content,
         )
 
         await asyncio.to_thread(
-            seed_workspace_from_bundle_snapshot, snapshot_path, environment.id
+            _replace_bundle_content, snapshot_path, environment.id
         )
         logger.info(
             "Replaced bundle content in env %s from snapshot %s",

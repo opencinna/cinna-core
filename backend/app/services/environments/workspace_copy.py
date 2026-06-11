@@ -1,11 +1,23 @@
 """Workspace copy utilities — shared between environment service & bundles.
 
-Phase 2: when ``InstallService.install_bundle`` seeds a new install env, it
-needs to drop the bundle revision content into the install's env workspace.
-The previous home of this logic (``AgentCloneService.copy_workspace``) is
-being retired with the rest of the clone code; the bytes-level copy moves
-here so the env service can keep its current "seed from a source env" code
-path while pointing at a different source (the bundle revision tree).
+These functions move bundle revision content into install env workspaces and
+copy workspace state between two envs of the same install. They all defer the
+"what counts as workspace content" decision to
+:mod:`app.services.environments.workspace_classification` (the single source of
+truth that replaced four divergent allowlists).
+
+Snapshot layouts (see ``workspace_classification.snapshot_layout``):
+
+* **v2 (schema_version 2)** — the snapshot has a ``workspace/`` subtree holding
+  a verbatim copy of ``app/workspace/`` minus the denylist. Seeding copies each
+  top-level entry into the install workspace; apply-update additionally prunes
+  stale bundle-owned top-level entries the new snapshot no longer ships.
+* **v1 (legacy)** — the allowlisted folders (``scripts/``, ``docs/`` …) sit
+  directly at the snapshot root. Handled by the ``_V1_FLAT_*`` tuples below;
+  apply-update keeps the legacy no-delete (overwrite-only) behaviour.
+
+``plugins/`` is always **merged** (never delete-swept) so a consumer's own
+``source=marketplace`` plugin dirs survive a bundle update.
 """
 import logging
 import shutil
@@ -13,58 +25,55 @@ from pathlib import Path
 from uuid import UUID
 
 from app.core.config import settings
+from app.services.environments.workspace_classification import (
+    BUNDLE_EXCLUDED_TOPLEVEL,
+    PLUGIN_DERIVED_FILES,
+    PLUGINS_DIRNAME,
+    WORKSPACE_ROOT_REL,
+    is_runtime_denylisted,
+    iter_env_migration_toplevel,
+    safe_copytree,
+    snapshot_layout,
+)
 
 logger = logging.getLogger(__name__)
 
 
-# Standard bundle folders + workspace files. Mirrors PublishService's
-# snapshot folders. The first element is the snapshot relative path; the
-# second is the env workspace relative path.
-_BUNDLE_FOLDERS_INTO_WORKSPACE: tuple[tuple[str, str], ...] = (
-    ("scripts", "app/workspace/scripts"),
-    ("docs", "app/workspace/docs"),
-    ("knowledge", "app/workspace/knowledge"),
-    ("files", "app/workspace/files"),
+# Legacy v1-flat snapshot allowlist — the EXACT folders/files that
+# schema_version 1 revisions wrote at the snapshot root. Used ONLY by the v1
+# branch of the seed routine; never extended (v2 uses the full-tree workspace/
+# subtree). The first element is the snapshot-relative path, the second the env
+# workspace-relative path.
+_V1_FLAT_FOLDERS: tuple[tuple[str, str], ...] = (
+    ("scripts", f"{WORKSPACE_ROOT_REL}/scripts"),
+    ("docs", f"{WORKSPACE_ROOT_REL}/docs"),
+    ("knowledge", f"{WORKSPACE_ROOT_REL}/knowledge"),
+    ("files", f"{WORKSPACE_ROOT_REL}/files"),
 )
-_BUNDLE_FILES_INTO_WORKSPACE: tuple[tuple[str, str], ...] = (
-    ("workspace_requirements.txt", "app/workspace/workspace_requirements.txt"),
-    ("workspace_system_packages.txt", "app/workspace/workspace_system_packages.txt"),
-)
-
-# Plugins tree is merged (not wholesale-replaced) so a consumer's own
-# ``source=marketplace`` plugin dirs survive a bundle update. The per-consumer
-# derived files (settings.json / manifest.json) are never seeded — the container
-# install routine regenerates them from each install's own manifest.
-_BUNDLE_PLUGINS_SNAPSHOT_DIR = "plugins"
-_BUNDLE_PLUGINS_WS_REL = "app/workspace/plugins"
-_PLUGIN_DERIVED_FILES = frozenset({"settings.json", "manifest.json"})
-
-# When copying between two existing env workspaces (publisher install →
-# foreign install seed at install time, or env-to-env copy on rebuild) we
-# use the env-workspace-relative paths on both ends.
-_ENV_FOLDERS: tuple[str, ...] = (
-    "app/workspace/scripts",
-    "app/workspace/docs",
-    "app/workspace/knowledge",
-    "app/workspace/webapp",
-)
-_ENV_OPTIONAL_FOLDERS: tuple[str, ...] = (
-    "app/workspace/files",
-    "app/workspace/uploads",
-)
-_ENV_FILES: tuple[str, ...] = (
-    "app/workspace/workspace_requirements.txt",
-    "app/workspace/workspace_system_packages.txt",
+_V1_FLAT_FILES: tuple[tuple[str, str], ...] = (
+    ("workspace_requirements.txt", f"{WORKSPACE_ROOT_REL}/workspace_requirements.txt"),
+    ("workspace_system_packages.txt", f"{WORKSPACE_ROOT_REL}/workspace_system_packages.txt"),
 )
 
 
 def copy_env_to_env(
-    source_env_id: UUID, dest_env_id: UUID, *, include_files_folder: bool = True
+    source_env_id: UUID, dest_env_id: UUID, *, include_uploads_folder: bool = True
 ) -> None:
-    """Copy bundle-style folders from one env workspace to another.
+    """Copy workspace state from one env to another (same install).
 
-    Replaces ``AgentCloneService.copy_workspace`` for the env-service hook
-    that seeds a new env from an existing one.
+    Uses the ENV_MIGRATION profile: the full bundle-owned set **plus**
+    ``credentials/`` + ``uploads/``, minus the runtime dirs ``logs/`` /
+    ``databases/`` and the ``app-data/`` bind mount. This now also carries
+    ``webapp/``, ``agent_api/``, ``plugins/`` and any custom top-level dir the
+    agent created — closing the gaps in the old static folder list.
+
+    ``include_uploads_folder`` is retained for call-site compatibility; when
+    ``False`` the per-install ``uploads/`` dir is skipped (``files/`` is part of
+    the bundle-owned set and always copied).
+
+    Symlinks are never followed or copied: top-level symlinks are skipped by
+    ``iter_env_migration_toplevel`` and nested ones by ``safe_copytree`` (the
+    source workspace is agent-controlled).
     """
     instances_dir = Path(settings.ENV_INSTANCES_DIR)
     src_root = instances_dir / str(source_env_id)
@@ -77,32 +86,23 @@ def copy_env_to_env(
         logger.warning("Destination env workspace not found: %s", dst_root)
         return
 
-    folders = list(_ENV_FOLDERS)
-    if include_files_folder:
-        folders.extend(_ENV_OPTIONAL_FOLDERS)
+    src_workspace = src_root / WORKSPACE_ROOT_REL
+    dst_workspace = dst_root / WORKSPACE_ROOT_REL
 
-    for rel in folders:
-        src = src_root / rel
-        dst = dst_root / rel
-        if not src.exists():
+    for src in iter_env_migration_toplevel(src_workspace):
+        if not include_uploads_folder and src.name == "uploads":
             continue
+        dst = dst_workspace / src.name
         try:
-            if dst.exists():
-                shutil.rmtree(dst)
-            shutil.copytree(src, dst)
+            if src.is_dir():
+                if dst.exists():
+                    shutil.rmtree(dst)
+                safe_copytree(src, dst)
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
         except OSError as e:
-            logger.error("Failed to copy %s: %s", rel, e)
-
-    for rel in _ENV_FILES:
-        src = src_root / rel
-        dst = dst_root / rel
-        if not src.exists():
-            continue
-        try:
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-        except OSError as e:
-            logger.error("Failed to copy file %s: %s", rel, e)
+            logger.error("Failed to copy %s: %s", src.name, e)
 
 
 def seed_workspace_from_bundle_snapshot(
@@ -112,9 +112,11 @@ def seed_workspace_from_bundle_snapshot(
 
     Used by ``InstallService.install_bundle`` immediately after the env
     instance directory has been created by ``EnvironmentLifecycleManager``.
-    Preserves anything already present that isn't part of the snapshot
-    (e.g. the empty ``app/workspace/credentials/`` directory created by the
-    template, ``opencode_sessions``, etc.).
+    Dispatches on the snapshot layout (v1 flat vs v2 ``workspace/`` subtree).
+    Preserves anything already present that isn't part of the snapshot (e.g.
+    the empty ``app/workspace/credentials/`` dir created by the template,
+    ``opencode_sessions``, etc.). ``plugins/`` is merged so the consumer's own
+    marketplace plugins survive.
     """
     instances_dir = Path(settings.ENV_INSTANCES_DIR)
     dst_root = instances_dir / str(env_id)
@@ -125,7 +127,57 @@ def seed_workspace_from_bundle_snapshot(
         logger.warning("Bundle snapshot path missing: %s", snapshot_path)
         return
 
-    for snap_rel, ws_rel in _BUNDLE_FOLDERS_INTO_WORKSPACE:
+    _seed_overwrite_pass(snapshot_path, dst_root)
+
+
+def _seed_overwrite_pass(snapshot_path: Path, dst_root: Path) -> None:
+    """Copy/overwrite snapshot content into the install workspace.
+
+    Shared by ``seed_workspace_from_bundle_snapshot`` and the
+    ``replace_bundle_content`` apply-update path (which adds a prune pass on
+    top for v2 snapshots). Dispatches on the snapshot layout.
+    """
+    if snapshot_layout(snapshot_path) == "v2_workspace":
+        _seed_v2(snapshot_path / "workspace", dst_root)
+    else:
+        _seed_v1_flat(snapshot_path, dst_root)
+
+
+def _seed_v2(snapshot_workspace: Path, dst_root: Path) -> None:
+    """Copy each top-level entry of a v2 ``workspace/`` subtree into the install.
+
+    The snapshot can only contain bundle-owned entries (the publisher snapshot
+    already applied the denylist), so we copy everything present. ``plugins/``
+    is routed through the merge helper; all other dirs/files overwrite.
+    """
+    dst_workspace = dst_root / WORKSPACE_ROOT_REL
+    if not snapshot_workspace.exists() or not snapshot_workspace.is_dir():
+        return
+    for child in snapshot_workspace.iterdir():
+        # Defence in depth: the publisher snapshot already strips symlinks, but
+        # never follow/copy one if a legacy/hand-built snapshot contains it.
+        if child.is_symlink():
+            logger.warning("Skipping symlink in snapshot workspace: %s", child)
+            continue
+        dst = dst_workspace / child.name
+        if child.name == PLUGINS_DIRNAME and child.is_dir():
+            _seed_plugins_tree(child, dst)
+            continue
+        try:
+            if child.is_dir():
+                if dst.exists():
+                    shutil.rmtree(dst)
+                safe_copytree(child, dst)
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(child, dst)
+        except OSError as e:
+            logger.error("Failed to seed bundle entry %s: %s", child.name, e)
+
+
+def _seed_v1_flat(snapshot_path: Path, dst_root: Path) -> None:
+    """Legacy v1-flat allowlist seed (unchanged behaviour for old revisions)."""
+    for snap_rel, ws_rel in _V1_FLAT_FOLDERS:
         src = snapshot_path / snap_rel
         dst = dst_root / ws_rel
         if not src.exists():
@@ -133,11 +185,11 @@ def seed_workspace_from_bundle_snapshot(
         try:
             if dst.exists():
                 shutil.rmtree(dst)
-            shutil.copytree(src, dst)
+            safe_copytree(src, dst)
         except OSError as e:
             logger.error("Failed to seed bundle folder %s: %s", snap_rel, e)
 
-    for snap_rel, ws_rel in _BUNDLE_FILES_INTO_WORKSPACE:
+    for snap_rel, ws_rel in _V1_FLAT_FILES:
         src = snapshot_path / snap_rel
         dst = dst_root / ws_rel
         if not src.exists():
@@ -152,8 +204,8 @@ def seed_workspace_from_bundle_snapshot(
     # so the consumer's own source=marketplace plugins survive. Derived files
     # (settings.json / manifest.json) are never seeded.
     _seed_plugins_tree(
-        snapshot_path / _BUNDLE_PLUGINS_SNAPSHOT_DIR,
-        dst_root / _BUNDLE_PLUGINS_WS_REL,
+        snapshot_path / PLUGINS_DIRNAME,
+        dst_root / WORKSPACE_ROOT_REL / PLUGINS_DIRNAME,
     )
 
 
@@ -180,14 +232,17 @@ def _seed_plugins_tree(src_plugins: Path, dst_plugins: Path) -> None:
         return
 
     for child in src_plugins.iterdir():
-        if child.is_file() and child.name in _PLUGIN_DERIVED_FILES:
+        if child.is_symlink():
+            logger.warning("Skipping symlink in plugins tree: %s", child)
+            continue
+        if child.is_file() and child.name in PLUGIN_DERIVED_FILES:
             continue
         target = dst_plugins / child.name
         try:
             if child.is_dir():
                 if target.exists():
                     shutil.rmtree(target)
-                shutil.copytree(child, target)
+                safe_copytree(child, target)
             else:
                 shutil.copy2(child, target)
         except OSError as e:
@@ -195,11 +250,85 @@ def _seed_plugins_tree(src_plugins: Path, dst_plugins: Path) -> None:
 
 
 def replace_bundle_content(snapshot_path: Path, env_id: UUID) -> None:
-    """Replace bundle-owned folders in an env workspace with snapshot content.
+    """Apply a new revision's snapshot onto an existing install env workspace.
 
-    Preserves ``credentials/`` (managed by the credentials sync) and
-    ``app-data/`` (per-user persistent data; never touched by updates).
-    Same logic as ``seed_workspace_from_bundle_snapshot`` — the distinct
-    name documents the lifecycle method called by ``InstallService.apply_update``.
+    Unlike a fresh seed, apply-update must remove **stale bundle-owned**
+    top-level entries — paths the old revision shipped but the new one dropped
+    (D5: "the snapshot is authoritative for bundle-owned top-level entries").
+    The sequence is:
+
+    1. Copy/overwrite every snapshot top-level entry (shared seed pass).
+    2. (v2 only) Prune: remove each install-workspace top-level entry that is
+       NOT in the new snapshot, NOT in ``BUNDLE_EXCLUDED_TOPLEVEL``, NOT
+       runtime-denylisted, and NOT ``plugins/``.
+
+    Always preserved: ``app-data/``, ``credentials/``, ``logs/``,
+    ``databases/``, ``uploads/`` (the denylist) and the consumer's own
+    ``plugins/`` marketplace dirs (plugins are merged, never delete-swept).
+
+    v1 (legacy) snapshots skip the prune pass to keep today's overwrite-only
+    semantics — a v1→v1 apply-update never deletes; a v1→v2 apply-update prunes
+    against the v2 snapshot, which is the desired forward behaviour.
+
+    Pruning is best-effort per entry (a failed removal is logged, not raised)
+    so one bad entry can't abort the whole update.
     """
-    seed_workspace_from_bundle_snapshot(snapshot_path, env_id)
+    instances_dir = Path(settings.ENV_INSTANCES_DIR)
+    dst_root = instances_dir / str(env_id)
+    if not dst_root.exists():
+        logger.warning("Target env workspace does not exist: %s", dst_root)
+        return
+    if not snapshot_path.exists():
+        logger.warning("Bundle snapshot path missing: %s", snapshot_path)
+        return
+
+    _seed_overwrite_pass(snapshot_path, dst_root)
+
+    if snapshot_layout(snapshot_path) != "v2_workspace":
+        return  # legacy: no prune
+
+    _prune_stale_bundle_content(snapshot_path / "workspace", dst_root)
+
+
+def _prune_stale_bundle_content(snapshot_workspace: Path, dst_root: Path) -> None:
+    """Remove install-workspace top-level entries the v2 snapshot no longer ships.
+
+    Only genuinely stale **bundle-owned** paths are removed: anything in the
+    denylist (``app-data/``, ``credentials/``, ``logs/``, ``databases/``,
+    ``uploads/``, ``__init__.py``), any runtime dotfile, and ``plugins/`` are
+    always preserved.
+    """
+    dst_workspace = dst_root / WORKSPACE_ROOT_REL
+    if not dst_workspace.exists() or not dst_workspace.is_dir():
+        return
+
+    snapshot_toplevel: set[str] = set()
+    if snapshot_workspace.exists() and snapshot_workspace.is_dir():
+        snapshot_toplevel = {p.name for p in snapshot_workspace.iterdir()}
+
+    for child in dst_workspace.iterdir():
+        name = child.name
+        if name in snapshot_toplevel:
+            continue  # still shipped by the bundle
+        if name == PLUGINS_DIRNAME:
+            continue  # plugins are merged, never delete-swept
+        if name in BUNDLE_EXCLUDED_TOPLEVEL:
+            continue  # per-user / runtime / secret — never touched
+        if is_runtime_denylisted(name):
+            continue  # runtime dotfile state
+        # Stale bundle-owned path: the bundle used to ship it but no longer
+        # does. Remove it.
+        try:
+            # A symlink (even one pointing at a dir) must be unlinked, never
+            # rmtree'd: rmtree raises on a symlinked dir (the OSError would be
+            # swallowed and the stale link would linger forever), and following
+            # it could delete the link's TARGET. Always remove the link itself.
+            if child.is_symlink():
+                child.unlink()
+            elif child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+            logger.info("Pruned stale bundle-owned workspace entry: %s", name)
+        except OSError as e:
+            logger.error("Failed to prune stale workspace entry %s: %s", name, e)

@@ -32,6 +32,8 @@ Define how data flows between agents, environments, and installs, ensuring consi
 
 ### Bundle-Owned Data (Replaced on apply-update)
 
+Bundle-owned data is everything under `app/workspace/` **except** the per-user/runtime/secret denylist (`app-data/`, `credentials/`, `logs/`, `databases/`, `uploads/`, and the `__init__.py` template marker). This is a denylist model, not an allowlist — any custom top-level directory or file the agent creates in its workspace is bundle-owned and will be snapshotted at publish time and restored at install/update time.
+
 | Data | Storage | Sync Timing | Notes |
 |------|---------|-------------|-------|
 | `workflow_prompt` | agent_config + environment | Dynamic | Synced to `/app/workspace/docs/WORKFLOW_PROMPT.md`; snapshotted into bundle revision at publish |
@@ -39,11 +41,13 @@ Define how data flows between agents, environments, and installs, ensuring consi
 | `scripts/` folder | environment | On-Demand (install/update) | Replaced from bundle snapshot on install or apply-update |
 | `docs/` folder | environment | On-Demand (install/update) | Replaced from bundle snapshot |
 | `knowledge/` folder | environment | On-Demand (install/update) | Replaced from bundle snapshot |
-| `files/` folder | environment | On-Demand (install/update) | Replaced from bundle snapshot (static assets only) |
-| `webapp/` folder | environment | On-Demand (install/update) | Web app static files, data endpoints, actions registry |
+| `files/` folder | environment | On-Demand (install/update) | Replaced from bundle snapshot (static assets shipped with bundle; `uploads/` is separate) |
+| `webapp/` folder | environment | On-Demand (install/update) | Web app static files, data endpoints, actions registry; snapshotted in bundle revision |
+| `agent_api/` folder | environment | On-Demand (install/update) | REST API source tree built by the agent; snapshotted in bundle revision |
+| Any custom top-level dir/file | environment | On-Demand (install/update) | Any path the agent creates at `app/workspace/<name>` that is not in the denylist is bundle-owned and snapshotted |
 | `workspace_requirements.txt` | environment | On-Demand (install/update) | Replaced from bundle snapshot |
 | `workspace_system_packages.txt` | environment | On-Demand (install/update) | Replaced from bundle snapshot |
-| Plugins (LLM tools) | agent_config | Dynamic | Synced via plugin sync operation |
+| Plugins (LLM tools) | agent_config | Dynamic | Synced via plugin sync operation; `plugins/` is merged on install/update (consumer marketplace plugins survive) |
 
 ### App Data (Persistent per user × bundle)
 
@@ -54,6 +58,14 @@ Define how data flows between agents, environments, and installs, ensuring consi
 | `app-data/cache/` | AppDataVolume host path | Persistent | For cached downloads and processed files |
 
 App Data is **never** touched by `replace_bundle_content`, rebuild, or apply-update. It survives uninstall and reattaches on reinstall of the same bundle.
+
+### Per-Install Runtime Data (Not Bundle Content, but Env-Migration-Copied)
+
+| Data | Storage | Notes |
+|------|---------|-------|
+| `uploads/` folder | environment | User-provided files uploaded at runtime. **Not bundle-owned** — excluded from bundle snapshots and never replaced on apply-update. However, it IS copied during environment switch (the `ENV_MIGRATION` profile includes it). For static assets to ship with a bundle, use `files/` instead. |
+
+`uploads/` is the one workspace path whose classification differs between the two copy profiles: excluded from `BUNDLE_OWNED` (publish/seed/apply-update), included in `ENV_MIGRATION` (env switch/rebuild-from-env).
 
 ### Install-Specific Data (Credential Ownership)
 
@@ -100,9 +112,9 @@ App Data is **never** touched by `replace_bundle_content`, rebuild, or apply-upd
 5. Old environments stopped, target started
 6. Dynamic data synced to target
 
-**Copied during switch**: `scripts/`, `docs/`, `knowledge/`, `files/`, `uploads/`, `credentials/`, `plugins/`, `webapp/`, `workspace_requirements.txt`
+**Copied during switch** (ENV_MIGRATION profile): the full bundle-owned set (`scripts/`, `docs/`, `knowledge/`, `files/`, `webapp/`, `agent_api/`, `plugins/`, any custom top-level dirs, `workspace_requirements.txt`, `workspace_system_packages.txt`) **plus** `credentials/` and `uploads/`. Custom top-level directories created by the agent are included automatically — the ENV_MIGRATION profile is denylist-driven, not allowlist-driven. `plugins/` is a straight copy here (no merge) — env switch is same-user same-agent so there are no foreign consumer plugins to preserve. Top-level and nested symlinks are never followed or copied.
 
-**NOT copied**: `logs/`, `databases/` (runtime data)
+**NOT copied**: `logs/`, `databases/` (runtime data), `app-data/` (bind mount, follows the volume)
 
 ### 3. Install Creation
 
@@ -113,11 +125,11 @@ App Data is **never** touched by `replace_bundle_content`, rebuild, or apply-upd
 5. Credentials: for each `required_credential_spec`, either link an existing user credential or create a placeholder
 6. App-data volume bind-mounted at `/app/workspace/app-data` in the generated docker-compose
 
-**Seeded from bundle snapshot**: `scripts/`, `docs/`, `knowledge/`, `files/`, `workspace_requirements.txt`, `workspace_system_packages.txt`
+**Seeded from bundle snapshot** (BUNDLE_OWNED profile, v2 snapshots): the full `app/workspace/` tree minus the denylist — `scripts/`, `docs/`, `knowledge/`, `files/`, `webapp/`, `agent_api/`, any custom top-level dirs the publisher shipped, `workspace_requirements.txt`, `workspace_system_packages.txt`. `plugins/` is merged (consumer's own marketplace plugins survive). For v1 (legacy) snapshots, only the original allowlist (`scripts/`, `docs/`, `knowledge/`, `files/`, the two `.txt` files, `plugins/`) is seeded.
 
 **Persistent (from app-data volume)**: `app-data/storage/`, `app-data/uploads/`, `app-data/cache/`
 
-**NOT copied from snapshot**: `logs/`, `databases/` (runtime), `credentials/` (handled separately via dynamic sync)
+**NOT copied from snapshot**: `logs/`, `databases/` (runtime), `credentials/` (handled separately via dynamic sync), `uploads/` (per-install runtime data, not bundle-owned)
 
 ### 4. Apply Update (Bundle Revision Push)
 
@@ -129,9 +141,13 @@ App Data is **never** touched by `replace_bundle_content`, rebuild, or apply-upd
 6. `installed_revision_id` updated; `pending_update` cleared
 7. Environment restarted; `INSTALL_UPDATE_APPLIED` event emitted
 
-**Replaced**: `scripts/`, `docs/`, `knowledge/`, `files/`, `workspace_requirements.txt`, `workspace_system_packages.txt`
+**Replaced/updated** (BUNDLE_OWNED profile, v2 snapshots): the full `app/workspace/` tree minus the denylist — every bundle-owned top-level entry in the new snapshot is copied/overwritten into the install workspace.
 
-**Preserved**: `app-data/` (AppDataVolume), `credentials/`, `logs/`, `databases/`
+**Pruned (v2 only)**: any install-workspace top-level entry that (a) is not present in the new snapshot, (b) is not in `BUNDLE_EXCLUDED_TOPLEVEL`, (c) is not runtime-name-denylisted, and (d) is not `plugins/` — is deleted. This removes stale bundle-owned paths (e.g. a directory the old revision shipped but the new one dropped) without touching any user data. The prune pass is best-effort per entry; a failed removal is logged and does not abort the update.
+
+**Preserved**: `app-data/` (AppDataVolume), `credentials/`, `logs/`, `databases/`, `uploads/` (all in `BUNDLE_EXCLUDED_TOPLEVEL`), and the consumer's own `plugins/` marketplace dirs (plugins are merged, never delete-swept).
+
+**Important**: Files an agent wrote directly into a bundle-owned top-level directory (e.g. a file dropped into `scripts/`) will be overwritten or removed on apply-update because that directory is bundle-authoritative. Durable runtime output belongs in `app-data/`, which is never touched by apply-update.
 
 ### 5. Environment Rebuild
 
@@ -193,18 +209,22 @@ Agent Model (DB) → Environment Lifecycle Manager → Docker Adapter → Docker
 │   └── ENTRYPOINT_PROMPT.md
 ├── knowledge/                   # Bundle-owned
 ├── files/                       # Bundle-owned (static assets shipped with bundle)
-├── app-data/                    # App Data — persistent per (user × bundle)
-│   ├── storage/                 #   for structured runtime data (DBs, JSON, CSVs)
-│   ├── uploads/                 #   for user-provided files at runtime
-│   └── cache/                   #   for cached downloads, processed output
-├── credentials/                 # Credentials (synced from platform on every start)
-├── plugins/                     # LLM plugins (synced dynamically)
-├── webapp/                      # Web app files, data endpoints, actions registry (Bundle-owned)
+├── webapp/                      # Bundle-owned — web app files, data endpoints, actions registry
 │   ├── index.html
-│   ├── api/                     # Python data endpoint scripts
-│   └── WEB_APP_ACTIONS.md       # Actions registry for chat integration
-├── logs/                        # Session logs (Runtime - never synced)
-├── databases/                   # Runtime databases (Runtime - never synced)
+│   ├── api/                     #   Python data endpoint scripts
+│   └── WEB_APP_ACTIONS.md       #   Actions registry for chat integration
+├── agent_api/                   # Bundle-owned — REST API source tree built by the agent
+├── <custom-dir>/                # Bundle-owned — any other top-level dir the agent creates
+├── app-data/                    # App Data — persistent per (user × bundle), never bundle-owned
+│   ├── storage/                 #   for structured runtime data (DBs, JSON, CSVs)
+│   ├── uploads/                 #   for files the user provides at runtime
+│   └── cache/                   #   for cached downloads, processed output
+├── uploads/                     # Per-install runtime user-provided files — NOT bundle-owned;
+│                                #   preserved on apply-update; copied on env migration
+├── credentials/                 # Credentials (synced from platform on every start)
+├── plugins/                     # LLM plugins (synced dynamically; merged on install/update)
+├── logs/                        # Session logs (Runtime — never synced or copied)
+├── databases/                   # Runtime databases (Runtime — never synced or copied)
 └── workspace_requirements.txt   # Bundle-owned (replaced on update)
 ```
 

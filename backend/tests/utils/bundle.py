@@ -10,8 +10,21 @@ Behavior is intentionally identical to the migrated call sites. Where the local
 copies diverged (publish returning the *agent row* vs the *revision*, optional
 visibility flip, ``expected_status``), the divergence is exposed as a parameter
 rather than baked in, so each call site keeps its original semantics.
+
+FS seam note (schema_version 2 workspace check):
+  ``PublishService._assert_workspace_readable`` blocks publish when an active
+  env exists but its ``app/workspace/`` dir is absent. Since the test
+  environment adapter stubs out Docker (no real FS), the ``setup_environment_adapter``
+  fixture in ``tests/utils/fixtures.py`` handles this at the infrastructure level:
+  it creates ``app/workspace`` inside the test template dir so every new env
+  instance has the directory, AND patches ``settings.ENV_INSTANCES_DIR`` to match
+  the lifecycle manager's tmp instances dir.  Publish helpers here do not need to
+  create the workspace dir themselves.  Tests that want to assert on workspace
+  content (e.g. captured files) should seed files into
+  ``Path(settings.ENV_INSTANCES_DIR) / env_id / "app" / "workspace"`` directly.
 """
 import uuid
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 

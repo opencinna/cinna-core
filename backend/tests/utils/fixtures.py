@@ -210,6 +210,18 @@ def setup_environment_adapter(tmp_path_factory, *, persistent_adapter=False, ext
     Sets up temp directories with a minimal docker-compose template and installs
     the lifecycle manager as the EnvironmentService singleton.
 
+    FS seam — ENV_INSTANCES_DIR alignment:
+      ``PublishService._assert_workspace_readable`` resolves the publisher env
+      workspace from ``Path(settings.ENV_INSTANCES_DIR) / env_id / "app/workspace"``.
+      Without alignment, this differs from ``lm.instances_dir`` (the tmp dir used
+      by the lifecycle manager) and every publish through an active-env install hits
+      the fail-loud 400.  This function now:
+        1. Creates ``app/workspace`` inside the template dir so ``_copy_template``
+           populates it for every new env instance (mirrors the real template).
+        2. Patches ``settings.ENV_INSTANCES_DIR`` to ``str(instances_dir)`` for the
+           duration of the test, storing the stopper on ``lm._env_instances_dir_patcher``
+           so ``teardown_environment_adapter`` can undo it.
+
     Args:
         tmp_path_factory: pytest tmp_path_factory fixture.
         persistent_adapter: If True, reuses a single adapter instance (available
@@ -232,6 +244,12 @@ def setup_environment_adapter(tmp_path_factory, *, persistent_adapter=False, ext
     (template_dir / "docker-compose.template.yml").write_text(
         "version: '3'\nservices:\n  agent:\n    image: test\n    ports:\n      - '${AGENT_PORT}:8000'\n"
     )
+
+    # Create app/workspace inside the template so _copy_template populates it for
+    # every new env instance.  The real template (python-env-advanced) ships this
+    # directory; without it the publish pre-flight (_assert_workspace_readable)
+    # raises a 400 for every test that publishes through an active-env install.
+    (template_dir / "app" / "workspace").mkdir(parents=True, exist_ok=True)
 
     # Create shared app_core_base/core directory (used during rebuild)
     app_core_base_dir = templates_dir / APP_CORE_BASE_DIR_NAME / "core"
@@ -257,11 +275,24 @@ def setup_environment_adapter(tmp_path_factory, *, persistent_adapter=False, ext
         lm.get_adapter = _test_get_adapter
 
     EnvironmentService._lifecycle_manager = lm
+
+    # Align settings.ENV_INSTANCES_DIR with the tmp instances dir so that
+    # PublishService (which reads settings.ENV_INSTANCES_DIR directly) resolves
+    # workspace paths to the same location as the lifecycle manager.
+    instances_dir_patcher = patch.object(settings, "ENV_INSTANCES_DIR", str(instances_dir))
+    instances_dir_patcher.start()
+    lm._env_instances_dir_patcher = instances_dir_patcher  # stored for teardown
+
     return lm
 
 
 def teardown_environment_adapter():
-    """Reset the environment service singleton."""
+    """Reset the environment service singleton and undo ENV_INSTANCES_DIR patch."""
+    lm = EnvironmentService._lifecycle_manager
+    if lm is not None:
+        patcher = getattr(lm, "_env_instances_dir_patcher", None)
+        if patcher is not None:
+            patcher.stop()
     EnvironmentService._lifecycle_manager = None
 
 
