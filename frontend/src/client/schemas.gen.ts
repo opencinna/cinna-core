@@ -9351,6 +9351,11 @@ export const CatalogEntryPublicSchema = {
             ],
             title: 'User Install Id'
         },
+        user_install_pending_update: {
+            type: 'boolean',
+            title: 'User Install Pending Update',
+            default: false
+        },
         required_credential_specs: {
             items: {},
             type: 'array',
@@ -9499,6 +9504,28 @@ export const CheckUpdatesResponseSchema = {
                 }
             ],
             title: 'Latest Revision Number'
+        },
+        installed_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Version'
+        },
+        latest_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Version'
         },
         last_update_status: {
             anyOf: [

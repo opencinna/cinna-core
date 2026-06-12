@@ -10,8 +10,10 @@
  * install page for un-installed bundles, or the agent detail page for
  * installed ones.
  */
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import {
+  ArrowUpCircle,
   Bot,
   Download,
   ExternalLink,
@@ -23,7 +25,9 @@ import {
 import type { MouseEvent, ReactNode } from "react"
 
 import type { CatalogEntryPublic } from "@/client"
+import { InstallsService } from "@/client"
 import { useQuickInstall } from "@/components/Install/useQuickInstall"
+import useCustomToast from "@/hooks/useCustomToast"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -47,11 +51,25 @@ const VISIBILITY_ICONS: Record<string, ReactNode> = {
 
 export function CatalogCard({ entry }: CatalogCardProps) {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
   const visibilityIcon = VISIBILITY_ICONS[entry.visibility] ?? null
   const quickInstall = useQuickInstall(entry.bundle_id)
 
+  const applyUpdate = useMutation({
+    mutationFn: () =>
+      InstallsService.applyUpdate({ agentId: entry.user_install_id as string }),
+    onSuccess: () => {
+      showSuccessToast("Update applied")
+      queryClient.invalidateQueries({ queryKey: ["catalog"] })
+    },
+    onError: (e: any) => {
+      showErrorToast(e?.body?.detail || "Failed to apply update")
+    },
+  })
+
   const handleCardClick = () => {
-    if (quickInstall.isPending) return
+    if (quickInstall.isPending || applyUpdate.isPending) return
     if (entry.is_installed && entry.user_install_id) {
       navigate({
         to: "/agent/$agentId",
@@ -68,6 +86,11 @@ export function CatalogCard({ entry }: CatalogCardProps) {
   const handleQuickInstall = (e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation()
     quickInstall.mutate()
+  }
+
+  const handleApplyUpdate = (e: MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation()
+    applyUpdate.mutate()
   }
 
   const handleOpen = (e: MouseEvent<HTMLButtonElement>) => {
@@ -147,14 +170,32 @@ export function CatalogCard({ entry }: CatalogCardProps) {
       </CardContent>
       <CardFooter className="pt-2">
         {entry.is_installed && entry.user_install_id ? (
-          <Button
-            variant="outline"
-            className="w-full"
-            onClick={handleOpen}
-          >
-            <ExternalLink className="h-4 w-4 mr-2" />
-            Open
-          </Button>
+          entry.user_install_pending_update ? (
+            <Button
+              variant="default"
+              className="w-full bg-amber-500 text-white hover:bg-amber-600"
+              onClick={handleApplyUpdate}
+              disabled={applyUpdate.isPending}
+            >
+              {applyUpdate.isPending ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <ArrowUpCircle className="h-4 w-4 mr-2" />
+              )}
+              {applyUpdate.isPending
+                ? "Updating…"
+                : `Update${entry.latest_version ? ` to v${entry.latest_version}` : ""}`}
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={handleOpen}
+            >
+              <ExternalLink className="h-4 w-4 mr-2" />
+              Open
+            </Button>
+          )
         ) : (
           <Button
             className="group relative w-full overflow-hidden shadow-sm transition-all duration-200 hover:shadow-md hover:ring-2 hover:ring-primary/30 hover:ring-offset-1"

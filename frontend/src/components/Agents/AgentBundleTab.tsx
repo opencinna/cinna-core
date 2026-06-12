@@ -532,7 +532,7 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
                   const isCurrent = bundle?.latest_revision_id === rev.id
                   const isInstalled =
                     agent.installed_revision_number === rev.revision_number
-                  const canDelete = (rev.install_count ?? 0) <= 1
+                  const canDelete = (rev.install_count ?? 0) <= 0
                   return (
                     <div
                       key={rev.id}

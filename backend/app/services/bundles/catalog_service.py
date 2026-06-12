@@ -200,6 +200,9 @@ class CatalogService:
             install_count=install_count,
             is_installed=user_install is not None,
             user_install_id=user_install.id if user_install else None,
+            user_install_pending_update=(
+                bool(user_install.pending_update) if user_install else False
+            ),
             required_credential_specs=cred_specs,
             publisher_ai_credential_conversation_id=(
                 bundle.publisher_ai_credential_conversation_id

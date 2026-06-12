@@ -154,11 +154,18 @@ class BundleService:
     def revision_install_count(
         session: Session, revision_id: uuid.UUID
     ) -> int:
-        """Count installs whose ``installed_revision_id`` is this revision."""
+        """Count installs whose ``installed_revision_id`` is this revision.
+
+        Excludes the publisher's own working install (``is_publisher_install``)
+        — that copy is the *source* of the revision, not an install of it.
+        """
         stmt = (
             select(func.count())
             .select_from(Agent)
-            .where(Agent.installed_revision_id == revision_id)
+            .where(
+                Agent.installed_revision_id == revision_id,
+                Agent.is_publisher_install == False,  # noqa: E712
+            )
         )
         return session.exec(stmt).one()
 
@@ -169,6 +176,9 @@ class BundleService:
         """Return ``(revision, install_count)`` pairs ordered newest-first.
 
         Single aggregated query — replaces the per-revision count loop.
+        The publisher's own working install (``is_publisher_install``) is
+        excluded from every count: it is the source of the revision, not an
+        install of it.
         """
         revisions_stmt = (
             select(AgentBundleRevision)
@@ -183,7 +193,8 @@ class BundleService:
             .where(
                 Agent.installed_revision_id.in_(  # type: ignore[union-attr]
                     [r.id for r in revisions]
-                )
+                ),
+                Agent.is_publisher_install == False,  # noqa: E712
             )
             .group_by(Agent.installed_revision_id)
         )

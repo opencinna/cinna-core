@@ -24,6 +24,7 @@ from app.core.config import settings
 from tests.utils.agent import create_agent_via_api
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.bundle import (
+    make_bundle_public,
     make_user_and_headers as _make_user_and_headers,
     publish_bundle_and_make_public as _publish,
 )
@@ -179,6 +180,93 @@ def test_republish_flags_pending_update_and_apply_clears_it(
     assert install["installed_revision_id"] == revision_2["id"]
     assert install["installed_revision_number"] == 2
     assert install["last_update_status"] == "synced"
+
+
+def test_revision_install_count_excludes_publisher_and_version_labels(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """Per-revision install counts exclude the publisher's source install.
+
+    Also verifies the catalog ``user_install_pending_update`` flag and the
+    ``check-updates`` version labels that power the update banner / card.
+    """
+    publisher_agent = create_agent_via_api(
+        client, superuser_token_headers, name="Counted"
+    )
+    drain_tasks()
+    # First publish with an explicit version label.
+    r = client.post(
+        f"{API}/agents/{publisher_agent['id']}/publish",
+        headers=superuser_token_headers,
+        json={"version": "1.0"},
+    )
+    assert r.status_code == 200, r.text
+    drain_tasks()
+    fresh = client.get(
+        f"{API}/agents/{publisher_agent['id']}", headers=superuser_token_headers
+    ).json()
+    bundle_id = fresh["bundle_id"]
+    bundle_uuid = fresh["bundle_uuid"]
+    make_bundle_public(client, superuser_token_headers, bundle_uuid)
+
+    def _rev_counts() -> dict[int, int]:
+        data = client.get(
+            f"{API}/bundles/{bundle_uuid}/revisions",
+            headers=superuser_token_headers,
+        ).json()["data"]
+        return {r["revision_number"]: r["install_count"] for r in data}
+
+    # Only the publisher's source install exists → it is NOT counted.
+    assert _rev_counts() == {1: 0}
+
+    # Foreign user installs.
+    _, recipient_headers = _make_user_and_headers(client)
+    install = client.post(
+        f"{API}/catalog/{bundle_id}/install",
+        headers=recipient_headers,
+        json={},
+    ).json()
+    drain_tasks()
+    install_id = install["id"]
+
+    # Revision 1 now has exactly one (foreign) install; publisher excluded.
+    assert _rev_counts() == {1: 1}
+
+    # Catalog: installed, up to date.
+    def _catalog_entry(headers: dict[str, str]) -> dict:
+        catalog = client.get(f"{API}/catalog/", headers=headers).json()
+        return next(
+            e for e in catalog["data"] if e["bundle_id"] == bundle_id
+        )
+
+    entry = _catalog_entry(recipient_headers)
+    assert entry["is_installed"] is True
+    assert entry["user_install_pending_update"] is False
+
+    # Second publish with a minor bump.
+    r = client.post(
+        f"{API}/agents/{publisher_agent['id']}/publish",
+        headers=superuser_token_headers,
+        json={"version": "1.1"},
+    )
+    assert r.status_code == 200, r.text
+    drain_tasks()
+
+    # Publisher source moved to rev 2 (still excluded); foreign still on rev 1.
+    assert _rev_counts() == {1: 1, 2: 0}
+
+    # check-updates surfaces both version labels for the banner.
+    check = client.post(
+        f"{API}/agents/{install_id}/check-updates", headers=recipient_headers
+    ).json()
+    assert check["pending_update"] is True
+    assert check["installed_version"] == "1.0"
+    assert check["latest_version"] == "1.1"
+
+    # Catalog now signals an available update for the installer.
+    entry = _catalog_entry(recipient_headers)
+    assert entry["user_install_pending_update"] is True
 
 
 def test_uninstall_marks_app_data_orphaned(

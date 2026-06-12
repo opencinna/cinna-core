@@ -1958,6 +1958,7 @@ export type CatalogEntryPublic = {
     install_count: number;
     is_installed: boolean;
     user_install_id: (string | null);
+    user_install_pending_update?: boolean;
     required_credential_specs?: Array<unknown>;
     publisher_ai_credential_conversation_id?: (string | null);
     publisher_ai_credential_building_id?: (string | null);
@@ -2006,6 +2007,8 @@ export type CheckUpdatesResponse = {
     pending_update: boolean;
     installed_revision_number: (number | null);
     latest_revision_number: (number | null);
+    installed_version?: (string | null);
+    latest_version?: (string | null);
     last_update_status: (string | null);
     last_sync_at: (string | null);
     update_mode: string;
@@ -6192,6 +6195,12 @@ export type CliAccountCreateAgentResponse = (AgentPublic);
 export type CliListAccountUserWorkspacesResponse = (UserWorkspacesPublic);
 
 export type CliGetAccountContextPackageResponse = (unknown);
+
+export type CliAccountSearchKnowledgeData = {
+    requestBody: KnowledgeSearchBody;
+};
+
+export type CliAccountSearchKnowledgeResponse = (unknown);
 
 export type CliMintChildTokenData = {
     agentId: string;

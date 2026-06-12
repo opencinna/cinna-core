@@ -33,6 +33,10 @@ class CatalogEntryPublic(SQLModel):
     install_count: int
     is_installed: bool
     user_install_id: uuid.UUID | None  # set when is_installed=True
+    # True when the user's consumer install is behind the latest revision
+    # (``Agent.pending_update``) — the catalog card surfaces an "Update"
+    # action instead of "Open". False/absent when not installed or up to date.
+    user_install_pending_update: bool = False
     required_credential_specs: list = []
     # Publisher-provided AI credential FKs mirrored straight from the bundle
     # row (Phase 1 of the install redesign). Phase 2+ uses these to skip
@@ -185,6 +189,11 @@ class CheckUpdatesResponse(BaseModel):
     pending_update: bool
     installed_revision_number: int | None
     latest_revision_number: int | None
+    # Human-friendly version labels (``AgentBundleRevision.version``) for the
+    # installed and latest revisions, when present. The update banner renders
+    # "Update to v<latest_version>" from these, falling back to revision numbers.
+    installed_version: str | None = None
+    latest_version: str | None = None
     last_update_status: str | None
     last_sync_at: datetime | None
     update_mode: str

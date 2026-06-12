@@ -1362,16 +1362,20 @@ class InstallService:
 
         installed_number: int | None = None
         latest_number: int | None = None
+        installed_version: str | None = None
+        latest_version: str | None = None
         if install.installed_revision_id:
             rev = session.get(AgentBundleRevision, install.installed_revision_id)
             if rev:
                 installed_number = rev.revision_number
+                installed_version = rev.version
         if install.bundle_uuid:
             bundle = BundleService.get_bundle_by_uuid(session, install.bundle_uuid)
             if bundle:
                 latest_rev = BundleService.latest_revision(session, bundle)
                 if latest_rev:
                     latest_number = latest_rev.revision_number
+                    latest_version = latest_rev.version
 
         if (
             latest_number is not None
@@ -1393,6 +1397,8 @@ class InstallService:
             "pending_update": install.pending_update,
             "installed_revision_number": installed_number,
             "latest_revision_number": latest_number,
+            "installed_version": installed_version,
+            "latest_version": latest_version,
             "last_update_status": install.last_update_status,
             "last_sync_at": install.last_sync_at,
             "update_mode": install.update_mode,
