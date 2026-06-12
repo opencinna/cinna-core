@@ -247,6 +247,7 @@ class EnvironmentService:
         credential_bag: dict[str, str | None],
         auto_start: bool = False,
         source_environment_id: UUID | None = None,
+        bundle_snapshot_path: str | None = None,
     ):
         """
         Background task to create environment instance.
@@ -277,14 +278,37 @@ class EnvironmentService:
 
                 # Copy workspace from source environment if provided. The
                 # source-env path is still used for blue-green rebuild flows
-                # and admin "duplicate environment" paths; bundle-driven
-                # installs use ``InstallService`` which seeds from the
-                # revision snapshot directly (not via this method).
+                # and admin "duplicate environment" paths.
                 if source_environment_id:
                     from app.services.environments.workspace_copy import copy_env_to_env
 
                     logger.info(f"Copying workspace from {source_environment_id} to {env_id}")
                     copy_env_to_env(source_environment_id, env_id)
+
+                # Seed the workspace from a bundle revision snapshot if provided.
+                # This MUST run inside the build — after ``create_environment_instance``
+                # has materialised the instance dir from the template, and BEFORE
+                # ``start_environment`` boots the container. Seeding here (instead
+                # of in the foreground at the InstallService call site) is what
+                # closes the historical race where the synchronous seed either
+                # found no instance dir yet (no-op) or was clobbered by the async
+                # template materialisation — shipping installs with empty
+                # bundle-owned dirs (e.g. ``scripts/``).
+                if bundle_snapshot_path:
+                    from pathlib import Path
+
+                    from app.services.environments.workspace_copy import (
+                        seed_workspace_from_bundle_snapshot,
+                    )
+
+                    logger.info(
+                        "Seeding workspace for env %s from bundle snapshot %s",
+                        env_id,
+                        bundle_snapshot_path,
+                    )
+                    seed_workspace_from_bundle_snapshot(
+                        Path(bundle_snapshot_path), env_id
+                    )
 
                 # Auto-start if requested (typically for default agent environments)
                 if auto_start and environment.status == "stopped":
@@ -692,7 +716,8 @@ class EnvironmentService:
         data: AgentEnvironmentCreate,
         user: User,
         auto_start: bool = False,
-        source_environment_id: UUID | None = None
+        source_environment_id: UUID | None = None,
+        bundle_snapshot_path: str | None = None,
     ) -> AgentEnvironment:
         """
         Create environment for agent.
@@ -710,6 +735,11 @@ class EnvironmentService:
             user: User creating the environment
             auto_start: If True, automatically start and activate after build completes
             source_environment_id: If provided, copy workspace from this environment after build (for clones)
+            bundle_snapshot_path: If provided, seed the workspace from this bundle
+                revision snapshot after the instance dir is materialised and
+                BEFORE the container starts. Used by ``InstallService`` so the
+                bundle content is laid down inside the build (no foreground race
+                against the async template materialisation).
 
         Note: The actual Docker build happens asynchronously.
         Use GET /environments/{id}/status to track progress.
@@ -796,6 +826,7 @@ class EnvironmentService:
             EnvironmentService._create_environment_background(
                 environment.id, agent_id, bag, auto_start,
                 source_environment_id,
+                bundle_snapshot_path,
             ),
             "create_environment",
         )

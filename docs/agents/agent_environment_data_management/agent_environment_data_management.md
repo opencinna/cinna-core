@@ -120,7 +120,7 @@ App Data is **never** touched by `replace_bundle_content`, rebuild, or apply-upd
 
 1. User installs a bundle via the catalog
 2. New `Agent` (Install) row created from latest revision (prompts, SDK settings)
-3. `AgentEnvironment` created; workspace seeded from bundle revision snapshot (`seed_workspace_from_bundle_snapshot`)
+3. `AgentEnvironment` created; the workspace is seeded from the bundle revision snapshot (`seed_workspace_from_bundle_snapshot`) **inside the background env build** — after the instance dir is materialised from the template and before the container starts (the seed is passed via `create_environment(..., bundle_snapshot_path=...)`, not run in the foreground, to avoid racing the async build)
 4. `AppDataVolume` created (or reattached if orphaned from previous install)
 5. Credentials: for each `required_credential_spec`, either link an existing user credential or create a placeholder
 6. App-data volume bind-mounted at `/app/workspace/app-data` in the generated docker-compose

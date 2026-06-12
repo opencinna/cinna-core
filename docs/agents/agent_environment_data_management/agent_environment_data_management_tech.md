@@ -85,7 +85,7 @@ Data management fields:
 ### Workspace Copy Helpers (`backend/app/services/environments/workspace_copy.py`)
 
 - `copy_env_to_env(source_env_id, dest_env_id, *, include_files_folder=True)` - Used by `EnvironmentService._create_environment_background` when a `source_environment_id` is supplied (blue-green / "duplicate environment" flows). Copies bundle-style folders + the two workspace requirements files.
-- `seed_workspace_from_bundle_snapshot(snapshot_path, env_id)` - Used by `InstallService.install_bundle` to drop a bundle revision snapshot into a fresh install workspace.
+- `seed_workspace_from_bundle_snapshot(snapshot_path, env_id)` - Drops a bundle revision snapshot into a fresh install workspace. Called by `EnvironmentService._create_environment_background` (after `create_environment_instance`, before `start_environment`) when `InstallService.install_bundle` passes `create_environment(..., bundle_snapshot_path=revision.snapshot_path)`. Seeding inside the build — rather than in the foreground install path — avoids racing the async instance materialisation (the historical empty-`scripts/` bug).
 - `replace_bundle_content(snapshot_path, env_id)` - Used by `InstallService.apply_update` to swap bundle-owned folders with a new revision. Preserves `credentials/` and `app-data/`.
 
 ### Supporting Services

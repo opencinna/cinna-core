@@ -200,9 +200,6 @@ class InstallService:
         from app.services.bundles.app_data_service import AppDataService
         from app.services.bundles.bundle_id_service import BundleIdService
         from app.services.environments.environment_service import EnvironmentService
-        from app.services.environments.workspace_copy import (
-            seed_workspace_from_bundle_snapshot,
-        )
 
         # 1. Allocate Install row up-front so the bundle_id can be derived.
         install_id = uuid.uuid4()
@@ -289,6 +286,7 @@ class InstallService:
                 data=env_data,
                 user=user,
                 auto_start=True,
+                bundle_snapshot_path=revision.snapshot_path,
             )
             install.active_environment_id = env.id
             session.add(install)
@@ -308,23 +306,14 @@ class InstallService:
                 session.rollback()
             raise InstallError(f"Failed to provision environment: {e}") from e
 
-        # 3. Seed workspace from snapshot. The env's workspace dir is
-        # created during ``create_environment_instance``; we drop the
-        # bundle folders into it before the container starts. This races
-        # with the background create task in theory; in practice the
-        # ``create_environment`` API kicks off the build asynchronously
-        # and the workspace files are read at container boot, so seeding
-        # here is fine for the common case. For Docker-in-Docker setups,
-        # see the env-service for the bind path indirection.
-        try:
-            seed_workspace_from_bundle_snapshot(
-                Path(revision.snapshot_path), env.id
-            )
-        except Exception as e:
-            logger.warning(
-                "Failed to seed workspace from snapshot for install %s: %s",
-                install.id, e,
-            )
+        # 3. Workspace seeding from the revision snapshot is performed INSIDE
+        # the background env build (``EnvironmentService._create_environment_background``
+        # seeds after ``create_environment_instance`` materialises the instance
+        # dir and before the container starts) — passed via
+        # ``bundle_snapshot_path`` above. Seeding there closes the historical
+        # race where a foreground seed here either found no instance dir yet
+        # (no-op) or was clobbered by the async template materialisation,
+        # shipping installs with empty bundle-owned dirs (e.g. ``scripts/``).
 
         # 4. Ensure / reattach app-data volume. Slot by source so the
         # publisher's dev / source copy (NULL slot) and a consumer install
