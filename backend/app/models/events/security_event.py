@@ -1,7 +1,8 @@
 import uuid
-from datetime import datetime, UTC
+from datetime import UTC, datetime
+
 from sqlalchemy import Index
-from sqlmodel import SQLModel, Field
+from sqlmodel import Field, SQLModel
 
 # Event type constants
 CREDENTIAL_READ_ATTEMPT = "CREDENTIAL_READ_ATTEMPT"
@@ -76,6 +77,20 @@ CLI_ACCOUNT_AGENT_API_ENABLED = "CLI_ACCOUNT_AGENT_API_ENABLED"
 # per call. ``agent-api call`` and ``agent show`` are diagnostic reads/previews
 # and are not audited (mirrors ``_refresh`` / spec reads above).
 CLI_ACCOUNT_ENV_RESTARTED = "CLI_ACCOUNT_ENV_RESTARTED"
+
+# ── Account-CLI schedule + status management ──────────────────────────
+# Schedule create / update / delete / run are discrete state changes to an
+# agent's automatic-execution config (run also spends tokens / spins a session),
+# so each is audited per call. List / generate-preview / logs are diagnostic
+# reads and are not audited (mirrors the unaudited credential reads / spec reads).
+CLI_ACCOUNT_SCHEDULE_CREATED = "CLI_ACCOUNT_SCHEDULE_CREATED"
+CLI_ACCOUNT_SCHEDULE_UPDATED = "CLI_ACCOUNT_SCHEDULE_UPDATED"
+CLI_ACCOUNT_SCHEDULE_DELETED = "CLI_ACCOUNT_SCHEDULE_DELETED"
+CLI_ACCOUNT_SCHEDULE_RUN = "CLI_ACCOUNT_SCHEDULE_RUN"
+# Setting an agent's status-refresh pre-command is a config state change and is
+# audited. Reading / force-refreshing the status is a diagnostic read — not
+# audited (mirrors the REST status read).
+CLI_ACCOUNT_STATUS_COMMAND_SET = "CLI_ACCOUNT_STATUS_COMMAND_SET"
 
 
 class SecurityEvent(SQLModel, table=True):

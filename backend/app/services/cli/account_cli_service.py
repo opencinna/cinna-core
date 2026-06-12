@@ -31,8 +31,19 @@ from sqlmodel import Session, select
 
 if TYPE_CHECKING:
     from app.models.agent_api.agent_api_token import ConnectAgentApiResponse
+    from app.models.agents.agent_schedule import (
+        AgentSchedule,
+        AgentSchedulesPublic,
+        CreateScheduleRequest,
+        ScheduleRequest,
+        ScheduleResponse,
+        UpdateScheduleRequest,
+    )
+    from app.models.agents.agent_schedule_log import AgentScheduleLogsPublic
+    from app.models.agents.agent_status import AgentStatusPublic
     from app.models.cli.account_convenience import (
         AccountAgentCreateBody,
+        AccountAgentStatusResult,
         AccountConnectAgentApiBody,
         AccountConnectMcpBody,
         AccountCredentialCreateBody,
@@ -46,6 +57,7 @@ if TYPE_CHECKING:
         MCPProviderConnectionResponse,
     )
     from app.models.users.user_workspace import UserWorkspacesPublic
+    from app.services.agents.agent_scheduler_service import ManualRunResult
 
 from app.core.config import settings
 from app.models import Agent, AgentEnvironment, User
@@ -63,6 +75,11 @@ from app.models.events.security_event import (
     CLI_ACCOUNT_CREDENTIAL_SHARED_WITH_AGENT,
     CLI_ACCOUNT_CREDENTIAL_UPDATED,
     CLI_ACCOUNT_ENV_RESTARTED,
+    CLI_ACCOUNT_SCHEDULE_CREATED,
+    CLI_ACCOUNT_SCHEDULE_DELETED,
+    CLI_ACCOUNT_SCHEDULE_RUN,
+    CLI_ACCOUNT_SCHEDULE_UPDATED,
+    CLI_ACCOUNT_STATUS_COMMAND_SET,
     CLI_ACCOUNT_TOKEN_CREATED,
     SecurityEventCreate,
 )
@@ -992,6 +1009,398 @@ class AccountCLIService:
             "credentials": cred_items,
             "agent_api_status": agent_api_status,
         }
+
+    # ── Schedule management (full CRUD via dedicated account verbs) ───────
+    # Mirror the agent Config → Schedules card. Ownership is enforced
+    # 404-no-leak via ``resolve_agent_only``; foreign (bundle-consumer) installs
+    # keep the same read-only contract as the UI (toggle / Run now / logs only —
+    # the schedule *definitions* are publisher-authored). Each write audits one
+    # event; list / generate-preview / logs are diagnostic reads (not audited).
+
+    @staticmethod
+    def _resolve_owned_agent(db: Session, user: User, agent_id: uuid.UUID) -> "Agent":
+        """404-no-leak ownership resolve shared by the schedule + status verbs."""
+        from app.services.agent_api.agent_api_service import AgentApiService
+
+        return AgentApiService.resolve_agent_only(
+            db, agent_id, user.id, is_superuser=user.is_superuser
+        )
+
+    @staticmethod
+    def _guard_foreign_schedule_write(agent: "Agent") -> None:
+        """403 when mutating schedule *definitions* on a foreign install.
+
+        Mirrors the UI route guard: a consumer (bundle-owned, non-publisher)
+        install may toggle / run / view logs, but the create / edit / delete of
+        the definitions belongs to the publisher.
+        """
+        from app.services.agents.agent_scheduler_service import ScheduleError
+
+        if AgentService.is_foreign_install(agent):
+            raise ScheduleError(
+                "Schedules on an installed bundle are managed by the publisher "
+                "and cannot be created, edited, or deleted. You can "
+                "enable/disable, run, and view logs.",
+                status_code=403,
+            )
+
+    @staticmethod
+    def list_schedules(
+        db: Session, user: User, agent_id: uuid.UUID
+    ) -> "AgentSchedulesPublic":
+        """List an agent's schedules (``cinna agent schedule list``). Read."""
+        from app.models.agents.agent_schedule import AgentSchedulesPublic
+        from app.services.agents.agent_scheduler_service import AgentSchedulerService
+
+        AccountCLIService._resolve_owned_agent(db, user, agent_id)
+        schedules = AgentSchedulerService.get_agent_schedules(db, agent_id)
+        return AgentSchedulesPublic(data=schedules, count=len(schedules))
+
+    @staticmethod
+    def generate_schedule(
+        db: Session, user: User, agent_id: uuid.UUID, body: "ScheduleRequest"
+    ) -> "ScheduleResponse":
+        """Natural-language → CRON preview (``cinna agent schedule generate``).
+
+        Stateless: nothing is persisted. Lets the CLI turn "every weekday at
+        7am" into a cron string + next-execution preview before ``create``.
+        """
+        from app.models.agents.agent_schedule import ScheduleResponse
+        from app.services.agents.agent_scheduler_service import AgentSchedulerService
+
+        AccountCLIService._resolve_owned_agent(db, user, agent_id)
+        result = AgentSchedulerService.generate_schedule_preview(
+            natural_language=body.natural_language,
+            timezone=body.timezone,
+            schedule_type=body.schedule_type,
+            user=user,
+            db=db,
+        )
+        return ScheduleResponse(**result)
+
+    @staticmethod
+    async def create_schedule(
+        db: Session,
+        user: User,
+        agent_id: uuid.UUID,
+        body: "CreateScheduleRequest",
+        request: Request,
+    ) -> "AgentSchedule":
+        """Create a schedule (``cinna agent schedule create``).
+
+        Foreign-install-guarded; validates the type/command combo exactly like
+        the UI route; the cron-string is converted local→UTC and frequency-floor
+        validated inside ``AgentSchedulerService.create_schedule``. Audits
+        ``CLI_ACCOUNT_SCHEDULE_CREATED``.
+        """
+        from app.services.agents.agent_scheduler_service import (
+            AgentSchedulerService,
+            ScheduleError,
+        )
+
+        agent = AccountCLIService._resolve_owned_agent(db, user, agent_id)
+        AccountCLIService._guard_foreign_schedule_write(agent)
+
+        if body.schedule_type == "script_trigger":
+            if not body.command or not body.command.strip():
+                raise ScheduleError(
+                    "command is required for script_trigger schedules",
+                    status_code=400,
+                )
+        elif body.schedule_type != "static_prompt":
+            raise ScheduleError(
+                f"Invalid schedule_type '{body.schedule_type}'. Must be "
+                "'static_prompt' or 'script_trigger'",
+                status_code=400,
+            )
+
+        schedule = AgentSchedulerService.create_schedule(
+            session=db,
+            agent_id=agent_id,
+            name=body.name,
+            cron_string=body.cron_string,
+            timezone=body.timezone,
+            description=body.description,
+            prompt=body.prompt,
+            enabled=body.enabled,
+            schedule_type=body.schedule_type,
+            command=body.command,
+        )
+
+        await SecurityEventService.create_event(
+            session=db,
+            user_id=user.id,
+            data=SecurityEventCreate(
+                agent_id=agent_id,
+                event_type=CLI_ACCOUNT_SCHEDULE_CREATED,
+                severity="low",
+                details={
+                    "schedule_id": str(schedule.id),
+                    "schedule_type": schedule.schedule_type,
+                    "ip": _client_ip(request),
+                },
+            ),
+        )
+        return schedule
+
+    @staticmethod
+    async def update_schedule(
+        db: Session,
+        user: User,
+        agent_id: uuid.UUID,
+        schedule_id: uuid.UUID,
+        body: "UpdateScheduleRequest",
+        request: Request,
+    ) -> "AgentSchedule":
+        """Partial-update / toggle a schedule (``cinna agent schedule update``).
+
+        On a foreign install only ``enabled`` may change (the toggle the
+        consumer is allowed); any other set field → 403, mirroring the UI route.
+        Audits ``CLI_ACCOUNT_SCHEDULE_UPDATED``.
+        """
+        from app.services.agents.agent_scheduler_service import (
+            AgentSchedulerService,
+            ScheduleError,
+        )
+
+        agent = AccountCLIService._resolve_owned_agent(db, user, agent_id)
+        schedule = AgentSchedulerService.get_schedule_for_agent(
+            db, agent_id, schedule_id
+        )
+        fields = body.model_dump(exclude_unset=True)
+
+        if AgentService.is_foreign_install(agent) and set(fields.keys()) - {"enabled"}:
+            raise ScheduleError(
+                "Schedules on an installed bundle are managed by the publisher. "
+                "You can only enable or disable them.",
+                status_code=403,
+            )
+
+        updated = AgentSchedulerService.update_schedule(db, schedule, **fields)
+
+        await SecurityEventService.create_event(
+            session=db,
+            user_id=user.id,
+            data=SecurityEventCreate(
+                agent_id=agent_id,
+                event_type=CLI_ACCOUNT_SCHEDULE_UPDATED,
+                severity="low",
+                details={
+                    "schedule_id": str(schedule_id),
+                    "fields": sorted(fields.keys()),
+                    "ip": _client_ip(request),
+                },
+            ),
+        )
+        return updated
+
+    @staticmethod
+    async def delete_schedule(
+        db: Session,
+        user: User,
+        agent_id: uuid.UUID,
+        schedule_id: uuid.UUID,
+        request: Request,
+    ) -> None:
+        """Delete a schedule (``cinna agent schedule delete``).
+
+        Foreign-install-guarded (publisher-managed definitions). Audits
+        ``CLI_ACCOUNT_SCHEDULE_DELETED``.
+        """
+        from app.services.agents.agent_scheduler_service import AgentSchedulerService
+
+        agent = AccountCLIService._resolve_owned_agent(db, user, agent_id)
+        AccountCLIService._guard_foreign_schedule_write(agent)
+        schedule = AgentSchedulerService.get_schedule_for_agent(
+            db, agent_id, schedule_id
+        )
+        AgentSchedulerService.delete_schedule(db, schedule)
+
+        await SecurityEventService.create_event(
+            session=db,
+            user_id=user.id,
+            data=SecurityEventCreate(
+                agent_id=agent_id,
+                event_type=CLI_ACCOUNT_SCHEDULE_DELETED,
+                severity="low",
+                details={
+                    "schedule_id": str(schedule_id),
+                    "ip": _client_ip(request),
+                },
+            ),
+        )
+
+    @staticmethod
+    async def run_schedule(
+        db: Session,
+        user: User,
+        agent_id: uuid.UUID,
+        schedule_id: uuid.UUID,
+        request: Request,
+    ) -> "ManualRunResult":
+        """Trigger a schedule immediately (``cinna agent schedule run``).
+
+        Allowed on foreign installs too (Run now is a consumer-permitted action).
+        Returns the ``ManualRunResult`` (the route maps ``action`` → message).
+        Audits ``CLI_ACCOUNT_SCHEDULE_RUN`` (run spends tokens / spins a session).
+        """
+        from app.services.agents.agent_scheduler_service import AgentSchedulerService
+
+        AccountCLIService._resolve_owned_agent(db, user, agent_id)
+        AgentSchedulerService.get_schedule_for_agent(db, agent_id, schedule_id)
+        result = await AgentSchedulerService.execute_now(db, agent_id, schedule_id)
+
+        await SecurityEventService.create_event(
+            session=db,
+            user_id=user.id,
+            data=SecurityEventCreate(
+                agent_id=agent_id,
+                event_type=CLI_ACCOUNT_SCHEDULE_RUN,
+                severity="low",
+                details={
+                    "schedule_id": str(schedule_id),
+                    "action": result.action,
+                    "ip": _client_ip(request),
+                },
+            ),
+        )
+        return result
+
+    @staticmethod
+    def get_schedule_logs(
+        db: Session, user: User, agent_id: uuid.UUID, schedule_id: uuid.UUID
+    ) -> "AgentScheduleLogsPublic":
+        """List a schedule's execution logs (``cinna agent schedule logs``). Read."""
+        from app.models.agents.agent_schedule_log import AgentScheduleLogsPublic
+        from app.services.agents.agent_scheduler_service import AgentSchedulerService
+
+        AccountCLIService._resolve_owned_agent(db, user, agent_id)
+        AgentSchedulerService.get_schedule_for_agent(db, agent_id, schedule_id)
+        logs = AgentSchedulerService.get_schedule_logs(db, schedule_id)
+        return AgentScheduleLogsPublic(data=logs, count=len(logs))
+
+    # ── Status management (access / refresh / set pre-command) ───────────
+    # Mirror the agent Integrations → Agent status card. The status read +
+    # force-refresh are diagnostic (not audited, mirroring the REST status
+    # surface); setting the status-refresh pre-command is a config state change
+    # and is audited.
+
+    @staticmethod
+    def _status_snapshot_to_public(snapshot, agent_id: uuid.UUID) -> "AgentStatusPublic":
+        """Mirror of ``agent_status.py::_snapshot_to_public`` for the account verb."""
+        from app.models.agents.agent_status import AgentStatusPublic
+
+        return AgentStatusPublic(
+            agent_id=agent_id,
+            environment_id=snapshot.environment_id,
+            severity=snapshot.severity,
+            summary=snapshot.summary,
+            reported_at=snapshot.reported_at,
+            reported_at_source=snapshot.reported_at_source,
+            fetched_at=snapshot.fetched_at,
+            raw=snapshot.raw,
+            body=snapshot.body,
+            has_structured_metadata=snapshot.has_structured_metadata,
+            prev_severity=snapshot.prev_severity,
+            severity_changed_at=snapshot.severity_changed_at,
+            refresh_command_warning=snapshot.refresh_command_warning,
+        )
+
+    @staticmethod
+    async def get_agent_status(
+        db: Session, user: User, agent_id: uuid.UUID, force_refresh: bool
+    ) -> "AccountAgentStatusResult":
+        """Status snapshot + configured pre-command (``cinna agent status``).
+
+        ``force_refresh=True`` runs the full force flow (wake suspended env →
+        pre-command → live STATUS.md read → cache fallback) via the single
+        ``force_refresh_status`` entrypoint; otherwise the cached snapshot is
+        returned. Ownership 404-no-leak. Read — not audited.
+        """
+        from app.models.agents.agent_status import AgentStatusPublic
+        from app.models.cli.account_convenience import AccountAgentStatusResult
+        from app.services.agents.agent_status_service import AgentStatusService
+
+        agent = AccountCLIService._resolve_owned_agent(db, user, agent_id)
+        environment = AgentStatusService.get_primary_environment(
+            db, agent_id, agent.active_environment_id
+        )
+        if not environment:
+            status_public = AgentStatusPublic(agent_id=agent_id)
+        else:
+            if force_refresh:
+                snapshot = await AgentStatusService.force_refresh_status(
+                    environment, agent=agent
+                )
+            else:
+                snapshot = AgentStatusService.get_cached_status(environment)
+            status_public = AccountCLIService._status_snapshot_to_public(
+                snapshot, agent_id
+            )
+
+        return AccountAgentStatusResult(
+            status=status_public,
+            status_refresh_command=agent.status_refresh_command,
+        )
+
+    @staticmethod
+    async def set_status_refresh_command(
+        db: Session,
+        user: User,
+        agent_id: uuid.UUID,
+        command: str | None,
+        request: Request,
+    ) -> "AccountAgentStatusResult":
+        """Set the status-refresh pre-command (``cinna agent status set-command``).
+
+        Mirrors the Integrations → Agent status card command input — flips
+        ``status_refresh_command`` through ``AgentService.update_agent`` (the same
+        path the UI ``PATCH /agents/{id}`` uses). Returns the (cached) status plus
+        the new command value. Audits ``CLI_ACCOUNT_STATUS_COMMAND_SET``.
+        """
+        from app.models.agents.agent import AgentUpdate
+        from app.models.agents.agent_status import AgentStatusPublic
+        from app.models.cli.account_convenience import AccountAgentStatusResult
+        from app.services.agents.agent_status_service import AgentStatusService
+
+        # 404 no-leak ownership check (does NOT require a running env).
+        AccountCLIService._resolve_owned_agent(db, user, agent_id)
+
+        agent = await AgentService.update_agent(
+            session=db,
+            agent_id=agent_id,
+            data=AgentUpdate(status_refresh_command=command),
+            user_id=user.id,
+        )
+
+        await SecurityEventService.create_event(
+            session=db,
+            user_id=user.id,
+            data=SecurityEventCreate(
+                agent_id=agent_id,
+                event_type=CLI_ACCOUNT_STATUS_COMMAND_SET,
+                severity="low",
+                details={
+                    "command": command,
+                    "ip": _client_ip(request),
+                },
+            ),
+        )
+
+        environment = AgentStatusService.get_primary_environment(
+            db, agent_id, agent.active_environment_id
+        )
+        if environment:
+            status_public = AccountCLIService._status_snapshot_to_public(
+                AgentStatusService.get_cached_status(environment), agent_id
+            )
+        else:
+            status_public = AgentStatusPublic(agent_id=agent_id)
+
+        return AccountAgentStatusResult(
+            status=status_public,
+            status_refresh_command=agent.status_refresh_command,
+        )
 
     @staticmethod
     def list_discoverable_mcp_agents(

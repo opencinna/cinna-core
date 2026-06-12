@@ -29,6 +29,15 @@ from app.api.deps import (
 from app.models import Message
 from app.models.agent_api.agent_api_token import ConnectAgentApiResponse
 from app.models.agents.agent import AgentPublic
+from app.models.agents.agent_schedule import (
+    AgentSchedulePublic,
+    AgentSchedulesPublic,
+    CreateScheduleRequest,
+    ScheduleRequest,
+    ScheduleResponse,
+    UpdateScheduleRequest,
+)
+from app.models.agents.agent_schedule_log import AgentScheduleLogsPublic
 from app.models.cli.account_agent import AccountAgentsPublic
 from app.models.cli.account_convenience import (
     AccountAgentApiCallBody,
@@ -37,6 +46,7 @@ from app.models.cli.account_convenience import (
     AccountAgentApiRefreshBody,
     AccountAgentCreateBody,
     AccountAgentInspectResult,
+    AccountAgentStatusResult,
     AccountApiProxyRequest,
     AccountConnectAgentApiBody,
     AccountConnectMcpBody,
@@ -46,6 +56,7 @@ from app.models.cli.account_convenience import (
     AccountCredentialTypesPublic,
     AccountCredentialUpdateBody,
     AccountRestartEnvResult,
+    AccountStatusRefreshCommandBody,
 )
 from app.models.cli.cli_setup_token import CLISetupTokenCreate, CLISetupTokenCreated
 from app.models.cli.cli_token import (
@@ -965,6 +976,291 @@ async def account_connect_mcp(
             db=db, user=account_ctx.user, body=body, request=request
         )
     except MCPProviderError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+# ── Account CLI schedule management (full CRUD) ──────────────────────────────
+# Reach the agent Config → Schedules card through the account token so a local
+# coding agent can manage an agent's automatic-execution rules without the
+# browser. Ownership is enforced 404-no-leak (``resolve_agent_only`` →
+# ``AgentApiError``); the underlying CRUD delegates to ``AgentSchedulerService``
+# (the same service the UI route uses), preserving the foreign-install read-only
+# contract (consumers may toggle / run / view logs, not create / edit / delete).
+# Writes are ``require_developer``-gated; list / generate-preview / logs are open
+# diagnostic reads.
+
+# Map the manual-run action → user-facing message (copy lives in the route, not
+# the service — mirrors ``agents.py::_RUN_NOW_MESSAGES``).
+_ACCOUNT_SCHEDULE_RUN_MESSAGES = {
+    "executed": "Schedule triggered successfully",
+    "env_starting": (
+        "Environment is starting; the schedule will run automatically "
+        "once it's ready."
+    ),
+}
+
+
+@router.get(
+    "/account/agents/{agent_id}/schedules", response_model=AgentSchedulesPublic
+)
+def account_list_schedules(
+    agent_id: uuid.UUID,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """List an agent's schedules (``cinna agent schedule list``)."""
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    try:
+        return AccountCLIService.list_schedules(
+            db=db, user=account_ctx.user, agent_id=agent_id
+        )
+    except AgentApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.post(
+    "/account/agents/{agent_id}/schedules/generate", response_model=ScheduleResponse
+)
+def account_generate_schedule(
+    agent_id: uuid.UUID,
+    body: ScheduleRequest,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """Natural-language → CRON preview (``cinna agent schedule generate``).
+
+    Stateless: turns "every weekday at 7am" into a cron string + next-execution
+    preview before ``create``. Ownership-checked (404 no-leak), not audited.
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    try:
+        return AccountCLIService.generate_schedule(
+            db=db, user=account_ctx.user, agent_id=agent_id, body=body
+        )
+    except AgentApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.post(
+    "/account/agents/{agent_id}/schedules", response_model=AgentSchedulePublic
+)
+async def account_create_schedule(
+    agent_id: uuid.UUID,
+    body: CreateScheduleRequest,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """Create a schedule (``cinna agent schedule create``).
+
+    ``require_developer``-gated; foreign installs are publisher-managed (403).
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+    from app.services.agents.agent_scheduler_service import ScheduleError
+
+    _require_developer_account(account_ctx)
+    try:
+        return await AccountCLIService.create_schedule(
+            db=db, user=account_ctx.user, agent_id=agent_id, body=body, request=request
+        )
+    except AgentApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ScheduleError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.put(
+    "/account/agents/{agent_id}/schedules/{schedule_id}",
+    response_model=AgentSchedulePublic,
+)
+async def account_update_schedule(
+    agent_id: uuid.UUID,
+    schedule_id: uuid.UUID,
+    body: UpdateScheduleRequest,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """Update / toggle a schedule (``cinna agent schedule update``).
+
+    ``require_developer``-gated. On a foreign install only ``enabled`` may
+    change (403 for any other field) — the definition is publisher-authored.
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+    from app.services.agents.agent_scheduler_service import ScheduleError
+
+    _require_developer_account(account_ctx)
+    try:
+        return await AccountCLIService.update_schedule(
+            db=db,
+            user=account_ctx.user,
+            agent_id=agent_id,
+            schedule_id=schedule_id,
+            body=body,
+            request=request,
+        )
+    except AgentApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ScheduleError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.delete(
+    "/account/agents/{agent_id}/schedules/{schedule_id}", response_model=Message
+)
+async def account_delete_schedule(
+    agent_id: uuid.UUID,
+    schedule_id: uuid.UUID,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """Delete a schedule (``cinna agent schedule delete``).
+
+    ``require_developer``-gated; foreign installs are publisher-managed (403).
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+    from app.services.agents.agent_scheduler_service import ScheduleError
+
+    _require_developer_account(account_ctx)
+    try:
+        await AccountCLIService.delete_schedule(
+            db=db,
+            user=account_ctx.user,
+            agent_id=agent_id,
+            schedule_id=schedule_id,
+            request=request,
+        )
+        return Message(message="Schedule deleted successfully")
+    except AgentApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ScheduleError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.post(
+    "/account/agents/{agent_id}/schedules/{schedule_id}/run", response_model=Message
+)
+async def account_run_schedule(
+    agent_id: uuid.UUID,
+    schedule_id: uuid.UUID,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """Trigger a schedule immediately (``cinna agent schedule run``).
+
+    ``require_developer``-gated; allowed on foreign installs (Run now is a
+    consumer-permitted action). The message reflects whether the env was
+    already running or is being activated in the background.
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+    from app.services.agents.agent_scheduler_service import ScheduleError
+
+    _require_developer_account(account_ctx)
+    try:
+        result = await AccountCLIService.run_schedule(
+            db=db,
+            user=account_ctx.user,
+            agent_id=agent_id,
+            schedule_id=schedule_id,
+            request=request,
+        )
+        return Message(message=_ACCOUNT_SCHEDULE_RUN_MESSAGES[result.action])
+    except AgentApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ScheduleError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.get(
+    "/account/agents/{agent_id}/schedules/{schedule_id}/logs",
+    response_model=AgentScheduleLogsPublic,
+)
+def account_schedule_logs(
+    agent_id: uuid.UUID,
+    schedule_id: uuid.UUID,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """List a schedule's execution logs (``cinna agent schedule logs``)."""
+    from app.services.agent_api.agent_api_service import AgentApiError
+    from app.services.agents.agent_scheduler_service import ScheduleError
+
+    try:
+        return AccountCLIService.get_schedule_logs(
+            db=db, user=account_ctx.user, agent_id=agent_id, schedule_id=schedule_id
+        )
+    except AgentApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ScheduleError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+# ── Account CLI agent status management (access / refresh / set command) ──────
+# Reach the agent Integrations → Agent status card through the account token.
+# The status read + force-refresh are diagnostic (not audited); setting the
+# status-refresh pre-command is a config state change (audited,
+# ``require_developer``-gated). Ownership is enforced 404-no-leak.
+
+
+@router.get(
+    "/account/agents/{agent_id}/status", response_model=AccountAgentStatusResult
+)
+async def account_agent_status(
+    agent_id: uuid.UUID,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+    force_refresh: bool = False,
+) -> Any:
+    """Agent status snapshot + configured pre-command (``cinna agent status``).
+
+    ``force_refresh=true`` runs the full force flow (wake suspended env →
+    pre-command → live STATUS.md read → cache fallback). Read — not audited.
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    try:
+        return await AccountCLIService.get_agent_status(
+            db=db,
+            user=account_ctx.user,
+            agent_id=agent_id,
+            force_refresh=force_refresh,
+        )
+    except AgentApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.post(
+    "/account/agents/{agent_id}/status/refresh-command",
+    response_model=AccountAgentStatusResult,
+)
+async def account_set_status_refresh_command(
+    agent_id: uuid.UUID,
+    body: AccountStatusRefreshCommandBody,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """Set the status-refresh pre-command (``cinna agent status set-command``).
+
+    ``require_developer``-gated. Mirrors the Integrations → Agent status card's
+    command input; returns the (cached) status plus the new command value.
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    _require_developer_account(account_ctx)
+    try:
+        return await AccountCLIService.set_status_refresh_command(
+            db=db,
+            user=account_ctx.user,
+            agent_id=agent_id,
+            command=body.command,
+            request=request,
+        )
+    except AgentApiError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
 
 

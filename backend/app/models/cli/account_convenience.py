@@ -14,6 +14,7 @@ from typing import Any, Literal
 from pydantic import field_validator
 from sqlmodel import Field, SQLModel
 
+from app.models.agents.agent_status import AgentStatusPublic
 from app.models.credentials.credential import CredentialPublic, CredentialType
 
 
@@ -153,6 +154,34 @@ class AccountRestartEnvResult(SQLModel):
     environment_id: uuid.UUID
     status: str
     status_message: str | None = None
+
+
+class AccountStatusRefreshCommandBody(SQLModel):
+    """Set an agent's status-refresh pre-command — ``cinna agent status set-command``.
+
+    Mirrors the Integrations → Agent status card's command input. The command
+    is a raw shell/Python string or a ``/run:<name>`` reference (resolved against
+    the agent's ``CLI_COMMANDS.yaml``) that runs inside the container immediately
+    before every forced/live STATUS.md read. ``None`` / empty string is a
+    deliberate opt-out (no pre-command, no warning). The platform default is
+    ``/run:status``.
+    """
+
+    command: str | None = Field(default=None, max_length=1024)
+
+
+class AccountAgentStatusResult(SQLModel):
+    """Combined status read for ``cinna agent status`` (show / refresh).
+
+    Bundles the agent's self-reported ``STATUS.md`` snapshot with its configured
+    ``status_refresh_command`` so a builder sees both the live state and the
+    pre-command that produced it in one read — the CLI analogue of the
+    Integrations → Agent status card. On a force refresh the snapshot's
+    ``refresh_command_warning`` reports a pre-command that did not run cleanly.
+    """
+
+    status: AgentStatusPublic
+    status_refresh_command: str | None = None
 
 
 class AccountConnectMcpBody(SQLModel):

@@ -2951,3 +2951,319 @@ def test_account_knowledge_search(
 # by a unit test for _RateLimiter directly.
 #
 # def test_proxy_rate_limit(...) → SKIPPED (coverage gap — see note above)
+
+
+# ── Scenario 22: Account-CLI schedule management (full CRUD) ──────────────────
+
+
+def test_account_schedule_management(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    Account-CLI schedule verbs — the agent Config → Schedules card reached
+    through the account token:
+
+      GET  /account/agents/{id}/schedules                 — list
+      POST /account/agents/{id}/schedules/generate        — NL → cron preview
+      POST /account/agents/{id}/schedules                 — create
+      PUT  /account/agents/{id}/schedules/{sid}           — update / toggle
+      POST /account/agents/{id}/schedules/{sid}/run       — run now
+      GET  /account/agents/{id}/schedules/{sid}/logs      — logs
+      DELETE /account/agents/{id}/schedules/{sid}         — delete
+
+    Covers:
+      1. empty list on a fresh agent
+      2. generate preview (AI mocked) → cron + next_execution
+      3. create static_prompt schedule → 200, fields echoed
+      4. script_trigger create without command → 400
+      5. list reflects the created schedule
+      6. update (toggle enabled) → 200, enabled flips
+      7. run now → 200, "triggered" message (stub env running)
+      8. logs → 200, list shape
+      9. delete → 200; subsequent list is empty
+     10. gating: ghost agent → 404 (no-leak); other user's agent → 404;
+         regular user JWT → 401; demoted agent-user account token → 403 on write
+     11. foreign (bundle) install → 403 on create (publisher-managed)
+    """
+    from unittest.mock import patch
+
+    account_jwt, _ = bootstrap_account_token(
+        client, superuser_token_headers, machine_name="Schedule Mgmt Machine"
+    )
+    acc_headers = account_cli_headers(account_jwt)
+
+    agent = create_agent_via_api(client, superuser_token_headers)
+    drain_tasks()
+    agent_id = agent["id"]
+    base = f"{_BASE}/account/agents/{agent_id}/schedules"
+
+    # ── Phase 1: empty list ──────────────────────────────────────────────
+    r = client.get(base, headers=acc_headers)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"data": [], "count": 0}
+
+    # ── Phase 2: generate preview (AI mocked) ────────────────────────────
+    with patch(
+        "app.services.ai_functions.ai_functions_service.AIFunctionsService.generate_schedule",
+        return_value={
+            "success": True,
+            "cron_string": "0 9 * * 1-5",
+            "description": "Every weekday at 09:00",
+        },
+    ):
+        r = client.post(
+            f"{base}/generate",
+            headers=acc_headers,
+            json={"natural_language": "every weekday at 9am", "timezone": "UTC"},
+        )
+    assert r.status_code == 200, r.text
+    gen = r.json()
+    assert gen["success"] is True
+    assert gen["cron_string"] == "0 9 * * 1-5"
+    assert gen["next_execution"] is not None
+
+    # ── Phase 3: create a static_prompt schedule ─────────────────────────
+    r = client.post(
+        base,
+        headers=acc_headers,
+        json={
+            "name": "Daily report",
+            "cron_string": "0 9 * * 1-5",
+            "timezone": "UTC",
+            "description": "Every weekday at 9am",
+            "prompt": "Produce the daily report",
+            "enabled": True,
+            "schedule_type": "static_prompt",
+        },
+    )
+    assert r.status_code == 200, f"Create must be 200, got {r.status_code}: {r.text}"
+    created = r.json()
+    schedule_id = created["id"]
+    assert created["name"] == "Daily report"
+    assert created["schedule_type"] == "static_prompt"
+    assert created["enabled"] is True
+    assert len(created["cron_string"].split()) == 5
+
+    # ── Phase 4: script_trigger without command → 400 ────────────────────
+    r = client.post(
+        base,
+        headers=acc_headers,
+        json={
+            "name": "Bad trigger",
+            "cron_string": "*/5 * * * *",
+            "timezone": "UTC",
+            "description": "missing command",
+            "schedule_type": "script_trigger",
+        },
+    )
+    assert r.status_code == 400, (
+        f"script_trigger create without command must be 400, got {r.status_code}"
+    )
+
+    # ── Phase 5: list reflects the schedule ──────────────────────────────
+    r = client.get(base, headers=acc_headers)
+    assert r.status_code == 200, r.text
+    listing = r.json()
+    assert listing["count"] == 1
+    assert listing["data"][0]["id"] == schedule_id
+
+    # ── Phase 6: update (toggle disabled) ────────────────────────────────
+    r = client.put(
+        f"{base}/{schedule_id}",
+        headers=acc_headers,
+        json={"enabled": False},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["enabled"] is False
+
+    # ── Phase 7: run now → 200, message present ──────────────────────────
+    r = client.post(f"{base}/{schedule_id}/run", headers=acc_headers)
+    assert r.status_code == 200, f"Run now must be 200, got {r.status_code}: {r.text}"
+    assert "message" in r.json()
+    drain_tasks()
+
+    # ── Phase 8: logs → 200, list shape ──────────────────────────────────
+    r = client.get(f"{base}/{schedule_id}/logs", headers=acc_headers)
+    assert r.status_code == 200, r.text
+    logs = r.json()
+    assert "data" in logs and "count" in logs
+
+    # ── Phase 9: delete → 200; list empty again ──────────────────────────
+    r = client.delete(f"{base}/{schedule_id}", headers=acc_headers)
+    assert r.status_code == 200, r.text
+    r = client.get(base, headers=acc_headers)
+    assert r.json()["count"] == 0
+
+    # ── Phase 10a: ghost agent → 404 (no-leak) ───────────────────────────
+    ghost = str(uuid.uuid4())
+    r = client.get(f"{_BASE}/account/agents/{ghost}/schedules", headers=acc_headers)
+    assert r.status_code == 404, f"Ghost agent list must be 404, got {r.status_code}"
+
+    # ── Phase 10b: other user's agent → 404 (no-leak) ────────────────────
+    other_user, other_headers = _make_user_and_headers(client)
+    promote_to_developer(client, superuser_token_headers, other_user["id"])
+    other_jwt, _ = bootstrap_account_token(
+        client, other_headers, machine_name="Other Schedule Machine"
+    )
+    other_acc_headers = account_cli_headers(other_jwt)
+    other_agent = create_agent_via_api(client, other_headers)
+    drain_tasks()
+    r = client.get(
+        f"{_BASE}/account/agents/{agent_id}/schedules", headers=other_acc_headers
+    )
+    assert r.status_code == 404, (
+        f"Listing another user's agent schedules must be 404 (no-leak), got {r.status_code}"
+    )
+
+    # ── Phase 10c: regular user JWT → 401 (account CLI token required) ────
+    r = client.get(base, headers=superuser_token_headers)
+    assert r.status_code == 401, (
+        f"Regular user JWT must be rejected on account schedules, got {r.status_code}"
+    )
+
+    # ── Phase 10d: demoted-to-agent-user account token → 403 on write ────
+    client.patch(
+        f"{settings.API_V1_STR}/users/{other_user['id']}/role",
+        headers=superuser_token_headers,
+        json={"role": "agent-user"},
+    )
+    r = client.post(
+        f"{_BASE}/account/agents/{other_agent['id']}/schedules",
+        headers=other_acc_headers,
+        json={
+            "name": "Should 403",
+            "cron_string": "0 9 * * *",
+            "timezone": "UTC",
+            "description": "demoted user write",
+        },
+    )
+    assert r.status_code == 403, (
+        f"Create by a demoted (agent-user) account token must be 403, got {r.status_code}"
+    )
+
+    # ── Phase 11: foreign (bundle) install → 403 on create ───────────────
+    publisher_agent = create_agent_via_api(client, superuser_token_headers)
+    drain_tasks()
+    publish_bundle_and_make_public(
+        client, superuser_token_headers, publisher_agent["id"]
+    )
+    bundle_id = client.get(
+        f"{settings.API_V1_STR}/agents/{publisher_agent['id']}",
+        headers=superuser_token_headers,
+    ).json()["bundle_id"]
+    # Install into a fresh developer's account so the install is a foreign one.
+    consumer_user, consumer_headers = _make_user_and_headers(client)
+    promote_to_developer(client, superuser_token_headers, consumer_user["id"])
+    consumer_jwt, _ = bootstrap_account_token(
+        client, consumer_headers, machine_name="Consumer Schedule Machine"
+    )
+    consumer_acc_headers = account_cli_headers(consumer_jwt)
+    install = install_bundle(client, consumer_headers, bundle_id)
+    drain_tasks()
+    foreign_id = install["id"]
+    r = client.post(
+        f"{_BASE}/account/agents/{foreign_id}/schedules",
+        headers=consumer_acc_headers,
+        json={
+            "name": "Consumer cannot create",
+            "cron_string": "0 9 * * *",
+            "timezone": "UTC",
+            "description": "publisher-managed",
+        },
+    )
+    assert r.status_code == 403, (
+        f"Creating a schedule on a foreign install must be 403, got {r.status_code}: {r.text}"
+    )
+
+
+# ── Scenario 23: Account-CLI agent status (access / refresh / set command) ────
+
+
+def test_account_agent_status(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    Account-CLI status verbs — the agent Integrations → Agent status card
+    reached through the account token:
+
+      GET  /account/agents/{id}/status[?force_refresh=]   — access / refresh
+      POST /account/agents/{id}/status/refresh-command    — set pre-command
+
+    Covers:
+      1. cached read → 200, AccountAgentStatusResult shape (status + command)
+      2. force_refresh read → 200, never raises (cache fallback)
+      3. set-command → 200, status_refresh_command updated and echoed back
+      4. subsequent read reflects the new command
+      5. gating: ghost agent → 404 (no-leak); regular user JWT → 401;
+         demoted agent-user account token → 403 on set-command
+    """
+    account_jwt, _ = bootstrap_account_token(
+        client, superuser_token_headers, machine_name="Status Mgmt Machine"
+    )
+    acc_headers = account_cli_headers(account_jwt)
+
+    agent = create_agent_via_api(client, superuser_token_headers)
+    drain_tasks()
+    agent_id = agent["id"]
+    base = f"{_BASE}/account/agents/{agent_id}/status"
+
+    # ── Phase 1: cached read → 200, result shape ─────────────────────────
+    r = client.get(base, headers=acc_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "status" in body and "status_refresh_command" in body
+    assert body["status"]["agent_id"] == agent_id
+
+    # ── Phase 2: force refresh → 200, never raises ───────────────────────
+    r = client.get(base, headers=acc_headers, params={"force_refresh": "true"})
+    assert r.status_code == 200, f"Force refresh must be 200, got {r.status_code}: {r.text}"
+    assert "status" in r.json()
+
+    # ── Phase 3: set the status-refresh pre-command ──────────────────────
+    r = client.post(
+        f"{base}/refresh-command",
+        headers=acc_headers,
+        json={"command": "/run:custom-status"},
+    )
+    assert r.status_code == 200, f"Set-command must be 200, got {r.status_code}: {r.text}"
+    assert r.json()["status_refresh_command"] == "/run:custom-status"
+
+    # ── Phase 4: subsequent read reflects the new command ────────────────
+    r = client.get(base, headers=acc_headers)
+    assert r.json()["status_refresh_command"] == "/run:custom-status"
+
+    # ── Phase 5a: ghost agent → 404 (no-leak) ────────────────────────────
+    ghost = str(uuid.uuid4())
+    r = client.get(f"{_BASE}/account/agents/{ghost}/status", headers=acc_headers)
+    assert r.status_code == 404, f"Ghost agent status must be 404, got {r.status_code}"
+
+    # ── Phase 5b: regular user JWT → 401 ─────────────────────────────────
+    r = client.get(base, headers=superuser_token_headers)
+    assert r.status_code == 401, (
+        f"Regular user JWT must be rejected on account status, got {r.status_code}"
+    )
+
+    # ── Phase 5c: demoted agent-user account token → 403 on set-command ──
+    other_user, other_headers = _make_user_and_headers(client)
+    promote_to_developer(client, superuser_token_headers, other_user["id"])
+    other_jwt, _ = bootstrap_account_token(
+        client, other_headers, machine_name="Other Status Machine"
+    )
+    other_acc_headers = account_cli_headers(other_jwt)
+    other_agent = create_agent_via_api(client, other_headers)
+    drain_tasks()
+    client.patch(
+        f"{settings.API_V1_STR}/users/{other_user['id']}/role",
+        headers=superuser_token_headers,
+        json={"role": "agent-user"},
+    )
+    r = client.post(
+        f"{_BASE}/account/agents/{other_agent['id']}/status/refresh-command",
+        headers=other_acc_headers,
+        json={"command": "/run:status"},
+    )
+    assert r.status_code == 403, (
+        f"Set-command by a demoted (agent-user) account token must be 403, got {r.status_code}"
+    )

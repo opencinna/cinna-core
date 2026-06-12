@@ -16,6 +16,9 @@
   - `AccountCredentialDraftResult` — `{credential: CredentialPublic, required_fields: list[str], setup_url: str}`. The create response — the draft plus what the user must fill and where.
   - `AccountCredentialTypeInfo` — `{type: CredentialType, required_fields: list[str], note: str|None}`; `AccountCredentialTypesPublic` — `{data, count}`.
   - `AccountApiProxyRequest` — `{method: Literal[GET,POST,PUT,PATCH,DELETE], path: str, query: dict|None, json_body: Any|None, headers: dict|None}`. `method` validated as uppercase via `field_validator`. `headers` accepted-but-ignored in v1 (O3 — only the minted user JWT is sent inward). Reuses existing response models (`AgentPublic`, `ConnectAgentApiResponse`, `MCPProviderConnectionResponse`, `DiscoverableAgents`); escape-hatch response is a raw `fastapi.Response` passthrough.
+  - `AccountStatusRefreshCommandBody` — `{command: str|None}` (max 1024) (Phase 5). Body for `cinna agent status set-command`. `None`/empty = deliberate opt-out.
+  - `AccountAgentStatusResult` — `{status: AgentStatusPublic, status_refresh_command: str|None}` (Phase 5). The combined status read — the `STATUS.md` snapshot plus the configured pre-command, returned by both the status get and the set-command verbs. (Imports `AgentStatusPublic` from `agents/agent_status.py`.)
+  - **Schedule verbs reuse existing schedule models** — no new request/response models. `ScheduleRequest`, `ScheduleResponse`, `CreateScheduleRequest`, `UpdateScheduleRequest`, `AgentSchedulePublic`, `AgentSchedulesPublic` (from `models/agents/agent_schedule.py`) and `AgentScheduleLogsPublic` (from `models/agents/agent_schedule_log.py`); run-now returns `Message`.
 
 ### Backend — Models (Phases 1–2)
 
@@ -49,6 +52,19 @@
   - `POST /api/v1/cli/account/agents/{agent_id}/restart-env` — `AccountCLIContextDep`; path `agent_id`; response `AccountRestartEnvResult` (`{environment_id, status, status_message}`). `AgentService.assert_can_build` gate; wraps `EnvironmentService.restart_environment` (blocks until restarted); maps `CanBuildError` (404/403), `AgentApiError` / `AgentEnvironmentError` (their `status_code`), `ValueError` → 400 (no active env). **Audited** (`CLI_ACCOUNT_ENV_RESTARTED`). Status codes: 200 / 400 / 401 / 403 / 404.
   - `GET /api/v1/cli/account/agents/{agent_id}/inspect` — `AccountCLIContextDep`; path `agent_id`; response `AccountAgentInspectResult` (prompts from the `Agent` DB fields, feature flags, connected credential **name + type only** via `CredentialsService.get_agent_credentials`, live agent-api status when enabled). Ownership-checked (404 no-leak); diagnostic, not audited. Status codes: 200 / 401 / 404.
   - `POST /api/v1/cli/account/api-proxy` — `AccountCLIContextDep`; body `AccountApiProxyRequest`; raw `Response` passthrough (no `response_model`); maps `ApiProxyDenied` → 403 (`excluded_*`) or 400 (`malformed_path`); 413 (body), 429 (rate limit), 502 (streaming/oversize). Status codes: 200/4xx-5xx (inner) / 400 / 403 / 413 / 429 / 502.
+
+  **Schedule management (Phase 5)** — thin wrappers over `AgentSchedulerService`, nested under `/account/agents/{agent_id}/schedules`. Ownership is enforced 404-no-leak via `AccountCLIService._resolve_owned_agent` (→ `AgentApiError`); the foreign-install read-only contract matches the UI route. Routes catch `AgentApiError` (ownership) and `ScheduleError` (the scheduler service's status-coded exception). A module-level `_ACCOUNT_SCHEDULE_RUN_MESSAGES` maps the `ManualRunResult.action` → message (copy stays in the route, mirroring `agents.py::_RUN_NOW_MESSAGES`):
+  - `GET /api/v1/cli/account/agents/{agent_id}/schedules` — `AccountCLIContextDep`; response `AgentSchedulesPublic`; read (no `require_developer`).
+  - `POST /api/v1/cli/account/agents/{agent_id}/schedules/generate` — `AccountCLIContextDep`; body `ScheduleRequest`; response `ScheduleResponse`; stateless AI preview (no `require_developer`).
+  - `POST /api/v1/cli/account/agents/{agent_id}/schedules` — `AccountCLIContextDep` + `require_developer`; body `CreateScheduleRequest`; response `AgentSchedulePublic`. Foreign install → 403; `script_trigger` without command / unknown type / too-frequent cadence → 400. Emits `CLI_ACCOUNT_SCHEDULE_CREATED`.
+  - `PUT /api/v1/cli/account/agents/{agent_id}/schedules/{schedule_id}` — `AccountCLIContextDep` + `require_developer`; body `UpdateScheduleRequest`; response `AgentSchedulePublic`. On a foreign install only `enabled` may change (any other set field → 403). Emits `CLI_ACCOUNT_SCHEDULE_UPDATED`.
+  - `DELETE /api/v1/cli/account/agents/{agent_id}/schedules/{schedule_id}` — `AccountCLIContextDep` + `require_developer`; response `Message`. Foreign install → 403. Emits `CLI_ACCOUNT_SCHEDULE_DELETED`.
+  - `POST /api/v1/cli/account/agents/{agent_id}/schedules/{schedule_id}/run` — `AccountCLIContextDep` + `require_developer`; response `Message` (env-state-aware). Allowed on foreign installs. Emits `CLI_ACCOUNT_SCHEDULE_RUN`.
+  - `GET /api/v1/cli/account/agents/{agent_id}/schedules/{schedule_id}/logs` — `AccountCLIContextDep`; response `AgentScheduleLogsPublic`; read (no `require_developer`).
+
+  **Status management (Phase 5)** — thin wrappers over `AgentStatusService` + `AgentService`, nested under `/account/agents/{agent_id}/status`. Ownership 404-no-leak via `_resolve_owned_agent`:
+  - `GET /api/v1/cli/account/agents/{agent_id}/status?force_refresh=bool` — `AccountCLIContextDep`; response `AccountAgentStatusResult` (snapshot + `status_refresh_command`). `force_refresh=true` runs the full `force_refresh_status` flow (wake suspended env → pre-command → live fetch → cache fallback; never raises). Read — not audited.
+  - `POST /api/v1/cli/account/agents/{agent_id}/status/refresh-command` — `AccountCLIContextDep` + `require_developer`; body `AccountStatusRefreshCommandBody`; response `AccountAgentStatusResult`. Flips `status_refresh_command` via `AgentService.update_agent`. Emits `CLI_ACCOUNT_STATUS_COMMAND_SET`.
 
   **Knowledge search:**
   - `async search_knowledge(db, user, query, topic=None) -> list[dict]` — account-level analogue of the per-agent knowledge search. No `require_developer` (read). Delegates to `CLIService.search_user_knowledge` with `workspace_id=None`. No SecurityEvent / audit (high-frequency read; mirrors the unaudited per-agent route).
@@ -132,6 +148,17 @@
     - `async update_credential_metadata(db, user, credential_id, body, request) -> CredentialPublic` — builds `CredentialUpdate` from provided safe fields only (defensively pops any `credential_data`), delegates to `CredentialsService.update_credential`, emits `CLI_ACCOUNT_CREDENTIAL_UPDATED`.
     - `async delete_credential(db, user, credential_id, force, request)` — delegates to `CredentialsService.delete_credential` (propagates `CredentialInUseError`/`ValueError`), emits `CLI_ACCOUNT_CREDENTIAL_DELETED`.
     - `async share_credential_with_agent(db, user, credential_id, agent_id, request)` — delegates to `CredentialsService.link_credential_to_agent`, emits `CLI_ACCOUNT_CREDENTIAL_SHARED_WITH_AGENT`.
+  - **Schedule + status management (Phase 5)** — thin delegators over `AgentSchedulerService` / `AgentStatusService` / `AgentService`:
+    - `_resolve_owned_agent(db, user, agent_id) -> Agent` — shared 404-no-leak ownership resolve (delegates to `AgentApiService.resolve_agent_only`); used by every schedule + status verb.
+    - `_guard_foreign_schedule_write(agent)` — raises `ScheduleError(..., 403)` on a foreign (bundle-consumer) install; mirrors the UI route guard.
+    - `list_schedules` / `generate_schedule` / `get_schedule_logs` — sync reads (resolve ownership, delegate to `AgentSchedulerService.get_agent_schedules` / `generate_schedule_preview` / `get_schedule_logs`). Not audited.
+    - `async create_schedule(db, user, agent_id, body, request)` — foreign-guard + type/command validation (same as the UI route), delegate to `AgentSchedulerService.create_schedule`, emit `CLI_ACCOUNT_SCHEDULE_CREATED`.
+    - `async update_schedule(db, user, agent_id, schedule_id, body, request)` — `get_schedule_for_agent` (404), foreign-install enabled-only guard, delegate to `AgentSchedulerService.update_schedule(**exclude_unset)`, emit `CLI_ACCOUNT_SCHEDULE_UPDATED`.
+    - `async delete_schedule(db, user, agent_id, schedule_id, request)` — foreign-guard, `get_schedule_for_agent`, `delete_schedule`, emit `CLI_ACCOUNT_SCHEDULE_DELETED`.
+    - `async run_schedule(db, user, agent_id, schedule_id, request) -> ManualRunResult` — `get_schedule_for_agent`, `execute_now`, emit `CLI_ACCOUNT_SCHEDULE_RUN`. Foreign installs allowed.
+    - `_status_snapshot_to_public(snapshot, agent_id)` — local mirror of `agent_status.py::_snapshot_to_public`.
+    - `async get_agent_status(db, user, agent_id, force_refresh) -> AccountAgentStatusResult` — resolves the primary environment; `force_refresh` → `AgentStatusService.force_refresh_status` else `get_cached_status`; returns snapshot + `agent.status_refresh_command`. Not audited.
+    - `async set_status_refresh_command(db, user, agent_id, command, request) -> AccountAgentStatusResult` — ownership-check, `AgentService.update_agent(AgentUpdate(status_refresh_command=command))`, emit `CLI_ACCOUNT_STATUS_COMMAND_SET`, return cached status + the new command.
 
 ### Backend — Services (Phases 1–2)
 
@@ -252,6 +279,8 @@
   - `CLI_ACCOUNT_CREDENTIAL_CREATED` / `CLI_ACCOUNT_CREDENTIAL_UPDATED` / `CLI_ACCOUNT_CREDENTIAL_DELETED` / `CLI_ACCOUNT_CREDENTIAL_SHARED_WITH_AGENT` — one per credential drafting write (create/update/delete/attach). Discrete, infrequent state changes, audited per call (mirrors the connect verbs).
   - `CLI_ACCOUNT_AGENT_API_ENABLED = "CLI_ACCOUNT_AGENT_API_ENABLED"` — written on `agent-api enable` (and `--disable`); `details={enabled, ip}`, `agent_id` = producer. `refresh` / `spec` / `call` are diagnostic and **not** audited (mirrors the unaudited credential *reads*).
   - `CLI_ACCOUNT_ENV_RESTARTED = "CLI_ACCOUNT_ENV_RESTARTED"` — written on `agent restart-env` (a build-rights state change that bounces the container); `details={environment_id, ip}`, `agent_id` = target. `agent show` (inspect) is diagnostic and **not** audited.
+  - `CLI_ACCOUNT_SCHEDULE_CREATED` / `CLI_ACCOUNT_SCHEDULE_UPDATED` / `CLI_ACCOUNT_SCHEDULE_DELETED` / `CLI_ACCOUNT_SCHEDULE_RUN` (Phase 5) — one per schedule write (`severity="low"`); `agent_id` = target. `list` / `generate` / `logs` are diagnostic reads and **not** audited.
+  - `CLI_ACCOUNT_STATUS_COMMAND_SET` (Phase 5) — written on `agent status set-command`; `details={command, ip}`, `agent_id` = target. `status show` / `refresh` are diagnostic and **not** audited.
 
 ### Frontend — Components
 
@@ -339,6 +368,9 @@
     responses are structurally valid tarballs
 
   - **Scenario 21b** — `POST /account/knowledge/search`: valid account token + query → 200, `{"results": [...]}` shape; optional `topic` param accepted; per-agent CLI token → 401; regular user JWT → 401; revoked account token → 401.
+
+  - **Scenario 22** (`test_account_schedule_management`) — full schedule CRUD via the account token: empty list → generate-preview (AI mocked) → create static_prompt → `script_trigger` without command 400 → list reflects → update toggle → run now (stub env running) → logs → delete → empty list; gating (ghost 404, other user's agent 404 no-leak, user JWT 401, demoted agent-user 403 on write); **foreign (bundle) install → 403 on create** (publish + install a bundle into a fresh developer's account, then assert create is 403).
+  - **Scenario 23** (`test_account_agent_status`) — status verbs: cached read → `AccountAgentStatusResult` shape (`status` + `status_refresh_command`); force refresh never raises; set-command updates and echoes the new command; subsequent read reflects it; gating (ghost 404, user JWT 401, demoted agent-user 403 on set-command).
 
   **Phase 4 additional assertions (agentic-teams escape-hatch reachability):**
   The Phase 3 chokepoint test (`test_account_api_proxy_policy.py`) asserts that
@@ -431,6 +463,15 @@ Response:
 | `POST` | `/api/v1/cli/account/credentials/{credential_id}/share-with-agent` | 200 / 400 / 403 / 404 | Attach credential to an owned agent; `require_developer`-gated; body `AccountCredentialShareBody`; response `Message` |
 | `POST` | `/api/v1/cli/account/knowledge/search` | 200 / 401 | Search knowledge sources accessible to the account user; body `KnowledgeSearchBody {query, topic?}`; response `{results: [{content, source, similarity}]}`; empty list when no accessible sources; no `require_developer` (read); no audit |
 | `POST` | `/api/v1/cli/account/api-proxy` | inner / 400 / 403 / 413 / 429 / 502 | Generic escape hatch; body `AccountApiProxyRequest`; raw `Response` passthrough |
+| `GET` | `/api/v1/cli/account/agents/{agent_id}/schedules` | 200 / 401 / 404 | List schedules; response `AgentSchedulesPublic` |
+| `POST` | `/api/v1/cli/account/agents/{agent_id}/schedules/generate` | 200 / 401 / 404 | NL → cron preview (stateless); body `ScheduleRequest`; response `ScheduleResponse` |
+| `POST` | `/api/v1/cli/account/agents/{agent_id}/schedules` | 200 / 400 / 401 / 403 / 404 | Create schedule; `require_developer`; foreign install → 403; body `CreateScheduleRequest` |
+| `PUT` | `/api/v1/cli/account/agents/{agent_id}/schedules/{schedule_id}` | 200 / 400 / 401 / 403 / 404 | Update / toggle; `require_developer`; foreign install enabled-only (else 403); body `UpdateScheduleRequest` |
+| `DELETE` | `/api/v1/cli/account/agents/{agent_id}/schedules/{schedule_id}` | 200 / 401 / 403 / 404 | Delete; `require_developer`; foreign install → 403; response `Message` |
+| `POST` | `/api/v1/cli/account/agents/{agent_id}/schedules/{schedule_id}/run` | 200 / 400 / 401 / 404 | Run now; `require_developer`; allowed on foreign installs; response `Message` |
+| `GET` | `/api/v1/cli/account/agents/{agent_id}/schedules/{schedule_id}/logs` | 200 / 401 / 404 | Execution logs (last 50); response `AgentScheduleLogsPublic` |
+| `GET` | `/api/v1/cli/account/agents/{agent_id}/status` | 200 / 401 / 404 | Status snapshot + configured pre-command; `?force_refresh=`; response `AccountAgentStatusResult` |
+| `POST` | `/api/v1/cli/account/agents/{agent_id}/status/refresh-command` | 200 / 401 / 403 / 404 | Set `status_refresh_command`; `require_developer`; body `AccountStatusRefreshCommandBody`; response `AccountAgentStatusResult` |
 
 **Phase 4 note:** No new routes were added. Agentic-teams team/node/connection CRUD
 is reached entirely through `POST /api/v1/cli/account/api-proxy`. The agentic-teams
