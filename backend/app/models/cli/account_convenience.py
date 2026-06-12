@@ -80,6 +80,81 @@ class AccountAgentApiRefreshBody(SQLModel):
     agent_id: uuid.UUID
 
 
+class AccountAgentApiCallBody(SQLModel):
+    """Owner-side smoke test for a producer API — ``cinna agent-api call``.
+
+    Invokes one endpoint on the producer's *own* REST API through the
+    owner-preview proxy (no consumer token, no policy edge — same semantics as
+    the UI "try it" proxy), so a builder can verify an endpoint in one round
+    trip instead of hand-rolling a consumer probe. Query params are forwarded
+    (the friction that made this verb necessary), so this catches a silent
+    query-drop directly.
+    """
+
+    agent_id: uuid.UUID
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] = "GET"
+    path: str = Field(min_length=1, max_length=2048)
+    query: dict[str, str | list[str]] | None = None
+    json_body: Any | None = None
+
+    @field_validator("method", mode="before")
+    @classmethod
+    def _upper_method(cls, v: Any) -> Any:
+        return v.upper() if isinstance(v, str) else v
+
+
+class AccountAgentApiCallResult(SQLModel):
+    """Buffered response from an ``agent-api call`` smoke test.
+
+    The producer response is buffered (not streamed) so the CLI can print it
+    plainly. ``body`` is the decoded text; ``is_json`` lets the CLI pretty-print
+    without re-sniffing the content type.
+    """
+
+    status_code: int
+    headers: dict[str, str]
+    body: str
+    is_json: bool
+
+
+class AccountAgentInspectCredentialItem(SQLModel):
+    """One connected credential in an agent inspection — metadata only.
+
+    SECURITY: name + type ONLY. No ``credential_data`` / secret ever crosses
+    this boundary (preserves the account token's no-credential-secrets rule).
+    """
+
+    name: str
+    type: CredentialType
+
+
+class AccountAgentInspectResult(SQLModel):
+    """Effective agent config as the runtime sees it — ``cinna agent show``.
+
+    Aggregates the agent's prompts (the DB fields that sync verbatim into the
+    workspace prompt docs the runtime reads), its enabled features, and the
+    metadata of its connected credentials, in one read — so a builder can
+    confirm "is what I edited actually live?" without three round trips.
+    ``agent_api_status`` is included when the REST API feature is enabled.
+    """
+
+    id: uuid.UUID
+    name: str
+    description: str | None = None
+    features: dict[str, bool]
+    prompts: dict[str, str | None]
+    credentials: list[AccountAgentInspectCredentialItem]
+    agent_api_status: dict[str, Any] | None = None
+
+
+class AccountRestartEnvResult(SQLModel):
+    """Result of ``cinna agent restart-env`` — the env's post-restart state."""
+
+    environment_id: uuid.UUID
+    status: str
+    status_message: str | None = None
+
+
 class AccountConnectMcpBody(SQLModel):
     """Wrap the ``mcp_provider`` agent2agent connect helper.
 

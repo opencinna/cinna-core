@@ -125,15 +125,28 @@ class AgentApiSupervisor:
             return ok
 
     async def get_status(self) -> dict:
-        """Build/run status dict for the ``/agent-api/_status`` route."""
+        """Build/run status dict for the ``/agent-api/_status`` route.
+
+        Live health is ground truth for the serving child: if the child is
+        responding, the import succeeded, so a stale ``_boot_error`` captured
+        from a *previous* crashed boot is cleared here. uvicorn ``--reload``
+        restarts the app worker in-process without going through ``_spawn``, so
+        without this a transient boot error would stick on screen even after the
+        producer fixed the code and the child self-healed — the "poisoned API"
+        symptom. The reported ``state`` therefore reflects the child's *current*
+        health, not a historical failure.
+        """
         from .discovery import has_agent_api
 
         has_app = has_agent_api()
         healthy = self.child_running and await self._is_healthy() if self.child_running else False
-        if self._boot_error:
-            state = "error"
-        elif healthy:
+        if healthy and self._boot_error:
+            # Child is serving again — the cached boot error is stale.
+            self._boot_error = None
+        if healthy:
             state = "running"
+        elif self._boot_error:
+            state = "error"
         elif has_app:
             state = "stopped"  # built but child not currently spawned (lazy)
         else:
@@ -156,9 +169,18 @@ class AgentApiSupervisor:
         failure records the boot error and raises RuntimeError with the captured
         traceback.
         """
+        # Clear stale source bytecode so the fresh subprocess re-imports the
+        # current source (defeats CPython's mtime-collision .pyc reuse) — this
+        # is what lets `refresh` actually pick up a fix instead of re-importing
+        # the broken bytecode.
+        self._purge_source_pycache()
+
         env = {
             **os.environ,
             "CINNA_API_SDK_PARENT": SDK_PARENT_DIR,
+            # Don't write .pyc for agent source — keep the tree free of bytecode
+            # that a later fast edit could shadow.
+            "PYTHONDONTWRITEBYTECODE": "1",
         }
 
         # Use the isolated venv's interpreter for the harvest too, so the
@@ -231,9 +253,15 @@ class AgentApiSupervisor:
         self._boot_error = None
         self._stderr_tail = []
 
+        # Clear stale source bytecode before the fresh child imports the API
+        # (see _purge_source_pycache) so a just-fixed file is never shadowed by
+        # bytecode compiled from the previous broken version.
+        self._purge_source_pycache()
+
         env = {
             **os.environ,
             "CINNA_API_SDK_PARENT": SDK_PARENT_DIR,
+            "PYTHONDONTWRITEBYTECODE": "1",
         }
 
         # Optional isolated venv: install agent_api/requirements.txt into
@@ -373,7 +401,15 @@ class AgentApiSupervisor:
         return True
 
     async def _drain_stderr(self) -> None:
-        """Keep a bounded tail of the child's stderr for boot-error capture."""
+        """Keep a bounded tail of the child's stderr for boot-error capture.
+
+        Also self-heals the boot error: when uvicorn's ``--reload`` watcher
+        restarts the app worker after the producer fixes a broken file, the
+        child re-imports in-process (no ``_spawn``) and logs
+        ``Application startup complete``. We clear the cached boot error on that
+        signal so a transient import failure does not stick after a successful
+        reload (the "poisoned API" symptom).
+        """
         proc = self._process
         if proc is None or proc.stderr is None:
             return
@@ -383,11 +419,38 @@ class AgentApiSupervisor:
                 self._stderr_tail.append(line)
                 if len(self._stderr_tail) > 100:
                     self._stderr_tail.pop(0)
+                # A clean (re)start clears any prior boot error — the reload
+                # succeeded, so the previous traceback is no longer current.
+                if "Application startup complete" in line:
+                    self._boot_error = None
+                    continue
                 # Heuristic: capture the most recent traceback-ish line.
                 if "Error" in line or "Traceback" in line or "Exception" in line:
                     self._boot_error = "\n".join(self._stderr_tail[-20:])
         except Exception:
             pass
+
+    def _purge_source_pycache(self) -> None:
+        """Remove stale ``__pycache__`` under the agent_api source tree.
+
+        Fast edit→sync→import cycles can defeat CPython's mtime-based ``.pyc``
+        invalidation (1-second resolution): a corrected source file can be
+        shadowed by bytecode compiled from the previous (broken) version, so a
+        fresh harvest/spawn re-imports stale code. Clearing the source caches
+        before each import guarantees the import sees the file on disk. The
+        isolated dependency venv's caches are left intact (recompiling those on
+        every harvest would be wasteful and they are never edited in place).
+        Best-effort; never raises.
+        """
+        import shutil
+
+        try:
+            for pycache in AGENT_API_DIR.rglob("__pycache__"):
+                if AGENT_API_VENV in pycache.parents:
+                    continue  # leave the isolated deps venv's caches intact
+                shutil.rmtree(pycache, ignore_errors=True)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("agent_api: pycache purge skipped: %s", exc)
 
     async def _stop_child(self) -> None:
         """SIGTERM then SIGKILL the child. Idempotent."""

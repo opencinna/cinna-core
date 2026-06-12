@@ -45,6 +45,9 @@
   - `POST /api/v1/cli/account/agent-api/enable` — `AccountCLIContextDep` + `require_developer`; body `AccountAgentApiEnableBody`; response is the agent-api status dict; maps `AgentApiError` to its `status_code`. Status codes: 200 / 401 / 403 / 404.
   - `POST /api/v1/cli/account/agent-api/refresh` — `AccountCLIContextDep`; body `AccountAgentApiRefreshBody`; response is the agent-api status dict (never raises on a harvest failure — `last_error` carries it); maps `AgentApiError` to its `status_code`. Status codes: 200 / 401 / 404.
   - `GET /api/v1/cli/account/agent-api/spec` — `AccountCLIContextDep`; query `?agent_id=`; response is the harvested OpenAPI spec JSON; maps `AgentApiError` to its `status_code`. Status codes: 200 / 400 (disabled) / 401 / 404 / 503 (env not running + cold cache).
+  - `POST /api/v1/cli/account/agent-api/call` — `AccountCLIContextDep`; body `AccountAgentApiCallBody`; response `AccountAgentApiCallResult` (`{status_code, headers, body, is_json}`). Owner-side endpoint smoke test via the owner-preview proxy (`adapter.proxy_agent_api`, buffered `stream=False`, query forwarded); maps `AgentApiError` to its `status_code` (incl. 502 on a proxy transport error). Diagnostic, not audited. Status codes: 200 / 400 (disabled) / 401 / 404 / 502 / 503.
+  - `POST /api/v1/cli/account/agents/{agent_id}/restart-env` — `AccountCLIContextDep`; path `agent_id`; response `AccountRestartEnvResult` (`{environment_id, status, status_message}`). `AgentService.assert_can_build` gate; wraps `EnvironmentService.restart_environment` (blocks until restarted); maps `CanBuildError` (404/403), `AgentApiError` / `AgentEnvironmentError` (their `status_code`), `ValueError` → 400 (no active env). **Audited** (`CLI_ACCOUNT_ENV_RESTARTED`). Status codes: 200 / 400 / 401 / 403 / 404.
+  - `GET /api/v1/cli/account/agents/{agent_id}/inspect` — `AccountCLIContextDep`; path `agent_id`; response `AccountAgentInspectResult` (prompts from the `Agent` DB fields, feature flags, connected credential **name + type only** via `CredentialsService.get_agent_credentials`, live agent-api status when enabled). Ownership-checked (404 no-leak); diagnostic, not audited. Status codes: 200 / 401 / 404.
   - `POST /api/v1/cli/account/api-proxy` — `AccountCLIContextDep`; body `AccountApiProxyRequest`; raw `Response` passthrough (no `response_model`); maps `ApiProxyDenied` → 403 (`excluded_*`) or 400 (`malformed_path`); 413 (body), 429 (rate limit), 502 (streaming/oversize). Status codes: 200/4xx-5xx (inner) / 400 / 403 / 413 / 429 / 502.
 
   **Credential drafting verbs** (metadata + structure only — the account token never reads or writes a credential's secret value; these expose the *safe* slice of an otherwise denylisted surface):
@@ -240,7 +243,8 @@
   - `CLI_ACCOUNT_CONNECT_MCP = "CLI_ACCOUNT_CONNECT_MCP"` (Phase 3)
   - `CLI_ACCOUNT_API_PROXY_CALL = "CLI_ACCOUNT_API_PROXY_CALL"` (Phase 3 — exclusion hits only)
   - `CLI_ACCOUNT_CREDENTIAL_CREATED` / `CLI_ACCOUNT_CREDENTIAL_UPDATED` / `CLI_ACCOUNT_CREDENTIAL_DELETED` / `CLI_ACCOUNT_CREDENTIAL_SHARED_WITH_AGENT` — one per credential drafting write (create/update/delete/attach). Discrete, infrequent state changes, audited per call (mirrors the connect verbs).
-  - `CLI_ACCOUNT_AGENT_API_ENABLED = "CLI_ACCOUNT_AGENT_API_ENABLED"` — written on `agent-api enable` (and `--disable`); `details={enabled, ip}`, `agent_id` = producer. `refresh` / `spec` are diagnostic and **not** audited (mirrors the unaudited credential *reads*).
+  - `CLI_ACCOUNT_AGENT_API_ENABLED = "CLI_ACCOUNT_AGENT_API_ENABLED"` — written on `agent-api enable` (and `--disable`); `details={enabled, ip}`, `agent_id` = producer. `refresh` / `spec` / `call` are diagnostic and **not** audited (mirrors the unaudited credential *reads*).
+  - `CLI_ACCOUNT_ENV_RESTARTED = "CLI_ACCOUNT_ENV_RESTARTED"` — written on `agent restart-env` (a build-rights state change that bounces the container); `details={environment_id, ip}`, `agent_id` = target. `agent show` (inspect) is diagnostic and **not** audited.
 
 ### Frontend — Components
 
@@ -407,6 +411,9 @@ Response:
 | `POST` | `/api/v1/cli/account/agent-api/enable` | 200 / 401 / 403 / 404 | Toggle producer `agent_api_enabled`; `require_developer`-gated; body `AccountAgentApiEnableBody`; response = agent-api status dict |
 | `POST` | `/api/v1/cli/account/agent-api/refresh` | 200 / 401 / 404 | Force a spec + policy re-harvest; body `AccountAgentApiRefreshBody`; response = agent-api status dict (never raises on harvest failure) |
 | `GET` | `/api/v1/cli/account/agent-api/spec` | 200 / 400 / 401 / 404 / 503 | Harvested OpenAPI spec; query `?agent_id=`; 400 if disabled, 503 if env not running + cold cache |
+| `POST` | `/api/v1/cli/account/agent-api/call` | 200 / 400 / 401 / 404 / 502 / 503 | Owner-side endpoint smoke test (query forwarded); body `AccountAgentApiCallBody`; response `AccountAgentApiCallResult` |
+| `POST` | `/api/v1/cli/account/agents/{agent_id}/restart-env` | 200 / 400 / 401 / 403 / 404 | Restart the agent env (`can_build`-gated, audited); response `AccountRestartEnvResult` |
+| `GET` | `/api/v1/cli/account/agents/{agent_id}/inspect` | 200 / 401 / 404 | Effective prompts / features / connected-credential metadata (no secrets); response `AccountAgentInspectResult` |
 | `GET` | `/api/v1/cli/account/credentials/types` | 200 | Credential-type catalogue + per-type `required_fields`; response `AccountCredentialTypesPublic` |
 | `GET` | `/api/v1/cli/account/credentials` | 200 | List the user's credentials (metadata only, `status` per row); `?user_workspace_id=` filter; response `CredentialsPublic` |
 | `POST` | `/api/v1/cli/account/credentials` | 200 / 403 / 404 | Create a draft credential (no value); `require_developer`-gated; body `AccountCredentialCreateBody`; response `AccountCredentialDraftResult`; 404 on foreign workspace |

@@ -1276,6 +1276,7 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
         body: bytes | None = None,
         stream: bool = False,
         timeout: float = 60.0,
+        query_string: str | None = None,
     ) -> tuple[int, dict, bytes] | tuple[int, dict, AsyncIterator[bytes]]:
         """
         Proxy an arbitrary HTTP request to the agent's REST API child via env-core.
@@ -1292,6 +1293,11 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
             stream: When True, returns an async byte iterator for the response body
                     and the caller is responsible for draining it.
             timeout: Per-request timeout in seconds.
+            query_string: Raw, already-encoded query string (without the leading
+                    ``?``) to forward verbatim to the producer. Appended to the
+                    env-core proxy URL so the producer's handler receives the
+                    consumer's query params (FastAPI ``Query(...)`` etc.). Without
+                    this the query is silently dropped and handlers see defaults.
 
         Returns:
             ``(status_code, response_headers, body_bytes)`` when ``stream=False``,
@@ -1302,6 +1308,8 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
 
         encoded_path = urllib.parse.quote(path, safe="/")
         url = f"{self.base_url}/agent-api/proxy/{encoded_path}"
+        if query_string:
+            url = f"{url}?{query_string}"
 
         # Merge auth header with caller-supplied headers. The auth token is for
         # the env-core boundary; the agent's own app does not see it.

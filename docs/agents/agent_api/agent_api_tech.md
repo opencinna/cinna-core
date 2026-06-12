@@ -185,7 +185,7 @@ Agent disabled or not found → `404` (no existence leak). Invalid/revoked token
 - `authorize_consumer_request(session, agent, token, method, path, body_size, incoming_headers)` → `(environment, hop_headers)` — orchestrates: load cached policy → enforce it → compute request-loop headers → resolve + auto-activate-and-wait for env. Policy enforcement runs BEFORE env resolution so a 405/413/429 never wakes a suspended env.
 
 **Status and spec:**
-- `get_status(session, agent, environment)` → `dict` — reports `state` of `disabled` | `not_running` | `running` | `error`, spec availability, last error, policy summary. Never spawns the serving child.
+- `get_status(session, agent, environment)` → `dict` — reports `state` of `disabled` | `not_running` | `running` | `error`, spec availability, last error, policy summary, and `spec_fetched_at` (ISO timestamp of the last successful harvest, from `agent_api_spec_fetched_at`). `state` tracks the *serving child's* current health while `spec_fetched_at` dates the *cached spec* — the two are reported separately so a stale spec is visible instead of masquerading as current. Never spawns the serving child.
 - `get_spec(session, environment, force_refresh)` → `dict` — serves from `agent_api_spec_parsed` cache when present; otherwise calls `adapter.get_agent_api_spec()` (import-only harvest via env-core, no child spawn). Caches result. Raises if env not running and cache is cold.
 - `cache_spec(session, environment, spec)` — persists spec + clears prior error.
 - `refresh_spec_cache(environment_id)` — async class method called on the env-core reload notification; re-harvests + re-caches spec + policy; emits `AGENT_API_STATUS_CHANGED` event. Best-effort, never raises.
@@ -244,7 +244,7 @@ Agent disabled or not found → `404` (no existence leak). Invalid/revoked token
 
 - `get_agent_api_status()` → `dict` — `GET {base_url}/agent-api/_status`
 - `get_agent_api_spec()` → `dict` — `GET {base_url}/agent-api/openapi.json` (import-only harvest in env-core; no serving child)
-- `proxy_agent_api(method, path, headers, body, stream)` → `(status_code, resp_headers, stream)` — `ANY {base_url}/agent-api/proxy/{path}` with full header/body/streaming passthrough; supports multipart
+- `proxy_agent_api(method, path, headers, body, stream, timeout, query_string)` → `(status_code, resp_headers, stream)` — `ANY {base_url}/agent-api/proxy/{path}` with full header/body/streaming passthrough; supports multipart. `query_string` (raw, already-encoded, no leading `?`) is appended to the env-core URL so the consumer's query params reach the producer's handler; the owner/consumer routes thread `request.url.query` here. Without it the query is silently dropped and `Query(...)` params fall back to defaults.
 
 ---
 
@@ -288,7 +288,8 @@ Discovery (`discovery.py`, `build_app(base_url)`): env-core imports every `*.py`
 - **Lazy spawn-on-first-call:** child is NOT started on env start. On first proxied request to `/agent-api/proxy/{path}`, `ensure_running()` spawns `uvicorn core.cinna_api.serve:app --host 127.0.0.1 --port 9100 --reload --reload-dir agent_api` (internal port only, never exposed outside the container). If the child is not healthy within `STARTUP_TIMEOUT=20s`, returns `503 + Retry-After`.
 - **Idle reap:** `_reap_loop` stops the child after `IDLE_REAP_SECONDS=300s` (5 min) without API traffic. Reaper check interval: `REAP_CHECK_INTERVAL=30s`.
 - **Health check:** `_is_healthy()` pings `GET {BASE_URL}/openapi.json` (FastAPI's built-in; always exists). Polls every 0.5s up to `STARTUP_TIMEOUT`.
-- **Boot-error capture:** `_drain_stderr()` keeps a bounded 100-line tail of stderr. Lines containing "Error", "Traceback", or "Exception" update `_boot_error`. This is surfaced via `get_status()` and `harvest_spec()`.
+- **Boot-error capture + self-heal:** `_drain_stderr()` keeps a bounded 100-line tail of stderr. Lines containing "Error", "Traceback", or "Exception" update `_boot_error`; an `"Application startup complete"` line **clears** it (a uvicorn `--reload` restart re-imports in-process without `_spawn`, so a fixed file self-heals). `get_status()` additionally treats live child health as ground truth — a healthy child clears any stale `_boot_error` and reports `running`, so a transient boot error never sticks once the API is actually serving (the "poisoned API" symptom). The harvest path's error is persisted separately on the env row (`agent_api_spec_error`).
+- **Stale-bytecode guard:** before each harvest and child spawn, `_purge_source_pycache()` removes `__pycache__` under the `agent_api/` source tree (the deps venv's caches are left intact), and both subprocesses run with `PYTHONDONTWRITEBYTECODE=1` (`harvest.py` also sets `sys.dont_write_bytecode`). Fast edit→sync→import cycles otherwise hit CPython's 1-second mtime-resolution `.pyc` reuse, so a corrected file could be shadowed by bytecode from the previous broken version — making `refresh` keep harvesting the old error.
 - **Import-only spec harvest:** `harvest_spec()` runs `python -m core.cinna_api.harvest` in a short-lived subprocess (timeout `HARVEST_TIMEOUT=30s`). This imports the agent modules and calls `app.openapi()` WITHOUT spawning the serving child, then writes a single JSON object to stdout (`{"ok": true, "spec": …}` or `{"ok": false, "error": …, "traceback": …}`); the supervisor `json.loads` it. `harvest.py` wraps the build+`openapi()` in `contextlib.redirect_stdout(sys.stderr)` so any agent `print`, library logging, or warning (e.g. FastAPI's "Duplicate Operation ID") goes to stderr and can **never** corrupt the stdout JSON channel — the prior cause of the cryptic "spec harvest produced no JSON. stderr: …" failure. The final JSON is written to the saved real stdout. Errors are captured in `_boot_error`.
 - **Reload notification:** after a child restart or harvest, `notify_backend_reload()` posts to `{BACKEND_URL}/api/v1/environments/{ENV_ID}/agent-api-reloaded` so the backend re-harvests and re-caches the spec (and emits `AGENT_API_STATUS_CHANGED`).
 - **Optional isolated venv:** if `agent_api/requirements.txt` exists, `_ensure_venv()` creates `agent_api/.venv` via `uv venv --system-site-packages` and installs deps with `uv pip install -r requirements.txt`. Install timeout: `VENV_INSTALL_TIMEOUT=180s`. A requirements hash marker (`agent_api/.venv/.cinna_req_sha256`) skips reinstall when the file is unchanged. Zero-install (no requirements.txt) is the MVP fast path.
@@ -300,7 +301,7 @@ Discovery (`discovery.py`, `build_app(base_url)`): env-core imports every `*.py`
 |--------|------|---------|-------|
 | `GET` | `/agent-api/_status` | `get_agent_api_status` | Returns `get_status()` dict; no child spawn |
 | `GET` | `/agent-api/openapi.json` | `get_agent_api_spec` | Import-only harvest via supervisor; caches result |
-| `ANY` | `/agent-api/proxy/{path:path}` | `proxy_agent_api` | `ensure_running()` lazily spawns child; 503 while booting |
+| `ANY` | `/agent-api/proxy/{path:path}` | `proxy_agent_api` | `ensure_running()` lazily spawns child; 503 while booting. Forwards the **raw** query string (`request.url.query`) to the child so repeated keys (`?tag=a&tag=b`) and exact encoding survive |
 | `POST` | `/environments/{env_id}/agent-api-reloaded` | `agent_api_reloaded` | Called by supervisor after reload; triggers `AgentApiService.refresh_spec_cache()` |
 
 ---

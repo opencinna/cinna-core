@@ -62,6 +62,7 @@ from app.models.events.security_event import (
     CLI_ACCOUNT_CREDENTIAL_DELETED,
     CLI_ACCOUNT_CREDENTIAL_SHARED_WITH_AGENT,
     CLI_ACCOUNT_CREDENTIAL_UPDATED,
+    CLI_ACCOUNT_ENV_RESTARTED,
     CLI_ACCOUNT_TOKEN_CREATED,
     SecurityEventCreate,
 )
@@ -776,6 +777,192 @@ class AccountCLIService:
         # Keep the env alive while the spec is inspected (mirrors the UI route).
         AgentApiService.update_last_activity(db, environment)
         return spec
+
+    @staticmethod
+    async def call_agent_api(
+        db: Session,
+        user: User,
+        agent_id: uuid.UUID,
+        method: str,
+        path: str,
+        query: dict | None,
+        json_body,
+    ) -> dict:
+        """Owner-side smoke test of a producer endpoint — ``cinna agent-api call``.
+
+        Invokes one endpoint on the producer's *own* REST API through the
+        owner-preview proxy (no consumer token, no policy edge — same as the UI
+        "try it" proxy). Buffers the response and returns
+        ``{status_code, headers, body, is_json}``. Diagnostic, not audited (no
+        ``request`` needed — there is nothing to attribute an IP to).
+
+        Requires the agent to be owned (404 no-leak), ``agent_api_enabled``, and
+        a running env (503 otherwise — the consumer would see the same). Query
+        params are forwarded verbatim so this catches a silent query-drop.
+        """
+        import json as _json
+        from urllib.parse import urlencode
+
+        from app.services.agent_api.agent_api_service import (
+            AgentApiError,
+            AgentApiService,
+        )
+        from app.services.environments.environment_service import EnvironmentService
+
+        agent, environment = AgentApiService.resolve_producer_environment(
+            db, agent_id, user.id, is_superuser=user.is_superuser
+        )
+
+        headers: dict[str, str] = {}
+        body: bytes | None = None
+        if json_body is not None:
+            body = _json.dumps(json_body).encode("utf-8")
+            headers["content-type"] = "application/json"
+
+        query_string = urlencode(query, doseq=True) if query else ""
+        norm_path = path.lstrip("/")
+
+        lifecycle = EnvironmentService.get_lifecycle_manager()
+        adapter = lifecycle.get_adapter(environment)
+        try:
+            status_code, resp_headers, body_bytes = await adapter.proxy_agent_api(
+                method=method,
+                path=norm_path,
+                headers=headers,
+                body=body,
+                stream=False,
+                query_string=query_string,
+            )
+        except Exception as e:  # transport failure (env up, child unreachable)
+            # Mirror the UI owner-preview proxy: a proxy transport error is a 502.
+            raise AgentApiError(
+                f"Agent API proxy error: {e}", status_code=502
+            ) from e
+        AgentApiService.update_last_activity(db, environment)
+
+        if isinstance(body_bytes, (bytes, bytearray)):
+            text = bytes(body_bytes).decode("utf-8", errors="replace")
+        else:  # defensive — non-stream path always returns bytes
+            text = str(body_bytes)
+        content_type = (resp_headers or {}).get("content-type", "")
+        return {
+            "status_code": status_code,
+            "headers": dict(resp_headers or {}),
+            "body": text,
+            "is_json": "json" in content_type.lower(),
+        }
+
+    @staticmethod
+    async def restart_agent_env(
+        db: Session,
+        user: User,
+        agent_id: uuid.UUID,
+        request: Request,
+    ) -> dict:
+        """Restart an agent's active environment — ``cinna agent restart-env``.
+
+        Wraps ``EnvironmentService.restart_environment`` (the same path the UI's
+        restart button drives) so a builder can recover a stuck env / serving
+        child without discovering the raw ``environments/{id}/restart`` route.
+        Build-rights gated (``assert_can_build`` → 404 no-leak / 403); the call
+        blocks until the container is back, then returns the post-restart status.
+        Emits ``CLI_ACCOUNT_ENV_RESTARTED``.
+
+        Raises ``ValueError`` if the agent has no active environment (→ 400).
+        """
+        from app.services.agent_api.agent_api_service import AgentApiService
+        from app.services.environments.environment_service import EnvironmentService
+
+        # 404 no-leak existence/ownership check, then build-rights gate.
+        agent = AgentApiService.resolve_agent_only(
+            db, agent_id, user.id, is_superuser=user.is_superuser
+        )
+        AgentService.assert_can_build(db, user, agent)
+
+        if not agent.active_environment_id:
+            raise ValueError("Agent has no active environment to restart.")
+
+        environment = await EnvironmentService.restart_environment(
+            session=db, env_id=agent.active_environment_id
+        )
+
+        await SecurityEventService.create_event(
+            session=db,
+            user_id=user.id,
+            data=SecurityEventCreate(
+                agent_id=agent_id,
+                event_type=CLI_ACCOUNT_ENV_RESTARTED,
+                severity="medium",
+                details={
+                    "environment_id": str(environment.id),
+                    "ip": _client_ip(request),
+                },
+            ),
+        )
+
+        return {
+            "environment_id": environment.id,
+            "status": environment.status,
+            "status_message": environment.status_message,
+        }
+
+    @staticmethod
+    async def inspect_agent(
+        db: Session,
+        user: User,
+        agent_id: uuid.UUID,
+    ) -> dict:
+        """Effective agent config as the runtime sees it — ``cinna agent show``.
+
+        Aggregates the agent's prompts (the DB fields that sync verbatim into the
+        workspace prompt docs the runtime reads), enabled features, and connected
+        credential metadata (name + type ONLY — never a secret), plus the live
+        agent-api status when the REST API is enabled. Ownership-checked (404
+        no-leak). Diagnostic read, not audited.
+        """
+        from app.services.agent_api.agent_api_service import AgentApiService
+        from app.services.credentials.credentials_service import CredentialsService
+
+        agent = AgentApiService.resolve_agent_only(
+            db, agent_id, user.id, is_superuser=user.is_superuser
+        )
+
+        credentials = CredentialsService.get_agent_credentials(db, agent_id)
+        cred_items = [
+            {"name": c.name, "type": c.type} for c in credentials
+        ]
+
+        agent_api_status: dict | None = None
+        if agent.agent_api_enabled:
+            environment = AccountCLIService._resolve_agent_api_env(db, agent)
+            try:
+                agent_api_status = await AgentApiService.get_status(
+                    db, agent, environment
+                )
+            except Exception as exc:  # best-effort; inspection still returns
+                logger.debug(
+                    "account inspect_agent: agent-api status failed for %s: %s",
+                    agent_id, exc,
+                )
+
+        return {
+            "id": agent.id,
+            "name": agent.name,
+            "description": agent.description,
+            "features": {
+                "is_active": agent.is_active,
+                "show_on_dashboard": agent.show_on_dashboard,
+                "webapp_enabled": agent.webapp_enabled,
+                "agent_api_enabled": agent.agent_api_enabled,
+            },
+            "prompts": {
+                "entrypoint": agent.entrypoint_prompt,
+                "workflow": agent.workflow_prompt,
+                "refiner": agent.refiner_prompt,
+            },
+            "credentials": cred_items,
+            "agent_api_status": agent_api_status,
+        }
 
     @staticmethod
     def list_discoverable_mcp_agents(

@@ -182,6 +182,16 @@ venv is a future enhancement; do not rely on it yet.)
 - On any change under `agent_api/`, the spec is re-harvested automatically. If
   your code has an import/boot error, it surfaces as an error status with the
   traceback — fix it and save again.
+- **Query parameters are forwarded** end-to-end: `?vs_currency=eur`, repeated
+  keys (`?tag=a&tag=b`), and exact encoding all reach your handler's
+  `Query(...)` params. (Path and query both work; pick whichever fits.)
+- **Recovering from a boot error.** A boot/import error is *not* sticky: once
+  you fix the code and the serving process reloads (or you re-harvest), the
+  error clears on its own — the status reflects the *current* health of the
+  serving process, not a past failure. If you want to force it immediately,
+  re-harvest the spec; the harvest always runs against the source on disk (it
+  ignores any stale compiled bytecode), so a fixed file is picked up. A full
+  environment restart is a last resort, not the normal recovery path.
 
 ## Scaffolding a Starter
 Run the scaffolder to drop a working `orders.py` + `policy.yaml` (read-only,

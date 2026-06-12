@@ -203,6 +203,7 @@ async def proxy_agent_api(
             headers=fwd_headers,
             body=body if body else None,
             stream=True,
+            query_string=request.url.query,
         )
     except Exception as e:
         logger.error("agent_api owner proxy failed for agent %s path %s: %s", agent_id, path, e)

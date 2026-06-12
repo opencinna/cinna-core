@@ -71,6 +71,12 @@ CLI_ACCOUNT_CREDENTIAL_SHARED_WITH_AGENT = "CLI_ACCOUNT_CREDENTIAL_SHARED_WITH_A
 # credential *reads*).
 CLI_ACCOUNT_AGENT_API_ENABLED = "CLI_ACCOUNT_AGENT_API_ENABLED"
 
+# Restarting a producer/agent environment from the account CLI is a discrete,
+# build-rights state change (it bounces the running container), so it is audited
+# per call. ``agent-api call`` and ``agent show`` are diagnostic reads/previews
+# and are not audited (mirrors ``_refresh`` / spec reads above).
+CLI_ACCOUNT_ENV_RESTARTED = "CLI_ACCOUNT_ENV_RESTARTED"
+
 
 class SecurityEvent(SQLModel, table=True):
     """

@@ -30,6 +30,12 @@ import traceback
 
 
 def main() -> int:
+    # Never write .pyc while harvesting agent source: stale bytecode from a fast
+    # edit→sync→import cycle is exactly what makes a fixed API keep harvesting
+    # the old (broken) version. The supervisor also clears existing caches
+    # before launching us; this stops us re-creating them.
+    sys.dont_write_bytecode = True
+
     # Ensure cinna_api + workspace are importable when invoked as a module.
     sdk_parent = os.getenv("CINNA_API_SDK_PARENT", "/app/core")
     if sdk_parent not in sys.path:

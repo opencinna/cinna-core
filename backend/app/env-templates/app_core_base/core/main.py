@@ -186,14 +186,25 @@ async def _agent_api_reload_watcher() -> None:
             return ()
 
     prev = _dir_signature()
+    pending = False  # a change is observed but writes may still be in flight
     logger.info("Agent API reload watcher started")
 
     while True:
         await asyncio.sleep(_POLL_INTERVAL)
         current = _dir_signature()
         if current != prev:
+            # Still changing — DEBOUNCE: defer the re-harvest until writes
+            # settle. A multi-step local edit synced over Mutagen lands as a
+            # burst of intermediate states (sometimes transiently broken); we
+            # don't want to harvest a half-written tree. Keep deferring while
+            # the signature keeps moving; only notify once it holds steady for a
+            # full poll cycle.
             prev = current
-            logger.info("agent_api/ changed — notifying backend to re-cache spec")
+            pending = True
+            continue
+        if pending:
+            pending = False
+            logger.info("agent_api/ settled — notifying backend to re-cache spec")
             await agent_api_supervisor.notify_backend_reload()
 
 

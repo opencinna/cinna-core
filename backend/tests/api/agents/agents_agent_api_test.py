@@ -287,6 +287,17 @@ def test_owner_spec_requires_agent_api_enabled(
     # Stub returns a minimal spec; confirm it is parseable JSON
     assert isinstance(spec, dict)
 
+    # ── Phase 4b: spec freshness surfaced on status (friction A4) ────────
+    # A successful harvest caches the spec + stamps the fetch time; _status
+    # must expose that timestamp so a stale cache is visible instead of
+    # masquerading as current truth.
+    r = client.get(_status_url(agent_id), headers=superuser_token_headers)
+    assert r.status_code == 200, r.text
+    status = r.json()
+    assert "spec_fetched_at" in status
+    assert status["spec_fetched_at"] is not None
+    assert status["spec_available"] is True
+
     # ── Phase 5: other user → 404 ────────────────────────────────────────
     _, other_headers = create_random_user_with_headers(client)
     r = client.get(_owner_spec_url(agent_id), headers=other_headers)
@@ -701,6 +712,70 @@ def test_consumer_proxy_get_passthrough(
         lm.get_adapter = original_get_adapter
 
 
+def test_consumer_proxy_forwards_query_string(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    Regression for the silent query-param drop (friction report A1).
+
+    A consumer's query string must reach the producer's handler. The path
+    captured by ``{path:path}`` excludes the query, so the route must thread
+    ``request.url.query`` to the adapter — otherwise ``Query(...)`` params
+    silently fall back to their defaults (200 OK, wrong data).
+    Repeated keys (?tag=a&tag=b) must survive as well.
+    """
+    agent = _setup_api_agent(client, superuser_token_headers, name="Query Forward Agent")
+    agent_id = agent["id"]
+    token = _mint_token(client, superuser_token_headers, agent_id, label="query-consumer")
+    token_value = token["token"]
+
+    persistent = EnvironmentTestAdapter()
+    lm = EnvironmentService._lifecycle_manager
+    original_get_adapter = lm.get_adapter
+    lm.get_adapter = lambda env: persistent
+
+    try:
+        r = client.get(
+            _consumer_proxy_url(agent_id, "btc-rate") + "?vs_currency=eur&tag=a&tag=b",
+            headers=_bearer_headers(token_value),
+        )
+        assert r.status_code == 200, r.text
+
+        assert len(persistent.agent_api_proxy_calls) == 1
+        call = persistent.agent_api_proxy_calls[0]
+        assert call["path"] == "btc-rate"
+        # The full query string is forwarded verbatim, repeated keys intact.
+        assert call["query_string"] == "vs_currency=eur&tag=a&tag=b"
+    finally:
+        lm.get_adapter = original_get_adapter
+
+
+def test_owner_proxy_forwards_query_string(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """Owner-preview proxy must also forward the query string (friction A1/A5)."""
+    agent = _setup_api_agent(client, superuser_token_headers, name="Owner Query Agent")
+    agent_id = agent["id"]
+
+    persistent = EnvironmentTestAdapter()
+    lm = EnvironmentService._lifecycle_manager
+    original_get_adapter = lm.get_adapter
+    lm.get_adapter = lambda env: persistent
+
+    try:
+        r = client.get(
+            _owner_proxy_url(agent_id, "btc-rate") + "?vs_currency=eur",
+            headers=superuser_token_headers,
+        )
+        assert r.status_code == 200, r.text
+        assert len(persistent.agent_api_proxy_calls) == 1
+        assert persistent.agent_api_proxy_calls[0]["query_string"] == "vs_currency=eur"
+    finally:
+        lm.get_adapter = original_get_adapter
+
+
 def test_consumer_proxy_invalid_tokens(
     client: TestClient,
     superuser_token_headers: dict[str, str],
@@ -1101,9 +1176,11 @@ def test_deadline_header_propagated_and_decremented(
     forwarded_headers: list[dict] = []
 
     class _TrackingAdapter(EnvironmentTestAdapter):
-        async def proxy_agent_api(self, method, path, headers=None, body=None, stream=False, timeout=60.0):
+        async def proxy_agent_api(self, method, path, headers=None, body=None, stream=False, timeout=60.0, query_string=None):
             forwarded_headers.append(dict(headers or {}))
-            status, resp_headers, gen = await super().proxy_agent_api(method, path, headers, body, stream, timeout)
+            status, resp_headers, gen = await super().proxy_agent_api(
+                method, path, headers, body, stream, timeout, query_string
+            )
             return status, resp_headers, gen
 
     lm = EnvironmentService._lifecycle_manager

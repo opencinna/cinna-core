@@ -468,6 +468,11 @@ class AgentApiService:
             "spec_available": False,
             "last_error": None,
             "policy": None,
+            # Spec freshness is tracked separately from serving-child health so a
+            # stale cached spec is visible instead of masquerading as current:
+            # the live ``state`` reflects the serving child, while
+            # ``spec_fetched_at`` dates the last successful harvest.
+            "spec_fetched_at": None,
         }
 
         if not agent.agent_api_enabled:
@@ -478,6 +483,8 @@ class AgentApiService:
             base["spec_available"] = environment.agent_api_spec_parsed is not None
             base["last_error"] = environment.agent_api_spec_error
             base["policy"] = environment.agent_api_policy_cache
+            if environment.agent_api_spec_fetched_at is not None:
+                base["spec_fetched_at"] = environment.agent_api_spec_fetched_at.isoformat()
 
         if not environment or environment.status != "running":
             status_label = environment.status if environment else "no_environment"

@@ -247,19 +247,29 @@ cinna agent-api enable acme-orders        # → prints status (enabled, state, s
 cinna agent-api refresh acme-orders       # re-import modules + re-parse policy.yaml
 cinna agent-api spec    acme-orders        # the harvested OpenAPI JSON (or -o file)
 
+# 4b. Smoke-test an endpoint directly (no consumer needed; query params work)
+cinna agent-api call acme-orders btc-rate --query vs_currency=eur
+
 # 5. Once the spec looks right, wire the consumer (flow 4)
 cinna connect agent-api --producer acme-orders --consumer crm-agent
+
+# Recover a wedged env / stuck producer API, or inspect what the runtime sees
+cinna agent restart-env acme-orders
+cinna agent show acme-orders --prompts
 ```
 
 Each verb resolves `AGENT_REF` (name / slug / id) against the cached `cinna
-account agents` listing, then calls a thin `/account/agent-api/*` endpoint that
-delegates to the same services the UI uses:
+account agents` listing, then calls a thin `/account/*` endpoint that delegates
+to the same services the UI uses:
 
 | Command | Backend endpoint | Delegates to | Gate |
 |---------|------------------|--------------|------|
 | `cinna agent-api enable <agent> [--disable]` | `POST /account/agent-api/enable` | `AgentService.update_agent` (`agent_api_enabled`) | `require_developer` + producer ownership (404 no-leak) |
 | `cinna agent-api refresh <agent>` | `POST /account/agent-api/refresh` | `AgentApiService.get_spec(force_refresh) + load_policy` | producer ownership (404 no-leak) |
 | `cinna agent-api spec <agent> [-o file]` | `GET /account/agent-api/spec?agent_id=` | `AgentApiService.get_spec` | producer ownership (404 no-leak) |
+| `cinna agent-api call <agent> <path> [-X method] [--query k=v] [--json …]` | `POST /account/agent-api/call` | owner-preview proxy (`adapter.proxy_agent_api`, buffered) | producer ownership (404), `agent_api_enabled` (400), running env (503) |
+| `cinna agent restart-env <agent>` | `POST /account/agents/{id}/restart-env` | `EnvironmentService.restart_environment` | `can_build` (404 no-leak / 403); 400 if no active env. **Audited** (`CLI_ACCOUNT_ENV_RESTARTED`) |
+| `cinna agent show <agent> [--prompts]` | `GET /account/agents/{id}/inspect` | `Agent` fields + `CredentialsService.get_agent_credentials` (metadata only) | producer ownership (404 no-leak) |
 
 Behavioural notes:
 
@@ -275,7 +285,25 @@ Behavioural notes:
   again.
 - **`spec` is machine-facing.** It prints the harvested OpenAPI JSON to stdout
   (plain, pipe-friendly) or writes it to a file with `-o`. `400` if the API is
-  disabled, `503` if the env is not running and the spec cache is cold.
+  disabled, `503` if the env is not running and the spec cache is cold. The
+  status surfaced by `enable`/`refresh` now also carries `spec_fetched_at`, which
+  the CLI renders as a "Spec harvested: 3m ago" line so spec freshness is visible
+  separately from the live serving-child `state`.
+- **`call` is the owner-side smoke test.** It invokes one of the producer's own
+  endpoints through the owner-preview proxy (no consumer token, no policy edge)
+  and prints status + body. **Query params are forwarded**, so it catches the
+  silent query-drop class of bug directly — replacing hand-rolled consumer
+  probes. Exit code 0 for an inner 2xx, 1 for a 4xx/5xx (body still printed).
+- **`restart-env` is the recovery path.** It bounces the agent's container the
+  same way the UI restart button does — the supported way to clear a wedged env
+  or a stuck producer serving child, instead of the raw
+  `environments/{id}/restart` escape hatch. It is `can_build`-gated and audited
+  (`CLI_ACCOUNT_ENV_RESTARTED`); 400 if the agent has no active environment.
+- **`show` answers "is what I edited actually live?"** It aggregates the agent's
+  effective prompts (the DB fields synced verbatim into the runtime's prompt
+  docs), enabled features, and connected credential metadata (name + type ONLY —
+  never a secret), plus live agent-api status when enabled. `--prompts` narrows
+  the output to just the prompts.
 - **Authoring the code is still a sync step.** The producer's `agent_api/*.py`
   and `policy.yaml` live in the *agent's* workspace, not the account workspace —
   the coding agent writes them under `agents/<producer>/workspace/agent_api/` and
@@ -574,7 +602,8 @@ normal JWT auth.
 | `CLI_ACCOUNT_CHILD_TOKEN_REVOKED` | Successful child-token revoke via `unsync`; written only on a real revoke (already-revoked is a no-op, no duplicate event) | target agent | `{account_token_id, child_token_id, prefix, ip}` |
 | `CLI_ACCOUNT_CONNECT_AGENT_API` | Successful `cinna connect agent-api` | consumer agent | `{producer_agent_id, credential_id, token_prefix, ip}` |
 | `CLI_ACCOUNT_CONNECT_MCP` | Successful `cinna connect mcp` | consumer agent | `{connector_id, credential_id, ip}` |
-| `CLI_ACCOUNT_AGENT_API_ENABLED` | Successful `cinna agent-api enable` (and `--disable`) — the state-changing toggle. `refresh` / `spec` are diagnostic and **not** audited | producer agent | `{enabled, ip}` |
+| `CLI_ACCOUNT_AGENT_API_ENABLED` | Successful `cinna agent-api enable` (and `--disable`) — the state-changing toggle. `refresh` / `spec` / `call` are diagnostic and **not** audited | producer agent | `{enabled, ip}` |
+| `CLI_ACCOUNT_ENV_RESTARTED` | Successful `cinna agent restart-env` — a build-rights state change (bounces the container). `agent show` is diagnostic and **not** audited | target agent | `{environment_id, ip}` |
 | `CLI_ACCOUNT_API_PROXY_CALL` | Exclusion hit (`excluded_path` or `excluded_method`) on `api-proxy` — NOT on allowed calls or `malformed_path` | `None` | `{method, path, reason, account_token_id, ip}` |
 
 ### Setup-Token Kind Guard

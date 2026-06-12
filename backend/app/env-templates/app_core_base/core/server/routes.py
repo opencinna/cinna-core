@@ -1590,6 +1590,13 @@ async def agent_api_proxy(path: str, request: Request):
 
     body = await request.body()
     target_url = f"{_AGENT_API_CHILD_BASE_URL}/{path}"
+    # Forward the raw query string verbatim so repeated keys (?a=1&a=2) and
+    # exact encoding survive. ``dict(request.query_params)`` would collapse
+    # repeated keys to a single value; building the URL from the raw query
+    # preserves the producer's full query surface.
+    raw_query = request.url.query
+    if raw_query:
+        target_url = f"{target_url}?{raw_query}"
 
     try:
         client = _httpx.AsyncClient(timeout=60.0)
@@ -1597,7 +1604,6 @@ async def agent_api_proxy(path: str, request: Request):
             request.method,
             target_url,
             headers=fwd_headers,
-            params=dict(request.query_params),
             content=body if body else None,
         )
         upstream = await client.send(upstream_req, stream=True)

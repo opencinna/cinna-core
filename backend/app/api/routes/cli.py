@@ -31,9 +31,12 @@ from app.models.agent_api.agent_api_token import ConnectAgentApiResponse
 from app.models.agents.agent import AgentPublic
 from app.models.cli.account_agent import AccountAgentsPublic
 from app.models.cli.account_convenience import (
+    AccountAgentApiCallBody,
+    AccountAgentApiCallResult,
     AccountAgentApiEnableBody,
     AccountAgentApiRefreshBody,
     AccountAgentCreateBody,
+    AccountAgentInspectResult,
     AccountApiProxyRequest,
     AccountConnectAgentApiBody,
     AccountConnectMcpBody,
@@ -42,6 +45,7 @@ from app.models.cli.account_convenience import (
     AccountCredentialShareBody,
     AccountCredentialTypesPublic,
     AccountCredentialUpdateBody,
+    AccountRestartEnvResult,
 )
 from app.models.cli.cli_setup_token import CLISetupTokenCreate, CLISetupTokenCreated
 from app.models.cli.cli_token import (
@@ -802,6 +806,100 @@ async def account_agent_api_spec(
 
     try:
         return await AccountCLIService.get_agent_api_spec(
+            db=db, user=account_ctx.user, agent_id=agent_id
+        )
+    except AgentApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.post("/account/agent-api/call", response_model=AccountAgentApiCallResult)
+async def account_agent_api_call(
+    body: AccountAgentApiCallBody,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Owner-side smoke test of a producer endpoint (``cinna agent-api call``).
+
+    Invokes one endpoint on the producer's own REST API via the owner-preview
+    proxy (no consumer token, no policy edge — query params ARE forwarded), so a
+    builder can verify an endpoint directly instead of hand-rolling a consumer
+    probe. Returns the buffered response (status + headers + body). Ownership is
+    checked up front (404 no-leak), 400 if the API is disabled, 503 if the env
+    is not running.
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    try:
+        return await AccountCLIService.call_agent_api(
+            db=db,
+            user=account_ctx.user,
+            agent_id=body.agent_id,
+            method=body.method,
+            path=body.path,
+            query=body.query,
+            json_body=body.json_body,
+        )
+    except AgentApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.post(
+    "/account/agents/{agent_id}/restart-env",
+    response_model=AccountRestartEnvResult,
+)
+async def account_restart_env(
+    agent_id: uuid.UUID,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Restart an agent's active environment (``cinna agent restart-env``).
+
+    Wraps the same restart path as the UI button so a builder can recover a
+    stuck env / poisoned serving child without the raw
+    ``environments/{id}/restart`` escape hatch. Build-rights gated
+    (``assert_can_build`` → 404 no-leak / 403); 400 if there is no active
+    environment. Blocks until the container is back, then returns its status.
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+    from app.services.agents.agent_service import CanBuildError
+    from app.services.environments.environment_service import AgentEnvironmentError
+
+    try:
+        return await AccountCLIService.restart_agent_env(
+            db=db, user=account_ctx.user, agent_id=agent_id, request=request
+        )
+    except CanBuildError as e:
+        _raise_can_build_http(e)
+    except AgentApiError as e:  # resolve_agent_only → 404 no-leak
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except AgentEnvironmentError as e:  # dangling env / lifecycle restart failure
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get("/account/agents/{agent_id}/inspect", response_model=AccountAgentInspectResult)
+async def account_inspect_agent(
+    agent_id: uuid.UUID,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Show an agent's effective prompts / features / connected credentials
+    (``cinna agent show``).
+
+    Aggregates the agent's prompts (the DB fields synced verbatim into the
+    runtime's prompt docs), enabled features, and connected credential metadata
+    (name + type only — never a secret), plus live agent-api status when the
+    REST API is enabled. Ownership-checked (404 no-leak). Diagnostic read.
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    try:
+        return await AccountCLIService.inspect_agent(
             db=db, user=account_ctx.user, agent_id=agent_id
         )
     except AgentApiError as e:

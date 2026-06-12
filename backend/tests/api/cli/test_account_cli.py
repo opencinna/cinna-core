@@ -2666,6 +2666,143 @@ def test_account_agent_api_management(
     )
 
 
+def test_account_agent_api_call_restart_inspect(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    Account-CLI dev-loop verbs added from the friction report:
+
+      POST /account/agent-api/call          — owner-side endpoint smoke test (A5)
+      POST /account/agents/{id}/restart-env — first-class env restart (D1)
+      GET  /account/agents/{id}/inspect     — effective prompts/features (C2)
+
+    Covers happy paths, the query-string forwarding that motivated `call`,
+    disabled/ghost/no-leak gating, the restart build-rights gate, and that
+    inspect never returns credential secrets.
+    """
+    import json as _json
+
+    account_jwt, _ = bootstrap_account_token(
+        client, superuser_token_headers, machine_name="DevLoop Machine"
+    )
+    acc_headers = account_cli_headers(account_jwt)
+
+    agent = create_agent_via_api(client, superuser_token_headers)
+    drain_tasks()
+    agent_id = agent["id"]
+
+    # Enable the producer API so call/spec work against the stub env.
+    r = client.post(
+        f"{_BASE}/account/agent-api/enable",
+        headers=acc_headers,
+        json={"agent_id": agent_id, "enabled": True},
+    )
+    assert r.status_code == 200, r.text
+
+    # ── A5: call forwards the query string and buffers the response ──────
+    r = client.post(
+        f"{_BASE}/account/agent-api/call",
+        headers=acc_headers,
+        json={
+            "agent_id": agent_id,
+            "method": "GET",
+            "path": "btc-rate",
+            "query": {"vs_currency": "eur"},
+        },
+    )
+    assert r.status_code == 200, f"call must be 200, got {r.status_code}: {r.text}"
+    result = r.json()
+    assert result["status_code"] == 200, result
+    assert result["is_json"] is True, result
+    # The stub echoes what env-core received — proves the query reached it.
+    echoed = _json.loads(result["body"])
+    assert echoed["path"] == "btc-rate", echoed
+    assert echoed["query_string"] == "vs_currency=eur", echoed
+
+    # ── A5: call on a disabled producer → 400 (disabled, not leaky 404) ──
+    client.post(
+        f"{_BASE}/account/agent-api/enable",
+        headers=acc_headers,
+        json={"agent_id": agent_id, "enabled": False},
+    )
+    r = client.post(
+        f"{_BASE}/account/agent-api/call",
+        headers=acc_headers,
+        json={"agent_id": agent_id, "method": "GET", "path": "btc-rate"},
+    )
+    assert r.status_code == 400, f"call on disabled API must be 400, got {r.status_code}"
+
+    # ── C2: inspect returns prompts / features / credentials, no secrets ─
+    r = client.get(f"{_BASE}/account/agents/{agent_id}/inspect", headers=acc_headers)
+    assert r.status_code == 200, f"inspect must be 200, got {r.status_code}: {r.text}"
+    info = r.json()
+    assert info["id"] == agent_id
+    assert set(["entrypoint", "workflow", "refiner"]).issubset(info["prompts"].keys())
+    assert "agent_api_enabled" in info["features"]
+    assert isinstance(info["credentials"], list)
+    # Credential entries are metadata only — never a secret payload.
+    for cred in info["credentials"]:
+        assert set(cred.keys()) <= {"name", "type"}, cred
+
+    # ── D1: restart-env returns the post-restart status ──────────────────
+    r = client.post(
+        f"{_BASE}/account/agents/{agent_id}/restart-env", headers=acc_headers
+    )
+    assert r.status_code == 200, f"restart-env must be 200, got {r.status_code}: {r.text}"
+    restart = r.json()
+    assert restart["environment_id"]
+    assert restart["status"], restart
+
+    # ── Gating: ghost agent → 404 (no-leak) for all three ────────────────
+    ghost = str(uuid.uuid4())
+    assert client.post(
+        f"{_BASE}/account/agent-api/call",
+        headers=acc_headers,
+        json={"agent_id": ghost, "method": "GET", "path": "x"},
+    ).status_code == 404
+    assert client.post(
+        f"{_BASE}/account/agents/{ghost}/restart-env", headers=acc_headers
+    ).status_code == 404
+    assert client.get(
+        f"{_BASE}/account/agents/{ghost}/inspect", headers=acc_headers
+    ).status_code == 404
+
+    # ── Gating: regular user JWT (not an account token) → 401 ────────────
+    assert client.post(
+        f"{_BASE}/account/agent-api/call",
+        headers=superuser_token_headers,
+        json={"agent_id": agent_id, "method": "GET", "path": "x"},
+    ).status_code == 401
+    assert client.get(
+        f"{_BASE}/account/agents/{agent_id}/inspect",
+        headers=superuser_token_headers,
+    ).status_code == 401
+
+    # ── D1: restart-env is build-rights gated → demoted user gets 403 ────
+    fresh_user, fresh_headers = _make_user_and_headers(client)
+    promote_to_developer(client, superuser_token_headers, fresh_user["id"])
+    fresh_jwt, _ = bootstrap_account_token(
+        client, fresh_headers, machine_name="DevLoop Fresh Machine"
+    )
+    fresh_acc_headers = account_cli_headers(fresh_jwt)
+    fresh_agent = create_agent_via_api(client, fresh_headers)
+    drain_tasks()
+    demote = client.patch(
+        f"{settings.API_V1_STR}/users/{fresh_user['id']}/role",
+        headers=superuser_token_headers,
+        json={"role": "agent-user"},
+    )
+    assert demote.status_code == 200, demote.text
+    r = client.post(
+        f"{_BASE}/account/agents/{fresh_agent['id']}/restart-env",
+        headers=fresh_acc_headers,
+    )
+    assert r.status_code == 403, (
+        f"restart-env by a demoted (agent-user) account token must be 403, got {r.status_code}: {r.text}"
+    )
+
+
 # ── Scenario 21: Rate-limit note (coverage gap) ──────────────────────────────
 #
 # The account API proxy rate limiter (_RateLimiter in account_api_proxy_service)

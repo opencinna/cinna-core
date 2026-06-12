@@ -316,12 +316,26 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
         body: bytes | None = None,
         stream: bool = False,
         timeout: float = 60.0,
+        query_string: str | None = None,
     ):
         import json
         self.agent_api_proxy_calls.append(
-            {"method": method, "path": path, "body": body, "headers": headers}
+            {
+                "method": method,
+                "path": path,
+                "body": body,
+                "headers": headers,
+                "query_string": query_string,
+            }
         )
-        payload = json.dumps({"ok": True, "method": method, "path": path}).encode()
+        payload = json.dumps(
+            {"ok": True, "method": method, "path": path, "query_string": query_string}
+        ).encode()
+
+        # Honor the stream flag exactly like the real adapter: buffered bytes
+        # when stream=False, an async byte iterator when stream=True.
+        if not stream:
+            return 200, {"content-type": "application/json"}, payload
 
         async def _stream():
             yield payload
