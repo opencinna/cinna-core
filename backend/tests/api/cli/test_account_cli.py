@@ -2505,6 +2505,167 @@ def test_account_api_proxy(
     )
 
 
+# ── Scenario 20b: agent-api producer management (enable / refresh / spec) ────
+
+
+def test_account_agent_api_management(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    Account-CLI agent-api producer verbs — the build→verify loop a coding agent
+    drives before ``cinna connect agent-api``:
+
+      POST /account/agent-api/enable   — toggle agent_api_enabled on/off
+      POST /account/agent-api/refresh  — force a spec + policy re-harvest
+      GET  /account/agent-api/spec     — read the harvested OpenAPI spec
+
+    Covers:
+      1. spec while disabled → 400 (disabled, not a leaky 404)
+      2. enable → 200, agent_api_enabled True, state reflects the (stubbed)
+         running env (not "disabled")
+      3. spec after enable → 200 with valid OpenAPI structure
+      4. refresh after enable → 200, status reflects enabled+running
+      5. disable → 200, agent_api_enabled False, state="disabled"
+      6. gating: ghost agent → 404; other user's agent → 404 (no-leak);
+         regular user JWT → 401; demoted-to-agent-user account token → 403
+    """
+    account_jwt, _ = bootstrap_account_token(
+        client, superuser_token_headers, machine_name="AgentAPI Mgmt Machine"
+    )
+    acc_headers = account_cli_headers(account_jwt)
+
+    agent = create_agent_via_api(client, superuser_token_headers)
+    drain_tasks()
+    agent_id = agent["id"]
+
+    # ── Phase 1: spec while disabled → 400 (disabled) ────────────────────
+    r = client.get(
+        f"{_BASE}/account/agent-api/spec",
+        headers=acc_headers,
+        params={"agent_id": agent_id},
+    )
+    assert r.status_code == 400, (
+        f"Spec on a disabled producer must return 400, got {r.status_code}: {r.text}"
+    )
+
+    # ── Phase 2: enable → 200, agent_api_enabled True, running state ─────
+    r = client.post(
+        f"{_BASE}/account/agent-api/enable",
+        headers=acc_headers,
+        json={"agent_id": agent_id, "enabled": True},
+    )
+    assert r.status_code == 200, f"Enable must return 200, got {r.status_code}: {r.text}"
+    body = r.json()
+    assert body["agent_api_enabled"] is True, body
+    assert body["state"] != "disabled", (
+        f"After enable, state must reflect the running env (stub), got {body['state']}"
+    )
+
+    # ── Phase 3: spec after enable → 200, valid OpenAPI ──────────────────
+    r = client.get(
+        f"{_BASE}/account/agent-api/spec",
+        headers=acc_headers,
+        params={"agent_id": agent_id},
+    )
+    assert r.status_code == 200, f"Spec after enable must be 200, got {r.text}"
+    spec = r.json()
+    assert "openapi" in spec and "info" in spec, f"Spec must be valid OpenAPI, got {spec!r}"
+
+    # ── Phase 4: refresh → 200, still enabled+running ────────────────────
+    r = client.post(
+        f"{_BASE}/account/agent-api/refresh",
+        headers=acc_headers,
+        json={"agent_id": agent_id},
+    )
+    assert r.status_code == 200, f"Refresh must return 200, got {r.status_code}: {r.text}"
+    body = r.json()
+    assert body["agent_api_enabled"] is True, body
+    assert body["state"] != "disabled", body
+
+    # ── Phase 5: disable → 200, agent_api_enabled False, state disabled ──
+    r = client.post(
+        f"{_BASE}/account/agent-api/enable",
+        headers=acc_headers,
+        json={"agent_id": agent_id, "enabled": False},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["agent_api_enabled"] is False, body
+    assert body["state"] == "disabled", body
+
+    # ── Phase 6a: ghost agent → 404 (no existence leak) ──────────────────
+    ghost_id = str(uuid.uuid4())
+    r = client.post(
+        f"{_BASE}/account/agent-api/enable",
+        headers=acc_headers,
+        json={"agent_id": ghost_id, "enabled": True},
+    )
+    assert r.status_code == 404, f"Ghost agent enable must be 404, got {r.status_code}"
+
+    # ── Phase 6b: other user's agent → 404 (no-leak) ─────────────────────
+    fresh_user, fresh_headers = _make_user_and_headers(client)
+    promote_to_developer(client, superuser_token_headers, fresh_user["id"])
+    fresh_jwt, _ = bootstrap_account_token(
+        client, fresh_headers, machine_name="Fresh AgentAPI Machine"
+    )
+    fresh_acc_headers = account_cli_headers(fresh_jwt)
+    # Create the fresh user's own agent now, while they still hold the developer
+    # role (agent creation is developer-gated) — used by the 403 check in 6d.
+    fresh_agent = create_agent_via_api(client, fresh_headers)
+    drain_tasks()
+    r = client.post(
+        f"{_BASE}/account/agent-api/enable",
+        headers=fresh_acc_headers,
+        json={"agent_id": agent_id, "enabled": True},
+    )
+    assert r.status_code == 404, (
+        f"Enabling another user's agent must return 404 (no-leak), got {r.status_code}"
+    )
+
+    # ── Phase 6c: regular user JWT → 401 (account CLI token required) ─────
+    for path, payload in (
+        ("enable", {"agent_id": agent_id, "enabled": True}),
+        ("refresh", {"agent_id": agent_id}),
+    ):
+        r = client.post(
+            f"{_BASE}/account/agent-api/{path}",
+            headers=superuser_token_headers,
+            json=payload,
+        )
+        assert r.status_code == 401, (
+            f"Regular user JWT must be rejected on agent-api/{path}, got {r.status_code}"
+        )
+    r = client.get(
+        f"{_BASE}/account/agent-api/spec",
+        headers=superuser_token_headers,
+        params={"agent_id": agent_id},
+    )
+    assert r.status_code == 401, (
+        f"Regular user JWT must be rejected on agent-api/spec, got {r.status_code}"
+    )
+
+    # ── Phase 6d: demoted-to-agent-user account token → 403 (enable gate) ─
+    # The account token was minted while the user was a developer; demoting now
+    # must 403 the state-changing enable on the next call (re-checked per call).
+    demote = client.patch(
+        f"{settings.API_V1_STR}/users/{fresh_user['id']}/role",
+        headers=superuser_token_headers,
+        json={"role": "agent-user"},
+    )
+    assert demote.status_code == 200, demote.text
+    # fresh_agent (created above while developer) is owned by the demoted user,
+    # so the 403 is unambiguously the role gate, not a 404.
+    r = client.post(
+        f"{_BASE}/account/agent-api/enable",
+        headers=fresh_acc_headers,
+        json={"agent_id": fresh_agent["id"], "enabled": True},
+    )
+    assert r.status_code == 403, (
+        f"Enable by a demoted (agent-user) account token must be 403, got {r.status_code}: {r.text}"
+    )
+
+
 # ── Scenario 21: Rate-limit note (coverage gap) ──────────────────────────────
 #
 # The account API proxy rate limiter (_RateLimiter in account_api_proxy_service)

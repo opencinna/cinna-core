@@ -31,6 +31,8 @@ from app.models.agent_api.agent_api_token import ConnectAgentApiResponse
 from app.models.agents.agent import AgentPublic
 from app.models.cli.account_agent import AccountAgentsPublic
 from app.models.cli.account_convenience import (
+    AccountAgentApiEnableBody,
+    AccountAgentApiRefreshBody,
     AccountAgentCreateBody,
     AccountApiProxyRequest,
     AccountConnectAgentApiBody,
@@ -714,6 +716,95 @@ async def account_connect_agent_api(
             db=db, user=account_ctx.user, body=body, request=request
         )
     except AgentApiTokenError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+# ── Account CLI agent-api producer management ────────────────────────────────
+# Reach the producer-side enable / refresh / spec actions through the account
+# token. These mirror the UI's Integrations → Agent REST API card (enable toggle,
+# Refresh button, View Spec) so a local coding agent can build a producer API and
+# verify the harvested spec without opening the browser. Ownership is enforced by
+# the underlying ``AgentApiService`` (404 no-leak); ``enable`` is
+# ``require_developer``-gated (a state change), ``refresh`` / ``spec`` are
+# diagnostic reads open to any account-token holder.
+
+
+@router.post("/account/agent-api/enable")
+async def account_agent_api_enable(
+    body: AccountAgentApiEnableBody,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Toggle a producer agent's REST API on/off (``cinna agent-api enable``).
+
+    Mirrors the UI ``PUT /agents/{id}`` ``agent_api_enabled`` toggle. Ownership
+    is checked up front (404 no-leak); returns the resulting agent-api status so
+    the verb doubles as a verify. ``require_developer``-gated at the route.
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    _require_developer_account(account_ctx)
+    try:
+        return await AccountCLIService.set_agent_api_enabled(
+            db=db,
+            user=account_ctx.user,
+            agent_id=body.agent_id,
+            enabled=body.enabled,
+            request=request,
+        )
+    except AgentApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.post("/account/agent-api/refresh")
+async def account_agent_api_refresh(
+    body: AccountAgentApiRefreshBody,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Force an on-demand spec + policy re-harvest (``cinna agent-api refresh``).
+
+    Mirrors the producer ``POST /_refresh`` action; returns the resulting status
+    (``last_error`` reflects a harvest failure — never raises on one). Ownership
+    is checked up front (404 no-leak).
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    try:
+        return await AccountCLIService.refresh_agent_api(
+            db=db,
+            user=account_ctx.user,
+            agent_id=body.agent_id,
+            request=request,
+        )
+    except AgentApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.get("/account/agent-api/spec")
+async def account_agent_api_spec(
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+    agent_id: uuid.UUID,
+) -> Any:
+    """
+    Return a producer agent's harvested OpenAPI spec (``cinna agent-api spec``).
+
+    Mirrors the owner ``GET /openapi.json`` preview. 404 if the agent is
+    inaccessible (no-leak), 400 if the API is disabled, 503 if the env is not
+    running and the spec cache is cold.
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    try:
+        return await AccountCLIService.get_agent_api_spec(
+            db=db, user=account_ctx.user, agent_id=agent_id
+        )
+    except AgentApiError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
 
 

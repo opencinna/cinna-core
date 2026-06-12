@@ -53,6 +53,7 @@ from app.models.cli.account_agent import AccountAgentListItem
 from app.models.cli.cli_setup_token import CLISetupToken, CLISetupTokenCreated
 from app.models.cli.cli_token import CLIAccountTokenPublic, CLIToken
 from app.models.events.security_event import (
+    CLI_ACCOUNT_AGENT_API_ENABLED,
     CLI_ACCOUNT_CHILD_TOKEN_MINTED,
     CLI_ACCOUNT_CHILD_TOKEN_REVOKED,
     CLI_ACCOUNT_CONNECT_AGENT_API,
@@ -643,6 +644,138 @@ class AccountCLIService:
             ),
         )
         return result
+
+    # ── Agent REST API producer management ───────────────────────────────
+    # Reach the producer-side enable / refresh / spec actions through the
+    # account token. Ownership is enforced by ``resolve_agent_only`` (404
+    # no-leak); the underlying work is delegated to the same services the UI
+    # uses (``AgentService.update_agent`` and ``AgentApiService``), so the
+    # account verbs add no new behaviour beyond a thin, audited entry point.
+
+    @staticmethod
+    def _resolve_agent_api_env(
+        db: Session, agent: "Agent"
+    ) -> "AgentEnvironment | None":
+        """The agent's active environment, or ``None`` (suspended / absent)."""
+        if not agent.active_environment_id:
+            return None
+        return db.get(AgentEnvironment, agent.active_environment_id)
+
+    @staticmethod
+    async def set_agent_api_enabled(
+        db: Session,
+        user: User,
+        agent_id: uuid.UUID,
+        enabled: bool,
+        request: Request,
+    ) -> dict:
+        """Toggle a producer agent's REST API on/off and return its status.
+
+        Mirrors the UI ``PUT /agents/{id}`` ``agent_api_enabled`` toggle.
+        Ownership is checked up front (404 no-leak via ``resolve_agent_only``);
+        the field flip goes through ``AgentService.update_agent`` (the same path
+        the UI uses). Emits ``CLI_ACCOUNT_AGENT_API_ENABLED`` on success.
+        """
+        from app.models.agents.agent import AgentUpdate
+        from app.services.agent_api.agent_api_service import AgentApiService
+
+        # 404 no-leak ownership check (does NOT require a running env).
+        AgentApiService.resolve_agent_only(
+            db, agent_id, user.id, is_superuser=user.is_superuser
+        )
+
+        agent = await AgentService.update_agent(
+            session=db,
+            agent_id=agent_id,
+            data=AgentUpdate(agent_api_enabled=enabled),
+            user_id=user.id,
+        )
+
+        await SecurityEventService.create_event(
+            session=db,
+            user_id=user.id,
+            data=SecurityEventCreate(
+                agent_id=agent_id,
+                event_type=CLI_ACCOUNT_AGENT_API_ENABLED,
+                severity="medium",
+                details={
+                    "enabled": enabled,
+                    "ip": _client_ip(request),
+                },
+            ),
+        )
+
+        environment = AccountCLIService._resolve_agent_api_env(db, agent)
+        return await AgentApiService.get_status(db, agent, environment)
+
+    @staticmethod
+    async def refresh_agent_api(
+        db: Session,
+        user: User,
+        agent_id: uuid.UUID,
+        request: Request,
+    ) -> dict:
+        """Force an on-demand spec + policy re-harvest; return the status.
+
+        Mirrors the producer ``POST /_refresh`` action. Best-effort: only
+        meaningful when enabled + env running; the harvest error (if any) is
+        persisted by ``get_spec`` and surfaced via the returned status's
+        ``last_error`` (this never raises on a harvest failure). Not audited —
+        a re-harvest is diagnostic, not a state-changing grant.
+        """
+        from app.services.agent_api.agent_api_service import (
+            AgentApiError,
+            AgentApiService,
+        )
+
+        # 404 no-leak ownership check.
+        agent = AgentApiService.resolve_agent_only(
+            db, agent_id, user.id, is_superuser=user.is_superuser
+        )
+        environment = AccountCLIService._resolve_agent_api_env(db, agent)
+
+        if (
+            agent.agent_api_enabled
+            and environment is not None
+            and environment.status == "running"
+        ):
+            try:
+                await AgentApiService.get_spec(db, environment, force_refresh=True)
+            except AgentApiError:
+                pass  # persisted; surfaced via the status payload
+            try:
+                await AgentApiService.load_policy(
+                    db, environment, force_refresh=True
+                )
+            except Exception:  # best-effort (matches the UI _refresh route)
+                logger.debug(
+                    "account agent-api refresh policy reload failed for env %s",
+                    environment.id,
+                )
+
+        return await AgentApiService.get_status(db, agent, environment)
+
+    @staticmethod
+    async def get_agent_api_spec(
+        db: Session,
+        user: User,
+        agent_id: uuid.UUID,
+    ) -> dict:
+        """Return the producer's harvested OpenAPI spec (cache or import-only).
+
+        Mirrors the owner ``GET /openapi.json`` preview. Requires the agent to be
+        owned (404 no-leak), ``agent_api_enabled``, and a reachable spec (cache or
+        a running env to harvest from). Keeps the env warm while inspecting.
+        """
+        from app.services.agent_api.agent_api_service import AgentApiService
+
+        agent, environment = AgentApiService.resolve_producer_environment(
+            db, agent_id, user.id, is_superuser=user.is_superuser
+        )
+        spec = await AgentApiService.get_spec(db, environment)
+        # Keep the env alive while the spec is inspected (mirrors the UI route).
+        AgentApiService.update_last_activity(db, environment)
+        return spec
 
     @staticmethod
     def list_discoverable_mcp_agents(

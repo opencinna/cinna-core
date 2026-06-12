@@ -63,6 +63,13 @@ CLI_ACCOUNT_CREDENTIAL_CREATED = "CLI_ACCOUNT_CREDENTIAL_CREATED"
 CLI_ACCOUNT_CREDENTIAL_UPDATED = "CLI_ACCOUNT_CREDENTIAL_UPDATED"
 CLI_ACCOUNT_CREDENTIAL_DELETED = "CLI_ACCOUNT_CREDENTIAL_DELETED"
 CLI_ACCOUNT_CREDENTIAL_SHARED_WITH_AGENT = "CLI_ACCOUNT_CREDENTIAL_SHARED_WITH_AGENT"
+# ── Account-CLI agent-api producer management ─────────────────────────
+# Toggling a producer agent's REST API on/off is a discrete state change
+# (it opens/closes the consumer-facing proxy surface) and is audited per call.
+# ``_refresh`` (re-harvest spec/policy) and spec reads are diagnostic, not
+# state-changing grants, so they are not audited (mirrors the unaudited
+# credential *reads*).
+CLI_ACCOUNT_AGENT_API_ENABLED = "CLI_ACCOUNT_AGENT_API_ENABLED"
 
 
 class SecurityEvent(SQLModel, table=True):

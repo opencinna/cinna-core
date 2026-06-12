@@ -197,7 +197,7 @@ The `agent_api` connection credential appears in the Credentials page and Agent 
 
 - **[Realtime Events](../../application/realtime_events/event_bus_system.md)** — `AGENT_API_STATUS_CHANGED` event is emitted after a spec reload or boot error so the owner's Integrations tab updates live without polling.
 
-- **[Account CLI Workspace](../../application/cinna_cli_integration/account_cli_workspace.md)** — `cinna connect agent-api --producer P --consumer C` wraps `AgentApiTokenService.connect_agent_api` via `POST /api/v1/cli/account/connect/agent-api`; producer ownership gate and 403/404 mapping are reused unchanged.
+- **[Account CLI Workspace](../../application/cinna_cli_integration/account_cli_workspace.md)** — two layers. **Connect:** `cinna connect agent-api --producer P --consumer C` wraps `AgentApiTokenService.connect_agent_api` via `POST /api/v1/cli/account/connect/agent-api`; producer ownership gate and 403/404 mapping are reused unchanged. **Build + verify:** `cinna agent-api enable|refresh|spec <agent>` (the producer-side half that precedes connect) wrap the same `agent_api_enabled` toggle (`AgentService.update_agent`), `_refresh` re-harvest, and `openapi.json` spec read the Integrations card uses, via `POST /account/agent-api/enable`, `POST /account/agent-api/refresh`, and `GET /account/agent-api/spec`. So a local coding agent can stand up a producer API and verify the harvested spec, then wire a consumer, entirely from the CLI.
 
 ---
 

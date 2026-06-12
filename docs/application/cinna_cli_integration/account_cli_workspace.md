@@ -21,7 +21,7 @@ token's provenance differs from one set up manually.
 | **Account CLI Token** | Long-lived JWT (`token_type="cli-account"`, `agent_id=NULL`). Stored in `.cinna/account.json` on the user's machine. Scoped **only** to the `/account/*` route group — rejected by all per-agent routes |
 | **Child Token (minted)** | A standard per-agent `token_type="cli"` token minted by the account token via `POST /account/agents/{id}/mint`. Carries `minted_by_account_token_id` as provenance. Authenticates the existing per-agent sync / exec / workspace endpoints unchanged |
 | **Building-rights predicate (`can_build`)** | `developer-or-admin role AND not a foreign install AND user owns the agent`. The single gate for setup-token creation (both per-agent and account), the mint endpoint, and the `can_build` flag in the agents listing |
-| **Accessible-agents listing** | `GET /account/agents` — returns the user's own agents with `can_build`, `is_foreign_install`, and `has_active_environment` flags. No credentials, prompts, or env internals |
+| **Accessible-agents listing** | `GET /account/agents` — returns the user's own agents with `can_build`, `is_foreign_install`, `has_active_environment`, and `user_workspace_id`. No credentials, prompts, or env internals. The endpoint always returns the full owner-scoped set; `cinna account agents` filters to the active workspace client-side (`--all` to show every workspace) |
 | **Cascade revocation** | Revoking an account token soft-revokes every child token it minted. Independent per-agent tokens from other sources are unaffected |
 
 ## User Stories / Flows
@@ -53,7 +53,13 @@ developer directly) uses the account token to:
 
 1. **List accessible agents** (`cinna account agents` → `GET /account/agents`):
    prints name, ID, `can_build` flag, `is_foreign_install` flag, and an
-   env-active indicator.
+   env-active indicator. The listing is **scoped to the active user workspace by
+   default** (flow 3) — the CLI filters the full `GET /account/agents` result
+   client-side by each row's `user_workspace_id` and the header states which
+   workspace is shown; `cinna account agents --all` lists every workspace. The
+   endpoint itself is unchanged and always returns the full owner-scoped set
+   (the name/id resolvers used by `sync` / `connect` / `agent-api` rely on
+   seeing every agent regardless of the active workspace).
 2. **Mint a per-agent token** (`cinna agent sync <agent>` →
    `POST /account/agents/{id}/mint`):
    - `can_build` is checked — if the target is a foreign install, returns 403;
@@ -214,6 +220,73 @@ the Settings pages.
 the producer (consistent with the UI), not on the stricter `can_build` predicate
 (which additionally bars foreign installs). A foreign install the user owns can
 still be the target of a connect operation from the CLI.
+
+### 4c. Building a Producer's Agent REST API (`cinna agent-api`)
+
+`cinna connect agent-api` (flow 4 above) only *wires* a consumer to a producer
+that **already exposes** a REST API. The `cinna agent-api` verbs are the other
+half: they let a local coding agent **build and verify** that producer API
+itself — the CLI equivalent of the Integrations → **Agent REST API** card's
+enable toggle, **Refresh**, and **View Spec**. This closes the loop so a coding
+assistant can stand up the whole thing end-to-end without the browser:
+
+```
+# 1. Create the producer + consumer agents
+cinna agent create acme-orders
+cinna agent create crm-agent
+
+# 2. Sync the producer and author its API
+cinna agent sync acme-orders
+#    write agents/acme-orders/workspace/agent_api/orders.py + policy.yaml,
+#    then land it in the container (cinna dev live-sync, or cinna exec)
+
+# 3. Turn the feature on
+cinna agent-api enable acme-orders        # → prints status (enabled, state, spec?)
+
+# 4. Re-harvest + verify the spec after each code/policy edit
+cinna agent-api refresh acme-orders       # re-import modules + re-parse policy.yaml
+cinna agent-api spec    acme-orders        # the harvested OpenAPI JSON (or -o file)
+
+# 5. Once the spec looks right, wire the consumer (flow 4)
+cinna connect agent-api --producer acme-orders --consumer crm-agent
+```
+
+Each verb resolves `AGENT_REF` (name / slug / id) against the cached `cinna
+account agents` listing, then calls a thin `/account/agent-api/*` endpoint that
+delegates to the same services the UI uses:
+
+| Command | Backend endpoint | Delegates to | Gate |
+|---------|------------------|--------------|------|
+| `cinna agent-api enable <agent> [--disable]` | `POST /account/agent-api/enable` | `AgentService.update_agent` (`agent_api_enabled`) | `require_developer` + producer ownership (404 no-leak) |
+| `cinna agent-api refresh <agent>` | `POST /account/agent-api/refresh` | `AgentApiService.get_spec(force_refresh) + load_policy` | producer ownership (404 no-leak) |
+| `cinna agent-api spec <agent> [-o file]` | `GET /account/agent-api/spec?agent_id=` | `AgentApiService.get_spec` | producer ownership (404 no-leak) |
+
+Behavioural notes:
+
+- **`enable` doubles as a verify.** It returns the resulting agent-api status
+  (`agent_api_enabled`, `state`, `spec_available`, `last_error`, `env_status`),
+  so a coding agent confirms the toggle and learns whether a spec is already
+  available in one round-trip. `--disable` flips it back off.
+- **`refresh` is the iterative dev loop.** It mirrors the card's **Refresh**
+  button: a successful re-harvest refreshes the spec and re-parses `policy.yaml`;
+  a failed one records the error. It **never raises on a harvest failure** — the
+  returned status's `last_error` carries it (the CLI prints it as a warning), so
+  the agent reads the import error, fixes `agent_api/*.py`, syncs, and refreshes
+  again.
+- **`spec` is machine-facing.** It prints the harvested OpenAPI JSON to stdout
+  (plain, pipe-friendly) or writes it to a file with `-o`. `400` if the API is
+  disabled, `503` if the env is not running and the spec cache is cold.
+- **Authoring the code is still a sync step.** The producer's `agent_api/*.py`
+  and `policy.yaml` live in the *agent's* workspace, not the account workspace —
+  the coding agent writes them under `agents/<producer>/workspace/agent_api/` and
+  lands them with `cinna dev` (live Mutagen sync) or `cinna exec`. `cinna
+  agent-api` only manages the feature toggle, spec cache, and spec read.
+
+**Gating** mirrors the connect verbs: `enable` (a state change) is
+`require_developer`-gated; `refresh` / `spec` are diagnostic and open to any
+account-token holder, but all three enforce producer **ownership** via
+`AgentApiService.resolve_agent_only` (404 no-leak, never 403, so an inaccessible
+agent id is never confirmed to exist).
 
 ### 5. Drafting and Attaching Credentials (`cinna account credentials`)
 
@@ -501,6 +574,7 @@ normal JWT auth.
 | `CLI_ACCOUNT_CHILD_TOKEN_REVOKED` | Successful child-token revoke via `unsync`; written only on a real revoke (already-revoked is a no-op, no duplicate event) | target agent | `{account_token_id, child_token_id, prefix, ip}` |
 | `CLI_ACCOUNT_CONNECT_AGENT_API` | Successful `cinna connect agent-api` | consumer agent | `{producer_agent_id, credential_id, token_prefix, ip}` |
 | `CLI_ACCOUNT_CONNECT_MCP` | Successful `cinna connect mcp` | consumer agent | `{connector_id, credential_id, ip}` |
+| `CLI_ACCOUNT_AGENT_API_ENABLED` | Successful `cinna agent-api enable` (and `--disable`) — the state-changing toggle. `refresh` / `spec` are diagnostic and **not** audited | producer agent | `{enabled, ip}` |
 | `CLI_ACCOUNT_API_PROXY_CALL` | Exclusion hit (`excluded_path` or `excluded_method`) on `api-proxy` — NOT on allowed calls or `malformed_path` | `None` | `{method, path, reason, account_token_id, ip}` |
 
 ### Setup-Token Kind Guard
@@ -526,7 +600,7 @@ The backend contract these commands consume:
 |---------|-----------------|----------|
 | `cinna account setup <token_or_url>` | `POST /api/cli-setup/account/{token}` then `GET /api/v1/cli/account/context-package` | Exchange account setup token; download and extract context package into `context/`; write `account.json` + `CLAUDE.md` |
 | `cinna account refresh-context` | `GET /api/v1/cli/account/context-package` | Re-download the context package and replace `context/` in place; warns and exits cleanly on failure without corrupting existing content |
-| `cinna account agents` | `GET /api/v1/cli/account/agents` | Print accessible-agents table with `can_build` / `is_foreign_install` flags |
+| `cinna account agents [--all]` | `GET /api/v1/cli/account/agents` | Print accessible-agents table with `can_build` / `is_foreign_install` flags; **scoped to the active workspace by default** (client-side filter on `user_workspace_id`, header names the workspace), `--all` for every workspace |
 | `cinna agent sync <agent>` | `POST /api/v1/cli/account/agents/{id}/mint` then existing per-agent bootstrap | Mint child token; write `agents/<slug>/` as a standard workspace |
 | `cinna agent unsync <agent>` | `DELETE /api/v1/cli/account/tokens/children/{child_token_id}` then local | Revokes the child token server-side (authenticated by the account token), then stops sync and removes `agents/<slug>/` from the local registry |
 | `cinna exec --agent <agent> <cmd>` | Existing `POST /api/v1/cli/agents/{id}/exec` | Mint (if needed) then exec with child token |
@@ -538,6 +612,9 @@ The backend contract these commands consume:
 | `cinna agent create <name> [--description D]` | `POST /api/v1/cli/account/agents` body `{name, description, env_name}` | Create agent with backend defaults; print created agent's id, name, env id. 403 if not developer |
 | `cinna connect agent-api --producer P --consumer C [--label L] [--read-only]` | `POST /api/v1/cli/account/connect/agent-api` | Resolve P/C names → IDs from cached agents list; body `{producer_agent_id, consumer_agent_id, credential_label, read_only_override}`; print credential_id, token_prefix, base_url, spec_url |
 | `cinna connect mcp --producer P --consumer C [--label L] [--conversation-only\|--building-only]` | `GET …/account/connect/mcp/discoverable?consumer_agent_id=C` then `POST …/account/connect/mcp` | Resolve P → connector_id from discoverable list; body `{connector_id, consumer_agent_id, mcp_mode_conversation, mcp_mode_building, label}`; print credential_id, endpoint_url |
+| `cinna agent-api enable <agent> [--disable]` | `POST /api/v1/cli/account/agent-api/enable` body `{agent_id, enabled}` | Resolve agent → id; toggle `agent_api_enabled`; print resulting status (state, spec_available). 403 if not developer |
+| `cinna agent-api refresh <agent>` | `POST /api/v1/cli/account/agent-api/refresh` body `{agent_id}` | Force a spec + policy re-harvest; print status (warns on `last_error`). Never raises on a harvest failure |
+| `cinna agent-api spec <agent> [-o file]` | `GET /api/v1/cli/account/agent-api/spec?agent_id=` | Print the harvested OpenAPI JSON to stdout (or write to `-o file`). 400 if disabled, 503 if env not running + cache cold |
 | `cinna api <METHOD> <path> [--json '<obj>'\|--data @file.json] [--query k=v ...]` | `POST /api/v1/cli/account/api-proxy` body `{method, path, query, json_body}` | Generic escape hatch; path is relative to API root; response body to stdout (pretty-printed if JSON); exit code 0 for 2xx, non-zero for 4xx/5xx; proxy errors (403/400/429/413/502) to stderr |
 
 ### `.cinna/account.json` Schema
@@ -578,6 +655,11 @@ child workspace's `.cinna/config.json` and in `~/.cinna/agents.json`.
 | `connect agent-api` when producer's REST API is disabled | 400 (service) |
 | `connect agent-api` with non-owned consumer | 403 (service ownership check) |
 | `connect mcp` connector not in caller's ACL | 403 (service ACL check) |
+| `agent-api enable` on a non-owned / non-existent agent | 404 (no existence leak) |
+| `agent-api enable` by a demoted (agent-user) account token | 403 (`require_developer`, re-checked per call) |
+| `agent-api spec` while the producer's API is disabled | 400 (disabled) |
+| `agent-api spec` when the env is not running and the spec cache is cold | 503 |
+| `agent-api refresh` when the harvest fails (bad `agent_api/` code) | 200 with `last_error` in the status (never raises); CLI prints a warning |
 | `connect mcp` missing or non-agent2agent connector | 404 (no-leak, service) |
 | `cinna api` targets `credentials/*`, `admin/*`, `cli/*`, etc. | 403 `excluded_path` + `CLI_ACCOUNT_API_PROXY_CALL` SecurityEvent |
 | `cinna api GET users/me` | Allowed (carve-out from user exclusion) |
@@ -632,7 +714,11 @@ This document covers **Phases 1 through 4** — all four phases are now shipped:
 - **agent_api** (Phase 3) — `POST /account/connect/agent-api` wraps
   `AgentApiTokenService.connect_agent_api`; the resulting `AGENT_API` credential
   rides the existing credential sync / whitelist / redaction pipeline unchanged.
-  See [agent_api.md](../../agents/agent_api/agent_api.md)
+  The `cinna agent-api enable|refresh|spec` verbs (flow 4c) wrap
+  `AgentService.update_agent` (`agent_api_enabled`) and `AgentApiService`
+  (`get_spec` / `load_policy`) — the producer-side build+verify half that
+  precedes connect, mirroring the Integrations → Agent REST API card (enable /
+  Refresh / View Spec). See [agent_api.md](../../agents/agent_api/agent_api.md)
 - **agent_to_agent_mcp_connector** (Phase 3) — `POST /account/connect/mcp` wraps
   `MCPProviderService.connect_to_agent`; the resulting `MCP_PROVIDER` credential
   is injected into the consumer SDK runtime config (not `credentials.json`).

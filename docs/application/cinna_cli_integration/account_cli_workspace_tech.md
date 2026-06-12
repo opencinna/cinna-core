@@ -8,6 +8,8 @@
   - `AccountAgentCreateBody` — `{name: str, description: str|None, env_name: str|None, user_workspace_id: uuid|None}`. `env_name` accepted-but-noop in v1 (O1 — normal create path hard-codes `DEFAULT_AGENT_ENV_NAME`). `user_workspace_id` targets the account user's **active workspace** (the CLI fills it from `.cinna/account.json`; `None` = Default); validated to belong to the account user before assignment (`WorkspaceNotFoundError` → 404). Credentials created by the connect verbs inherit the agent's workspace automatically, so this one field realizes the "create in my active workspace" intent for both agents and their connection credentials.
   - `AccountConnectAgentApiBody` — `{producer_agent_id: uuid, consumer_agent_id: uuid|None, credential_label: str|None, read_only_override: bool=False}`
   - `AccountConnectMcpBody` — `{connector_id: uuid, consumer_agent_id: uuid|None, mcp_mode_conversation: bool=True, mcp_mode_building: bool=True, label: str|None}`
+  - `AccountAgentApiEnableBody` — `{agent_id: uuid, enabled: bool=True}`. Toggles the producer's `agent_api_enabled` (the `cinna agent-api enable [--disable]` verb).
+  - `AccountAgentApiRefreshBody` — `{agent_id: uuid}`. Forces a spec + policy re-harvest (the `cinna agent-api refresh` verb). The `spec` read takes `agent_id` as a query param, no body model.
   - `AccountCredentialCreateBody` — `{name: str, type: CredentialType, notes?, service_uri?, allow_sharing: bool=False, user_workspace_id: uuid|None}`. **No `credential_data`** by design — the account CLI creates *drafts*; the user fills the secret in the UI.
   - `AccountCredentialUpdateBody` — `{name?, notes?, service_uri?, allow_sharing?, allow_template_sharing?}`. Metadata only; **no `credential_data`**. All optional (`exclude_unset` applied).
   - `AccountCredentialShareBody` — `{agent_id: uuid}`. Attaches an existing credential to an owned agent.
@@ -40,6 +42,9 @@
   - `POST /api/v1/cli/account/connect/agent-api` — `AccountCLIContextDep` + `require_developer`; body `AccountConnectAgentApiBody`; response `ConnectAgentApiResponse`; maps `AgentApiTokenError` to its `status_code`. Status codes: 200 / 400 / 403 / 404.
   - `GET /api/v1/cli/account/connect/mcp/discoverable` — `AccountCLIContextDep`; query `?consumer_agent_id=`; response `DiscoverableAgents`. No `require_developer` (listing is unrestricted for account token holders).
   - `POST /api/v1/cli/account/connect/mcp` — `AccountCLIContextDep` + `require_developer`; body `AccountConnectMcpBody`; response `MCPProviderConnectionResponse`; maps `MCPProviderError` to its `status_code`. Status codes: 200 / 400 / 403 / 404.
+  - `POST /api/v1/cli/account/agent-api/enable` — `AccountCLIContextDep` + `require_developer`; body `AccountAgentApiEnableBody`; response is the agent-api status dict; maps `AgentApiError` to its `status_code`. Status codes: 200 / 401 / 403 / 404.
+  - `POST /api/v1/cli/account/agent-api/refresh` — `AccountCLIContextDep`; body `AccountAgentApiRefreshBody`; response is the agent-api status dict (never raises on a harvest failure — `last_error` carries it); maps `AgentApiError` to its `status_code`. Status codes: 200 / 401 / 404.
+  - `GET /api/v1/cli/account/agent-api/spec` — `AccountCLIContextDep`; query `?agent_id=`; response is the harvested OpenAPI spec JSON; maps `AgentApiError` to its `status_code`. Status codes: 200 / 400 (disabled) / 401 / 404 / 503 (env not running + cold cache).
   - `POST /api/v1/cli/account/api-proxy` — `AccountCLIContextDep`; body `AccountApiProxyRequest`; raw `Response` passthrough (no `response_model`); maps `ApiProxyDenied` → 403 (`excluded_*`) or 400 (`malformed_path`); 413 (body), 429 (rate limit), 502 (streaming/oversize). Status codes: 200/4xx-5xx (inner) / 400 / 403 / 413 / 429 / 502.
 
   **Credential drafting verbs** (metadata + structure only — the account token never reads or writes a credential's secret value; these expose the *safe* slice of an otherwise denylisted surface):
@@ -107,6 +112,11 @@
   - `async connect_agent_api(db, user, body, request) -> ConnectAgentApiResponse` — maps `AccountConnectAgentApiBody` → `ConnectAgentApiRequest` and delegates to `AgentApiTokenService.connect_agent_api`. Emits `CLI_ACCOUNT_CONNECT_AGENT_API` on success.
   - `list_discoverable_mcp_agents(db, user, consumer_agent_id) -> DiscoverableAgents` — delegates to `MCPProviderService.list_discoverable_agents`.
   - `async connect_mcp(db, user, body, request) -> MCPProviderConnectionResponse` — maps `AccountConnectMcpBody` → `ConnectMcpProviderAgentRequest` and delegates to `MCPProviderService.connect_to_agent`. Emits `CLI_ACCOUNT_CONNECT_MCP` on success.
+  - **Agent REST API producer management** (the producer-side build+verify half that precedes `connect_agent_api`):
+    - `_resolve_agent_api_env(db, agent) -> AgentEnvironment|None` — the agent's active environment (or `None` when suspended/absent), shared by `set_agent_api_enabled` / `refresh_agent_api`.
+    - `async set_agent_api_enabled(db, user, agent_id, enabled, request) -> dict` — ownership-checks via `AgentApiService.resolve_agent_only` (404 no-leak), flips `agent_api_enabled` through `AgentService.update_agent(AgentUpdate(...))` (same path as the UI `PUT /agents/{id}`), emits `CLI_ACCOUNT_AGENT_API_ENABLED`, and returns `AgentApiService.get_status`.
+    - `async refresh_agent_api(db, user, agent_id, request) -> dict` — ownership-checks, then (when enabled + env running) best-effort `AgentApiService.get_spec(force_refresh=True)` + `load_policy(force_refresh=True)` and returns `get_status`. Mirrors the producer `POST /_refresh`; never raises on a harvest failure (the error is persisted and surfaced via the status `last_error`). Not audited (diagnostic, not a grant).
+    - `async get_agent_api_spec(db, user, agent_id) -> dict` — `AgentApiService.resolve_producer_environment(require_agent_api_enabled=True)` then `get_spec`; bumps `update_last_activity` to keep the env warm. Mirrors the owner `GET /openapi.json`.
   - **Credential drafting verbs** (secrets-safe — never read/write `credential_data`):
     - `_credential_public(db, credential) -> CredentialPublic` — owner projection (share_count + computed `status`); decrypts only to compute completeness server-side, plaintext never leaves the function.
     - `_required_fields_for(credential_type) -> list[str]` — per-type required fields from `CredentialsService.REQUIRED_FIELDS`.
@@ -230,6 +240,7 @@
   - `CLI_ACCOUNT_CONNECT_MCP = "CLI_ACCOUNT_CONNECT_MCP"` (Phase 3)
   - `CLI_ACCOUNT_API_PROXY_CALL = "CLI_ACCOUNT_API_PROXY_CALL"` (Phase 3 — exclusion hits only)
   - `CLI_ACCOUNT_CREDENTIAL_CREATED` / `CLI_ACCOUNT_CREDENTIAL_UPDATED` / `CLI_ACCOUNT_CREDENTIAL_DELETED` / `CLI_ACCOUNT_CREDENTIAL_SHARED_WITH_AGENT` — one per credential drafting write (create/update/delete/attach). Discrete, infrequent state changes, audited per call (mirrors the connect verbs).
+  - `CLI_ACCOUNT_AGENT_API_ENABLED = "CLI_ACCOUNT_AGENT_API_ENABLED"` — written on `agent-api enable` (and `--disable`); `details={enabled, ip}`, `agent_id` = producer. `refresh` / `spec` are diagnostic and **not** audited (mirrors the unaudited credential *reads*).
 
 ### Frontend — Components
 
@@ -393,6 +404,9 @@ Response:
 | `POST` | `/api/v1/cli/account/connect/agent-api` | 200 / 400 / 403 / 404 | Wire consumer → producer REST API; `require_developer`-gated; body `AccountConnectAgentApiBody`; response `ConnectAgentApiResponse` |
 | `GET` | `/api/v1/cli/account/connect/mcp/discoverable` | 200 | List platform agents exposing an agent2agent connector visible to the caller; query `?consumer_agent_id=` |
 | `POST` | `/api/v1/cli/account/connect/mcp` | 200 / 400 / 403 / 404 | Wire consumer → producer MCP connector; `require_developer`-gated; body `AccountConnectMcpBody`; response `MCPProviderConnectionResponse` |
+| `POST` | `/api/v1/cli/account/agent-api/enable` | 200 / 401 / 403 / 404 | Toggle producer `agent_api_enabled`; `require_developer`-gated; body `AccountAgentApiEnableBody`; response = agent-api status dict |
+| `POST` | `/api/v1/cli/account/agent-api/refresh` | 200 / 401 / 404 | Force a spec + policy re-harvest; body `AccountAgentApiRefreshBody`; response = agent-api status dict (never raises on harvest failure) |
+| `GET` | `/api/v1/cli/account/agent-api/spec` | 200 / 400 / 401 / 404 / 503 | Harvested OpenAPI spec; query `?agent_id=`; 400 if disabled, 503 if env not running + cold cache |
 | `GET` | `/api/v1/cli/account/credentials/types` | 200 | Credential-type catalogue + per-type `required_fields`; response `AccountCredentialTypesPublic` |
 | `GET` | `/api/v1/cli/account/credentials` | 200 | List the user's credentials (metadata only, `status` per row); `?user_workspace_id=` filter; response `CredentialsPublic` |
 | `POST` | `/api/v1/cli/account/credentials` | 200 / 403 / 404 | Create a draft credential (no value); `require_developer`-gated; body `AccountCredentialCreateBody`; response `AccountCredentialDraftResult`; 404 on foreign workspace |

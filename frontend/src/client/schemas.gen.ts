@@ -988,6 +988,49 @@ export const AccessTokenScopeSchema = {
     description: 'Scope for the token - determines session visibility.'
 } as const;
 
+export const AccountAgentApiEnableBodySchema = {
+    properties: {
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled',
+            default: true
+        }
+    },
+    type: 'object',
+    required: ['agent_id'],
+    title: 'AccountAgentApiEnableBody',
+    description: `Toggle a producer agent's REST API on/off — \`\`cinna agent-api enable\`\`.
+
+Mirrors the UI's \`\`PUT /agents/{id}\`\` \`\`agent_api_enabled\`\` toggle, but
+reached through the account token. The agent id is a body field (the account
+route is path-free, consistent with the connect verbs). \`\`enabled\`\` defaults
+to \`\`True\`\` (the common case); pass \`\`False\`\` to disable.`
+} as const;
+
+export const AccountAgentApiRefreshBodySchema = {
+    properties: {
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        }
+    },
+    type: 'object',
+    required: ['agent_id'],
+    title: 'AccountAgentApiRefreshBody',
+    description: `Force an on-demand spec + policy re-harvest — \`\`cinna agent-api refresh\`\`.
+
+Maps to the producer \`\`POST /_refresh\`\` action: re-imports the agent's
+\`\`agent_api/\`\` modules to refresh the cached OpenAPI spec and re-parses
+\`\`policy.yaml\`\`. Returns the resulting status (never raises on a harvest
+failure — the status carries \`\`last_error\`\`).`
+} as const;
+
 export const AccountAgentCreateBodySchema = {
     properties: {
         name: {

@@ -55,6 +55,31 @@ class AccountConnectAgentApiBody(SQLModel):
     read_only_override: bool = False
 
 
+class AccountAgentApiEnableBody(SQLModel):
+    """Toggle a producer agent's REST API on/off — ``cinna agent-api enable``.
+
+    Mirrors the UI's ``PUT /agents/{id}`` ``agent_api_enabled`` toggle, but
+    reached through the account token. The agent id is a body field (the account
+    route is path-free, consistent with the connect verbs). ``enabled`` defaults
+    to ``True`` (the common case); pass ``False`` to disable.
+    """
+
+    agent_id: uuid.UUID
+    enabled: bool = True
+
+
+class AccountAgentApiRefreshBody(SQLModel):
+    """Force an on-demand spec + policy re-harvest — ``cinna agent-api refresh``.
+
+    Maps to the producer ``POST /_refresh`` action: re-imports the agent's
+    ``agent_api/`` modules to refresh the cached OpenAPI spec and re-parses
+    ``policy.yaml``. Returns the resulting status (never raises on a harvest
+    failure — the status carries ``last_error``).
+    """
+
+    agent_id: uuid.UUID
+
+
 class AccountConnectMcpBody(SQLModel):
     """Wrap the ``mcp_provider`` agent2agent connect helper.
 

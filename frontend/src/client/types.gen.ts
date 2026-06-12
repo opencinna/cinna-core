@@ -35,6 +35,31 @@ export type AccessTokenMode = 'conversation' | 'building';
 export type AccessTokenScope = 'limited' | 'general';
 
 /**
+ * Toggle a producer agent's REST API on/off — ``cinna agent-api enable``.
+ *
+ * Mirrors the UI's ``PUT /agents/{id}`` ``agent_api_enabled`` toggle, but
+ * reached through the account token. The agent id is a body field (the account
+ * route is path-free, consistent with the connect verbs). ``enabled`` defaults
+ * to ``True`` (the common case); pass ``False`` to disable.
+ */
+export type AccountAgentApiEnableBody = {
+    agent_id: string;
+    enabled?: boolean;
+};
+
+/**
+ * Force an on-demand spec + policy re-harvest — ``cinna agent-api refresh``.
+ *
+ * Maps to the producer ``POST /_refresh`` action: re-imports the agent's
+ * ``agent_api/`` modules to refresh the cached OpenAPI spec and re-parses
+ * ``policy.yaml``. Returns the resulting status (never raises on a harvest
+ * failure — the status carries ``last_error``).
+ */
+export type AccountAgentApiRefreshBody = {
+    agent_id: string;
+};
+
+/**
  * Thin-client agent-create body.
  *
  * The CLI sends only user-specified fields; the backend applies ALL defaults
@@ -6107,6 +6132,24 @@ export type CliAccountConnectAgentApiData = {
 };
 
 export type CliAccountConnectAgentApiResponse = (ConnectAgentApiResponse);
+
+export type CliAccountAgentApiEnableData = {
+    requestBody: AccountAgentApiEnableBody;
+};
+
+export type CliAccountAgentApiEnableResponse = (unknown);
+
+export type CliAccountAgentApiRefreshData = {
+    requestBody: AccountAgentApiRefreshBody;
+};
+
+export type CliAccountAgentApiRefreshResponse = (unknown);
+
+export type CliAccountAgentApiSpecData = {
+    agentId: string;
+};
+
+export type CliAccountAgentApiSpecResponse = (unknown);
 
 export type CliAccountListDiscoverableMcpData = {
     consumerAgentId?: (string | null);
