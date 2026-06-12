@@ -308,7 +308,7 @@ def _guard_foreign_schedule_write(agent: Agent) -> None:
 ## Configuration
 
 - No feature flags — scheduling is always available
-- Minimum CRON interval (30 minutes) enforced in the AI prompt template, not as a backend config
+- Minimum CRON interval is per schedule type and enforced **deterministically in the backend** (`AgentSchedulerService.validate_frequency`, called on generate-preview / create / update), not by the AI prompt: `static_prompt` = 10 minutes, `script_trigger` = no minimum. The limit is the smallest gap between consecutive fire times (so `*/40` = 20 min real gap), defined in `AgentSchedulerService.MINIMUM_INTERVAL_MINUTES`. The AI prompt no longer rejects on frequency — it only translates natural language to CRON.
 - Background scheduler poll interval: 1 minute (hardcoded in `agent_schedule_scheduler.py`)
 - Command timeout default: 120 seconds, max: 300 seconds
 - Output truncation: 10,000 characters per stream (stdout/stderr)

@@ -17444,6 +17444,11 @@ export const ScheduleRequestSchema = {
         timezone: {
             type: 'string',
             title: 'Timezone'
+        },
+        schedule_type: {
+            type: 'string',
+            title: 'Schedule Type',
+            default: 'static_prompt'
         }
     },
     type: 'object',

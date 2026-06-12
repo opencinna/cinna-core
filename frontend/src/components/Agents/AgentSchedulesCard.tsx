@@ -362,10 +362,20 @@ export function AgentSchedulesCard({
 
   // Generate mutation (stateless AI)
   const generateMutation = useMutation({
-    mutationFn: (naturalLanguage: string) =>
+    mutationFn: ({
+      naturalLanguage,
+      scheduleType,
+    }: {
+      naturalLanguage: string
+      scheduleType: ScheduleType
+    }) =>
       AgentsService.generateSchedule({
         id: agentId,
-        requestBody: { natural_language: naturalLanguage, timezone: userTimezone },
+        requestBody: {
+          natural_language: naturalLanguage,
+          timezone: userTimezone,
+          schedule_type: scheduleType,
+        },
       }),
   })
 
@@ -507,7 +517,10 @@ export function AgentSchedulesCard({
     setCreateError(null)
     setCreateGenerated(null)
     try {
-      const result = await generateMutation.mutateAsync(createInput)
+      const result = await generateMutation.mutateAsync({
+        naturalLanguage: createInput,
+        scheduleType: createType,
+      })
       if (result.success && result.cron_string && result.description) {
         setCreateGenerated({
           description: result.description,
@@ -553,11 +566,14 @@ export function AgentSchedulesCard({
   }
 
   const handleEditGenerate = async () => {
-    if (!editInput.trim()) return
+    if (!editInput.trim() || !editingSchedule) return
     setEditError(null)
     setEditGenerated(null)
     try {
-      const result = await generateMutation.mutateAsync(editInput)
+      const result = await generateMutation.mutateAsync({
+        naturalLanguage: editInput,
+        scheduleType: editingSchedule.schedule_type as ScheduleType,
+      })
       if (result.success && result.cron_string && result.description) {
         setEditGenerated({
           description: result.description,

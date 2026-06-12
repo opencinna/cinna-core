@@ -3978,6 +3978,7 @@ export type RouterTriggerPromptUpdate = {
 export type ScheduleRequest = {
     natural_language: string;
     timezone: string;
+    schedule_type?: string;
 };
 
 /**

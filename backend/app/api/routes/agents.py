@@ -567,6 +567,7 @@ def generate_schedule(
     result = AgentSchedulerService.generate_schedule_preview(
         natural_language=data.natural_language,
         timezone=data.timezone,
+        schedule_type=data.schedule_type,
         user=current_user,
         db=session,
     )

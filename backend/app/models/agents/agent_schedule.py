@@ -49,6 +49,8 @@ class ScheduleRequest(SQLModel):
     """Request to generate schedule from natural language."""
     natural_language: str
     timezone: str
+    # Selects which minimum-interval floor applies to the generated cadence.
+    schedule_type: str = "static_prompt"
 
 
 class ScheduleResponse(SQLModel):

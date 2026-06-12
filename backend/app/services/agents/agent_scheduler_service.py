@@ -293,6 +293,84 @@ async def _log_and_emit_manual_run_error(
 class AgentSchedulerService:
     """Service for managing agent schedules."""
 
+    # ==================== Frequency Constraints ====================
+    #
+    # Minimum gap (in minutes) the platform allows between two consecutive
+    # executions, keyed by schedule type. ``static_prompt`` schedules always
+    # spin up a session and spend tokens, so they keep a floor. ``script_trigger``
+    # schedules usually no-op (the command returns "OK" without creating a
+    # session or spending tokens), so they have NO floor and may run as
+    # frequently as the user needs.
+    #
+    # Enforcement is deterministic (computed from the CRON string below), NOT
+    # delegated to the LLM — the AI generator only translates natural language
+    # to a CRON expression; this service is the source of truth for whether the
+    # resulting cadence is allowed.
+    MINIMUM_INTERVAL_MINUTES: dict[str, int] = {
+        "static_prompt": 10,
+        "script_trigger": 0,
+    }
+
+    @staticmethod
+    def _minimum_interval_minutes(cron_string: str) -> float:
+        """
+        Smallest gap (in minutes) between any two consecutive fire times of a
+        CRON expression.
+
+        Samples a fixed window of consecutive executions from a fixed base
+        time (deterministic, timezone-invariant for minute/hour cadence) and
+        returns the tightest gap observed — this captures the real cadence of
+        step expressions like ``*/40`` (which fire at :00 and :40, a true 20
+        minute minimum gap), not just the nominal "40 minutes".
+        """
+        base = datetime(2024, 1, 1, tzinfo=pytz.utc)
+        itr = croniter(cron_string, base)
+        prev = itr.get_next(datetime)
+        smallest = float("inf")
+        # 500 steps covers well over a full day even for per-minute schedules,
+        # which is enough to surface any within-day minimum gap.
+        for _ in range(500):
+            nxt = itr.get_next(datetime)
+            gap = (nxt - prev).total_seconds() / 60.0
+            if gap < smallest:
+                smallest = gap
+            prev = nxt
+        return smallest
+
+    @staticmethod
+    def validate_frequency(cron_string: str, schedule_type: str) -> None:
+        """
+        Reject a schedule whose cadence is tighter than the per-type minimum.
+
+        Args:
+            cron_string: CRON expression (local or UTC — minute/hour gaps are
+                timezone-invariant)
+            schedule_type: "static_prompt" or "script_trigger"
+
+        Raises:
+            ScheduleError: If the schedule would run more frequently than the
+                minimum allowed for its type.
+            InvalidCronError: If the CRON string cannot be parsed.
+        """
+        minimum = AgentSchedulerService.MINIMUM_INTERVAL_MINUTES.get(
+            schedule_type, 10
+        )
+        if minimum <= 0:
+            return  # No floor for this type (e.g. script_trigger).
+
+        try:
+            interval = AgentSchedulerService._minimum_interval_minutes(cron_string)
+        except Exception as e:
+            raise InvalidCronError(str(e))
+
+        if interval < minimum:
+            raise ScheduleError(
+                f"Execution frequency too high: minimum interval for "
+                f"{schedule_type.replace('_', ' ')} schedules is {minimum} "
+                f"minutes, but this schedule would run every "
+                f"{int(interval)} minutes."
+            )
+
     # ==================== Access Control Helpers ====================
 
     @staticmethod
@@ -471,17 +549,21 @@ class AgentSchedulerService:
     def generate_schedule_preview(
         natural_language: str,
         timezone: str,
+        schedule_type: str = "static_prompt",
         user: "User | None" = None,
         db: "Session | None" = None,
     ) -> dict:
         """
         Generate a CRON schedule from natural language and calculate next execution.
 
-        Orchestrates the AI call, CRON conversion, and next_execution calculation.
+        Orchestrates the AI call, CRON conversion, type-aware frequency
+        validation, and next_execution calculation.
 
         Args:
             natural_language: User's schedule description
             timezone: User's IANA timezone
+            schedule_type: "static_prompt" or "script_trigger" — selects which
+                minimum-interval floor to enforce on the generated cadence
 
         Returns:
             Dict with success, cron_string, description, next_execution, or error
@@ -500,9 +582,13 @@ class AgentSchedulerService:
                 cron_utc = AgentSchedulerService.convert_local_cron_to_utc(
                     ai_result["cron_string"], timezone
                 )
+                AgentSchedulerService.validate_frequency(cron_utc, schedule_type)
                 next_exec = AgentSchedulerService.calculate_next_execution(cron_utc)
                 ai_result["next_execution"] = next_exec.isoformat()
-            except (InvalidCronError, Exception) as e:
+            except ScheduleError as e:
+                # Type-aware frequency / cron errors carry a user-facing message.
+                return {"success": False, "error": e.message}
+            except Exception as e:
                 return {
                     "success": False,
                     "error": f"Failed to calculate next execution: {str(e)}",
@@ -551,6 +637,10 @@ class AgentSchedulerService:
         cron_utc = AgentSchedulerService.convert_local_cron_to_utc(
             cron_string, timezone
         )
+
+        # Enforce the per-type minimum execution interval (server-side source
+        # of truth — a direct cron_string can bypass the AI preview check).
+        AgentSchedulerService.validate_frequency(cron_utc, schedule_type)
 
         # Calculate next execution
         next_exec = AgentSchedulerService.calculate_next_execution(cron_utc)
@@ -626,6 +716,11 @@ class AgentSchedulerService:
 
             cron_utc = AgentSchedulerService.convert_local_cron_to_utc(
                 fields["cron_string"], timezone
+            )
+            # Enforce the per-type minimum interval using the schedule's own
+            # (immutable) type.
+            AgentSchedulerService.validate_frequency(
+                cron_utc, schedule.schedule_type
             )
             schedule.cron_string = cron_utc
             schedule.next_execution = AgentSchedulerService.calculate_next_execution(cron_utc)

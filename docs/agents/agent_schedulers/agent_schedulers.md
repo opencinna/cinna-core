@@ -149,10 +149,18 @@ All schedule executions (both types) create an immutable `AgentScheduleLog` reco
 
 ### Frequency Constraints
 
-**Minimum execution interval: 30 minutes**
+**Minimum execution interval is per schedule type, enforced deterministically by the backend (not the AI):**
 
-- Valid: "every hour", "every 30 minutes", "every day at 9 AM", "every Monday at 3 PM"
-- Invalid: "every 5 minutes", "every minute", "every 15 minutes" (all rejected as too frequent)
+| Schedule Type | Minimum interval |
+|---------------|------------------|
+| `static_prompt` | **10 minutes** — every execution spins up a session and spends tokens |
+| `script_trigger` | **None** — the command usually no-ops (returns "OK") without a session or tokens, so it may run as frequently as needed |
+
+- The limit is computed from the actual CRON cadence — the smallest gap between two consecutive fire times — not the nominal phrase. For example `*/40` ("every 40 minutes") fires at `:00` and `:40`, a real 20-minute minimum gap, which is allowed for both types.
+- The AI generator (`schedule_generator_prompt`) no longer gates on frequency; it faithfully translates any cadence to CRON. The backend (`AgentSchedulerService.validate_frequency`) is the single source of truth and rejects too-frequent `static_prompt` schedules on **generate-preview, create, and update**.
+- `static_prompt` valid: "every hour", "every 30 minutes", "every 10 minutes", "every day at 9 AM"
+- `static_prompt` invalid: "every 5 minutes", "every minute" (rejected as too frequent)
+- `script_trigger`: any cadence accepted, including "every 5 minutes" or "every minute"
 
 ### Timezone Handling
 
@@ -266,7 +274,7 @@ L = Logs, E = Edit, T = Toggle enabled/disabled, D = Delete with confirmation
 - Schedule 2 (static_prompt): "Daily incident report" — "every day at 6 PM" — prompt: "Generate daily incident summary from today's alerts"
 
 **Error cases:**
-- Too frequent input → AI returns error: "Execution frequency too high: minimum interval is 30 minutes."
+- Too frequent `static_prompt` → backend returns error: "Execution frequency too high: minimum interval for static prompt schedules is 10 minutes, but this schedule would run every 5 minutes." (`script_trigger` has no such limit)
 - Vague input → AI returns error: "Cannot extract schedule: 'sometimes' is too vague. Please specify exact time or frequency."
 
 ## Integration Points
