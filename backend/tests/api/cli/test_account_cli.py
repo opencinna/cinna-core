@@ -1456,6 +1456,15 @@ def test_context_package_content(
         f"guides members found: {guides_members}"
     )
 
+    # ── Phase 13: ``context/guides/authoring-agent-prompts.md`` is present ──
+    assert "context/guides/authoring-agent-prompts.md" in member_names, (
+        "context/guides/authoring-agent-prompts.md must be present in the tarball — "
+        "the guide is committed to the repo at "
+        "backend/app/env-templates/platform-knowledge-env/app/workspace/knowledge/guides/ "
+        "and must be included in the context package; "
+        f"guides members found: {guides_members}"
+    )
+
 
 # ── Scenario 15: Context-package auth matrix ─────────────────────────────────
 

@@ -96,6 +96,7 @@ my-cinna/
     examples/            # working API-script patterns (platform_helper + samples)
     guides/              # end-to-end worked walkthroughs (Phase 4)
       build-an-agentic-network.md   # how to build a delegating multi-agent network
+      authoring-agent-prompts.md    # how to author prompts and finalize the description
   agents/
     crm-agent/           # 100% standard cinna per-agent workspace
       .cinna/config.json
@@ -499,6 +500,94 @@ end-to-end, including the capability-vs-delegation table, the create→capture�
 id-capture loop, and the business-rule cheat-sheet. The orchestrator `CLAUDE.md`
 points to it for "build a multi-agent network" requests.
 
+### 7b. Authoring Agent Prompts (Finalize Step)
+
+Once an agent's functionality is built and verified — scripts run, connections
+resolve, the REST API spec harvests — the orchestrator should author the agent's
+prompts and write a description that matches the **finished** agent. This is the
+final acceptance step of every build.
+
+**Author prompts LAST.** Create the agent with a one-line provisional
+description, build and verify all functionality first, then come back to write
+the real prompt set from what actually exists.
+
+**The six prompt-ish fields** (each consumed by a different system):
+
+| Field | Consumer | Notes |
+|-------|---------|-------|
+| `description` | Discovery cards, A2A card; feeds router-trigger / A2A skill generation | One clear sentence. Rewrite it to match the *finished* agent. |
+| `workflow_prompt` | Conversation-mode system prompt — every conversation session | Operational: which scripts to run, how to parse output, how to present results. The agent is a *bridge* that runs scripts, parses, and rephrases. |
+| `entrypoint_prompt` | First user message for scheduled / automated runs | Conversational, **not** technical. ✅ *"What is my time-off balance?"* |
+| `refiner_prompt` | AI task refinement, before execution | Default-fill rules and mandatory fields. |
+| `router_trigger_prompt` | App MCP router classifier only — never in any system prompt | Describes *when to route here*, not how to behave. |
+| `example_prompts` | Surfaced as MCP slash commands | Short imperative tasks: `["reconcile last week", "show failed payouts"]` |
+
+**The bulk workflow** — keep a local `agents/<name>/prompts.json` holding only the
+prompt subset, and push it in one atomic write:
+
+```jsonc
+// agents/billing-agent/prompts.json
+{
+  "description": "Reconciles Stripe payouts against the ledger and flags mismatches.",
+  "workflow_prompt": "You reconcile Stripe payouts. Run reconcile.py for the requested period, parse the JSON output, ...",
+  "entrypoint_prompt": "Reconcile this week's payouts.",
+  "refiner_prompt": "If no period is given, default to the current week. Always capture account id and currency.",
+  "router_trigger_prompt": "Reconciles Stripe payouts and flags ledger mismatches.",
+  "example_prompts": ["reconcile last week", "show failed payouts"]
+}
+```
+
+```bash
+# 1. Bulk write — the agent's config (DB) is the authoritative source of truth
+cinna api PUT agents/<agent_id> --data @agents/billing-agent/prompts.json
+
+# 2. Verify what actually landed
+cinna agent show billing-agent --prompts
+```
+
+All fields are optional — omitted keys are left unchanged. `agents/*` is not on
+the escape-hatch denylist (only `agents/create-flow-stream` and `agents/create-flow`
+are excluded), so `PUT /agents/{id}`, `POST /agents/{id}/sync-prompts`, and
+`POST /agents/{id}/generate-router-trigger-prompt` are all reachable via
+`cinna api` — no new backend endpoints or CLI verbs were needed.
+
+**How it reaches the running environment:** the three document-backed prompts
+(`workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`) are seeded into the
+container's `docs/*.md` automatically on the next environment start (`SEED_PUSH`
+when the env files are empty — the fresh-agent case). If the environment is
+**already running** and you want the doc prompts pushed immediately:
+
+```bash
+cinna api POST agents/<agent_id>/sync-prompts
+```
+
+`router_trigger_prompt`, `example_prompts`, and `description` are config-only and
+take effect immediately after the write.
+
+**Optional — let the platform generate the router trigger** from the agent's name
+and description:
+
+```bash
+cinna api POST agents/<agent_id>/generate-router-trigger-prompt
+```
+
+**The finalize step (end of every build):**
+
+1. Confirm all functionality works (scripts, connections, API spec, team wiring).
+2. Author the full prompt set from what you *actually built*. Rewrite
+   `description` explicitly in the same payload — do not rely on auto-derivation.
+3. `cinna api PUT agents/<id> --data @agents/<name>/prompts.json`
+4. `cinna agent show <name> --prompts` to confirm.
+5. If the env is already running: `cinna api POST agents/<id>/sync-prompts`.
+
+**The guide** (`context/guides/authoring-agent-prompts.md`) ships in
+`knowledge/guides/` inside the `platform-knowledge-env` template (survives
+knowledge re-sync, the same mechanism as the agentic-network playbook). The
+context package assembler includes it verbatim under `context/guides/`; the
+generated `context/README.md` index points the orchestrator at it for the
+finalize step. Like the network playbook, it requires no new backend endpoints or
+migration.
+
 ### 8. Managing Account Sessions (UI)
 
 1. Settings → Channels → Local Development card lists active account sessions.
@@ -718,7 +807,10 @@ This document covers **Phases 1 through 4** — all four phases are now shipped:
   verbs or backend endpoints); `context/guides/` subtree added to the context
   package; `context/guides/build-an-agentic-network.md` playbook ships a
   full end-to-end meeting-booking walkthrough covering agent creation, capability
-  wiring, and team-graph registration via `cinna api`.
+  wiring, and team-graph registration via `cinna api`;
+  `context/guides/authoring-agent-prompts.md` guide ships the bulk-prompt
+  authoring workflow and finalize-the-description rule (flow 7b — no new backend
+  endpoints or migration).
 
 ## Integration Points
 
@@ -760,3 +852,10 @@ This document covers **Phases 1 through 4** — all four phases are now shipped:
   graph (nodes + directed connections) is the delegation-policy artifact that
   permits `mcp__agent_task__create_subtask` along drawn edges. See
   [agentic_teams.md](../../agents/agentic_teams/agentic_teams.md)
+- **agent_prompts** (Phase 4 / flow 7b) — the bulk-prompt authoring workflow
+  (`cinna api PUT agents/{id}`) targets the standard `PUT /agents/{id}` route,
+  which is not on the escape-hatch denylist. `POST /agents/{id}/sync-prompts`
+  (force-push DB→env) and `POST /agents/{id}/generate-router-trigger-prompt`
+  (AI-generate routing sentence) are also reachable via `cinna api`. The
+  three-way reconcile and SEED_PUSH mechanics are described in
+  [agent_prompts.md](../../agents/agent_prompts/agent_prompts.md)
