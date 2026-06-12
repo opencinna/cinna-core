@@ -7,6 +7,7 @@ import DeleteAccount from "@/components/UserSettings/DeleteAccount"
 import { AppAgentRoutesCard } from "@/components/UserSettings/AppAgentRoutesCard"
 import { DesktopSessionsCard } from "@/components/UserSettings/DesktopSessionsCard"
 import { IdentityServerCard } from "@/components/UserSettings/IdentityServerCard"
+import { LocalDevelopmentCard } from "@/components/UserSettings/LocalDevelopmentCard"
 import { MailServerSettings } from "@/components/UserSettings/MailServerSettings"
 import { NotificationSettings } from "@/components/UserSettings/NotificationSettings"
 import OAuthAccounts from "@/components/UserSettings/OAuthAccounts"
@@ -94,6 +95,7 @@ function UserSettings() {
           <MailServerSettings />
           <AppAgentRoutesCard />
           <IdentityServerCard />
+          <LocalDevelopmentCard />
         </div>
       ),
     },

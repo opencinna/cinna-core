@@ -151,7 +151,7 @@ Each agent has a configurable inactivity threshold (agent-level setting, not per
 `last_activity_at` timestamp updated when:
 - User sends a message to the environment
 - User opens a session with the environment
-- User sends `agent_usage_intent` WebSocket event (opens session in UI)
+- Frontend calls `POST /environments/{id}/usage-intent` REST endpoint (primary path — works even when WebSocket is disconnected); the `agent_usage_intent` WebSocket event is a legacy fallback that delegates to the same service function
 
 ### Data Preservation Rules
 

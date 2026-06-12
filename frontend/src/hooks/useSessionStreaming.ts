@@ -257,22 +257,10 @@ export function useSessionStreaming({
           throw new Error("Not authenticated")
         }
 
-        // Subscribe to session-specific streaming room before sending
-        const streamRoom = `session_${sessionId}_stream`
-        streamRoomRef.current = streamRoom
-        await eventService.subscribeToRoom(streamRoom)
-
-        // Subscribe to stream events
-        if (streamSubscriptionRef.current) {
-          eventService.unsubscribe(streamSubscriptionRef.current)
-        }
-        const subscriptionId = eventService.subscribe(
-          "stream_event",
-          handleStreamEvent
-        )
-        streamSubscriptionRef.current = subscriptionId
-
-        // Optimistically add user message to cache
+        // Optimistically add user message to cache FIRST — before any WS/network
+        // interaction — so the message is visible immediately and the REST POST
+        // below is never gated on WebSocket health (WS is an enhancement, not a
+        // requirement; polling recovers all streaming data from the DB).
         const tempUserMessageId = `temp-${Date.now()}`
         queryClient.setQueryData(["messages", sessionId], (old: any) => {
           if (!old) return old
@@ -314,6 +302,27 @@ export function useSessionStreaming({
             }
           })
         }
+
+        // Subscribe to the session streaming room as a fire-and-forget
+        // enhancement. We do NOT await it: with a dead/disconnected socket the
+        // ack never fires, and blocking here would prevent the REST POST below
+        // (the real source of truth). The room is tracked and re-subscribed on
+        // reconnect; polling fills any gaps from the DB in the meantime.
+        const streamRoom = `session_${sessionId}_stream`
+        streamRoomRef.current = streamRoom
+        eventService.subscribeToRoom(streamRoom).catch((err) => {
+          console.warn("Failed to subscribe to stream room (non-blocking):", err)
+        })
+
+        // Subscribe to stream events (synchronous, local — safe regardless of WS state)
+        if (streamSubscriptionRef.current) {
+          eventService.unsubscribe(streamSubscriptionRef.current)
+        }
+        const subscriptionId = eventService.subscribe(
+          "stream_event",
+          handleStreamEvent
+        )
+        streamSubscriptionRef.current = subscriptionId
 
         // Send message via REST API (triggers background streaming)
         const requestBody: any = { content, file_ids: fileIds || [] }
@@ -381,7 +390,13 @@ export function useSessionStreaming({
           console.error("Failed to refresh messages after error:", refreshError)
         }
 
-        onError?.(error instanceof Error ? error : new Error(String(error)))
+        const normalizedError =
+          error instanceof Error ? error : new Error(String(error))
+        onError?.(normalizedError)
+        // Re-throw so awaiting callers (e.g. the initial-message effect on the
+        // session page) can react to the failure — restore the message text,
+        // preserve URL params, and avoid clearing state as if the send worked.
+        throw normalizedError
       }
     },
     [sessionId, isStreaming, queryClient, handleStreamEvent, onError]

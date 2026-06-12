@@ -40,8 +40,12 @@ export function FileViewer({ envId, filePath }: FileViewerProps) {
     if (!envId || usageIntentSent.current) return
     if (envStatus && isEnvRunning) return
     usageIntentSent.current = true
-    eventService.sendAgentUsageIntent(envId).catch((error) => {
+    // Use the REST endpoint so env wake-up works even when the WebSocket is
+    // permanently disconnected (e.g. after a backend deploy).
+    EnvironmentsService.registerEnvironmentUsageIntent({ id: envId }).catch((error) => {
       console.error("Failed to send agent usage intent:", error)
+      // Reset so a later status refresh can retry the wake-up.
+      usageIntentSent.current = false
     })
   }, [envId, envStatus, isEnvRunning])
 

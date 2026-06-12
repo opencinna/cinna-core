@@ -36,6 +36,7 @@ from app.services.environments import agent_env_connector as _aec_module
 if TYPE_CHECKING:
     # Imported lazily to avoid a module-load cycle with app.api.deps.
     from app.api.deps import CLIContext
+    from app.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -173,21 +174,27 @@ class CLIService:
     def create_setup_token(
         db: Session,
         agent_id: uuid.UUID,
-        user_id: uuid.UUID,
+        user: "User",
         request: Request,
     ) -> CLISetupTokenCreated:
         """
         Create a short-lived setup token for the given agent.
 
-        Verifies agent ownership. Returns a CLISetupTokenCreated with the
-        curl oneliner setup command.
+        Gated by ``AgentService.assert_can_build`` (developer/admin role,
+        not a foreign install, accessible) rather than bare ownership — a
+        per-agent CLI session is a *building* context. Returns a
+        ``CLISetupTokenCreated`` with the curl oneliner setup command.
         """
-        # Verify agent ownership
+        from app.services.agents.agent_service import AgentService, CanBuildError
+
+        user_id = user.id
+
         agent = db.get(Agent, agent_id)
         if not agent:
-            raise ValueError("Agent not found")
-        if agent.owner_id != user_id:
-            raise ValueError("Not allowed to create setup tokens for this agent")
+            # Surface as not-accessible so the route returns 404 (no leak).
+            raise CanBuildError("not_accessible", "Agent not found")
+        # Raises CanBuildError (route maps reason → 403/404).
+        AgentService.assert_can_build(db, user, agent)
 
         # Find active environment (optional — we record whichever is active)
         env_stmt = select(AgentEnvironment).where(
@@ -317,6 +324,11 @@ class CLIService:
         setup_token = db.exec(stmt).first()
         if not setup_token:
             raise ValueError("Invalid setup token")
+        # Explicitly reject account setup tokens on the per-agent exchange path
+        # (defense-in-depth — an account token's agent_id is NULL and would
+        # otherwise fail only incidentally on the agent lookup below).
+        if setup_token.kind != "agent":
+            raise ValueError("Not a per-agent setup token")
 
         now = datetime.now(UTC)
         if setup_token.is_used:
@@ -550,18 +562,32 @@ class CLIService:
     # ── Bootstrap Script ─────────────────────────────────────────────────
 
     @staticmethod
-    def render_bootstrap_script(token: str, request: Request) -> str:
+    def render_bootstrap_script(
+        token: str, request: Request, flavor: str = "agent"
+    ) -> str:
         """
-        Render the Python bootstrap script served by ``GET /api/cli-setup/{token}``.
+        Render the Python bootstrap script served by the bootstrap GET routes.
 
         The generated script is piped into ``python3 -`` via the curl one-liner;
         it delegates to an installed ``cinna`` CLI when present or prints install
         instructions otherwise. Keeping the generator in the service layer keeps
         the route a thin controller and avoids the route importing private
         helpers from the service module.
+
+        Args:
+            token: The setup token embedded in the URL.
+            request: The incoming request (used to derive the platform URL).
+            flavor: ``"agent"`` → ``cinna setup <url>`` (per-agent, default);
+                ``"account"`` → ``cinna account setup <url>`` against the
+                ``/api/cli-setup/account/{token}`` endpoint.
         """
         platform_url = _get_platform_url(request)
-        setup_url = f"{platform_url}/api/cli-setup/{token}"
+        if flavor == "account":
+            setup_url = f"{platform_url}/api/cli-setup/account/{token}"
+            cinna_args = '[cinna, "account", "setup", SETUP_URL]'
+        else:
+            setup_url = f"{platform_url}/api/cli-setup/{token}"
+            cinna_args = '[cinna, "setup", SETUP_URL]'
 
         return f'''\
 #!/usr/bin/env python3
@@ -602,7 +628,7 @@ def main():
         # preexec_fn so cinna still receives SIGINT normally.
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         proc = subprocess.Popen(
-            [cinna, "setup", SETUP_URL],
+            {cinna_args},
             preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
         )
         sys.exit(proc.wait())

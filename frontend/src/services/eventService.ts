@@ -128,18 +128,33 @@ class EventServiceClass {
   private subscriptions: Map<string, EventSubscription> = new Map()
   private activeRooms: Set<string> = new Set()
   private isConnecting = false
-  private reconnectAttempts = 0
-  private maxReconnectAttempts = 5
   private reconnectDelay = 1000 // Start with 1 second
   private statusListeners: Set<ConnectionStatusListener> = new Set()
   private currentStatus: ConnectionStatus = "disconnected"
+  // Remember the last userId used so ensureConnected() (and window-event
+  // recovery nudges) can re-create the socket if it was torn down.
+  private lastUserId: string | null = null
+  // Guard so window listeners are only registered once.
+  private windowListenersBound = false
 
   /**
    * Initialize the WebSocket connection
    */
   connect(userId: string): void {
+    this.lastUserId = userId
+    this.bindWindowListeners()
+
     if (this.socket?.connected || this.isConnecting) {
       console.log("[EventService] Already connected or connecting")
+      return
+    }
+
+    // A socket may already exist but be disconnected (e.g. after the page was
+    // backgrounded). Reuse it rather than leaking a second socket.
+    if (this.socket && !this.socket.connected) {
+      this.isConnecting = true
+      this.updateStatus("connecting")
+      this.socket.connect()
       return
     }
 
@@ -156,16 +171,18 @@ class EventServiceClass {
         user_id: userId,
       },
       reconnection: true,
-      reconnectionAttempts: this.maxReconnectAttempts,
+      // Retry forever — after a backend deploy the client must keep trying so
+      // it recovers on its own without a full page reload. The degraded-mode
+      // banner nudges ensureConnected() while disconnected as a backstop.
+      reconnectionAttempts: Infinity,
       reconnectionDelay: this.reconnectDelay,
-      reconnectionDelayMax: 5000,
+      reconnectionDelayMax: 30000,
     })
 
     // Connection event handlers
     this.socket.on("connect", () => {
       console.log("[EventService] Connected, socket ID:", this.socket?.id)
       this.isConnecting = false
-      this.reconnectAttempts = 0
       this.reconnectDelay = 1000
       this.updateStatus("connected")
 
@@ -187,21 +204,23 @@ class EventServiceClass {
     this.socket.on("disconnect", (reason) => {
       console.log("[EventService] Disconnected:", reason)
       this.isConnecting = false
-      this.updateStatus("disconnected")
+      // "io server disconnect" / "io client disconnect" mean socket.io will NOT
+      // auto-reconnect. Any other reason means it is actively retrying, so we
+      // report "connecting" rather than "disconnected" to avoid flapping the
+      // degraded banner during transient blips.
+      if (reason === "io server disconnect" || reason === "io client disconnect") {
+        this.updateStatus("disconnected")
+      } else {
+        this.updateStatus("connecting")
+      }
     })
 
     this.socket.on("connect_error", (error) => {
       console.error("[EventService] Connection error:", error)
       this.isConnecting = false
-      this.reconnectAttempts++
-
-      // Exponential backoff
-      if (this.reconnectAttempts < this.maxReconnectAttempts) {
-        this.reconnectDelay = Math.min(this.reconnectDelay * 2, 5000)
-        this.updateStatus("connecting")
-      } else {
-        this.updateStatus("disconnected")
-      }
+      // With reconnectionAttempts: Infinity, socket.io keeps retrying, so we
+      // remain in "connecting" rather than declaring a hard "disconnected".
+      this.updateStatus(this.socket?.active ? "connecting" : "disconnected")
     })
 
     // Listen for events from server
@@ -239,6 +258,52 @@ class EventServiceClass {
   }
 
   /**
+   * Best-effort recovery nudge. Safe to call repeatedly (e.g. on window focus,
+   * network online, or from the degraded-mode banner's interval).
+   *
+   * - Connected/connecting: no-op.
+   * - Socket exists but disconnected: reconnect the existing socket.
+   * - No socket but a userId was previously used: re-create the connection.
+   */
+  ensureConnected(): void {
+    if (this.socket?.connected || this.isConnecting) {
+      return
+    }
+    if (this.socket) {
+      console.log("[EventService] ensureConnected: reconnecting existing socket")
+      this.isConnecting = true
+      this.updateStatus("connecting")
+      this.socket.connect()
+      return
+    }
+    if (this.lastUserId) {
+      console.log("[EventService] ensureConnected: re-creating connection")
+      this.connect(this.lastUserId)
+    }
+  }
+
+  /**
+   * Register window-level listeners that trigger reconnection recovery when the
+   * browser regains connectivity or the tab becomes active again. Registered
+   * once (guarded) so repeated connect() calls don't stack listeners.
+   */
+  private bindWindowListeners(): void {
+    if (this.windowListenersBound || typeof window === "undefined") {
+      return
+    }
+    this.windowListenersBound = true
+
+    const nudge = () => this.ensureConnected()
+    window.addEventListener("online", nudge)
+    window.addEventListener("focus", nudge)
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        this.ensureConnected()
+      }
+    })
+  }
+
+  /**
    * Subscribe to specific event type or all events
    * @param eventType - Event type to subscribe to, or "*" for all events
    * @param handler - Callback function to handle the event
@@ -271,20 +336,28 @@ class EventServiceClass {
     // Track room regardless of connection state so it gets re-subscribed on reconnect
     this.activeRooms.add(room)
 
-    if (!this.socket) {
-      console.warn("[EventService] Cannot subscribe to room: not connected (will subscribe on reconnect)")
+    if (!this.socket?.connected) {
+      console.warn("[EventService] Cannot subscribe to room now: not connected (will subscribe on reconnect)")
       return
     }
 
-    return new Promise((resolve, reject) => {
-      this.socket?.emit("subscribe", { room }, (response: any) => {
+    // ALWAYS settle: the room is already tracked in activeRooms and will be
+    // re-subscribed on reconnect, so a failed/timed-out ack must never block the
+    // caller. Resolve (don't reject) on failure — callers treat the WS room as
+    // an enhancement, not a requirement.
+    return new Promise((resolve) => {
+      this.socket?.timeout(5000).emit("subscribe", { room }, (err: any, response: any) => {
+        if (err) {
+          console.warn(`[EventService] subscribe ack timed out for room: ${room} (tracked, will retry on reconnect)`)
+          resolve()
+          return
+        }
         if (response?.status === "success") {
           console.log(`[EventService] Subscribed to room: ${room}`)
-          resolve()
         } else {
-          console.error(`[EventService] Failed to subscribe to room: ${room}`, response)
-          reject(new Error(response?.message || "Failed to subscribe"))
+          console.warn(`[EventService] Failed to subscribe to room: ${room}`, response)
         }
+        resolve()
       })
     })
   }
@@ -296,20 +369,23 @@ class EventServiceClass {
   async unsubscribeFromRoom(room: string): Promise<void> {
     this.activeRooms.delete(room)
 
-    if (!this.socket) {
-      console.warn("[EventService] Cannot unsubscribe from room: not connected")
+    if (!this.socket?.connected) {
+      console.warn("[EventService] Cannot unsubscribe from room now: not connected")
       return
     }
 
-    return new Promise((resolve, reject) => {
-      this.socket?.emit("unsubscribe", { room }, (response: any) => {
-        if (response?.status === "success") {
+    // ALWAYS settle (resolve on failure/timeout) — the room was already removed
+    // from activeRooms, so it won't be re-subscribed regardless of the ack.
+    return new Promise((resolve) => {
+      this.socket?.timeout(5000).emit("unsubscribe", { room }, (err: any, response: any) => {
+        if (err) {
+          console.warn(`[EventService] unsubscribe ack timed out for room: ${room}`)
+        } else if (response?.status === "success") {
           console.log(`[EventService] Unsubscribed from room: ${room}`)
-          resolve()
         } else {
-          console.error(`[EventService] Failed to unsubscribe from room: ${room}`, response)
-          reject(new Error(response?.message || "Failed to unsubscribe"))
+          console.warn(`[EventService] Failed to unsubscribe from room: ${room}`, response)
         }
+        resolve()
       })
     })
   }
@@ -332,21 +408,33 @@ class EventServiceClass {
    * @returns Promise resolving to backend response
    */
   async sendAgentUsageIntent(environmentId: string): Promise<any> {
-    if (!this.socket) {
+    if (!this.socket?.connected) {
       console.warn("[EventService] Cannot send agent_usage_intent: not connected")
       return { status: "error", message: "Not connected" }
     }
 
-    return new Promise((resolve, reject) => {
-      this.socket?.emit("agent_usage_intent", { environment_id: environmentId }, (response: any) => {
-        if (response?.status === "error") {
-          console.error(`[EventService] agent_usage_intent error:`, response)
-          reject(new Error(response.message || "Failed to send usage intent"))
-        } else {
-          console.log(`[EventService] agent_usage_intent sent for environment ${environmentId}, response:`, response)
+    // ALWAYS settle. On timeout/error resolve with an error-shaped response
+    // rather than rejecting, mirroring the not-connected branch above.
+    // NOTE: usage intent now has a dedicated REST path; this WS variant is kept
+    // (and hardened) for backward compatibility but should have no callers.
+    return new Promise((resolve) => {
+      this.socket?.timeout(5000).emit(
+        "agent_usage_intent",
+        { environment_id: environmentId },
+        (err: any, response: any) => {
+          if (err) {
+            console.warn(`[EventService] agent_usage_intent ack timed out for environment ${environmentId}`)
+            resolve({ status: "error", message: "Timed out" })
+            return
+          }
+          if (response?.status === "error") {
+            console.warn(`[EventService] agent_usage_intent error:`, response)
+          } else {
+            console.log(`[EventService] agent_usage_intent sent for environment ${environmentId}, response:`, response)
+          }
           resolve(response)
         }
-      })
+      )
     })
   }
 

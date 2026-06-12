@@ -146,7 +146,10 @@ def test_setup_token_and_cli_token_full_lifecycle(
         headers=other_headers,
         json={"agent_id": agent_id},
     )
-    assert r.status_code == 400
+    # The per-agent setup-token route is now gated by ``assert_can_build``
+    # rather than bare ownership. Another user cannot access this agent, so the
+    # request 404s (no existence leak) instead of the old ownership 400.
+    assert r.status_code == 404
 
     # ── Phase 12: Unauthenticated setup token creation → 401/403 ──────────
     r = client.post(

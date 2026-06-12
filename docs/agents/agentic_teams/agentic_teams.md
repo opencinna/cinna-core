@@ -209,6 +209,16 @@ Teams participate directly in the task management system:
 
 See [Input Tasks](../../application/input_tasks/input_tasks.md) for the full task collaboration model.
 
+### Account CLI Workspace
+
+Teams can be created and wired entirely from the account CLI workspace using the
+Phase 3 escape hatch (`cinna api POST agentic-teams …`). The agentic-teams API is
+not on the escape-hatch denylist, so team CRUD, node management, connection drawing,
+and prompt generation are all reachable via `cinna api` without any dedicated CLI
+verbs. The Phase 4 playbook (`context/guides/build-an-agentic-network.md` in the
+context package) walks through this end-to-end. See
+[account_cli_workspace.md](../../application/cinna_cli_integration/account_cli_workspace.md).
+
 ### Workspaces
 
 AgenticTeams are explicitly workspace-independent. Teams are not filtered by workspace and do not carry a `user_workspace_id`. This mirrors the same design decision as Dashboards.

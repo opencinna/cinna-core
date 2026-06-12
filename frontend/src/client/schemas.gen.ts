@@ -988,6 +988,571 @@ export const AccessTokenScopeSchema = {
     description: 'Scope for the token - determines session visibility.'
 } as const;
 
+export const AccountAgentCreateBodySchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        env_name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Env Name'
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'AccountAgentCreateBody',
+    description: `Thin-client agent-create body.
+
+The CLI sends only user-specified fields; the backend applies ALL defaults
+via the normal \`\`AgentService.create_agent\`\` path (default AI-credential
+resolution, default env template, environment creation) exactly as the UI
+does. \`\`env_name\`\` (env-template selection) is **not** honored at create time
+in v1 — the normal create path hard-codes \`\`settings.DEFAULT_AGENT_ENV_NAME\`\`
+(see plan O1). The field is accepted-but-noop and documented as a follow-up.`
+} as const;
+
+export const AccountAgentListItemSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        ui_color_preset: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ui Color Preset'
+        },
+        owner_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Owner Id'
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
+        },
+        bundle_uuid: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Bundle Uuid'
+        },
+        is_publisher_install: {
+            type: 'boolean',
+            title: 'Is Publisher Install'
+        },
+        is_foreign_install: {
+            type: 'boolean',
+            title: 'Is Foreign Install'
+        },
+        can_build: {
+            type: 'boolean',
+            title: 'Can Build'
+        },
+        has_active_environment: {
+            type: 'boolean',
+            title: 'Has Active Environment'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name', 'description', 'ui_color_preset', 'owner_id', 'user_workspace_id', 'bundle_uuid', 'is_publisher_install', 'is_foreign_install', 'can_build', 'has_active_environment'],
+    title: 'AccountAgentListItem',
+    description: 'One row in the accessible-agents listing for the account CLI.'
+} as const;
+
+export const AccountAgentsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AccountAgentListItem'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AccountAgentsPublic'
+} as const;
+
+export const AccountApiProxyRequestSchema = {
+    properties: {
+        method: {
+            type: 'string',
+            enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+            title: 'Method'
+        },
+        path: {
+            type: 'string',
+            maxLength: 2048,
+            minLength: 1,
+            title: 'Path'
+        },
+        query: {
+            anyOf: [
+                {
+                    additionalProperties: {
+                        anyOf: [
+                            {
+                                type: 'string'
+                            },
+                            {
+                                items: {
+                                    type: 'string'
+                                },
+                                type: 'array'
+                            }
+                        ]
+                    },
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Query'
+        },
+        json_body: {
+            anyOf: [
+                {},
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Json Body'
+        },
+        headers: {
+            anyOf: [
+                {
+                    additionalProperties: {
+                        type: 'string'
+                    },
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Headers'
+        }
+    },
+    type: 'object',
+    required: ['method', 'path'],
+    title: 'AccountApiProxyRequest',
+    description: `Generic escape-hatch request: \`\`cinna api <METHOD> <path>\`\`.
+
+\`\`path\`\` is **relative to the API root** (no \`\`/api/v1\`\` prefix — the backend
+prepends it). \`\`headers\`\` is accepted but **ignored** in v1 (O3 — safe
+default; only the minted user JWT is sent inward).`
+} as const;
+
+export const AccountConnectAgentApiBodySchema = {
+    properties: {
+        producer_agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Producer Agent Id'
+        },
+        consumer_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Consumer Agent Id'
+        },
+        credential_label: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credential Label'
+        },
+        read_only_override: {
+            type: 'boolean',
+            title: 'Read Only Override',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['producer_agent_id'],
+    title: 'AccountConnectAgentApiBody',
+    description: `Wrap the \`\`agent_api\`\` one-click connect helper.
+
+Maps directly to \`\`ConnectAgentApiRequest\`\` plus the producer agent id (a
+body field, since the account route is path-free).`
+} as const;
+
+export const AccountConnectMcpBodySchema = {
+    properties: {
+        connector_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Connector Id'
+        },
+        consumer_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Consumer Agent Id'
+        },
+        mcp_mode_conversation: {
+            type: 'boolean',
+            title: 'Mcp Mode Conversation',
+            default: true
+        },
+        mcp_mode_building: {
+            type: 'boolean',
+            title: 'Mcp Mode Building',
+            default: true
+        },
+        label: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        }
+    },
+    type: 'object',
+    required: ['connector_id'],
+    title: 'AccountConnectMcpBody',
+    description: `Wrap the \`\`mcp_provider\`\` agent2agent connect helper.
+
+Maps to \`\`ConnectMcpProviderAgentRequest\`\`. The CLI resolves
+\`\`--producer <agent>\`\` → \`\`connector_id\`\` via the discoverable passthrough
+(O2) before calling this.`
+} as const;
+
+export const AccountCredentialCreateBodySchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        type: {
+            '$ref': '#/components/schemas/CredentialType'
+        },
+        notes: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Notes'
+        },
+        service_uri: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2048
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Uri'
+        },
+        allow_sharing: {
+            type: 'boolean',
+            title: 'Allow Sharing',
+            default: false
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
+        }
+    },
+    type: 'object',
+    required: ['name', 'type'],
+    title: 'AccountCredentialCreateBody',
+    description: `Create a *draft* credential from the account workspace.
+
+SECURITY: deliberately has **no** \`\`credential_data\`\` field. The account CLI
+scaffolds the credential's *structure* (name, type, audience) but never sets
+its secret value — the user fills that in the UI later (the credential shows
+as \`\`status="incomplete"\`\` until then). This keeps the account token's
+no-credential-secrets guarantee (Decision 6) intact for writes as well as
+reads. \`\`user_workspace_id\`\` targets the account's active workspace (the CLI
+fills it from \`\`.cinna/account.json\`\`; validated to belong to the user).`
+} as const;
+
+export const AccountCredentialDraftResultSchema = {
+    properties: {
+        credential: {
+            '$ref': '#/components/schemas/CredentialPublic'
+        },
+        required_fields: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Required Fields'
+        },
+        setup_url: {
+            type: 'string',
+            title: 'Setup Url'
+        }
+    },
+    type: 'object',
+    required: ['credential', 'required_fields', 'setup_url'],
+    title: 'AccountCredentialDraftResult',
+    description: `Response for \`\`POST /account/credentials\`\` — the created draft plus the
+setup hints the orchestrator relays to the user.
+
+\`\`required_fields\`\` lists the secret/config fields the user must fill for the
+credential to become \`\`complete\`\` (derived from the platform's per-type
+required-field map). \`\`setup_url\`\` deep-links to the Credentials page where
+the user enters them.`
+} as const;
+
+export const AccountCredentialShareBodySchema = {
+    properties: {
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        }
+    },
+    type: 'object',
+    required: ['agent_id'],
+    title: 'AccountCredentialShareBody',
+    description: `Attach a credential to an agent the account user owns (\`\`share-with-agent\`\`).
+
+Links the credential to the agent (\`\`AgentCredentialLink\`\`) so its
+whitelisted fields sync to the agent's environment once the user fills the
+secret value. \`\`agent_id\`\` must be owned by the account user.`
+} as const;
+
+export const AccountCredentialTypeInfoSchema = {
+    properties: {
+        type: {
+            '$ref': '#/components/schemas/CredentialType'
+        },
+        required_fields: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Required Fields'
+        },
+        note: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Note'
+        }
+    },
+    type: 'object',
+    required: ['type', 'required_fields'],
+    title: 'AccountCredentialTypeInfo',
+    description: 'One entry in the credential-type catalogue for the account CLI.'
+} as const;
+
+export const AccountCredentialTypesPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AccountCredentialTypeInfo'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AccountCredentialTypesPublic'
+} as const;
+
+export const AccountCredentialUpdateBodySchema = {
+    properties: {
+        name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        },
+        notes: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Notes'
+        },
+        service_uri: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2048
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Uri'
+        },
+        allow_sharing: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Allow Sharing'
+        },
+        allow_template_sharing: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Allow Template Sharing'
+        }
+    },
+    type: 'object',
+    title: 'AccountCredentialUpdateBody',
+    description: `Update a credential's **metadata only** from the account workspace.
+
+SECURITY: like the create body, there is **no** \`\`credential_data\`\` field —
+the account CLI never writes secret values. Only descriptive / structural
+fields are editable here. All fields optional; only the provided ones are
+applied (\`\`exclude_unset\`\` semantics).`
+} as const;
+
 export const ActivitiesPublicExtendedSchema = {
     properties: {
         data: {
@@ -8131,6 +8696,93 @@ has never been published (no latest revision) reports \`\`stale=False\`\`
 with an empty \`\`drift\`\` list — there is nothing to be stale against.`
 } as const;
 
+export const CLIAccountTokenPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        owner_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Owner Id'
+        },
+        prefix: {
+            type: 'string',
+            title: 'Prefix'
+        },
+        is_revoked: {
+            type: 'boolean',
+            title: 'Is Revoked'
+        },
+        last_used_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Used At'
+        },
+        machine_info: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Machine Info'
+        },
+        expires_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Expires At'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        child_count: {
+            type: 'integer',
+            title: 'Child Count'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name', 'owner_id', 'prefix', 'is_revoked', 'last_used_at', 'machine_info', 'expires_at', 'created_at', 'child_count'],
+    title: 'CLIAccountTokenPublic',
+    description: 'Public projection of an account CLI token, with synced-child count.'
+} as const;
+
+export const CLIAccountTokensPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/CLIAccountTokenPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'CLIAccountTokensPublic'
+} as const;
+
 export const CLISetupTokenCreateSchema = {
     properties: {
         agent_id: {
@@ -8156,8 +8808,15 @@ export const CLISetupTokenCreatedSchema = {
             title: 'Token'
         },
         agent_id: {
-            type: 'string',
-            format: 'uuid',
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Agent Id'
         },
         environment_id: {
@@ -8206,8 +8865,15 @@ export const CLITokenPublicSchema = {
             title: 'Id'
         },
         agent_id: {
-            type: 'string',
-            format: 'uuid',
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Agent Id'
         },
         owner_id: {
@@ -8218,6 +8884,10 @@ export const CLITokenPublicSchema = {
         prefix: {
             type: 'string',
             title: 'Prefix'
+        },
+        token_type: {
+            type: 'string',
+            title: 'Token Type'
         },
         is_revoked: {
             type: 'boolean',
@@ -8270,7 +8940,7 @@ export const CLITokenPublicSchema = {
         }
     },
     type: 'object',
-    required: ['name', 'id', 'agent_id', 'owner_id', 'prefix', 'is_revoked', 'last_used_at', 'machine_info', 'expires_at', 'created_at', 'last_sync_connected_at'],
+    required: ['name', 'id', 'agent_id', 'owner_id', 'prefix', 'token_type', 'is_revoked', 'last_used_at', 'machine_info', 'expires_at', 'created_at', 'last_sync_connected_at'],
     title: 'CLITokenPublic'
 } as const;
 
@@ -14985,6 +15655,29 @@ constraint on \`\`method\`\` propagates into OpenAPI as an enum and the
 generated TypeScript client gets a string-union type.`
 } as const;
 
+export const MintChildTokenBodySchema = {
+    properties: {
+        machine_name: {
+            type: 'string',
+            title: 'Machine Name',
+            default: 'My Machine'
+        },
+        machine_info: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Machine Info'
+        }
+    },
+    type: 'object',
+    title: 'MintChildTokenBody'
+} as const;
+
 export const ModelHealthModeSchema = {
     properties: {
         mode: {
@@ -19513,6 +20206,34 @@ export const UpdateSessionStateResponseSchema = {
     required: ['success'],
     title: 'UpdateSessionStateResponse',
     description: 'Response from session state update.'
+} as const;
+
+export const UsageIntentResponseSchema = {
+    properties: {
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        message: {
+            type: 'string',
+            title: 'Message'
+        },
+        environment_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Environment Id'
+        }
+    },
+    type: 'object',
+    required: ['status', 'message', 'environment_id'],
+    title: 'UsageIntentResponse',
+    description: `Response for a usage-intent signal (REST + WebSocket share this shape).
+
+\`\`status\`\` is \`\`"activating"\`\` when a suspended environment's activation was
+triggered in the background, or \`\`"ok"\`\` when no action was needed.
+\`\`environment_id\`\` is the *resolved* environment id, which may differ from
+the requested one when the request targeted a non-active environment and was
+redirected to the agent's active environment.`
 } as const;
 
 export const UserAppAgentRouteCreateSchema = {

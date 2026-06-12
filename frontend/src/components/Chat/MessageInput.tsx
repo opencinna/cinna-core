@@ -38,6 +38,14 @@ interface MessageInputProps {
   isNewAgent?: boolean
   /** When provided, enables slash command autocomplete popup. */
   sessionId?: string
+  /**
+   * Imperative seed for the input text (used to restore a message after a
+   * failed send so the user can retry). The `nonce` makes every seed request
+   * distinct so re-seeding the *same* text twice still fires; the textarea is
+   * only repopulated when it is currently empty, so it never clobbers text the
+   * user is actively typing.
+   */
+  seed?: { text: string; nonce: number }
 }
 
 export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
@@ -52,6 +60,7 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
     mode = "conversation",
     isNewAgent = false,
     sessionId,
+    seed,
   }, ref) {
     // Resolve effective streaming state: prefer the new isStreaming prop, fall
     // back to the legacy sendDisabled prop so callers that haven't migrated yet
@@ -67,6 +76,16 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
     const [selectedCommandIndex, setSelectedCommandIndex] = useState(-1)
     const { showErrorToast } = useCustomToast()
     const queryClient = useQueryClient()
+
+    // Seed the input from the `seed` prop (e.g. restoring a message after a
+    // failed send). Keyed on the nonce so the same text can be re-seeded; only
+    // applied when the textarea is empty so it never clobbers active typing.
+    useEffect(() => {
+      if (seed?.text) {
+        setMessage((current) => (current.trim() ? current : seed.text))
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [seed?.nonce])
 
     const { data: commandsData } = useQuery({
       queryKey: ["sessionCommands", sessionId],

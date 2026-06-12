@@ -97,3 +97,4 @@ Session creation
 - [user_workspaces](../user_workspaces/user_workspaces.md) — GA is workspace-agnostic; workspace filtering always includes it via the `OR is_general_assistant = true` clause
 - [agent_bundles](../../agents/agent_bundles/agent_bundles.md) — publishing is explicitly blocked for GA agents (`is_general_assistant` check in `PublishService.publish()`)
 - [getting_started](../getting_started/getting_started.md) — the GA is a companion to the onboarding flow, accessible once an API key is configured
+- [account_cli_workspace](../cinna_cli_integration/account_cli_workspace.md) — the GA environment template's platform-docs snapshot (`knowledge/platform/`) is the source for the account-CLI context package; generation logic is shared via `ga_knowledge_assets.py`

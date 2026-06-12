@@ -38,6 +38,32 @@ MFA_TRUSTED_DEVICE_USED = "MFA_TRUSTED_DEVICE_USED"
 AGENT_ENV_TERMINAL_OPENED = "AGENT_ENV_TERMINAL_OPENED"
 AGENT_ENV_TERMINAL_CLOSED = "AGENT_ENV_TERMINAL_CLOSED"
 
+# ── Account CLI workspace event-type constants ───────────────────────
+# Emitted by ``AccountCLIService``. An account CLI token is a mint-and-discover
+# credential that can spawn per-agent (building) child tokens, so its creation
+# and every child mint are audited with the acting user and source IP.
+CLI_ACCOUNT_TOKEN_CREATED = "CLI_ACCOUNT_TOKEN_CREATED"
+CLI_ACCOUNT_CHILD_TOKEN_MINTED = "CLI_ACCOUNT_CHILD_TOKEN_MINTED"
+CLI_ACCOUNT_CHILD_TOKEN_REVOKED = "CLI_ACCOUNT_CHILD_TOKEN_REVOKED"
+# ── Phase 3 — convenience verbs + generic API escape hatch ───────────
+# ``CLI_ACCOUNT_CONNECT_*`` are discrete, infrequent, state-changing grants
+# (wiring two agents together) and are audited per call. ``API_PROXY_CALL`` is
+# written ONLY on an exclusion hit (someone/something probing an off-limits
+# surface through the escape hatch) — allowed proxy calls are not audited here
+# (the inner route audits its own sensitive writes; per-call audit would flood).
+CLI_ACCOUNT_CONNECT_AGENT_API = "CLI_ACCOUNT_CONNECT_AGENT_API"
+CLI_ACCOUNT_CONNECT_MCP = "CLI_ACCOUNT_CONNECT_MCP"
+CLI_ACCOUNT_API_PROXY_CALL = "CLI_ACCOUNT_API_PROXY_CALL"
+# ── Account-CLI credential drafting verbs ────────────────────────────
+# The account CLI scaffolds credentials as *drafts* (no secret values — the user
+# fills them in the UI) and wires them to agents. The account token can never
+# read or write a credential's secret value (Decision 6); these verbs only touch
+# metadata + structure, so each discrete state-changing call is audited.
+CLI_ACCOUNT_CREDENTIAL_CREATED = "CLI_ACCOUNT_CREDENTIAL_CREATED"
+CLI_ACCOUNT_CREDENTIAL_UPDATED = "CLI_ACCOUNT_CREDENTIAL_UPDATED"
+CLI_ACCOUNT_CREDENTIAL_DELETED = "CLI_ACCOUNT_CREDENTIAL_DELETED"
+CLI_ACCOUNT_CREDENTIAL_SHARED_WITH_AGENT = "CLI_ACCOUNT_CREDENTIAL_SHARED_WITH_AGENT"
+
 
 class SecurityEvent(SQLModel, table=True):
     """

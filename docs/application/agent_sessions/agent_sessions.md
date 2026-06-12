@@ -72,12 +72,13 @@ A session is a persistent chat conversation between a user (or external system) 
 
 ### Flow 7: Environment Auto-Activation
 
-1. User sends message to session whose environment is `suspended` or `stopped`
-2. Backend sets `interaction_status = "pending_stream"` on session
-3. Environment activation triggered in background
-4. When environment reaches `running` → `ENVIRONMENT_ACTIVATED` event fires
-5. Backend processes all pending sessions for that environment automatically
-6. Streaming begins; frontend detects state change via WebSocket event
+1. User opens a session page (or sends a message to a session whose environment is `suspended` or `stopped`)
+2. Frontend calls `POST /api/v1/environments/{id}/usage-intent` (REST, not WebSocket) so the wake-up works even when the Socket.IO connection is permanently lost
+3. Service resolves to the agent's active environment, bumps `last_activity_at`, and if suspended triggers background activation via `EnvironmentService.get_lifecycle_manager()`
+4. Backend sets `interaction_status = "pending_stream"` when the message is sent
+5. When environment reaches `running` → `ENVIRONMENT_ACTIVATED` event fires
+6. Backend processes all pending sessions for that environment automatically
+7. Streaming begins; frontend detects state change via WebSocket event (or polling if WS is down)
 
 ## Business Rules
 
@@ -180,18 +181,21 @@ Message Flow:
 ### Header
 
 - **Back button** — Navigates to sessions list
-- **Session title** — Auto-generated from first message content; shows animated placeholder until set
+- **Session title** — Auto-generated from first message content; shows animated "Generating..." placeholder while the title is being created (only when the session has at least one message); shows the static muted label "New session" when no messages exist yet
 - **Mode indicator** — Color-coded dot: orange for Building mode, blue for Conversation mode
 - **Integration badges** — `Email` badge (indigo) when `integration_type="email"`, `A2A` badge (purple) when `integration_type="a2a"`
 - **Tasks button** — Visible when session has sub-tasks (created via `create_agent_task` tool). Shows colored badge counts per status: violet (new), blue (running), amber (needs input), red (error), green (completed). Toggles sub-tasks side panel
-- **App button** — Opens the Environment Panel showing agent workspace files. Displays "Activating..." spinner when environment is starting up
+- **App button** — Opens the Environment Panel showing agent workspace files. Displays three distinct states:
+  - "Activating…" (spinner) — environment is `activating`, `starting`, or `rebuilding`
+  - "Suspended" (muted static label, clickable) — environment is `suspended` or `stopped`; tooltip notes it will wake on next message
+  - "App" (normal button) — environment is `running`
 - **Options menu** — Edit session (rename, change mode) and Delete session
 
 ### Main Content Area
 
 - **MessageList** — Scrollable chat history with `MessageBubble` per message. In-progress messages show streaming indicator and update every 2 seconds via polling. Completed messages render markdown with tool blocks, thinking sections, file attachments
 - **StreamingMessage** — Real-time streaming event display beneath the in-progress message; events rendered by type (assistant text, tool use, thinking); deduplicated by `event_seq`
-- **MessageInput** — Text area with send/stop buttons. Disabled with placeholder "Agent is responding..." while streaming. Supports file attachments
+- **MessageInput** — Text area with send/stop buttons. Disabled with placeholder "Agent is responding..." while streaming. Supports file attachments. Accepts a `seed` prop: when an initial-message URL param send fails, the failed text is seeded back into the input so the user can retry without retyping
 
 ### Side Panels (mutually exclusive)
 

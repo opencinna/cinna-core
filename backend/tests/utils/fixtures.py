@@ -68,6 +68,9 @@ BACKGROUND_TASK_TARGETS_FULL = BACKGROUND_TASK_TARGETS_BASE + [
     # rebuild_env_command schedules the rebuild as a background task (agent CLI
     # /rebuild slash command); collect it so the deferred coroutine is captured.
     "app.services.agents.commands.rebuild_env_command.create_task_with_error_logging",
+    # usage_intent.py schedules background env activation via create_task_with_error_logging
+    # when a suspended environment receives a usage-intent signal.
+    "app.services.environments.usage_intent.create_task_with_error_logging",
 ]
 
 

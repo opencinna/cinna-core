@@ -169,6 +169,8 @@ Disconnect options:
 - **[Agent Plugins](../../agents/agent_plugins/agent_plugins_tech.md)** — the plugin-declared-MCP-server merge is the direct template for credential-declared MCP servers; namespaced keys prevent collision.
 - **[Agent REST API](../../agents/agent_api/agent_api.md)** — producer/consumer + connect-helper + connection-is-a-credential + Automatic Credentials grouping + workspace-stamp + sharing pattern is the same architecture.
 
+- **[Account CLI Workspace](../../application/cinna_cli_integration/account_cli_workspace.md)** — `cinna connect mcp --producer P --consumer C` wraps `MCPProviderService.connect_to_agent` via `POST /api/v1/cli/account/connect/mcp`; `GET /account/connect/mcp/discoverable` is the account-token-accessible passthrough that maps producer agent name → connector_id.
+
 ---
 
 ## Known Gaps and Future Work

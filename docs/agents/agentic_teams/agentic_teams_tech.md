@@ -103,7 +103,7 @@ All endpoints are under prefix `/api/v1/agentic-teams`. All require authenticati
 | GET | `/` | — | `AgenticTeamsPublic` | List all teams owned by the current user |
 | POST | `/` | `AgenticTeamCreate` | `AgenticTeamPublic` | Create a new team |
 | GET | `/{team_id}` | — | `AgenticTeamPublic` | Get a single team |
-| PUT | `/{team_id}` | `AgenticTeamUpdate` | `AgenticTeamPublic` | Update name or icon |
+| PUT | `/{team_id}` | `AgenticTeamUpdate` | `AgenticTeamPublic` | Update name, icon, or task_prefix |
 | DELETE | `/{team_id}` | — | `Message` | Delete team (cascades to nodes and connections) |
 
 ### Chart Bulk Endpoint
@@ -149,6 +149,7 @@ The generate-prompt endpoint is read-only (no state mutation); it returns the AI
 ```python
 name: str  # min_length=1, max_length=255
 icon: str | None  # max_length=50, default None
+task_prefix: str | None  # max_length=10, default None; short-code prefix (e.g., "HR" → HR-1)
 ```
 
 ### `AgenticTeamUpdate`
@@ -156,6 +157,7 @@ icon: str | None  # max_length=50, default None
 ```python
 name: str | None  # min_length=1, max_length=255
 icon: str | None  # max_length=50
+task_prefix: str | None  # max_length=10, default None; short-code prefix (e.g., "HR" → HR-1)
 ```
 
 ### `AgenticTeamPublic`

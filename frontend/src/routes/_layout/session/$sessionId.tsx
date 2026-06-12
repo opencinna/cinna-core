@@ -53,6 +53,18 @@ function ChatInterface() {
   const initialMessageSent = useRef(false)
   const messageInputRef = useRef<HTMLTextAreaElement>(null)
   const [isEnvActivating, setIsEnvActivating] = useState(false)
+  // Distinguish a genuinely suspended/stopped env (no spinner, "Suspended"
+  // label) from one that is actively activating/starting/rebuilding (spinner).
+  const [isEnvSuspended, setIsEnvSuspended] = useState(false)
+  // When a send fails, stash the message text here so MessageInput re-seeds it
+  // and the user can retry. The nonce forces a fresh re-seed even when the same
+  // text fails twice in a row (a bare string would be deduped by React state).
+  const [seed, setSeed] = useState<{ text: string; nonce: number } | undefined>(undefined)
+  const seedNonceRef = useRef(0)
+  const restoreMessageText = useCallback((text: string) => {
+    seedNonceRef.current += 1
+    setSeed({ text, nonce: seedNonceRef.current })
+  }, [])
   const usageIntentSent = useRef(false)
   const [resolvedEnvId, setResolvedEnvId] = useState<string | null>(null)
   const [showSubTasks, setShowSubTasks] = useState(false)
@@ -174,14 +186,26 @@ function ChatInterface() {
       fileObjs?: Array<{ id: string; filename: string; file_size: number; mime_type: string }>,
       msgPageContext?: string
     ) => {
-      await sendMessage(content, undefined, fileIds, fileObjs, msgPageContext)
+      // sendMessage re-throws on failure (so the initial-message effect can
+      // react). For interactive sends from MessageInput — which call this
+      // fire-and-forget — swallow here so we don't produce an unhandled
+      // rejection; the user-facing error is already shown via onError.
+      try {
+        await sendMessage(content, undefined, fileIds, fileObjs, msgPageContext)
+      } catch {
+        /* handled by onError */
+      }
     },
     [sendMessage]
   )
 
   const handleSendAnswer = useCallback(
     async (content: string, answersToMessageId: string) => {
-      await sendMessage(content, answersToMessageId)
+      try {
+        await sendMessage(content, answersToMessageId)
+      } catch {
+        /* handled by onError */
+      }
     },
     [sendMessage]
   )
@@ -189,7 +213,11 @@ function ChatInterface() {
   // Simple message send without linking to another message (for tool approval, etc.)
   const handleSendSimpleMessage = useCallback(
     async (content: string) => {
-      await sendMessage(content)
+      try {
+        await sendMessage(content)
+      } catch {
+        /* handled by onError */
+      }
     },
     [sendMessage]
   )
@@ -205,6 +233,7 @@ function ChatInterface() {
       !sessionLoading &&
       !messagesLoading
     ) {
+      // Set the dedup guard synchronously so the effect doesn't fire twice.
       initialMessageSent.current = true
       // Parse fileIds from comma-separated string to array
       const fileIdsArray = fileIds ? fileIds.split(',').filter(id => id.trim()) : undefined
@@ -219,14 +248,29 @@ function ChatInterface() {
       }
       // Forward pageContext (from dashboard block prompt actions) with the first message.
       // The backend stores it in message_metadata and uses it for context diff injection.
-      handleSendMessage(initialMessage, fileIdsArray, parsedFileObjects, pageContext)
-      // Clear the search params after sending
-      navigate({
-        to: "/session/$sessionId",
-        params: { sessionId },
-        search: { initialMessage: undefined, fileIds: undefined, fileObjects: undefined, pageContext: undefined },
-        replace: true,
-      })
+      // Only clear the URL search params AFTER the send succeeds; on failure
+      // preserve them, reset the guard, surface an error, and restore the text
+      // into the input so the user's message is never silently lost.
+      // Call sendMessage directly (not handleSendMessage, which swallows errors
+      // for the interactive path) so we can observe success/failure here.
+      sendMessage(initialMessage, undefined, fileIdsArray, parsedFileObjects, pageContext)
+        .then(() => {
+          navigate({
+            to: "/session/$sessionId",
+            params: { sessionId },
+            search: { initialMessage: undefined, fileIds: undefined, fileObjects: undefined, pageContext: undefined },
+            replace: true,
+          })
+        })
+        .catch((error) => {
+          console.error("Failed to send initial message:", error)
+          // Keep the URL params intact and re-seed the input so the user can
+          // retry manually (the primary recovery path). Resetting the guard also
+          // allows an opportunistic auto-retry if a later session/messages
+          // refetch re-runs this effect. The error toast is shown via onError.
+          initialMessageSent.current = false
+          restoreMessageText(initialMessage)
+        })
     }
   }, [
     initialMessage,
@@ -240,7 +284,7 @@ function ChatInterface() {
     messagesLoading,
     sessionId,
     navigate,
-    handleSendMessage,
+    sendMessage,
   ])
 
   const { goBack } = useNavigationHistory()
@@ -260,16 +304,22 @@ function ChatInterface() {
     }
   }, [sessionLoading, messagesLoading])
 
-  // Update isEnvActivating based on environment status
+  // Update env-state flags based on environment status. Only an env that is
+  // genuinely in flight (activating/starting/rebuilding) shows the "Activating…"
+  // spinner; a suspended/stopped env shows a distinct, non-animated "Suspended"
+  // state; running clears everything.
   useEffect(() => {
-    if (environment) {
-      const status = environment.status
-      // Show activating state for suspended, stopped, activating, starting, or rebuilding statuses
-      if (status === "suspended" || status === "stopped" || status === "activating" || status === "starting" || status === "rebuilding") {
-        setIsEnvActivating(true)
-      } else if (status === "running") {
-        setIsEnvActivating(false)
-      }
+    if (!environment) return
+    const status = environment.status
+    if (status === "activating" || status === "starting" || status === "rebuilding") {
+      setIsEnvActivating(true)
+      setIsEnvSuspended(false)
+    } else if (status === "suspended" || status === "stopped") {
+      setIsEnvActivating(false)
+      setIsEnvSuspended(true)
+    } else if (status === "running") {
+      setIsEnvActivating(false)
+      setIsEnvSuspended(false)
     }
   }, [environment])
 
@@ -280,13 +330,20 @@ function ChatInterface() {
   useEffect(() => {
     if (intentTargetEnvId && !usageIntentSent.current) {
       usageIntentSent.current = true
-      eventService.sendAgentUsageIntent(intentTargetEnvId).then((response) => {
-        if (response?.environment_id && response.environment_id !== intentTargetEnvId) {
-          setResolvedEnvId(response.environment_id)
-        }
-      }).catch((error) => {
-        console.error("Failed to send agent usage intent:", error)
-      })
+      // Use the REST endpoint (not the WebSocket) so env wake-up works even when
+      // the socket is permanently disconnected (e.g. after a backend deploy).
+      EnvironmentsService.registerEnvironmentUsageIntent({ id: intentTargetEnvId })
+        .then((response) => {
+          if (response?.environment_id && response.environment_id !== intentTargetEnvId) {
+            setResolvedEnvId(response.environment_id)
+          }
+        })
+        .catch((error) => {
+          console.error("Failed to send agent usage intent:", error)
+          // Reset the guard so a later effect re-run (e.g. after the env query
+          // refreshes) can retry the wake-up.
+          usageIntentSent.current = false
+        })
     }
   }, [intentTargetEnvId])
 
@@ -301,6 +358,7 @@ function ChatInterface() {
       if (event.model_id === effectiveEnvId) {
         console.log("Environment is activating...")
         setIsEnvActivating(true)
+        setIsEnvSuspended(false)
         queryClient.invalidateQueries({ queryKey: ["environment", effectiveEnvId] })
       }
     })
@@ -311,6 +369,7 @@ function ChatInterface() {
       if (event.model_id === effectiveEnvId) {
         console.log("Environment activated successfully")
         setIsEnvActivating(false)
+        setIsEnvSuspended(false)
         showSuccessToast("Agent environment activated")
         queryClient.invalidateQueries({ queryKey: ["environment", effectiveEnvId] })
       }
@@ -333,6 +392,7 @@ function ChatInterface() {
       if (event.model_id === effectiveEnvId) {
         console.log("Environment was suspended")
         setIsEnvActivating(false)
+        setIsEnvSuspended(true)
         queryClient.invalidateQueries({ queryKey: ["environment", effectiveEnvId] })
       }
     })
@@ -345,8 +405,10 @@ function ChatInterface() {
         console.log(`Environment status changed: ${status}`)
         if (status === "rebuilding" || status === "activating" || status === "starting") {
           setIsEnvActivating(true)
+          setIsEnvSuspended(false)
         } else if (status === "running" || status === "stopped" || status === "error") {
           setIsEnvActivating(false)
+          setIsEnvSuspended(status === "stopped")
           if (status === "error") {
             showErrorToast("Environment rebuild failed")
           }
@@ -398,7 +460,11 @@ function ChatInterface() {
             </Button>
             <div className="min-w-0">
               <h1 className="text-base font-semibold truncate">
-                {session.title ? session.title : <AnimatedPlaceholder />}
+                {session.title
+                  ? session.title
+                  : (messagesData?.data?.length ?? 0) > 0
+                    ? <AnimatedPlaceholder />
+                    : <span className="text-muted-foreground">New session</span>}
               </h1>
               <p className="text-xs text-muted-foreground flex items-center gap-1.5">
                 {isBuilding ? (
@@ -516,6 +582,17 @@ function ChatInterface() {
                 <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
                 Activating...
               </Button>
+            ) : isEnvSuspended ? (
+              <Button
+                variant={envPanelOpen ? "secondary" : "ghost"}
+                size="sm"
+                className="shrink-0 text-muted-foreground"
+                title="App is suspended — it will wake up on your next message"
+                onClick={() => { setEnvPanelOpen(!envPanelOpen); setShowSubTasks(false) }}
+              >
+                <Package className="h-4 w-4 mr-1.5 opacity-60" />
+                Suspended
+              </Button>
             ) : (
               <Button
                 variant={envPanelOpen ? "secondary" : "ghost"}
@@ -546,7 +623,7 @@ function ChatInterface() {
       )
     }
     return () => setHeaderContent(null)
-  }, [session, setHeaderContent, menuOpen, envPanelOpen, handleBack, handleDeleteSuccess, isEnvActivating, subTaskCount, subTaskBadges, showSubTasks])
+  }, [session, setHeaderContent, menuOpen, envPanelOpen, handleBack, handleDeleteSuccess, isEnvActivating, isEnvSuspended, messagesData?.data?.length, subTaskCount, subTaskBadges, showSubTasks])
 
   if (sessionLoading || messagesLoading) {
     return <PendingItems />
@@ -601,6 +678,7 @@ function ChatInterface() {
         agentId={session?.agent_id ?? undefined}
         mode={session?.mode as "building" | "conversation" | undefined}
         sessionId={sessionId}
+        seed={seed}
       />
     </div>
   )

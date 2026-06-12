@@ -165,7 +165,9 @@ User's IDE          cinna CLI / Mutagen         Platform Backend        Agent en
 - **Agent Environment Core** — `WS /sync/exec` spawns `mutagen-agent` inside the container; `POST /command/stream` streams exec output. See [agent_environment_core](../../agents/agent_environment_core/agent_environment_core.md)
 - **Knowledge Sources** — MCP proxy calls existing vector search infrastructure. See [knowledge_sources](../knowledge_sources/knowledge_sources.md)
 - **Frontend Integrations Tab** — LocalDevCard sits alongside A2A, MCP, Access Token cards in the agent detail page
+- **Account CLI Workspace** — Account-level bootstrap (Phase 1): one setup token bootstraps a multi-agent account workspace; account token mints per-agent child tokens on demand. See [account_cli_workspace.md](account_cli_workspace.md)
 
 ## Aspects
 
 - [Local CLI Development](local_cli_development.md) — How to develop and test the `cinna` CLI tool itself against a local platform instance (editable install from source)
+- [Account CLI Workspace](account_cli_workspace.md) — Account-level bootstrap: single setup token, multi-agent discovery, child-token minting, cascade revocation (Phase 1)

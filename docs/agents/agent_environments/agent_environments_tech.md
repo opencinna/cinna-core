@@ -213,7 +213,7 @@ Manages one shared Docker image per template, tagged by a content hash of the bu
 ### EventService (`backend/app/services/events/event_service.py`)
 
 - `is_user_online(user_id)` - Check active WebSocket connections
-- `agent_usage_intent` handler - Updates `last_activity_at`, triggers background activation if suspended
+- `agent_usage_intent` handler - Delegates to `register_usage_intent()` in `services/environments/usage_intent.py` (shared with the REST route); updates `last_activity_at`, triggers background activation if suspended
 - `_activate_environment_sync()` - Synchronous wrapper for async activation (runs in ThreadPoolExecutor)
 
 ### AgentEnvService (inside container: `core/server/agent_env_service.py`)
@@ -250,10 +250,12 @@ Manages one shared Docker image per template, tagged by a content hash of the bu
 
 ### Session UI (`frontend/src/routes/_layout/session/$sessionId.tsx`)
 
-- `isEnvActivating` state tracks activation progress
-- Suspended/Activating → "Activating..." button with spinner
+- `isEnvActivating` state tracks in-flight activation (`activating` / `starting` / `rebuilding`) → "Activating..." button with spinner
+- `isEnvSuspended` state tracks genuinely suspended/stopped env → "Suspended" muted static button (tooltip: "will wake on next message")
 - Running → normal "App" button
-- WebSocket event listeners: `ENVIRONMENT_ACTIVATING`, `ENVIRONMENT_ACTIVATED`, `ENVIRONMENT_ACTIVATION_FAILED`, `ENVIRONMENT_SUSPENDED`
+- Both states cleared when status becomes `running`; `isEnvSuspended` set on `suspended`/`stopped`; `isEnvActivating` set on `rebuilding`/`activating`/`starting`
+- Usage intent sent once via `EnvironmentsService.registerEnvironmentUsageIntent()` (REST) rather than WS emit; guard reset on failure for retry
+- WebSocket event listeners: `ENVIRONMENT_ACTIVATING`, `ENVIRONMENT_ACTIVATED`, `ENVIRONMENT_ACTIVATION_FAILED`, `ENVIRONMENT_SUSPENDED`, `ENVIRONMENT_STATUS_CHANGED`
 
 ### EnvironmentPanel (`frontend/src/components/Environment/EnvironmentPanel.tsx`)
 
@@ -368,7 +370,7 @@ The `app/core/` directory is maintained in a single shared location (`backend/ap
 | `ENVIRONMENT_ACTIVATION_FAILED` | Backend → Frontend | Activation failed |
 | `ENVIRONMENT_SUSPENDED` | Backend → Frontend | Environment suspended |
 | `ENVIRONMENT_STATUS_CHANGED` | Backend → Frontend | Environment status changed (e.g., health check detected crash → error) |
-| `agent_usage_intent` | Frontend → Backend | User opened session, triggers activity tracking and potential activation |
+| `agent_usage_intent` | Frontend → Backend | Legacy WS fallback; delegates to `register_usage_intent()`. Frontend now uses `POST /environments/{id}/usage-intent` (REST) as the primary path |
 
 Event types defined in `backend/app/models/events/event.py`
 

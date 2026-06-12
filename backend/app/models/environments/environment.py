@@ -181,6 +181,20 @@ class AgentEnvironmentsPublic(SQLModel):
     count: int
 
 
+class UsageIntentResponse(SQLModel):
+    """Response for a usage-intent signal (REST + WebSocket share this shape).
+
+    ``status`` is ``"activating"`` when a suspended environment's activation was
+    triggered in the background, or ``"ok"`` when no action was needed.
+    ``environment_id`` is the *resolved* environment id, which may differ from
+    the requested one when the request targeted a non-active environment and was
+    redirected to the agent's active environment.
+    """
+    status: str
+    message: str
+    environment_id: uuid.UUID
+
+
 # ---------------------------------------------------------------------------
 # Admin-only response schemas (no database tables)
 # ---------------------------------------------------------------------------

@@ -277,6 +277,13 @@ class Settings(BaseSettings):
     ADMIN_BULK_REBUILD_CONCURRENCY: int = 4  # Max parallel env rebuilds during bulk operation
     ADMIN_ENV_MAX_BULK_SIZE: int = 200  # Max environment IDs per bulk rebuild request
 
+    # ── Account CLI escape hatch (Phase 3) ──────────────────────────────
+    # Limits for the generic ``cinna api <METHOD> <path>`` proxy. The hatch
+    # targets JSON control-plane calls, not file transfer or streaming.
+    ACCOUNT_API_PROXY_MAX_BODY_BYTES: int = 1_048_576  # 1 MiB request cap → 413
+    ACCOUNT_API_PROXY_MAX_RESPONSE_BYTES: int = 8_388_608  # 8 MiB response cap → 502
+    ACCOUNT_API_PROXY_RATE_LIMIT_PER_MIN: int = 120  # per-account-token backstop
+
     # ── Two-Factor Authentication (MFA) ────────────────────────────────
     # Settings that govern the WebAuthn passkey + TOTP authenticator-app
     # 2FA flows.  See ``docs/drafts/user-2fa-passkeys-totp_plan.md``.

@@ -305,6 +305,12 @@ def _resolve_cli_context(db: Session, raw_token: str) -> CLIContext:
     except ValueError as e:
         raise CLIAuthError("invalid_token", str(e))
 
+    # Reject account tokens on per-agent routes: an account token is a
+    # mint/discover-only credential and must never satisfy a per-agent context
+    # (structural guarantee for the account-token capability exclusions).
+    if payload.get("token_type") != "cli":
+        raise CLIAuthError("invalid_token", "Account token cannot be used on a per-agent route")
+
     try:
         token_id = uuid.UUID(payload["sub"])
     except (KeyError, ValueError):
@@ -401,6 +407,88 @@ async def get_cli_context_ws(websocket: WebSocket, db: SessionDep) -> CLIContext
 
 
 CLIContextWSDep = Annotated[CLIContext, Depends(get_cli_context_ws)]
+
+
+# ── Account CLI token context ──────────────────────────────────────────
+
+
+class AccountCLIContext(SQLModel):
+    """
+    Context object for account-CLI-authenticated routes.
+
+    Returned by ``get_account_cli_context`` when the Bearer token is a valid
+    *account* CLI JWT (``token_type == "cli-account"``). An account token has
+    no single agent — it is a mint/discover-only credential. It is wired to
+    exactly the ``/account/*`` routes and is rejected by the per-agent CLI
+    context dep, so it physically cannot reach sync/exec/credential routes.
+
+    Uses ``Any`` for ``cli_token`` to avoid circular imports with models.
+    """
+    user: User
+    cli_token: Any  # CLIToken with token_type == "cli-account"
+
+
+def _resolve_account_cli_context(db: Session, raw_token: str) -> AccountCLIContext:
+    """
+    Resolve an account CLI JWT → ``AccountCLIContext``.
+
+    Decodes the token, *requires* ``token_type == "cli-account"`` (rejects
+    per-agent ``"cli"`` tokens), loads the token row and active user, and rolls
+    the 7-day expiry (no environment to keep alive for an account token).
+    Raises ``CLIAuthError`` on any failure.
+    """
+    from app.models.cli.cli_token import CLIToken
+    from app.services.cli.cli_auth import CLIAuthError, CLIAuthService
+
+    try:
+        payload = CLIAuthService.decode_cli_jwt(raw_token)
+    except ValueError as e:
+        raise CLIAuthError("invalid_token", str(e))
+
+    if payload.get("token_type") != "cli-account":
+        raise CLIAuthError("invalid_token", "Not an account CLI token")
+
+    try:
+        token_id = uuid.UUID(payload["sub"])
+    except (KeyError, ValueError):
+        raise CLIAuthError("invalid_token", "Invalid CLI token payload")
+
+    cli_token = db.get(CLIToken, token_id)
+    if not cli_token:
+        raise CLIAuthError("not_found", "CLI token not found")
+    if cli_token.token_type != "cli-account":
+        raise CLIAuthError("invalid_token", "Not an account CLI token")
+    if cli_token.is_revoked:
+        raise CLIAuthError("revoked", "CLI token has been revoked")
+    if _ensure_utc(cli_token.expires_at) < datetime.now(UTC):
+        raise CLIAuthError("expired", "CLI token has expired")
+
+    user = db.get(User, cli_token.owner_id)
+    if not user or not user.is_active:
+        raise CLIAuthError("user_inactive", "User not found or inactive")
+
+    # Roll the rolling 7-day expiry. Account tokens have no environment, so the
+    # env-keepalive arg is None.
+    CLIAuthService.refresh_token_usage(db, cli_token, environment=None)
+
+    return AccountCLIContext(user=user, cli_token=cli_token)
+
+
+def get_account_cli_context(token: TokenDep, db: SessionDep) -> AccountCLIContext:
+    """
+    Validate an account CLI JWT (HTTP) and return the account CLI context.
+
+    CLI-auth errors are surfaced as 401 HTTPExceptions.
+    """
+    from app.services.cli.cli_auth import CLIAuthError
+
+    try:
+        return _resolve_account_cli_context(db, token)
+    except CLIAuthError as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=e.message)
+
+
+AccountCLIContextDep = Annotated[AccountCLIContext, Depends(get_account_cli_context)]
 
 
 # ── Environment console (web terminal + logs) WS context ───────────────

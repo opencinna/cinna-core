@@ -155,96 +155,23 @@ class EventService:
                 return {"status": "error", "message": "environment_id required"}
 
             try:
-                # Import here to avoid circular dependencies
+                # Delegate to the shared service function. The WS handler trusts
+                # the socket's authenticated user_id and does no extra access
+                # control (the REST route enforces ownership; see usage_intent.py).
                 from app.core.db import engine as db_engine
                 from sqlmodel import Session as DBSession
-                from app.models.environments.environment import AgentEnvironment
-                from app.models.agents.agent import Agent
-                import asyncio
+                from app.services.environments.usage_intent import register_usage_intent
 
-                # Check environment status and trigger activation if needed
                 with DBSession(db_engine) as session:
-                    environment = session.get(AgentEnvironment, UUID(environment_id))
-                    if not environment:
-                        logger.warning(f"Environment {environment_id} not found")
-                        return {"status": "error", "message": "Environment not found"}
+                    return register_usage_intent(
+                        db_session=session,
+                        user_id=user_id,
+                        environment_id=UUID(environment_id),
+                    )
 
-                    # Resolve to the agent's active environment if the passed one is not active
-                    agent = session.get(Agent, environment.agent_id)
-                    if not agent:
-                        logger.error(f"Agent {environment.agent_id} not found for environment {environment_id}")
-                        return {"status": "error", "message": "Agent not found"}
-
-                    if agent.active_environment_id and agent.active_environment_id != environment.id:
-                        active_env = session.get(AgentEnvironment, agent.active_environment_id)
-                        if active_env:
-                            logger.info(
-                                f"Resolving agent_usage_intent from non-active environment {environment.id} "
-                                f"(status={environment.status}) to active environment {active_env.id} "
-                                f"(status={active_env.status})"
-                            )
-                            environment = active_env
-                            environment_id = str(active_env.id)
-
-                    # Update last_activity_at
-                    environment.last_activity_at = datetime.now(UTC)
-                    session.add(environment)
-                    session.commit()
-
-                    # If suspended, trigger activation in background
-                    if environment.status == "suspended":
-                        logger.info(f"User {user_id} triggered activation for suspended environment {environment_id}")
-
-                        # Store IDs for background task (avoid passing detached ORM objects)
-                        env_id_for_activation = environment.id
-                        agent_id_for_activation = agent.id
-
-                        # Activate in background using current event loop (NOT asyncio.run!)
-                        # asyncio.run() creates a new event loop that gets destroyed, cancelling all tasks
-                        async def _activate_async():
-                            """Activate environment with fresh DB session in main event loop"""
-                            from app.core.db import engine as db_engine
-                            from sqlmodel import Session as DBSession
-                            from app.models.environments.environment import AgentEnvironment
-                            from app.models.agents.agent import Agent
-                            from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
-
-                            with DBSession(db_engine) as fresh_session:
-                                fresh_env = fresh_session.get(AgentEnvironment, env_id_for_activation)
-                                fresh_agent = fresh_session.get(Agent, agent_id_for_activation)
-
-                                if not fresh_env or not fresh_agent:
-                                    logger.error(f"Environment or agent not found during activation")
-                                    return False
-
-                                lifecycle_manager = EnvironmentLifecycleManager()
-                                result = await lifecycle_manager.activate_suspended_environment(
-                                    db_session=fresh_session,
-                                    environment=fresh_env,
-                                    agent=fresh_agent,
-                                    emit_events=True
-                                )
-
-                                logger.info(f"Background activation completed for environment {env_id_for_activation}")
-                                return result
-
-                        create_task_with_error_logging(
-                            _activate_async(),
-                            task_name=f"activate_from_usage_intent_{env_id_for_activation}"
-                        )
-
-                        return {
-                            "status": "activating",
-                            "message": "Environment activation started",
-                            "environment_id": str(environment_id)
-                        }
-
-                    return {
-                        "status": "ok",
-                        "message": f"Environment status: {environment.status}",
-                        "environment_id": str(environment_id)
-                    }
-
+            except ValueError as e:
+                logger.warning(f"agent_usage_intent rejected: {e}")
+                return {"status": "error", "message": str(e)}
             except Exception as e:
                 logger.error(f"Error handling agent_usage_intent: {e}", exc_info=True)
                 return {"status": "error", "message": str(e)}

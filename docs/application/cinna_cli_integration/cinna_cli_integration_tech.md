@@ -5,9 +5,12 @@
 ### Backend — Models
 
 - `backend/app/models/cli/__init__.py` — Re-exports all CLI models
-- `backend/app/models/cli/cli_setup_token.py` — CLISetupToken (table), CLISetupTokenBase, CLISetupTokenPublic, CLISetupTokenCreate, CLISetupTokenCreated
-- `backend/app/models/cli/cli_token.py` — CLIToken (table), CLITokenBase, CLITokenPublic, CLITokenCreate, CLITokenCreated, CLITokensPublic, CLITokenPayload
+- `backend/app/models/cli/cli_setup_token.py` — CLISetupToken (table), CLISetupTokenBase, CLISetupTokenPublic, CLISetupTokenCreate, CLISetupTokenCreated; `agent_id` nullable; `kind` field added
+- `backend/app/models/cli/cli_token.py` — CLIToken (table), CLITokenBase, CLITokenPublic, CLITokenCreate, CLITokenCreated, CLITokensPublic, CLITokenPayload, CLIAccountTokenPublic, CLIAccountTokensPublic; `token_type` and `minted_by_account_token_id` fields added; `agent_id` nullable
+- `backend/app/models/cli/account_agent.py` — AccountAgentListItem, AccountAgentsPublic (account CLI accessible-agents listing)
 - `backend/app/models/__init__.py` — Re-exports CLI models at package level
+
+For account CLI workspace schemas and routes, see [account_cli_workspace_tech.md](account_cli_workspace_tech.md).
 
 ### Backend — Routes
 
@@ -61,9 +64,10 @@
 |-------|------|-------------|
 | id | UUID | PK |
 | token | VARCHAR(64) | unique, indexed |
-| agent_id | UUID | FK -> agent.id, CASCADE |
+| agent_id | UUID \| NULL | FK -> agent.id, CASCADE; nullable (NULL for account setup tokens) |
 | environment_id | UUID | FK -> agent_environment.id, SET NULL, nullable |
 | owner_id | UUID | FK -> user.id, CASCADE |
+| kind | VARCHAR(20) | NOT NULL, default `'agent'`; `'account'` for account bootstrap setup tokens |
 | is_used | BOOLEAN | default false |
 | expires_at | TIMESTAMP WITH TZ | |
 | created_at | TIMESTAMP WITH TZ | |
@@ -75,11 +79,13 @@ Indexes: `ix_cli_setup_token_token` (unique), `ix_cli_setup_token_owner_agent` (
 | Field | Type | Constraints |
 |-------|------|-------------|
 | id | UUID | PK |
-| agent_id | UUID | FK -> agent.id, CASCADE |
+| agent_id | UUID \| NULL | FK -> agent.id, CASCADE; nullable (NULL for account tokens) |
 | owner_id | UUID | FK -> user.id, CASCADE |
 | name | VARCHAR(100) | |
 | token_hash | VARCHAR | unique, indexed |
 | prefix | VARCHAR(12) | |
+| token_type | VARCHAR(20) | NOT NULL, default `'cli'`; `'cli-account'` for account tokens; indexed |
+| minted_by_account_token_id | UUID \| NULL | self-FK -> cli_token.id, ON DELETE CASCADE; set on child tokens minted from an account token; indexed |
 | is_revoked | BOOLEAN | default false |
 | last_used_at | TIMESTAMP WITH TZ | nullable |
 | last_sync_connected_at | TIMESTAMP WITH TZ | nullable |
@@ -87,7 +93,10 @@ Indexes: `ix_cli_setup_token_token` (unique), `ix_cli_setup_token_owner_agent` (
 | expires_at | TIMESTAMP WITH TZ | |
 | created_at | TIMESTAMP WITH TZ | |
 
-Indexes: `ix_cli_token_token_hash` (unique), `ix_cli_token_owner_agent` (composite)
+Indexes: `ix_cli_token_token_hash` (unique), `ix_cli_token_owner_agent` (composite), `ix_cli_token_token_type`, `ix_cli_token_minted_by_account_token_id`
+
+Account CLI workspace additions added by migration `5abf2cec7a18_add_account_cli_tokens.py`.
+See [account_cli_workspace_tech.md](account_cli_workspace_tech.md) for full schema details.
 
 ### agent_environment (sync-related additions)
 

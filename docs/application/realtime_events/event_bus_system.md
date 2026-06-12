@@ -192,7 +192,7 @@ When chat streaming occurs, `MessageService` emits events at each stage:
 - `STREAM_COMPLETED` → `ActivityService` manages completion; `EnvironmentService.handle_stream_completed_event` runs the three-way prompt reconcile (building mode); `CLICommandsService.handle_post_action_event` refreshes CLI commands cache; `AgentStatusService.handle_post_action_event` pulls STATUS.md
 - `STREAM_ERROR` → `ActivityService` creates error activity; post-action handlers refresh caches
 - `STREAM_INTERRUPTED` → `ActivityService` cleans up running activity
-- `WORKSPACE_FILES_CHANGED` → env-core fires when watched workspace files stabilise after a write (Mutagen sync, cinna-cli edit, or agent in-container write). The five watched files are declared in the **Synced Workspace File Registry** (`backend/app/services/environments/synced_files.py`): `docs/WORKFLOW_PROMPT.md`, `docs/ENTRYPOINT_PROMPT.md`, `docs/REFINER_PROMPT.md` (bidirectional), `docs/CLI_COMMANDS.yaml`, `app-data/storage/STATUS.md` (pull-only). `EnvironmentService.handle_workspace_files_changed_event` runs the reconcile for prompt files; `CLICommandsService.handle_post_action_event` and `AgentStatusService.handle_post_action_event` refresh the pull-only caches
+- `WORKSPACE_FILES_CHANGED` → env-core fires when watched workspace files stabilise after a write (Mutagen sync, cinna-cli edit, or agent in-container write). The five watched files are declared in the **Synced Workspace File Registry** (`backend/app/services/environments/synced_files.py`): `docs/WORKFLOW_PROMPT.md`, `docs/ENTRYPOINT_PROMPT.md`, `docs/REFINER_PROMPT.md` (bidirectional), `docs/CLI_COMMANDS.yaml`, `app-data/storage/STATUS.md` (pull-only). `EnvironmentService.handle_workspace_files_changed_event` runs the reconcile for prompt files; `CLICommandsService.handle_post_action_event` and `AgentStatusService.handle_post_action_event` refresh the pull-only caches <!-- nocheck -->
 - `ENVIRONMENT_ACTIVATED` → `SessionService.handle_environment_activated` (process pending messages); `CLICommandsService.handle_post_action_event`; `AgentStatusService.handle_post_action_event` — the last two were previously only registered against stream/CRON events; adding `ENVIRONMENT_ACTIVATED` closes the gap where STATUS.md was not pulled when an environment started without any immediately following action
 - `AGENT_UPDATED` → emitted by `EnvironmentService.reconcile_agent_prompts` to the agent owner on every DB-side prompt change (PULL / CONFLICT_PULL / SEED_PULL). Frontend agent detail route subscribes and invalidates `["agent", agentId]` / `["agents"]` so the Prompts cards re-render with pulled content. DB→env pushes and NOOPs do not emit this event
 
@@ -596,7 +596,8 @@ Event handlers using these patterns:
 - `backend/app/services/events/activity_service.py` - `handle_stream_started()`, `handle_stream_completed()`
 - `backend/app/services/environments/environment_service.py` - `handle_stream_completed_event()`
 - `backend/app/services/tasks/input_task_service.py` - `handle_stream_started()`, `handle_stream_completed()`, `handle_stream_error()`, `handle_todo_list_updated()`
-- `backend/app/services/events/event_service.py` - `agent_usage_intent` WebSocket handler
+- `backend/app/services/events/event_service.py` - `agent_usage_intent` WebSocket handler (now delegates to `register_usage_intent` for behavior parity with the REST route)
+- `backend/app/services/environments/usage_intent.py` - `register_usage_intent()`: shared logic used by both the WS handler and `POST /environments/{id}/usage-intent`
 
 ## Extension Points
 

@@ -34,6 +34,170 @@ export type AccessTokenMode = 'conversation' | 'building';
  */
 export type AccessTokenScope = 'limited' | 'general';
 
+/**
+ * Thin-client agent-create body.
+ *
+ * The CLI sends only user-specified fields; the backend applies ALL defaults
+ * via the normal ``AgentService.create_agent`` path (default AI-credential
+ * resolution, default env template, environment creation) exactly as the UI
+ * does. ``env_name`` (env-template selection) is **not** honored at create time
+ * in v1 — the normal create path hard-codes ``settings.DEFAULT_AGENT_ENV_NAME``
+ * (see plan O1). The field is accepted-but-noop and documented as a follow-up.
+ */
+export type AccountAgentCreateBody = {
+    name: string;
+    description?: (string | null);
+    env_name?: (string | null);
+    user_workspace_id?: (string | null);
+};
+
+/**
+ * One row in the accessible-agents listing for the account CLI.
+ */
+export type AccountAgentListItem = {
+    id: string;
+    name: string;
+    description: (string | null);
+    ui_color_preset: (string | null);
+    owner_id: string;
+    user_workspace_id: (string | null);
+    bundle_uuid: (string | null);
+    is_publisher_install: boolean;
+    is_foreign_install: boolean;
+    can_build: boolean;
+    has_active_environment: boolean;
+};
+
+export type AccountAgentsPublic = {
+    data: Array<AccountAgentListItem>;
+    count: number;
+};
+
+/**
+ * Generic escape-hatch request: ``cinna api <METHOD> <path>``.
+ *
+ * ``path`` is **relative to the API root** (no ``/api/v1`` prefix — the backend
+ * prepends it). ``headers`` is accepted but **ignored** in v1 (O3 — safe
+ * default; only the minted user JWT is sent inward).
+ */
+export type AccountApiProxyRequest = {
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+    path: string;
+    query?: ({
+    [key: string]: (string | Array<(string)>);
+} | null);
+    json_body?: (unknown | null);
+    headers?: ({
+    [key: string]: (string);
+} | null);
+};
+
+export type method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+/**
+ * Wrap the ``agent_api`` one-click connect helper.
+ *
+ * Maps directly to ``ConnectAgentApiRequest`` plus the producer agent id (a
+ * body field, since the account route is path-free).
+ */
+export type AccountConnectAgentApiBody = {
+    producer_agent_id: string;
+    consumer_agent_id?: (string | null);
+    credential_label?: (string | null);
+    read_only_override?: boolean;
+};
+
+/**
+ * Wrap the ``mcp_provider`` agent2agent connect helper.
+ *
+ * Maps to ``ConnectMcpProviderAgentRequest``. The CLI resolves
+ * ``--producer <agent>`` → ``connector_id`` via the discoverable passthrough
+ * (O2) before calling this.
+ */
+export type AccountConnectMcpBody = {
+    connector_id: string;
+    consumer_agent_id?: (string | null);
+    mcp_mode_conversation?: boolean;
+    mcp_mode_building?: boolean;
+    label?: (string | null);
+};
+
+/**
+ * Create a *draft* credential from the account workspace.
+ *
+ * SECURITY: deliberately has **no** ``credential_data`` field. The account CLI
+ * scaffolds the credential's *structure* (name, type, audience) but never sets
+ * its secret value — the user fills that in the UI later (the credential shows
+ * as ``status="incomplete"`` until then). This keeps the account token's
+ * no-credential-secrets guarantee (Decision 6) intact for writes as well as
+ * reads. ``user_workspace_id`` targets the account's active workspace (the CLI
+ * fills it from ``.cinna/account.json``; validated to belong to the user).
+ */
+export type AccountCredentialCreateBody = {
+    name: string;
+    type: CredentialType;
+    notes?: (string | null);
+    service_uri?: (string | null);
+    allow_sharing?: boolean;
+    user_workspace_id?: (string | null);
+};
+
+/**
+ * Response for ``POST /account/credentials`` — the created draft plus the
+ * setup hints the orchestrator relays to the user.
+ *
+ * ``required_fields`` lists the secret/config fields the user must fill for the
+ * credential to become ``complete`` (derived from the platform's per-type
+ * required-field map). ``setup_url`` deep-links to the Credentials page where
+ * the user enters them.
+ */
+export type AccountCredentialDraftResult = {
+    credential: CredentialPublic;
+    required_fields: Array<(string)>;
+    setup_url: string;
+};
+
+/**
+ * Attach a credential to an agent the account user owns (``share-with-agent``).
+ *
+ * Links the credential to the agent (``AgentCredentialLink``) so its
+ * whitelisted fields sync to the agent's environment once the user fills the
+ * secret value. ``agent_id`` must be owned by the account user.
+ */
+export type AccountCredentialShareBody = {
+    agent_id: string;
+};
+
+/**
+ * One entry in the credential-type catalogue for the account CLI.
+ */
+export type AccountCredentialTypeInfo = {
+    type: CredentialType;
+    required_fields: Array<(string)>;
+    note?: (string | null);
+};
+
+export type AccountCredentialTypesPublic = {
+    data: Array<AccountCredentialTypeInfo>;
+    count: number;
+};
+
+/**
+ * Update a credential's **metadata only** from the account workspace.
+ *
+ * SECURITY: like the create body, there is **no** ``credential_data`` field —
+ * the account CLI never writes secret values. Only descriptive / structural
+ * fields are editable here. All fields optional; only the provided ones are
+ * applied (``exclude_unset`` semantics).
+ */
+export type AccountCredentialUpdateBody = {
+    name?: (string | null);
+    notes?: (string | null);
+    service_uri?: (string | null);
+    allow_sharing?: (boolean | null);
+    allow_template_sharing?: (boolean | null);
+};
+
 export type ActivitiesPublicExtended = {
     data: Array<ActivityPublicExtended>;
     count: number;
@@ -1740,6 +1904,27 @@ export type CheckUpdatesResponse = {
     update_mode: string;
 };
 
+/**
+ * Public projection of an account CLI token, with synced-child count.
+ */
+export type CLIAccountTokenPublic = {
+    id: string;
+    name: string;
+    owner_id: string;
+    prefix: string;
+    is_revoked: boolean;
+    last_used_at: (string | null);
+    machine_info: (string | null);
+    expires_at: string;
+    created_at: string;
+    child_count: number;
+};
+
+export type CLIAccountTokensPublic = {
+    data: Array<CLIAccountTokenPublic>;
+    count: number;
+};
+
 export type CLISetupTokenCreate = {
     agent_id: string;
 };
@@ -1750,7 +1935,7 @@ export type CLISetupTokenCreate = {
 export type CLISetupTokenCreated = {
     id: string;
     token: string;
-    agent_id: string;
+    agent_id: (string | null);
     environment_id: (string | null);
     expires_at: string;
     created_at: string;
@@ -1760,9 +1945,10 @@ export type CLISetupTokenCreated = {
 export type CLITokenPublic = {
     name: string;
     id: string;
-    agent_id: string;
+    agent_id: (string | null);
     owner_id: string;
     prefix: string;
+    token_type: string;
     is_revoked: boolean;
     last_used_at: (string | null);
     machine_info: (string | null);
@@ -3243,7 +3429,12 @@ export type MfaVerifyRequest = {
     remember_device_days?: (1 | 7 | 30 | null);
 };
 
-export type method = 'passkey' | 'totp' | 'recovery';
+export type method2 = 'passkey' | 'totp' | 'recovery';
+
+export type MintChildTokenBody = {
+    machine_name?: string;
+    machine_info?: (string | null);
+};
 
 /**
  * Per-mode model-health entry.
@@ -4310,6 +4501,21 @@ export type UpdateSessionStateResponse = {
     success: boolean;
     message?: (string | null);
     error?: (string | null);
+};
+
+/**
+ * Response for a usage-intent signal (REST + WebSocket share this shape).
+ *
+ * ``status`` is ``"activating"`` when a suspended environment's activation was
+ * triggered in the background, or ``"ok"`` when no action was needed.
+ * ``environment_id`` is the *resolved* environment id, which may differ from
+ * the requested one when the request targeted a non-active environment and was
+ * redirected to the agent's active environment.
+ */
+export type UsageIntentResponse = {
+    status: string;
+    message: string;
+    environment_id: string;
 };
 
 export type UserAppAgentRouteCreate = {
@@ -5861,6 +6067,100 @@ export type CliExecCommandData = {
 
 export type CliExecCommandResponse = (unknown);
 
+export type CliCreateAccountSetupTokenResponse = (CLISetupTokenCreated);
+
+export type CliListAccountTokensResponse = (CLIAccountTokensPublic);
+
+export type CliRevokeAccountTokenData = {
+    tokenId: string;
+};
+
+export type CliRevokeAccountTokenResponse = (Message);
+
+export type CliListAccountAgentsResponse = (AccountAgentsPublic);
+
+export type CliAccountCreateAgentData = {
+    requestBody: AccountAgentCreateBody;
+};
+
+export type CliAccountCreateAgentResponse = (AgentPublic);
+
+export type CliListAccountUserWorkspacesResponse = (UserWorkspacesPublic);
+
+export type CliGetAccountContextPackageResponse = (unknown);
+
+export type CliMintChildTokenData = {
+    agentId: string;
+    requestBody: MintChildTokenBody;
+};
+
+export type CliMintChildTokenResponse = (unknown);
+
+export type CliRevokeAccountChildTokenData = {
+    childTokenId: string;
+};
+
+export type CliRevokeAccountChildTokenResponse = (Message);
+
+export type CliAccountConnectAgentApiData = {
+    requestBody: AccountConnectAgentApiBody;
+};
+
+export type CliAccountConnectAgentApiResponse = (ConnectAgentApiResponse);
+
+export type CliAccountListDiscoverableMcpData = {
+    consumerAgentId?: (string | null);
+};
+
+export type CliAccountListDiscoverableMcpResponse = (DiscoverableAgents);
+
+export type CliAccountConnectMcpData = {
+    requestBody: AccountConnectMcpBody;
+};
+
+export type CliAccountConnectMcpResponse = (MCPProviderConnectionResponse);
+
+export type CliAccountListCredentialTypesResponse = (AccountCredentialTypesPublic);
+
+export type CliAccountListCredentialsData = {
+    userWorkspaceId?: (string | null);
+};
+
+export type CliAccountListCredentialsResponse = (CredentialsPublic);
+
+export type CliAccountCreateCredentialData = {
+    requestBody: AccountCredentialCreateBody;
+};
+
+export type CliAccountCreateCredentialResponse = (AccountCredentialDraftResult);
+
+export type CliAccountUpdateCredentialData = {
+    credentialId: string;
+    requestBody: AccountCredentialUpdateBody;
+};
+
+export type CliAccountUpdateCredentialResponse = (CredentialPublic);
+
+export type CliAccountDeleteCredentialData = {
+    credentialId: string;
+    force?: boolean;
+};
+
+export type CliAccountDeleteCredentialResponse = (Message);
+
+export type CliAccountShareCredentialWithAgentData = {
+    credentialId: string;
+    requestBody: AccountCredentialShareBody;
+};
+
+export type CliAccountShareCredentialWithAgentResponse = (Message);
+
+export type CliAccountApiProxyData = {
+    requestBody: AccountApiProxyRequest;
+};
+
+export type CliAccountApiProxyResponse = (unknown);
+
 export type CliGetBootstrapScriptData = {
     token: string;
 };
@@ -5873,6 +6173,19 @@ export type CliExchangeSetupTokenData = {
 };
 
 export type CliExchangeSetupTokenResponse = (unknown);
+
+export type CliGetAccountBootstrapScriptData = {
+    token: string;
+};
+
+export type CliGetAccountBootstrapScriptResponse = (string);
+
+export type CliExchangeAccountSetupTokenData = {
+    requestBody: ExchangeSetupTokenBody;
+    token: string;
+};
+
+export type CliExchangeAccountSetupTokenResponse = (unknown);
 
 export type CredentialsShareCredentialData = {
     credentialId: string;
@@ -6225,6 +6538,12 @@ export type EnvironmentsDeleteEnvironmentData = {
 };
 
 export type EnvironmentsDeleteEnvironmentResponse = (Message);
+
+export type EnvironmentsRegisterEnvironmentUsageIntentData = {
+    id: string;
+};
+
+export type EnvironmentsRegisterEnvironmentUsageIntentResponse = (UsageIntentResponse);
 
 export type EnvironmentsReconfigureEnvironmentData = {
     id: string;

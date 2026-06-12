@@ -3,6 +3,12 @@ CLI-specific test fixtures.
 
 Mirrors the agent test conftest — patches the environment adapter and
 background tasks so agent creation works without a real Docker daemon.
+
+The ``patch_storage_dirs`` fixture is required by tests that publish agent
+bundles (``test_account_cli.py`` publishes + installs bundles to produce
+foreign installs for the ``can_build`` gate tests). Without it,
+``PublishService`` writes real bundle files to the bind-mounted host
+``backend/data/`` directory and leaks state across test runs.
 """
 import pytest
 from tests.utils.fixtures import (
@@ -11,6 +17,7 @@ from tests.utils.fixtures import (
     patched_create_sessions,
     patched_background_tasks,
     patched_external_services,
+    patched_storage_dirs,
     setup_environment_adapter,
     teardown_environment_adapter,
     CREATE_SESSION_TARGETS_AGENT,
@@ -44,4 +51,17 @@ def background_tasks():
 def patch_external_services():
     """Mock external service calls (OAuth refresh, Socket.IO, LLM providers)."""
     with patched_external_services(mock_ai_functions=True, mock_a2a_skills=True):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def patch_storage_dirs(tmp_path_factory):
+    """Redirect bundle + app-data storage to a tmp tree (no host disk writes).
+
+    Required by tests that publish agent bundles (e.g. producing a foreign
+    install to gate the ``can_build`` predicate). Without this,
+    ``PublishService`` writes to the bind-mounted host data directory and
+    leaves artefacts across test runs.
+    """
+    with patched_storage_dirs(tmp_path_factory):
         yield

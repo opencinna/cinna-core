@@ -86,7 +86,93 @@ def _increment_version(version: str) -> str:
     return "1.0.1"
 
 
+class CanBuildError(Exception):
+    """Raised when a user is not allowed to build/sync an agent.
+
+    Carries a ``reason`` so route/service callers can map it to the right
+    HTTP status: ``"not_developer"`` / ``"foreign_install"`` → 403,
+    ``"not_accessible"`` → 404 (no existence leak — see plan).
+    """
+
+    def __init__(self, reason: str, message: str):
+        self.reason = reason  # "not_developer" | "foreign_install" | "not_accessible"
+        self.message = message
+        super().__init__(message)
+
+
 class AgentService:
+    # ── Building-rights authorization ──────────────────────────────────
+
+    @staticmethod
+    def is_foreign_install(agent: Agent) -> bool:
+        """True for a consumer (bundle-owned, non-publisher) install.
+
+        Such installs have a publisher-managed, read-only-ish workspace:
+        they may be enabled/disabled and run, but cannot be edited, built,
+        or synced for local development. Publisher installs
+        (``is_publisher_install=True``) and standalone agents
+        (``bundle_uuid is None``) stay fully buildable.
+        """
+        return agent.bundle_uuid is not None and not agent.is_publisher_install
+
+    @staticmethod
+    def user_can_access(session: Session, user: User, agent: Agent) -> bool:
+        """Whether the user can *see* the agent at all.
+
+        Mirrors the access set ``list_agents`` returns for the user, which is
+        always owner-scoped (``Agent.owner_id == user_id``). Foreign-bundle
+        installs and General Assistants are themselves per-user owned rows
+        (each carries the consuming user's ``owner_id``), so ownership alone
+        fully captures the access set — there is no cross-tenant visibility.
+
+        Used by the account-CLI listing and the mint-target access check
+        (which 404s rather than leaking existence).
+        """
+        return agent.owner_id == user.id
+
+    @staticmethod
+    def can_build(session: Session, user: User, agent: Agent) -> bool:
+        """One predicate: may this user build/sync this agent?
+
+        ``can_build := is_developer(user) AND not is_foreign_install(agent)
+        AND user_can_access(user, agent)``.
+
+        This is the single authorization gate for the account-CLI mint
+        endpoint, the per-agent CLI setup-token route, and the ``can_build``
+        flag in the accessible-agents listing.
+        """
+        from app.services.users.role_service import RoleService
+
+        return (
+            RoleService.is_developer(user)
+            and not AgentService.is_foreign_install(agent)
+            and AgentService.user_can_access(session, user, agent)
+        )
+
+    @staticmethod
+    def assert_can_build(session: Session, user: User, agent: Agent) -> None:
+        """Raise ``CanBuildError`` if the user cannot build/sync the agent.
+
+        Access is checked first so an inaccessible agent raises
+        ``"not_accessible"`` (404) without leaking why; then role, then the
+        foreign-install guard.
+        """
+        from app.services.users.role_service import RoleService
+
+        if not AgentService.user_can_access(session, user, agent):
+            raise CanBuildError("not_accessible", "Agent not found")
+        if not RoleService.is_developer(user):
+            raise CanBuildError(
+                "not_developer",
+                "This action requires the agent-developer role.",
+            )
+        if AgentService.is_foreign_install(agent):
+            raise CanBuildError(
+                "foreign_install",
+                "This is an installed bundle; its workspace is "
+                "publisher-managed and can't be synced for local development.",
+            )
+
     @staticmethod
     def to_public_with_clone_info(session: Session, agent: Agent) -> AgentPublic:
         """Convert Agent to AgentPublic with resolved bundle information.

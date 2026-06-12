@@ -197,6 +197,8 @@ The `agent_api` connection credential appears in the Credentials page and Agent 
 
 - **[Realtime Events](../../application/realtime_events/event_bus_system.md)** — `AGENT_API_STATUS_CHANGED` event is emitted after a spec reload or boot error so the owner's Integrations tab updates live without polling.
 
+- **[Account CLI Workspace](../../application/cinna_cli_integration/account_cli_workspace.md)** — `cinna connect agent-api --producer P --consumer C` wraps `AgentApiTokenService.connect_agent_api` via `POST /api/v1/cli/account/connect/agent-api`; producer ownership gate and 403/404 mapping are reused unchanged.
+
 ---
 
 ## Known Gaps and Future Work

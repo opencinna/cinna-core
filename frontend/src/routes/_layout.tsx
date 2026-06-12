@@ -15,6 +15,7 @@ import { useBundleEvents } from "@/hooks/useBundleEvents"
 import { useRoleEvents } from "@/hooks/useRoleEvents"
 import { useNavigationTracker } from "@/hooks/useNavigationHistory"
 import AgentUserWelcomeBanner from "@/components/Common/AgentUserWelcomeBanner"
+import { ConnectionBanner } from "@/components/Common/ConnectionBanner"
 
 interface HeaderContextType {
   setHeaderContent: (content: ReactNode) => void
@@ -89,7 +90,10 @@ function Layout() {
               </div>
             )}
           </header>
-          <main className="flex-1 flex flex-col min-h-0 min-w-0">
+          <main className="relative flex-1 flex flex-col min-h-0 min-w-0">
+            {/* Floating degraded-mode banner: overlays content directly below
+                the header without pushing layout. Auto-visible on all pages. */}
+            <ConnectionBanner />
             <AgentUserWelcomeBanner />
             <Outlet />
           </main>

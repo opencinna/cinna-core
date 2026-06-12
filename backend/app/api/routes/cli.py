@@ -11,24 +11,81 @@ Live sync model (replaces tarball push/pull and local container):
 - GET  /agents/{id}/sync-runtime — pinned Mutagen version info for CLI setup
 """
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException, Request, WebSocket, status
+from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, status
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
-from app.api.deps import CLIContext, CLIContextDep, CLIContextWSDep, CurrentUser, SessionDep
+from app.api.deps import (
+    AccountCLIContextDep,
+    CLIContext,
+    CLIContextDep,
+    CLIContextWSDep,
+    CurrentUser,
+    SessionDep,
+)
 from app.models import Message
+from app.models.agent_api.agent_api_token import ConnectAgentApiResponse
+from app.models.agents.agent import AgentPublic
+from app.models.cli.account_agent import AccountAgentsPublic
+from app.models.cli.account_convenience import (
+    AccountAgentCreateBody,
+    AccountApiProxyRequest,
+    AccountConnectAgentApiBody,
+    AccountConnectMcpBody,
+    AccountCredentialCreateBody,
+    AccountCredentialDraftResult,
+    AccountCredentialShareBody,
+    AccountCredentialTypesPublic,
+    AccountCredentialUpdateBody,
+)
 from app.models.cli.cli_setup_token import CLISetupTokenCreate, CLISetupTokenCreated
-from app.models.cli.cli_token import CLITokensPublic, CLITokenPublic
+from app.models.cli.cli_token import (
+    CLIAccountTokensPublic,
+    CLITokenPublic,
+    CLITokensPublic,
+)
+from app.models.credentials.credential import (
+    CredentialPublic,
+    CredentialsPublic,
+)
+from app.models.mcp.mcp_provider import (
+    DiscoverableAgents,
+    MCPProviderConnectionResponse,
+)
+from app.models.users.user_workspace import UserWorkspacesPublic
+from app.services.cli.account_api_proxy_policy import ApiProxyDenied
+from app.services.cli.account_api_proxy_service import AccountApiProxyService
+from app.services.cli.account_cli_service import (
+    AccountCLIService,
+    WorkspaceNotFoundError,
+)
 from app.services.cli.cli_service import CLIService
+from app.services.cli.context_package_service import ContextPackageService
+
+if TYPE_CHECKING:
+    from app.services.agents.agent_service import CanBuildError
 
 
 def _verify_cli_agent_scope(cli_ctx: CLIContext, agent_id: uuid.UUID) -> None:
     """Verify the CLI token is scoped to the requested agent."""
     if cli_ctx.agent.id != agent_id:
         raise HTTPException(status_code=403, detail="Token is not scoped to this agent")
+
+
+def _raise_can_build_http(e: "CanBuildError") -> None:
+    """Map a ``CanBuildError`` reason to the right HTTP status.
+
+    ``not_accessible`` → 404 (no existence leak), everything else → 403.
+    """
+    code = (
+        status.HTTP_404_NOT_FOUND
+        if e.reason == "not_accessible"
+        else status.HTTP_403_FORBIDDEN
+    )
+    raise HTTPException(status_code=code, detail=e.message)
 
 
 async def _ensure_environment_running(cli_ctx: CLIContext, db: Session) -> None:
@@ -105,6 +162,51 @@ async def exchange_setup_token(
         )
 
 
+# ── Account Bootstrap (no auth — account setup token is the credential) ──────
+
+
+@setup_router.get("/account/{token}", response_class=PlainTextResponse)
+async def get_account_bootstrap_script(
+    token: str,
+    request: Request,
+) -> str:
+    """
+    Serve the account bootstrap script for `curl -sL <url> | python3 -`.
+
+    Delegates to ``cinna account setup <setup_url>`` when the CLI is installed,
+    or prints install instructions otherwise.
+    """
+    return CLIService.render_bootstrap_script(token, request, flavor="account")
+
+
+@setup_router.post("/account/{token}")
+async def exchange_account_setup_token(
+    token: str,
+    body: ExchangeSetupTokenBody,
+    request: Request,
+    db: SessionDep,
+) -> Any:
+    """
+    Exchange an account setup token for an account CLI token + bootstrap payload.
+
+    Hit by the account `curl | python3` bootstrap script. No authentication —
+    the setup token acts as the credential.
+    """
+    try:
+        return await AccountCLIService.exchange_account_setup_token(
+            db=db,
+            token_str=token,
+            machine_name=body.machine_name,
+            machine_info=body.machine_info,
+            request=request,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
 # ── Authenticated CLI API Router ─────────────────────────────────────────────
 # Registered under api_router → /api/v1/cli
 
@@ -125,14 +227,21 @@ def create_setup_token(
 
     Returns a curl oneliner command to run locally that bootstraps the CLI.
     The token expires in 15 minutes and can only be used once.
+
+    Gated by building rights (developer/admin role, not a foreign install,
+    accessible) rather than bare ownership.
     """
+    from app.services.agents.agent_service import CanBuildError
+
     try:
         return CLIService.create_setup_token(
             db=db,
             agent_id=body.agent_id,
-            user_id=current_user.id,
+            user=current_user,
             request=request,
         )
+    except CanBuildError as e:
+        _raise_can_build_http(e)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -350,3 +459,515 @@ async def sync_stream_ws(
         return
 
     await CLIService.run_sync_tunnel(websocket, cli_ctx)
+
+
+# ── Account CLI Routes ───────────────────────────────────────────────────────
+# Account setup/management is user-JWT + developer-gated; account-scoped routes
+# authenticate via the account CLI token (AccountCLIContextDep).
+
+
+@router.post("/account/setup-tokens", response_model=CLISetupTokenCreated)
+def create_account_setup_token(
+    request: Request,
+    db: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """
+    Generate an account setup token.
+
+    Returns a curl oneliner that bootstraps the account CLI workspace. The
+    token expires in 15 minutes and can only be used once. Restricted to
+    ``agent-developer`` / ``admin`` (an agent-user can't even generate the link).
+    """
+    from app.services.users.role_service import RoleService
+
+    try:
+        RoleService.require_developer(current_user)
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+
+    return AccountCLIService.create_account_setup_token(
+        db=db,
+        user=current_user,
+        request=request,
+    )
+
+
+@router.get("/account/tokens", response_model=CLIAccountTokensPublic)
+def list_account_tokens(
+    db: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """List the current user's account CLI tokens with synced-child counts."""
+    tokens = AccountCLIService.list_account_tokens(db=db, user=current_user)
+    return CLIAccountTokensPublic(data=tokens, count=len(tokens))
+
+
+@router.delete("/account/tokens/{token_id}", response_model=Message)
+def revoke_account_token(
+    token_id: uuid.UUID,
+    db: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """
+    Revoke an account token and cascade-revoke every child token it minted.
+
+    On the next API call each synced agent gets 401 and Mutagen pauses. Local
+    files remain intact.
+    """
+    try:
+        count = AccountCLIService.revoke_account_token(
+            db=db, token_id=token_id, user=current_user
+        )
+        return Message(message=f"Account token revoked; {count} session(s) disconnected")
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
+
+@router.get("/account/agents", response_model=AccountAgentsPublic)
+def list_account_agents(
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    List the agents the account token's user can access, each flagged with
+    ``can_build`` / ``is_foreign_install`` / ``has_active_environment``.
+
+    No credentials, prompts, or env internals are exposed.
+    """
+    items = AccountCLIService.list_accessible_agents(db=db, user=account_ctx.user)
+    return AccountAgentsPublic(data=items, count=len(items))
+
+
+@router.get("/account/user-workspaces", response_model=UserWorkspacesPublic)
+def list_account_user_workspaces(
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    List the account user's workspaces for ``cinna account user-workspace``.
+
+    Supplies the catalogue the CLI prints (``user-workspace list``) and validates
+    the activated id against (``user-workspace --activate=<id>``). The active
+    workspace is a **client-side** setting in ``.cinna/account.json`` — there is
+    no server-side "active workspace"; the chosen id is sent per-create (e.g. on
+    ``cinna agent create``), and the new agent's credentials inherit it.
+    """
+    return AccountCLIService.list_user_workspaces(db=db, user=account_ctx.user)
+
+
+@router.get("/account/context-package")
+def get_account_context_package(
+    account_ctx: AccountCLIContextDep,
+) -> StreamingResponse:
+    """
+    Download the orchestrator context package as a gzip tarball.
+
+    Static platform knowledge for driving the agent network from the account
+    workspace: curated platform docs, the generated REST API reference, example
+    API-script patterns, and a ``context/README.md`` index the orchestrator
+    ``CLAUDE.md`` points at. Contains no user-specific secrets.
+
+    Consumed by ``cinna account setup``, which extracts it into the account
+    workspace's ``context/`` tree.
+    """
+    return ContextPackageService.get_context_package()
+
+
+class MintChildTokenBody(BaseModel):
+    machine_name: str = "My Machine"
+    machine_info: str | None = None
+
+
+@router.post("/account/agents/{agent_id}/mint")
+async def mint_child_token(
+    agent_id: uuid.UUID,
+    body: MintChildTokenBody,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Mint a normal per-agent CLI token for the target agent (provenance-stamped).
+
+    ``can_build``-gated: 403 if not buildable, 404 if inaccessible. Returns the
+    child JWT (shown once) plus the workspace-bootstrap fields the CLI needs to
+    write a standard per-agent workspace.
+    """
+    from app.services.agents.agent_service import CanBuildError
+
+    try:
+        return await AccountCLIService.mint_child_token(
+            db=db,
+            user=account_ctx.user,
+            account_token=account_ctx.cli_token,
+            agent_id=agent_id,
+            machine_name=body.machine_name,
+            machine_info=body.machine_info,
+            request=request,
+        )
+    except CanBuildError as e:
+        _raise_can_build_http(e)
+
+
+@router.delete("/account/tokens/children/{child_token_id}", response_model=Message)
+async def revoke_account_child_token(
+    child_token_id: uuid.UUID,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Revoke a child token minted by the calling account token (``cinna agent
+    unsync``).
+
+    Authenticated by the account CLI token itself (not a user JWT). The target
+    must be a ``token_type="cli"`` child stamped with this account token's id;
+    any other token (other users', children of other account tokens, account
+    tokens, nonexistent ids) returns 404 — existence-leak discipline. The child
+    gets 401 on its next API call.
+    """
+    try:
+        await AccountCLIService.revoke_child_token(
+            db=db,
+            account_token=account_ctx.cli_token,
+            child_token_id=child_token_id,
+            request=request,
+        )
+        return Message(message="CLI token revoked successfully")
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
+
+# ── Account CLI Phase 3: convenience verbs + generic API escape hatch ────────
+# All authenticated via the account CLI token (AccountCLIContextDep). The
+# convenience verbs delegate to already-shipped services and reuse their 403/404
+# mapping verbatim; the escape hatch re-dispatches into the rest of the API
+# behind a single exclusion chokepoint. Phase 1's structural guard is untouched.
+
+
+def _require_developer_account(account_ctx: AccountCLIContextDep) -> None:
+    """Account-route developer gate (mirrors create_account_setup_token).
+
+    The account workspace is a developer tool; the practical caller is always a
+    developer, but we enforce explicitly so a demoted user is 403'd on the next
+    state-changing call.
+    """
+    from app.services.users.role_service import RoleService
+
+    try:
+        RoleService.require_developer(account_ctx.user)
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+
+
+@router.post("/account/agents", response_model=AgentPublic)
+async def account_create_agent(
+    body: AccountAgentCreateBody,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Create an agent from the account workspace (thin client).
+
+    Delegates to the normal ``AgentService.create_agent`` path — the backend
+    applies ALL defaults (default AI credentials, default env template,
+    environment creation) exactly as ``POST /api/v1/agents/`` does. Returns the
+    full ``AgentPublic`` record. ``require_developer``-gated (mirrors the UI
+    create route). ``env_name`` is accepted-but-noop in v1 (O1).
+    """
+    _require_developer_account(account_ctx)
+    try:
+        return await AccountCLIService.create_agent(
+            db=db, user=account_ctx.user, body=body, request=request
+        )
+    except WorkspaceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.post("/account/connect/agent-api", response_model=ConnectAgentApiResponse)
+async def account_connect_agent_api(
+    body: AccountConnectAgentApiBody,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Wire a consumer agent to a producer agent's REST API (one-click connect).
+
+    Delegates to ``AgentApiTokenService.connect_agent_api``, which enforces
+    producer ownership (404 no-leak) and consumer ownership (403). 400 if the
+    producer's REST API is disabled. ``require_developer``-gated at the route.
+    """
+    from app.services.agent_api.agent_api_token_service import AgentApiTokenError
+
+    _require_developer_account(account_ctx)
+    try:
+        return await AccountCLIService.connect_agent_api(
+            db=db, user=account_ctx.user, body=body, request=request
+        )
+    except AgentApiTokenError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.get("/account/connect/mcp/discoverable", response_model=DiscoverableAgents)
+def account_list_discoverable_mcp(
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+    consumer_agent_id: uuid.UUID | None = None,
+) -> Any:
+    """
+    Account-token passthrough to the MCP discoverable-agents picker (O2).
+
+    Returns platform agents exposing an agent2agent connector the account user
+    may consume, each with ``connector_id`` so the CLI can map
+    ``--producer <agent>`` → ``connector_id`` before calling connect.
+    """
+    return AccountCLIService.list_discoverable_mcp_agents(
+        db=db, user=account_ctx.user, consumer_agent_id=consumer_agent_id
+    )
+
+
+@router.post("/account/connect/mcp", response_model=MCPProviderConnectionResponse)
+async def account_connect_mcp(
+    body: AccountConnectMcpBody,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Wire a consumer agent to a producer agent's MCP (agent2agent) connector.
+
+    Delegates to ``MCPProviderService.connect_to_agent``, which enforces producer
+    connector ACL membership (403; missing/non-a2a connector → 404 no-leak) and
+    consumer ownership (403). ``require_developer``-gated at the route.
+    """
+    from app.services.mcp_providers.mcp_provider_service import MCPProviderError
+
+    _require_developer_account(account_ctx)
+    try:
+        return await AccountCLIService.connect_mcp(
+            db=db, user=account_ctx.user, body=body, request=request
+        )
+    except MCPProviderError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+# ── Account CLI credential drafting verbs ────────────────────────────────────
+# The account CLI scaffolds credentials as *drafts* (no secret values — the user
+# fills them in the UI) and wires them to agents. SECURITY: none of these routes
+# ever reads or writes a credential's secret value (Decision 6). Listing/updating
+# return metadata-only `CredentialPublic` (never `with-data`); create/update
+# accept no `credential_data`. Reads are open to the account token; writes are
+# `require_developer`-gated like the other convenience verbs.
+
+
+def _raise_credential_value_error(e: ValueError) -> None:
+    """Map a credentials-service ValueError → 404 (not found) or 400."""
+    status_code = (
+        status.HTTP_404_NOT_FOUND
+        if "not found" in str(e).lower()
+        else status.HTTP_400_BAD_REQUEST
+    )
+    raise HTTPException(status_code=status_code, detail=str(e))
+
+
+@router.get("/account/credentials/types", response_model=AccountCredentialTypesPublic)
+def account_list_credential_types(
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Catalogue of credential types + the fields the user must fill per type.
+
+    Lets the orchestrator pick a type and tell the user exactly which secret /
+    config fields they'll need to supply after the draft is created.
+    """
+    return AccountCLIService.list_credential_types()
+
+
+@router.get("/account/credentials", response_model=CredentialsPublic)
+def account_list_credentials(
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+    user_workspace_id: str | None = None,
+) -> Any:
+    """
+    List the account user's credentials (metadata only — no secret values).
+
+    ``user_workspace_id`` follows the standard filter semantics: omitted = all,
+    ``""`` = Default workspace, a UUID = that workspace. Each row carries a
+    ``status`` (``complete`` / ``incomplete``) so the orchestrator can see which
+    drafts still need the user to fill them.
+    """
+    try:
+        return AccountCLIService.list_credentials(
+            db=db, user=account_ctx.user, user_workspace_id=user_workspace_id
+        )
+    except WorkspaceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/account/credentials", response_model=AccountCredentialDraftResult)
+async def account_create_credential(
+    body: AccountCredentialCreateBody,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Create a *draft* credential (no secret value) in the active workspace.
+
+    The credential is created empty (``status="incomplete"``); the response
+    carries ``required_fields`` the user must fill plus a ``setup_url`` deep-link
+    to the Credentials page. ``require_developer``-gated. 404 if
+    ``user_workspace_id`` is not owned by the caller.
+    """
+    _require_developer_account(account_ctx)
+    try:
+        return await AccountCLIService.create_credential_draft(
+            db=db, user=account_ctx.user, body=body, request=request
+        )
+    except WorkspaceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.put("/account/credentials/{credential_id}", response_model=CredentialPublic)
+async def account_update_credential(
+    credential_id: uuid.UUID,
+    body: AccountCredentialUpdateBody,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Update a credential's metadata only (never its secret value).
+
+    ``require_developer``-gated. 404 if the credential doesn't exist or isn't
+    owned by the caller.
+    """
+    _require_developer_account(account_ctx)
+    try:
+        return await AccountCLIService.update_credential_metadata(
+            db=db,
+            user=account_ctx.user,
+            credential_id=credential_id,
+            body=body,
+            request=request,
+        )
+    except ValueError as e:
+        _raise_credential_value_error(e)
+
+
+@router.delete("/account/credentials/{credential_id}", response_model=Message)
+async def account_delete_credential(
+    credential_id: uuid.UUID,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+    force: bool = False,
+) -> Any:
+    """
+    Delete a credential (blast-radius tier-gated).
+
+    ``require_developer``-gated. 409 (with the structured deletion impact) when
+    the credential is publisher-provided in a published bundle with active
+    foreign installs, unless ``?force=true``. 404 if missing / not owned.
+    """
+    from app.services.credentials.credentials_service import CredentialInUseError
+
+    _require_developer_account(account_ctx)
+    try:
+        await AccountCLIService.delete_credential(
+            db=db,
+            user=account_ctx.user,
+            credential_id=credential_id,
+            force=force,
+            request=request,
+        )
+        return Message(message="Credential deleted successfully")
+    except CredentialInUseError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=e.impact.model_dump(mode="json"),
+        )
+    except ValueError as e:
+        _raise_credential_value_error(e)
+
+
+@router.post(
+    "/account/credentials/{credential_id}/share-with-agent",
+    response_model=Message,
+)
+async def account_share_credential_with_agent(
+    credential_id: uuid.UUID,
+    body: AccountCredentialShareBody,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Attach a credential to an agent the account user owns (``share-with-agent``).
+
+    Once the user fills the credential's secret value, its whitelisted fields
+    sync to the agent's environment. ``require_developer``-gated. 404 if the
+    credential or agent is missing / not owned.
+    """
+    _require_developer_account(account_ctx)
+    try:
+        await AccountCLIService.share_credential_with_agent(
+            db=db,
+            user=account_ctx.user,
+            credential_id=credential_id,
+            agent_id=body.agent_id,
+            request=request,
+        )
+        return Message(message="Credential attached to agent successfully")
+    except ValueError as e:
+        _raise_credential_value_error(e)
+
+
+@router.post("/account/api-proxy")
+async def account_api_proxy(
+    body: AccountApiProxyRequest,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Response:
+    """
+    Generic authenticated escape hatch into (most of) the platform API.
+
+    Re-dispatches ``{method, path, query, json_body}`` internally as the account
+    token's owning user (request-scoped backend-only JWT) and returns the inner
+    response status/body verbatim. A single exclusion chokepoint
+    (``assert_api_proxy_allowed``) runs BEFORE dispatch: credential/user-mgmt/
+    admin/CLI/MFA/auth/streaming surfaces are denied (403 ``excluded_path`` /
+    ``excluded_method``; 400 ``malformed_path``). Per-account-token rate-limited
+    (429); request/response size-capped (413/502). The response is a raw
+    passthrough (no ``response_model``) — only the CLI consumes it.
+    """
+    try:
+        return await AccountApiProxyService.proxy(
+            db=db,
+            account_token=account_ctx.cli_token,
+            user=account_ctx.user,
+            req=body,
+            request=request,
+        )
+    except ApiProxyDenied as e:
+        # malformed_path → 400; excluded_path / excluded_method → 403. (The
+        # request model's ``Literal`` method type means a bad method is rejected
+        # 422 by Pydantic before policy runs, so ``excluded_method`` is in
+        # practice only reachable for streaming-route targets.)
+        code = (
+            status.HTTP_400_BAD_REQUEST
+            if e.reason == "malformed_path"
+            else status.HTTP_403_FORBIDDEN
+        )
+        raise HTTPException(status_code=code, detail=e.message)

@@ -36,30 +36,38 @@ class CLIAuthError(Exception):
 class CLIAuthService:
     """Handles JWT creation, decoding, and hashing for CLI token authentication."""
 
+    # Recognised CLI JWT ``token_type`` claims.
+    #   "cli"         — per-agent token (scoped to one agent)
+    #   "cli-account" — account token (no single agent; mint/discover only)
+    VALID_TOKEN_TYPES = ("cli", "cli-account")
+
     @staticmethod
     def create_cli_jwt(
         cli_token_id: uuid.UUID,
-        agent_id: uuid.UUID,
+        agent_id: uuid.UUID | None,
         owner_id: uuid.UUID,
         expires_at: datetime,
+        token_type: str = "cli",
     ) -> str:
         """
         Create a JWT for CLI authentication.
 
         Args:
             cli_token_id: UUID of the CLIToken record (used as JWT `sub`)
-            agent_id: UUID of the agent this token is scoped to
+            agent_id: UUID of the agent this token is scoped to, or ``None``
+                for an account token (``token_type="cli-account"``)
             owner_id: UUID of the token owner
             expires_at: Expiration datetime (timezone-aware)
+            token_type: ``"cli"`` (per-agent) or ``"cli-account"`` (account)
 
         Returns:
             Encoded JWT string
         """
         payload = {
             "sub": str(cli_token_id),
-            "agent_id": str(agent_id),
+            "agent_id": str(agent_id) if agent_id is not None else None,
             "owner_id": str(owner_id),
-            "token_type": "cli",
+            "token_type": token_type,
             "exp": int(expires_at.timestamp()),
         }
         return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
@@ -68,6 +76,9 @@ class CLIAuthService:
     def decode_cli_jwt(token_str: str) -> dict:
         """
         Decode and validate a CLI JWT.
+
+        Accepts both ``"cli"`` and ``"cli-account"`` token types — callers
+        (the per-agent vs account deps) decide which one they require.
 
         Args:
             token_str: The JWT string to decode
@@ -89,7 +100,7 @@ class CLIAuthService:
         except jwt.InvalidTokenError as e:
             raise ValueError(f"Invalid CLI token: {e}")
 
-        if payload.get("token_type") != "cli":
+        if payload.get("token_type") not in CLIAuthService.VALID_TOKEN_TYPES:
             raise ValueError("Token is not a CLI token")
 
         return payload

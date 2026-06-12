@@ -17,6 +17,7 @@ from app.models import (
     AgentEnvironmentUpdate,
     AgentEnvironmentReconfigure,
     AgentEnvironmentPublic,
+    UsageIntentResponse,
     Message,
 )
 from app.services.environments.environment_service import (
@@ -114,6 +115,41 @@ def get_environment(
         return EnvironmentService.to_public_with_health(session, environment)
     except AgentEnvironmentError as e:
         _handle_service_error(e)
+
+
+@router.post("/{id}/usage-intent", response_model=UsageIntentResponse)
+def register_environment_usage_intent(
+    session: SessionDep, current_user: CurrentUser, id: uuid.UUID
+) -> Any:
+    """
+    Signal intent to use an environment (REST fallback for the WebSocket
+    ``agent_usage_intent`` event).
+
+    Bumps ``last_activity_at`` and triggers background activation when the
+    resolved environment is suspended. Unlike the WebSocket handler, this route
+    enforces ownership/access control (mirrors ``GET /environments/{id}``).
+    """
+    from app.services.environments.usage_intent import register_usage_intent
+
+    # Access control: same check used by GET /environments/{id}. Raises 404/403
+    # via AgentEnvironmentError if the user may not access this environment.
+    try:
+        EnvironmentService.get_environment_with_access_check(
+            session, id, current_user.id, current_user.is_superuser
+        )
+    except AgentEnvironmentError as e:
+        _handle_service_error(e)
+
+    try:
+        return register_usage_intent(
+            db_session=session,
+            user_id=current_user.id,
+            environment_id=id,
+        )
+    except ValueError as e:
+        # The access check above already resolved the env, so this is unexpected;
+        # surface as 404 to match "not found" semantics.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 
 @router.patch("/{id}", response_model=AgentEnvironmentPublic)

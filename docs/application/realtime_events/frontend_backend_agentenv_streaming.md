@@ -80,7 +80,8 @@ On message refetch (every 2s):
 | Scenario | Behavior |
 |----------|----------|
 | Page refresh | API returns ALL events (DB + in-memory buffer via ActiveStreamingManager). Zero gap. WS reconnects for live updates. |
-| WS disconnect mid-stream | Events stop arriving live. Message refetch returns complete list from API (DB + in-memory). No data loss. |
+| WS disconnect mid-stream | Events stop arriving live. Message refetch returns complete list from API (DB + in-memory). No data loss. WS retries forever; `ConnectionBanner` appears after ~3 s. |
+| WS permanently lost (e.g. backend deploy) | `sendMessage` fires the REST POST unconditionally. Streaming content recovers via DB polling. Banner remains until reconnect or page reload. |
 | WS never connects | Pure polling mode. API always returns complete events. Fully functional, just not real-time. |
 | Duplicate event (same seq from DB and WS) | Skip - already in list. No double rendering. |
 | Gap detected (seq jumps) | Trigger immediate message refetch. API provides all events including in-memory ones. |
@@ -91,11 +92,11 @@ On message refetch (every 2s):
 ### 1. Sending a Message
 
 **Frontend** (`useSessionStreaming.ts:sendMessage`):
-- Subscribes to session-specific WebSocket room: `session_{session_id}_stream`
-- Subscribes to `stream_event` events via `eventService`
-- Sends POST to `/api/v1/sessions/{session_id}/messages/stream`
-- Optimistically adds user message to cache
+- Optimistically inserts the user message into the React Query cache first (before any WS/network call)
+- Fires `subscribeToRoom("session_{session_id}_stream")` as **fire-and-forget** — not awaited; a dead/disconnected socket resolves the promise immediately (room is tracked in `activeRooms` and re-subscribed on reconnect)
+- Sends POST to `/api/v1/sessions/{session_id}/messages/stream` **unconditionally** — WebSocket state never gates the REST call
 - Invalidates session query after 200ms to detect `interaction_status` change
+- On error: removes optimistic message, resets the send guard (allows retry), and re-throws so the caller can restore the message text and preserve URL params
 
 **Backend API** (`messages.py:send_message_stream`):
 - Validates session ownership
@@ -250,9 +251,10 @@ const isStreaming = session?.interaction_status === "running"
 - No completion polling - session query detects completion via `interaction_status` change
 - No message polling fallback - DB content always current (within 2s via incremental saves)
 - Index-based dedup prevents any double-rendering
+- `sendMessage` never awaits WS room subscription — REST POST is always unconditional
 
 **State transitions**:
-1. `isStreaming` becomes `true` → subscribe to WS room, initialize event list
+1. `isStreaming` becomes `true` → subscribe to WS room (fire-and-forget), initialize event list
 2. WS events arrive → append to list (deduplicated by `event_seq`)
 3. Message query refetches (every 2s) → merge DB events into list (fill gaps)
 4. `session_interaction_status_changed` WS event received → invalidate session query
@@ -640,10 +642,12 @@ Agent uses TodoWrite → Backend detects tool event → Session.todo_progress up
 ### WebSocket-Specific Errors
 
 **Connection Errors**:
-- Frontend: `eventService` handles reconnection automatically and re-subscribes to tracked rooms
+- Frontend: `eventService` retries forever (`reconnectionAttempts: Infinity`), backoff capped at 30 s, and re-subscribes to all tracked rooms on reconnect
+- `ConnectionBanner` (amber overlay, top of all authenticated pages) appears after ~3 s of continuous `disconnected` status; hides immediately on reconnect; provides a "Refresh page" button and nudges `ensureConnected()` every 12 s while visible
 - Backend: No change needed - WebSocket delivery is fire-and-forget
 - Events missed during WS disconnection are recovered via message query polling (every 2s)
 - Message query always returns complete data (DB + in-memory merge from ActiveStreamingManager)
+- `sendMessage` never waits for WS room subscription; the REST POST always fires regardless of socket state
 
 **Backend Errors** (`initiate_stream` → `process_pending_messages`):
 - Catches exceptions during environment activation or message processing
@@ -681,14 +685,17 @@ Same mechanism as page refresh - derived state from session query handles everyt
 
 ### WebSocket Reconnection During Streaming
 
-**Problem**: Socket.IO may reconnect (transport upgrade, network blip) and get a new socket ID.
+**Problem**: Socket.IO may reconnect (transport upgrade, network blip, or backend deploy) and get a new socket ID.
 
 **Solution** (`eventService.ts`):
-1. `subscribeToRoom()` adds room to `activeRooms` set (persists intent)
+1. `subscribeToRoom()` adds room to `activeRooms` set (persists intent); a failed/timed-out ack resolves (never rejects) — the room stays tracked
 2. On Socket.IO `connect` event: re-emits `subscribe` for all tracked rooms
 3. Any events missed during disconnection are recovered via message query refetch
+4. `reconnectionAttempts: Infinity` — the client retries forever (no 5-attempt hard stop); `reconnectionDelayMax: 30000` caps the backoff at 30 seconds
+5. `ensureConnected()` method — best-effort recovery nudge: reconnects an existing disconnected socket, or re-creates the connection if the socket was torn down (uses `lastUserId` stored on first `connect()`)
+6. Window event listeners (registered once, guarded): `online`, `focus`, and `visibilitychange` (when tab becomes visible) all call `ensureConnected()`
 
-**User Experience**: WS reconnects and room subscription restored automatically. Missed events filled by next message query poll (within 2s). No user-visible interruption.
+**User Experience**: WS reconnects and room subscription restored automatically. Missed events filled by next message query poll (within 2s). No user-visible interruption. After a permanent disconnect (≥3 s), the `ConnectionBanner` overlay appears (see File Reference).
 
 ### Backend Restart During Streaming
 
@@ -769,10 +776,12 @@ await active_streaming_manager.update_last_flushed_seq(session_id, flush_seq)
 ## File Reference
 
 ### Frontend
-- `hooks/useSessionStreaming.ts` - Streaming hook with derived state, seq-based dedup, unified event list
-- `services/eventService.ts` - Socket.IO client, stream_event handling, room management
-- `routes/_layout/session/$sessionId.tsx` - Session page with dynamic polling and WS status listener
-- `components/Chat/MessageInput.tsx` - Send/stop UI
+- `hooks/useSessionStreaming.ts` - Streaming hook with derived state, seq-based dedup, unified event list; `sendMessage` uses fire-and-forget WS subscribe and always fires the REST POST
+- `services/eventService.ts` - Socket.IO client, stream_event handling, room management; `reconnectionAttempts: Infinity`, `reconnectionDelayMax: 30000`, `ensureConnected()` method, window `online`/`focus`/`visibilitychange` recovery listeners; all WS emits (`subscribeToRoom`, `unsubscribeFromRoom`, `sendAgentUsageIntent`) guarded and always-settling
+- `routes/_layout/session/$sessionId.tsx` - Session page with dynamic polling and WS status listener; App button shows "Activating..." (spinner, only for activating/starting/rebuilding) vs "Suspended" (muted static label) vs normal; session-title animated placeholder only when ≥1 message exists; initial-message URL params cleared only after successful send, restored on failure
+- `routes/_layout.tsx` - Authenticated layout; mounts `ConnectionBanner`
+- `components/Common/ConnectionBanner.tsx` - Amber WS-disconnect banner; appears after ~3 s of `disconnected` status, hides on reconnect; "Refresh page" button; nudges `ensureConnected()` every 12 s while visible
+- `components/Chat/MessageInput.tsx` - Send/stop UI; accepts `seed` prop to restore failed-send text
 - `components/Chat/MessageBubble.tsx` - Message display with streaming indicator for in-progress messages
 - `components/Chat/StreamEventRenderer.tsx` - Event rendering by type (uses `event_seq` for keys)
 - `components/Chat/MessageList.tsx` - Message list, renders in-progress messages with indicator
@@ -781,12 +790,14 @@ await active_streaming_manager.update_last_flushed_seq(session_id, flush_seq)
 - `routes/_layout/tasks.tsx` - Tasks list with real-time todo progress updates
 
 ### Backend
+- `api/routes/environments.py` - `POST /environments/{id}/usage-intent` REST endpoint (response model `UsageIntentResponse{status, message, environment_id}`); access control mirrors `GET /environments/{id}`
 - `api/routes/messages.py` - Message endpoints with in-memory event merge and DB-based streaming status
 - `services/sessions/session_service.py` - Stream lifecycle handlers, `session_interaction_status_changed` emission
 - `services/sessions/message_service.py` - `stream_message_with_events()` with event_seq, incremental flush, TodoWrite detection
 - `services/sessions/stream_processor.py` - `SessionStreamProcessor`: unified streaming pipeline (collect → mark sent → stream → finalize) with `StreamEventHandler` protocol and per-session locking
 - `services/sessions/stream_event_handlers.py` - `WebSocketEventHandler` (UI), `MCPEventHandler` (MCP progress), `A2AStreamEventHandler` (A2A SSE mapping)
-- `services/events/event_service.py` - EventService with emit_stream_event() and backend event handlers
+- `services/events/event_service.py` - EventService with emit_stream_event() and backend event handlers; `agent_usage_intent` WS handler delegates to `register_usage_intent` (shared with the REST route)
+- `services/environments/usage_intent.py` - `register_usage_intent()`: shared logic for both WS and REST entry points — resolves to the agent's active env, bumps `last_activity_at`, background-activates suspended envs
 - `services/sessions/active_streaming_manager.py` - Stream tracking with in-memory event buffer
 - `services/activity_service.py` - Event handlers for streaming lifecycle
 - `services/input_task_service.py` - handle_todo_list_updated() for task todo propagation
@@ -861,7 +872,8 @@ Store IDs and fetch fresh objects with a new DB session in the background task.
 
 - `backend/app/utils.py` - `create_task_with_error_logging()` utility function
 - `backend/app/services/sessions/session_service.py` - `initiate_stream()`, `process_pending_messages()`, stream event handlers
-- `backend/app/services/events/event_service.py` - `agent_usage_intent` handler
+- `backend/app/services/events/event_service.py` - `agent_usage_intent` handler (delegates to `register_usage_intent`)
+- `backend/app/services/environments/usage_intent.py` - `register_usage_intent()` shared by both WS handler and REST route
 - `backend/app/services/sessions/message_service.py` - `_flush_streaming_content` (runs in background thread)
 
 ## Future Enhancements

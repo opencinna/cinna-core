@@ -164,6 +164,7 @@ from .environments.environment import (
     AgentEnvironmentReconfigure,
     AgentEnvironmentPublic,
     AgentEnvironmentsPublic,
+    UsageIntentResponse,
     AdminAgentEnvironmentPublic,
     AdminAgentEnvironmentsPublic,
     AdminTemplateInfoPublic,
@@ -534,6 +535,16 @@ from .cli.cli_setup_token import (
     CLISetupTokenPublic,
     CLISetupTokenCreated,
 )
+from .cli.account_agent import (
+    AccountAgentListItem,
+    AccountAgentsPublic,
+)
+from .cli.account_convenience import (
+    AccountAgentCreateBody,
+    AccountConnectAgentApiBody,
+    AccountConnectMcpBody,
+    AccountApiProxyRequest,
+)
 from .cli.cli_token import (
     CLIToken,
     CLITokenBase,
@@ -542,6 +553,8 @@ from .cli.cli_token import (
     CLITokenCreated,
     CLITokensPublic,
     CLITokenPayload,
+    CLIAccountTokenPublic,
+    CLIAccountTokensPublic,
 )
 from .agentic_teams.agentic_team import (
     AgenticTeam,
@@ -807,6 +820,7 @@ __all__ = [
     "AgentEnvironmentReconfigure",
     "AgentEnvironmentPublic",
     "AgentEnvironmentsPublic",
+    "UsageIntentResponse",
     # Admin Environments (admin-only schemas)
     "AdminAgentEnvironmentPublic",
     "AdminAgentEnvironmentsPublic",

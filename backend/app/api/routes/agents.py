@@ -524,13 +524,15 @@ def _handle_schedule_error(e: ScheduleError) -> None:
 def _is_foreign_install(agent: Agent) -> bool:
     """True for a consumer (bundle-owned, non-publisher) install.
 
+    Thin re-export of ``AgentService.is_foreign_install`` — the single
+    shared predicate. Kept here to avoid churn at this route's call-sites.
     Schedules on such installs are entirely publisher-authored: the
     consumer may enable/disable, Run now, and view logs, but cannot
     create / edit / delete the definitions. Publisher installs
     (``is_publisher_install=True``) and standalone agents
     (``bundle_uuid is None``) stay fully editable.
     """
-    return agent.bundle_uuid is not None and not agent.is_publisher_install
+    return AgentService.is_foreign_install(agent)
 
 
 def _guard_foreign_schedule_write(agent: Agent) -> None:
