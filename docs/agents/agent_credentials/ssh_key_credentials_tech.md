@@ -21,7 +21,7 @@
 
 ### Dockerfiles (updated)
 - `backend/app/env-templates/general-env/Dockerfile`
-- `backend/app/env-templates/general-assistant-env/Dockerfile`
+- `backend/app/env-templates/platform-knowledge-env/Dockerfile`
 - `backend/app/env-templates/python-env-advanced/Dockerfile`
 
 All three add `openssh-client` to the apt-install list, providing `ssh`, `ssh-keyscan`, and `scp` to containers.

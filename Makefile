@@ -171,9 +171,9 @@ backfill-router-trigger-prompts-dry-run: # dry-run: report what backfill-router-
 check-docs: # check documentation for broken file references
 	python3 .cinna-core-kit/scripts/check_docs_references.py
 
-.PHONY: sync-ga-knowledge
-sync-ga-knowledge: # sync docs + auto-generate API reference into GA env template
-	python3 .cinna-core-kit/scripts/sync_ga_knowledge.py
+.PHONY: sync-platform-knowledge
+sync-platform-knowledge: # sync docs + auto-generate API reference into platform-knowledge env template
+	python3 .cinna-core-kit/scripts/sync_platform_knowledge.py
 
 .PHONY: mcp-inspector
 mcp-inspector: # run mcp inspector for local development and testing

@@ -190,7 +190,7 @@ Bulk-marks all pre-deploy command system messages with `forwarded_to_llm_at` to 
 
 **File:** `backend/app/main.py`
 
-Handler registrations are now driven by the **Synced Workspace File Registry** (`backend/app/services/environments/synced_files.py`) rather than hand-listed blocks. For the `"cli_commands"` pull-only entry (`docs/CLI_COMMANDS.yaml`), the registry loop registers `CLICommandsService.handle_post_action_event` against all 7 post-action events:
+Handler registrations are now driven by the **Synced Workspace File Registry** (`backend/app/services/environments/synced_files.py`) rather than hand-listed blocks. For the `"cli_commands"` pull-only entry (`docs/CLI_COMMANDS.yaml` — a path inside the agent container workspace), the registry loop registers `CLICommandsService.handle_post_action_event` against all 7 post-action events: <!-- nocheck -->
 
 ```python
 _POST_ACTION_EVENTS = (
@@ -283,7 +283,7 @@ with create_db_session() as db:
 
 Starter `CLI_COMMANDS.yaml` files (with `commands: []`) were added to:
 - `backend/app/env-templates/general-env/app/workspace/docs/CLI_COMMANDS.yaml`
-- `backend/app/env-templates/general-assistant-env/app/workspace/docs/CLI_COMMANDS.yaml`
+- `backend/app/env-templates/platform-knowledge-env/app/workspace/docs/CLI_COMMANDS.yaml`
 - `backend/app/env-templates/python-env-advanced/app/workspace/docs/CLI_COMMANDS.yaml`
 
 The `app_core_base` template includes an "Exposed CLI Commands" section in `core/prompts/COMPLEX_AGENT_DESIGN.md` covering the file format, security hygiene, A2A skill surfacing, and when to maintain the file.

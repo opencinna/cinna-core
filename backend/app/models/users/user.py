@@ -69,7 +69,6 @@ class UserUpdateMe(SQLModel):
     default_sdk_building: str | None = Field(default=None, max_length=50)
     default_ai_functions_sdk: str | None = Field(default=None, max_length=50)
     default_ai_functions_credential_id: uuid.UUID | None = None
-    general_assistant_enabled: bool | None = None
     workspaces_enabled: bool | None = None
     # Default credential and model override per mode
     default_ai_credential_conversation_id: uuid.UUID | None = None
@@ -111,8 +110,6 @@ class User(UserBase, table=True):
     # Default model override per mode
     default_model_override_conversation: str | None = Field(default=None, max_length=255)
     default_model_override_building: str | None = Field(default=None, max_length=255)
-    # General Assistant feature flag
-    general_assistant_enabled: bool = Field(default=False)
     # Whether the UI applies workspace filters to list queries. When False,
     # the sidebar workspace switcher is hidden and queries return every
     # owned entity regardless of `user_workspace_id`.
@@ -140,7 +137,6 @@ class UserPublic(UserBase):
     default_sdk_building: str | None = SDK_ANTHROPIC
     default_ai_functions_sdk: str | None = "system"
     default_ai_functions_credential_id: uuid.UUID | None = None
-    general_assistant_enabled: bool = False
     workspaces_enabled: bool = False
     # Default credential and model override per mode
     default_ai_credential_conversation_id: uuid.UUID | None = None

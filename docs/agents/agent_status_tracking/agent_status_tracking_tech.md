@@ -52,12 +52,12 @@
 **Generated client**
 - `frontend/src/client/sdk.gen.ts` — `AgentsService.getAgentStatus({ agentId, forceRefresh? })`, `AgentsService.listAgentStatuses({ workspaceId? })`, `AgentsService.updateAgent({ id, requestBody })` (auto-generated; do not edit)
 
-### Env Template (App Core / General Assistant)
+### Env Template (App Core / Platform Knowledge)
 
 - `backend/app/env-templates/app_core_base/core/prompts/COMPLEX_AGENT_DESIGN.md` — "Agent Self-Reported Status" section + cross-link from "Rules for OK-pattern scripts"
 - `backend/app/env-templates/app_core_base/core/main.py` — agent-env FastAPI startup (no status-related wiring — the backend pulls STATUS.md on demand)
-- `backend/app/env-templates/general-assistant-env/app/workspace/scripts/update_status.py` — helper CLI (`--status`, `--summary`, `--details-file`); writes to `/app/workspace/app-data/storage/STATUS.md` with atomic temp-file + rename. No placeholder file is shipped: `STATUS.md` is per-install state, not bundle content, and the platform creates `app-data/storage/` at install time
-- `backend/app/env-templates/general-assistant-env/app/workspace/knowledge/platform/agents/agent_commands/agent_status_command.md` — synced from `docs/agents/agent_commands/agent_status_command.md`
+- `backend/app/env-templates/platform-knowledge-env/app/workspace/scripts/update_status.py` — helper CLI (`--status`, `--summary`, `--details-file`); writes to `/app/workspace/app-data/storage/STATUS.md` with atomic temp-file + rename. No placeholder file is shipped: `STATUS.md` is per-install state, not bundle content, and the platform creates `app-data/storage/` at install time
+- `backend/app/env-templates/platform-knowledge-env/app/workspace/knowledge/platform/agents/agent_commands/agent_status_command.md` — synced from `docs/agents/agent_commands/agent_status_command.md`
 
 ## Database Schema
 

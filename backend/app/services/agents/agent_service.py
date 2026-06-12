@@ -121,7 +121,7 @@ class AgentService:
 
         Mirrors the access set ``list_agents`` returns for the user, which is
         always owner-scoped (``Agent.owner_id == user_id``). Foreign-bundle
-        installs and General Assistants are themselves per-user owned rows
+        installs are themselves per-user owned rows
         (each carries the consuming user's ``owner_id``), so ownership alone
         fully captures the access set — there is no cross-tenant visibility.
 
@@ -226,7 +226,6 @@ class AgentService:
             pending_update_at=agent.pending_update_at,
             last_sync_at=agent.last_sync_at,
             last_update_status=agent.last_update_status,
-            is_general_assistant=agent.is_general_assistant,
             publish_settings=agent.publish_settings or {},
         )
 
@@ -270,9 +269,8 @@ class AgentService:
         if apply_workspace_filter:
             # Include agents in the requested workspace, plus foreign-bundle
             # installs (workspace-agnostic — they have user_workspace_id=None
-            # and bundle_uuid set, but is_publisher_install is False) and the
-            # General Assistant. Plain default-workspace agents are NOT shown
-            # in non-default views.
+            # and bundle_uuid set, but is_publisher_install is False). Plain
+            # default-workspace agents are NOT shown in non-default views.
             foreign_install_condition = and_(
                 Agent.bundle_uuid.is_not(None),
                 Agent.is_publisher_install == False,
@@ -281,7 +279,6 @@ class AgentService:
             workspace_condition = or_(
                 Agent.user_workspace_id == workspace_filter,
                 foreign_install_condition,
-                Agent.is_general_assistant == True,
             )
             count_statement = count_statement.where(workspace_condition)
             statement = statement.where(workspace_condition)
@@ -530,10 +527,6 @@ class AgentService:
         agent = session.get(Agent, agent_id)
         if not agent:
             return False
-
-        # Guard: General Assistant cannot be deleted
-        if agent.is_general_assistant:
-            raise ValueError("The General Assistant cannot be deleted")
 
         # Mark the per-user app-data volume orphaned BEFORE deleting the row.
         # ``AppDataService.wipe_volume`` requires ``is_orphaned=true``, and

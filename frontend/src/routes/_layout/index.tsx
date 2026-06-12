@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { useEffect, useState, useMemo, Fragment, KeyboardEvent, DragEvent } from "react"
+import { useEffect, useState, useMemo, KeyboardEvent, DragEvent } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate, useSearch } from "@tanstack/react-router"
 
@@ -239,9 +239,7 @@ function Dashboard() {
   )
 
   const sortedAgents = useMemo(() => {
-    const ga = agentsWithActiveEnv.filter((a) => a.is_general_assistant)
-    const regular = agentsWithActiveEnv.filter((a) => !a.is_general_assistant)
-    return [...ga, ...regular]
+    return agentsWithActiveEnv
   }, [agentsWithActiveEnv])
 
   useEffect(() => {
@@ -309,14 +307,11 @@ function Dashboard() {
     setInputError(null)
   }, [selectedAgentId, agentsWithActiveEnv, inputMode])
 
-  // Force building mode when GA agent is selected; force conversation mode
-  // for foreign (consumer) bundle installs — those are use-only and cannot
-  // be built, regardless of the viewer's role.
+  // Force conversation mode for foreign (consumer) bundle installs — those are
+  // use-only and cannot be built, regardless of the viewer's role.
   useEffect(() => {
     const selectedAgent = agentsWithActiveEnv.find((a) => a.id === selectedAgentId)
-    if (selectedAgent?.is_general_assistant && mode !== "building") {
-      setMode("building")
-    } else if (
+    if (
       !!selectedAgent?.bundle_uuid &&
       !selectedAgent?.is_publisher_install &&
       mode !== "conversation"
@@ -579,33 +574,23 @@ function Dashboard() {
           {/* Agent Selector Pills */}
           <div className="space-y-2">
             <div className="flex flex-wrap gap-2 items-center">
-              {sortedAgents.map((agent, index) => {
+              {sortedAgents.map((agent) => {
                 const colorPreset = getColorPreset(agent.ui_color_preset)
                 const isSelected = selectedAgentId === agent.id
-                const isLastGA =
-                  agent.is_general_assistant &&
-                  (index === sortedAgents.length - 1 || !sortedAgents[index + 1]?.is_general_assistant)
                 return (
-                  <Fragment key={agent.id}>
-                    <button
-                      className={`
-                        cursor-pointer px-4 py-2 text-sm rounded-md transition-all inline-flex items-center gap-1.5
-                        ${colorPreset.badgeBg}
-                        ${colorPreset.badgeText}
-                        ${colorPreset.badgeHover}
-                        ${isSelected ? colorPreset.badgeOutline : ""}
-                      `}
-                      onClick={() => handleAgentClick(agent.id)}
-                    >
-                      {agent.is_general_assistant && (
-                        <Sparkles className="h-3.5 w-3.5" />
-                      )}
-                      {agent.name}
-                    </button>
-                    {isLastGA && sortedAgents.some((a) => !a.is_general_assistant) && (
-                      <div className="h-6 w-px bg-border mx-1" />
-                    )}
-                  </Fragment>
+                  <button
+                    key={agent.id}
+                    className={`
+                      cursor-pointer px-4 py-2 text-sm rounded-md transition-all inline-flex items-center gap-1.5
+                      ${colorPreset.badgeBg}
+                      ${colorPreset.badgeText}
+                      ${colorPreset.badgeHover}
+                      ${isSelected ? colorPreset.badgeOutline : ""}
+                    `}
+                    onClick={() => handleAgentClick(agent.id)}
+                  >
+                    {agent.name}
+                  </button>
                 )
               })}
               {/* New Agent Badge */}
@@ -764,12 +749,11 @@ function Dashboard() {
                   </Dialog>
                 ) : (() => {
                   const selectedAgent = agentsWithActiveEnv.find((a) => a.id === selectedAgentId)
-                  const isGASelected = selectedAgent?.is_general_assistant ?? false
                   // Foreign (consumer) bundle installs are use-only: hide the
                   // Building-mode switch for every role, not just agent-users.
                   const isForeignSelected =
                     !!selectedAgent?.bundle_uuid && !selectedAgent?.is_publisher_install
-                  if (isGASelected || isAgentUser || isForeignSelected) {
+                  if (isAgentUser || isForeignSelected) {
                     return null
                   }
                   return (

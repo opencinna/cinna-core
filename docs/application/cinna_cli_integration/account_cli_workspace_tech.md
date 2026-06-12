@@ -160,17 +160,17 @@
   - `_cache: tuple[str, bytes] | None` — process-local class variable; guarded by
     `threading.Lock()` for concurrent requests.
 
-- `backend/app/services/cli/ga_knowledge_assets.py` — shared generation module
-  for General-Assistant platform knowledge:
-  - `ga_platform_knowledge_dir()` — resolves the path to
-    `<ENV_TEMPLATES_DIR>/general-assistant-env/app/workspace/knowledge/platform/`
+- `backend/app/services/cli/platform_knowledge_assets.py` — shared generation module
+  for the platform's self-knowledge snapshot:
+  - `platform_knowledge_dir()` — resolves the path to
+    `<ENV_TEMPLATES_DIR>/platform-knowledge-env/app/workspace/knowledge/platform/`
     (lazy import of `app.core.config` so the module can be imported by the
     repo-root sync script without triggering backend Settings validation).
-  - `ga_example_scripts_dir()` — resolves
-    `<ENV_TEMPLATES_DIR>/general-assistant-env/app/workspace/scripts/examples/`.
-  - `ga_guides_dir()` — resolves
-    `<ENV_TEMPLATES_DIR>/general-assistant-env/app/workspace/knowledge/guides/`
-    (Phase 4). Sibling of `knowledge/platform/`; outside the `sync_ga_knowledge.py`
+  - `example_scripts_dir()` — resolves
+    `<ENV_TEMPLATES_DIR>/platform-knowledge-env/app/workspace/scripts/examples/`.
+  - `guides_dir()` — resolves
+    `<ENV_TEMPLATES_DIR>/platform-knowledge-env/app/workspace/knowledge/guides/`
+    (Phase 4). Sibling of `knowledge/platform/`; outside the `sync_platform_knowledge.py`
     rmtree target, so the docs sync never touches it.
   - `generate_api_reference(spec)` — groups OpenAPI paths by tag, skips
     `SKIP_TAGS` (`login`, `oauth`, `private`, `utils`, `items`, `mcp-oauth`,
@@ -182,7 +182,7 @@
     with a table of domain → filename → endpoint count.
   - This module is the single source of truth for both the backend endpoint
     (`context_package_service.py`) and the repo-root sync script
-    (`.cinna-core-kit/scripts/sync_ga_knowledge.py`), which imports from it.
+    (`.cinna-core-kit/scripts/sync_platform_knowledge.py`), which imports from it.
 
 - `backend/app/services/cli/account_cli_service.py` — `AccountCLIService`:
   all static methods (mirrors `CLIService` style):
@@ -399,7 +399,7 @@ Response:
 
 | Method | Path | Status codes | Description |
 |--------|------|--------------|-------------|
-| `GET` | `/api/v1/cli/account/context-package` | 200 / 503 | Download orchestrator context package (`application/tar+gzip`); all members under `context/`; 503 if GA snapshot missing from this deployment |
+| `GET` | `/api/v1/cli/account/context-package` | 200 / 503 | Download orchestrator context package (`application/tar+gzip`); all members under `context/`; 503 if platform knowledge snapshot is missing from this deployment |
 | `GET` | `/api/v1/cli/account/user-workspaces` | 200 | List the account user's own workspaces (catalogue for `cinna account user-workspace`); response `UserWorkspacesPublic` |
 | `GET` | `/api/v1/cli/account/agents` | 200 | List accessible agents with `can_build` / `is_foreign_install` / `has_active_environment` |
 | `POST` | `/api/v1/cli/account/agents/{agent_id}/mint` | 200 / 403 / 404 | Mint per-agent child token; 403 / 404 on `can_build` failures |

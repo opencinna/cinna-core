@@ -258,7 +258,7 @@ Entries are upserted on every `cinna setup` (refreshing the token) and removed b
 
 ### Docker image
 
-- `mutagen-agent` binary baked into the agent env Dockerfile at the pinned `MUTAGEN_VERSION` build arg (see `backend/app/env-templates/general-env/Dockerfile`, `general-assistant-env/Dockerfile`, `python-env-advanced/Dockerfile`)
+- `mutagen-agent` binary baked into the agent env Dockerfile at the pinned `MUTAGEN_VERSION` build arg (see `backend/app/env-templates/general-env/Dockerfile`, `platform-knowledge-env/Dockerfile`, `python-env-advanced/Dockerfile`)
 - Installed at `/usr/local/bin/mutagen-agent`; version recorded at `/etc/mutagen-agent.version`
 - The Dockerfile build arg and `settings.MUTAGEN_VERSION` must stay in lockstep — the CLI fails fast when `GET /sync-runtime` reports a version the local Mutagen can't speak
 

@@ -345,29 +345,6 @@ def test_agent_user_cannot_start_building_mode_session(
                "environment" in r.json()["detail"].lower()
 
 
-def test_agent_user_cannot_generate_general_assistant(client: TestClient) -> None:
-    """``POST /users/me/general-assistant`` is developer-only.
-
-    The route creates a real ``Agent`` row, so the same role gate
-    applied to ``POST /agents/`` applies here — without it an
-    agent-user could bypass agent-creation gating via this path.
-    """
-    user, headers = _make_user(client)
-    create_random_ai_credential(client, headers, set_default=True)
-
-    # Enable the GA feature on the user's profile (not enough to
-    # bypass the role gate — feature flag and role are independent).
-    r = client.patch(
-        f"{API}/users/me",
-        headers=headers,
-        json={"general_assistant_enabled": True},
-    )
-    assert r.status_code == 200
-
-    r = client.post(f"{API}/users/me/general-assistant", headers=headers)
-    assert r.status_code == 403
-
-
 # ── Message-send building-mode gating ─────────────────────────────
 
 

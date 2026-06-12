@@ -36,7 +36,7 @@
 - `backend/app/env-templates/app_core_base/core/server/adapters/claude_code_sdk_adapter.py` — reads `MODEL_BUILDING` / `MODEL_CONVERSATION` env vars and sets `options.model`
 - `backend/app/env-templates/general-env/docker-compose.template.yml` — forwards `MODEL_BUILDING` / `MODEL_CONVERSATION` into the container
 - `backend/app/env-templates/python-env-advanced/docker-compose.template.yml` — same forwarding
-- `backend/app/env-templates/general-assistant-env/docker-compose.template.yml` — same forwarding
+- `backend/app/env-templates/platform-knowledge-env/docker-compose.template.yml` — same forwarding
 
 ### Frontend
 

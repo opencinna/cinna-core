@@ -112,8 +112,6 @@ class PublishService:
             raise ValueError("Only the install owner may publish")
         if install.bundle_id is None:
             raise ValueError("Install has no bundle_id (data integrity error)")
-        if install.is_general_assistant:
-            raise ValueError("The General Assistant cannot be published as a bundle")
 
         # Apply the bundle_id override on first publish.
         if bundle_id_override is not None:

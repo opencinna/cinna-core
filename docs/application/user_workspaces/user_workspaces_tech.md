@@ -206,7 +206,6 @@ Database schema reference: `backend/app/models/users/user.py` (`User` table mode
 ```
 user_workspace_id == workspace_filter
 OR (bundle_uuid IS NOT NULL AND is_publisher_install = false AND user_workspace_id IS NULL)
-OR is_general_assistant = true
 ```
 
 Foreign-bundle installs are workspace-agnostic — they have `user_workspace_id IS NULL` because they were created from another publisher's bundle and never assigned to a workspace. Including them in every workspace view keeps installed bundles reachable regardless of which workspace the user is currently viewing. Plain default-workspace agents (NULL workspace, no bundle linkage) are NOT included by this OR — they only appear when the active filter itself targets the Default workspace.

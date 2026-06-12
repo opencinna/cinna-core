@@ -8,7 +8,6 @@ from app.api.deps import (
     CurrentUser,
     SessionDep,
     get_current_active_superuser,
-    require_developer,
 )
 from app.core.config import settings
 from app.services.users.user_service import UserService
@@ -28,7 +27,6 @@ from app.models import (
     UserUpdate,
     UserUpdateMe,
 )
-from app.models.agents.agent import AgentPublic
 from app.models.users.user import (
     AIServiceCredentials,
     AIServiceCredentialsUpdate,
@@ -272,37 +270,6 @@ def set_password_me(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return Message(message="Password set successfully")
-
-
-@router.post(
-    "/me/general-assistant",
-    response_model=AgentPublic,
-    dependencies=[Depends(require_developer)],
-)
-async def generate_general_assistant(
-    *, session: SessionDep, current_user: CurrentUser
-) -> Any:
-    """
-    Create the General Assistant agent for the current user.
-
-    Phase 3 — restricted to ``agent-developer`` and ``admin`` roles.
-    The General Assistant creates a real ``Agent`` row, so the same
-    role gate applied to ``POST /agents/`` applies here.
-
-    Returns HTTP 409 if a General Assistant already exists for this user.
-    Returns HTTP 400 if the General Assistant feature is not enabled on the account.
-    """
-    from app.services.users.general_assistant_service import GeneralAssistantService
-
-    try:
-        agent = await GeneralAssistantService.ensure_or_create(session, current_user)
-    except GeneralAssistantService.NotEnabledError:
-        raise HTTPException(status_code=400, detail="Enable General Assistant in your profile first")
-    except GeneralAssistantService.AlreadyExistsError:
-        raise HTTPException(status_code=409, detail="General Assistant already exists")
-
-    from app.services.agents.agent_service import AgentService
-    return AgentService.to_public_with_clone_info(session, agent)
 
 
 @router.get("/me", response_model=UserPublic)

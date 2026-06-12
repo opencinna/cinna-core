@@ -93,13 +93,6 @@ class Agent(AgentBase, table=True):
             unique=True,
             postgresql_where=text("is_publisher_install = true"),
         ),
-        # Partial unique index: one General Assistant per user
-        Index(
-            "ix_agent_general_assistant_per_user",
-            "owner_id",
-            postgresql_where=text("is_general_assistant = true"),
-            unique=True,
-        ),
         # One install per (owner, bundle_id, slot) — the slot is
         # ``is_publisher_install``. A user may own both a publisher
         # install (``is_publisher_install=True``) and a separate consumer
@@ -190,9 +183,6 @@ class Agent(AgentBase, table=True):
     last_sync_at: datetime | None = Field(default=None)
     last_update_status: str | None = Field(default=None)  # "synced" | "failed" | None
 
-    # General Assistant flag
-    is_general_assistant: bool = Field(default=False)
-
     # Publisher overrides (Phase 5 of the install-experience-redesign plan).
     # Lives only on the publisher install; ignored on foreign installs. The
     # publish-time spec collector reads ``credential_overrides[<spec_name>]
@@ -279,9 +269,6 @@ class AgentPublic(SQLModel):
     pending_update_at: datetime | None = None
     last_sync_at: datetime | None = None
     last_update_status: str | None = None  # "synced" | "failed" | None
-
-    # General Assistant flag
-    is_general_assistant: bool = False
 
     # Publisher override map (Phase 5). Empty / absent on foreign installs.
     publish_settings: dict = {}

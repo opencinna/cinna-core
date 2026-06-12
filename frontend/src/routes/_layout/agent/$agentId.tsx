@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { ArrowLeft, EllipsisVertical, Package, Sparkles, Tag, User } from "lucide-react"
+import { ArrowLeft, EllipsisVertical, Package, Tag, User } from "lucide-react"
 import { useState, useEffect } from "react"
 
 import { AgentsService, BundlesService } from "@/client"
@@ -103,12 +103,6 @@ function AgentDetail() {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h1 className="text-base font-semibold truncate">{agent.name}</h1>
-                {agent.is_general_assistant && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 dark:bg-violet-900/40 px-2 py-0.5 text-xs font-medium text-violet-700 dark:text-violet-300 shrink-0">
-                    <Sparkles className="h-3 w-3" />
-                    General Assistant
-                  </span>
-                )}
               </div>
               {agent.bundle_uuid && !agent.is_publisher_install ? (
                 <div className="flex gap-1.5 mt-1 overflow-hidden">
@@ -155,7 +149,7 @@ function AgentDetail() {
             // only lifecycle action is Uninstall — never Edit/Delete the
             // bundle-sourced definition.
             const showDeveloperActions =
-              !agent.is_general_assistant && isDeveloper && !isForeignInstallHdr
+              isDeveloper && !isForeignInstallHdr
             const showUninstall = isForeignInstallHdr
             if (!showDeveloperActions && !showUninstall) return null
             return (
@@ -267,9 +261,6 @@ function AgentDetail() {
       "interface",
     ])
     tabs = allTabs.filter((tab) => agentUserTabs.has(tab.value))
-  } else if (agent.is_general_assistant) {
-    // Hide bundle tab for General Assistant agents (cannot be published).
-    tabs = allTabs.filter((tab) => tab.value !== "bundle")
   }
 
   // Default tab: everyone lands on "configuration" — for developers

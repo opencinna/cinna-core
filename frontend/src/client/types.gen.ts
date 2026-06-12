@@ -35,6 +35,44 @@ export type AccessTokenMode = 'conversation' | 'building';
 export type AccessTokenScope = 'limited' | 'general';
 
 /**
+ * Owner-side smoke test for a producer API — ``cinna agent-api call``.
+ *
+ * Invokes one endpoint on the producer's *own* REST API through the
+ * owner-preview proxy (no consumer token, no policy edge — same semantics as
+ * the UI "try it" proxy), so a builder can verify an endpoint in one round
+ * trip instead of hand-rolling a consumer probe. Query params are forwarded
+ * (the friction that made this verb necessary), so this catches a silent
+ * query-drop directly.
+ */
+export type AccountAgentApiCallBody = {
+    agent_id: string;
+    method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
+    path: string;
+    query?: ({
+    [key: string]: (string | Array<(string)>);
+} | null);
+    json_body?: (unknown | null);
+};
+
+export type method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
+
+/**
+ * Buffered response from an ``agent-api call`` smoke test.
+ *
+ * The producer response is buffered (not streamed) so the CLI can print it
+ * plainly. ``body`` is the decoded text; ``is_json`` lets the CLI pretty-print
+ * without re-sniffing the content type.
+ */
+export type AccountAgentApiCallResult = {
+    status_code: number;
+    headers: {
+        [key: string]: (string);
+    };
+    body: string;
+    is_json: boolean;
+};
+
+/**
  * Toggle a producer agent's REST API on/off — ``cinna agent-api enable``.
  *
  * Mirrors the UI's ``PUT /agents/{id}`` ``agent_api_enabled`` toggle, but
@@ -74,6 +112,42 @@ export type AccountAgentCreateBody = {
     description?: (string | null);
     env_name?: (string | null);
     user_workspace_id?: (string | null);
+};
+
+/**
+ * One connected credential in an agent inspection — metadata only.
+ *
+ * SECURITY: name + type ONLY. No ``credential_data`` / secret ever crosses
+ * this boundary (preserves the account token's no-credential-secrets rule).
+ */
+export type AccountAgentInspectCredentialItem = {
+    name: string;
+    type: CredentialType;
+};
+
+/**
+ * Effective agent config as the runtime sees it — ``cinna agent show``.
+ *
+ * Aggregates the agent's prompts (the DB fields that sync verbatim into the
+ * workspace prompt docs the runtime reads), its enabled features, and the
+ * metadata of its connected credentials, in one read — so a builder can
+ * confirm "is what I edited actually live?" without three round trips.
+ * ``agent_api_status`` is included when the REST API feature is enabled.
+ */
+export type AccountAgentInspectResult = {
+    id: string;
+    name: string;
+    description?: (string | null);
+    features: {
+        [key: string]: (boolean);
+    };
+    prompts: {
+        [key: string]: (string | null);
+    };
+    credentials: Array<AccountAgentInspectCredentialItem>;
+    agent_api_status?: ({
+    [key: string]: unknown;
+} | null);
 };
 
 /**
@@ -117,7 +191,7 @@ export type AccountApiProxyRequest = {
 } | null);
 };
 
-export type method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+export type method2 = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 /**
  * Wrap the ``agent_api`` one-click connect helper.
@@ -221,6 +295,15 @@ export type AccountCredentialUpdateBody = {
     service_uri?: (string | null);
     allow_sharing?: (boolean | null);
     allow_template_sharing?: (boolean | null);
+};
+
+/**
+ * Result of ``cinna agent restart-env`` — the env's post-restart state.
+ */
+export type AccountRestartEnvResult = {
+    environment_id: string;
+    status: string;
+    status_message?: (string | null);
 };
 
 export type ActivitiesPublicExtended = {
@@ -1014,7 +1097,6 @@ export type AgentPublic = {
     pending_update_at?: (string | null);
     last_sync_at?: (string | null);
     last_update_status?: (string | null);
-    is_general_assistant?: boolean;
     publish_settings?: {
         [key: string]: unknown;
     };
@@ -3454,7 +3536,7 @@ export type MfaVerifyRequest = {
     remember_device_days?: (1 | 7 | 30 | null);
 };
 
-export type method2 = 'passkey' | 'totp' | 'recovery';
+export type method3 = 'passkey' | 'totp' | 'recovery';
 
 export type MintChildTokenBody = {
     machine_name?: string;
@@ -4737,7 +4819,6 @@ export type UserPublic = {
     default_sdk_building?: (string | null);
     default_ai_functions_sdk?: (string | null);
     default_ai_functions_credential_id?: (string | null);
-    general_assistant_enabled?: boolean;
     workspaces_enabled?: boolean;
     default_ai_credential_conversation_id?: (string | null);
     default_ai_credential_building_id?: (string | null);
@@ -4765,7 +4846,6 @@ export type UserPublicWithAICredentials = {
     default_sdk_building?: (string | null);
     default_ai_functions_sdk?: (string | null);
     default_ai_functions_credential_id?: (string | null);
-    general_assistant_enabled?: boolean;
     workspaces_enabled?: boolean;
     default_ai_credential_conversation_id?: (string | null);
     default_ai_credential_building_id?: (string | null);
@@ -4843,7 +4923,6 @@ export type UserUpdateMe = {
     default_sdk_building?: (string | null);
     default_ai_functions_sdk?: (string | null);
     default_ai_functions_credential_id?: (string | null);
-    general_assistant_enabled?: (boolean | null);
     workspaces_enabled?: (boolean | null);
     default_ai_credential_conversation_id?: (string | null);
     default_ai_credential_building_id?: (string | null);
@@ -6150,6 +6229,24 @@ export type CliAccountAgentApiSpecData = {
 };
 
 export type CliAccountAgentApiSpecResponse = (unknown);
+
+export type CliAccountAgentApiCallData = {
+    requestBody: AccountAgentApiCallBody;
+};
+
+export type CliAccountAgentApiCallResponse = (AccountAgentApiCallResult);
+
+export type CliAccountRestartEnvData = {
+    agentId: string;
+};
+
+export type CliAccountRestartEnvResponse = (AccountRestartEnvResult);
+
+export type CliAccountInspectAgentData = {
+    agentId: string;
+};
+
+export type CliAccountInspectAgentResponse = (AccountAgentInspectResult);
 
 export type CliAccountListDiscoverableMcpData = {
     consumerAgentId?: (string | null);
@@ -8005,8 +8102,6 @@ export type UsersSetPasswordMeData = {
 };
 
 export type UsersSetPasswordMeResponse = (Message);
-
-export type UsersGenerateGeneralAssistantResponse = (AgentPublic);
 
 export type UsersReadMyRoleResponse = (UserRolePublic);
 

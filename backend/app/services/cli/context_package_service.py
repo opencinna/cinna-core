@@ -3,8 +3,8 @@ Account-CLI context package.
 
 Assembles the *orchestrator context package* downloaded by ``cinna account
 setup`` into the account workspace's ``context/`` tree. The package is the
-General Assistant's platform self-knowledge, re-delivered to a local coding
-agent that drives a multi-agent network from the account root.
+platform's self-knowledge, delivered to a local coding agent that drives a
+multi-agent network from the account root.
 
 Contents (static platform knowledge only — never any user-specific secret):
 
@@ -19,14 +19,15 @@ Contents (static platform knowledge only — never any user-specific secret):
 
 Source of truth
 ---------------
-The package is assembled from the committed ``general-assistant-env`` template
+The package is assembled from the committed ``platform-knowledge-env`` template
 snapshot (``…/knowledge/platform/`` + ``…/scripts/examples/`` +
 ``…/knowledge/guides/``). That snapshot is
 the only copy of this knowledge present inside the backend container at runtime
 — the repo-root ``docs/`` tree and ``frontend/openapi.json`` are not shipped in
 the image. The snapshot is refreshed by
-``.cinna-core-kit/scripts/sync_ga_knowledge.py`` (which shares the API-reference
-generation logic with this service via ``ga_knowledge_assets``).
+``.cinna-core-kit/scripts/sync_platform_knowledge.py`` (which shares the
+API-reference generation logic with this service via
+``platform_knowledge_assets``).
 
 Transport: a gzip tarball, mirroring the per-agent workspace clone
 (``CLIService.get_workspace_tarball``), so the CLI reuses one extract path.
@@ -48,10 +49,10 @@ from pathlib import Path
 from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
 
-from app.services.cli.ga_knowledge_assets import (
-    ga_example_scripts_dir,
-    ga_guides_dir,
-    ga_platform_knowledge_dir,
+from app.services.cli.platform_knowledge_assets import (
+    example_scripts_dir,
+    guides_dir as guides_snapshot_dir,
+    platform_knowledge_dir,
 )
 
 logger = logging.getLogger(__name__)
@@ -97,9 +98,9 @@ class ContextPackageService:
 
     @classmethod
     def _build_or_cached(cls) -> bytes:
-        platform_dir = ga_platform_knowledge_dir()
-        examples_dir = ga_example_scripts_dir()
-        guides_dir = ga_guides_dir()
+        platform_dir = platform_knowledge_dir()
+        examples_dir = example_scripts_dir()
+        guides_dir = guides_snapshot_dir()
         cache_key = cls._snapshot_version(platform_dir, examples_dir, guides_dir)
 
         cached = cls._cache
@@ -179,7 +180,7 @@ class ContextPackageService:
             logger.error(
                 "Context package: platform knowledge snapshot missing or empty "
                 "at %s — this deployment's image was built without the "
-                "general-assistant-env snapshot",
+                "platform-knowledge-env snapshot",
                 platform_dir,
             )
             raise HTTPException(

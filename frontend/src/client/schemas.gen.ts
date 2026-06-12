@@ -988,6 +988,104 @@ export const AccessTokenScopeSchema = {
     description: 'Scope for the token - determines session visibility.'
 } as const;
 
+export const AccountAgentApiCallBodySchema = {
+    properties: {
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        method: {
+            type: 'string',
+            enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'],
+            title: 'Method',
+            default: 'GET'
+        },
+        path: {
+            type: 'string',
+            maxLength: 2048,
+            minLength: 1,
+            title: 'Path'
+        },
+        query: {
+            anyOf: [
+                {
+                    additionalProperties: {
+                        anyOf: [
+                            {
+                                type: 'string'
+                            },
+                            {
+                                items: {
+                                    type: 'string'
+                                },
+                                type: 'array'
+                            }
+                        ]
+                    },
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Query'
+        },
+        json_body: {
+            anyOf: [
+                {},
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Json Body'
+        }
+    },
+    type: 'object',
+    required: ['agent_id', 'path'],
+    title: 'AccountAgentApiCallBody',
+    description: `Owner-side smoke test for a producer API — \`\`cinna agent-api call\`\`.
+
+Invokes one endpoint on the producer's *own* REST API through the
+owner-preview proxy (no consumer token, no policy edge — same semantics as
+the UI "try it" proxy), so a builder can verify an endpoint in one round
+trip instead of hand-rolling a consumer probe. Query params are forwarded
+(the friction that made this verb necessary), so this catches a silent
+query-drop directly.`
+} as const;
+
+export const AccountAgentApiCallResultSchema = {
+    properties: {
+        status_code: {
+            type: 'integer',
+            title: 'Status Code'
+        },
+        headers: {
+            additionalProperties: {
+                type: 'string'
+            },
+            type: 'object',
+            title: 'Headers'
+        },
+        body: {
+            type: 'string',
+            title: 'Body'
+        },
+        is_json: {
+            type: 'boolean',
+            title: 'Is Json'
+        }
+    },
+    type: 'object',
+    required: ['status_code', 'headers', 'body', 'is_json'],
+    title: 'AccountAgentApiCallResult',
+    description: `Buffered response from an \`\`agent-api call\`\` smoke test.
+
+The producer response is buffered (not streamed) so the CLI can print it
+plainly. \`\`body\`\` is the decoded text; \`\`is_json\`\` lets the CLI pretty-print
+without re-sniffing the content type.`
+} as const;
+
 export const AccountAgentApiEnableBodySchema = {
     properties: {
         agent_id: {
@@ -1086,6 +1184,100 @@ resolution, default env template, environment creation) exactly as the UI
 does. \`\`env_name\`\` (env-template selection) is **not** honored at create time
 in v1 — the normal create path hard-codes \`\`settings.DEFAULT_AGENT_ENV_NAME\`\`
 (see plan O1). The field is accepted-but-noop and documented as a follow-up.`
+} as const;
+
+export const AccountAgentInspectCredentialItemSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        type: {
+            '$ref': '#/components/schemas/CredentialType'
+        }
+    },
+    type: 'object',
+    required: ['name', 'type'],
+    title: 'AccountAgentInspectCredentialItem',
+    description: `One connected credential in an agent inspection — metadata only.
+
+SECURITY: name + type ONLY. No \`\`credential_data\`\` / secret ever crosses
+this boundary (preserves the account token's no-credential-secrets rule).`
+} as const;
+
+export const AccountAgentInspectResultSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        features: {
+            additionalProperties: {
+                type: 'boolean'
+            },
+            type: 'object',
+            title: 'Features'
+        },
+        prompts: {
+            additionalProperties: {
+                anyOf: [
+                    {
+                        type: 'string'
+                    },
+                    {
+                        type: 'null'
+                    }
+                ]
+            },
+            type: 'object',
+            title: 'Prompts'
+        },
+        credentials: {
+            items: {
+                '$ref': '#/components/schemas/AccountAgentInspectCredentialItem'
+            },
+            type: 'array',
+            title: 'Credentials'
+        },
+        agent_api_status: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Api Status'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name', 'features', 'prompts', 'credentials'],
+    title: 'AccountAgentInspectResult',
+    description: `Effective agent config as the runtime sees it — \`\`cinna agent show\`\`.
+
+Aggregates the agent's prompts (the DB fields that sync verbatim into the
+workspace prompt docs the runtime reads), its enabled features, and the
+metadata of its connected credentials, in one read — so a builder can
+confirm "is what I edited actually live?" without three round trips.
+\`\`agent_api_status\`\` is included when the REST API feature is enabled.`
 } as const;
 
 export const AccountAgentListItemSchema = {
@@ -1594,6 +1786,35 @@ SECURITY: like the create body, there is **no** \`\`credential_data\`\` field �
 the account CLI never writes secret values. Only descriptive / structural
 fields are editable here. All fields optional; only the provided ones are
 applied (\`\`exclude_unset\`\` semantics).`
+} as const;
+
+export const AccountRestartEnvResultSchema = {
+    properties: {
+        environment_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Environment Id'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        status_message: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status Message'
+        }
+    },
+    type: 'object',
+    required: ['environment_id', 'status'],
+    title: 'AccountRestartEnvResult',
+    description: "Result of ``cinna agent restart-env`` — the env's post-restart state."
 } as const;
 
 export const ActivitiesPublicExtendedSchema = {
@@ -5191,11 +5412,6 @@ export const AgentPublicSchema = {
                 }
             ],
             title: 'Last Update Status'
-        },
-        is_general_assistant: {
-            type: 'boolean',
-            title: 'Is General Assistant',
-            default: false
         },
         publish_settings: {
             additionalProperties: true,
@@ -21303,11 +21519,6 @@ export const UserPublicSchema = {
             ],
             title: 'Default Ai Functions Credential Id'
         },
-        general_assistant_enabled: {
-            type: 'boolean',
-            title: 'General Assistant Enabled',
-            default: false
-        },
         workspaces_enabled: {
             type: 'boolean',
             title: 'Workspaces Enabled',
@@ -21490,11 +21701,6 @@ export const UserPublicWithAICredentialsSchema = {
                 }
             ],
             title: 'Default Ai Functions Credential Id'
-        },
-        general_assistant_enabled: {
-            type: 'boolean',
-            title: 'General Assistant Enabled',
-            default: false
         },
         workspaces_enabled: {
             type: 'boolean',
@@ -21846,17 +22052,6 @@ export const UserUpdateMeSchema = {
                 }
             ],
             title: 'Default Ai Functions Credential Id'
-        },
-        general_assistant_enabled: {
-            anyOf: [
-                {
-                    type: 'boolean'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'General Assistant Enabled'
         },
         workspaces_enabled: {
             anyOf: [

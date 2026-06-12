@@ -1442,8 +1442,8 @@ def test_context_package_content(
     guides_members = [n for n in member_names if n.startswith("context/guides/")]
     assert guides_members, (
         "Tarball must contain at least one member under context/guides/ — "
-        "the guides snapshot (knowledge/guides/ in the GA env-template) is missing "
-        "or was not packaged; "
+        "the guides snapshot (knowledge/guides/ in the platform-knowledge "
+        "env-template) is missing or was not packaged; "
         f"members: {member_names[:30]}"
     )
 
@@ -1451,7 +1451,7 @@ def test_context_package_content(
     assert "context/guides/build-an-agentic-network.md" in member_names, (
         "context/guides/build-an-agentic-network.md must be present in the tarball — "
         "the playbook is committed to the repo at "
-        "backend/app/env-templates/general-assistant-env/app/workspace/knowledge/guides/ "
+        "backend/app/env-templates/platform-knowledge-env/app/workspace/knowledge/guides/ "
         "and must be included in the context package; "
         f"guides members found: {guides_members}"
     )
