@@ -173,6 +173,20 @@ export type AccountAgentsPublic = {
 };
 
 /**
+ * Combined status read for ``cinna agent status`` (show / refresh).
+ *
+ * Bundles the agent's self-reported ``STATUS.md`` snapshot with its configured
+ * ``status_refresh_command`` so a builder sees both the live state and the
+ * pre-command that produced it in one read — the CLI analogue of the
+ * Integrations → Agent status card. On a force refresh the snapshot's
+ * ``refresh_command_warning`` reports a pre-command that did not run cleanly.
+ */
+export type AccountAgentStatusResult = {
+    status: AgentStatusPublic;
+    status_refresh_command?: (string | null);
+};
+
+/**
  * Generic escape-hatch request: ``cinna api <METHOD> <path>``.
  *
  * ``path`` is **relative to the API root** (no ``/api/v1`` prefix — the backend
@@ -304,6 +318,20 @@ export type AccountRestartEnvResult = {
     environment_id: string;
     status: string;
     status_message?: (string | null);
+};
+
+/**
+ * Set an agent's status-refresh pre-command — ``cinna agent status set-command``.
+ *
+ * Mirrors the Integrations → Agent status card's command input. The command
+ * is a raw shell/Python string or a ``/run:<name>`` reference (resolved against
+ * the agent's ``CLI_COMMANDS.yaml``) that runs inside the container immediately
+ * before every forced/live STATUS.md read. ``None`` / empty string is a
+ * deliberate opt-out (no pre-command, no warning). The platform default is
+ * ``/run:status``.
+ */
+export type AccountStatusRefreshCommandBody = {
+    command?: (string | null);
 };
 
 export type ActivitiesPublicExtended = {
@@ -1940,6 +1968,33 @@ export type BundleCredentialDrift = {
 };
 
 /**
+ * Installed-vs-latest bundle version state for an installed agent.
+ *
+ * Surfaced on ``ExternalTargetPublic.bundle_version`` so native clients
+ * (Cinna Desktop, Cinna Mobile) can show "v1.0 → v1.2 update available"
+ * and offer an in-client update. Populated only for consumer installs
+ * (``target_type="agent"`` with a ``bundle_uuid`` and
+ * ``is_publisher_install=False``); ``None`` for the publisher's own
+ * working copy, shared routes, and identity contacts (none of which the
+ * caller updates).
+ *
+ * Computed read-only — building this never mutates ``Agent.pending_update``
+ * (the discovery endpoint is write-free). ``update_available`` is derived
+ * purely from the monotonic ``revision_number`` comparison; the human
+ * ``*_version`` labels are the publisher-supplied strings and may be absent
+ * on legacy revisions.
+ */
+export type BundleVersionInfo = {
+    installed_revision_number?: (number | null);
+    installed_version?: (string | null);
+    latest_revision_number?: (number | null);
+    latest_version?: (string | null);
+    update_available?: boolean;
+    update_mode?: (string | null);
+    last_update_status?: (string | null);
+};
+
+/**
  * One row in the user's catalog.
  */
 export type CatalogEntryPublic = {
@@ -2657,6 +2712,7 @@ export type ExternalTargetPublic = {
     mcp?: ({
     [key: string]: unknown;
 } | null);
+    bundle_version?: (BundleVersionInfo | null);
 };
 
 export type target_type = 'agent' | 'app_mcp_route' | 'identity';
@@ -6270,6 +6326,69 @@ export type CliAccountConnectMcpData = {
 
 export type CliAccountConnectMcpResponse = (MCPProviderConnectionResponse);
 
+export type CliAccountListSchedulesData = {
+    agentId: string;
+};
+
+export type CliAccountListSchedulesResponse = (AgentSchedulesPublic);
+
+export type CliAccountCreateScheduleData = {
+    agentId: string;
+    requestBody: CreateScheduleRequest;
+};
+
+export type CliAccountCreateScheduleResponse = (AgentSchedulePublic);
+
+export type CliAccountGenerateScheduleData = {
+    agentId: string;
+    requestBody: ScheduleRequest;
+};
+
+export type CliAccountGenerateScheduleResponse = (ScheduleResponse);
+
+export type CliAccountUpdateScheduleData = {
+    agentId: string;
+    requestBody: UpdateScheduleRequest;
+    scheduleId: string;
+};
+
+export type CliAccountUpdateScheduleResponse = (AgentSchedulePublic);
+
+export type CliAccountDeleteScheduleData = {
+    agentId: string;
+    scheduleId: string;
+};
+
+export type CliAccountDeleteScheduleResponse = (Message);
+
+export type CliAccountRunScheduleData = {
+    agentId: string;
+    scheduleId: string;
+};
+
+export type CliAccountRunScheduleResponse = (Message);
+
+export type CliAccountScheduleLogsData = {
+    agentId: string;
+    scheduleId: string;
+};
+
+export type CliAccountScheduleLogsResponse = (AgentScheduleLogsPublic);
+
+export type CliAccountAgentStatusData = {
+    agentId: string;
+    forceRefresh?: boolean;
+};
+
+export type CliAccountAgentStatusResponse = (AccountAgentStatusResult);
+
+export type CliAccountSetStatusRefreshCommandData = {
+    agentId: string;
+    requestBody: AccountStatusRefreshCommandBody;
+};
+
+export type CliAccountSetStatusRefreshCommandResponse = (AccountAgentStatusResult);
+
 export type CliAccountListCredentialTypesResponse = (AccountCredentialTypesPublic);
 
 export type CliAccountListCredentialsData = {
@@ -6800,6 +6919,18 @@ export type ExternalListExternalAgentsData = {
 };
 
 export type ExternalListExternalAgentsResponse = (ExternalAgentListResponse);
+
+export type ExternalCheckExternalInstallUpdatesData = {
+    agentId: string;
+};
+
+export type ExternalCheckExternalInstallUpdatesResponse = (CheckUpdatesResponse);
+
+export type ExternalApplyExternalInstallUpdateData = {
+    agentId: string;
+};
+
+export type ExternalApplyExternalInstallUpdateResponse = (BundleVersionInfo);
 
 export type ExternalListExternalSessionsData = {
     limit?: number;

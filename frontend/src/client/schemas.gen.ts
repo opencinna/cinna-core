@@ -1365,6 +1365,35 @@ export const AccountAgentListItemSchema = {
     description: 'One row in the accessible-agents listing for the account CLI.'
 } as const;
 
+export const AccountAgentStatusResultSchema = {
+    properties: {
+        status: {
+            '$ref': '#/components/schemas/AgentStatusPublic'
+        },
+        status_refresh_command: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status Refresh Command'
+        }
+    },
+    type: 'object',
+    required: ['status'],
+    title: 'AccountAgentStatusResult',
+    description: `Combined status read for \`\`cinna agent status\`\` (show / refresh).
+
+Bundles the agent's self-reported \`\`STATUS.md\`\` snapshot with its configured
+\`\`status_refresh_command\`\` so a builder sees both the live state and the
+pre-command that produced it in one read — the CLI analogue of the
+Integrations → Agent status card. On a force refresh the snapshot's
+\`\`refresh_command_warning\`\` reports a pre-command that did not run cleanly.`
+} as const;
+
 export const AccountAgentsPublicSchema = {
     properties: {
         data: {
@@ -1815,6 +1844,33 @@ export const AccountRestartEnvResultSchema = {
     required: ['environment_id', 'status'],
     title: 'AccountRestartEnvResult',
     description: "Result of ``cinna agent restart-env`` — the env's post-restart state."
+} as const;
+
+export const AccountStatusRefreshCommandBodySchema = {
+    properties: {
+        command: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1024
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Command'
+        }
+    },
+    type: 'object',
+    title: 'AccountStatusRefreshCommandBody',
+    description: `Set an agent's status-refresh pre-command — \`\`cinna agent status set-command\`\`.
+
+Mirrors the Integrations → Agent status card's command input. The command
+is a raw shell/Python string or a \`\`/run:<name>\`\` reference (resolved against
+the agent's \`\`CLI_COMMANDS.yaml\`\`) that runs inside the container immediately
+before every forced/live STATUS.md read. \`\`None\`\` / empty string is a
+deliberate opt-out (no pre-command, no warning). The platform default is
+\`\`/run:status\`\`.`
 } as const;
 
 export const ActivitiesPublicExtendedSchema = {
@@ -8955,6 +9011,99 @@ has never been published (no latest revision) reports \`\`stale=False\`\`
 with an empty \`\`drift\`\` list — there is nothing to be stale against.`
 } as const;
 
+export const BundleVersionInfoSchema = {
+    properties: {
+        installed_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Revision Number'
+        },
+        installed_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Version'
+        },
+        latest_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Revision Number'
+        },
+        latest_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Version'
+        },
+        update_available: {
+            type: 'boolean',
+            title: 'Update Available',
+            default: false
+        },
+        update_mode: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Update Mode'
+        },
+        last_update_status: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Update Status'
+        }
+    },
+    type: 'object',
+    title: 'BundleVersionInfo',
+    description: `Installed-vs-latest bundle version state for an installed agent.
+
+Surfaced on \`\`ExternalTargetPublic.bundle_version\`\` so native clients
+(Cinna Desktop, Cinna Mobile) can show "v1.0 → v1.2 update available"
+and offer an in-client update. Populated only for consumer installs
+(\`\`target_type="agent"\`\` with a \`\`bundle_uuid\`\` and
+\`\`is_publisher_install=False\`\`); \`\`None\`\` for the publisher's own
+working copy, shared routes, and identity contacts (none of which the
+caller updates).
+
+Computed read-only — building this never mutates \`\`Agent.pending_update\`\`
+(the discovery endpoint is write-free). \`\`update_available\`\` is derived
+purely from the monotonic \`\`revision_number\`\` comparison; the human
+\`\`*_version\`\` labels are the publisher-supplied strings and may be absent
+on legacy revisions.`
+} as const;
+
 export const CLIAccountTokenPublicSchema = {
     properties: {
         id: {
@@ -11828,6 +11977,16 @@ export const ExternalTargetPublicSchema = {
                 }
             ],
             title: 'Mcp'
+        },
+        bundle_version: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/BundleVersionInfo'
+                },
+                {
+                    type: 'null'
+                }
+            ]
         }
     },
     type: 'object',

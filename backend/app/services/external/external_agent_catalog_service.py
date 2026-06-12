@@ -18,8 +18,11 @@ from typing import Any, Optional
 from sqlmodel import Session as DBSession, select
 
 from app.models.agents.agent import Agent
+from app.models.bundles.agent_bundle import AgentBundle
+from app.models.bundles.agent_bundle_revision import AgentBundleRevision
 from app.models.environments.environment import AgentEnvironment
 from app.models.external.external_agents import (
+    BundleVersionInfo,
     ExternalAgentListResponse,
     ExternalTargetPublic,
 )
@@ -227,6 +230,11 @@ class ExternalAgentCatalogService:
                         f"{base_url}/api/v1/external/a2a/agent/{agent.id}/"
                     ),
                     metadata=ExternalAgentCatalogService._agent_metadata(agent),
+                    bundle_version=(
+                        ExternalAgentCatalogService.build_bundle_version_info(
+                            db, agent
+                        )
+                    ),
                 )
             )
             if descriptor_contexts is not None:
@@ -247,6 +255,59 @@ class ExternalAgentCatalogService:
         if not agent.active_environment_id:
             return None
         return db.get(AgentEnvironment, agent.active_environment_id)
+
+    @staticmethod
+    def build_bundle_version_info(
+        db: DBSession, agent: Agent
+    ) -> BundleVersionInfo | None:
+        """Build installed-vs-latest version state for a consumer install.
+
+        Returns ``None`` for anything that is not the caller's own consumer
+        install: agents with no ``bundle_uuid`` (never installed from a
+        bundle) and publisher working copies (``is_publisher_install=True``,
+        which are the source of a bundle, not an install of it).
+
+        Read-only — never mutates ``Agent.pending_update``. ``update_available``
+        is derived from the monotonic ``revision_number`` comparison so it does
+        not depend on the (separately reconciled) ``pending_update`` flag. The
+        shared resolution also powers the external apply-update / check-updates
+        routes so the discovery list and the action responses never diverge.
+        """
+        if not agent.bundle_uuid or agent.is_publisher_install:
+            return None
+
+        installed_number: int | None = None
+        installed_version: str | None = None
+        if agent.installed_revision_id:
+            rev = db.get(AgentBundleRevision, agent.installed_revision_id)
+            if rev:
+                installed_number = rev.revision_number
+                installed_version = rev.version
+
+        latest_number: int | None = None
+        latest_version: str | None = None
+        bundle = db.get(AgentBundle, agent.bundle_uuid)
+        if bundle and bundle.latest_revision_id:
+            latest_rev = db.get(AgentBundleRevision, bundle.latest_revision_id)
+            if latest_rev:
+                latest_number = latest_rev.revision_number
+                latest_version = latest_rev.version
+
+        update_available = (
+            latest_number is not None
+            and installed_number is not None
+            and latest_number > installed_number
+        )
+
+        return BundleVersionInfo(
+            installed_revision_number=installed_number,
+            installed_version=installed_version,
+            latest_revision_number=latest_number,
+            latest_version=latest_version,
+            update_available=update_available,
+            update_mode=agent.update_mode,
+            last_update_status=agent.last_update_status,
+        )
 
     @staticmethod
     def _agent_metadata(agent: Agent) -> dict[str, Any]:

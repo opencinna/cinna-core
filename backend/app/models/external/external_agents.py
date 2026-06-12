@@ -15,6 +15,33 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 
+class BundleVersionInfo(BaseModel):
+    """Installed-vs-latest bundle version state for an installed agent.
+
+    Surfaced on ``ExternalTargetPublic.bundle_version`` so native clients
+    (Cinna Desktop, Cinna Mobile) can show "v1.0 → v1.2 update available"
+    and offer an in-client update. Populated only for consumer installs
+    (``target_type="agent"`` with a ``bundle_uuid`` and
+    ``is_publisher_install=False``); ``None`` for the publisher's own
+    working copy, shared routes, and identity contacts (none of which the
+    caller updates).
+
+    Computed read-only — building this never mutates ``Agent.pending_update``
+    (the discovery endpoint is write-free). ``update_available`` is derived
+    purely from the monotonic ``revision_number`` comparison; the human
+    ``*_version`` labels are the publisher-supplied strings and may be absent
+    on legacy revisions.
+    """
+
+    installed_revision_number: int | None = None
+    installed_version: str | None = None
+    latest_revision_number: int | None = None
+    latest_version: str | None = None
+    update_available: bool = False
+    update_mode: str | None = None
+    last_update_status: str | None = None
+
+
 class ExternalTargetPublic(BaseModel):
     """A single addressable target returned by the external agent discovery endpoint.
 
@@ -41,6 +68,10 @@ class ExternalTargetPublic(BaseModel):
     # payload without re-fetching every card. The card remains the source of
     # truth; this is the cache. None when no descriptor could be built.
     mcp: dict[str, Any] | None = None
+    # Installed-vs-latest bundle version state. Populated only for consumer
+    # installs (target_type="agent" with a bundle, is_publisher_install=False);
+    # None for publisher working copies, shared routes, and identity contacts.
+    bundle_version: BundleVersionInfo | None = None
 
 
 class ExternalAgentListResponse(BaseModel):

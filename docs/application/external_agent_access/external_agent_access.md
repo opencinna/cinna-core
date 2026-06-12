@@ -31,9 +31,19 @@ A dedicated REST + A2A surface under `/api/v1/external/` that gives authenticate
 
 1. Client calls `GET /api/v1/external/agents` (optionally with `?workspace_id=` to scope to one workspace)
 2. Response contains a `targets` list in three ordered sections: personal agents → MCP shared agents → identity contacts
-3. Each target includes `name`, `description`, `entrypoint_prompt`, `example_prompts`, `agent_card_url`, `protocol_versions`, and `mcp` (the `cinna.mcp` descriptor — see [cinna.mcp descriptor](./cinna_mcp_descriptor.md))
+3. Each target includes `name`, `description`, `entrypoint_prompt`, `example_prompts`, `agent_card_url`, `protocol_versions`, `mcp` (the `cinna.mcp` descriptor — see [cinna.mcp descriptor](./cinna_mcp_descriptor.md)), and `bundle_version` (installed-vs-latest bundle version state — see [Showing & Applying Bundle Updates](#showing--applying-bundle-updates))
 4. Client renders the list with prompt-example chips; tapping an agent opens a new conversation
 5. Cinna Desktop uses the `mcp` field to wrap each agent as an emulated MCP tool without re-fetching individual cards; `mcp` is `null` for `identity` targets
+
+### Showing & Applying Bundle Updates
+
+Native clients show "v1.0 → v1.2 update available" on installed agents and let the user update in-app, without the web SPA.
+
+1. The discovery payload (`GET /external/agents`) carries a `bundle_version` object on each `target_type="agent"` target that is one of the caller's own consumer installs (`installed_version`, `installed_revision_number`, `latest_version`, `latest_revision_number`, `update_available`, `update_mode`, `last_update_status`). It is `null` for the publisher's own working copy, plain (never-from-a-bundle) agents, shared routes, and identity contacts — none of which the caller updates
+2. `bundle_version` on the discovery list is computed **read-only**: `update_available` is derived purely from the monotonic `revision_number` comparison, and building it never mutates `Agent.pending_update` (discovery stays write-free)
+3. To refresh a single agent on demand, the client calls `POST /external/agents/{agent_id}/check-updates`. Unlike discovery, this delegates to the same `InstallService.check_for_updates` the web surface uses, so it **reconciles** `Agent.pending_update` and returns the canonical `CheckUpdatesResponse`
+4. To update, the client calls `POST /external/agents/{agent_id}/apply-update`. This delegates to `InstallService.apply_update` (stops the environment, swaps bundle-owned workspace content, preserves App Data + credentials, restarts) and returns the post-update `bundle_version` snapshot so the client can refresh its UI without a second round-trip
+5. Both update endpoints are owner-gated (owner or superuser) — `401` unauthenticated, `403` for a non-owner, `404` for an unknown agent id, `400` only when `InstallService.apply_update` raises `InstallError` (e.g. the install is not linked to a bundle, or the bundle has no published revisions). An already-current install — including the publisher's own working copy — is a silent no-op: `apply_update` clears `pending_update` and returns the install unchanged, and the route returns the current `BundleVersionInfo` snapshot (all-null for a publisher install) without a `400`. They are thin native-surface wrappers over the same services as the web install routes (`POST /agents/{id}/check-updates`, `/apply-update`), so behavior never diverges between web and native clients
 
 ### Chatting with a Personal Agent
 
@@ -125,7 +135,12 @@ GET  /api/v1/external/sessions            ExternalSessionService.list_sessions_f
 GET  /api/v1/external/sessions/{id}         (OR-filter: owner | caller | identity_caller; hidden filter)
 GET  /api/v1/external/sessions/{id}/messages
 DELETE /api/v1/external/sessions/{id}     ExternalSessionService.hide_session_for_external()
+
+POST /api/v1/external/agents/{id}/check-updates   InstallService.check_for_updates() (owner-gated; reconciles pending_update)
+POST /api/v1/external/agents/{id}/apply-update     InstallService.apply_update()      (owner-gated; returns BundleVersionInfo)
 ```
+
+The `bundle_version` snapshot on discovery and the apply-update response are both built by the shared `ExternalAgentCatalogService.build_bundle_version_info(db, agent)`, so the list snapshot and the action response never diverge.
 
 ---
 
@@ -137,7 +152,8 @@ DELETE /api/v1/external/sessions/{id}     ExternalSessionService.hide_session_fo
 - **[Identity MCP Server](../identity_mcp_server/identity_mcp_server.md)** — `IdentityAgentBinding`, `IdentityBindingAssignment`, and Stage-2 routing used for the identity target type; `IdentityRoutingService.route_within_identity` picks the agent on the first message
 - **[Agent Sessions](../agent_sessions/agent_sessions.md)** — the `Session` model, `session_metadata` JSON column, `integration_type` field, and `caller_id`/`identity_caller_id` fields that the external surface stamps and reads
 - **[`cinna.mcp` Descriptor](./cinna_mcp_descriptor.md)** — the `mcp` field on each discovery target and the `urn:cinna:mcp` card extension that let Cinna Desktop wrap agents as emulated MCP tools
+- **[Agent Bundles & Installs](../../agents/agent_bundles/agent_bundles.md)** — supplies the version/update model surfaced here: `Agent.installed_revision_id`, `AgentBundle.latest_revision_id`, and the `InstallService.check_for_updates` / `apply_update` services the native update endpoints delegate to. The `bundle_version` field is the native-client mirror of the web catalog's `latest_version` / `user_install_pending_update` and the install detail page's `UpdateAvailableBanner`
 
 ---
 
-*Last updated: 2026-05-28 — added cinna.mcp descriptor delivery channel and integration point*
+*Last updated: 2026-06-12 — added bundle_version on discovery targets + native check-updates / apply-update endpoints*

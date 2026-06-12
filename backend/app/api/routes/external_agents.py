@@ -20,11 +20,15 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from app.api.deps import CurrentUser, SessionDep
+from app.models.agents.agent import Agent
+from app.models.bundles.catalog import CheckUpdatesResponse
 from app.models.external.external_agents import (
+    BundleVersionInfo,
     ExternalAgentListResponse,
     ExternalSessionPublic,
 )
 from app.models.sessions.session import MessagePublic
+from app.services.bundles.install_service import InstallError, InstallService
 from app.services.external.errors import ExternalSessionError
 from app.services.external.external_agent_catalog_service import (
     ExternalAgentCatalogService,
@@ -75,6 +79,83 @@ def list_external_agents(
         request_base_url=get_base_url(request),
         workspace_id=workspace_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Install updates (native client in-app update flow)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_install_owned(
+    session, agent_id: uuid_lib.UUID, current_user
+) -> Agent:
+    """Load an install the caller owns, or raise the leak-safe error.
+
+    Mirrors the web install routes' ``_resolve_install_owned`` so the native
+    surface enforces the same owner-or-superuser gate.
+    """
+    install = session.get(Agent, agent_id)
+    if not install:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if install.owner_id != current_user.id and not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not your agent")
+    return install
+
+
+@router.post(
+    "/agents/{agent_id}/check-updates",
+    response_model=CheckUpdatesResponse,
+)
+def check_external_install_updates(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    agent_id: uuid_lib.UUID,
+) -> Any:
+    """Reconcile and report installed-vs-latest bundle version for an install.
+
+    Owner-gated. Delegates to the same ``InstallService.check_for_updates``
+    the web surface uses, so ``Agent.pending_update`` is reconciled and the
+    response matches the web client exactly. Native clients call this to
+    refresh a single agent's update state on demand (the discovery list
+    carries a read-only snapshot in ``bundle_version``).
+    """
+    install = _resolve_install_owned(session, agent_id, current_user)
+    result = InstallService.check_for_updates(session, install)
+    return CheckUpdatesResponse(**result)
+
+
+@router.post(
+    "/agents/{agent_id}/apply-update",
+    response_model=BundleVersionInfo,
+)
+async def apply_external_install_update(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    agent_id: uuid_lib.UUID,
+) -> Any:
+    """Apply the latest bundle revision to an install from a native client.
+
+    Owner-gated. Delegates to ``InstallService.apply_update`` (stops the
+    environment, swaps bundle-owned workspace content, preserves app-data /
+    credentials, restarts) and returns the post-update version state so the
+    client can refresh its UI without a second round-trip.
+    """
+    install = _resolve_install_owned(session, agent_id, current_user)
+    try:
+        install = await InstallService.apply_update(session, install)
+    except InstallError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    version = ExternalAgentCatalogService.build_bundle_version_info(
+        session, install
+    )
+    if version is None:
+        # Defensive: apply_update only succeeds for consumer installs, so a
+        # version snapshot is always resolvable here. Fall back to an empty
+        # snapshot rather than 500 if the install shape is unexpected.
+        version = BundleVersionInfo()
+    return version
 
 
 # ---------------------------------------------------------------------------
