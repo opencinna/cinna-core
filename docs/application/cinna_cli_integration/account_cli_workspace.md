@@ -434,6 +434,22 @@ flooding the audit log with high-frequency developer tool calls. `malformed_path
 outer `/account/api-proxy` route via `AccountCLIContextDep`. The inner JWT is
 minted inside the service, used once, and never returned to the CLI.
 
+### 6b. Querying Platform Knowledge from the Account Workspace
+
+While building in the account workspace, the local orchestrator agent can query the platform's knowledge DB — the same indexed articles that an in-container building agent can access via its `knowledge_query` MCP tool.
+
+The query is handled via the account workspace's MCP proxy (wired in the CLI-side `.mcp.json`; implementation in the `cinna-cli` repo). The proxy forwards each `knowledge_query` tool call to the backend:
+
+1. Orchestrator agent invokes `knowledge_query` (or `mcp__cinna_account__knowledge_query`) inside the account workspace.
+2. The MCP proxy POSTs to `POST /api/v1/cli/account/knowledge/search` authenticated with the account CLI token.
+3. The backend resolves all knowledge sources accessible to the account user: **all public sources** plus the user's own private connected sources. No agent scope, no workspace filter (`workspace_id=None`).
+4. A vector search runs and returns ranked chunks. The response is always `{"results": [{content, source, similarity}, ...]}` — an empty list if no accessible sources exist.
+5. The result is returned to the orchestrator agent as the MCP tool output.
+
+This is the account-level analogue of the per-agent knowledge proxy (see [cinna_cli_integration.md](cinna_cli_integration.md) — "MCP Proxy" concept and flow 2 step 6). The scoping differs: the per-agent proxy filters results to the agent's user workspace; the account proxy applies no workspace filter (the orchestrator agent has no associated workspace).
+
+No additional setup is required beyond the standard account workspace bootstrap (`cinna account setup`). The `knowledge_query` tool is available in the account workspace's `.mcp.json` from that point on.
+
 ### 7. Registering an Agentic Network (Phase 4)
 
 Once the agents are created and wired (via `cinna agent create`, `cinna connect
@@ -723,6 +739,7 @@ The backend contract these commands consume:
 | `cinna agent sync <agent>` | `POST /api/v1/cli/account/agents/{id}/mint` then existing per-agent bootstrap | Mint child token; write `agents/<slug>/` as a standard workspace |
 | `cinna agent unsync <agent>` | `DELETE /api/v1/cli/account/tokens/children/{child_token_id}` then local | Revokes the child token server-side (authenticated by the account token), then stops sync and removes `agents/<slug>/` from the local registry |
 | `cinna exec --agent <agent> <cmd>` | Existing `POST /api/v1/cli/agents/{id}/exec` | Mint (if needed) then exec with child token |
+| `knowledge_query` MCP tool (account workspace `.mcp.json`) | `POST /api/v1/cli/account/knowledge/search` body `{query, topic?}` | Account-workspace MCP proxy forwards orchestrator `knowledge_query` calls to the backend; scoped to the account user's accessible sources (public + own private); returns `{results: [{content, source, similarity}]}`. Not a typed `cinna` subcommand — served via the MCP proxy. CLI proxy wiring lives in the `cinna-cli` repo |
 
 **Phase 3 commands:**
 

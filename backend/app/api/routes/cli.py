@@ -583,6 +583,25 @@ def get_account_context_package(
     return ContextPackageService.get_context_package()
 
 
+@router.post("/account/knowledge/search")
+async def account_search_knowledge(
+    body: KnowledgeSearchBody,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """Account-level analogue of POST /agents/{id}/knowledge/search.
+
+    Used by the account workspace's MCP proxy to serve knowledge_query tool
+    calls from the local orchestrator agent. Scoped to the account user's
+    accessible knowledge sources (public + own private); no agent, no workspace
+    filter.
+    """
+    results = await AccountCLIService.search_knowledge(
+        db=db, user=account_ctx.user, query=body.query, topic=body.topic,
+    )
+    return {"results": results}
+
+
 class MintChildTokenBody(BaseModel):
     machine_name: str = "My Machine"
     machine_info: str | None = None

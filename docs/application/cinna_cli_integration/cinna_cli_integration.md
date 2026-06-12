@@ -38,7 +38,7 @@ Enables local development of remote agents using the `cinna` CLI tool. Users dev
 3. Remote environment is the authoritative runtime — same Python packages, system deps, credentials as production
 4. `cinna exec <command>` runs the command in the remote environment (from another terminal while `cinna dev` is live, or standalone — it does not require an active dev session) and streams stdout/stderr back
 5. Local AI tools (Claude Code, Cursor) read `CLAUDE.md` and `BUILDING_AGENT.md` for agent context; companion guides (`WEBAPP_BUILDING.md`, `COMPLEX_AGENT_DESIGN.md`, …) sit next to `BUILDING_AGENT.md` so the on-demand `./<NAME>.md` references in the building prompt resolve locally — letting the local assistant follow the same webapp-build and complex-agent-design workflows the platform's building agent does
-6. MCP proxy provides `knowledge_query` tool for searching the agent's knowledge base
+6. MCP proxy provides `knowledge_query` tool for searching the agent's knowledge base (scoped to the agent's workspace). An analogous `knowledge_query` tool is also available in the account workspace for the local orchestrator agent — see [account_cli_workspace.md](account_cli_workspace.md) (flow 6b)
 7. When any watched workspace file (`docs/WORKFLOW_PROMPT.md`, `docs/ENTRYPOINT_PROMPT.md`, `docs/REFINER_PROMPT.md`, `docs/CLI_COMMANDS.yaml`, `app-data/storage/STATUS.md`) changes and stabilises — e.g., after a Mutagen sync completes — env-core fires a single callback and the backend emits `WORKSPACE_FILES_CHANGED`; downstream handlers resync agent prompts, refresh the CLI commands cache, and pull the STATUS.md snapshot. This is the same post-action refresh that runs after stream completion <!-- nocheck -->
 
 ### 3. Managing Active Sessions (UI)

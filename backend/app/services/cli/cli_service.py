@@ -491,15 +491,20 @@ class CLIService:
     # ── Knowledge Search ─────────────────────────────────────────────────
 
     @staticmethod
-    async def search_knowledge(
+    async def search_user_knowledge(
         db: Session,
-        agent_id: uuid.UUID,
+        *,
         user_id: uuid.UUID,
         query: str,
         topic: str | None = None,
+        workspace_id: uuid.UUID | None = None,
     ) -> list[dict]:
         """
-        Search the agent's configured knowledge sources.
+        Search a user's accessible knowledge sources.
+
+        User-scoped core of the knowledge search infrastructure, independent of
+        any agent. When ``workspace_id`` is ``None`` there is no workspace
+        filter (all the user's own connected sources + all public sources).
 
         Proxies to the existing knowledge search infrastructure.
         """
@@ -512,12 +517,6 @@ class CLIService:
             get_accessible_source_ids,
             search_article_chunks,
         )
-
-        agent = db.get(Agent, agent_id)
-        if not agent:
-            raise ValueError("Agent not found")
-
-        workspace_id = agent.user_workspace_id
 
         try:
             query_embedding, _ = generate_query_embedding(
@@ -557,6 +556,32 @@ class CLIService:
         except Exception as e:
             logger.error(f"Unexpected error during knowledge search: {e}", exc_info=True)
             return []
+
+    @staticmethod
+    async def search_knowledge(
+        db: Session,
+        agent_id: uuid.UUID,
+        user_id: uuid.UUID,
+        query: str,
+        topic: str | None = None,
+    ) -> list[dict]:
+        """
+        Search the agent's configured knowledge sources.
+
+        Resolves the workspace from the agent and delegates to
+        :meth:`search_user_knowledge`.
+        """
+        agent = db.get(Agent, agent_id)
+        if not agent:
+            raise ValueError("Agent not found")
+
+        return await CLIService.search_user_knowledge(
+            db,
+            user_id=user_id,
+            query=query,
+            topic=topic,
+            workspace_id=agent.user_workspace_id,
+        )
 
 
     # ── Bootstrap Script ─────────────────────────────────────────────────

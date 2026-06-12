@@ -50,6 +50,9 @@
   - `GET /api/v1/cli/account/agents/{agent_id}/inspect` — `AccountCLIContextDep`; path `agent_id`; response `AccountAgentInspectResult` (prompts from the `Agent` DB fields, feature flags, connected credential **name + type only** via `CredentialsService.get_agent_credentials`, live agent-api status when enabled). Ownership-checked (404 no-leak); diagnostic, not audited. Status codes: 200 / 401 / 404.
   - `POST /api/v1/cli/account/api-proxy` — `AccountCLIContextDep`; body `AccountApiProxyRequest`; raw `Response` passthrough (no `response_model`); maps `ApiProxyDenied` → 403 (`excluded_*`) or 400 (`malformed_path`); 413 (body), 429 (rate limit), 502 (streaming/oversize). Status codes: 200/4xx-5xx (inner) / 400 / 403 / 413 / 429 / 502.
 
+  **Knowledge search:**
+  - `async search_knowledge(db, user, query, topic=None) -> list[dict]` — account-level analogue of the per-agent knowledge search. No `require_developer` (read). Delegates to `CLIService.search_user_knowledge` with `workspace_id=None`. No SecurityEvent / audit (high-frequency read; mirrors the unaudited per-agent route).
+
   **Credential drafting verbs** (metadata + structure only — the account token never reads or writes a credential's secret value; these expose the *safe* slice of an otherwise denylisted surface):
   - `GET /api/v1/cli/account/credentials/types` — `AccountCLIContextDep`; response `AccountCredentialTypesPublic`; static catalogue of `CredentialType` + per-type `required_fields` (from `CredentialsService.REQUIRED_FIELDS`). No `require_developer` (read).
   - `GET /api/v1/cli/account/credentials` — `AccountCLIContextDep`; query `?user_workspace_id=` (omitted = all, `""` = Default, UUID = that workspace); response `CredentialsPublic` (metadata only via the same projection as the credentials route — `share_count` + computed `status`, **never `credential_data`**). No `require_developer`.
@@ -183,6 +186,10 @@
   - This module is the single source of truth for both the backend endpoint
     (`context_package_service.py`) and the repo-root sync script
     (`.cinna-core-kit/scripts/sync_platform_knowledge.py`), which imports from it.
+
+- `backend/app/services/cli/cli_service.py` — `CLIService` — **refactored knowledge search core**:
+  - `async search_user_knowledge(db, *, user_id, query, topic=None, workspace_id=None) -> list[dict]` — reusable user-scoped knowledge search. Resolves accessible source IDs via `get_accessible_source_ids(user_id, workspace_id)` (public + user-owned private; `workspace_id=None` skips the workspace filter), runs vector search, and returns `[{content, source, similarity}]`. Returns `[]` on `VectorSearchError` or empty source set. Both the per-agent and account-level paths delegate here.
+  - `async search_knowledge(db, agent_id, user_id, query, topic=None) -> list[dict]` — per-agent path (unchanged behavior): resolves `workspace_id` from `agent.user_workspace_id` and delegates to `search_user_knowledge`.
 
 - `backend/app/services/cli/account_cli_service.py` — `AccountCLIService`:
   all static methods (mirrors `CLIService` style):
@@ -331,6 +338,8 @@
     (exercises `ContextPackageService._cache` keyed by `_snapshot_version()`); both
     responses are structurally valid tarballs
 
+  - **Scenario 21b** — `POST /account/knowledge/search`: valid account token + query → 200, `{"results": [...]}` shape; optional `topic` param accepted; per-agent CLI token → 401; regular user JWT → 401; revoked account token → 401.
+
   **Phase 4 additional assertions (agentic-teams escape-hatch reachability):**
   The Phase 3 chokepoint test (`test_account_api_proxy_policy.py`) asserts that
   `GET /agentic-teams`, `POST /agentic-teams`, `POST /agentic-teams/{id}/nodes/`,
@@ -420,6 +429,7 @@ Response:
 | `PUT` | `/api/v1/cli/account/credentials/{credential_id}` | 200 / 400 / 403 / 404 | Update metadata only; `require_developer`-gated; body `AccountCredentialUpdateBody`; response `CredentialPublic` |
 | `DELETE` | `/api/v1/cli/account/credentials/{credential_id}` | 200 / 400 / 403 / 404 / 409 | Delete (blast-radius tier-gated; 409+impact on Tier 2 unless `?force=true`); `require_developer`-gated; response `Message` |
 | `POST` | `/api/v1/cli/account/credentials/{credential_id}/share-with-agent` | 200 / 400 / 403 / 404 | Attach credential to an owned agent; `require_developer`-gated; body `AccountCredentialShareBody`; response `Message` |
+| `POST` | `/api/v1/cli/account/knowledge/search` | 200 / 401 | Search knowledge sources accessible to the account user; body `KnowledgeSearchBody {query, topic?}`; response `{results: [{content, source, similarity}]}`; empty list when no accessible sources; no `require_developer` (read); no audit |
 | `POST` | `/api/v1/cli/account/api-proxy` | inner / 400 / 403 / 413 / 429 / 502 | Generic escape hatch; body `AccountApiProxyRequest`; raw `Response` passthrough |
 
 **Phase 4 note:** No new routes were added. Agentic-teams team/node/connection CRUD
@@ -428,6 +438,8 @@ router prefix (`/agentic-teams`) is not on `EXCLUDED_PREFIXES`, so the full surf
 (`POST agentic-teams`, `POST agentic-teams/{id}/nodes/`,
 `POST agentic-teams/{id}/connections/`, `GET agentic-teams/{id}/chart`, etc.) is
 proxyable verbatim.
+
+**Knowledge search note:** No new models, no migration, no config knobs, no audit. `KnowledgeSearchBody` is reused from the per-agent route. The CLI-side MCP proxy wiring (`.mcp.json` entry that maps the `knowledge_query` tool to `POST /account/knowledge/search`) lives in the `cinna-cli` repo.
 
 Mint request body:
 ```json

@@ -275,6 +275,35 @@ class AccountCLIService:
             )
         return items
 
+    # ── Knowledge Search ─────────────────────────────────────────────────
+
+    @staticmethod
+    async def search_knowledge(
+        db: Session,
+        user: User,
+        query: str,
+        topic: str | None = None,
+    ) -> list[dict]:
+        """
+        Account-level analogue of the per-agent knowledge search.
+
+        Scoped to the account user's accessible knowledge sources (public + own
+        private). There is no agent and no workspace filter; delegates to the
+        shared user-scoped core in ``CLIService``.
+        """
+        # Lazy import of the sibling service class (matches the local-import
+        # convention used elsewhere in this module; the module-level import from
+        # cli_service is value-only and the dependency stays one-directional).
+        from app.services.cli.cli_service import CLIService
+
+        return await CLIService.search_user_knowledge(
+            db,
+            user_id=user.id,
+            query=query,
+            topic=topic,
+            workspace_id=None,
+        )
+
     # ── Child Token Minting ──────────────────────────────────────────────
 
     @staticmethod

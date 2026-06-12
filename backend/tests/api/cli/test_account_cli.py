@@ -44,6 +44,10 @@ Phase 3 — Convenience verbs + generic API escape hatch:
   CLI recursion → 403; GET users/me → 200); auth matrix (user JWT / child token /
   revoked account token → 401); ``CLI_ACCOUNT_API_PROXY_CALL`` SecurityEvent on
   exclusion hits only; allowed call writes no such event
+- POST /account/knowledge/search — account-level knowledge search (Scenario 21b):
+  200 + {"results": list} for a valid account CLI token; empty list in test DB is
+  expected/valid; optional ``topic`` accepted; auth matrix (per-agent child token /
+  user JWT / revoked account token / no auth → 401)
 
 Notes:
 - Unit tests for the pure exclusion-policy chokepoint (all denylist prefixes,
@@ -2809,6 +2813,120 @@ def test_account_agent_api_call_restart_inspect(
     )
     assert r.status_code == 403, (
         f"restart-env by a demoted (agent-user) account token must be 403, got {r.status_code}: {r.text}"
+    )
+
+
+# ── Scenario 21b: POST /account/knowledge/search ─────────────────────────────
+
+
+def test_account_knowledge_search(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    POST /account/knowledge/search — account-level knowledge search:
+      1. Valid account CLI token + query → 200, body shape {"results": list}
+         (no accessible knowledge sources in test DB → results == [] is valid)
+      2. Optional ``topic`` field accepted → 200, same shape
+      3. Auth matrix — structural isolation (load-bearing):
+         a. Per-agent child CLI token → 401 (AccountCLIContextDep rejects it)
+         b. Regular user JWT → 401
+         c. Revoked account token → 401
+         d. No auth header → 401
+    """
+    # ── Phase 1: Bootstrap account token ──────────────────────────────────
+    account_jwt, account_token_id = bootstrap_account_token(
+        client, superuser_token_headers, machine_name="Knowledge Search Machine"
+    )
+    acc_headers = account_cli_headers(account_jwt)
+
+    # ── Phase 2: Happy path — query only → 200 + list shape ───────────────
+    r = client.post(
+        f"{_BASE}/account/knowledge/search",
+        headers=acc_headers,
+        json={"query": "test query for knowledge search"},
+    )
+    assert r.status_code == 200, (
+        f"POST /account/knowledge/search must return 200 for a valid account "
+        f"CLI token, got {r.status_code}: {r.text}"
+    )
+    body = r.json()
+    assert "results" in body, (
+        f"Response must have a 'results' key, got: {body!r}"
+    )
+    assert isinstance(body["results"], list), (
+        f"'results' must be a list, got: {type(body['results'])!r}"
+    )
+    # In the test DB there are no accessible knowledge sources; an empty list is
+    # the correct and expected result — assert shape, not specific content.
+
+    # ── Phase 3: Optional topic field accepted → 200 + same shape ─────────
+    r = client.post(
+        f"{_BASE}/account/knowledge/search",
+        headers=acc_headers,
+        json={"query": "test query with topic", "topic": "general"},
+    )
+    assert r.status_code == 200, (
+        f"POST /account/knowledge/search with topic must return 200, "
+        f"got {r.status_code}: {r.text}"
+    )
+    body_with_topic = r.json()
+    assert "results" in body_with_topic, (
+        f"Response with topic must have a 'results' key, got: {body_with_topic!r}"
+    )
+    assert isinstance(body_with_topic["results"], list), (
+        f"'results' with topic must be a list, got: {type(body_with_topic['results'])!r}"
+    )
+
+    # ── Phase 4: Auth matrix — structural isolation ────────────────────────
+
+    # a. Per-agent child CLI token → 401 (AccountCLIContextDep rejects it)
+    agent = create_agent_via_api(client, superuser_token_headers)
+    mint = mint_child_token(
+        client, acc_headers, agent["id"], machine_name="Knowledge Search Child"
+    )
+    child_headers = cli_auth_headers(mint["token"])
+    r = client.post(
+        f"{_BASE}/account/knowledge/search",
+        headers=child_headers,
+        json={"query": "per-agent token should fail"},
+    )
+    assert r.status_code == 401, (
+        f"Per-agent child CLI token must be rejected by "
+        f"POST /account/knowledge/search, got {r.status_code}: {r.text}"
+    )
+
+    # b. Regular user JWT → 401
+    r = client.post(
+        f"{_BASE}/account/knowledge/search",
+        headers=superuser_token_headers,
+        json={"query": "user JWT should fail"},
+    )
+    assert r.status_code == 401, (
+        f"Regular user JWT must be rejected by POST /account/knowledge/search, "
+        f"got {r.status_code}: {r.text}"
+    )
+
+    # c. Revoked account token → 401
+    revoke_account_token(client, superuser_token_headers, account_token_id)
+    r = client.post(
+        f"{_BASE}/account/knowledge/search",
+        headers=acc_headers,
+        json={"query": "revoked token should fail"},
+    )
+    assert r.status_code == 401, (
+        f"Revoked account token must return 401 on POST /account/knowledge/search, "
+        f"got {r.status_code}: {r.text}"
+    )
+
+    # d. No auth header → 401/403
+    r = client.post(
+        f"{_BASE}/account/knowledge/search",
+        json={"query": "no auth should fail"},
+    )
+    assert r.status_code in (401, 403), (
+        f"Missing auth must be rejected on POST /account/knowledge/search, "
+        f"got {r.status_code}: {r.text}"
     )
 
 
