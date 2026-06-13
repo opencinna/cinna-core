@@ -1,4 +1,4 @@
-import type { AdminAICredentialPublic } from "@/client"
+import type { ManagedAICredentialMember, ManagedAICredentialPublic } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import {
   Table,
@@ -12,10 +12,23 @@ import { LlmProviderActionsMenu } from "./LlmProviderActionsMenu"
 import { getProviderTypeLabel } from "./providerTypes"
 
 interface LlmProvidersTableProps {
-  credentials: AdminAICredentialPublic[]
-  // Maps owner user id → display label (email or full name). Owners not in the
-  // map fall back to a shortened id.
-  ownerLabels: Record<string, string>
+  records: ManagedAICredentialPublic[]
+}
+
+function memberBadgeLabel(member: ManagedAICredentialMember): string {
+  if (member.full_name) return `${member.full_name} <${member.email}>`
+  return member.email
+}
+
+function BooleanBadge({ value }: { value: boolean }) {
+  if (value) {
+    return <Badge variant="secondary">Yes</Badge>
+  }
+  return (
+    <Badge variant="outline" className="text-muted-foreground">
+      No
+    </Badge>
+  )
 }
 
 function formatDate(value: string): string {
@@ -28,18 +41,11 @@ function formatDate(value: string): string {
   })
 }
 
-function ownerLabel(ownerId: string, labels: Record<string, string>): string {
-  return labels[ownerId] ?? `${ownerId.slice(0, 8)}…`
-}
-
-export function LlmProvidersTable({
-  credentials,
-  ownerLabels,
-}: LlmProvidersTableProps) {
-  if (credentials.length === 0) {
+export function LlmProvidersTable({ records }: LlmProvidersTableProps) {
+  if (records.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-2 rounded-md border border-dashed py-20 text-center">
-        <p className="text-muted-foreground">No admin-managed credentials found.</p>
+        <p className="text-muted-foreground">No managed credentials found.</p>
         <p className="text-xs text-muted-foreground">
           Provision a credential to get started.
         </p>
@@ -52,36 +58,48 @@ export function LlmProvidersTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Target User</TableHead>
-            <TableHead>Name</TableHead>
-            <TableHead>Provider</TableHead>
-            <TableHead>Default</TableHead>
-            <TableHead>Created</TableHead>
-            <TableHead className="w-12" />
+            <TableHead className="w-[18%]">Name</TableHead>
+            <TableHead className="w-[12%]">Provider</TableHead>
+            <TableHead className="w-[12%]">Default provider</TableHead>
+            <TableHead className="w-[10%]">Default SDK</TableHead>
+            <TableHead>Shared with</TableHead>
+            <TableHead className="w-[12%]">Created</TableHead>
+            <TableHead className="w-[48px]" />
           </TableRow>
         </TableHeader>
         <TableBody>
-          {credentials.map((cred) => (
-            <TableRow key={cred.id}>
-              <TableCell className="font-medium">
-                {ownerLabel(cred.owner_id, ownerLabels)}
-              </TableCell>
-              <TableCell>{cred.name}</TableCell>
+          {records.map((record) => (
+            <TableRow key={record.id} className="align-top">
+              <TableCell className="font-medium">{record.name}</TableCell>
               <TableCell>
-                <Badge variant="secondary">{getProviderTypeLabel(cred.type)}</Badge>
+                <Badge variant="secondary">{getProviderTypeLabel(record.type)}</Badge>
               </TableCell>
               <TableCell>
-                {cred.is_default ? (
-                  <Badge>Default</Badge>
-                ) : (
-                  <span className="text-muted-foreground text-xs">—</span>
-                )}
+                <BooleanBadge value={Boolean(record.set_as_default)} />
+              </TableCell>
+              <TableCell>
+                <BooleanBadge value={Boolean(record.set_user_sdk_defaults)} />
+              </TableCell>
+              <TableCell>
+                <div className="flex flex-wrap gap-2">
+                  {(record.members ?? []).map((member) => (
+                    <div
+                      key={member.user_id}
+                      className="inline-flex items-center gap-1.5 rounded-full border bg-muted/40 px-3 py-0.5 text-xs"
+                    >
+                      <span className="truncate">{memberBadgeLabel(member)}</span>
+                    </div>
+                  ))}
+                  {(record.members ?? []).length === 0 && (
+                    <span className="text-xs text-muted-foreground">No members</span>
+                  )}
+                </div>
               </TableCell>
               <TableCell className="text-muted-foreground text-sm">
-                {formatDate(cred.created_at)}
+                {formatDate(record.created_at)}
               </TableCell>
-              <TableCell>
-                <LlmProviderActionsMenu credential={cred} />
+              <TableCell className="text-right">
+                <LlmProviderActionsMenu record={record} />
               </TableCell>
             </TableRow>
           ))}

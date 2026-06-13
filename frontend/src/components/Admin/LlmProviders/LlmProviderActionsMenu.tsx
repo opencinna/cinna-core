@@ -3,10 +3,10 @@ import { CheckCircle2, EllipsisVertical, Pencil, Trash } from "lucide-react"
 import { useState } from "react"
 
 import {
-  type AdminAICredentialPublic,
-  type AICredentialUpdate,
+  type ManagedAICredentialPublic,
   AdminLlmProvidersService,
 } from "@/client"
+import { ApiError } from "@/client/core/ApiError"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,153 +19,127 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { LoadingButton } from "@/components/ui/loading-button"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
+import { ManagedCredentialDialog } from "./ManagedCredentialDialog"
 import { MANAGED_CREDENTIALS_QUERY_PREFIX } from "./providerTypes"
 
 interface LlmProviderActionsMenuProps {
-  credential: AdminAICredentialPublic
+  record: ManagedAICredentialPublic
 }
 
-export function LlmProviderActionsMenu({ credential }: LlmProviderActionsMenuProps) {
+// One blocked member from a 409 delete response.
+interface BlockedMember {
+  user_id: string
+  reason: string
+  impact?: unknown
+}
+
+// Extract the blocked-members list from a 409 ApiError body
+// ({ detail: { message, blocked: [...] } }).
+function blockedFromError(error: unknown): BlockedMember[] | null {
+  if (error instanceof ApiError && error.status === 409) {
+    const detail = (error.body as { detail?: unknown } | undefined)?.detail
+    if (detail && typeof detail === "object" && "blocked" in detail) {
+      const blocked = (detail as { blocked?: unknown }).blocked
+      if (Array.isArray(blocked)) return blocked as BlockedMember[]
+    }
+  }
+  return null
+}
+
+export function LlmProviderActionsMenu({ record }: LlmProviderActionsMenuProps) {
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
+  // Populated when a non-forced delete is blocked by bundle usage (409); drives
+  // the "force delete" confirmation copy.
+  const [blocked, setBlocked] = useState<BlockedMember[] | null>(null)
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
-
-  const showBaseUrl =
-    credential.type === "openai_compatible" || credential.type === "google"
-  const showModel = credential.type === "openai_compatible"
-
-  // Local edit form state (metadata-only: name, api_key, base_url, model).
-  const [name, setName] = useState(credential.name)
-  const [apiKey, setApiKey] = useState("")
-  const [baseUrl, setBaseUrl] = useState(credential.base_url ?? "")
-  const [model, setModel] = useState(credential.model ?? "")
-
-  const resetEditForm = () => {
-    setName(credential.name)
-    setApiKey("")
-    setBaseUrl(credential.base_url ?? "")
-    setModel(credential.model ?? "")
-  }
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: MANAGED_CREDENTIALS_QUERY_PREFIX })
 
-  const updateMutation = useMutation({
-    mutationFn: (body: AICredentialUpdate) =>
-      AdminLlmProvidersService.updateManagedAiCredential({
-        credentialId: credential.id,
-        requestBody: body,
-      }),
-    onSuccess: () => {
-      showSuccessToast("Credential updated.")
-      setIsEditOpen(false)
-    },
-    onError: handleError.bind(showErrorToast),
-    onSettled: () => void invalidate(),
-  })
+  const memberLabelById = new Map(
+    (record.members ?? []).map((m) => [
+      m.user_id,
+      m.full_name ? `${m.full_name} <${m.email}>` : m.email,
+    ]),
+  )
+  const labelFor = (userId: string) => memberLabelById.get(userId) ?? userId
 
   const setDefaultMutation = useMutation({
     mutationFn: () =>
       AdminLlmProvidersService.setManagedAiCredentialDefault({
-        credentialId: credential.id,
+        managedCredentialId: record.id,
       }),
     onSuccess: () => {
-      showSuccessToast("Set as the owner's default credential.")
+      showSuccessToast("Set as the default credential for all members.")
     },
     onError: handleError.bind(showErrorToast),
     onSettled: () => void invalidate(),
   })
 
   const deleteMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (force: boolean) =>
       AdminLlmProvidersService.deleteManagedAiCredential({
-        credentialId: credential.id,
+        managedCredentialId: record.id,
+        force,
       }),
     onSuccess: () => {
-      showSuccessToast("Credential deleted.")
+      showSuccessToast("Managed credential deleted.")
+      setBlocked(null)
       setIsDeleteOpen(false)
     },
-    onError: handleError.bind(showErrorToast),
+    onError: (error) => {
+      const blockedMembers = blockedFromError(error)
+      if (blockedMembers) {
+        // Surface the Tier-2 block: keep the dialog open and switch it into the
+        // "force delete" confirmation (mirrors the AI-credential Tier-2 flow).
+        setBlocked(blockedMembers)
+        showErrorToast(
+          "One or more members are in use by a published bundle. Review below before forcing.",
+        )
+        return
+      }
+      handleError.call(showErrorToast, error as ApiError)
+    },
     onSettled: () => void invalidate(),
   })
 
-  const onSubmitEdit = () => {
-    // For OpenAI-compatible credentials base_url and model are mandatory, so
-    // block clearing them out (mirrors the provision form rules).
-    if (showBaseUrl && credential.type === "openai_compatible" && baseUrl.trim() === "") {
-      showErrorToast("Base URL is required for OpenAI Compatible providers.")
-      return
-    }
-    if (showModel && model.trim() === "") {
-      showErrorToast("Model is required for OpenAI Compatible providers.")
-      return
-    }
-
-    const body: AICredentialUpdate = {}
-    if (name.trim() !== credential.name) body.name = name.trim()
-    if (apiKey.trim() !== "") body.api_key = apiKey
-    if (showBaseUrl && baseUrl !== (credential.base_url ?? "")) {
-      body.base_url = baseUrl.trim() || null
-    }
-    if (showModel && model !== (credential.model ?? "")) {
-      body.model = model.trim() || null
-    }
-
-    if (Object.keys(body).length === 0) {
-      showErrorToast("No changes to save.")
-      return
-    }
-    updateMutation.mutate(body)
-  }
+  const isBlocked = (blocked?.length ?? 0) > 0
 
   return (
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+          <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
             <EllipsisVertical className="h-4 w-4" />
             <span className="sr-only">Open menu</span>
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuItem
-            onClick={() => {
-              resetEditForm()
-              setIsEditOpen(true)
-            }}
-          >
+          <DropdownMenuItem onClick={() => setIsEditOpen(true)}>
             <Pencil className="mr-2 h-4 w-4" />
             Edit
           </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() => setDefaultMutation.mutate()}
-            disabled={credential.is_default || setDefaultMutation.isPending}
+            disabled={setDefaultMutation.isPending}
           >
             <CheckCircle2 className="mr-2 h-4 w-4" />
-            {credential.is_default ? "Already default" : "Set as default"}
+            Set default for all
           </DropdownMenuItem>
           <DropdownMenuItem
-            onClick={() => setIsDeleteOpen(true)}
+            onClick={() => {
+              setBlocked(null)
+              setIsDeleteOpen(true)
+            }}
             className="text-destructive focus:text-destructive"
           >
             <Trash className="mr-2 h-4 w-4" />
@@ -174,86 +148,59 @@ export function LlmProviderActionsMenu({ credential }: LlmProviderActionsMenuPro
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* Edit dialog */}
-      <Dialog
+      {/* Unified edit dialog */}
+      <ManagedCredentialDialog
+        mode="edit"
+        record={record}
         open={isEditOpen}
+        onOpenChange={setIsEditOpen}
+      />
+
+      {/* Delete confirm — escalates to a force confirmation on a 409 block */}
+      <AlertDialog
+        open={isDeleteOpen}
         onOpenChange={(open) => {
-          setIsEditOpen(open)
-          if (!open) resetEditForm()
+          setIsDeleteOpen(open)
+          if (!open) setBlocked(null)
         }}
       >
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Edit Credential</DialogTitle>
-            <DialogDescription>
-              Update the credential on behalf of its owner. Leave the API key blank
-              to keep the existing key.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="edit-name">Name</Label>
-              <Input
-                id="edit-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="edit-api-key">API Key</Label>
-              <Input
-                id="edit-api-key"
-                type="password"
-                autoComplete="off"
-                placeholder="Leave blank to keep existing key"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-              />
-            </div>
-            {showBaseUrl && (
-              <div className="space-y-2">
-                <Label htmlFor="edit-base-url">Base URL</Label>
-                <Input
-                  id="edit-base-url"
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                />
-              </div>
-            )}
-            {showModel && (
-              <div className="space-y-2">
-                <Label htmlFor="edit-model">Model</Label>
-                <Input
-                  id="edit-model"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                />
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button variant="outline" disabled={updateMutation.isPending}>
-                Cancel
-              </Button>
-            </DialogClose>
-            <LoadingButton onClick={onSubmitEdit} loading={updateMutation.isPending}>
-              Save
-            </LoadingButton>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete confirm */}
-      <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Credential</AlertDialogTitle>
+            <AlertDialogTitle>
+              {isBlocked ? "Members in use by a bundle" : "Delete Managed Credential"}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              Delete "{credential.name}" provisioned for this user? This removes the
-              user's credential. This action cannot be undone.
+              {isBlocked ? (
+                <>
+                  Some members couldn't be removed because their credential is in use
+                  by a published bundle. Forcing the delete will degrade those bundles
+                  back to "user provides". This action cannot be undone.
+                </>
+              ) : (
+                <>
+                  Delete "{record.name}" and every member's credential
+                  {record.member_count
+                    ? ` (${record.member_count} member${record.member_count === 1 ? "" : "s"})`
+                    : ""}
+                  ? This action cannot be undone.
+                </>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
+
+          {isBlocked && (
+            <ul className="space-y-1 text-sm">
+              {blocked!.map((b) => (
+                <li
+                  key={b.user_id}
+                  className="rounded-md border bg-muted/30 px-3 py-1.5 text-muted-foreground"
+                >
+                  {labelFor(b.user_id)}
+                </li>
+              ))}
+            </ul>
+          )}
+
           <AlertDialogFooter>
             <AlertDialogCancel disabled={deleteMutation.isPending}>
               Cancel
@@ -261,11 +208,15 @@ export function LlmProviderActionsMenu({ credential }: LlmProviderActionsMenuPro
             <AlertDialogAction
               onClick={(e) => {
                 e.preventDefault()
-                deleteMutation.mutate()
+                deleteMutation.mutate(isBlocked)
               }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+              {deleteMutation.isPending
+                ? "Deleting..."
+                : isBlocked
+                  ? "Force delete & degrade bundles"
+                  : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

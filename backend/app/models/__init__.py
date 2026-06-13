@@ -105,6 +105,16 @@ from .credentials.ai_credential import (
     AdminProvisionSkip,
     AdminAICredentialProvisionResult,
 )
+from .credentials.managed_ai_credential import (
+    ManagedAICredential,
+    ManagedAICredentialMember,
+    ManagedAICredentialPublic,
+    ManagedAICredentialCreate,
+    ManagedAICredentialUpdate,
+    ManagedReconcileSkip,
+    ManagedReconcileBlock,
+    ManagedAICredentialReconcileResult,
+)
 from .credentials.ai_credential_share import (
     AICredentialShare,
     AICredentialShareBase,
@@ -772,6 +782,15 @@ __all__ = [
     "AdminAICredentialCreate",
     "AdminProvisionSkip",
     "AdminAICredentialProvisionResult",
+    # Managed AI Credentials (admin-managed parent/child)
+    "ManagedAICredential",
+    "ManagedAICredentialMember",
+    "ManagedAICredentialPublic",
+    "ManagedAICredentialCreate",
+    "ManagedAICredentialUpdate",
+    "ManagedReconcileSkip",
+    "ManagedReconcileBlock",
+    "ManagedAICredentialReconcileResult",
     "AICredentialsPublic",
     "AICredentialType",
     "AICredentialData",

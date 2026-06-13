@@ -39,7 +39,7 @@ The event translation layer for each adapter is responsible for converting SDK-s
 | SDK ID | Display Name | Credential Type | Status |
 |--------|-------------|-----------------|--------|
 | `claude-code/anthropic` | Anthropic Claude | `anthropic` | Implemented (default) |
-| `claude-code/minimax` | MiniMax M2 | `minimax` | Implemented |
+| `claude-code/minimax` | MiniMax M2 | `minimax` | Implemented (backend only — **temporarily disabled in UI, not currently supported**) |
 
 ### OpenCode Engine
 

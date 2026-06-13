@@ -12,6 +12,26 @@ Auto-generated from OpenAPI spec. Tag: `external`
 
 ---
 
+## POST `/api/v1/external/agents/{agent_id}/check-updates`
+**Check External Install Updates**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Response:** `CheckUpdatesResponse`
+
+---
+
+## POST `/api/v1/external/agents/{agent_id}/apply-update`
+**Apply External Install Update**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Response:** `BundleVersionInfo`
+
+---
+
 ## GET `/api/v1/external/sessions`
 **List External Sessions**
 
@@ -44,5 +64,12 @@ Auto-generated from OpenAPI spec. Tag: `external`
 
 **Path parameters:**
 - `session_id`: uuid
+
+---
+
+## GET `/api/v1/external/account-config`
+**Get Account Config**
+
+**Response:** `AccountConfigResponse`
 
 ---

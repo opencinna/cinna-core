@@ -118,6 +118,7 @@ Note: `anthropic` credentials also support OAuth tokens (prefix `sk-ant-oat*`) �
 - **Base URL + Model required** - Only for `openai_compatible` type; base URL is optional for `google`
 - **Keys never exposed** - API responses show `has_api_key: true` instead of the actual key
 - **Share access control** - Shared credentials can only be used, not modified, by recipients
+- **Admin-managed credentials are read-only to the owner** - A credential provisioned by a superuser carries `is_admin_managed: true` in its public projection. The owner may use it and set it as their default, but cannot edit, delete, or re-key it (the backend returns `403`). In **Settings → AI Credentials** these rows render a **"Managed" badge** (shield icon, tooltip "Managed by your administrator…") and **hide the Edit/Delete buttons** (the set-default star stays, rendered after the type badge). See [Admin-Provisioned AI Credentials](admin_ai_credential_provisioning.md)
 
 ## Architecture Overview
 

@@ -266,6 +266,7 @@ Configured via `MODEL_DISCOVERY_ENABLED` (default `True`) and
 - Credentials list card with compact rows: name, default star icon, expiry badge, type label, set-default/edit/delete buttons
 - Set default via star icon; triggers `AffectedEnvironmentsDialog` after success
 - Add button opens `AICredentialDialog`
+- **Admin-managed rows** (`cred.is_admin_managed`) render a blue **"Managed" badge** (`ShieldCheck` icon) and suppress the Edit/Delete buttons; the set-default star is the trailing action (the default-status amber star moves to the right of the type label for these rows). Backend enforces the read-only guard regardless — the UI gating is defense-in-depth. See [Admin-Provisioned AI Credentials](admin_ai_credential_provisioning.md)
 - SDK Preferences card with compact summary rows for Conversation and Building modes:
   - Each row shows: mode icon, engine name (bold), resolved credential name (muted), model override if set
   - Pencil button opens `SDKModeEditDialog` modal with SDK engine, credential, and model override fields

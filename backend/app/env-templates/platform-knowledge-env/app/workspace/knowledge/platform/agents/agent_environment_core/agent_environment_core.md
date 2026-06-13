@@ -16,7 +16,7 @@ Pluggable adapter system supporting multiple AI providers. Each adapter converts
 
 - **Adapter ID format**: `<adapter-type>/<provider>` (e.g., `claude-code/anthropic`, `opencode/openai`)
 - **Two SDK engines:**
-  - **Claude Code** — Anthropic's CLI agent SDK, communicates via Python subprocess (`claude_agent_sdk`). Supports `anthropic`, `minimax`.
+  - **Claude Code** — Anthropic's CLI agent SDK, communicates via Python subprocess (`claude_agent_sdk`). Supports `anthropic` (and `minimax` at the code level, but `minimax` is temporarily disabled in the UI — not currently supported).
   - **OpenCode** — Open-source multi-provider agent running as an HTTP server (`opencode serve`). Supports `anthropic`, `openai`, `openai_compatible`, `google`. Custom tools are bridged via local MCP servers.
 
 ### Session Modes

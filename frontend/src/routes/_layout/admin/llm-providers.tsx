@@ -3,13 +3,13 @@ import { createFileRoute, redirect } from "@tanstack/react-router"
 import { Filter } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 
-import { AdminLlmProvidersService, UsersService } from "@/client"
+import { AdminLlmProvidersService } from "@/client"
 import {
   UserAllowlistPicker,
   type UserAllowlistSelectedItem,
 } from "@/components/Common/UserAllowlistPicker"
 import { LlmProvidersTable } from "@/components/Admin/LlmProviders/LlmProvidersTable"
-import { ProvisionLlmProviderDialog } from "@/components/Admin/LlmProviders/ProvisionLlmProviderDialog"
+import { ManagedCredentialDialog } from "@/components/Admin/LlmProviders/ManagedCredentialDialog"
 import { managedCredentialsQueryKey } from "@/components/Admin/LlmProviders/providerTypes"
 import PendingItems from "@/components/Pending/PendingItems"
 import { Button } from "@/components/ui/button"
@@ -52,7 +52,9 @@ function AdminLlmProviders() {
 
   // Single-user filter, modeled as a 0-or-1 entry selection so it can reuse
   // the shared UserAllowlistPicker. The filter panel is hidden by default and
-  // toggled open via the "Filter" button in the page header.
+  // toggled open via the "Filter" button in the page header. Maps to the
+  // backend `target_user_id` query param (records that have that user as a
+  // member).
   const [filterUser, setFilterUser] = useState<UserAllowlistSelectedItem | null>(null)
   const [showFilter, setShowFilter] = useState(false)
   const targetUserId = filterUser?.userId ?? undefined
@@ -67,7 +69,7 @@ function AdminLlmProviders() {
   }, [targetUserId])
 
   const {
-    data: credentials,
+    data: records,
     isLoading,
     isError,
   } = useQuery({
@@ -77,34 +79,19 @@ function AdminLlmProviders() {
     staleTime: 30_000,
   })
 
-  // Resolve owner display labels from the admin user list. Superusers have
-  // access to GET /users/, so this is a single fetch reused for all rows.
-  const { data: users } = useQuery({
-    queryKey: ["users", "for-llm-providers"],
-    queryFn: () => UsersService.readUsers({ skip: 0, limit: 100 }),
-  })
+  // Sort by name for stable ordering across refetches.
+  const sortedRecords = useMemo(
+    () => [...(records ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
+    [records],
+  )
 
-  const ownerLabels = useMemo(() => {
-    const map: Record<string, string> = {}
-    for (const u of users?.data ?? []) {
-      map[u.id] = u.full_name || u.email
-    }
-    // Ensure the actively-filtered user is always labeled even if outside the
-    // first page of the admin user list.
-    if (filterUser?.userId && filterUser.fallbackLabel) {
-      map[filterUser.userId] = filterUser.fallbackLabel
-    }
-    return map
-  }, [users, filterUser])
-
-  // Derived pagination: clamp the active page to the available range and slice
-  // the current page out of the full list.
-  const totalCount = credentials?.length ?? 0
-  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
+  // Derived pagination over records: clamp the active page and slice the
+  // current page out of the list.
+  const totalPages = Math.max(1, Math.ceil(sortedRecords.length / PAGE_SIZE))
   const currentPage = Math.min(page, totalPages)
-  const pagedCredentials = useMemo(
-    () => (credentials ?? []).slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
-    [credentials, currentPage],
+  const pagedRecords = useMemo(
+    () => sortedRecords.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [sortedRecords, currentPage],
   )
 
   useEffect(() => {
@@ -128,7 +115,7 @@ function AdminLlmProviders() {
               <span className="ml-2 inline-block size-2 rounded-full bg-primary" />
             )}
           </Button>
-          <ProvisionLlmProviderDialog />
+          <ManagedCredentialDialog mode="create" />
         </div>
       </>,
     )
@@ -178,7 +165,7 @@ function AdminLlmProviders() {
 
         {isLoading ? (
           <PendingItems />
-        ) : isError || !credentials ? (
+        ) : isError || !records ? (
           <div className="flex flex-col items-center justify-center gap-2 py-20 text-center">
             <p className="text-muted-foreground">
               Failed to load credentials. Please try refreshing the page.
@@ -186,7 +173,7 @@ function AdminLlmProviders() {
           </div>
         ) : (
           <>
-            <LlmProvidersTable credentials={pagedCredentials} ownerLabels={ownerLabels} />
+            <LlmProvidersTable records={pagedRecords} />
             {totalPages > 1 && (
               <Pagination>
                 <PaginationContent>

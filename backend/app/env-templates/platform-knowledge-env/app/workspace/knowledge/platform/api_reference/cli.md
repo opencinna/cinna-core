@@ -136,6 +136,15 @@ Auto-generated from OpenAPI spec. Tag: `cli`
 
 ---
 
+## POST `/api/v1/cli/account/knowledge/search`
+**Account Search Knowledge**
+
+**Request body** (`KnowledgeSearchBody`):
+  - `query`: string (required)
+  - `topic`: string | null
+
+---
+
 ## POST `/api/v1/cli/account/agents/{agent_id}/mint`
 **Mint Child Token**
 
@@ -251,6 +260,130 @@ Auto-generated from OpenAPI spec. Tag: `cli`
   - `label`: string | null
 
 **Response:** `MCPProviderConnectionResponse`
+
+---
+
+## GET `/api/v1/cli/account/agents/{agent_id}/schedules`
+**Account List Schedules**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Response:** `AgentSchedulesPublic`
+
+---
+
+## POST `/api/v1/cli/account/agents/{agent_id}/schedules`
+**Account Create Schedule**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Request body** (`CreateScheduleRequest`):
+  - `name`: string (required)
+  - `cron_string`: string (required)
+  - `timezone`: string (required)
+  - `description`: string (required)
+  - `prompt`: string | null
+  - `enabled`: boolean
+  - `schedule_type`: string
+  - `command`: string | null
+
+**Response:** `AgentSchedulePublic`
+
+---
+
+## POST `/api/v1/cli/account/agents/{agent_id}/schedules/generate`
+**Account Generate Schedule**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Request body** (`ScheduleRequest`):
+  - `natural_language`: string (required)
+  - `timezone`: string (required)
+  - `schedule_type`: string
+
+**Response:** `ScheduleResponse`
+
+---
+
+## PUT `/api/v1/cli/account/agents/{agent_id}/schedules/{schedule_id}`
+**Account Update Schedule**
+
+**Path parameters:**
+- `agent_id`: uuid
+- `schedule_id`: uuid
+
+**Request body** (`UpdateScheduleRequest`):
+  - `name`: string | null
+  - `cron_string`: string | null
+  - `timezone`: string | null
+  - `description`: string | null
+  - `prompt`: string | null
+  - `enabled`: boolean | null
+  - `command`: string | null
+
+**Response:** `AgentSchedulePublic`
+
+---
+
+## DELETE `/api/v1/cli/account/agents/{agent_id}/schedules/{schedule_id}`
+**Account Delete Schedule**
+
+**Path parameters:**
+- `agent_id`: uuid
+- `schedule_id`: uuid
+
+**Response:** `Message`
+
+---
+
+## POST `/api/v1/cli/account/agents/{agent_id}/schedules/{schedule_id}/run`
+**Account Run Schedule**
+
+**Path parameters:**
+- `agent_id`: uuid
+- `schedule_id`: uuid
+
+**Response:** `Message`
+
+---
+
+## GET `/api/v1/cli/account/agents/{agent_id}/schedules/{schedule_id}/logs`
+**Account Schedule Logs**
+
+**Path parameters:**
+- `agent_id`: uuid
+- `schedule_id`: uuid
+
+**Response:** `AgentScheduleLogsPublic`
+
+---
+
+## GET `/api/v1/cli/account/agents/{agent_id}/status`
+**Account Agent Status**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Query parameters:**
+- `force_refresh`: boolean, default: `False`
+
+**Response:** `AccountAgentStatusResult`
+
+---
+
+## POST `/api/v1/cli/account/agents/{agent_id}/status/refresh-command`
+**Account Set Status Refresh Command**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Request body** (`AccountStatusRefreshCommandBody`):
+  - `command`: string | null
+
+**Response:** `AccountAgentStatusResult`
 
 ---
 

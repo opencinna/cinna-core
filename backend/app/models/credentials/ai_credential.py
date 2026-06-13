@@ -58,6 +58,7 @@ class AICredential(AICredentialBase, table=True):
     __table_args__ = (
         Index("ix_ai_credential_owner_type", "owner_id", "type"),
         Index("ix_ai_credential_owner_default", "owner_id", "is_default"),
+        Index("ix_ai_credential_managed_credential", "managed_credential_id"),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -89,6 +90,21 @@ class AICredential(AICredentialBase, table=True):
             sa.ForeignKey("user.id", ondelete="SET NULL"),
             nullable=True,
             index=True,
+        ),
+    )
+    # Structural link to the parent ManagedAICredential record (admin-managed
+    # parent/child model). NULL = a normal self-created credential. SET NULL on
+    # parent deletion is a safety net only — parent deletion is expected to route
+    # through the reconcile/delete path so each child gets proper profile
+    # un-wiring + Tier-2 blast-radius gating. If a parent is ever deleted
+    # out-of-band, children degrade to plain is_admin_managed orphans rather than
+    # silently vanishing.
+    managed_credential_id: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            sa.Uuid(),
+            sa.ForeignKey("managed_ai_credential.id", ondelete="SET NULL"),
+            nullable=True,
         ),
     )
     expiry_notification_date: datetime | None = Field(default=None)

@@ -68,3 +68,7 @@ Set in the container `.env` file by `backend/app/services/environments/environme
 - [Knowledge Sources Tech](../../application/knowledge_sources/knowledge_sources_tech.md) - Backend services, database schema, API endpoints
 - [Agent Environment Core](agent_environment_core.md) - Parent feature: server running inside Docker containers
 
+## Account Workspace Analogue
+
+In addition to this in-container building-mode tool and the per-agent CLI MCP proxy, the **account CLI workspace** exposes user-scoped knowledge search for local orchestrator agents via `POST /api/v1/cli/account/knowledge/search`. That endpoint is scoped to the account user's accessible sources (public + own private) with no agent or workspace filter, and is served through the account workspace's `.mcp.json` MCP proxy as the `knowledge_query` tool. See [Account CLI Workspace](../../application/cinna_cli_integration/account_cli_workspace.md) (flow 6b).
+

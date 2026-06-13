@@ -31,7 +31,7 @@ See [Agent Prompts](../../agents/agent_prompts/agent_prompts.md)
 
 ### SDK & AI Provider
 - `agent_sdk_building` / `agent_sdk_conversation` — selected AI provider per mode (format: `engine/provider`, e.g., `claude-code/anthropic`, `opencode/openai`); immutable after creation
-- Three SDK engines: **Claude Code** (Anthropic, MiniMax), **OpenCode** (75+ providers: Anthropic, OpenAI, Google, Bedrock, Azure, Ollama), **Google ADK** (OpenAI-compatible, Vertex)
+- Three SDK engines: **Claude Code** (Anthropic; MiniMax temporarily disabled in the UI — not currently supported), **OpenCode** (75+ providers: Anthropic, OpenAI, Google, Bedrock, Azure, Ollama), **Google ADK** (OpenAI-compatible, Vertex)
 - `model_override_building` / `model_override_conversation` — optional per-mode model override (e.g., `gpt-4o`, `claude-opus-4`); overrides the adapter's default when set
 - `agent_sdk_config` — stores discovered tools (`sdk_tools`) and user-approved tools (`allowed_tools`) for automatic permission granting
 

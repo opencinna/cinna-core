@@ -484,64 +484,6 @@ export type AdminAgentEnvironmentsPublic = {
 };
 
 /**
- * Admin request to provision an AI credential for one or more users.
- *
- * One :class:`AICredential` row is created per ``target_user_id`` with
- * ``owner_id = target.id``, ``is_admin_managed=True`` and
- * ``managed_by_id = admin.id``. The provided key bytes are shared across the
- * created rows but each row is an independent credential owned by its user.
- */
-export type AdminAICredentialCreate = {
-    name: string;
-    type: AICredentialType;
-    api_key: string;
-    base_url?: (string | null);
-    model?: (string | null);
-    expiry_notification_date?: (string | null);
-    target_user_ids: Array<(string)>;
-    set_as_default?: boolean;
-    set_user_sdk_defaults?: boolean;
-    sdk_default_modes?: Array<(string)>;
-};
-
-/**
- * Result of an admin provision call — one created row per valid target,
- * plus any skipped targets.
- */
-export type AdminAICredentialProvisionResult = {
-    created: Array<AdminAICredentialPublic>;
-    skipped?: Array<AdminProvisionSkip>;
-};
-
-/**
- * Admin-facing projection of an AI credential.
- *
- * Extends the shared :class:`AICredentialPublic` with the owner and
- * provisioning-admin identity that are intentionally hidden from the
- * owner-facing surface (see OQ-4). Used by the ``/admin/llm-providers*``
- * routes only.
- */
-export type AdminAICredentialPublic = {
-    name: string;
-    type: AICredentialType;
-    expiry_notification_date?: (string | null);
-    id: string;
-    is_default: boolean;
-    is_admin_managed?: boolean;
-    has_api_key?: boolean;
-    is_oauth_token?: boolean;
-    base_url?: (string | null);
-    model?: (string | null);
-    discovered_models?: (Array<(string)> | null);
-    models_discovered_at?: (string | null);
-    models_discovery_error?: (string | null);
-    created_at: string;
-    updated_at: string;
-    owner_id: string;
-    managed_by_id?: (string | null);
-};
-
-/**
  * Request body for bulk rebuild endpoint.
  */
 export type AdminBulkRebuildRequest = {
@@ -573,15 +515,6 @@ export type AdminInstallRequest = {
 } | null);
     ai_credential_selections?: (AICredentialSelections | null);
     target_user_id: string;
-};
-
-/**
- * A target user that was skipped during provisioning (e.g. unknown or
- * inactive). The whole call does not fail for an individual bad target.
- */
-export type AdminProvisionSkip = {
-    user_id: string;
-    reason: string;
 };
 
 /**
@@ -3434,6 +3367,112 @@ export type MailServerConfigUpdate = {
 export type MailServerType = 'imap' | 'smtp';
 
 /**
+ * Admin request to create a managed AI credential record.
+ *
+ * Creates the parent row + reconciles to create one ``AICredential`` child per
+ * valid target user.
+ */
+export type ManagedAICredentialCreate = {
+    name: string;
+    type: AICredentialType;
+    api_key: string;
+    base_url?: (string | null);
+    model?: (string | null);
+    expiry_notification_date?: (string | null);
+    target_user_ids: Array<(string)>;
+    set_as_default?: boolean;
+    set_user_sdk_defaults?: boolean;
+    sdk_default_modes?: Array<(string)>;
+};
+
+/**
+ * One member of a managed AI credential record — i.e. one child credential
+ * and the user who owns it.
+ */
+export type ManagedAICredentialMember = {
+    user_id: string;
+    email: string;
+    full_name?: (string | null);
+    child_credential_id: string;
+    is_default?: boolean;
+};
+
+/**
+ * Admin-facing projection of a managed AI credential parent record.
+ *
+ * Never includes ``encrypted_data`` or any key material.
+ */
+export type ManagedAICredentialPublic = {
+    id: string;
+    name: string;
+    type: AICredentialType;
+    base_url?: (string | null);
+    model?: (string | null);
+    set_as_default?: boolean;
+    set_user_sdk_defaults?: boolean;
+    sdk_default_modes?: Array<(string)>;
+    expiry_notification_date?: (string | null);
+    managed_by_id?: (string | null);
+    has_api_key?: boolean;
+    is_oauth_token?: boolean;
+    members?: Array<ManagedAICredentialMember>;
+    member_count?: number;
+    created_at: string;
+    updated_at: string;
+};
+
+/**
+ * Result of a create/update reconcile call.
+ */
+export type ManagedAICredentialReconcileResult = {
+    record: ManagedAICredentialPublic;
+    added?: Array<ManagedAICredentialMember>;
+    removed?: Array<(string)>;
+    updated?: Array<ManagedAICredentialMember>;
+    updated_count?: number;
+    skipped?: Array<ManagedReconcileSkip>;
+    blocked?: Array<ManagedReconcileBlock>;
+};
+
+/**
+ * Admin request to update a managed AI credential record (partial update).
+ *
+ * Omitting ``api_key`` keeps the stored key. Omitting ``target_user_ids``
+ * leaves membership unchanged.
+ */
+export type ManagedAICredentialUpdate = {
+    name?: (string | null);
+    api_key?: (string | null);
+    base_url?: (string | null);
+    model?: (string | null);
+    expiry_notification_date?: (string | null);
+    target_user_ids?: (Array<(string)> | null);
+    set_as_default?: (boolean | null);
+    set_user_sdk_defaults?: (boolean | null);
+    sdk_default_modes?: (Array<(string)> | null);
+};
+
+/**
+ * A member that could not be removed because a child is in use (Tier-2
+ * blast radius). ``impact`` carries the deletion-impact payload.
+ */
+export type ManagedReconcileBlock = {
+    user_id: string;
+    reason: string;
+    impact?: ({
+    [key: string]: unknown;
+} | null);
+};
+
+/**
+ * A target user skipped during reconcile (unknown/inactive).
+ */
+export type ManagedReconcileSkip = {
+    user_id: string;
+    reason: string;
+};
+
+/**
  * Status of a plugin marketplace.
  */
 export type MarketplaceStatus = 'pending' | 'connected' | 'error' | 'disconnected';
@@ -5323,46 +5362,61 @@ export type AdminEnvironmentsRebuildSingleEnvironmentData = {
 
 export type AdminEnvironmentsRebuildSingleEnvironmentResponse = (Message);
 
-export type AdminLlmProvidersProvisionAiCredentialsData = {
-    requestBody: AdminAICredentialCreate;
+export type AdminLlmProvidersCreateManagedAiCredentialData = {
+    requestBody: ManagedAICredentialCreate;
 };
 
-export type AdminLlmProvidersProvisionAiCredentialsResponse = (AdminAICredentialProvisionResult);
+export type AdminLlmProvidersCreateManagedAiCredentialResponse = (ManagedAICredentialReconcileResult);
 
 export type AdminLlmProvidersListManagedAiCredentialsData = {
     /**
-     * Optional filter to a single target user
+     * Filter to records managed by this admin
+     */
+    managedById?: (string | null);
+    /**
+     * Filter to records that have this user as a member
      */
     targetUserId?: (string | null);
 };
 
-export type AdminLlmProvidersListManagedAiCredentialsResponse = (Array<AdminAICredentialPublic>);
+export type AdminLlmProvidersListManagedAiCredentialsResponse = (Array<ManagedAICredentialPublic>);
 
 export type AdminLlmProvidersGetManagedAiCredentialData = {
-    credentialId: string;
+    managedCredentialId: string;
 };
 
-export type AdminLlmProvidersGetManagedAiCredentialResponse = (AdminAICredentialPublic);
+export type AdminLlmProvidersGetManagedAiCredentialResponse = (ManagedAICredentialPublic);
 
 export type AdminLlmProvidersUpdateManagedAiCredentialData = {
-    credentialId: string;
-    requestBody: AICredentialUpdate;
+    force?: boolean;
+    managedCredentialId: string;
+    requestBody: ManagedAICredentialUpdate;
 };
 
-export type AdminLlmProvidersUpdateManagedAiCredentialResponse = (AdminAICredentialPublic);
+export type AdminLlmProvidersUpdateManagedAiCredentialResponse = (ManagedAICredentialReconcileResult);
 
 export type AdminLlmProvidersDeleteManagedAiCredentialData = {
-    credentialId: string;
     force?: boolean;
+    managedCredentialId: string;
 };
 
 export type AdminLlmProvidersDeleteManagedAiCredentialResponse = (Message);
 
 export type AdminLlmProvidersSetManagedAiCredentialDefaultData = {
-    credentialId: string;
+    managedCredentialId: string;
 };
 
-export type AdminLlmProvidersSetManagedAiCredentialDefaultResponse = (AdminAICredentialPublic);
+export type AdminLlmProvidersSetManagedAiCredentialDefaultResponse = (ManagedAICredentialPublic);
+
+export type AdminLlmProvidersTestManagedAiCredentialConnectionData = {
+    /**
+     * When set and api_key is blank, resolve the stored parent key for the probe (Edit-with-blank-key case).
+     */
+    managedCredentialId?: (string | null);
+    requestBody: AICredentialTestRequest;
+};
+
+export type AdminLlmProvidersTestManagedAiCredentialConnectionResponse = (AICredentialTestResult);
 
 export type AgentApiGetAgentApiStatusData = {
     agentId: string;

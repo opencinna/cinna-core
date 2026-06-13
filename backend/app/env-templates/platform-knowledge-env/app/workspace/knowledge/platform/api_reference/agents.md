@@ -223,6 +223,7 @@ Auto-generated from OpenAPI spec. Tag: `agents`
 **Request body** (`ScheduleRequest`):
   - `natural_language`: string (required)
   - `timezone`: string (required)
+  - `schedule_type`: string
 
 **Response:** `ScheduleResponse`
 

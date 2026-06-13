@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Trash2, AlertCircle, MessageCircle, Wrench, Plus, Pencil, Star, Key, Calendar, Sparkles, Save } from "lucide-react"
+import { Trash2, AlertCircle, MessageCircle, Wrench, Plus, Pencil, Star, Key, Calendar, Sparkles, Save, ShieldCheck } from "lucide-react"
 import { UsersService, AiCredentialsService, AICredentialPublic, AICredentialType } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -580,7 +580,9 @@ export function AICredentialsSettings() {
                     {/* Left: name, default badge, and expiry badge */}
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="font-medium text-sm truncate">{cred.name}</span>
-                      {cred.is_default && (
+                      {/* Default indicator next to the name. For admin-managed rows
+                          it is rendered on the right (after the type) instead. */}
+                      {cred.is_default && !cred.is_admin_managed && (
                         <TooltipProvider>
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -588,6 +590,22 @@ export function AICredentialsSettings() {
                             </TooltipTrigger>
                             <TooltipContent side="top" className="text-xs">
                               Default credential
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      )}
+                      {cred.is_admin_managed && (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-blue-200 bg-blue-50 text-blue-700 text-xs shrink-0 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-300">
+                                <ShieldCheck className="h-3 w-3" />
+                                <span>Managed</span>
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="text-xs">
+                              Managed by your administrator — you can use it and set
+                              it as default, but it can't be edited or deleted here.
                             </TooltipContent>
                           </Tooltip>
                         </TooltipProvider>
@@ -633,6 +651,24 @@ export function AICredentialsSettings() {
                           </TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
+                      {/* Default-status star for admin-managed rows lives here
+                          (after the type), mirroring the set-default button's
+                          position so the row layout stays consistent. */}
+                      {cred.is_admin_managed && cred.is_default && (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Star className="h-3.5 w-3.5 text-amber-500 shrink-0 fill-amber-500" />
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="text-xs">
+                              Default credential
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      )}
+                      {/* Set-as-default star. For admin-managed rows the Edit/
+                          Delete buttons below are hidden, so this naturally
+                          becomes the last action (after the type badge). */}
                       {!cred.is_default && (
                         <TooltipProvider>
                           <Tooltip>
@@ -653,25 +689,31 @@ export function AICredentialsSettings() {
                           </Tooltip>
                         </TooltipProvider>
                       )}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={() => handleEditCredential(cred)}
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={() => {
-                          setDeletingCredential(cred)
-                          setDeleteDialogOpen(true)
-                        }}
-                      >
-                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                      </Button>
+                      {/* Edit/Delete are hidden for admin-managed credentials —
+                          they are read-only for the owner (backend returns 403). */}
+                      {!cred.is_admin_managed && (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={() => handleEditCredential(cred)}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={() => {
+                              setDeletingCredential(cred)
+                              setDeleteDialogOpen(true)
+                            }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </div>
                 ))}

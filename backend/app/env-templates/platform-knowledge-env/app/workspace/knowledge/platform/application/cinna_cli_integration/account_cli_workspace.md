@@ -96,6 +96,7 @@ my-cinna/
     examples/            # working API-script patterns (platform_helper + samples)
     guides/              # end-to-end worked walkthroughs (Phase 4)
       build-an-agentic-network.md   # how to build a delegating multi-agent network
+      authoring-agent-prompts.md    # how to author prompts and finalize the description
   agents/
     crm-agent/           # 100% standard cinna per-agent workspace
       .cinna/config.json
@@ -433,6 +434,22 @@ flooding the audit log with high-frequency developer tool calls. `malformed_path
 outer `/account/api-proxy` route via `AccountCLIContextDep`. The inner JWT is
 minted inside the service, used once, and never returned to the CLI.
 
+### 6b. Querying Platform Knowledge from the Account Workspace
+
+While building in the account workspace, the local orchestrator agent can query the platform's knowledge DB — the same indexed articles that an in-container building agent can access via its `knowledge_query` MCP tool.
+
+The query is handled via the account workspace's MCP proxy (wired in the CLI-side `.mcp.json`; implementation in the `cinna-cli` repo). The proxy forwards each `knowledge_query` tool call to the backend:
+
+1. Orchestrator agent invokes `knowledge_query` (or `mcp__cinna_account__knowledge_query`) inside the account workspace.
+2. The MCP proxy POSTs to `POST /api/v1/cli/account/knowledge/search` authenticated with the account CLI token.
+3. The backend resolves all knowledge sources accessible to the account user: **all public sources** plus the user's own private connected sources. No agent scope, no workspace filter (`workspace_id=None`).
+4. A vector search runs and returns ranked chunks. The response is always `{"results": [{content, source, similarity}, ...]}` — an empty list if no accessible sources exist.
+5. The result is returned to the orchestrator agent as the MCP tool output.
+
+This is the account-level analogue of the per-agent knowledge proxy (see [cinna_cli_integration.md](cinna_cli_integration.md) — "MCP Proxy" concept and flow 2 step 6). The scoping differs: the per-agent proxy filters results to the agent's user workspace; the account proxy applies no workspace filter (the orchestrator agent has no associated workspace).
+
+No additional setup is required beyond the standard account workspace bootstrap (`cinna account setup`). The `knowledge_query` tool is available in the account workspace's `.mcp.json` from that point on.
+
 ### 7. Registering an Agentic Network (Phase 4)
 
 Once the agents are created and wired (via `cinna agent create`, `cinna connect
@@ -498,6 +515,189 @@ context package since Phase 4) walks through the full meeting-booking scenario
 end-to-end, including the capability-vs-delegation table, the create→capture→reference
 id-capture loop, and the business-rule cheat-sheet. The orchestrator `CLAUDE.md`
 points to it for "build a multi-agent network" requests.
+
+### 7b. Authoring Agent Prompts (Finalize Step)
+
+Once an agent's functionality is built and verified — scripts run, connections
+resolve, the REST API spec harvests — the orchestrator should author the agent's
+prompts and write a description that matches the **finished** agent. This is the
+final acceptance step of every build.
+
+**Author prompts LAST.** Create the agent with a one-line provisional
+description, build and verify all functionality first, then come back to write
+the real prompt set from what actually exists.
+
+**The six prompt-ish fields** (each consumed by a different system):
+
+| Field | Consumer | Notes |
+|-------|---------|-------|
+| `description` | Discovery cards, A2A card; feeds router-trigger / A2A skill generation | One clear sentence. Rewrite it to match the *finished* agent. |
+| `workflow_prompt` | Conversation-mode system prompt — every conversation session | Operational: which scripts to run, how to parse output, how to present results. The agent is a *bridge* that runs scripts, parses, and rephrases. |
+| `entrypoint_prompt` | First user message for scheduled / automated runs | Conversational, **not** technical. ✅ *"What is my time-off balance?"* |
+| `refiner_prompt` | AI task refinement, before execution | Default-fill rules and mandatory fields. |
+| `router_trigger_prompt` | App MCP router classifier only — never in any system prompt | Describes *when to route here*, not how to behave. |
+| `example_prompts` | Surfaced as MCP slash commands | Short imperative tasks: `["reconcile last week", "show failed payouts"]` |
+
+**The bulk workflow** — keep a local `agents/<name>/prompts.json` holding only the
+prompt subset, and push it in one atomic write:
+
+```jsonc
+// agents/billing-agent/prompts.json
+{
+  "description": "Reconciles Stripe payouts against the ledger and flags mismatches.",
+  "workflow_prompt": "You reconcile Stripe payouts. Run reconcile.py for the requested period, parse the JSON output, ...",
+  "entrypoint_prompt": "Reconcile this week's payouts.",
+  "refiner_prompt": "If no period is given, default to the current week. Always capture account id and currency.",
+  "router_trigger_prompt": "Reconciles Stripe payouts and flags ledger mismatches.",
+  "example_prompts": ["reconcile last week", "show failed payouts"]
+}
+```
+
+```bash
+# 1. Bulk write — the agent's config (DB) is the authoritative source of truth
+cinna api PUT agents/<agent_id> --data @agents/billing-agent/prompts.json
+
+# 2. Verify what actually landed
+cinna agent show billing-agent --prompts
+```
+
+All fields are optional — omitted keys are left unchanged. `agents/*` is not on
+the escape-hatch denylist (only `agents/create-flow-stream` and `agents/create-flow`
+are excluded), so `PUT /agents/{id}`, `POST /agents/{id}/sync-prompts`, and
+`POST /agents/{id}/generate-router-trigger-prompt` are all reachable via
+`cinna api` — no new backend endpoints or CLI verbs were needed.
+
+**How it reaches the running environment:** the three document-backed prompts
+(`workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`) are seeded into the
+container's `docs/*.md` automatically on the next environment start (`SEED_PUSH`
+when the env files are empty — the fresh-agent case). If the environment is
+**already running** and you want the doc prompts pushed immediately:
+
+```bash
+cinna api POST agents/<agent_id>/sync-prompts
+```
+
+`router_trigger_prompt`, `example_prompts`, and `description` are config-only and
+take effect immediately after the write.
+
+**Optional — let the platform generate the router trigger** from the agent's name
+and description:
+
+```bash
+cinna api POST agents/<agent_id>/generate-router-trigger-prompt
+```
+
+**The finalize step (end of every build):**
+
+1. Confirm all functionality works (scripts, connections, API spec, team wiring).
+2. Author the full prompt set from what you *actually built*. Rewrite
+   `description` explicitly in the same payload — do not rely on auto-derivation.
+3. `cinna api PUT agents/<id> --data @agents/<name>/prompts.json`
+4. `cinna agent show <name> --prompts` to confirm.
+5. If the env is already running: `cinna api POST agents/<id>/sync-prompts`.
+
+**The guide** (`context/guides/authoring-agent-prompts.md`) ships in
+`knowledge/guides/` inside the `platform-knowledge-env` template (survives
+knowledge re-sync, the same mechanism as the agentic-network playbook). The
+context package assembler includes it verbatim under `context/guides/`; the
+generated `context/README.md` index points the orchestrator at it for the
+finalize step. Like the network playbook, it requires no new backend endpoints or
+migration.
+
+### 7c. Managing Agent Schedules (Phase 5)
+
+Scheduling is a first-class part of building an agent, so the account workspace
+ships dedicated verbs for the full schedule lifecycle — the CLI equivalent of the
+agent Config → **Schedules** card. They wrap the same `AgentSchedulerService` the
+UI route uses, so behaviour (CRON conversion, per-type frequency floor, the
+foreign-install read-only contract) is identical.
+
+```
+# Turn natural language into a cron string + next-execution preview
+cinna agent schedule generate crm-agent "every weekday at 7am" --tz Europe/Berlin
+
+# Create a static-prompt schedule (always spins a session)
+cinna agent schedule create crm-agent \
+  --name "Daily report" --cron "0 6 * * 1-5" --tz Europe/Berlin \
+  --prompt "Produce the daily report"
+
+# Create a script-trigger schedule (only sessions when output != "OK")
+cinna agent schedule create crm-agent \
+  --name "DB check" --cron "*/30 * * * *" --tz UTC \
+  --type script_trigger --command "python scripts/check_db.py"
+
+cinna agent schedule list crm-agent                 # all schedules
+cinna agent schedule update crm-agent <sid> --disable   # toggle off
+cinna agent schedule run crm-agent <sid>            # Run now
+cinna agent schedule logs crm-agent <sid>           # last 50 execution logs
+cinna agent schedule delete crm-agent <sid>
+```
+
+Each verb resolves `AGENT_REF` against the cached `cinna account agents` listing,
+then calls a thin `/account/agents/{id}/schedules*` endpoint:
+
+| Command | Backend endpoint | Gate |
+|---------|------------------|------|
+| `cinna agent schedule list <agent>` | `GET …/schedules` | ownership (404 no-leak) |
+| `cinna agent schedule generate <agent> <text>` | `POST …/schedules/generate` | ownership; stateless AI preview |
+| `cinna agent schedule create <agent> …` | `POST …/schedules` | `require_developer` + ownership; **foreign install → 403** |
+| `cinna agent schedule update <agent> <sid> …` | `PUT …/schedules/{sid}` | `require_developer` + ownership; on a foreign install only `enabled` may change (else 403) |
+| `cinna agent schedule run <agent> <sid>` | `POST …/schedules/{sid}/run` | `require_developer` + ownership; allowed on foreign installs |
+| `cinna agent schedule logs <agent> <sid>` | `GET …/schedules/{sid}/logs` | ownership |
+| `cinna agent schedule delete <agent> <sid>` | `DELETE …/schedules/{sid}` | `require_developer` + ownership; **foreign install → 403** |
+
+Behavioural notes:
+
+- **Foreign installs are publisher-managed.** A consumer (bundle-owned,
+  non-publisher) install may toggle / run / view logs, but cannot create / edit /
+  delete the definitions — the same read-only contract the UI enforces. Create
+  and delete return 403; update accepts only `enabled`.
+- **Frequency floor is server-side.** `static_prompt` schedules must run no more
+  than once every 10 minutes (computed from the real cron cadence);
+  `script_trigger` has no floor. The backend rejects too-frequent
+  `static_prompt` cadences on generate-preview and create.
+- **Run now reflects the env state.** The success message is either "Schedule
+  triggered successfully" (env was running) or "Environment is starting; the
+  schedule will run automatically once it's ready." (env is waking up).
+- Create / update / delete / run each emit a `CLI_ACCOUNT_SCHEDULE_*` security
+  event; list / generate / logs are diagnostic reads and are not audited.
+
+### 7d. Managing Agent Status (Phase 5)
+
+The agent's self-reported status (`STATUS.md`) and its **status refresh command**
+are also reachable from the account workspace — the CLI equivalent of the
+Integrations → **Agent status** card. This lets a builder confirm an agent is
+healthy and configure how its status is regenerated, all without the browser.
+
+```
+cinna agent status show crm-agent          # cached snapshot + configured command
+cinna agent status refresh crm-agent       # force a live STATUS.md re-read
+cinna agent status set-command crm-agent "/run:status"   # set the pre-command
+```
+
+| Command | Backend endpoint | Gate |
+|---------|------------------|------|
+| `cinna agent status show <agent>` | `GET …/status` | ownership (404 no-leak) |
+| `cinna agent status refresh <agent>` | `GET …/status?force_refresh=true` | ownership |
+| `cinna agent status set-command <agent> <cmd>` | `POST …/status/refresh-command` | `require_developer` + ownership |
+
+Behavioural notes:
+
+- **One read for both.** The `GET …/status` response is an
+  `AccountAgentStatusResult` — the `AgentStatusPublic` snapshot **plus** the
+  agent's configured `status_refresh_command` — so the builder sees the live
+  state and the pre-command that produced it in one call.
+- **Refresh runs the full force flow.** `?force_refresh=true` wakes a suspended
+  env, runs the configured pre-command, re-reads `STATUS.md`, and falls back to
+  the cached snapshot on any failure — it never raises. A pre-command that did
+  not run cleanly is reported in `status.refresh_command_warning`.
+- **Set-command mirrors the card input.** The command is a raw shell/Python
+  string or a `/run:<name>` reference (resolved against the agent's
+  `CLI_COMMANDS.yaml`); empty string is a deliberate opt-out; the platform
+  default is `/run:status`. It flips `status_refresh_command` through the same
+  `AgentService.update_agent` path the UI `PATCH /agents/{id}` uses and emits
+  `CLI_ACCOUNT_STATUS_COMMAND_SET`. Reads / refreshes are diagnostic and not
+  audited.
 
 ### 8. Managing Account Sessions (UI)
 
@@ -606,6 +806,11 @@ normal JWT auth.
 | `CLI_ACCOUNT_AGENT_API_ENABLED` | Successful `cinna agent-api enable` (and `--disable`) — the state-changing toggle. `refresh` / `spec` / `call` are diagnostic and **not** audited | producer agent | `{enabled, ip}` |
 | `CLI_ACCOUNT_ENV_RESTARTED` | Successful `cinna agent restart-env` — a build-rights state change (bounces the container). `agent show` is diagnostic and **not** audited | target agent | `{environment_id, ip}` |
 | `CLI_ACCOUNT_API_PROXY_CALL` | Exclusion hit (`excluded_path` or `excluded_method`) on `api-proxy` — NOT on allowed calls or `malformed_path` | `None` | `{method, path, reason, account_token_id, ip}` |
+| `CLI_ACCOUNT_SCHEDULE_CREATED` | Successful `cinna agent schedule create` | target agent | `{schedule_id, schedule_type, ip}` |
+| `CLI_ACCOUNT_SCHEDULE_UPDATED` | Successful `cinna agent schedule update` (incl. toggle) | target agent | `{schedule_id, fields, ip}` |
+| `CLI_ACCOUNT_SCHEDULE_DELETED` | Successful `cinna agent schedule delete` | target agent | `{schedule_id, ip}` |
+| `CLI_ACCOUNT_SCHEDULE_RUN` | Successful `cinna agent schedule run` (spends tokens / spins a session) | target agent | `{schedule_id, action, ip}` |
+| `CLI_ACCOUNT_STATUS_COMMAND_SET` | Successful `cinna agent status set-command` — `show` / `refresh` are diagnostic and **not** audited | target agent | `{command, ip}` |
 
 ### Setup-Token Kind Guard
 
@@ -634,6 +839,7 @@ The backend contract these commands consume:
 | `cinna agent sync <agent>` | `POST /api/v1/cli/account/agents/{id}/mint` then existing per-agent bootstrap | Mint child token; write `agents/<slug>/` as a standard workspace |
 | `cinna agent unsync <agent>` | `DELETE /api/v1/cli/account/tokens/children/{child_token_id}` then local | Revokes the child token server-side (authenticated by the account token), then stops sync and removes `agents/<slug>/` from the local registry |
 | `cinna exec --agent <agent> <cmd>` | Existing `POST /api/v1/cli/agents/{id}/exec` | Mint (if needed) then exec with child token |
+| `knowledge_query` MCP tool (account workspace `.mcp.json`) | `POST /api/v1/cli/account/knowledge/search` body `{query, topic?}` | Account-workspace MCP proxy forwards orchestrator `knowledge_query` calls to the backend; scoped to the account user's accessible sources (public + own private); returns `{results: [{content, source, similarity}]}`. Not a typed `cinna` subcommand — served via the MCP proxy. CLI proxy wiring lives in the `cinna-cli` repo |
 
 **Phase 3 commands:**
 
@@ -646,6 +852,21 @@ The backend contract these commands consume:
 | `cinna agent-api refresh <agent>` | `POST /api/v1/cli/account/agent-api/refresh` body `{agent_id}` | Force a spec + policy re-harvest; print status (warns on `last_error`). Never raises on a harvest failure |
 | `cinna agent-api spec <agent> [-o file]` | `GET /api/v1/cli/account/agent-api/spec?agent_id=` | Print the harvested OpenAPI JSON to stdout (or write to `-o file`). 400 if disabled, 503 if env not running + cache cold |
 | `cinna api <METHOD> <path> [--json '<obj>'\|--data @file.json] [--query k=v ...]` | `POST /api/v1/cli/account/api-proxy` body `{method, path, query, json_body}` | Generic escape hatch; path is relative to API root; response body to stdout (pretty-printed if JSON); exit code 0 for 2xx, non-zero for 4xx/5xx; proxy errors (403/400/429/413/502) to stderr |
+
+**Phase 5 commands (schedules + status):**
+
+| Command | Backend endpoint | Behavior |
+|---------|-----------------|----------|
+| `cinna agent schedule list <agent>` | `GET /api/v1/cli/account/agents/{id}/schedules` | Print the agent's schedules |
+| `cinna agent schedule generate <agent> <text> [--tz]` | `POST …/schedules/generate` | NL → cron + next-execution preview (stateless) |
+| `cinna agent schedule create <agent> --name --cron --tz [--type] [--prompt\|--command] [--disabled]` | `POST …/schedules` | Create a schedule; 403 on a foreign install; 400 if `script_trigger` without command or cadence too frequent |
+| `cinna agent schedule update <agent> <sid> [--enable\|--disable] [--name --cron --tz --prompt --command]` | `PUT …/schedules/{sid}` | Partial update / toggle; on a foreign install only `enabled` may change (else 403) |
+| `cinna agent schedule run <agent> <sid>` | `POST …/schedules/{sid}/run` | Run now; prints the env-state-aware message |
+| `cinna agent schedule logs <agent> <sid>` | `GET …/schedules/{sid}/logs` | Print the last 50 execution logs |
+| `cinna agent schedule delete <agent> <sid>` | `DELETE …/schedules/{sid}` | Delete; 403 on a foreign install |
+| `cinna agent status show <agent>` | `GET …/status` | Print cached snapshot + configured refresh command |
+| `cinna agent status refresh <agent>` | `GET …/status?force_refresh=true` | Force a live STATUS.md re-read (wakes a suspended env; never raises) |
+| `cinna agent status set-command <agent> <cmd>` | `POST …/status/refresh-command` | Set `status_refresh_command`; 403 if not developer |
 
 ### `.cinna/account.json` Schema
 
@@ -702,10 +923,18 @@ child workspace's `.cinna/config.json` and in `~/.cinna/agents.json`.
 | `cinna api` inner route returns 4xx/5xx (e.g. 404 agent not found) | Mirrored verbatim — the escape hatch is transparent for allowed paths |
 | `cinna api` called via `cinna api POST cli/account/api-proxy` (recursion) | 403 (CLI prefix is excluded) |
 | `connect agent-api` with default everything (no consumer) | Credential created without a linked consumer; consumer agent is optional |
+| `schedule create` / `delete` on a foreign (bundle) install | 403 (publisher-managed definitions) |
+| `schedule update` setting any field other than `enabled` on a foreign install | 403 (only enable/disable allowed) |
+| `schedule create` with `script_trigger` but no command | 400 |
+| `schedule create` static_prompt cadence under the 10-minute floor | 400 (frequency too high) |
+| `schedule` / `status` verb on a ghost or another user's agent | 404 (no existence leak) |
+| `schedule create|update|delete|run` / `status set-command` by a demoted (agent-user) account token | 403 (`require_developer`, re-checked per call) |
+| `status refresh` when the env is suspended / down / has no STATUS.md | 200 — cached snapshot returned (never raises); `refresh_command_warning` carries any pre-command failure |
+| `status set-command` with an empty string | 200 — deliberate opt-out (no pre-command runs) |
 
 ## Roadmap Note
 
-This document covers **Phases 1 through 4** — all four phases are now shipped:
+This document covers **Phases 1 through 5** — all phases are now shipped:
 
 - **Phase 1** — Account token type, setup-token flow, accessible-agents listing,
   child-token minting, cascade revocation, and the Settings card.
@@ -718,7 +947,19 @@ This document covers **Phases 1 through 4** — all four phases are now shipped:
   verbs or backend endpoints); `context/guides/` subtree added to the context
   package; `context/guides/build-an-agentic-network.md` playbook ships a
   full end-to-end meeting-booking walkthrough covering agent creation, capability
-  wiring, and team-graph registration via `cinna api`.
+  wiring, and team-graph registration via `cinna api`;
+  `context/guides/authoring-agent-prompts.md` guide ships the bulk-prompt
+  authoring workflow and finalize-the-description rule (flow 7b — no new backend
+  endpoints or migration).
+- **Phase 5** — Dedicated schedule + status verbs (flows 7c / 7d): full schedule
+  CRUD (`cinna agent schedule list|generate|create|update|run|logs|delete`) and
+  status management (`cinna agent status show|refresh|set-command`) reached
+  through new thin `/account/agents/{id}/schedules*` and
+  `/account/agents/{id}/status*` endpoints that delegate to the existing
+  `AgentSchedulerService` / `AgentStatusService` / `AgentService` (so behaviour,
+  the per-type frequency floor, and the foreign-install read-only contract match
+  the UI). Five new `CLI_ACCOUNT_SCHEDULE_*` / `CLI_ACCOUNT_STATUS_COMMAND_SET`
+  security events; no new models persisted, no migration.
 
 ## Integration Points
 
@@ -760,3 +1001,22 @@ This document covers **Phases 1 through 4** — all four phases are now shipped:
   graph (nodes + directed connections) is the delegation-policy artifact that
   permits `mcp__agent_task__create_subtask` along drawn edges. See
   [agentic_teams.md](../../agents/agentic_teams/agentic_teams.md)
+- **agent_schedulers** (Phase 5 / flow 7c) — the schedule verbs wrap
+  `AgentSchedulerService` (generate / create / get / update / delete / execute_now
+  / logs) behind `/account/agents/{id}/schedules*`. The per-type frequency floor,
+  local→UTC cron conversion, and foreign-install read-only contract (consumers
+  may toggle / run / view logs only) are reused verbatim from the UI route. See
+  [agent_schedulers.md](../../agents/agent_schedulers/agent_schedulers.md)
+- **agent_status_tracking** (Phase 5 / flow 7d) — `GET …/status` wraps
+  `AgentStatusService.force_refresh_status` / `get_cached_status` and also returns
+  the agent's `status_refresh_command`; `POST …/status/refresh-command` flips that
+  field through `AgentService.update_agent` (the same `PATCH /agents/{id}` path the
+  Integrations → Agent status card uses). See
+  [agent_status_tracking.md](../../agents/agent_status_tracking/agent_status_tracking.md)
+- **agent_prompts** (Phase 4 / flow 7b) — the bulk-prompt authoring workflow
+  (`cinna api PUT agents/{id}`) targets the standard `PUT /agents/{id}` route,
+  which is not on the escape-hatch denylist. `POST /agents/{id}/sync-prompts`
+  (force-push DB→env) and `POST /agents/{id}/generate-router-trigger-prompt`
+  (AI-generate routing sentence) are also reachable via `cinna api`. The
+  three-way reconcile and SEED_PUSH mechanics are described in
+  [agent_prompts.md](../../agents/agent_prompts/agent_prompts.md)

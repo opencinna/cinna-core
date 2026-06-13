@@ -11,6 +11,7 @@ Each file below documents one API domain.
 | Access Tokens | [access_tokens.md](./access_tokens.md) | 5 |
 | Activities | [activities.md](./activities.md) | 8 |
 | Admin Environments | [admin_environments.md](./admin_environments.md) | 3 |
+| Admin Llm Providers | [admin_llm_providers.md](./admin_llm_providers.md) | 7 |
 | Agent Api | [agent_api.md](./agent_api.md) | 6 |
 | Agent Api Public | [agent_api_public.md](./agent_api_public.md) | 1 |
 | Agent App Mcp Routes | [agent_app_mcp_routes.md](./agent_app_mcp_routes.md) | 7 |
@@ -25,13 +26,13 @@ Each file below documents one API domain.
 | App Data | [app_data.md](./app_data.md) | 3 |
 | Bundles | [bundles.md](./bundles.md) | 9 |
 | Catalog | [catalog.md](./catalog.md) | 5 |
-| Cli | [cli.md](./cli.md) | 37 |
+| Cli | [cli.md](./cli.md) | 47 |
 | Credentials | [credentials.md](./credentials.md) | 19 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
 | Email Integration | [email_integration.md](./email_integration.md) | 6 |
 | Environments | [environments.md](./environments.md) | 16 |
 | Events | [events.md](./events.md) | 3 |
-| External | [external.md](./external.md) | 5 |
+| External | [external.md](./external.md) | 8 |
 | External A2A | [external_a2a.md](./external_a2a.md) | 9 |
 | Files | [files.md](./files.md) | 3 |
 | Guest Share | [guest_share.md](./guest_share.md) | 3 |

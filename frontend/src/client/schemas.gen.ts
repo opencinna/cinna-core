@@ -2337,266 +2337,6 @@ export const ActivityUpdateSchema = {
     title: 'ActivityUpdate'
 } as const;
 
-export const AdminAICredentialCreateSchema = {
-    properties: {
-        name: {
-            type: 'string',
-            maxLength: 255,
-            minLength: 1,
-            title: 'Name'
-        },
-        type: {
-            '$ref': '#/components/schemas/AICredentialType'
-        },
-        api_key: {
-            type: 'string',
-            minLength: 1,
-            title: 'Api Key'
-        },
-        base_url: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 500
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Base Url'
-        },
-        model: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 255
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Model'
-        },
-        expiry_notification_date: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'date-time'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Expiry Notification Date'
-        },
-        target_user_ids: {
-            items: {
-                type: 'string',
-                format: 'uuid'
-            },
-            type: 'array',
-            minItems: 1,
-            title: 'Target User Ids'
-        },
-        set_as_default: {
-            type: 'boolean',
-            title: 'Set As Default',
-            default: false
-        },
-        set_user_sdk_defaults: {
-            type: 'boolean',
-            title: 'Set User Sdk Defaults',
-            default: false
-        },
-        sdk_default_modes: {
-            items: {
-                type: 'string'
-            },
-            type: 'array',
-            title: 'Sdk Default Modes'
-        }
-    },
-    type: 'object',
-    required: ['name', 'type', 'api_key', 'target_user_ids'],
-    title: 'AdminAICredentialCreate',
-    description: `Admin request to provision an AI credential for one or more users.
-
-One :class:\`AICredential\` row is created per \`\`target_user_id\`\` with
-\`\`owner_id = target.id\`\`, \`\`is_admin_managed=True\`\` and
-\`\`managed_by_id = admin.id\`\`. The provided key bytes are shared across the
-created rows but each row is an independent credential owned by its user.`
-} as const;
-
-export const AdminAICredentialProvisionResultSchema = {
-    properties: {
-        created: {
-            items: {
-                '$ref': '#/components/schemas/AdminAICredentialPublic'
-            },
-            type: 'array',
-            title: 'Created'
-        },
-        skipped: {
-            items: {
-                '$ref': '#/components/schemas/AdminProvisionSkip'
-            },
-            type: 'array',
-            title: 'Skipped',
-            default: []
-        }
-    },
-    type: 'object',
-    required: ['created'],
-    title: 'AdminAICredentialProvisionResult',
-    description: `Result of an admin provision call — one created row per valid target,
-plus any skipped targets.`
-} as const;
-
-export const AdminAICredentialPublicSchema = {
-    properties: {
-        name: {
-            type: 'string',
-            maxLength: 255,
-            minLength: 1,
-            title: 'Name'
-        },
-        type: {
-            '$ref': '#/components/schemas/AICredentialType'
-        },
-        expiry_notification_date: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'date-time'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Expiry Notification Date'
-        },
-        id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Id'
-        },
-        is_default: {
-            type: 'boolean',
-            title: 'Is Default'
-        },
-        is_admin_managed: {
-            type: 'boolean',
-            title: 'Is Admin Managed',
-            default: false
-        },
-        has_api_key: {
-            type: 'boolean',
-            title: 'Has Api Key',
-            default: true
-        },
-        is_oauth_token: {
-            type: 'boolean',
-            title: 'Is Oauth Token',
-            default: false
-        },
-        base_url: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Base Url'
-        },
-        model: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Model'
-        },
-        discovered_models: {
-            anyOf: [
-                {
-                    items: {
-                        type: 'string'
-                    },
-                    type: 'array'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Discovered Models'
-        },
-        models_discovered_at: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'date-time'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Models Discovered At'
-        },
-        models_discovery_error: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Models Discovery Error'
-        },
-        created_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Created At'
-        },
-        updated_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Updated At'
-        },
-        owner_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Owner Id'
-        },
-        managed_by_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Managed By Id'
-        }
-    },
-    type: 'object',
-    required: ['name', 'type', 'id', 'is_default', 'created_at', 'updated_at', 'owner_id'],
-    title: 'AdminAICredentialPublic',
-    description: `Admin-facing projection of an AI credential.
-
-Extends the shared :class:\`AICredentialPublic\` with the owner and
-provisioning-admin identity that are intentionally hidden from the
-owner-facing surface (see OQ-4). Used by the \`\`/admin/llm-providers/*\`\`
-routes only.`
-} as const;
-
 export const AdminAgentEnvironmentPublicSchema = {
     properties: {
         id: {
@@ -3016,25 +2756,6 @@ export const AdminInstallRequestSchema = {
     required: ['target_user_id'],
     title: 'AdminInstallRequest',
     description: 'Body of ``POST /catalog/{bundle_id}/admin-install``.'
-} as const;
-
-export const AdminProvisionSkipSchema = {
-    properties: {
-        user_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'User Id'
-        },
-        reason: {
-            type: 'string',
-            title: 'Reason'
-        }
-    },
-    type: 'object',
-    required: ['user_id', 'reason'],
-    title: 'AdminProvisionSkip',
-    description: `A target user that was skipped during provisioning (e.g. unknown or
-inactive). The whole call does not fail for an individual bad target.`
 } as const;
 
 export const AdminTemplateInfoPublicSchema = {
@@ -16170,6 +15891,477 @@ export const MailServerTypeSchema = {
     type: 'string',
     enum: ['imap', 'smtp'],
     title: 'MailServerType'
+} as const;
+
+export const ManagedAICredentialCreateSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        type: {
+            '$ref': '#/components/schemas/AICredentialType'
+        },
+        api_key: {
+            type: 'string',
+            minLength: 1,
+            title: 'Api Key'
+        },
+        base_url: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 500
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Url'
+        },
+        model: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model'
+        },
+        expiry_notification_date: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expiry Notification Date'
+        },
+        target_user_ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            minItems: 1,
+            title: 'Target User Ids'
+        },
+        set_as_default: {
+            type: 'boolean',
+            title: 'Set As Default',
+            default: false
+        },
+        set_user_sdk_defaults: {
+            type: 'boolean',
+            title: 'Set User Sdk Defaults',
+            default: false
+        },
+        sdk_default_modes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Sdk Default Modes'
+        }
+    },
+    type: 'object',
+    required: ['name', 'type', 'api_key', 'target_user_ids'],
+    title: 'ManagedAICredentialCreate',
+    description: `Admin request to create a managed AI credential record.
+
+Creates the parent row + reconciles to create one \`\`AICredential\`\` child per
+valid target user.`
+} as const;
+
+export const ManagedAICredentialMemberSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        email: {
+            type: 'string',
+            title: 'Email'
+        },
+        full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Full Name'
+        },
+        child_credential_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Child Credential Id'
+        },
+        is_default: {
+            type: 'boolean',
+            title: 'Is Default',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['user_id', 'email', 'child_credential_id'],
+    title: 'ManagedAICredentialMember',
+    description: `One member of a managed AI credential record — i.e. one child credential
+and the user who owns it.`
+} as const;
+
+export const ManagedAICredentialPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        type: {
+            '$ref': '#/components/schemas/AICredentialType'
+        },
+        base_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Url'
+        },
+        model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model'
+        },
+        set_as_default: {
+            type: 'boolean',
+            title: 'Set As Default',
+            default: false
+        },
+        set_user_sdk_defaults: {
+            type: 'boolean',
+            title: 'Set User Sdk Defaults',
+            default: false
+        },
+        sdk_default_modes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Sdk Default Modes'
+        },
+        expiry_notification_date: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expiry Notification Date'
+        },
+        managed_by_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Managed By Id'
+        },
+        has_api_key: {
+            type: 'boolean',
+            title: 'Has Api Key',
+            default: true
+        },
+        is_oauth_token: {
+            type: 'boolean',
+            title: 'Is Oauth Token',
+            default: false
+        },
+        members: {
+            items: {
+                '$ref': '#/components/schemas/ManagedAICredentialMember'
+            },
+            type: 'array',
+            title: 'Members'
+        },
+        member_count: {
+            type: 'integer',
+            title: 'Member Count',
+            default: 0
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name', 'type', 'created_at', 'updated_at'],
+    title: 'ManagedAICredentialPublic',
+    description: `Admin-facing projection of a managed AI credential parent record.
+
+Never includes \`\`encrypted_data\`\` or any key material.`
+} as const;
+
+export const ManagedAICredentialReconcileResultSchema = {
+    properties: {
+        record: {
+            '$ref': '#/components/schemas/ManagedAICredentialPublic'
+        },
+        added: {
+            items: {
+                '$ref': '#/components/schemas/ManagedAICredentialMember'
+            },
+            type: 'array',
+            title: 'Added'
+        },
+        removed: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            title: 'Removed'
+        },
+        updated: {
+            items: {
+                '$ref': '#/components/schemas/ManagedAICredentialMember'
+            },
+            type: 'array',
+            title: 'Updated'
+        },
+        updated_count: {
+            type: 'integer',
+            title: 'Updated Count',
+            default: 0
+        },
+        skipped: {
+            items: {
+                '$ref': '#/components/schemas/ManagedReconcileSkip'
+            },
+            type: 'array',
+            title: 'Skipped'
+        },
+        blocked: {
+            items: {
+                '$ref': '#/components/schemas/ManagedReconcileBlock'
+            },
+            type: 'array',
+            title: 'Blocked'
+        }
+    },
+    type: 'object',
+    required: ['record'],
+    title: 'ManagedAICredentialReconcileResult',
+    description: 'Result of a create/update reconcile call.'
+} as const;
+
+export const ManagedAICredentialUpdateSchema = {
+    properties: {
+        name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        },
+        api_key: {
+            anyOf: [
+                {
+                    type: 'string',
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Api Key'
+        },
+        base_url: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 500
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Url'
+        },
+        model: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model'
+        },
+        expiry_notification_date: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expiry Notification Date'
+        },
+        target_user_ids: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string',
+                        format: 'uuid'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Target User Ids'
+        },
+        set_as_default: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Set As Default'
+        },
+        set_user_sdk_defaults: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Set User Sdk Defaults'
+        },
+        sdk_default_modes: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Sdk Default Modes'
+        }
+    },
+    type: 'object',
+    title: 'ManagedAICredentialUpdate',
+    description: `Admin request to update a managed AI credential record (partial update).
+
+Omitting \`\`api_key\`\` keeps the stored key. Omitting \`\`target_user_ids\`\`
+leaves membership unchanged.`
+} as const;
+
+export const ManagedReconcileBlockSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        reason: {
+            type: 'string',
+            title: 'Reason'
+        },
+        impact: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Impact'
+        }
+    },
+    type: 'object',
+    required: ['user_id', 'reason'],
+    title: 'ManagedReconcileBlock',
+    description: `A member that could not be removed because a child is in use (Tier-2
+blast radius). \`\`impact\`\` carries the deletion-impact payload.`
+} as const;
+
+export const ManagedReconcileSkipSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        reason: {
+            type: 'string',
+            title: 'Reason'
+        }
+    },
+    type: 'object',
+    required: ['user_id', 'reason'],
+    title: 'ManagedReconcileSkip',
+    description: 'A target user skipped during reconcile (unknown/inactive).'
 } as const;
 
 export const MarketplaceStatusSchema = {

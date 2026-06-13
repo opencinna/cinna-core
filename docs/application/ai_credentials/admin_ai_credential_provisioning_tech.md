@@ -5,39 +5,41 @@
 ### Backend
 
 **Models:**
-- `backend/app/models/credentials/ai_credential.py` — `AICredential` (two new columns: `is_admin_managed`, `managed_by_id`); `AICredentialPublic` (new `is_admin_managed` projection); `AdminAICredentialPublic` (admin-only projection adds `owner_id`, `managed_by_id`); `AdminAICredentialCreate`, `AdminAICredentialProvisionResult`, `AdminProvisionSkip` (admin DTOs)
+- `backend/app/models/credentials/managed_ai_credential.py` — `ManagedAICredential` (parent table); `ManagedAICredentialCreate`, `ManagedAICredentialUpdate`, `ManagedAICredentialPublic` (admin DTOs); `ManagedAICredentialMember`, `ManagedAICredentialReconcileResult`, `ManagedReconcileSkip`, `ManagedReconcileBlock`
+- `backend/app/models/credentials/ai_credential.py` — `AICredential` (child link: `managed_credential_id` FK, ON DELETE SET NULL; existing `is_admin_managed` and `managed_by_id` columns unchanged); `AICredentialPublic` (`is_admin_managed` projection)
 - `backend/app/models/external/account_config.py` — `AccountConfigProviderPublic`, `AccountConfigResponse` (native-config response models)
 
 **Routes:**
-- `backend/app/api/routes/admin_llm_providers.py` — `POST/GET/PATCH/DELETE /admin/llm-providers/`, `POST /admin/llm-providers/{id}/set-default`; superuser-gated
+- `backend/app/api/routes/admin_llm_providers.py` — parent-oriented `POST/GET/PATCH/DELETE /admin/llm-providers/`, `POST /admin/llm-providers/{id}/set-default`, `POST /admin/llm-providers/test-connection`; superuser-gated
 - `backend/app/api/routes/external_account_config.py` — `GET /external/account-config`; native-token-gated
 - `backend/app/api/main.py` — both routers registered (`admin_llm_providers.router`, `external_account_config.router`)
 
 **Services:**
-- `backend/app/services/credentials/admin_ai_credentials_service.py` — `AdminAICredentialService` (singleton: `admin_ai_credentials_service`)
+- `backend/app/services/credentials/managed_ai_credentials_service.py` — `ManagedAICredentialsService` (singleton: `managed_ai_credentials_service`); owns parent CRUD + reconcile
+- `backend/app/services/credentials/admin_ai_credentials_service.py` — `AdminAICredentialService` (legacy singleton: `admin_ai_credentials_service`); **no longer wired to any route**; retained but superseded
 - `backend/app/services/external/external_account_config_service.py` — `ExternalAccountConfigService` (singleton: `external_account_config_service`)
-- `backend/app/services/credentials/ai_credentials_service.py` — `update_credential` and `delete_credential` extended with `admin_override: bool = False` kwarg; `_to_public` projects `is_admin_managed`
+- `backend/app/services/credentials/ai_credentials_service.py` — `update_credential` and `delete_credential` extended with `admin_override: bool = False` kwarg; `_to_public` projects `is_admin_managed`; `_clear_user_profile_for_type` used by `_clear_child_default`
 
-**Migration:**
-- `backend/app/alembic/versions/2f2d8e49501d_add_admin_managed_ai_credential.py` — adds `is_admin_managed` and `managed_by_id` columns to `ai_credential`; `down_revision = 'd3f0a1b2c4e5'`
+**Migrations:**
+- `backend/app/alembic/versions/d3782dd039a5_add_managed_ai_credential.py` — creates `managed_ai_credential` table; adds `ai_credential.managed_credential_id` FK (ON DELETE SET NULL); `down_revision = '2f2d8e49501d'`; schema-only (no data backfill)
+- `backend/app/alembic/versions/2f2d8e49501d_add_admin_managed_ai_credential.py` — earlier migration that added `is_admin_managed` and `managed_by_id` to `ai_credential`
 
 ### Frontend
 
 **Route:**
-- `frontend/src/routes/_layout/admin/llm-providers.tsx` — `AdminLlmProviders` page component; `beforeLoad` redirects unauthenticated users to `/login` and non-superusers to `/`; registered at `/admin/llm-providers`
+- `frontend/src/routes/_layout/admin/llm-providers.tsx` — `AdminLlmProviders` page component; `beforeLoad` redirects unauthenticated users to `/login` and non-superusers to `/`; registered at `/admin/llm-providers`; client-side pagination (10 per page); filter by `target_user_id` via `UserAllowlistPicker` toggle-panel
 
 **Sidebar entry:**
 - `frontend/src/components/Sidebar/AdminMenu.tsx` — "LLM Providers" item with `KeyRound` icon in the Admin dropdown
 
 **Components under `frontend/src/components/Admin/LlmProviders/`:**
-- `LlmProvidersTable.tsx` — renders `AdminAICredentialPublic[]`; columns: Target User, Name, Provider (badge), Default (badge), Created, row-actions; owner labels resolved from the `ownerLabels` prop; unlabeled owners fall back to `<first-8-chars>…`
-- `ProvisionLlmProviderDialog.tsx` — provision form; provider-conditional fields (base\_url for `openai_compatible`/`google`, model for `openai_compatible`); multi-select `UserAllowlistPicker` for `target_user_ids`; `set_as_default` and `set_user_sdk_defaults` toggles; calls `AdminLlmProvidersService.provisionAiCredentials`; surfaces per-target skip reasons in toast
-- `LlmProviderActionsMenu.tsx` — three-dot menu per row: edit (name, api\_key, conditional base\_url/model; blank api\_key keeps existing key), set-default (disabled when `is_default`), delete (with `AlertDialog` confirm); calls `updateManagedAiCredential`, `setManagedAiCredentialDefault`, `deleteManagedAiCredential`
-- `providerTypes.ts` — `PROVIDER_TYPE_OPTIONS` array (value/label/description for all five `AICredentialType` values); `getProviderTypeLabel` helper; `MANAGED_CREDENTIALS_QUERY_PREFIX = ["admin", "llm-providers"]`; `managedCredentialsQueryKey(targetUserId?)` factory
+- `ManagedCredentialDialog.tsx` — unified create + edit dialog. In `create` mode it provides its own trigger button and manages open state internally; in `edit` mode it is fully controlled by the actions menu. Provider type is immutable after creation (`disabled` on the Select). API key field is blank in edit mode (blank = keep stored key for all members). Member add/remove via `UserAllowlistPicker` pre-seeded from `record.members`. Test Connection probes via `POST /test-connection` (resolves stored parent key when `api_key` is blank and `record.has_api_key` is true). Reconcile result surfaced as per-user skip/blocked toasts + summary toast.
+- `LlmProvidersTable.tsx` — renders `ManagedAICredentialPublic[]`; columns: Name | Provider (badge) | Default provider (Yes/No badge) | Default SDK (Yes/No badge) | Shared with (member chips: `full_name <email>` or `email`) | Created; no per-member default badge; member labels resolved inline from `record.members` (members carry their own `email`/`full_name` — no separate user-fetch needed)
+- `LlmProviderActionsMenu.tsx` — three-dot menu per parent row: Edit (opens `ManagedCredentialDialog` in `edit` mode), Set default for all (calls `/set-default`), Delete (with two-stage `AlertDialog`: first confirm, then if `409` escalates to a force-delete confirmation listing blocked members by name)
+- `providerTypes.ts` — `PROVIDER_TYPE_OPTIONS` array (Anthropic/OpenAI/OpenAI Compatible/Google — MiniMax omitted); `getProviderTypeLabel` helper; `MANAGED_CREDENTIALS_QUERY_PREFIX = ["admin", "llm-providers"]`; `managedCredentialsQueryKey(targetUserId?)` factory
 
 **Generated client services used:**
-- `AdminLlmProvidersService` — `provisionAiCredentials`, `listManagedAiCredentials`, `getManagedAiCredential`, `updateManagedAiCredential`, `deleteManagedAiCredential`, `setManagedAiCredentialDefault`
-- `UsersService.readUsers` — fetches the first 100 users to build the `ownerLabels` map for the table
+- `AdminLlmProvidersService` — `createManagedAiCredential`, `listManagedAiCredentials`, `getManagedAiCredential`, `updateManagedAiCredential`, `deleteManagedAiCredential`, `setManagedAiCredentialDefault`, `testManagedAiCredentialConnection`
 
 **Still pending (not yet implemented):**
 - Read-only badge on admin-managed rows in `frontend/src/components/UserSettings/AICredentials.tsx` (keyed off `AICredentialPublic.is_admin_managed`)
@@ -47,101 +49,149 @@
 
 ## Database Schema Changes
 
-### `ai_credential` table — two new columns (migration `2f2d8e49501d`)
+### `managed_ai_credential` table (new — migration `d3782dd039a5`)
 
 | Column | Type | Constraints | Purpose |
 |--------|------|-------------|---------|
-| `is_admin_managed` | `BOOLEAN` | `NOT NULL`, `server_default false` | Behavioral discriminator: row is read-only for owner when `True` |
-| `managed_by_id` | `UUID` | nullable, FK → `user.id` `ON DELETE SET NULL`, index `ix_ai_credential_managed_by_id` | Audit-only. Which admin provisioned this row; `NULL` when no admin did, or when the admin account was later deleted |
+| `id` | `UUID` | PK | Parent record identity |
+| `name` | `VARCHAR(255)` | NOT NULL | Human-readable label |
+| `type` | `VARCHAR(50)` | NOT NULL | `AICredentialType` enum value |
+| `encrypted_data` | `TEXT` | NOT NULL | Fernet-encrypted JSON `{api_key, base_url?, model?}` — canonical key |
+| `base_url` | `VARCHAR(500)` | nullable | Non-secret mirror for projection/UI |
+| `model` | `VARCHAR(255)` | nullable | Non-secret mirror for projection/UI |
+| `set_as_default` | `BOOLEAN` | NOT NULL, server_default false | Whether each child is set as its owner's default |
+| `set_user_sdk_defaults` | `BOOLEAN` | NOT NULL, server_default false | Whether each owner's SDK-default pointers are wired |
+| `sdk_default_modes` | `JSON` | NOT NULL, server_default `["conversation","building"]` | Modes to wire |
+| `expiry_notification_date` | `TIMESTAMP` | nullable | Informational expiry reminder |
+| `managed_by_id` | `UUID` | nullable, FK → `user.id` ON DELETE SET NULL, index `ix_managed_ai_credential_managed_by` | Which admin owns/manages this record; NULL when the admin account is deleted |
+| `created_at` | `TIMESTAMP` | NOT NULL | Creation time (UTC) |
+| `updated_at` | `TIMESTAMP` | NOT NULL | Last update time (UTC) |
 
-No data backfill needed — `server_default false` correctly marks all pre-existing rows as not admin-managed.
+### `ai_credential` table — new column (migration `d3782dd039a5`)
 
-Downgrade: drops FK, drops index, drops both columns.
+| Column | Type | Constraints | Purpose |
+|--------|------|-------------|---------|
+| `managed_credential_id` | `UUID` | nullable, FK → `managed_ai_credential.id` ON DELETE SET NULL, index `ix_ai_credential_managed_credential` | Structural link to the parent. NULL = not a managed child, or parent was deleted out-of-band |
 
-### `AccountConfigProviderPublic` (new model, no table)
+The `is_admin_managed` and `managed_by_id` columns already exist from migration `2f2d8e49501d`.
 
-File: `backend/app/models/external/account_config.py`
+No data backfill in either migration — existing rows had no admin-managed children before this feature.
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `credential_id` | `uuid.UUID` | The source `AICredential.id` |
-| `provider_type` | `AICredentialType` | `anthropic` / `openai` / `google` / `openai_compatible` / `minimax` |
-| `display_name` | `str` | Human-readable — `"Claude"`, `"OpenAI"`, `"Gemini"`, `"MiniMax"`, or the credential's own name for `openai_compatible` |
-| `descriptor_slug` | `str` | Stable slug: `"claude"` / `"openai"` / `"gemini"` / `"minimax"` / `"openai-compatible"` |
-| `base_url` | `str \| None` | Endpoint override (for `openai_compatible` and `google`) |
-| `model` | `str \| None` | Suggested concrete model ID (see model resolution) |
-| `api_key` | `str` | **Decrypted key** — the security boundary |
-| `is_default` | `bool` | Whether this is the user's default for its type |
-| `is_admin_managed` | `bool` | Whether the row was admin-provisioned |
-| `default_chat_mode_label` | `str` | Same as `display_name` — label the native app uses for the auto-created chat mode |
-| `suggested_models` | `list[str]` | From `credential.discovered_models`; empty if not yet discovered |
-
-### `AccountConfigResponse` (new model, no table)
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `providers` | `list[AccountConfigProviderPublic]` | All owned credentials; empty when user has none |
-| `default_provider_credential_id` | `uuid.UUID \| None` | Resolved conversation-default credential for the user |
-| `generated_at` | `datetime` | UTC timestamp when the bundle was assembled |
+Downgrade for `d3782dd039a5`: drops FK `fk_ai_credential_managed_credential`, drops index `ix_ai_credential_managed_credential`, drops column `managed_credential_id`, drops index `ix_managed_ai_credential_managed_by`, drops table `managed_ai_credential`.
 
 ---
 
-## Admin DTOs
+## Parent DTOs
 
-### `AdminAICredentialCreate`
+### `ManagedAICredentialCreate`
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `name` | `str` | 1–255 chars |
-| `type` | `AICredentialType` | Provider type |
-| `api_key` | `str` | Plaintext key (min length 1); the same key is written into each per-user row |
-| `base_url` | `str \| None` | Required for `openai_compatible`; optional for `google` |
-| `model` | `str \| None` | Required for `openai_compatible` |
+| `type` | `AICredentialType` | Provider type; immutable after creation |
+| `api_key` | `str` | Plaintext key (min length 1); encrypted into the parent row; written to children at add time |
+| `base_url` | `str \| None` | Required for `openai_compatible`; optional for `google`; max 500 chars |
+| `model` | `str \| None` | Required for `openai_compatible`; max 255 chars |
 | `expiry_notification_date` | `datetime \| None` | Informational expiry reminder |
-| `target_user_ids` | `list[uuid.UUID]` | One or more target users; min length 1; deduplicated preserving order |
-| `set_as_default` | `bool` | Default `False`; calls `set_default` per row if `True` |
-| `set_user_sdk_defaults` | `bool` | Default `False`; wires `default_sdk_*` + `default_ai_credential_*_id` if `True` |
-| `sdk_default_modes` | `list[str]` | Default `["conversation", "building"]`; unsupported values are skipped |
+| `target_user_ids` | `list[uuid.UUID]` | Min 1; deduplicated preserving order |
+| `set_as_default` | `bool` | Default `False` |
+| `set_user_sdk_defaults` | `bool` | Default `False` |
+| `sdk_default_modes` | `list[str]` | Default `["conversation", "building"]` |
 
-### `AdminAICredentialPublic`
+### `ManagedAICredentialUpdate`
 
-Extends `AICredentialPublic` with two admin-only fields:
-- `owner_id: uuid.UUID` — which user owns this row
-- `managed_by_id: uuid.UUID | None` — which admin provisioned it (null when admin account was deleted)
-
-These fields are deliberately absent from `AICredentialPublic` (the user-facing projection) to avoid leaking the admin identity.
-
-### `AdminAICredentialProvisionResult`
+All fields optional (partial update). Omitting `api_key` keeps the stored key. Omitting `target_user_ids` leaves membership unchanged.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `created` | `list[AdminAICredentialPublic]` | One entry per successfully provisioned target |
-| `skipped` | `list[AdminProvisionSkip]` | Users that were skipped |
+| `name` | `str \| None` | |
+| `api_key` | `str \| None` | Non-None triggers key rotation + Update pass for all current members |
+| `base_url` | `str \| None` | |
+| `model` | `str \| None` | |
+| `expiry_notification_date` | `datetime \| None` | |
+| `target_user_ids` | `list[uuid.UUID] \| None` | When supplied, the reconcile diff is against this list |
+| `set_as_default` | `bool \| None` | |
+| `set_user_sdk_defaults` | `bool \| None` | |
+| `sdk_default_modes` | `list[str] \| None` | |
 
-### `AdminProvisionSkip`
+### `ManagedAICredentialPublic`
+
+Never includes `encrypted_data` or key material.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | `uuid.UUID` | |
+| `name` | `str` | |
+| `type` | `AICredentialType` | |
+| `base_url` | `str \| None` | |
+| `model` | `str \| None` | |
+| `set_as_default` | `bool` | |
+| `set_user_sdk_defaults` | `bool` | |
+| `sdk_default_modes` | `list[str]` | |
+| `expiry_notification_date` | `datetime \| None` | |
+| `managed_by_id` | `uuid.UUID \| None` | Which admin manages this; NULL when that admin was deleted |
+| `has_api_key` | `bool` | Always `True` — a parent always holds a key |
+| `is_oauth_token` | `bool` | Derived from the stored key prefix (`sk-ant-oat`) for Anthropic; `False` for all other types |
+| `members` | `list[ManagedAICredentialMember]` | One entry per current child credential |
+| `member_count` | `int` | `len(members)` |
+| `created_at` | `datetime` | |
+| `updated_at` | `datetime` | |
+
+### `ManagedAICredentialMember`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user_id` | `uuid.UUID` | Owner of the child credential |
+| `email` | `str` | Owner's email |
+| `full_name` | `str \| None` | Owner's full name |
+| `child_credential_id` | `uuid.UUID` | The `AICredential.id` |
+| `is_default` | `bool` | Whether this child is the owner's default for its type |
+
+### `ManagedAICredentialReconcileResult`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `record` | `ManagedAICredentialPublic` | The parent record as it stands after reconcile |
+| `added` | `list[ManagedAICredentialMember]` | Newly created children |
+| `removed` | `list[uuid.UUID]` | Owner IDs whose children were successfully deleted |
+| `updated` | `list[ManagedAICredentialMember]` | Members whose child was actually mutated this reconcile (empty on no-op) |
+| `updated_count` | `int` | `len(updated)` — convenience scalar |
+| `skipped` | `list[ManagedReconcileSkip]` | Users skipped (unknown/inactive/provision_failed/update_failed) |
+| `blocked` | `list[ManagedReconcileBlock]` | Members whose removal was blocked by Tier-2 blast-radius (in_use_bundle) |
+
+### `ManagedReconcileSkip`
 
 | Field | Type | Values |
 |-------|------|--------|
 | `user_id` | `uuid.UUID` | The skipped target |
-| `reason` | `str` | `"user_not_found"` / `"user_inactive"` |
+| `reason` | `str` | `"user_not_found"` / `"user_inactive"` / `"provision_failed"` / `"update_failed"` |
+
+### `ManagedReconcileBlock`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user_id` | `uuid.UUID` | The blocked member |
+| `reason` | `str` | `"in_use_bundle"` / `"remove_failed"` |
+| `impact` | `dict \| None` | Deletion-impact payload from `AICredentialInUseError.impact` |
 
 ---
 
 ## API Endpoints
 
-### Admin LLM Providers (`/api/v1/admin/llm-providers/`)
+### Admin LLM Providers (`/api/v1/admin/llm-providers`)
 
 **File:** `backend/app/api/routes/admin_llm_providers.py`
 **Auth gate:** `get_current_active_superuser` — `403` for anyone else
 
 | Method | Path | Request | Response | Notes |
 |--------|------|---------|----------|-------|
-| `POST` | `/admin/llm-providers/` | `AdminAICredentialCreate` | `AdminAICredentialProvisionResult` | Creates one row per valid target; emits per-row + batch `SecurityEvent` |
-| `GET` | `/admin/llm-providers/` | query `?target_user_id=` optional | `list[AdminAICredentialPublic]` | Fleet-wide, ordered by `created_at DESC` |
-| `GET` | `/admin/llm-providers/{credential_id}` | — | `AdminAICredentialPublic` | `404` if not admin-managed |
-| `PATCH` | `/admin/llm-providers/{credential_id}` | `AICredentialUpdate` | `AdminAICredentialPublic` | Emits `admin.ai_credential.update` |
-| `DELETE` | `/admin/llm-providers/{credential_id}?force=bool` | — | `Message` | `409` on Tier-2 blast-radius unless `force`; emits `admin.ai_credential.delete` |
-| `POST` | `/admin/llm-providers/{credential_id}/set-default` | — | `AdminAICredentialPublic` | Sets as the owner-user's default; emits `admin.ai_credential.set_default` |
+| `POST` | `/admin/llm-providers/` | `ManagedAICredentialCreate` | `ManagedAICredentialReconcileResult` | Create parent + initial reconcile; bad per-type payload → `400` |
+| `GET` | `/admin/llm-providers/` | query `?managed_by_id=` & `?target_user_id=` (both optional) | `list[ManagedAICredentialPublic]` | Fleet-wide, ordered by `created_at DESC`; filtered when params supplied |
+| `GET` | `/admin/llm-providers/{id}` | — | `ManagedAICredentialPublic` | `404` if not found |
+| `PATCH` | `/admin/llm-providers/{id}?force=` | `ManagedAICredentialUpdate` | `ManagedAICredentialReconcileResult` | Update parent + re-reconcile; `force` overrides Tier-2 block on removed members |
+| `DELETE` | `/admin/llm-providers/{id}?force=` | — | `Message` | `409` with `blocked` list when any child is in use and `force` is absent |
+| `POST` | `/admin/llm-providers/{id}/set-default` | — | `ManagedAICredentialPublic` | Sets every current member's child as their default; stamps `set_as_default=True` on parent |
+| `POST` | `/admin/llm-providers/test-connection?managed_credential_id=` | `AICredentialTestRequest` | `AICredentialTestResult` | When `api_key` blank and `managed_credential_id` given, probes via stored parent key |
 
 ### Native Account-Config (`/api/v1/external/account-config`)
 
@@ -159,32 +209,48 @@ These fields are deliberately absent from `AICredentialPublic` (the user-facing 
 
 ---
 
-## Services
+## `ManagedAICredentialsService` (`managed_ai_credentials_service.py`)
 
-### `AdminAICredentialService` (`admin_ai_credentials_service.py`)
+Singleton: `managed_ai_credentials_service`
 
-Singleton: `admin_ai_credentials_service`
-
-**Key methods:**
+### Key public methods
 
 | Method | Description |
 |--------|-------------|
-| `provision_for_users(session, admin, data)` | Creates one admin-managed `AICredential` per valid target user. Returns `AdminAICredentialProvisionResult`. Invalid/inactive users go to `skipped`. Per-type field validation delegates to `AICredentialsService.create_credential` (fails the whole call if bad). |
-| `list_managed(session, admin, target_user_id=None)` | Returns all admin-managed rows fleet-wide, optionally scoped to one user. |
-| `get_managed(session, admin, credential_id)` | Returns one admin-managed row; `404` if not found or `is_admin_managed=False`. |
-| `update_managed(session, admin, credential_id, data)` | Updates on behalf of the owner, passing `admin_override=True` to bypass the user read-only guard. |
-| `delete_managed(session, admin, credential_id, force=False)` | Deletes with the Tier-2 blast-radius gate; passes `admin_override=True`. |
-| `set_managed_default(session, admin, credential_id)` | Sets the row as the owner-user's default by delegating to `AICredentialsService.set_default(credential.id, credential.owner_id)`. |
+| `create(session, admin, data)` | Validate + encrypt canonical key; INSERT parent; call `reconcile(apply_fields=False, key_rotated=False)`. Returns `ManagedAICredentialReconcileResult`. |
+| `update(session, admin, id, data, force)` | Apply scalar changes to parent (rotate `encrypted_data` if `api_key` supplied); call `reconcile(apply_fields=True, key_rotated=...)`. Omitting `target_user_ids` uses the current membership as desired. |
+| `delete(session, admin, id, force)` | Reconcile to empty desired set (Tier-2 gated); if blocked and not `force`, abort (parent stays); else `DELETE` parent row. |
+| `set_default_all(session, admin, id)` | `set_default` for every current member; stamp `parent.set_as_default=True`. Returns `ManagedAICredentialPublic`. |
+| `list(session, admin, managed_by_id, target_user_id)` | Fleet-wide list, optional filters. |
+| `get(session, admin, id)` | Single parent record; `404` if not found. |
+| `resolve_test_key(session, id)` | Decrypt parent key for the Test Connection blank-api_key case. `404` if not found. |
 
-**Implementation note:** every method that calls into `AICredentialsService` does so with `user_id = credential.owner_id` (not the admin's ID), so all per-user invariants (one-default-per-type, profile auto-sync, `default_sdk_*` wiring) run for the **target user**.
+### `reconcile()` — the heart
 
-**`_provision_one` flow (internal):**
-1. Call `AICredentialsService.create_credential(session, target.id, AICredentialCreate(...))` — handles encryption, type validation, expiry auto-detection for Anthropic OAuth tokens
-2. Fetch the new row; stamp `is_admin_managed=True`, `managed_by_id=admin.id`; commit
-3. If `set_as_default`: call `AICredentialsService.set_default(credential.id, target.id)` — runs profile auto-sync for the target
-4. If `set_user_sdk_defaults`: call `_apply_sdk_defaults` — writes `target.default_sdk_conversation/building` and `target.default_ai_credential_*_id` using the `_TYPE_TO_SDK_ENGINE` map
+```
+reconcile(
+    session, admin, parent, desired_user_ids,
+    *, apply_fields, force, key_rotated
+) -> ManagedAICredentialReconcileResult
+```
 
-**`_TYPE_TO_SDK_ENGINE` map:**
+- `desired_user_ids` — deduplicated; compared against `_current_members(parent)` (children keyed by `owner_id`)
+- `apply_fields=False` — skip the Update pass (used on create, since there are no pre-existing members to update)
+- `key_rotated=True` — forces key write-through in the Update pass even when other scalars are unchanged
+- `force=True` — passes `force` to `delete_credential`; blocked members do not block the Remove pass
+
+### `_update_child_fields()` — Update pass detail
+
+Diffs parent scalars against the child (and the child's decrypted data). Only writes when something changed (idempotency). Returns `True` iff the child was mutated.
+
+Clear-through limitation: `update_credential` treats `None` as "leave unchanged", so `base_url`/`model` cannot be cleared back to `None` (for `openai_compatible` both are required anyway). `expiry_notification_date` is cleared directly on the child row when the parent value is `None`.
+
+Default flag logic:
+- `set_as_default=True` and `child.is_default=False` → `set_default(child, owner)`
+- `set_as_default=False` and `child.is_default=True` → `_clear_child_default(child)` (clears profile blob + SDK-default pointers that reference this child)
+
+### `_TYPE_TO_SDK_ENGINE` map
+
 | `AICredentialType` | Composed SDK engine |
 |-------------------|---------------------|
 | `ANTHROPIC` | `"claude-code/anthropic"` |
@@ -193,7 +259,9 @@ Singleton: `admin_ai_credentials_service`
 | `GOOGLE` | `"opencode/google"` |
 | `OPENAI_COMPATIBLE` | `"opencode/openai_compatible"` |
 
-### `ExternalAccountConfigService` (`external_account_config_service.py`)
+---
+
+## `ExternalAccountConfigService` (`external_account_config_service.py`)
 
 Singleton: `external_account_config_service`
 
@@ -222,9 +290,19 @@ Resolution chain (native clients call the provider API directly — must be a co
 3. `resolve_model(engine, provider, mode="building", ...)` from `model_catalog` — but only if `not is_known_word(result)` (drops tier words like `"haiku"`, `"sonnet"` that are Claude Code internal shortcuts, not Anthropic API model IDs)
 4. `None`
 
-**`_resolve_default_credential_id(session, user) -> uuid.UUID | None`**
+---
 
-Reads `user.default_sdk_conversation` (falls back to `"claude-code"` if not set), takes the engine-prefix (`split("/")[0]`), then calls `AICredentialsService.resolve_default_credential_for_sdk(session, user.id, engine_prefix)`.
+## `AICredential` Child Columns
+
+**File:** `backend/app/models/credentials/ai_credential.py`
+
+Three columns relevant to the managed-credential feature:
+
+| Column | Type | Constraints | Purpose |
+|--------|------|-------------|---------|
+| `is_admin_managed` | `BOOLEAN` | NOT NULL, server_default false | Behavioral discriminator: row is read-only for owner when `True` |
+| `managed_by_id` | `UUID` | nullable, FK → `user.id` ON DELETE SET NULL | Audit-only. Which admin provisioned this row; NULL when not admin-provisioned, or when the admin account was later deleted |
+| `managed_credential_id` | `UUID` | nullable, FK → `managed_ai_credential.id` ON DELETE SET NULL | Structural link to parent. NULL = not a managed child, or parent deleted out-of-band |
 
 ---
 
@@ -244,7 +322,7 @@ delete_credential(session, credential_id, user_id, force=False, *, admin_overrid
     # Same guard
 ```
 
-User-facing routes in `ai_credentials.py` call these **without** `admin_override` → users blocked. `AdminAICredentialService` calls them **with** `admin_override=True` → admins pass.
+User-facing routes in `ai_credentials.py` call these **without** `admin_override` → users blocked. `ManagedAICredentialsService` calls them **with** `admin_override=True` → reconcile passes.
 
 `set_default` is NOT guarded — setting an admin-managed credential as one's default is a read-only use (beneficial for the user), not a modification.
 
@@ -258,7 +336,35 @@ User-facing routes in `ai_credentials.py` call these **without** `admin_override
 is_admin_managed=credential.is_admin_managed,
 ```
 
-`managed_by_id` is deliberately NOT projected on `AICredentialPublic` (user-facing). It is only available on `AdminAICredentialPublic` (admin-only surface) to avoid leaking the admin identity to the credential owner.
+`managed_by_id` and `managed_credential_id` are deliberately NOT projected on `AICredentialPublic` (user-facing) to avoid leaking admin identity or internal parent ID to the credential owner.
+
+---
+
+## `AccountConfigProviderPublic` (no table)
+
+File: `backend/app/models/external/account_config.py`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `credential_id` | `uuid.UUID` | The source `AICredential.id` |
+| `provider_type` | `AICredentialType` | |
+| `display_name` | `str` | Human-readable — `"Claude"`, `"OpenAI"`, `"Gemini"`, `"MiniMax"`, or the credential's own name for `openai_compatible` |
+| `descriptor_slug` | `str` | Stable slug: `"claude"` / `"openai"` / `"gemini"` / `"minimax"` / `"openai-compatible"` |
+| `base_url` | `str \| None` | Endpoint override (for `openai_compatible` and `google`) |
+| `model` | `str \| None` | Suggested concrete model ID (see model resolution) |
+| `api_key` | `str` | **Decrypted key** — the security boundary |
+| `is_default` | `bool` | Whether this is the user's default for its type |
+| `is_admin_managed` | `bool` | Whether the row was admin-provisioned |
+| `default_chat_mode_label` | `str` | Same as `display_name` — label the native app uses for the auto-created chat mode |
+| `suggested_models` | `list[str]` | From `credential.discovered_models`; empty if not yet discovered |
+
+## `AccountConfigResponse` (no table)
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `providers` | `list[AccountConfigProviderPublic]` | All owned credentials; empty when user has none |
+| `default_provider_credential_id` | `uuid.UUID \| None` | Resolved conversation-default credential for the user |
+| `generated_at` | `datetime` | UTC timestamp when the bundle was assembled |
 
 ---
 
@@ -268,27 +374,18 @@ All audit events contain counts/IDs but **never** key bytes.
 
 | Event type | Scope | Severity | Emitted by |
 |------------|-------|----------|------------|
-| `admin.ai_credential.provision` | Target user | `medium` | `POST /admin/llm-providers/` — one per provisioned row |
-| `admin.ai_credential.provision_batch` | Admin | `medium` | `POST /admin/llm-providers/` — one per call |
-| `admin.ai_credential.update` | Target user | `medium` | `PATCH /admin/llm-providers/{id}` |
-| `admin.ai_credential.delete` | Target user | `medium` | `DELETE /admin/llm-providers/{id}` |
-| `admin.ai_credential.set_default` | Target user | `medium` | `POST /admin/llm-providers/{id}/set-default` |
+| `admin.ai_credential.provision` | Child owner | `medium` | Per added child — `POST /` and `PATCH /{id}` |
+| `admin.ai_credential.update` | Child owner | `medium` | Per mutated child — `PATCH /{id}` (no-op children emit no event) |
+| `admin.ai_credential.delete` | Child owner | `medium` | Per removed child — `PATCH /{id}` and `DELETE /{id}` |
+| `admin.ai_credential.set_default` | Child owner | `medium` | Per member — `POST /{id}/set-default` |
+| `admin.managed_ai_credential.create` | Admin | `medium` | `POST /` — one per call |
+| `admin.managed_ai_credential.update` | Admin | `medium` | `PATCH /{id}` — one per call |
+| `admin.managed_ai_credential.delete` | Admin | `medium` | `DELETE /{id}` — one per call |
 | `external.account_config.read` | Calling user | `high` | `GET /external/account-config` (successful call only) |
 
 `external.account_config.read` details: `{client_kind, external_client_id, provider_count, credential_ids}`.
 
----
-
-## Dependencies
-
-| Dependency | Used by |
-|-----------|--------|
-| `get_current_active_superuser` | All `/admin/llm-providers/` routes |
-| `CurrentUser` | `/external/account-config` |
-| `CurrentClientClaims` | `/external/account-config` (reads `client_kind`, `external_client_id` from JWT) |
-| `SessionDep` | All routes |
-
-`CurrentClientClaims` is defined in `backend/app/api/deps.py` and returns `(client_kind, external_client_id)` from the JWT. It is shared with the rest of the external A2A surface (used there for client attribution).
+The old `admin.ai_credential.provision_batch` event type from the previous per-row model is gone.
 
 ---
 
@@ -301,4 +398,17 @@ All audit events contain counts/IDs but **never** key bytes.
 
 ---
 
-*Last updated: 2026-06-13 — admin UI (LLM Providers section) shipped; native account-config backend-only*
+## Dependencies
+
+| Dependency | Used by |
+|-----------|--------|
+| `get_current_active_superuser` | All `/admin/llm-providers/` routes |
+| `CurrentUser` | `/external/account-config` |
+| `CurrentClientClaims` | `/external/account-config` (reads `client_kind`, `external_client_id` from JWT) |
+| `SessionDep` | All routes |
+
+`CurrentClientClaims` is defined in `backend/app/api/deps.py` and returns `(client_kind, external_client_id)` from the JWT. It is shared with the rest of the external A2A surface.
+
+---
+
+*Last updated: 2026-06-13 — parent/child reconcile model (ManagedAICredential) shipped; native account-config backend-only*
