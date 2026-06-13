@@ -11,8 +11,8 @@
  *
  *   2. AI credential pickers (Conversation + Building) showing the
  *      currently used SDK engine. The dropdown is filtered by the
- *      compatibility matrix (``claude-code`` only sees ``anthropic`` /
- *      ``minimax`` credentials, etc.). Choosing "None — user provides"
+ *      compatibility matrix (``claude-code`` only sees ``anthropic``
+ *      credentials, etc.). Choosing "None — user provides"
  *      clears the bundle-level FK; foreign installs revert to user
  *      provides AI.
  *

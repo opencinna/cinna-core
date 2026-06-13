@@ -14,7 +14,7 @@ Both platforms share the same three-layer vocabulary — **Agent, Environment, S
 | **Who runs it** | Anthropic hosts and scales everything | You host, you own, you control |
 | **Who uses it** | Developers via Console UI, SDK, and CLI. End-user-facing UI is yours to build | End users working through a full-stack web UI (and developers extending via API) |
 | **Container lifecycle** | Ephemeral — fresh container per session, no file carry-over | Persistent — workspace files, databases, and scripts survive across sessions and rebuilds |
-| **LLM provider** | Claude only (Anthropic models) | Multi-provider: Claude, OpenAI, Google, MiniMax, Bedrock, Azure, Ollama, and 75+ via OpenCode engine |
+| **LLM provider** | Claude only (Anthropic models) | Multi-provider: Claude, OpenAI, Google, Bedrock, Azure, Ollama, and 75+ via OpenCode engine |
 
 ---
 

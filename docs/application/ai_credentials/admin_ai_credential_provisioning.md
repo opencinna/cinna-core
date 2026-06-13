@@ -70,7 +70,7 @@ The admin UI is accessed via **Admin menu → LLM Providers** (`/admin/llm-provi
 2. The admin can **filter** the table to a single target user via a `UserAllowlistPicker` in the page header. A "Clear filter" button appears when a filter is active.
 3. Clicking **"Provision Credential"** opens a dialog (`ProvisionLlmProviderDialog`) with:
    - Name (free-form)
-   - Provider type (dropdown over all five `AICredentialType` values: Anthropic, MiniMax, OpenAI, OpenAI Compatible, Google)
+   - Provider type (dropdown over the selectable `AICredentialType` values: Anthropic, OpenAI, OpenAI Compatible, Google — MiniMax is temporarily disabled in the UI and no longer offered)
    - API key (password field)
    - Base URL — shown only for `openai_compatible` (required) and `google` (optional)
    - Model — shown only for `openai_compatible` (required)

@@ -40,7 +40,7 @@ const SDK_ENGINE_OPTIONS = [
 
 // Compatibility matrix: which credential types each SDK engine supports
 const SDK_CREDENTIAL_COMPATIBILITY: Record<string, string[]> = {
-  "claude-code": ["anthropic", "minimax"],
+  "claude-code": ["anthropic"],
   "opencode": ["anthropic", "openai", "openai_compatible", "google"],
 }
 
@@ -50,7 +50,6 @@ const SUGGESTED_MODELS: Record<string, string[]> = {
   openai: ["gpt-4o", "gpt-4o-mini", "o3", "o4-mini"],
   google: ["gemini-2.5-pro", "gemini-2.5-flash"],
   openai_compatible: [],
-  minimax: [],
 }
 
 // Default SDK full ID per engine
@@ -63,9 +62,8 @@ const DEFAULT_SDK_FOR_ENGINE: Record<string, string> = {
 const USE_DEFAULT_SENTINEL = "__default__"
 
 // Type display names
-const TYPE_DISPLAY_NAMES: Record<AICredentialType, string> = {
+const TYPE_DISPLAY_NAMES: Partial<Record<AICredentialType, string>> = {
   anthropic: "Anthropic",
-  minimax: "MiniMax",
   openai_compatible: "OpenAI Compatible",
   openai: "OpenAI",
   google: "Google AI",

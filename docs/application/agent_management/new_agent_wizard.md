@@ -57,7 +57,7 @@ When "+ New Agent" is selected:
 - `envNameTouched`: Boolean (default `false`) that records whether the user explicitly clicked a template card in the current "+ New Agent" flow. Reset to `false` in `handleAgentClick` each time the user enters a fresh flow. Only when this is `true` does the dashboard include `envName` in the navigation search params.
 - The form is seeded from `aiCredentialsStatus` defaults each time the dialog is opened (re-seeds on every open, not just the first)
 
-**Credential Filtering:** Credential dropdown is filtered by `SDK_CREDENTIAL_COMPATIBILITY` — only credentials whose type is compatible with the selected engine are shown. Compatible types: `claude-code` → `anthropic`, `minimax`; `opencode` → `anthropic`, `openai`, `openai_compatible`, `google`.
+**Credential Filtering:** Credential dropdown is filtered by `SDK_CREDENTIAL_COMPATIBILITY` — only credentials whose type is compatible with the selected engine are shown. Compatible types: `claude-code` → `anthropic`; `opencode` → `anthropic`, `openai`, `openai_compatible`, `google`. (`minimax` is temporarily disabled in the UI — not currently supported.)
 
 **Model Override:** Optional text field per mode for explicit model selection (e.g., `gpt-4o-mini`, `claude-opus-4`). Left empty means the adapter uses its default for that mode.
 

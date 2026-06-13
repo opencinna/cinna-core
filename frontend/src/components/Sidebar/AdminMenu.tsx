@@ -1,5 +1,5 @@
 import { Link as RouterLink, useRouterState } from "@tanstack/react-router"
-import { Shield, Users, Store, BookOpen, Server, KeyRound } from "lucide-react"
+import { Shield, Users, Store, BookOpen, Server, Sparkles } from "lucide-react"
 
 import {
   SidebarMenu,
@@ -70,7 +70,7 @@ export function AdminMenu() {
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
               <RouterLink to="/admin/llm-providers" onClick={handleMenuClick}>
-                <KeyRound className="mr-2 h-4 w-4" />
+                <Sparkles className="mr-2 h-4 w-4" />
                 LLM Providers
               </RouterLink>
             </DropdownMenuItem>

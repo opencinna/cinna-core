@@ -1,23 +1,22 @@
 import type { AICredentialType } from "@/client"
 
-// Display metadata for the five AI credential provider types. Mirrors the
-// copy used in the user-facing AICredentialDialog so admin and user surfaces
-// stay consistent.
+// Display metadata for the user-selectable AI credential provider types.
+// Mirrors the copy used in the user-facing AICredentialDialog so admin and
+// user surfaces stay consistent.
+// NOTE: MiniMax is temporarily disabled in the UI (not currently supported).
 export const PROVIDER_TYPE_OPTIONS: {
   value: AICredentialType
   label: string
   description: string
 }[] = [
   { value: "anthropic", label: "Anthropic", description: "Claude AI models (API Key or OAuth Token)" },
-  { value: "minimax", label: "MiniMax", description: "MiniMax M2 models" },
   { value: "openai", label: "OpenAI", description: "OpenAI API (GPT-4o, o3, etc.)" },
   { value: "openai_compatible", label: "OpenAI Compatible", description: "OpenAI-compatible endpoints (vLLM, custom)" },
   { value: "google", label: "Google", description: "Google AI (Gemini models via AI Studio)" },
 ]
 
-const PROVIDER_TYPE_LABELS: Record<AICredentialType, string> = {
+const PROVIDER_TYPE_LABELS: Partial<Record<AICredentialType, string>> = {
   anthropic: "Anthropic",
-  minimax: "MiniMax",
   openai: "OpenAI",
   openai_compatible: "OpenAI Compatible",
   google: "Google",

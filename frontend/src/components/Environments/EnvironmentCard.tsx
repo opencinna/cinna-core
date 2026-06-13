@@ -55,7 +55,6 @@ const getTemplateDisplayName = (envName: string): string => {
 const getSDKDisplayName = (sdk: string | null | undefined): string => {
   if (!sdk) return "Anthropic"
   if (sdk === "claude-code/anthropic" || sdk === "claude-code") return "Claude Code"
-  if (sdk === "claude-code/minimax") return "MiniMax"
   if (sdk === "opencode" || sdk === "opencode/anthropic") return "OpenCode"
   // OpenCode with specific provider — show provider in parentheses
   if (sdk === "opencode/openai") return "OpenCode (OpenAI)"

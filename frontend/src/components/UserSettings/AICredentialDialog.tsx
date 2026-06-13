@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Loader2, Info, CheckCircle2 } from "lucide-react"
 
@@ -33,13 +33,20 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import useCustomToast from "@/hooks/useCustomToast"
 
 // Type display names and metadata
+// NOTE: MiniMax is temporarily disabled in the UI (not currently supported).
 const TYPE_OPTIONS: { value: AICredentialType; label: string; description: string }[] = [
   { value: "anthropic", label: "Anthropic", description: "Claude AI models (API Key or OAuth Token)" },
-  { value: "minimax", label: "MiniMax", description: "MiniMax M2 models" },
   { value: "openai", label: "OpenAI", description: "OpenAI API (GPT-4o, o3, etc.)" },
   { value: "openai_compatible", label: "OpenAI Compatible", description: "OpenAI-compatible endpoints (vLLM, custom)" },
   { value: "google", label: "Google", description: "Google AI (Gemini models via AI Studio)" },
 ]
+
+// Default credential name suggested for a freshly-created credential, derived
+// from the selected provider (e.g. "Anthropic Key").
+function defaultCredentialName(type: AICredentialType): string {
+  const label = TYPE_OPTIONS.find((o) => o.value === type)?.label ?? type
+  return `${label} Key`
+}
 
 interface AICredentialDialogProps {
   open: boolean
@@ -98,6 +105,10 @@ export function AICredentialDialog({
   // Test Connection result (inline alert)
   const [testResult, setTestResult] = useState<AICredentialTestResult | null>(null)
 
+  // Tracks the last auto-suggested name so we only overwrite it while the user
+  // hasn't typed their own name.
+  const autoNameRef = useRef("")
+
   const isEditing = !!credential
 
   // Reset form when dialog opens/closes or credential changes
@@ -119,8 +130,10 @@ export function AICredentialDialog({
             : ""
         )
       } else {
-        // Creating new credential
-        setName("")
+        // Creating new credential — prefill the name with the provider default.
+        const suggested = defaultCredentialName("anthropic")
+        autoNameRef.current = suggested
+        setName(suggested)
         setType("anthropic")
         setApiKey("")
         setBaseUrl("")
@@ -334,7 +347,17 @@ export function AICredentialDialog({
             <Label htmlFor="credential-type">Type</Label>
             <Select
               value={type}
-              onValueChange={(v) => setType(v as AICredentialType)}
+              onValueChange={(v) => {
+                const next = v as AICredentialType
+                setType(next)
+                // Keep the suggested name in sync with the provider until the
+                // user types their own name.
+                if (name === "" || name === autoNameRef.current) {
+                  const suggested = defaultCredentialName(next)
+                  autoNameRef.current = suggested
+                  setName(suggested)
+                }
+              }}
               disabled={isEditing} // Can't change type when editing
             >
               <SelectTrigger id="credential-type">

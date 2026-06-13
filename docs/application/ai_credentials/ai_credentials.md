@@ -9,7 +9,7 @@ Enable users to manage multiple named AI credentials (API keys) for different LL
 - **Named AI Credential** - Reusable, encrypted API key with a user-defined name (e.g., "Production Anthropic", "Testing OpenAI")
 - **Default Credential** - One credential per type marked as default; auto-synced to user profile for backward compatibility
 - **Prioritized Default Resolution** - When "Use Default" is selected for an SDK engine, the system finds the best matching default credential using priority: Anthropic > Google (Gemini) > OpenAI > any other compatible type (oldest first)
-- **Credential Type** - Provider category: `anthropic`, `minimax`, `openai`, `openai_compatible`, `google`
+- **Credential Type** - Provider category: `anthropic`, `openai`, `openai_compatible`, `google`. (`minimax` is **temporarily disabled in the UI — not currently supported**; backend code remains but it is not selectable.)
 - **Auto-Sync** - When a credential is set as default, its values are copied to the user's profile fields (`ai_credentials_encrypted`) so existing code continues working
 - **Environment Linking** - Environments can use default credentials or be explicitly linked to specific credentials
 - **Credential Provision** - Agent owners can attach their AI credentials when sharing, so recipients don't need their own
@@ -19,12 +19,14 @@ Enable users to manage multiple named AI credentials (API keys) for different LL
 | Type | Required Fields | Optional Fields | Compatible SDK Engines |
 |------|-----------------|-----------------|------------------------|
 | `anthropic` | `api_key` | — | `claude-code`, `opencode` |
-| `minimax` | `api_key` | — | `claude-code` |
+| `minimax` _(temporarily disabled in UI)_ | `api_key` | — | `claude-code` |
 | `openai` | `api_key` | — | `opencode` |
 | `openai_compatible` | `api_key`, `base_url`, `model` | — | `opencode` |
 | `google` | `api_key` | `base_url` | `opencode` |
 
 Note: `anthropic` credentials also support OAuth tokens (prefix `sk-ant-oat*`) — see [Anthropic Credential Types](anthropic_credential_types.md).
+
+> **MiniMax is temporarily disabled (not supported).** The platform UI focuses on four providers — Anthropic, Google, OpenAI, and OpenAI-compatible. The `minimax` type is no longer offered in any provider picker or SDK selector. The backend code paths remain in place, so MiniMax can be re-enabled later by restoring the UI options.
 
 ## User Stories / Flows
 

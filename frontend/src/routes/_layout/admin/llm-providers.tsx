@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { createFileRoute, redirect } from "@tanstack/react-router"
+import { Filter } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 
 import { AdminLlmProvidersService, UsersService } from "@/client"
@@ -12,6 +13,14 @@ import { ProvisionLlmProviderDialog } from "@/components/Admin/LlmProviders/Prov
 import { managedCredentialsQueryKey } from "@/components/Admin/LlmProviders/providerTypes"
 import PendingItems from "@/components/Pending/PendingItems"
 import { Button } from "@/components/ui/button"
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination"
 import useAuth, { isLoggedIn } from "@/hooks/useAuth"
 import { usePageHeader } from "@/routes/_layout"
 import { APP_NAME } from "@/utils"
@@ -42,9 +51,20 @@ function AdminLlmProviders() {
   const { user } = useAuth()
 
   // Single-user filter, modeled as a 0-or-1 entry selection so it can reuse
-  // the shared UserAllowlistPicker.
+  // the shared UserAllowlistPicker. The filter panel is hidden by default and
+  // toggled open via the "Filter" button in the page header.
   const [filterUser, setFilterUser] = useState<UserAllowlistSelectedItem | null>(null)
+  const [showFilter, setShowFilter] = useState(false)
   const targetUserId = filterUser?.userId ?? undefined
+
+  // Client-side pagination over the full managed-credential list.
+  const PAGE_SIZE = 10
+  const [page, setPage] = useState(1)
+
+  // Reset to the first page whenever the active filter changes.
+  useEffect(() => {
+    setPage(1)
+  }, [targetUserId])
 
   const {
     data: credentials,
@@ -77,6 +97,16 @@ function AdminLlmProviders() {
     return map
   }, [users, filterUser])
 
+  // Derived pagination: clamp the active page to the available range and slice
+  // the current page out of the full list.
+  const totalCount = credentials?.length ?? 0
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
+  const pagedCredentials = useMemo(
+    () => (credentials ?? []).slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [credentials, currentPage],
+  )
+
   useEffect(() => {
     setHeaderContent(
       <>
@@ -86,11 +116,24 @@ function AdminLlmProviders() {
             Provision read-only AI credentials on behalf of users
           </p>
         </div>
-        <ProvisionLlmProviderDialog />
+        <div className="flex items-center gap-2">
+          <Button
+            variant={showFilter || filterUser ? "secondary" : "outline"}
+            size="sm"
+            onClick={() => setShowFilter((v) => !v)}
+          >
+            <Filter className="mr-2 h-4 w-4" />
+            Filter
+            {filterUser && (
+              <span className="ml-2 inline-block size-2 rounded-full bg-primary" />
+            )}
+          </Button>
+          <ProvisionLlmProviderDialog />
+        </div>
       </>,
     )
     return () => setHeaderContent(null)
-  }, [setHeaderContent])
+  }, [setHeaderContent, showFilter, filterUser])
 
   // Edge-case guard for a non-superuser that slipped past beforeLoad.
   if (user && !user.is_superuser) {
@@ -104,32 +147,34 @@ function AdminLlmProviders() {
   return (
     <div className="p-6 md:p-8 overflow-y-auto">
       <div className="mx-auto max-w-7xl space-y-4">
-        {/* Filter by target user */}
-        <div className="flex flex-col gap-2 sm:max-w-md">
-          <UserAllowlistPicker
-            label="Filter by target user"
-            searchPlaceholder="Search a user to filter..."
-            selected={filterUser ? [filterUser] : []}
-            onAdd={(u) =>
-              setFilterUser({
-                id: u.id,
-                userId: u.id,
-                fallbackLabel: u.full_name || u.email,
-              })
-            }
-            onRemove={() => setFilterUser(null)}
-          />
-          {filterUser && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="self-start h-7 px-2 text-xs"
-              onClick={() => setFilterUser(null)}
-            >
-              Clear filter
-            </Button>
-          )}
-        </div>
+        {/* Filter by target user — toggled via the header "Filter" button */}
+        {showFilter && (
+          <div className="flex flex-col gap-2 sm:max-w-md rounded-md border bg-muted/30 p-3">
+            <UserAllowlistPicker
+              label="Filter by target user"
+              searchPlaceholder="Search a user to filter..."
+              selected={filterUser ? [filterUser] : []}
+              onAdd={(u) =>
+                setFilterUser({
+                  id: u.id,
+                  userId: u.id,
+                  fallbackLabel: u.full_name || u.email,
+                })
+              }
+              onRemove={() => setFilterUser(null)}
+            />
+            {filterUser && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="self-start h-7 px-2 text-xs"
+                onClick={() => setFilterUser(null)}
+              >
+                Clear filter
+              </Button>
+            )}
+          </div>
+        )}
 
         {isLoading ? (
           <PendingItems />
@@ -141,12 +186,55 @@ function AdminLlmProviders() {
           </div>
         ) : (
           <>
-            <div className="text-xs text-muted-foreground">
-              <strong>{credentials.length}</strong> managed credential
-              {credentials.length !== 1 ? "s" : ""}
-              {targetUserId ? " for the selected user" : " fleet-wide"}
-            </div>
-            <LlmProvidersTable credentials={credentials} ownerLabels={ownerLabels} />
+            <LlmProvidersTable credentials={pagedCredentials} ownerLabels={ownerLabels} />
+            {totalPages > 1 && (
+              <Pagination>
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious
+                      href="#"
+                      aria-disabled={currentPage <= 1}
+                      className={
+                        currentPage <= 1 ? "pointer-events-none opacity-50" : undefined
+                      }
+                      onClick={(e) => {
+                        e.preventDefault()
+                        setPage((p) => Math.max(1, p - 1))
+                      }}
+                    />
+                  </PaginationItem>
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+                    <PaginationItem key={p}>
+                      <PaginationLink
+                        href="#"
+                        isActive={p === currentPage}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          setPage(p)
+                        }}
+                      >
+                        {p}
+                      </PaginationLink>
+                    </PaginationItem>
+                  ))}
+                  <PaginationItem>
+                    <PaginationNext
+                      href="#"
+                      aria-disabled={currentPage >= totalPages}
+                      className={
+                        currentPage >= totalPages
+                          ? "pointer-events-none opacity-50"
+                          : undefined
+                      }
+                      onClick={(e) => {
+                        e.preventDefault()
+                        setPage((p) => Math.min(totalPages, p + 1))
+                      }}
+                    />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            )}
           </>
         )}
       </div>

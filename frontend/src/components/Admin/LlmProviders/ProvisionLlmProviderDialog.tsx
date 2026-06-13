@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Plus } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 
@@ -48,9 +48,16 @@ import { Switch } from "@/components/ui/switch"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 import {
+  getProviderTypeLabel,
   MANAGED_CREDENTIALS_QUERY_PREFIX,
   PROVIDER_TYPE_OPTIONS,
 } from "./providerTypes"
+
+// Default credential name suggested for a freshly-provisioned credential,
+// derived from the selected provider (e.g. "Anthropic Key").
+function defaultCredentialName(type: AICredentialType): string {
+  return `${getProviderTypeLabel(type)} Key`
+}
 
 // Validation mirrors the field rules documented in ai_credentials.md:
 //  - openai_compatible requires both base_url and model
@@ -59,7 +66,7 @@ import {
 const formSchema = z
   .object({
     name: z.string().min(1, "Name is required"),
-    type: z.enum(["anthropic", "minimax", "openai", "openai_compatible", "google"]),
+    type: z.enum(["anthropic", "openai", "openai_compatible", "google"]),
     api_key: z.string().min(1, "API key is required"),
     base_url: z.string().optional(),
     model: z.string().optional(),
@@ -88,7 +95,7 @@ const formSchema = z
 type FormData = z.infer<typeof formSchema>
 
 const DEFAULT_VALUES: FormData = {
-  name: "",
+  name: defaultCredentialName("anthropic"),
   type: "anthropic",
   api_key: "",
   base_url: "",
@@ -113,8 +120,24 @@ export function ProvisionLlmProviderDialog() {
   const showBaseUrl = selectedType === "openai_compatible" || selectedType === "google"
   const showModel = selectedType === "openai_compatible"
 
+  // Tracks the last auto-suggested name so we only overwrite it while the user
+  // hasn't typed their own name.
+  const autoNameRef = useRef(DEFAULT_VALUES.name)
+
+  // Keep the suggested name in sync with the selected provider until the user
+  // types their own name.
+  useEffect(() => {
+    const currentName = form.getValues("name")
+    if (currentName === "" || currentName === autoNameRef.current) {
+      const suggested = defaultCredentialName(selectedType)
+      autoNameRef.current = suggested
+      form.setValue("name", suggested)
+    }
+  }, [selectedType, form])
+
   const resetDialog = () => {
     form.reset(DEFAULT_VALUES)
+    autoNameRef.current = DEFAULT_VALUES.name
     setTargets([])
   }
 
