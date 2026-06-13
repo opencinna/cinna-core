@@ -208,6 +208,33 @@ export type AccountApiProxyRequest = {
 export type method2 = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 /**
+ * One LLM provider descriptor for a native client, carrying the DECRYPTED
+ * api key. Every field except ``api_key`` is non-secret.
+ */
+export type AccountConfigProviderPublic = {
+    credential_id: string;
+    provider_type: AICredentialType;
+    display_name: string;
+    descriptor_slug: string;
+    base_url?: (string | null);
+    model?: (string | null);
+    api_key: string;
+    is_default: boolean;
+    is_admin_managed: boolean;
+    default_chat_mode_label: string;
+    suggested_models?: Array<(string)>;
+};
+
+/**
+ * The native account configuration bundle for the authenticated user.
+ */
+export type AccountConfigResponse = {
+    providers: Array<AccountConfigProviderPublic>;
+    default_provider_credential_id?: (string | null);
+    generated_at: string;
+};
+
+/**
  * Wrap the ``agent_api`` one-click connect helper.
  *
  * Maps directly to ``ConnectAgentApiRequest`` plus the producer agent id (a
@@ -457,6 +484,64 @@ export type AdminAgentEnvironmentsPublic = {
 };
 
 /**
+ * Admin request to provision an AI credential for one or more users.
+ *
+ * One :class:`AICredential` row is created per ``target_user_id`` with
+ * ``owner_id = target.id``, ``is_admin_managed=True`` and
+ * ``managed_by_id = admin.id``. The provided key bytes are shared across the
+ * created rows but each row is an independent credential owned by its user.
+ */
+export type AdminAICredentialCreate = {
+    name: string;
+    type: AICredentialType;
+    api_key: string;
+    base_url?: (string | null);
+    model?: (string | null);
+    expiry_notification_date?: (string | null);
+    target_user_ids: Array<(string)>;
+    set_as_default?: boolean;
+    set_user_sdk_defaults?: boolean;
+    sdk_default_modes?: Array<(string)>;
+};
+
+/**
+ * Result of an admin provision call — one created row per valid target,
+ * plus any skipped targets.
+ */
+export type AdminAICredentialProvisionResult = {
+    created: Array<AdminAICredentialPublic>;
+    skipped?: Array<AdminProvisionSkip>;
+};
+
+/**
+ * Admin-facing projection of an AI credential.
+ *
+ * Extends the shared :class:`AICredentialPublic` with the owner and
+ * provisioning-admin identity that are intentionally hidden from the
+ * owner-facing surface (see OQ-4). Used by the ``/admin/llm-providers*``
+ * routes only.
+ */
+export type AdminAICredentialPublic = {
+    name: string;
+    type: AICredentialType;
+    expiry_notification_date?: (string | null);
+    id: string;
+    is_default: boolean;
+    is_admin_managed?: boolean;
+    has_api_key?: boolean;
+    is_oauth_token?: boolean;
+    base_url?: (string | null);
+    model?: (string | null);
+    discovered_models?: (Array<(string)> | null);
+    models_discovered_at?: (string | null);
+    models_discovery_error?: (string | null);
+    created_at: string;
+    updated_at: string;
+    owner_id: string;
+    managed_by_id?: (string | null);
+};
+
+/**
  * Request body for bulk rebuild endpoint.
  */
 export type AdminBulkRebuildRequest = {
@@ -488,6 +573,15 @@ export type AdminInstallRequest = {
 } | null);
     ai_credential_selections?: (AICredentialSelections | null);
     target_user_id: string;
+};
+
+/**
+ * A target user that was skipped during provisioning (e.g. unknown or
+ * inactive). The whole call does not fail for an individual bad target.
+ */
+export type AdminProvisionSkip = {
+    user_id: string;
+    reason: string;
 };
 
 /**
@@ -1555,6 +1649,7 @@ export type AICredentialPublic = {
     expiry_notification_date?: (string | null);
     id: string;
     is_default: boolean;
+    is_admin_managed?: boolean;
     has_api_key?: boolean;
     is_oauth_token?: boolean;
     base_url?: (string | null);
@@ -5228,6 +5323,47 @@ export type AdminEnvironmentsRebuildSingleEnvironmentData = {
 
 export type AdminEnvironmentsRebuildSingleEnvironmentResponse = (Message);
 
+export type AdminLlmProvidersProvisionAiCredentialsData = {
+    requestBody: AdminAICredentialCreate;
+};
+
+export type AdminLlmProvidersProvisionAiCredentialsResponse = (AdminAICredentialProvisionResult);
+
+export type AdminLlmProvidersListManagedAiCredentialsData = {
+    /**
+     * Optional filter to a single target user
+     */
+    targetUserId?: (string | null);
+};
+
+export type AdminLlmProvidersListManagedAiCredentialsResponse = (Array<AdminAICredentialPublic>);
+
+export type AdminLlmProvidersGetManagedAiCredentialData = {
+    credentialId: string;
+};
+
+export type AdminLlmProvidersGetManagedAiCredentialResponse = (AdminAICredentialPublic);
+
+export type AdminLlmProvidersUpdateManagedAiCredentialData = {
+    credentialId: string;
+    requestBody: AICredentialUpdate;
+};
+
+export type AdminLlmProvidersUpdateManagedAiCredentialResponse = (AdminAICredentialPublic);
+
+export type AdminLlmProvidersDeleteManagedAiCredentialData = {
+    credentialId: string;
+    force?: boolean;
+};
+
+export type AdminLlmProvidersDeleteManagedAiCredentialResponse = (Message);
+
+export type AdminLlmProvidersSetManagedAiCredentialDefaultData = {
+    credentialId: string;
+};
+
+export type AdminLlmProvidersSetManagedAiCredentialDefaultResponse = (AdminAICredentialPublic);
+
 export type AgentApiGetAgentApiStatusData = {
     agentId: string;
 };
@@ -6956,6 +7092,8 @@ export type ExternalListExternalSessionMessagesData = {
 };
 
 export type ExternalListExternalSessionMessagesResponse = (Array<MessagePublic>);
+
+export type ExternalGetAccountConfigResponse = (AccountConfigResponse);
 
 export type ExternalA2aGetExternalAgentCardData = {
     agentId: string;

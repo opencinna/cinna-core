@@ -45,6 +45,8 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | **Handover** | Agent-to-agent task delegation within the platform |
 | **Workspace** | Isolation boundary for user's agents, sessions, and resources |
 | **AI Function** | LLM utility for text generation, classification, extraction with multi-provider cascade fallback |
+| **Admin-managed AI credential** | An `AICredential` row provisioned by a superuser on behalf of a target user (`is_admin_managed=True`). Owned by the user and fully participates in existing per-user plumbing; read-only through the user-facing CRUD (owner may use and set as default, but cannot edit/delete/re-key). |
+| **Account config** | The native-client credential bundle returned by `GET /external/account-config` — a list of provider descriptors with decrypted API keys, consumed by Cinna Desktop/Mobile to auto-create local LLM providers on login. |
 | **Building Mode** | Agent environment state for configuration and development |
 | **Conversation Mode** | Agent environment state for executing tasks and chat |
 | **Agent User** | Default role for new signups — can install, chat, and manage settings; cannot create agents or publish bundles |
@@ -142,6 +144,7 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | Feature | Description | Docs |
 |---------|-------------|------|
 | ai_credentials | LLM provider API keys, named credentials, prioritized default resolution, environment linking, sharing. Supported types: Anthropic, MiniMax, OpenAI, OpenAI-compatible, Google | [business logic](application/ai_credentials/ai_credentials.md) \| [tech](application/ai_credentials/ai_credentials_tech.md) \| [anthropic types](application/ai_credentials/anthropic_credential_types.md) \| [affected envs](application/ai_credentials/affected_environments_widget.md) \| [ai functions routing](application/ai_credentials/ai_functions_sdk_routing.md) |
+| admin_ai_credential_provisioning | Superuser provisions AI credentials on behalf of target users (per-user rows, not key sharing); credentials are read-only for the owner but participate automatically in all existing per-user plumbing (default resolution, environment creation, agent-log visibility). Admin UI ships as **Admin → LLM Providers** (`/admin/llm-providers`): fleet-wide table with filter-by-user, provision dialog (multi-user `UserAllowlistPicker`, optional set-as-default and SDK-defaults wiring), and per-row edit/set-default/delete actions. Also includes a native-token-gated `GET /external/account-config` endpoint (backend-only) that will let Cinna Desktop/Mobile auto-create local LLM providers on login. | [business logic](application/ai_credentials/admin_ai_credential_provisioning.md) \| [tech](application/ai_credentials/admin_ai_credential_provisioning_tech.md) |
 
 ### application
 
@@ -234,4 +237,4 @@ User ──→ Frontend (React) ──→ Backend API (FastAPI) ──→ Servic
 
 ---
 
-*Last updated: 2026-06-08* <!-- model-freshness -->
+*Last updated: 2026-06-13* <!-- model-freshness -->

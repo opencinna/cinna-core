@@ -173,6 +173,11 @@ export const AICredentialPublicSchema = {
             type: 'boolean',
             title: 'Is Default'
         },
+        is_admin_managed: {
+            type: 'boolean',
+            title: 'Is Admin Managed',
+            default: false
+        },
         has_api_key: {
             type: 'boolean',
             title: 'Has Api Key',
@@ -1484,6 +1489,111 @@ prepends it). \`\`headers\`\` is accepted but **ignored** in v1 (O3 — safe
 default; only the minted user JWT is sent inward).`
 } as const;
 
+export const AccountConfigProviderPublicSchema = {
+    properties: {
+        credential_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Credential Id'
+        },
+        provider_type: {
+            '$ref': '#/components/schemas/AICredentialType'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        },
+        descriptor_slug: {
+            type: 'string',
+            title: 'Descriptor Slug'
+        },
+        base_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Url'
+        },
+        model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model'
+        },
+        api_key: {
+            type: 'string',
+            title: 'Api Key'
+        },
+        is_default: {
+            type: 'boolean',
+            title: 'Is Default'
+        },
+        is_admin_managed: {
+            type: 'boolean',
+            title: 'Is Admin Managed'
+        },
+        default_chat_mode_label: {
+            type: 'string',
+            title: 'Default Chat Mode Label'
+        },
+        suggested_models: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Suggested Models',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['credential_id', 'provider_type', 'display_name', 'descriptor_slug', 'api_key', 'is_default', 'is_admin_managed', 'default_chat_mode_label'],
+    title: 'AccountConfigProviderPublic',
+    description: `One LLM provider descriptor for a native client, carrying the DECRYPTED
+api key. Every field except \`\`api_key\`\` is non-secret.`
+} as const;
+
+export const AccountConfigResponseSchema = {
+    properties: {
+        providers: {
+            items: {
+                '$ref': '#/components/schemas/AccountConfigProviderPublic'
+            },
+            type: 'array',
+            title: 'Providers'
+        },
+        default_provider_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Provider Credential Id'
+        },
+        generated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Generated At'
+        }
+    },
+    type: 'object',
+    required: ['providers', 'generated_at'],
+    title: 'AccountConfigResponse',
+    description: 'The native account configuration bundle for the authenticated user.'
+} as const;
+
 export const AccountConnectAgentApiBodySchema = {
     properties: {
         producer_agent_id: {
@@ -2227,6 +2337,266 @@ export const ActivityUpdateSchema = {
     title: 'ActivityUpdate'
 } as const;
 
+export const AdminAICredentialCreateSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        type: {
+            '$ref': '#/components/schemas/AICredentialType'
+        },
+        api_key: {
+            type: 'string',
+            minLength: 1,
+            title: 'Api Key'
+        },
+        base_url: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 500
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Url'
+        },
+        model: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model'
+        },
+        expiry_notification_date: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expiry Notification Date'
+        },
+        target_user_ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            minItems: 1,
+            title: 'Target User Ids'
+        },
+        set_as_default: {
+            type: 'boolean',
+            title: 'Set As Default',
+            default: false
+        },
+        set_user_sdk_defaults: {
+            type: 'boolean',
+            title: 'Set User Sdk Defaults',
+            default: false
+        },
+        sdk_default_modes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Sdk Default Modes'
+        }
+    },
+    type: 'object',
+    required: ['name', 'type', 'api_key', 'target_user_ids'],
+    title: 'AdminAICredentialCreate',
+    description: `Admin request to provision an AI credential for one or more users.
+
+One :class:\`AICredential\` row is created per \`\`target_user_id\`\` with
+\`\`owner_id = target.id\`\`, \`\`is_admin_managed=True\`\` and
+\`\`managed_by_id = admin.id\`\`. The provided key bytes are shared across the
+created rows but each row is an independent credential owned by its user.`
+} as const;
+
+export const AdminAICredentialProvisionResultSchema = {
+    properties: {
+        created: {
+            items: {
+                '$ref': '#/components/schemas/AdminAICredentialPublic'
+            },
+            type: 'array',
+            title: 'Created'
+        },
+        skipped: {
+            items: {
+                '$ref': '#/components/schemas/AdminProvisionSkip'
+            },
+            type: 'array',
+            title: 'Skipped',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['created'],
+    title: 'AdminAICredentialProvisionResult',
+    description: `Result of an admin provision call — one created row per valid target,
+plus any skipped targets.`
+} as const;
+
+export const AdminAICredentialPublicSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        type: {
+            '$ref': '#/components/schemas/AICredentialType'
+        },
+        expiry_notification_date: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expiry Notification Date'
+        },
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        is_default: {
+            type: 'boolean',
+            title: 'Is Default'
+        },
+        is_admin_managed: {
+            type: 'boolean',
+            title: 'Is Admin Managed',
+            default: false
+        },
+        has_api_key: {
+            type: 'boolean',
+            title: 'Has Api Key',
+            default: true
+        },
+        is_oauth_token: {
+            type: 'boolean',
+            title: 'Is Oauth Token',
+            default: false
+        },
+        base_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Url'
+        },
+        model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model'
+        },
+        discovered_models: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Discovered Models'
+        },
+        models_discovered_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Models Discovered At'
+        },
+        models_discovery_error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Models Discovery Error'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        owner_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Owner Id'
+        },
+        managed_by_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Managed By Id'
+        }
+    },
+    type: 'object',
+    required: ['name', 'type', 'id', 'is_default', 'created_at', 'updated_at', 'owner_id'],
+    title: 'AdminAICredentialPublic',
+    description: `Admin-facing projection of an AI credential.
+
+Extends the shared :class:\`AICredentialPublic\` with the owner and
+provisioning-admin identity that are intentionally hidden from the
+owner-facing surface (see OQ-4). Used by the \`\`/admin/llm-providers/*\`\`
+routes only.`
+} as const;
+
 export const AdminAgentEnvironmentPublicSchema = {
     properties: {
         id: {
@@ -2646,6 +3016,25 @@ export const AdminInstallRequestSchema = {
     required: ['target_user_id'],
     title: 'AdminInstallRequest',
     description: 'Body of ``POST /catalog/{bundle_id}/admin-install``.'
+} as const;
+
+export const AdminProvisionSkipSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        reason: {
+            type: 'string',
+            title: 'Reason'
+        }
+    },
+    type: 'object',
+    required: ['user_id', 'reason'],
+    title: 'AdminProvisionSkip',
+    description: `A target user that was skipped during provisioning (e.g. unknown or
+inactive). The whole call does not fail for an individual bad target.`
 } as const;
 
 export const AdminTemplateInfoPublicSchema = {

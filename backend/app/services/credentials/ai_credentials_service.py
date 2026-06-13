@@ -129,9 +129,26 @@ class AICredentialsService:
         credential_id: uuid.UUID,
         user_id: uuid.UUID,
         data: AICredentialUpdate,
+        *,
+        admin_override: bool = False,
     ) -> AICredentialPublic:
-        """Update an existing AI credential"""
+        """Update an existing AI credential.
+
+        Admin-managed rows are read-only through the user-facing path: a 403 is
+        raised unless ``admin_override`` is passed (the admin provisioning
+        service sets it). The owner may still set such a row as their default
+        (that path does not call this method).
+        """
         credential = self.get_credential(session, credential_id, user_id)
+
+        if credential.is_admin_managed and not admin_override:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "This credential is managed by your administrator and "
+                    "cannot be modified."
+                ),
+            )
 
         # Get existing decrypted data
         existing_data = self.decrypt_credential(credential)
@@ -265,6 +282,8 @@ class AICredentialsService:
         credential_id: uuid.UUID,
         user_id: uuid.UUID,
         force: bool = False,
+        *,
+        admin_override: bool = False,
     ) -> None:
         """Delete an AI credential.
 
@@ -272,11 +291,24 @@ class AICredentialsService:
         more published bundles reference this credential as a
         publisher-provided AI credential, unless ``force`` is passed.
 
+        Admin-managed rows are read-only through the user-facing path: a 403 is
+        raised unless ``admin_override`` is passed (the admin provisioning
+        service sets it).
+
         Owner-only: returns 404 for missing or not-owned (no existence leak).
         """
         credential = self._get_owned_credential_or_404(
             session, credential_id, user_id
         )
+
+        if credential.is_admin_managed and not admin_override:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "This credential is managed by your administrator and "
+                    "cannot be deleted."
+                ),
+            )
 
         if not force:
             impact = self.get_deletion_impact(session, credential_id, user_id)
@@ -511,6 +543,7 @@ class AICredentialsService:
             name=credential.name,
             type=credential.type,
             is_default=credential.is_default,
+            is_admin_managed=credential.is_admin_managed,
             has_api_key=bool(data.api_key),
             is_oauth_token=is_oauth,
             base_url=data.base_url,

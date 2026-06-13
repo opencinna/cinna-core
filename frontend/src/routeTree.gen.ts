@@ -52,6 +52,7 @@ import { Route as LayoutAgentCreatingRouteImport } from './routes/_layout/agent/
 import { Route as LayoutAgentAgentIdRouteImport } from './routes/_layout/agent/$agentId'
 import { Route as LayoutAdminUsersRouteImport } from './routes/_layout/admin/users'
 import { Route as LayoutAdminMarketplacesRouteImport } from './routes/_layout/admin/marketplaces'
+import { Route as LayoutAdminLlmProvidersRouteImport } from './routes/_layout/admin/llm-providers'
 import { Route as LayoutAdminAgentEnvsRouteImport } from './routes/_layout/admin/agent-envs'
 import { Route as LayoutSessionsAgentAgentIdRouteImport } from './routes/_layout/sessions/agent/$agentId'
 import { Route as LayoutEnvironmentEnvIdFileRouteImport } from './routes/_layout/environment/$envId/file'
@@ -283,6 +284,11 @@ const LayoutAdminMarketplacesRoute = LayoutAdminMarketplacesRouteImport.update({
   path: '/admin/marketplaces',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutAdminLlmProvidersRoute = LayoutAdminLlmProvidersRouteImport.update({
+  id: '/admin/llm-providers',
+  path: '/admin/llm-providers',
+  getParentRoute: () => LayoutRoute,
+} as any)
 const LayoutAdminAgentEnvsRoute = LayoutAdminAgentEnvsRouteImport.update({
   id: '/admin/agent-envs',
   path: '/admin/agent-envs',
@@ -362,6 +368,7 @@ export interface FileRoutesByFullPath {
   '/': typeof LayoutIndexRoute
   '/login/': typeof LoginIndexRoute
   '/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
+  '/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/admin/users': typeof LayoutAdminUsersRoute
   '/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
@@ -412,6 +419,7 @@ export interface FileRoutesByTo {
   '/': typeof LayoutIndexRoute
   '/login': typeof LoginIndexRoute
   '/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
+  '/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/admin/users': typeof LayoutAdminUsersRoute
   '/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
@@ -467,6 +475,7 @@ export interface FileRoutesById {
   '/_layout/': typeof LayoutIndexRoute
   '/login/': typeof LoginIndexRoute
   '/_layout/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
+  '/_layout/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
   '/_layout/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/_layout/admin/users': typeof LayoutAdminUsersRoute
   '/_layout/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
@@ -522,6 +531,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login/'
     | '/admin/agent-envs'
+    | '/admin/llm-providers'
     | '/admin/marketplaces'
     | '/admin/users'
     | '/agent/$agentId'
@@ -572,6 +582,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/admin/agent-envs'
+    | '/admin/llm-providers'
     | '/admin/marketplaces'
     | '/admin/users'
     | '/agent/$agentId'
@@ -626,6 +637,7 @@ export interface FileRouteTypes {
     | '/_layout/'
     | '/login/'
     | '/_layout/admin/agent-envs'
+    | '/_layout/admin/llm-providers'
     | '/_layout/admin/marketplaces'
     | '/_layout/admin/users'
     | '/_layout/agent/$agentId'
@@ -976,6 +988,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAdminMarketplacesRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/admin/llm-providers': {
+      id: '/_layout/admin/llm-providers'
+      path: '/admin/llm-providers'
+      fullPath: '/admin/llm-providers'
+      preLoaderRoute: typeof LayoutAdminLlmProvidersRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/admin/agent-envs': {
       id: '/_layout/admin/agent-envs'
       path: '/admin/agent-envs'
@@ -1118,6 +1137,7 @@ interface LayoutRouteChildren {
   LayoutSettingsRoute: typeof LayoutSettingsRoute
   LayoutIndexRoute: typeof LayoutIndexRoute
   LayoutAdminAgentEnvsRoute: typeof LayoutAdminAgentEnvsRoute
+  LayoutAdminLlmProvidersRoute: typeof LayoutAdminLlmProvidersRoute
   LayoutAdminMarketplacesRoute: typeof LayoutAdminMarketplacesRoute
   LayoutAdminUsersRoute: typeof LayoutAdminUsersRoute
   LayoutAgentAgentIdRoute: typeof LayoutAgentAgentIdRouteWithChildren
@@ -1149,6 +1169,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutSettingsRoute: LayoutSettingsRoute,
   LayoutIndexRoute: LayoutIndexRoute,
   LayoutAdminAgentEnvsRoute: LayoutAdminAgentEnvsRoute,
+  LayoutAdminLlmProvidersRoute: LayoutAdminLlmProvidersRoute,
   LayoutAdminMarketplacesRoute: LayoutAdminMarketplacesRoute,
   LayoutAdminUsersRoute: LayoutAdminUsersRoute,
   LayoutAgentAgentIdRoute: LayoutAgentAgentIdRouteWithChildren,

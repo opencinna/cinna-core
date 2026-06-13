@@ -4,6 +4,7 @@ from app.api.routes import (
     a2a,
     access_tokens,
     admin_environments,
+    admin_llm_providers,
     agent_api,
     agent_api_public,
     agent_app_mcp_routes,
@@ -26,6 +27,7 @@ from app.api.routes import (
     email_integration,
     environments,
     external_a2a,
+    external_account_config,
     external_agents,
     identity,
     identity_contacts,
@@ -111,6 +113,7 @@ api_router.include_router(events.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(knowledge_sources.router)
 api_router.include_router(admin_environments.router)
+api_router.include_router(admin_llm_providers.router)
 api_router.include_router(files.router)
 api_router.include_router(llm_plugins.router)
 api_router.include_router(input_tasks.router)
@@ -142,6 +145,7 @@ api_router.include_router(desktop_auth.router)
 api_router.include_router(app_auth.router)
 api_router.include_router(app_sync.router)
 api_router.include_router(external_agents.router)
+api_router.include_router(external_account_config.router)
 api_router.include_router(external_a2a.router)
 
 

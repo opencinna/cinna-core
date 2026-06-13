@@ -100,6 +100,10 @@ from .credentials.ai_credential import (
     AICredentialData,
     AICredentialBundleUsage,
     AICredentialDeletionImpact,
+    AdminAICredentialPublic,
+    AdminAICredentialCreate,
+    AdminProvisionSkip,
+    AdminAICredentialProvisionResult,
 )
 from .credentials.ai_credential_share import (
     AICredentialShare,
@@ -661,6 +665,10 @@ from .external.external_agents import (
     ExternalAgentListResponse,
     ExternalSessionPublic,
 )
+from .external.account_config import (
+    AccountConfigProviderPublic,
+    AccountConfigResponse,
+)
 from .bundles.app_data_volume import (
     AppDataVolume,
     AppDataVolumePublic,
@@ -760,6 +768,10 @@ __all__ = [
     "AICredentialPublic",
     "AICredentialBundleUsage",
     "AICredentialDeletionImpact",
+    "AdminAICredentialPublic",
+    "AdminAICredentialCreate",
+    "AdminProvisionSkip",
+    "AdminAICredentialProvisionResult",
     "AICredentialsPublic",
     "AICredentialType",
     "AICredentialData",
@@ -1233,6 +1245,8 @@ __all__ = [
     "ExternalTargetPublic",
     "ExternalAgentListResponse",
     "ExternalSessionPublic",
+    "AccountConfigProviderPublic",
+    "AccountConfigResponse",
     # App Data Volumes (Phase 1: agent bundles & installs)
     "AppDataVolume",
     "AppDataVolumePublic",

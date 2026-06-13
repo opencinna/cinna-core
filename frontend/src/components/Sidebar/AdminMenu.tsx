@@ -1,5 +1,5 @@
 import { Link as RouterLink, useRouterState } from "@tanstack/react-router"
-import { Shield, Users, Store, BookOpen, Server } from "lucide-react"
+import { Shield, Users, Store, BookOpen, Server, KeyRound } from "lucide-react"
 
 import {
   SidebarMenu,
@@ -66,6 +66,12 @@ export function AdminMenu() {
               <RouterLink to="/admin/marketplaces" onClick={handleMenuClick}>
                 <Store className="mr-2 h-4 w-4" />
                 Plugin Marketplaces
+              </RouterLink>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <RouterLink to="/admin/llm-providers" onClick={handleMenuClick}>
+                <KeyRound className="mr-2 h-4 w-4" />
+                LLM Providers
               </RouterLink>
             </DropdownMenuItem>
           </DropdownMenuContent>
