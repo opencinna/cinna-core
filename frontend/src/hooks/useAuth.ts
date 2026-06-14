@@ -11,7 +11,7 @@ import {
   UsersService,
 } from "@/client"
 import { useMfaChallenge } from "@/components/Auth/MfaChallengeContext"
-import { handleError, safeRedirectPath } from "@/utils"
+import { clearLoginScopedDisclaimerAck, handleError, safeRedirectPath } from "@/utils"
 import { getTrustedDeviceToken } from "@/utils/trustedDevice"
 import useCustomToast from "./useCustomToast"
 
@@ -198,6 +198,7 @@ const useAuth = () => {
         return
       }
       localStorage.setItem("access_token", outcome.token.access_token)
+      clearLoginScopedDisclaimerAck()
       navigateToPostAuthTarget(target)
     },
     onError: handleError.bind(showErrorToast),

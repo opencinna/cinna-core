@@ -21,6 +21,32 @@ function extractErrorMessage(err: ApiError): string {
   return "Something went wrong."
 }
 
+/**
+ * Clear the per-login disclaimer acknowledgment(s).
+ *
+ * The "Every Login" disclaimer mode stores its acknowledgment in
+ * `sessionStorage` under `disclaimer_session_v<version>`. sessionStorage
+ * survives a logout→login cycle within the same browser tab, which would
+ * suppress the disclaimer on the next login. Call this on every successful
+ * login so "Every Login" truly re-shows after each sign-in. (The "New User
+ * Only" mode lives in localStorage and is intentionally left untouched.)
+ */
+export const clearLoginScopedDisclaimerAck = () => {
+  try {
+    const store = window.sessionStorage
+    const keys: string[] = []
+    for (let i = 0; i < store.length; i++) {
+      const key = store.key(i)
+      if (key && key.startsWith("disclaimer_session_")) {
+        keys.push(key)
+      }
+    }
+    keys.forEach((key) => store.removeItem(key))
+  } catch {
+    // sessionStorage may be unavailable (e.g. privacy mode) — ignore.
+  }
+}
+
 export const handleError = function (
   this: (msg: string) => void,
   err: ApiError,

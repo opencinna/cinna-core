@@ -11270,6 +11270,31 @@ export const DeviceInputSchema = {
     title: 'DeviceInput'
 } as const;
 
+export const DisclaimerPublicSchema = {
+    properties: {
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled'
+        },
+        markdown: {
+            type: 'string',
+            title: 'Markdown'
+        },
+        display_mode: {
+            type: 'string',
+            title: 'Display Mode'
+        },
+        version: {
+            type: 'integer',
+            title: 'Version'
+        }
+    },
+    type: 'object',
+    required: ['enabled', 'markdown', 'display_mode', 'version'],
+    title: 'DisclaimerPublic',
+    description: 'Disclaimer projection returned to any authenticated user.'
+} as const;
+
 export const DiscoverableAgentSchema = {
     properties: {
         agent_id: {
@@ -18710,6 +18735,100 @@ export const SendAnswerResponseSchema = {
     required: ['success'],
     title: 'SendAnswerResponse',
     description: 'Response from sending an email reply'
+} as const;
+
+export const ServerConfigSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        disclaimer_enabled: {
+            type: 'boolean',
+            title: 'Disclaimer Enabled',
+            default: false
+        },
+        disclaimer_markdown: {
+            type: 'string',
+            title: 'Disclaimer Markdown',
+            default: ''
+        },
+        disclaimer_display_mode: {
+            type: 'string',
+            title: 'Disclaimer Display Mode',
+            default: 'new_users'
+        },
+        disclaimer_version: {
+            type: 'integer',
+            title: 'Disclaimer Version',
+            default: 1
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        updated_by_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Updated By Id'
+        }
+    },
+    type: 'object',
+    title: 'ServerConfig',
+    description: `Singleton server-wide configuration.
+
+Only one row ever exists; it is created lazily on first access. Holds the
+admin-configurable disclaimer settings shown to users at login.`
+} as const;
+
+export const ServerConfigUpdateSchema = {
+    properties: {
+        disclaimer_enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Disclaimer Enabled'
+        },
+        disclaimer_markdown: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Disclaimer Markdown'
+        },
+        disclaimer_display_mode: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Disclaimer Display Mode'
+        }
+    },
+    type: 'object',
+    title: 'ServerConfigUpdate',
+    description: 'Admin update payload — all fields optional.'
 } as const;
 
 export const SessionCommandPublicSchema = {

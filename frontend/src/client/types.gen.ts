@@ -2519,6 +2519,16 @@ export type DeviceInput = {
 };
 
 /**
+ * Disclaimer projection returned to any authenticated user.
+ */
+export type DisclaimerPublic = {
+    enabled: boolean;
+    markdown: string;
+    display_mode: string;
+    version: number;
+};
+
+/**
  * A platform agent that exposes an agent2agent connector the current user is
  * allowed to consume. Drives the "Connect MCP Provider → platform agent" picker.
  */
@@ -4264,6 +4274,31 @@ export type SendAnswerResponse = {
     queue_entry_id?: (string | null);
     generated_reply?: (string | null);
     error?: (string | null);
+};
+
+/**
+ * Singleton server-wide configuration.
+ *
+ * Only one row ever exists; it is created lazily on first access. Holds the
+ * admin-configurable disclaimer settings shown to users at login.
+ */
+export type ServerConfig = {
+    id?: string;
+    disclaimer_enabled?: boolean;
+    disclaimer_markdown?: string;
+    disclaimer_display_mode?: string;
+    disclaimer_version?: number;
+    updated_at?: string;
+    updated_by_id?: (string | null);
+};
+
+/**
+ * Admin update payload — all fields optional.
+ */
+export type ServerConfigUpdate = {
+    disclaimer_enabled?: (boolean | null);
+    disclaimer_markdown?: (string | null);
+    disclaimer_display_mode?: (string | null);
 };
 
 export type SessionCommandPublic = {
@@ -8029,6 +8064,16 @@ export type SecurityEventsListSecurityEventsData = {
 };
 
 export type SecurityEventsListSecurityEventsResponse = (SecurityEventsPublic);
+
+export type ServerConfigGetDisclaimerResponse = (DisclaimerPublic);
+
+export type ServerConfigGetServerConfigResponse = (ServerConfig);
+
+export type ServerConfigUpdateServerConfigData = {
+    requestBody: ServerConfigUpdate;
+};
+
+export type ServerConfigUpdateServerConfigResponse = (ServerConfig);
 
 export type SessionsCreateSessionData = {
     requestBody: SessionCreate;

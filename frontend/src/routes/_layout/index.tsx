@@ -3,7 +3,7 @@ import { useEffect, useState, useMemo, KeyboardEvent, DragEvent } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate, useSearch } from "@tanstack/react-router"
 
-import { AgentsService, SessionsService, FilesService, UsersService, UtilsService, AiCredentialsService } from "@/client"
+import { AgentsService, SessionsService, FilesService, UsersService, UtilsService, AiCredentialsService, ServerConfigService } from "@/client"
 import type { SessionCreate, FileUploadPublic } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -47,6 +47,7 @@ import { FileUploadModal } from "@/components/Chat/FileUploadModal"
 import { FileBadge } from "@/components/Chat/FileBadge"
 import { ApiKeyOnboarding } from "@/components/Onboarding/ApiKeyOnboarding"
 import { GettingStartedModal } from "@/components/Onboarding/GettingStartedModal"
+import { DisclaimerModal } from "@/components/Onboarding/DisclaimerModal"
 import { DashboardHeader } from "@/components/Dashboard/DashboardHeader"
 import { EnableTwoFactorBanner } from "@/components/UserSettings/Security/EnableTwoFactorBanner"
 import { APP_NAME } from "@/utils"
@@ -127,6 +128,61 @@ function Dashboard() {
   })
 
   const hasAnthropicKey = credentialsStatus?.has_anthropic_api_key ?? false
+
+  // Server-wide disclaimer shown at login, before the Getting Started modal.
+  // Dismissal is tracked purely in browser storage (no server-side per-user
+  // record): "new_users" persists in localStorage; "every_login" lives in
+  // sessionStorage. Both keys are versioned so admin edits re-trigger display.
+  const { data: disclaimer } = useQuery({
+    queryKey: ["disclaimer"],
+    queryFn: () => ServerConfigService.getDisclaimer(),
+  })
+
+  // Bumped when the user acknowledges so `shouldShowDisclaimer` re-evaluates.
+  const [disclaimerAckTick, setDisclaimerAckTick] = useState(0)
+  // When onboarding finishes but a disclaimer must show first, defer opening
+  // Getting Started until the disclaimer is acknowledged.
+  const [pendingGettingStarted, setPendingGettingStarted] = useState(false)
+
+  const disclaimerStorageKey = (() => {
+    if (!disclaimer) return null
+    return disclaimer.display_mode === "every_login"
+      ? `disclaimer_session_v${disclaimer.version}`
+      : `disclaimer_ack_v${disclaimer.version}`
+  })()
+
+  const disclaimerSeen = (() => {
+    if (!disclaimer || !disclaimerStorageKey) return false
+    // Touch the ack tick so this recomputes after acknowledgment.
+    void disclaimerAckTick
+    const store =
+      disclaimer.display_mode === "every_login"
+        ? window.sessionStorage
+        : window.localStorage
+    return store.getItem(disclaimerStorageKey) === "true"
+  })()
+
+  const shouldShowDisclaimer = Boolean(
+    disclaimer?.enabled &&
+      disclaimer.markdown.trim() &&
+      !disclaimerSeen,
+  )
+
+  const acknowledgeDisclaimer = () => {
+    if (disclaimer && disclaimerStorageKey) {
+      const store =
+        disclaimer.display_mode === "every_login"
+          ? window.sessionStorage
+          : window.localStorage
+      store.setItem(disclaimerStorageKey, "true")
+    }
+    setDisclaimerAckTick((t) => t + 1)
+    // Now that the disclaimer is resolved, open any deferred Getting Started.
+    if (pendingGettingStarted) {
+      setPendingGettingStarted(false)
+      setShowGettingStarted(true)
+    }
+  }
 
   // Fetch user's AI credentials list — used by handleSend to resolve the
   // selected credential objects when composing the SDK ID.
@@ -532,7 +588,13 @@ function Dashboard() {
       <ApiKeyOnboarding
         onComplete={() => {
           queryClient.invalidateQueries({ queryKey: ["aiCredentialsStatus"] })
-          setShowGettingStarted(true)
+          // If a disclaimer must show first, defer Getting Started until it is
+          // acknowledged; otherwise open it immediately.
+          if (shouldShowDisclaimer) {
+            setPendingGettingStarted(true)
+          } else {
+            setShowGettingStarted(true)
+          }
         }}
         onSkip={() => {
           setOnboardingSkipped(true)
@@ -831,9 +893,19 @@ function Dashboard() {
             onFileUploaded={handleFileUploaded}
           />
 
-          {/* Getting Started Modal - shown once after API key onboarding */}
+          {/* Server-wide disclaimer — shown first, before Getting Started. */}
+          {disclaimer && (
+            <DisclaimerModal
+              open={shouldShowDisclaimer}
+              markdown={disclaimer.markdown}
+              onAcknowledge={acknowledgeDisclaimer}
+            />
+          )}
+
+          {/* Getting Started Modal - shown once after API key onboarding,
+              gated so it never appears over an unacknowledged disclaimer. */}
           <GettingStartedModal
-            open={showGettingStarted}
+            open={showGettingStarted && !shouldShowDisclaimer}
             onOpenChange={setShowGettingStarted}
           />
         </div>

@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/select"
 import useCustomToast from "@/hooks/useCustomToast"
 import { fetchLoginPasskeyOptions, useVerifyMfaMutation } from "@/hooks/useMfa"
-import { handleError } from "@/utils"
+import { clearLoginScopedDisclaimerAck, handleError } from "@/utils"
 import { setTrustedDeviceToken } from "@/utils/trustedDevice"
 import {
   isWebAuthnSupported,
@@ -104,6 +104,7 @@ export function TwoFactorChallenge() {
     verifyMutation.mutate(body, {
       onSuccess: (data) => {
         localStorage.setItem("access_token", data.access_token)
+        clearLoginScopedDisclaimerAck()
         // Persist the trusted-device token (when the user opted in) BEFORE
         // the hard reload below so the next login can skip the challenge.
         // Must stay here — see the clearChallenge() note below.

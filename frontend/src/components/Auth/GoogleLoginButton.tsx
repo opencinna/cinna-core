@@ -8,7 +8,7 @@ import { useMfaChallenge } from "@/components/Auth/MfaChallengeContext"
 import { Button } from "@/components/ui/button"
 import { isMfaChallengeResponse } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
-import { safeRedirectPath } from "@/utils"
+import { clearLoginScopedDisclaimerAck, safeRedirectPath } from "@/utils"
 import { getTrustedDeviceToken } from "@/utils/trustedDevice"
 
 const GOOGLE_REDIRECT_KEY = "google_oauth_redirect"
@@ -53,6 +53,7 @@ export function GoogleLoginButton() {
       }
 
       localStorage.setItem("access_token", data.access_token)
+      clearLoginScopedDisclaimerAck()
       if (safeTarget) {
         window.location.assign(safeTarget)
         return
