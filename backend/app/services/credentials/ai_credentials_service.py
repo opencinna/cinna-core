@@ -551,6 +551,10 @@ class AICredentialsService:
             discovered_models=credential.discovered_models,
             models_discovered_at=credential.models_discovered_at,
             models_discovery_error=credential.models_discovery_error,
+            # Admin-curated model metadata (read-only for the owner — see
+            # admin_curated_model_list). NULL for self-created credentials.
+            default_model=credential.default_model,
+            available_models=credential.available_models,
             expiry_notification_date=credential.expiry_notification_date,
             created_at=credential.created_at,
             updated_at=credential.updated_at,

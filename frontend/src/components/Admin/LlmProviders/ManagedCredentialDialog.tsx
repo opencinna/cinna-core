@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { CheckCircle2, Loader2, Plus } from "lucide-react"
+import { CheckCircle2, ExternalLink, Loader2, Plus } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
@@ -50,6 +50,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import { Textarea } from "@/components/ui/textarea"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 import {
@@ -101,11 +102,109 @@ const baseFormSchema = z.object({
   api_key: z.string(),
   base_url: z.string().optional(),
   model: z.string().optional(),
+  // Admin-curated default model (single concrete id). Optional.
+  default_model: z.string().optional(),
+  // Admin-curated available-models list, edited as a comma/newline-separated
+  // string; parsed into a deduped list on submit.
+  available_models: z.string().optional(),
   set_as_default: z.boolean(),
   set_user_sdk_defaults: z.boolean(),
 })
 
 type FormData = z.infer<typeof baseFormSchema>
+
+// Strip any leading "provider/" prefix for nicer display (the backend
+// re-normalizes regardless).
+function stripProviderPrefix(value: string): string {
+  const trimmed = value.trim()
+  const idx = trimmed.indexOf("/")
+  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed
+}
+
+// Official "available models" documentation page per provider. openai_compatible
+// has no canonical page (the model list depends on the configured endpoint), so
+// it's intentionally absent and the link is omitted for that type.
+const PROVIDER_MODELS_DOC_URL: Partial<Record<AICredentialType, string>> = {
+  anthropic: "https://platform.claude.com/docs/en/about-claude/models/overview",
+  google: "https://ai.google.dev/gemini-api/docs/models",
+  openai: "https://developers.openai.com/api/docs/models",
+}
+
+// Canonical Gemini alias used as the Google default — a stable pointer to the
+// latest Flash model that may not appear verbatim in the discovered list.
+const GOOGLE_DEFAULT_MODEL = "gemini-flash-latest"
+
+// Pick the best default model id for the given provider from a (prefix-stripped)
+// model list. Provider-specific:
+//  - google: always the canonical Flash alias (independent of the list).
+//  - anthropic: the highest-version Sonnet, tie-broken by trailing snapshot.
+//  - openai / openai_compatible: the first list entry.
+function pickDefaultModel(type: AICredentialType, models: string[]): string {
+  if (type === "google") return GOOGLE_DEFAULT_MODEL
+  if (type === "anthropic") {
+    const sonnet = pickHighestSonnet(models)
+    if (sonnet) return sonnet
+  }
+  return models[0] ?? ""
+}
+
+// Among model ids containing "sonnet", choose the highest version by comparing
+// numeric version tokens (e.g. the "4-6" in "claude-sonnet-4-6"), tie-broken by
+// any trailing dated snapshot (e.g. "...-20250115"). Returns undefined if none.
+function pickHighestSonnet(models: string[]): string | undefined {
+  const sonnets = models.filter((m) => m.toLowerCase().includes("sonnet"))
+  if (sonnets.length === 0) return undefined
+
+  // Split an id into its version tokens and a trailing dated snapshot, kept in
+  // separate fields so they are never compared against each other positionally.
+  // The version is the run of numeric tokens (e.g. [4, 6] in "claude-sonnet-4-6"),
+  // and the snapshot is a trailing 6+ digit run (e.g. 20250115 in "...-20250115").
+  const parseKey = (id: string): { version: number[]; snapshot: number } => {
+    const snapshotMatch = id.match(/(\d{6,})\s*$/)
+    const snapshot = snapshotMatch ? Number(snapshotMatch[1]) : 0
+    // Numeric tokens excluding a trailing snapshot make up the version.
+    const body = snapshotMatch ? id.slice(0, snapshotMatch.index) : id
+    const version = (body.match(/\d+/g) ?? []).map(Number)
+    // Ids with no numeric version compare as version [0].
+    return { version: version.length > 0 ? version : [0], snapshot }
+  }
+
+  return sonnets.reduce((best, candidate) => {
+    const a = parseKey(candidate)
+    const b = parseKey(best)
+
+    // Phase 1: compare version tokens element-by-element (missing slot = 0).
+    // A longer version that is otherwise an equal prefix wins (e.g. 4-5 > 4).
+    const len = Math.max(a.version.length, b.version.length)
+    for (let i = 0; i < len; i++) {
+      const av = a.version[i] ?? 0
+      const bv = b.version[i] ?? 0
+      if (av !== bv) return av > bv ? candidate : best
+    }
+
+    // Phase 2: version arrays are fully equal — break the tie by snapshot.
+    if (a.snapshot !== b.snapshot) return a.snapshot > b.snapshot ? candidate : best
+
+    // Exact full tie: keep the first occurrence (stable).
+    return best
+  })
+}
+
+// Parse the free-form available-models textarea into a deduped, prefix-stripped
+// list. Accepts commas and newlines as separators.
+function parseAvailableModels(raw: string | undefined): string[] {
+  if (!raw) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const part of raw.split(/[\n,]/)) {
+    const entry = stripProviderPrefix(part)
+    if (entry && !seen.has(entry)) {
+      seen.add(entry)
+      out.push(entry)
+    }
+  }
+  return out
+}
 
 // In edit mode the API key is optional (blank = keep the stored key); the
 // required check is applied conditionally in `superRefine` keyed off `mode`.
@@ -143,6 +242,8 @@ const CREATE_DEFAULTS: FormData = {
   api_key: "",
   base_url: "",
   model: "",
+  default_model: "",
+  available_models: "",
   set_as_default: false,
   set_user_sdk_defaults: false,
 }
@@ -170,6 +271,8 @@ function recordToFormData(record: ManagedAICredentialPublic): FormData {
     api_key: "",
     base_url: record.base_url ?? "",
     model: record.model ?? "",
+    default_model: record.default_model ?? "",
+    available_models: (record.available_models ?? []).join("\n"),
     set_as_default: record.set_as_default ?? false,
     set_user_sdk_defaults: record.set_user_sdk_defaults ?? false,
   }
@@ -303,6 +406,45 @@ export function ManagedCredentialDialog({
     return true
   }
 
+  // "Fill top 10 models": reuse a fresh successful test result if one exists for
+  // the current inputs, otherwise run the Test Connection first and continue
+  // once it resolves. On success, populate the Available models field with the
+  // top 10 discovered models (provider order, deduped, prefix-stripped) and set
+  // a provider-appropriate default model. A failed/empty test fills nothing —
+  // the inline test-result alert explains why.
+  const fillTopModels = async () => {
+    let result = testResult
+    if (!(result?.success && (result.models?.length ?? 0) > 0)) {
+      try {
+        result = await testMutation.mutateAsync()
+      } catch {
+        // mutation onError already surfaces the failure via testResult; nothing
+        // to fill.
+        return
+      }
+    }
+    if (!result?.success || (result.models?.length ?? 0) === 0) return
+
+    const deduped: string[] = []
+    const seen = new Set<string>()
+    for (const raw of result.models ?? []) {
+      const entry = stripProviderPrefix(raw)
+      if (entry && !seen.has(entry)) {
+        seen.add(entry)
+        deduped.push(entry)
+      }
+    }
+    const top = deduped.slice(0, 10)
+    if (top.length === 0) return
+
+    form.setValue("available_models", top.join("\n"), { shouldDirty: true })
+    // The user explicitly invoked fill, so overwriting the default is expected.
+    const nextDefault = pickDefaultModel(selectedType, deduped)
+    if (nextDefault) {
+      form.setValue("default_model", nextDefault, { shouldDirty: true })
+    }
+  }
+
   // Map a reconcile result into per-user warning toasts + a success summary.
   const surfaceReconcileResult = (
     result: ManagedAICredentialReconcileResult,
@@ -394,6 +536,9 @@ export function ManagedCredentialDialog({
     const includesModel = data.type === "openai_compatible"
     const targetUserIds = targets.map((t) => t.userId)
 
+    const defaultModel = stripProviderPrefix(data.default_model ?? "")
+    const availableModels = parseAvailableModels(data.available_models)
+
     if (mode === "create") {
       const body: ManagedAICredentialCreate = {
         name: data.name.trim(),
@@ -401,6 +546,9 @@ export function ManagedCredentialDialog({
         api_key: data.api_key,
         base_url: includesBaseUrl ? data.base_url?.trim() || undefined : undefined,
         model: includesModel ? data.model?.trim() || undefined : undefined,
+        default_model: defaultModel || undefined,
+        // Omit when empty so an unset curation stays NULL (offer all discovered).
+        available_models: availableModels.length ? availableModels : undefined,
         target_user_ids: targetUserIds,
         set_as_default: data.set_as_default,
         set_user_sdk_defaults: data.set_user_sdk_defaults,
@@ -411,10 +559,18 @@ export function ManagedCredentialDialog({
 
     // Edit: PATCH with the picker selection as the desired membership. Omit
     // api_key when blank so the stored key is kept for all members.
+    //
+    // Curation clear-vs-no-change semantics mirror base_url/model:
+    //  - available_models: [] explicitly clears curation (the textarea is
+    //    seeded from the record, so a blank textarea on edit means "clear").
+    //  - default_model: the trimmed/stripped value (blank → undefined leaves it
+    //    unchanged, matching the backend's None=no-change for default_model).
     const body: ManagedAICredentialUpdate = {
       name: data.name.trim(),
       base_url: includesBaseUrl ? data.base_url?.trim() || null : null,
       model: includesModel ? data.model?.trim() || null : null,
+      default_model: defaultModel || undefined,
+      available_models: availableModels,
       target_user_ids: targetUserIds,
       set_as_default: data.set_as_default,
       set_user_sdk_defaults: data.set_user_sdk_defaults,
@@ -575,6 +731,93 @@ export function ManagedCredentialDialog({
               )}
             />
           )}
+
+          <FormField
+            control={form.control}
+            name="default_model"
+            render={({ field }) => (
+              <FormItem>
+                <div className="flex items-center justify-between">
+                  <FormLabel>Default model</FormLabel>
+                  {PROVIDER_MODELS_DOC_URL[selectedType] && (
+                    <a
+                      href={PROVIDER_MODELS_DOC_URL[selectedType]}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
+                    >
+                      View available models
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                </div>
+                <FormControl>
+                  <Input
+                    placeholder="e.g. claude-sonnet-4-6"
+                    {...field}
+                    value={field.value ?? ""}
+                  />
+                </FormControl>
+                <FormDescription>
+                  The model used by default with this credential, across agents
+                  and native apps. Leave blank to use the platform default. Use a
+                  concrete model id for native apps.
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name="available_models"
+            render={({ field }) => (
+              <FormItem>
+                <div className="flex items-center justify-between">
+                  <FormLabel>Available models</FormLabel>
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="sm"
+                    className="h-auto p-0 text-xs"
+                    onClick={() => {
+                      void fillTopModels()
+                    }}
+                    // Reuse the canTest() gating: fill needs to probe unless a
+                    // fresh successful result is already available to reuse.
+                    disabled={
+                      testMutation.isPending ||
+                      isPending ||
+                      (!canTest() &&
+                        !(testResult?.success && (testResult.models?.length ?? 0) > 0))
+                    }
+                  >
+                    {testMutation.isPending ? (
+                      <>
+                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                        Testing...
+                      </>
+                    ) : (
+                      "Fill top 10 models"
+                    )}
+                  </Button>
+                </div>
+                <FormControl>
+                  <Textarea
+                    rows={3}
+                    placeholder="One model id per line (or comma-separated)"
+                    {...field}
+                    value={field.value ?? ""}
+                  />
+                </FormControl>
+                <FormDescription>
+                  Models offered for selection with this credential. Leave empty
+                  to offer all auto-detected models.
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
 
           <div className="space-y-2">
             <Label className="text-sm font-medium">

@@ -41,8 +41,12 @@
 **Generated client services used:**
 - `AdminLlmProvidersService` — `createManagedAiCredential`, `listManagedAiCredentials`, `getManagedAiCredential`, `updateManagedAiCredential`, `deleteManagedAiCredential`, `setManagedAiCredentialDefault`, `testManagedAiCredentialConnection`
 
+**Also implemented (admin-curated model list):**
+- `ManagedCredentialDialog.tsx` — "Default model" text input (with a "View available models ↗" external link next to the label, pointing to the provider's official models docs — `PROVIDER_MODELS_DOC_URL` map; omitted for `openai_compatible`) + "Available models" multi-line textarea; **"Fill top 10 models"** button (replaces the old "Use models from test" label): auto-runs Test Connection if no fresh successful result is cached, then fills "Available models" with the top 10 discovered models and auto-sets "Default model" via `pickDefaultModel` (Google → `GOOGLE_DEFAULT_MODEL = "gemini-flash-latest"`; Anthropic → `pickHighestSonnet` highest version Sonnet from the list; OpenAI/OpenAI Compatible → first model); edit-mode seeding; `None` vs `[]` clear semantics on submit; `stripProviderPrefix` + `parseAvailableModels` client-side normalization for display
+- `EnvironmentConfigForm.tsx` — model-override `<datalist>` prefers `available_models` over `discovered_models` when non-empty
+- `AICredentials.tsx` — model-override `<datalist>` same preference; read-only "Default model: …" line rendered on admin-managed credential entries when `default_model` is set
+
 **Still pending (not yet implemented):**
-- Read-only badge on admin-managed rows in `frontend/src/components/UserSettings/AICredentials.tsx` (keyed off `AICredentialPublic.is_admin_managed`)
 - Native-app (Cinna Desktop / Mobile) provider and chat-mode auto-creation driven by `GET /external/account-config`
 
 ---
@@ -59,6 +63,8 @@
 | `encrypted_data` | `TEXT` | NOT NULL | Fernet-encrypted JSON `{api_key, base_url?, model?}` — canonical key |
 | `base_url` | `VARCHAR(500)` | nullable | Non-secret mirror for projection/UI |
 | `model` | `VARCHAR(255)` | nullable | Non-secret mirror for projection/UI |
+| `default_model` | `VARCHAR(255)` | nullable | Admin-curated default model (bare concrete id). Added by migration `c1a4b2d3e5f6`. |
+| `available_models` | `JSON` | nullable | Admin-curated selectable model list. Added by migration `c1a4b2d3e5f6`. |
 | `set_as_default` | `BOOLEAN` | NOT NULL, server_default false | Whether each child is set as its owner's default |
 | `set_user_sdk_defaults` | `BOOLEAN` | NOT NULL, server_default false | Whether each owner's SDK-default pointers are wired |
 | `sdk_default_modes` | `JSON` | NOT NULL, server_default `["conversation","building"]` | Modes to wire |
@@ -67,17 +73,28 @@
 | `created_at` | `TIMESTAMP` | NOT NULL | Creation time (UTC) |
 | `updated_at` | `TIMESTAMP` | NOT NULL | Last update time (UTC) |
 
-### `ai_credential` table — new column (migration `d3782dd039a5`)
+### `ai_credential` table — columns added across two migrations
+
+**Migration `d3782dd039a5`:**
 
 | Column | Type | Constraints | Purpose |
 |--------|------|-------------|---------|
 | `managed_credential_id` | `UUID` | nullable, FK → `managed_ai_credential.id` ON DELETE SET NULL, index `ix_ai_credential_managed_credential` | Structural link to the parent. NULL = not a managed child, or parent was deleted out-of-band |
 
+**Migration `c1a4b2d3e5f6`:**
+
+| Column | Type | Constraints | Purpose |
+|--------|------|-------------|---------|
+| `default_model` | `VARCHAR(255)` | nullable | Mirror of parent value, written through by reconcile. Read by SDK resolution + native config. NULL for self-created credentials. |
+| `available_models` | `JSON` | nullable | Mirror of parent value, written through by reconcile. Read by model pickers + native config. NULL for self-created credentials. |
+
 The `is_admin_managed` and `managed_by_id` columns already exist from migration `2f2d8e49501d`.
 
-No data backfill in either migration — existing rows had no admin-managed children before this feature.
+No data backfill in any migration — existing rows get `NULL` (preserves current behavior: catalog default + discovered list).
 
 Downgrade for `d3782dd039a5`: drops FK `fk_ai_credential_managed_credential`, drops index `ix_ai_credential_managed_credential`, drops column `managed_credential_id`, drops index `ix_managed_ai_credential_managed_by`, drops table `managed_ai_credential`.
+
+Downgrade for `c1a4b2d3e5f6`: drops `ai_credential.available_models`, `ai_credential.default_model`, `managed_ai_credential.available_models`, `managed_ai_credential.default_model` (in that order).
 
 ---
 
@@ -92,6 +109,8 @@ Downgrade for `d3782dd039a5`: drops FK `fk_ai_credential_managed_credential`, dr
 | `api_key` | `str` | Plaintext key (min length 1); encrypted into the parent row; written to children at add time |
 | `base_url` | `str \| None` | Required for `openai_compatible`; optional for `google`; max 500 chars |
 | `model` | `str \| None` | Required for `openai_compatible`; max 255 chars |
+| `default_model` | `str \| None` | Admin-curated default model (bare concrete id, max 255); normalized server-side (strip `provider/` prefix, trim) |
+| `available_models` | `list[str] \| None` | Admin-curated selectable model list; normalized server-side; `None` = no curation |
 | `expiry_notification_date` | `datetime \| None` | Informational expiry reminder |
 | `target_user_ids` | `list[uuid.UUID]` | Min 1; deduplicated preserving order |
 | `set_as_default` | `bool` | Default `False` |
@@ -100,7 +119,7 @@ Downgrade for `d3782dd039a5`: drops FK `fk_ai_credential_managed_credential`, dr
 
 ### `ManagedAICredentialUpdate`
 
-All fields optional (partial update). Omitting `api_key` keeps the stored key. Omitting `target_user_ids` leaves membership unchanged.
+All fields optional (partial update). Omitting `api_key` keeps the stored key. Omitting `target_user_ids` leaves membership unchanged. Omitting `available_models` leaves the stored curation unchanged; sending `[]` clears it.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -108,6 +127,8 @@ All fields optional (partial update). Omitting `api_key` keeps the stored key. O
 | `api_key` | `str \| None` | Non-None triggers key rotation + Update pass for all current members |
 | `base_url` | `str \| None` | |
 | `model` | `str \| None` | |
+| `default_model` | `str \| None` | `None` = no change; blank string normalized to `None` (effectively clears). Normalized server-side. |
+| `available_models` | `list[str] \| None` | `None` = no change; `[]` = explicit clear (fall back to `discovered_models`). Normalized server-side. |
 | `expiry_notification_date` | `datetime \| None` | |
 | `target_user_ids` | `list[uuid.UUID] \| None` | When supplied, the reconcile diff is against this list |
 | `set_as_default` | `bool \| None` | |
@@ -125,6 +146,8 @@ Never includes `encrypted_data` or key material.
 | `type` | `AICredentialType` | |
 | `base_url` | `str \| None` | |
 | `model` | `str \| None` | |
+| `default_model` | `str \| None` | Admin-curated default model (bare concrete id) |
+| `available_models` | `list[str] \| None` | Admin-curated selectable model list |
 | `set_as_default` | `bool` | |
 | `set_user_sdk_defaults` | `bool` | |
 | `sdk_default_modes` | `list[str]` | |
@@ -245,9 +268,15 @@ Diffs parent scalars against the child (and the child's decrypted data). Only wr
 
 Clear-through limitation: `update_credential` treats `None` as "leave unchanged", so `base_url`/`model` cannot be cleared back to `None` (for `openai_compatible` both are required anyway). `expiry_notification_date` is cleared directly on the child row when the parent value is `None`.
 
+Admin-curated model metadata write-through: `default_model` and `available_models` are written directly on the child row (bypassing `update_credential` — they are non-secret plain columns, not part of `AICredentialData`). Idempotent: the child is only mutated and flagged as `updated` when the stored values differ from the parent's. `available_models` differentiates `None` (no change) from `[]` (explicit clear) by comparing the exact stored list values — the parent itself carries `None` vs `[]` as the source of truth.
+
 Default flag logic:
 - `set_as_default=True` and `child.is_default=False` → `set_default(child, owner)`
 - `set_as_default=False` and `child.is_default=True` → `_clear_child_default(child)` (clears profile blob + SDK-default pointers that reference this child)
+
+### `_stamp_child()` — curated model metadata write-through on create
+
+After `create_credential` creates the child, `_stamp_child` also writes `default_model` and `available_models` from the parent directly onto the child row (same pattern as the structural markers). This ensures newly-added members inherit the current curation immediately without a separate reconcile.
 
 ### `_TYPE_TO_SDK_ENGINE` map
 
@@ -258,6 +287,83 @@ Default flag logic:
 | `OPENAI` | `"opencode/openai"` |
 | `GOOGLE` | `"opencode/google"` |
 | `OPENAI_COMPATIBLE` | `"opencode/openai_compatible"` |
+
+---
+
+---
+
+## Admin-Curated Model Normalization (`_normalize_default_model` / `_normalize_available_models`)
+
+Both helpers live on `ManagedAICredentialsService` and are called at `create()` and `update()` time before the values are stored on the parent.
+
+**`_normalize_default_model(value)`**
+- Strips any `provider/` prefix via `_strip_provider_prefix` from `model_catalog.py`.
+- Trims whitespace; caps at 255 characters.
+- Blank or all-whitespace input returns `None`.
+
+**`_normalize_available_models(value)`**
+- `None` input returns `None` unchanged (distinguishes "no change" from an explicit empty list).
+- A list is processed entry-by-entry: strip `provider/` prefix, trim, drop blanks and duplicates (order-preserving), cap each entry at 255 characters.
+- Caps the output list at 100 entries.
+- An all-blank input list returns `[]` (explicit clear).
+
+These caps bound payload size and prevent prefix-collision bugs in the OpenCode config builder.
+
+---
+
+## SDK / Environment Resolution (`environment_lifecycle.py`, `sdk_constants.py`)
+
+### Per-mode credential-default bag carriers
+
+`make_empty_credential_bag()` (in `sdk_constants.py`) includes two extra keys:
+
+```python
+"model_default_conversation": None,
+"model_default_building": None,
+```
+
+These are filled during `_update_environment_config` in `environment_lifecycle.py` by `_set_mode_default_model_in_bag(bag, mode, cred_row)`, which reads `cred_row.default_model` and writes it to the appropriate bag key when non-empty.
+
+**Resolution sites:** `_resolve_assigned_credential_into_bag` (for credentials explicitly linked to the environment's `conversation_ai_credential_id` / `building_ai_credential_id`) and `_fallback_fill_bag_for_sdk` (for type-level-default fallbacks). Both sites call `_set_mode_default_model_in_bag` after resolving the credential row, so every code path that fills the bag also carries the credential's `default_model`.
+
+**Important note (create vs reconfigure):** `environment_service.create_environment` builds its bag for API-key extraction only; it does NOT populate the `model_default_*` carriers. The credential `default_model` is re-resolved inside `_update_environment_config` (which all lifecycle paths — create, reconfigure, rebuild — go through), so the net effect is correct.
+
+### Override injection (`_generate_env_file`, `_generate_opencode_config_files`)
+
+Both file-generation methods receive `model_default_conversation` and `model_default_building` as parameters. For each mode, the inner `_resolve_mode_model` function applies:
+
+```python
+credential_default = model_default_building if mode == "building" else model_default_conversation
+override = env_override or credential_default
+return resolve_model(engine, provider, mode, override, ...)
+```
+
+This means:
+- If the environment has an explicit `model_override_building` / `model_override_conversation`, that wins.
+- If not, the credential's `default_model` is injected as the override into `resolve_model`.
+- `resolve_model`'s contract is unchanged; the credential default is just a source for the `override` argument.
+
+**For Claude Code:** the resolved model is written to `MODEL_BUILDING` / `MODEL_CONVERSATION` env vars (picked up by the `claude_code_sdk_adapter` as `options.model`).
+
+**For OpenCode:** the resolved model is written to the `opencode.json` `model` field in `_build_config`.
+
+---
+
+## Model Health Consistency (`model_health_service.py`)
+
+`_evaluate_mode` recomputes the effective model to classify health. It now mirrors the same precedence as the lifecycle:
+
+```python
+credential_default = getattr(credential, "default_model", None)
+if not isinstance(credential_default, str) or not credential_default.strip():
+    credential_default = None
+override = env_override or credential_default
+effective_model = resolve_model(engine, provider, mode, override, ...)
+```
+
+This prevents a valid admin-curated `default_model` from being falsely classified as `unknown_model` or `stale_default`.
+
+**`has_override` is keyed on `env_override` only** (not on `credential_default`). This keeps the badge CTA accurate: the `frozen_override` cause means "the user pinned a model they should edit/clear", not "an admin set a default". When the effective model comes from a credential default, the cause will be `stale_default` (if the model is unavailable), which maps to "Restart to use the current model" — the right action for a credential default that has gone stale.
 
 ---
 
@@ -282,13 +388,23 @@ Singleton: `external_account_config_service`
 | `OPENAI_COMPATIBLE` | `credential.name` (free-form) | `"openai-compatible"` |
 | `MINIMAX` | `"MiniMax"` | `"minimax"` |
 
-**`_resolve_model(cred_type, credential_model, discovered_models) -> str | None`**
+**`_to_provider(credential, data)`** builds `suggested_models` as:
+
+```python
+suggested_models = credential.available_models or credential.discovered_models or []
+```
+
+Curated wins; if curated is `None`/empty, falls back to `discovered_models`.
+
+**`_resolve_model(cred_type, credential_model, discovered_models, default_model, available_models) -> str | None`**
 
 Resolution chain (native clients call the provider API directly — must be a concrete ID):
-1. `credential.model` if set (always concrete; only `openai_compatible` has it stored)
-2. `_strip_provider_prefix(discovered_models[0])` if the list is non-empty
-3. `resolve_model(engine, provider, mode="building", ...)` from `model_catalog` — but only if `not is_known_word(result)` (drops tier words like `"haiku"`, `"sonnet"` that are Claude Code internal shortcuts, not Anthropic API model IDs)
-4. `None`
+1. `default_model` (admin curated) — when set and `not is_known_word(default_model)` (tier words are dropped because the native client can't use "haiku" against the provider API); prefix-stripped.
+2. `credential_model` if set (always concrete; only `openai_compatible` has it stored)
+3. `_strip_provider_prefix(available_models[0])` if `available_models` is non-empty
+4. `_strip_provider_prefix(discovered_models[0])` if the list is non-empty
+5. `resolve_model(engine, provider, mode="building", ...)` from `model_catalog` — but only if `not is_known_word(result)` (drops tier words like `"haiku"`, `"sonnet"` that are Claude Code internal shortcuts, not Anthropic API model IDs)
+6. `None`
 
 ---
 
@@ -296,13 +412,17 @@ Resolution chain (native clients call the provider API directly — must be a co
 
 **File:** `backend/app/models/credentials/ai_credential.py`
 
-Three columns relevant to the managed-credential feature:
+Five columns relevant to the managed-credential feature:
 
 | Column | Type | Constraints | Purpose |
 |--------|------|-------------|---------|
 | `is_admin_managed` | `BOOLEAN` | NOT NULL, server_default false | Behavioral discriminator: row is read-only for owner when `True` |
 | `managed_by_id` | `UUID` | nullable, FK → `user.id` ON DELETE SET NULL | Audit-only. Which admin provisioned this row; NULL when not admin-provisioned, or when the admin account was later deleted |
 | `managed_credential_id` | `UUID` | nullable, FK → `managed_ai_credential.id` ON DELETE SET NULL | Structural link to parent. NULL = not a managed child, or parent deleted out-of-band |
+| `default_model` | `VARCHAR(255)` | nullable | Mirror of parent's admin-curated default model. NULL for self-created credentials. Written through by reconcile; read by SDK resolution and native config. |
+| `available_models` | `JSON` | nullable | Mirror of parent's admin-curated selectable model list. NULL for self-created credentials. Written through by reconcile; read by model pickers and native config. |
+
+`default_model` and `available_models` are **absent** from `AICredentialCreate` and `AICredentialUpdate` — users cannot set them through the user-facing CRUD. They are projected read-only on `AICredentialPublic` so the owner UI and SDK resolution can read them.
 
 ---
 
@@ -356,7 +476,7 @@ File: `backend/app/models/external/account_config.py`
 | `is_default` | `bool` | Whether this is the user's default for its type |
 | `is_admin_managed` | `bool` | Whether the row was admin-provisioned |
 | `default_chat_mode_label` | `str` | Same as `display_name` — label the native app uses for the auto-created chat mode |
-| `suggested_models` | `list[str]` | From `credential.discovered_models`; empty if not yet discovered |
+| `suggested_models` | `list[str]` | `credential.available_models` when non-empty (admin curated); otherwise `credential.discovered_models`; empty if neither is set |
 
 ## `AccountConfigResponse` (no table)
 
@@ -411,4 +531,4 @@ The old `admin.ai_credential.provision_batch` event type from the previous per-r
 
 ---
 
-*Last updated: 2026-06-13 — parent/child reconcile model (ManagedAICredential) shipped; native account-config backend-only*
+*Last updated: 2026-06-14 — admin-curated model list (`default_model` + `available_models`) added via migration `c1a4b2d3e5f6`; SDK resolution, model-health, and native config updated accordingly*

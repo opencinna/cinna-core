@@ -7,7 +7,7 @@ Two related backend capabilities that together deliver a "ready on login" experi
 - **Part A — Admin-provisioned AI credentials.** A superuser creates a single **Managed AI Credential** parent record and assigns it to one or more target users. The parent record is the canonical source of truth (name, type, encrypted key, default flags). The service reconciles the desired target-user set into per-user `AICredential` child rows, which participate automatically in all existing per-user plumbing. Users can use their child credential and set it as their default, but cannot edit, delete, or re-key it — those operations return `403`.
 - **Part B — Native account-config endpoint.** A native-token-gated endpoint (`GET /api/v1/external/account-config`) returns the caller's own usable AI credentials with the *decrypted* API key, so Cinna Desktop and Cinna Mobile can auto-create local "LLM providers" and a suggested chat mode per credential on login, without the user having to copy-paste keys into the native app.
 
-> **Frontend status:** The admin "LLM Providers" section is **implemented** — superusers can provision, list, filter, edit, set-default, and delete managed credentials from the web UI. The user-facing AI Credentials card now renders admin-managed child credentials with a **"Managed" badge** (tooltip: "Managed by your administrator…") and **hides the Edit/Delete affordances** (Set-as-default stays available). The native-app side (Part B) remains a future task: only the backend `GET /external/account-config` endpoint exists; Cinna Desktop/Mobile provider auto-creation is not yet built.
+> **Frontend status:** The admin "LLM Providers" section is **implemented** — superusers can provision, list, filter, edit, set-default, delete, and set an admin-curated model list (default model + available models) from the web UI. The user-facing AI Credentials card renders admin-managed child credentials with a **"Managed" badge** and a read-only **Default model** line when a curated default is set. The native-app side (Part B) backend is complete; Cinna Desktop/Mobile provider auto-creation is not yet built.
 
 ---
 
@@ -49,6 +49,8 @@ Membership is **derived** from the children (those whose `managed_credential_id`
 | `set_as_default = True` | Calls `set_default` for each member, including profile auto-sync (`ai_credentials_encrypted`). A PATCH that changes this flag applies it (or clears it) for every existing member in the Update pass of the reconcile. |
 | `set_user_sdk_defaults = True` | Wires each owner's `default_sdk_conversation` / `default_sdk_building` and `default_ai_credential_*_id` to their child, using the same SDK composition as the Add Environment dialog (`claude-code` for Anthropic/MiniMax, `opencode/<provider>` for OpenAI/Google/OpenAI-Compatible). |
 | `sdk_default_modes` | Modes to wire: `"conversation"`, `"building"`, or both (default). Modes incompatible with the credential type are silently skipped. |
+| `default_model` | Admin-curated preferred model ID (bare concrete id, e.g. `claude-sonnet-4-6`). Reconciled onto each child row. When set and the environment has no per-mode override, this model is used instead of the catalog tier default. `NULL` = use the catalog tier default. |
+| `available_models` | Admin-curated list of selectable concrete model IDs reconciled onto each child row. When non-empty, model-picker datalists and the native `suggested_models` field show this list instead of the auto-discovered list. `NULL`/empty on the credential = fall back to `discovered_models`. |
 
 ### Reconcile semantics
 
@@ -68,6 +70,52 @@ The user sees the credential in **Settings → AI Credentials** with `is_admin_m
 - User **cannot**: update the name/key/base_url, change the model field, or delete it. Attempts return `403 "This credential is managed by your administrator and cannot be modified."`.
 
 Because each child row is owned by the user, **web environment creation resolves it automatically** via the existing default-resolution and credential-linking pipelines — no extra steps.
+
+### Admin-Curated Model List
+
+Admins can attach two non-secret model metadata fields to a parent record. These are reconciled onto every child `AICredential` row and consumed across three surfaces:
+
+**What each field controls:**
+
+- **`default_model`** — a single concrete model id (e.g. `claude-sonnet-4-6`, `gpt-5.4-mini`). Stored without any `provider/` prefix (the service normalizes on write). When set, it overrides the model-catalog tier default for all environments that link this credential and have no explicit per-mode model override.
+- **`available_models`** — an ordered, deduplicated list of concrete model ids the admin wants offered for selection. When non-empty on the child row, model-picker datalists in the Environment Config dialog and the user's AI Credentials view use this list instead of `discovered_models`.
+
+**Precedence rules (SDK / agent environments):**
+
+1. User's per-mode environment override (`model_override_building` / `model_override_conversation`) — always wins.
+2. Admin-curated `default_model` on the linked credential — when set and no env override exists.
+3. Model-catalog tier default (`haiku` / `sonnet` / concrete ID per provider).
+
+**Precedence rules (native account-config, `GET /external/account-config`):**
+
+1. `default_model` (admin curated) — when set and not an SDK tier word (tier words are not valid Anthropic API model IDs).
+2. `credential.model` (openai_compatible's required model) — when set.
+3. First entry of `available_models` (curated), prefix-stripped.
+4. First entry of `discovered_models`, prefix-stripped.
+5. Catalog default — only when it is a concrete ID; tier words are dropped.
+6. `null` — client falls back to its own default.
+
+**User experience:**
+
+- The user's AI Credentials card shows the `default_model` as a read-only line ("Default model: …") on admin-managed credential entries.
+- The user cannot edit `default_model` or `available_models` — they are absent from `AICredentialCreate`/`AICredentialUpdate`. Attempts to set them via user routes simply don't work (fields not accepted).
+- Model pickers (env config, user settings) show the curated list when it is non-empty; otherwise the auto-discovered list applies.
+
+**None vs [] semantics for `available_models` on update:**
+
+- `None` (field omitted in the PATCH body) = no change to the stored curation.
+- `[]` (explicit empty list) = clear curation; fall back to `discovered_models` for all consumers.
+
+**Normalization on write (service-side):**
+
+- `provider/` prefixes stripped (e.g. `anthropic/claude-sonnet-4-6` → `claude-sonnet-4-6`).
+- Entries trimmed, deduplicated (order-preserving), blank entries dropped.
+- Capped at 100 entries, 255 characters per entry.
+- Reconcile to children is idempotent: a child whose values already match the parent is not counted as `updated` and emits no audit event.
+
+**Model health (amber badge):**
+
+The model-health service mirrors the same precedence. A valid admin-curated `default_model` is never falsely flagged as `unknown_model` or `stale_default`. Note that `has_override` in the health signal is keyed only on a **user-set env override** (not the credential default), so the badge CTA stays accurate: it never tells the user to "clear an override" they didn't set.
 
 ### Admin CRUD
 
@@ -93,6 +141,9 @@ The admin UI is accessed via **Admin menu → LLM Providers** (`/admin/llm-provi
    - API key (password field; required on create)
    - Base URL — shown only for `openai_compatible` (required) and `google` (optional)
    - Model — shown only for `openai_compatible` (required)
+   - **Default model** — optional text input; the concrete model ID used by default for all environments and native apps using this credential (leave blank to use the platform catalog default); a **"View available models ↗"** link to the provider's official models reference appears next to the label (Anthropic → platform.claude.com models overview; Google → ai.google.dev Gemini API models; OpenAI → developers.openai.com models; omitted for OpenAI Compatible)
+   - **Available models** — optional multi-line/comma editor; the curated list of model IDs offered for selection; leave empty to offer all auto-detected models
+   - **"Fill top 10 models"** button — auto-runs Test Connection first if no fresh successful result exists, then fills "Available models" with the top 10 discovered models (deduped, provider-prefix stripped) and auto-sets "Default model" using provider-specific logic: Google → `gemini-flash-latest` (fixed alias); Anthropic → highest-version Sonnet found in the model list, falling back to the first model; OpenAI / OpenAI Compatible → first model in the list
    - Target Users — multi-select `UserAllowlistPicker`; at least one user required
    - "Set as default" toggle
    - "Set user SDK defaults" toggle
@@ -156,7 +207,7 @@ This is a **deliberate, product-approved, scoped relaxation** of the platform's 
 | `is_default` | Whether this is the user's default for its type |
 | `is_admin_managed` | Whether this was provisioned by an admin |
 | `default_chat_mode_label` | Label the native app should use for the auto-created chat mode (equals `display_name`) |
-| `suggested_models` | Full list from `discovered_models` (the per-credential discovery cache) |
+| `suggested_models` | `available_models` when non-empty (admin curated); otherwise `discovered_models` (the per-credential discovery cache) |
 
 The response also carries `default_provider_credential_id` (the resolved conversation-default credential for the user, using the existing priority resolution) and `generated_at`.
 
@@ -164,11 +215,15 @@ The response also carries `default_provider_credential_id` (the resolved convers
 
 Native clients call the provider API directly with the decrypted key, so they need a **concrete, provider-usable model ID** — not an SDK-internal tier word (e.g., `"haiku"`, `"sonnet"` are Claude Code internal shortcuts that are not valid Anthropic API model IDs).
 
-Resolution order:
-1. `credential.model` when explicitly set (e.g., `openai_compatible` with a pinned model)
-2. First entry in `credential.discovered_models` (the nightly-refreshed list of models this key can actually access), stripped of any `provider/` prefix
-3. The model-catalog default for this provider/engine — but only when it is a **concrete ID**; tier words (`"haiku"`, `"sonnet"`, `"opus"`) are dropped and the field becomes `null`
-4. `null` — the client falls back to its own default or lets the user pick from `suggested_models`
+Resolution order (the admin curated `default_model` wins early):
+1. `credential.default_model` (admin curated) — when set and not an SDK tier word; stripped of any `provider/` prefix
+2. `credential.model` when explicitly set (e.g., `openai_compatible` with a pinned model)
+3. First entry in `credential.available_models` (admin curated list), prefix-stripped
+4. First entry in `credential.discovered_models` (the nightly-refreshed list of models this key can actually access), stripped of any `provider/` prefix
+5. The model-catalog default for this provider/engine — but only when it is a **concrete ID**; tier words (`"haiku"`, `"sonnet"`, `"opus"`) are dropped and the field becomes `null`
+6. `null` — the client falls back to its own default or lets the user pick from `suggested_models`
+
+The `suggested_models` field on the native response returns `credential.available_models` when non-empty, otherwise `credential.discovered_models`.
 
 ### Security boundary (all four constraints are enforced)
 
@@ -276,4 +331,4 @@ SecurityEvent("external.account_config.read", severity="high")
 
 ---
 
-*Last updated: 2026-06-13 — parent/child reconcile model shipped; native account-config backend-only*
+*Last updated: 2026-06-14 — admin-curated model list (`default_model` + `available_models`) shipped; migration `c1a4b2d3e5f6`*

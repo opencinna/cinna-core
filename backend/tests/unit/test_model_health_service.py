@@ -96,6 +96,7 @@ def _cred(
     cred_type: AICredentialType = AICredentialType.ANTHROPIC,
     discovered_models: list[str] | None = None,
     models_discovery_error: str | None = None,
+    default_model: str | None = None,
 ) -> AICredential:
     """Build a minimal AICredential mock."""
     c = MagicMock(spec=AICredential)
@@ -104,6 +105,10 @@ def _cred(
     c.discovered_models = discovered_models
     c.models_discovered_at = datetime.now(UTC) if discovered_models is not None else None
     c.models_discovery_error = models_discovery_error
+    # Admin-curated default (see admin_curated_model_list). NULL for a normal
+    # self-created credential — explicitly set so the spec'd mock doesn't leak an
+    # auto-MagicMock into the resolution precedence.
+    c.default_model = default_model
     return c
 
 
@@ -225,6 +230,110 @@ class TestStalDefault:
         assert building_mode.cause == CAUSE_STALE_DEFAULT
         assert building_mode.cta is not None
         assert result.has_warning is True
+
+
+# ---------------------------------------------------------------------------
+# 2b. Admin-curated credential default precedence (admin_curated_model_list)
+# ---------------------------------------------------------------------------
+
+class TestCredentialDefaultPrecedence:
+    """A credential's admin-curated ``default_model`` participates in the same
+    precedence the lifecycle uses (env override → credential default → catalog),
+    so a valid admin default is NOT falsely flagged unknown_model/stale_default.
+    """
+
+    def test_credential_default_in_discovered_is_ok(self):
+        """No env override + admin default that IS in discovered → ok (the
+        admin default, not the catalog default, is evaluated)."""
+        agent = _agent()
+        cred_id = uuid.uuid4()
+        # Catalog default for opencode/anthropic/building is 'claude-sonnet-4-6'
+        # and is NOT in this discovered list — without honoring the credential
+        # default this would flag stale_default. The admin default IS present.
+        cred = _cred(
+            AICredentialType.ANTHROPIC,
+            discovered_models=[
+                "claude-3-5-sonnet-20241022",
+                "claude-3-haiku-20240307",
+            ],
+            default_model="claude-3-5-sonnet-20241022",
+        )
+        cred.id = cred_id
+
+        env = _env(
+            sdk_conversation="opencode/anthropic",
+            sdk_building="opencode/anthropic",
+            override_building=None,
+            build_cred_id=cred_id,
+        )
+        env.agent_id = uuid.uuid4()
+
+        session = _session_with(agent=agent, cred_for_building=cred)
+
+        result = evaluate_environment(session, env, agent=agent)
+
+        building_mode = next(m for m in result.modes if m.mode == "building")
+        assert building_mode.status == STATUS_OK
+        assert building_mode.model == "claude-3-5-sonnet-20241022"
+
+    def test_env_override_wins_over_credential_default(self):
+        """An explicit env override takes precedence over the credential default
+        and drives the frozen-override classification when retired."""
+        retired_id = "claude-3-7-sonnet-20250219"  # In RETIRED_MODELS
+        agent = _agent()
+        cred_id = uuid.uuid4()
+        cred = _cred(
+            AICredentialType.ANTHROPIC,
+            discovered_models=["claude-3-5-sonnet-20241022"],
+            default_model="claude-3-5-sonnet-20241022",
+        )
+        cred.id = cred_id
+
+        env = _env(
+            sdk_conversation="opencode/anthropic",
+            sdk_building="opencode/anthropic",
+            override_building=retired_id,
+            build_cred_id=cred_id,
+        )
+        env.agent_id = uuid.uuid4()
+
+        session = _session_with(agent=agent, cred_for_building=cred)
+
+        result = evaluate_environment(session, env, agent=agent)
+
+        building_mode = next(m for m in result.modes if m.mode == "building")
+        # Env override (retired) wins over the healthy credential default.
+        assert building_mode.status == STATUS_RETIRED_OVERRIDE
+        assert building_mode.cause == CAUSE_FROZEN_OVERRIDE
+
+    def test_credential_default_not_in_discovered_flags_stale(self):
+        """Admin default that is NOT in the discovered list still flags
+        stale_default (cause), but classified as a default, not a frozen
+        override (no env override set)."""
+        agent = _agent()
+        cred_id = uuid.uuid4()
+        cred = _cred(
+            AICredentialType.ANTHROPIC,
+            discovered_models=["claude-3-haiku-20240307"],
+            default_model="claude-3-5-sonnet-20241022",  # not in discovered
+        )
+        cred.id = cred_id
+
+        env = _env(
+            sdk_conversation="opencode/anthropic",
+            sdk_building="opencode/anthropic",
+            override_building=None,
+            build_cred_id=cred_id,
+        )
+        env.agent_id = uuid.uuid4()
+
+        session = _session_with(agent=agent, cred_for_building=cred)
+
+        result = evaluate_environment(session, env, agent=agent)
+
+        building_mode = next(m for m in result.modes if m.mode == "building")
+        assert building_mode.status == STATUS_UNKNOWN_MODEL
+        assert building_mode.cause == CAUSE_STALE_DEFAULT
 
 
 # ---------------------------------------------------------------------------

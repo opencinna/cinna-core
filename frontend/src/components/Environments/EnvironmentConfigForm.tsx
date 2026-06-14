@@ -257,11 +257,16 @@ export function EnvModeEditDialog({
   const selectedCredential = credentials.find((c) => c.id === credentialId) ?? null
   // Prefer the credential's discovered (per-key) models as suggestions, falling
   // back to / augmenting the static SUGGESTED_MODELS list.
+  // Prefer the admin-curated available_models when present, else the per-key
+  // discovered models (see admin_curated_model_list).
   const discoveredModels = selectedCredential?.discovered_models ?? []
+  const offeredModels = selectedCredential?.available_models?.length
+    ? selectedCredential.available_models
+    : discoveredModels
   const suggestedModels = selectedCredential
     ? Array.from(
         new Set([
-          ...discoveredModels,
+          ...offeredModels,
           ...(SUGGESTED_MODELS[selectedCredential.type] ?? []),
         ]),
       )

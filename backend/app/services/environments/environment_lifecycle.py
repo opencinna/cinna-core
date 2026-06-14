@@ -1125,9 +1125,13 @@ class EnvironmentLifecycleManager:
 
                 # Per-mode fallback for any mode without a usable assigned credential.
                 if not conv_assigned:
-                    self._fallback_fill_bag_for_sdk(db_session, user, bag, sdk_conversation)
+                    self._fallback_fill_bag_for_sdk(
+                        db_session, user, bag, sdk_conversation, mode="conversation"
+                    )
                 if not build_assigned:
-                    self._fallback_fill_bag_for_sdk(db_session, user, bag, sdk_building)
+                    self._fallback_fill_bag_for_sdk(
+                        db_session, user, bag, sdk_building, mode="building"
+                    )
 
                 anthropic_api_key = bag["anthropic_api_key"]
                 minimax_api_key = bag["minimax_api_key"]
@@ -1136,6 +1140,8 @@ class EnvironmentLifecycleManager:
                 openai_compatible_model = bag["openai_compatible_model"]
                 openai_api_key = bag["openai_api_key"]
                 google_api_key = bag["google_api_key"]
+                model_default_conversation = bag.get("model_default_conversation")
+                model_default_building = bag.get("model_default_building")
 
                 # Regenerate MiniMax settings if needed
                 if uses_minimax and minimax_api_key:
@@ -1160,6 +1166,8 @@ class EnvironmentLifecycleManager:
                         openai_compatible_base_url=openai_compatible_base_url,
                         openai_compatible_model=openai_compatible_model,
                         google_api_key=google_api_key,
+                        model_default_conversation=model_default_conversation,
+                        model_default_building=model_default_building,
                     )
                     logger.info(f"Regenerated OpenCode config files after rebuild for environment {environment.id}")
 
@@ -1454,6 +1462,11 @@ class EnvironmentLifecycleManager:
             "openai_compatible_model": openai_compatible_model,
             "openai_api_key": openai_api_key,
             "google_api_key": google_api_key,
+            # Per-mode admin-curated default model carriers (filled by the
+            # resolve helpers below; consumed as the resolve_model override
+            # fallback in _generate_env_file / _generate_opencode_config_files).
+            "model_default_conversation": None,
+            "model_default_building": None,
         }
 
         # Track if specific credentials are assigned (to prevent fallback). An
@@ -1491,9 +1504,13 @@ class EnvironmentLifecycleManager:
         # mode that actually pins a credential, so we scope it to that mode.
         if user:
             if not has_assigned_conversation_credential:
-                self._fallback_fill_bag_for_sdk(db_session, user, bag, sdk_conversation)
+                self._fallback_fill_bag_for_sdk(
+                    db_session, user, bag, sdk_conversation, mode="conversation"
+                )
             if not has_assigned_building_credential:
-                self._fallback_fill_bag_for_sdk(db_session, user, bag, sdk_building)
+                self._fallback_fill_bag_for_sdk(
+                    db_session, user, bag, sdk_building, mode="building"
+                )
 
         # Unpack bag back to local vars for downstream methods that use positional args
         anthropic_api_key = bag["anthropic_api_key"]
@@ -1503,6 +1520,8 @@ class EnvironmentLifecycleManager:
         openai_compatible_model = bag["openai_compatible_model"]
         openai_api_key = bag["openai_api_key"]
         google_api_key = bag["google_api_key"]
+        model_default_conversation = bag.get("model_default_conversation")
+        model_default_building = bag.get("model_default_building")
 
         # 4. Generate docker-compose.yml (injects shared template image tag
         # and the per-(user, bundle) app-data host path).
@@ -1516,6 +1535,8 @@ class EnvironmentLifecycleManager:
             anthropic_api_key, minimax_api_key,
             openai_compatible_api_key, openai_compatible_base_url, openai_compatible_model,
             openai_api_key=openai_api_key, google_api_key=google_api_key,
+            model_default_conversation=model_default_conversation,
+            model_default_building=model_default_building,
         )
 
         # 6. Write Claude Code PreToolUse hook settings for credential access detection
@@ -1538,6 +1559,8 @@ class EnvironmentLifecycleManager:
                 openai_compatible_base_url=openai_compatible_base_url,
                 openai_compatible_model=openai_compatible_model,
                 google_api_key=google_api_key,
+                model_default_conversation=model_default_conversation,
+                model_default_building=model_default_building,
             )
 
         logger.info(f"Updated configuration files for environment {environment.id}")
@@ -1612,9 +1635,37 @@ class EnvironmentLifecycleManager:
         temp_bag = make_empty_credential_bag()
         apply_credential_to_bag(temp_bag, cred_type, cred_data)
         for key, val in temp_bag.items():
-            if val is not None and bag[key] is None:
+            if val is not None and bag.get(key) is None:
                 bag[key] = val
+        # Capture the admin-curated per-mode default model (see
+        # admin_curated_model_list). ``label`` is the mode ("conversation" /
+        # "building"); fill only an empty carrier so the assigned credential wins
+        # over the fallback.
+        self._set_mode_default_model_in_bag(bag, label, cred)
         logger.debug(f"Resolved {label} credential for environment {environment.id}")
+
+    def _set_mode_default_model_in_bag(
+        self, bag: dict, mode: str, cred_row: "AICredential | None"
+    ) -> None:
+        """Capture a credential's admin-curated ``default_model`` into the bag's
+        per-mode carrier (see admin_curated_model_list).
+
+        Mirrors ``EnvironmentService._set_mode_default_model``: fills only an
+        empty carrier (first resolved credential wins) and only when the row has
+        a non-empty ``default_model``. The carrier feeds the resolve_model
+        override fallback (env per-mode override → credential default → catalog).
+        """
+        if cred_row is None:
+            return
+        default_model = getattr(cred_row, "default_model", None)
+        if not default_model:
+            return
+        key = (
+            "model_default_building" if mode == "building"
+            else "model_default_conversation"
+        )
+        if bag.get(key) is None:
+            bag[key] = default_model
 
     def _fallback_fill_bag_for_sdk(
         self,
@@ -1622,6 +1673,7 @@ class EnvironmentLifecycleManager:
         user: User,
         bag: dict,
         sdk_id: str | None,
+        mode: str | None = None,
     ) -> None:
         """Fill the bag slot for a single mode's SDK from the user's defaults.
 
@@ -1653,6 +1705,8 @@ class EnvironmentLifecycleManager:
             apply_credential_to_bag(
                 bag, cred_type, ai_credentials_service.decrypt_credential(default_cred)
             )
+            if mode:
+                self._set_mode_default_model_in_bag(bag, mode, default_cred)
             return
 
         # Fall back to the legacy encrypted profile for the types it stores
@@ -1804,6 +1858,8 @@ class EnvironmentLifecycleManager:
         openai_compatible_model: str | None = None,
         openai_api_key: str | None = None,
         google_api_key: str | None = None,
+        model_default_conversation: str | None = None,
+        model_default_building: str | None = None,
     ):
         """Generate .env files for docker-compose and application, and SDK settings files."""
         logger.debug(f"Generating .env files for environment {environment.id}")
@@ -1825,10 +1881,20 @@ class EnvironmentLifecycleManager:
         def _resolve_mode_model(sdk_value: str, mode: str) -> str:
             engine, _, provider = sdk_value.partition("/")
             provider = provider or "anthropic"
-            override = (
+            env_override = (
                 environment.model_override_building if mode == "building"
                 else environment.model_override_conversation
             )
+            # Admin-curated credential default (see admin_curated_model_list).
+            # Precedence: env per-mode override → credential default → catalog
+            # tier default. The credential default is injected AS the override
+            # only when there is no explicit env override, so env overrides keep
+            # top precedence and resolve_model's contract is unchanged.
+            credential_default = (
+                model_default_building if mode == "building"
+                else model_default_conversation
+            )
+            override = env_override or credential_default
             return resolve_model(
                 engine=engine,
                 provider=provider,
@@ -2035,6 +2101,8 @@ MODEL_CONVERSATION={model_conversation}
         openai_compatible_base_url: str | None = None,
         openai_compatible_model: str | None = None,
         google_api_key: str | None = None,
+        model_default_conversation: str | None = None,
+        model_default_building: str | None = None,
     ):
         """
         Generate OpenCode config files in the core .opencode folder.
@@ -2136,10 +2204,18 @@ MODEL_CONVERSATION={model_conversation}
             # Determine model via the central catalog: explicit override →
             # provider+mode catalog default. openai_compatible draws its model
             # from the credential config.
-            model_override = (
+            env_override = (
                 environment.model_override_building if mode == "building"
                 else environment.model_override_conversation
             )
+            # Admin-curated credential default (see admin_curated_model_list).
+            # Precedence: env per-mode override → credential default → catalog
+            # tier default. Injected as the override only when no env override.
+            credential_default = (
+                model_default_building if mode == "building"
+                else model_default_conversation
+            )
+            model_override = env_override or credential_default
             model = resolve_model(
                 engine="opencode",
                 provider=provider,

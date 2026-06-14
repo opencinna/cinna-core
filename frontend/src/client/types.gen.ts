@@ -1590,6 +1590,8 @@ export type AICredentialPublic = {
     discovered_models?: (Array<(string)> | null);
     models_discovered_at?: (string | null);
     models_discovery_error?: (string | null);
+    default_model?: (string | null);
+    available_models?: (Array<(string)> | null);
     created_at: string;
     updated_at: string;
 };
@@ -3378,6 +3380,8 @@ export type ManagedAICredentialCreate = {
     api_key: string;
     base_url?: (string | null);
     model?: (string | null);
+    default_model?: (string | null);
+    available_models?: (Array<(string)> | null);
     expiry_notification_date?: (string | null);
     target_user_ids: Array<(string)>;
     set_as_default?: boolean;
@@ -3408,6 +3412,8 @@ export type ManagedAICredentialPublic = {
     type: AICredentialType;
     base_url?: (string | null);
     model?: (string | null);
+    default_model?: (string | null);
+    available_models?: (Array<(string)> | null);
     set_as_default?: boolean;
     set_user_sdk_defaults?: boolean;
     sdk_default_modes?: Array<(string)>;
@@ -3445,6 +3451,8 @@ export type ManagedAICredentialUpdate = {
     api_key?: (string | null);
     base_url?: (string | null);
     model?: (string | null);
+    default_model?: (string | null);
+    available_models?: (Array<(string)> | null);
     expiry_notification_date?: (string | null);
     target_user_ids?: (Array<(string)> | null);
     set_as_default?: (boolean | null);

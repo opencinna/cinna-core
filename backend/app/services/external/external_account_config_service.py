@@ -122,7 +122,18 @@ class ExternalAccountConfigService:
             display_name = credential.name
 
         model = self._resolve_model(
-            cred_type, data.model, credential.discovered_models
+            cred_type,
+            data.model,
+            credential.discovered_models,
+            credential.default_model,
+            credential.available_models,
+        )
+
+        # Curated wins, else discovered (see admin_curated_model_list).
+        suggested_models = (
+            credential.available_models
+            or credential.discovered_models
+            or []
         )
 
         return AccountConfigProviderPublic(
@@ -136,7 +147,7 @@ class ExternalAccountConfigService:
             is_default=credential.is_default,
             is_admin_managed=credential.is_admin_managed,
             default_chat_mode_label=display_name,
-            suggested_models=credential.discovered_models or [],
+            suggested_models=suggested_models,
         )
 
     def _resolve_model(
@@ -144,25 +155,39 @@ class ExternalAccountConfigService:
         cred_type: AICredentialType,
         credential_model: str | None,
         discovered_models: list[str] | None,
+        default_model: str | None = None,
+        available_models: list[str] | None = None,
     ) -> str | None:
         """Suggested model for a NATIVE client, which talks to the provider API
         directly with the decrypted key. It therefore needs a concrete,
         provider-usable model id — NOT a Claude-Code tier word (haiku/sonnet)
         nor an ``opencode/``-namespaced id, both of which are SDK-internal.
 
-        Resolution (OQ-10, adapted for direct-API use):
-          1. ``credential.model`` when explicitly set (e.g. openai_compatible).
-          2. The first discovered model the key can actually see, stripped of any
-             ``provider/`` prefix.
-          3. The model-catalog default for this provider, but ONLY when it is a
-             concrete id (tier words are dropped — the native client can't use
-             "haiku" against the Anthropic API).
-          4. ``None`` — the client falls back to its own default / picks from
+        Resolution (single default wins early; see admin_curated_model_list):
+          1. ``credential.default_model`` (admin curated) — when set. Dropped if
+             it is an SDK tier word (the native client can't use "haiku" against
+             the provider API) → falls through to the next step.
+          2. ``credential.model`` (openai_compatible's required model) — when set.
+          3. First entry of ``available_models`` (curated), prefix-stripped.
+          4. First entry of ``discovered_models``, prefix-stripped.
+          5. The model-catalog default for this provider, but ONLY when it is a
+             concrete id (tier words are dropped).
+          6. ``None`` — the client falls back to its own default / picks from
              ``suggested_models``.
         """
+        # 1. Admin-curated default (tier words can't be used directly).
+        if default_model and not is_known_word(default_model):
+            return _strip_provider_prefix(default_model)
+
+        # 2. openai_compatible's required model.
         if credential_model:
             return credential_model
 
+        # 3. First curated model.
+        if available_models:
+            return _strip_provider_prefix(available_models[0])
+
+        # 4. First discovered model the key can see.
         if discovered_models:
             return _strip_provider_prefix(discovered_models[0])
 

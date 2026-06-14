@@ -1252,3 +1252,201 @@ def test_patch_name_update_propagates_to_children(
     # Child reflects the new name
     child_cred = get_ai_credential(client, target_headers, child_id)
     assert child_cred["name"] == "Updated Name"
+
+
+# ── Scenario 12: Admin-curated model list (admin_curated_model_list) ──────────
+
+
+def _create_managed_with_curation(
+    client: TestClient,
+    headers: dict,
+    target_user_ids: list[str],
+    name: str,
+    api_key: str,
+    default_model: str | None = None,
+    available_models: list[str] | None = None,
+) -> dict:
+    """POST /admin/llm-providers/ carrying the curated-model fields."""
+    payload: dict = {
+        "name": name,
+        "type": "anthropic",
+        "api_key": api_key,
+        "target_user_ids": target_user_ids,
+    }
+    if default_model is not None:
+        payload["default_model"] = default_model
+    if available_models is not None:
+        payload["available_models"] = available_models
+    r = client.post(_ADMIN_BASE + "/", headers=headers, json=payload)
+    assert r.status_code == 200, f"create with curation failed: {r.text}"
+    return r.json()
+
+
+def test_curation_create_writes_through_to_child(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """Create with default_model + available_models reconciles both onto the
+    child and projects them read-only on the child's AICredentialPublic."""
+    target = create_random_user(client)
+    target_headers = user_authentication_headers(
+        client=client, email=target["email"], password=target["_password"]
+    )
+
+    result = _create_managed_with_curation(
+        client,
+        superuser_token_headers,
+        target_user_ids=[target["id"]],
+        name="Curated Create",
+        api_key="sk-ant-curated-create",
+        default_model="claude-sonnet-4-6",
+        available_models=["claude-sonnet-4-6", "claude-haiku-4-5"],
+    )
+    # Parent projection carries the curated fields.
+    assert result["record"]["default_model"] == "claude-sonnet-4-6"
+    assert result["record"]["available_models"] == [
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+    ]
+    child_id = result["added"][0]["child_credential_id"]
+
+    # Child (owner-facing) reflects the curated fields read-only.
+    child = get_ai_credential(client, target_headers, child_id)
+    assert child["default_model"] == "claude-sonnet-4-6"
+    assert child["available_models"] == ["claude-sonnet-4-6", "claude-haiku-4-5"]
+
+
+def test_curation_input_is_normalized(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """provider/ prefixes are stripped, blanks dropped, duplicates removed,
+    entries trimmed — on the way in."""
+    target = create_random_user(client)
+
+    result = _create_managed_with_curation(
+        client,
+        superuser_token_headers,
+        target_user_ids=[target["id"]],
+        name="Curated Normalize",
+        api_key="sk-ant-curated-normalize",
+        default_model="anthropic/claude-sonnet-4-6",
+        available_models=[
+            "anthropic/claude-sonnet-4-6",
+            "  claude-haiku-4-5  ",
+            "claude-sonnet-4-6",  # dup after strip
+            "",  # blank dropped
+        ],
+    )
+    assert result["record"]["default_model"] == "claude-sonnet-4-6"
+    assert result["record"]["available_models"] == [
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+    ]
+
+
+def test_curation_patch_idempotent_on_equal_values(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """Re-sending identical curated values does NOT flag the child as updated."""
+    target = create_random_user(client)
+
+    result = _create_managed_with_curation(
+        client,
+        superuser_token_headers,
+        target_user_ids=[target["id"]],
+        name="Curated Idempotent",
+        api_key="sk-ant-curated-idem",
+        default_model="claude-sonnet-4-6",
+        available_models=["claude-sonnet-4-6"],
+    )
+    parent_id = result["record"]["id"]
+
+    patch_result = _update_managed(
+        client,
+        superuser_token_headers,
+        parent_id,
+        target_user_ids=[target["id"]],
+        default_model="claude-sonnet-4-6",
+        available_models=["claude-sonnet-4-6"],
+    )
+    assert patch_result["updated"] == []
+    assert patch_result["updated_count"] == 0
+
+
+def test_curation_patch_empty_list_clears_none_leaves_unchanged(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """available_models: [] clears curation; omitting it (None) leaves it
+    unchanged. default_model omitted (None) is left unchanged."""
+    target = create_random_user(client)
+    target_headers = user_authentication_headers(
+        client=client, email=target["email"], password=target["_password"]
+    )
+
+    result = _create_managed_with_curation(
+        client,
+        superuser_token_headers,
+        target_user_ids=[target["id"]],
+        name="Curated Clear",
+        api_key="sk-ant-curated-clear",
+        default_model="claude-sonnet-4-6",
+        available_models=["claude-sonnet-4-6", "claude-haiku-4-5"],
+    )
+    parent_id = result["record"]["id"]
+    child_id = result["added"][0]["child_credential_id"]
+
+    # PATCH omitting both curated fields → unchanged (no curated diff). The
+    # member must NOT be flagged updated by the curated write-through.
+    patch_unchanged = _update_managed(
+        client,
+        superuser_token_headers,
+        parent_id,
+        target_user_ids=[target["id"]],
+    )
+    assert patch_unchanged["updated"] == []
+    child = get_ai_credential(client, target_headers, child_id)
+    assert child["available_models"] == ["claude-sonnet-4-6", "claude-haiku-4-5"]
+    assert child["default_model"] == "claude-sonnet-4-6"
+
+    # PATCH available_models=[] → explicit clear (child becomes empty list).
+    patch_clear = _update_managed(
+        client,
+        superuser_token_headers,
+        parent_id,
+        target_user_ids=[target["id"]],
+        available_models=[],
+    )
+    cleared_child_ids = [m["child_credential_id"] for m in patch_clear["updated"]]
+    assert child_id in cleared_child_ids
+    child = get_ai_credential(client, target_headers, child_id)
+    assert child["available_models"] == []
+    # default_model left untouched (was not in the PATCH body).
+    assert child["default_model"] == "claude-sonnet-4-6"
+
+
+def test_curation_self_created_credentials_stay_null(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """A normal self-created credential cannot carry curated fields (absent from
+    the user input schema) and projects them as null."""
+    target = create_random_user(client)
+    target_headers = user_authentication_headers(
+        client=client, email=target["email"], password=target["_password"]
+    )
+
+    # Self-created credential with an attempted curated payload — fields are
+    # silently ignored (not in AICredentialCreate).
+    r = client.post(
+        _CRED_BASE + "/",
+        headers=target_headers,
+        json={
+            "name": "Self Created",
+            "type": "anthropic",
+            "api_key": "sk-ant-self-created",
+            "default_model": "claude-sonnet-4-6",
+            "available_models": ["claude-sonnet-4-6"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    cred = r.json()
+    assert cred.get("default_model") is None
+    assert cred.get("available_models") is None

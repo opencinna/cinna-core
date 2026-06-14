@@ -527,6 +527,14 @@ class EnvironmentService:
         default fallbacks fill the bag but persist no id (rebuild re-resolves the
         typed default), mirroring the long-standing create-time behaviour.
 
+        Note (admin_curated_model_list): this bag is consumed only as individual
+        API-key args by ``create_environment_instance``; it deliberately does NOT
+        carry the per-mode admin-curated ``default_model``. That value is
+        re-resolved inside the lifecycle's ``_update_environment_config`` (from the
+        environment's stored ``conversation_ai_credential_id`` /
+        ``building_ai_credential_id`` via ``_set_mode_default_model_in_bag``), so
+        it is intentionally not populated here.
+
         Raises ``EnvironmentCredentialError`` on inaccessible/incompatible
         credentials or a missing required API key.
         """

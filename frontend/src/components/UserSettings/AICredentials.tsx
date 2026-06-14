@@ -198,11 +198,16 @@ function SDKModeEditDialog({
 
   const compatible = getCompatibleCredentials(engine, credentials)
   const selectedCredential = credentials.find((c) => c.id === credentialId) ?? null
+  // Prefer the admin-curated available_models when present, else the per-key
+  // discovered models (see admin_curated_model_list).
   const discoveredModels = selectedCredential?.discovered_models ?? []
+  const offeredModels = selectedCredential?.available_models?.length
+    ? selectedCredential.available_models
+    : discoveredModels
   const suggestedModels = selectedCredential
     ? Array.from(
         new Set([
-          ...discoveredModels,
+          ...offeredModels,
           ...(SUGGESTED_MODELS[selectedCredential.type] ?? []),
         ]),
       )
@@ -644,6 +649,14 @@ export function AICredentialsSettings() {
                               <div>
                                 <div>{cred.base_url}</div>
                                 {cred.model && <div>Model: {cred.model}</div>}
+                                {cred.is_admin_managed && cred.default_model && (
+                                  <div>Default model: {cred.default_model}</div>
+                                )}
+                              </div>
+                            ) : cred.is_admin_managed && cred.default_model ? (
+                              <div>
+                                <div>{getTypeDisplayName(cred.type)}</div>
+                                <div>Default model: {cred.default_model}</div>
                               </div>
                             ) : (
                               getTypeDisplayName(cred.type)

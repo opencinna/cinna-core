@@ -52,6 +52,16 @@ class ManagedAICredential(SQLModel, table=True):
     base_url: str | None = Field(default=None, max_length=500)
     model: str | None = Field(default=None, max_length=255)
 
+    # Admin-curated model metadata (see admin_curated_model_list). Reconciled
+    # onto each child AICredential row. Both non-secret.
+    # - default_model: admin's preferred default model (bare concrete id).
+    # - available_models: curated list of selectable model ids (NULL/empty =
+    #   offer the per-credential auto-discovered list).
+    default_model: str | None = Field(default=None, max_length=255)
+    available_models: list[str] | None = Field(
+        default=None, sa_column=Column(PG_JSON, nullable=True)
+    )
+
     # Desired: set each child as its owner's default for the type.
     set_as_default: bool = Field(
         default=False,
@@ -127,6 +137,8 @@ class ManagedAICredentialPublic(SQLModel):
     type: AICredentialType
     base_url: str | None = None
     model: str | None = None
+    default_model: str | None = None
+    available_models: list[str] | None = None
     set_as_default: bool = False
     set_user_sdk_defaults: bool = False
     sdk_default_modes: list[str] = Field(default_factory=_default_sdk_modes)
@@ -152,6 +164,9 @@ class ManagedAICredentialCreate(SQLModel):
     api_key: str = Field(min_length=1)
     base_url: str | None = Field(default=None, max_length=500)
     model: str | None = Field(default=None, max_length=255)
+    # Admin-curated model metadata (normalized + prefix-stripped server-side).
+    default_model: str | None = Field(default=None, max_length=255)
+    available_models: list[str] | None = None
     expiry_notification_date: datetime | None = None
     target_user_ids: list[uuid.UUID] = Field(min_length=1)
     set_as_default: bool = False
@@ -170,6 +185,12 @@ class ManagedAICredentialUpdate(SQLModel):
     api_key: str | None = Field(default=None, min_length=1)
     base_url: str | None = Field(default=None, max_length=500)
     model: str | None = Field(default=None, max_length=255)
+    # Admin-curated model metadata (partial update). For ``available_models``:
+    # ``None`` = leave unchanged; ``[]`` = clear curation (fall back to
+    # discovered). ``default_model``: ``None`` leaves unchanged (use the
+    # explicit ``""`` -> normalized to clear if ever needed; today blank stays).
+    default_model: str | None = Field(default=None, max_length=255)
+    available_models: list[str] | None = None
     expiry_notification_date: datetime | None = None
     target_user_ids: list[uuid.UUID] | None = None
     set_as_default: bool | None = None

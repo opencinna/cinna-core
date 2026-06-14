@@ -86,7 +86,11 @@ def _provision_admin_credential(
         },
     )
     assert r.status_code == 200, f"Admin provision failed: {r.text}"
-    return r.json()["created"][0]
+    # POST /admin/llm-providers/ returns a managed-credential reconcile result
+    # ({record, added, ...}); the first ``added`` member carries the per-user
+    # child credential. Return it shaped so callers can read ``["id"]``.
+    member = r.json()["added"][0]
+    return {"id": member["child_credential_id"], **member}
 
 
 def _list_security_events(

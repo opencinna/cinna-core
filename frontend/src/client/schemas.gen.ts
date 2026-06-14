@@ -247,6 +247,31 @@ export const AICredentialPublicSchema = {
             ],
             title: 'Models Discovery Error'
         },
+        default_model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Model'
+        },
+        available_models: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Available Models'
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -15933,6 +15958,32 @@ export const ManagedAICredentialCreateSchema = {
             ],
             title: 'Model'
         },
+        default_model: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Model'
+        },
+        available_models: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Available Models'
+        },
         expiry_notification_date: {
             anyOf: [
                 {
@@ -16056,6 +16107,31 @@ export const ManagedAICredentialPublicSchema = {
                 }
             ],
             title: 'Model'
+        },
+        default_model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Model'
+        },
+        available_models: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Available Models'
         },
         set_as_default: {
             type: 'boolean',
@@ -16242,6 +16318,32 @@ export const ManagedAICredentialUpdateSchema = {
                 }
             ],
             title: 'Model'
+        },
+        default_model: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Model'
+        },
+        available_models: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Available Models'
         },
         expiry_notification_date: {
             anyOf: [

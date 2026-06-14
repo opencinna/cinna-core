@@ -106,6 +106,12 @@ def make_empty_credential_bag() -> dict[str, str | None]:
         "openai_compatible_model": None,
         "openai_api_key": None,
         "google_api_key": None,
+        # Per-mode admin-curated default model carried alongside the keys (see
+        # admin_curated_model_list). Set by the resolver sites that know which
+        # mode a credential serves; consumed as the resolve_model override
+        # fallback (env per-mode override → credential default → catalog).
+        "model_default_conversation": None,
+        "model_default_building": None,
     }
 
 

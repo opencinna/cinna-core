@@ -127,6 +127,20 @@ class AICredential(AICredentialBase, table=True):
         default=None, sa_column=Column(Text, nullable=True)
     )
 
+    # Admin-curated model metadata (see admin_curated_model_list). Written ONLY
+    # through the managed (admin) reconcile — never through the user-facing CRUD
+    # (these fields are absent from AICredentialCreate/AICredentialUpdate). For
+    # self-created credentials they stay NULL and every consumer falls back to
+    # today's behavior (catalog default + discovered list). Both are non-secret.
+    # - default_model: admin's preferred default model (bare concrete id). NULL =
+    #   no curated default; the catalog tier default applies.
+    # - available_models: admin-curated list of selectable model ids. NULL/empty
+    #   = fall back to per-credential auto-discovery (discovered_models).
+    default_model: str | None = Field(default=None, max_length=255)
+    available_models: list[str] | None = Field(
+        default=None, sa_column=Column(sa.JSON, nullable=True)
+    )
+
     # Relationships
     owner: "User" = Relationship(
         sa_relationship_kwargs={"foreign_keys": "[AICredential.owner_id]"}
@@ -153,6 +167,13 @@ class AICredentialPublic(AICredentialBase):
     discovered_models: list[str] | None = None
     models_discovered_at: datetime | None = None
     models_discovery_error: str | None = None
+    # Admin-curated model metadata (read-only for the owner — see
+    # admin_curated_model_list). Projected here so the SDK + native paths and the
+    # owner UI can read them; the owner cannot mutate them (no corresponding
+    # fields on AICredentialCreate/AICredentialUpdate). NULL for self-created
+    # credentials.
+    default_model: str | None = None
+    available_models: list[str] | None = None
     created_at: datetime
     updated_at: datetime
 

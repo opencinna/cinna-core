@@ -20,7 +20,7 @@
 ### Backend — Models
 
 - `backend/app/models/environments/environment.py` — `ModelHealthMode`, `ModelHealthPublic`, `AgentEnvironmentPublic.model_health` (transient), `AdminAgentEnvironmentPublic.model_health_warning`
-- `backend/app/models/credentials/ai_credential.py` — `AICredential.discovered_models`, `models_discovered_at`, `models_discovery_error`; `AICredentialPublic` exposes all three
+- `backend/app/models/credentials/ai_credential.py` — `AICredential.discovered_models`, `models_discovered_at`, `models_discovery_error`; also `default_model` (admin-curated default, takes precedence over catalog tier default) and `available_models` (admin-curated selectable list, preferred over `discovered_models` in model pickers); `AICredentialPublic` exposes all five fields
 
 ### Backend — Notifications
 
@@ -44,8 +44,8 @@
 - `frontend/src/components/Environments/EnvironmentCard.tsx` — renders `ModelHealthBadge` when `environment.model_health` is present
 - `frontend/src/components/Agents/AgentEnvironmentsTab.tsx` — renders `EnvironmentCard` (badge included via composition)
 - `frontend/src/components/Admin/Environments/AdminEnvTable.tsx` — `model_health_warning` column beside the stale column; `ModelHealthCell` renders the flag
-- `frontend/src/components/Environments/EnvironmentConfigForm.tsx` — model override input uses `discovered_models` as a `<datalist>` for suggestions
-- `frontend/src/components/UserSettings/AICredentials.tsx` — model override input uses `discovered_models` as a `<datalist>` for suggestions
+- `frontend/src/components/Environments/EnvironmentConfigForm.tsx` — model override input `<datalist>` prefers `available_models` (admin curated) when non-empty, otherwise falls back to `discovered_models`
+- `frontend/src/components/UserSettings/AICredentials.tsx` — model override input `<datalist>` same preference (`available_models` → `discovered_models`)
 
 ---
 
@@ -382,11 +382,21 @@ cause-specific:
 `columnHelper.accessor("model_health_warning", ...)` renders a `ModelHealthCell` with
 the boolean flag. Positioned beside the `StaleBadge` column.
 
-### Discovered-models `<datalist>` suggestions
+### Model-picker `<datalist>` suggestions
 
-Both `EnvironmentConfigForm.tsx` and `AICredentials.tsx` expose the credential's
-`discovered_models` list as `<datalist>` options on the model override input field.
-`const discoveredModels = selectedCredential?.discovered_models ?? []`.
+Both `EnvironmentConfigForm.tsx` and `AICredentials.tsx` expose a list of selectable
+model IDs as `<datalist>` options on the model override input field. When the selected
+credential has a non-empty admin-curated `available_models` list, that list is preferred
+over the per-credential `discovered_models`:
+
+```typescript
+const offeredModels = selectedCredential?.available_models?.length
+  ? selectedCredential.available_models
+  : (selectedCredential?.discovered_models ?? [])
+```
+
+This ensures that when an admin has explicitly curated the allowed model list, users see
+only that curated set in the picker rather than the full auto-discovered list.
 
 ---
 
@@ -402,4 +412,4 @@ Both `EnvironmentConfigForm.tsx` and `AICredentials.tsx` expose the credential's
 
 ---
 
-*Last updated: 2026-06-05 — noted probe_models shared dispatch and Test Connection as manual force-refresh path*
+*Last updated: 2026-06-14 — model-picker datalist now prefers admin-curated `available_models` over `discovered_models`; noted probe_models shared dispatch and Test Connection as manual force-refresh path*

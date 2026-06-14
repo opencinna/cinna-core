@@ -49,6 +49,7 @@ from app.services.credentials.ai_credentials_service import (
     AICredentialInUseError,
     ai_credentials_service,
 )
+from app.services.environments.model_catalog import _strip_provider_prefix
 from app.services.environments.sdk_constants import (
     is_credential_compatible_with_sdk,
 )
@@ -132,6 +133,46 @@ class ManagedAICredentialsService:
         seen: set[uuid.UUID] = set()
         return [i for i in ids if not (i in seen or seen.add(i))]
 
+    # Cap on curated list length / per-entry length (bound payload size).
+    _AVAILABLE_MODELS_MAX = 100
+    _MODEL_ID_MAX = 255
+
+    @classmethod
+    def _normalize_default_model(cls, value: str | None) -> str | None:
+        """Normalize an admin ``default_model``: trim, strip any ``provider/``
+        prefix, cap length. Blank → ``None``."""
+        if value is None:
+            return None
+        cleaned = _strip_provider_prefix(value.strip())[: cls._MODEL_ID_MAX].strip()
+        return cleaned or None
+
+    @classmethod
+    def _normalize_available_models(
+        cls, value: list[str] | None
+    ) -> list[str] | None:
+        """Normalize an admin ``available_models`` list.
+
+        Distinguishes ``None`` (no change / unset) from ``[]`` (explicit clear):
+        ``None`` is returned as-is; a list is trimmed, ``provider/``-stripped,
+        de-duplicated (order-preserving), emptied of blanks, and capped. An
+        all-blank list normalizes to ``[]`` (still an explicit clear).
+        """
+        if value is None:
+            return None
+        seen: set[str] = set()
+        out: list[str] = []
+        for raw in value:
+            if not isinstance(raw, str):
+                continue
+            entry = _strip_provider_prefix(raw.strip())[: cls._MODEL_ID_MAX].strip()
+            if not entry or entry in seen:
+                continue
+            seen.add(entry)
+            out.append(entry)
+            if len(out) >= cls._AVAILABLE_MODELS_MAX:
+                break
+        return out
+
     # ------------------------------------------------------------------ #
     # Per-child operations (delegate to ai_credentials_service)
     # ------------------------------------------------------------------ #
@@ -143,10 +184,17 @@ class ManagedAICredentialsService:
         parent: ManagedAICredential,
     ) -> None:
         """Stamp the admin-managed markers + structural parent link on a freshly
-        created child so it looks exactly like today's admin-managed rows."""
+        created child so it looks exactly like today's admin-managed rows.
+
+        Also writes through the parent's admin-curated model metadata
+        (``default_model`` / ``available_models``) directly on the child row —
+        these are non-secret plain columns, so no ``update_credential`` round-trip
+        is needed (they are not part of the encrypted ``AICredentialData``)."""
         child.is_admin_managed = True
         child.managed_by_id = parent.managed_by_id
         child.managed_credential_id = parent.id
+        child.default_model = parent.default_model
+        child.available_models = parent.available_models
         session.add(child)
         session.commit()
         session.refresh(child)
@@ -301,6 +349,27 @@ class ManagedAICredentialsService:
         # Clear-through for expiry → None (update_credential can't express it).
         if expiry_changed and parent.expiry_notification_date is None:
             child.expiry_notification_date = None
+            child.updated_at = datetime.now(timezone.utc)
+            session.add(child)
+            session.commit()
+            session.refresh(child)
+            changed = True
+
+        # Admin-curated model metadata write-through. These are non-secret plain
+        # columns (not part of AICredentialData), so we write them DIRECTLY on the
+        # child row — bypassing update_credential entirely (parallel to the expiry
+        # clear-through above). The parent values are already normalized at store
+        # time. Idempotent: only write (and only flag changed) on an actual diff.
+        # ``available_models`` distinguishes None (no change) from [] (clear) by
+        # comparing exact stored values: the parent itself carries None vs [].
+        curated_changed = False
+        if parent.default_model != child.default_model:
+            child.default_model = parent.default_model
+            curated_changed = True
+        if parent.available_models != child.available_models:
+            child.available_models = parent.available_models
+            curated_changed = True
+        if curated_changed:
             child.updated_at = datetime.now(timezone.utc)
             session.add(child)
             session.commit()
@@ -559,6 +628,10 @@ class ManagedAICredentialsService:
             encrypted_data=encrypted,
             base_url=data.base_url,
             model=data.model,
+            default_model=self._normalize_default_model(data.default_model),
+            available_models=self._normalize_available_models(
+                data.available_models
+            ),
             set_as_default=data.set_as_default,
             set_user_sdk_defaults=data.set_user_sdk_defaults,
             sdk_default_modes=data.sdk_default_modes,
@@ -597,6 +670,16 @@ class ManagedAICredentialsService:
             parent.base_url = data.base_url
         if data.model is not None:
             parent.model = data.model
+        # Curated model metadata. ``default_model``: None = no change. For
+        # ``available_models``: None = no change, [] = explicit clear → store [].
+        if data.default_model is not None:
+            parent.default_model = self._normalize_default_model(
+                data.default_model
+            )
+        if data.available_models is not None:
+            parent.available_models = self._normalize_available_models(
+                data.available_models
+            )
         if data.expiry_notification_date is not None:
             parent.expiry_notification_date = data.expiry_notification_date
         if data.set_as_default is not None:
@@ -760,6 +843,8 @@ class ManagedAICredentialsService:
             type=parent.type,
             base_url=parent.base_url,
             model=parent.model,
+            default_model=parent.default_model,
+            available_models=parent.available_models,
             set_as_default=parent.set_as_default,
             set_user_sdk_defaults=parent.set_user_sdk_defaults,
             sdk_default_modes=parent.sdk_default_modes,

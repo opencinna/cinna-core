@@ -159,11 +159,30 @@ def _evaluate_mode(
         environment.agent_sdk_building if mode == "building"
         else environment.agent_sdk_conversation
     )
-    override = (
+    env_override = (
         environment.model_override_building if mode == "building"
         else environment.model_override_conversation
     )
     engine, provider = _split_engine_provider(sdk_value)
+
+    # Resolve the credential that backs this mode up-front so we can apply the
+    # SAME precedence the lifecycle uses (env per-mode override → credential
+    # admin-curated default_model → catalog tier default). Without mirroring the
+    # credential default here a perfectly valid admin default would be evaluated
+    # against the catalog default and could be falsely flagged
+    # unknown_model/stale_default (see admin_curated_model_list).
+    credential = _linked_credential_for_mode(
+        session, environment, user_id, sdk_value, mode
+    )
+    credential_default = (
+        getattr(credential, "default_model", None) if credential else None
+    )
+    # Guard: only a real non-empty string is a usable override (the column is
+    # str|None; the isinstance check also keeps mocked/spec'd rows from leaking a
+    # non-string attribute into resolve_model).
+    if not isinstance(credential_default, str) or not credential_default.strip():
+        credential_default = None
+    override = env_override or credential_default
 
     effective_model = resolve_model(
         engine=engine,
@@ -182,7 +201,12 @@ def _evaluate_mode(
     if provider == "openai_compatible":
         return ModelHealthMode(mode=mode, model=effective_model, status=STATUS_OK)
 
-    has_override = bool(override)
+    # ``has_override`` drives the cause classification (frozen_override vs
+    # stale_default). Only a USER-set env override counts as a "frozen override"
+    # the user must edit/clear; an admin-curated credential default behaves like
+    # a default (the user fixes it by restarting / the admin re-curates), so it
+    # is NOT treated as an override here.
+    has_override = bool(env_override)
 
     # The catalog tier default for this mode (used as the suggested replacement).
     suggested = resolve_model(
@@ -194,9 +218,7 @@ def _evaluate_mode(
         suggested = None
 
     # 2. Per-credential discovered models (most authoritative, per key).
-    credential = _linked_credential_for_mode(
-        session, environment, user_id, sdk_value, mode
-    )
+    # ``credential`` was already resolved above for the default precedence.
     discovered = credential.discovered_models if credential else None
 
     if discovered:

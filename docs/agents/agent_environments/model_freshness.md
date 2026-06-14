@@ -47,6 +47,19 @@ fallback when no discovery data exists yet.
 
 Users can also **force an immediate refresh** for a saved credential by clicking **Test Connection** in the Edit AI Credential dialog — this probes the provider and persists the fresh model list right away, without waiting for the next cron run. See [AI Credentials](../../application/ai_credentials/ai_credentials.md) for details.
 
+### Admin-Curated Credential Default
+
+For credentials provisioned by an admin (see [Admin-Provisioned AI Credentials](../../application/ai_credentials/admin_ai_credential_provisioning.md)), the `AICredential` row may carry a `default_model` value set by the superuser. This value takes precedence over the catalog tier default in the effective-model resolution, **but it is still overridden by any explicit per-mode `model_override_*` the user sets** on the environment.
+
+Precedence (in effect order):
+1. Environment per-mode override (`model_override_building` / `model_override_conversation`) — always wins.
+2. Admin-curated `default_model` on the linked credential — when set and the above is absent.
+3. Catalog tier default.
+
+The model-health service mirrors this same precedence so a valid admin default is never falsely flagged as `unknown_model` or `stale_default`. Additionally, `has_override` (used to distinguish `frozen_override` from `stale_default` in badge copy) is keyed only on a user-set env override — not on the credential default — so the CTA stays accurate.
+
+Model-picker datalists (`EnvironmentConfigForm`, user `AICredentials`) prefer `available_models` over `discovered_models` for selection suggestions when the credential has a non-empty admin-curated list.
+
 ### Model Health Signal
 
 `model_health_service.evaluate_environment` computes a per-mode health classification without
@@ -153,4 +166,4 @@ a false alarm when it simply has no data yet.
 
 ---
 
-*Last updated: 2026-06-05 — noted manual force-refresh via Test Connection*
+*Last updated: 2026-06-14 — admin-curated `default_model` precedence and `available_models` datalist preference*
