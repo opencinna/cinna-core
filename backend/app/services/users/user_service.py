@@ -24,8 +24,8 @@ from app.models import (
     UserUpdate,
 )
 from app.models.events import security_event as security_event_constants
-from app.models.users.user import UserRole
 from app.services.users.auth_service import AuthService
+from app.services.users.role_service import RoleService
 from app.utils import (
     generate_password_reset_token,
     generate_reset_password_email,
@@ -46,18 +46,19 @@ class UserService:
     def create_user(*, session: Session, user_create: UserCreate) -> User:
         """Create a new user with hashed password.
 
-        New users default to ``agent-user``; superusers are upgraded to
-        ``admin`` so the ``role ⇔ is_superuser`` invariant holds for
-        freshly created rows the same way the Phase 3 migration does
-        for existing rows.
+        Superusers are upgraded to ``admin`` so the
+        ``role ⇔ is_superuser`` invariant holds for freshly created rows.
+        Non-superusers default to the operator-configured
+        ``DEFAULT_USER_ROLE`` (``agent-user`` by default), resolved via
+        ``RoleService.derive_default_role`` — the single source of truth
+        for the creation-time default.
         """
         # Honour caller-provided role if present (e.g., admin creating
-        # a developer); otherwise derive from is_superuser.
+        # a developer); otherwise derive from is_superuser + config.
         provided = user_create.model_dump(exclude_unset=True)
         if "role" not in provided:
-            provided_role = (
-                UserRole.ADMIN.value if user_create.is_superuser
-                else UserRole.USER.value
+            provided_role = RoleService.derive_default_role(
+                is_superuser=user_create.is_superuser
             )
         else:
             provided_role = user_create.role

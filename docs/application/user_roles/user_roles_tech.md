@@ -152,4 +152,38 @@ The Bundle tab on the agent detail page remains developer-only.
 
 ## Configuration
 
-No additional environment variables required. The `role` column default is set in the `User` model (`Field(default=UserRole.USER.value)`).
+### `DEFAULT_USER_ROLE`
+
+Controls the `UserRole` assigned to newly created **non-superuser** accounts at creation time. Set it in the project root `.env` file.
+
+| Property | Value |
+|----------|-------|
+| Type | `Literal["agent-user", "agent-developer"]` |
+| Default | `"agent-user"` |
+| File | `backend/app/core/config.py`, field `DEFAULT_USER_ROLE` |
+
+**Allowed values:**
+- `agent-user` — default; new signups can install, chat, and manage settings but cannot create agents or publish bundles
+- `agent-developer` — new signups start with full developer access; useful for internal/team deployments where every account is a developer
+
+`admin` is intentionally excluded from the `Literal` type. It cannot be configured here — that would break the `role ⇔ is_superuser` invariant. A present-but-invalid value (e.g. `admin` or a typo) causes `Settings()` to raise a `ValidationError` at startup and the backend will not start. This fail-loud behaviour is consistent with the existing `ENVIRONMENT: Literal[...]` pattern in `config.py`: a mis-configured provisioning value is a security-relevant error that should never be silently masked.
+
+**Unset/empty** falls back to `agent-user` via `env_ignore_empty=True` — behaviour is identical to before the setting was introduced.
+
+### Single source of truth: `RoleService.derive_default_role`
+
+`RoleService.derive_default_role(*, is_superuser: bool) -> str` in `backend/app/services/users/role_service.py` is the only place that translates the setting into an actual role value:
+
+- `is_superuser=True` → always returns `'admin'`, ignoring `DEFAULT_USER_ROLE`
+- `is_superuser=False` → returns `settings.DEFAULT_USER_ROLE`; defends against any future config widening by falling back to `'agent-user'` if the value is outside `{'agent-user', 'agent-developer'}`
+
+Both creation paths call through this helper:
+
+- **Password signup** — `UserService.create_user` in `backend/app/services/users/user_service.py`: calls `derive_default_role` when the caller does not supply an explicit `role`. An explicit caller-provided role (e.g. an admin creating a developer through the admin form) is honoured as-is and is not overridden.
+- **Google OAuth first login** — `AuthService.create_user_from_google` in `backend/app/services/users/auth_service.py`: always calls `derive_default_role(is_superuser=False)` directly, since Google first-login users are always non-superusers.
+
+The setting affects **creation time only**. It never touches existing users and it never overrides the superuser → `admin` mapping.
+
+### Persistence-layer fallback
+
+The `role` column in the `user` table has `DEFAULT 'agent-user'` at the database level (set in the Phase 3 migration). This is a persistence-layer safety net; `derive_default_role` is the authoritative runtime gate.

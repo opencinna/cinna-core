@@ -12,6 +12,7 @@ from sqlmodel import Session, select
 from app.core import security
 from app.core.config import settings
 from app.models import User, UserMfaChallenge
+from app.services.users.role_service import RoleService
 
 
 @dataclass
@@ -223,6 +224,10 @@ class AuthService:
             hashed_password=None,
             is_active=True,
             is_superuser=False,
+            # Google first-login users are always non-superuser, so they
+            # pick up the operator-configured DEFAULT_USER_ROLE via the
+            # single-source-of-truth helper instead of the column default.
+            role=RoleService.derive_default_role(is_superuser=False),
         )
         session.add(db_obj)
         session.commit()
