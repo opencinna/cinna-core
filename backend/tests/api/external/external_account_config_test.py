@@ -166,6 +166,10 @@ def test_desktop_token_returns_providers_with_api_key(
     # multiple credentials of the same provider family.
     assert provider["credential_name"] == "Desktop Config Test Key"
     assert provider["descriptor_slug"] == "claude"
+    # Curated default model is exposed (None for a self-created key with no
+    # admin curation) so native clients can prefer it over the legacy `model`.
+    assert "default_model" in provider
+    assert provider["default_model"] is None
     assert "credential_id" in provider
     assert "is_default" in provider
     assert "is_admin_managed" in provider
