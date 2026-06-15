@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 from sqlalchemy.orm.attributes import flag_modified
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 from app.models import Agent, AgentCreate, AgentPublic, AgentUpdate, User, SessionCreate, AgentHandoverConfig, AgentEnvironment, Session as ChatSession, AgentSdkConfig, InputTaskCreate
 from app.models.environments.environment import AgentEnvironmentCreate
 from app.services.environments.environment_service import EnvironmentService
@@ -289,8 +289,48 @@ class AgentService:
         return list(agents), count
 
     @staticmethod
+    def _enforce_agent_creation_limit(*, session: Session, user: User) -> None:
+        """Raise ValueError if ``user`` is at/over their agent-creation cap.
+
+        - superuser → unlimited (returns immediately)
+        - else limit = AGENT_LIMIT_CONFIRMED if user.email_confirmed
+                       else AGENT_LIMIT_UNCONFIRMED
+
+        Counts user-CREATED standalone agents only:
+        ``owner_id == user.id AND bundle_uuid IS NULL AND
+        is_publisher_install == False``. Bundle installs (consumer copies of
+        others' work) do NOT count (D8) — the anti-abuse concern is users
+        spinning up many original agents, each with its own env/mailbox.
+        """
+        if user.is_superuser:
+            return
+        limit = (
+            settings.AGENT_LIMIT_CONFIRMED
+            if user.email_confirmed
+            else settings.AGENT_LIMIT_UNCONFIRMED
+        )
+        count = session.exec(
+            select(func.count())
+            .select_from(Agent)
+            .where(
+                Agent.owner_id == user.id,
+                Agent.bundle_uuid.is_(None),  # type: ignore[union-attr]
+                Agent.is_publisher_install == False,  # noqa: E712
+            )
+        ).one()
+        if count >= limit:
+            if user.email_confirmed:
+                raise ValueError(f"Agent limit reached ({limit}).")
+            raise ValueError(
+                f"Agent limit reached ({limit}). "
+                f"Confirm your email to raise the limit to "
+                f"{settings.AGENT_LIMIT_CONFIRMED}."
+            )
+
+    @staticmethod
     async def create_agent(session: Session, user_id: UUID, data: AgentCreate, user: User) -> Agent:
         """Create new agent with default environment"""
+        AgentService._enforce_agent_creation_limit(session=session, user=user)
         from app.services.bundles.bundle_id_service import BundleIdService
 
         # Generate the agent UUID up front so the auto-generated bundle_id can
@@ -632,6 +672,11 @@ class AgentService:
         environment = None
 
         try:
+            # Enforce the agent-creation cap before any work (mirrors
+            # create_agent). The route also checks this up front so the
+            # client gets a clean 4xx instead of a mid-stream error.
+            AgentService._enforce_agent_creation_limit(session=session, user=user)
+
             # Step 1: Create agent from description
             yield {
                 "step": "creating_agent",

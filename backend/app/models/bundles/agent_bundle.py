@@ -110,6 +110,7 @@ class AgentBundlePublic(SQLModel):
     publisher_handle: str | None = None  # e.g. truncated name; never email
     publisher_name: str | None = None
     publisher_email: str | None = None
+    publisher_email_confirmed: bool = False
     latest_revision_id: uuid.UUID | None
     latest_revision_number: int | None = None
     is_listed: bool

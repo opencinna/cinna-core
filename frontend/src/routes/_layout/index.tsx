@@ -582,6 +582,24 @@ function Dashboard() {
     return <PendingItems />
   }
 
+  // The server-wide disclaimer is blocking and must be acknowledged before
+  // anything else — including the API-key onboarding screen below. A brand-new
+  // user has no AI credentials, so without this gate they would be sent
+  // straight to ApiKeyOnboarding and never see the disclaimer (the modal was
+  // only mounted in the main return, which the onboarding/no-active-env early
+  // returns skip). Gate it ahead of every other early return so it always
+  // appears first. Once acknowledged, this re-evaluates to false and the
+  // normal flow (onboarding, then Getting Started) resumes.
+  if (shouldShowDisclaimer && disclaimer) {
+    return (
+      <DisclaimerModal
+        open
+        markdown={disclaimer.markdown}
+        onAcknowledge={acknowledgeDisclaimer}
+      />
+    )
+  }
+
   // Show onboarding if user doesn't have Anthropic API key and hasn't skipped
   if (!hasAnthropicKey && !onboardingSkipped) {
     return (
@@ -893,19 +911,11 @@ function Dashboard() {
             onFileUploaded={handleFileUploaded}
           />
 
-          {/* Server-wide disclaimer — shown first, before Getting Started. */}
-          {disclaimer && (
-            <DisclaimerModal
-              open={shouldShowDisclaimer}
-              markdown={disclaimer.markdown}
-              onAcknowledge={acknowledgeDisclaimer}
-            />
-          )}
-
-          {/* Getting Started Modal - shown once after API key onboarding,
-              gated so it never appears over an unacknowledged disclaimer. */}
+          {/* Getting Started Modal - shown once after API key onboarding.
+              The disclaimer is handled by a blocking early return above, so by
+              the time we render here it has already been acknowledged. */}
           <GettingStartedModal
-            open={showGettingStarted && !shouldShowDisclaimer}
+            open={showGettingStarted}
             onOpenChange={setShowGettingStarted}
           />
         </div>

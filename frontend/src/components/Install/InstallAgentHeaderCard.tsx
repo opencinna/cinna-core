@@ -12,6 +12,7 @@ import type {
   CatalogEntryPublic,
   InstallContextSpec,
 } from "@/client"
+import { PublisherEmailConfirmedIcon } from "@/components/Common/PublisherEmailConfirmedIcon"
 import { Badge } from "@/components/ui/badge"
 import {
   Card,
@@ -47,16 +48,28 @@ export function InstallAgentHeaderCard({
             <CardTitle className="text-xl break-words">
               {entry.display_name}
             </CardTitle>
-            <p className="text-xs text-muted-foreground mt-1">
-              by{" "}
-              {entry.publisher_name ||
-                entry.publisher_email ||
-                entry.publisher_handle ||
-                "unknown publisher"}
+            <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+              <span className="truncate">
+                by{" "}
+                {entry.publisher_name ||
+                  entry.publisher_email ||
+                  entry.publisher_handle ||
+                  "unknown publisher"}
+              </span>
+              {!entry.publisher_name && (
+                <PublisherEmailConfirmedIcon
+                  confirmed={entry.publisher_email_confirmed ?? false}
+                  hasEmail={!!entry.publisher_email}
+                />
+              )}
             </p>
             {entry.publisher_name && entry.publisher_email && (
-              <p className="text-xs text-muted-foreground truncate">
-                {entry.publisher_email}
+              <p className="text-xs text-muted-foreground truncate flex items-center gap-1">
+                <span className="truncate">{entry.publisher_email}</span>
+                <PublisherEmailConfirmedIcon
+                  confirmed={entry.publisher_email_confirmed ?? false}
+                  hasEmail={!!entry.publisher_email}
+                />
               </p>
             )}
           </div>

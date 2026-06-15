@@ -726,6 +726,10 @@ async def account_create_agent(
         )
     except WorkspaceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ValueError as e:
+        # Agent-creation limit (and other domain rule failures) raised by
+        # AgentService.create_agent through the account-CLI path.
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
 
 @router.post("/account/connect/agent-api", response_model=ConnectAgentApiResponse)

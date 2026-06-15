@@ -1833,6 +1833,20 @@ class InputTaskService:
                 "error": "No outgoing email server configured for this agent",
             }
 
+        # Outbound-email gate (anti-abuse): the platform user invoking the
+        # reply must be email-confirmed. Reject at enqueue time with clear
+        # feedback; the send-time gate is defense-in-depth.
+        from app.models.users.user import User
+        from app.services.users.email_confirmation_service import (
+            EmailConfirmationService,
+        )
+        reply_user = db_session.get(User, user_id)
+        if not EmailConfirmationService.is_outbound_email_allowed(reply_user):
+            return {
+                "success": False,
+                "error": "Your email is not confirmed. Confirm your email to send replies.",
+            }
+
         # Create outgoing email queue entry
         queue_entry = OutgoingEmailQueue(
             agent_id=source_agent_id,

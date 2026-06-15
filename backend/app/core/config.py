@@ -165,6 +165,21 @@ class Settings(BaseSettings):
 
     EMAIL_RESET_TOKEN_EXPIRE_HOURS: int = 48
 
+    # ── Email confirmation (anti-abuse outbound-email gate) ──────────────
+    # Expiry of the JWT confirm-email token (mirrors EMAIL_RESET_TOKEN_EXPIRE_HOURS).
+    EMAIL_CONFIRM_TOKEN_EXPIRE_HOURS: int = 48
+    # Minimum seconds between resend-confirmation emails for a given user.
+    CONFIRMATION_EMAIL_COOLDOWN_SECONDS: int = 300  # 5 min between resends
+    # Minimum seconds between password-recovery emails for a given user.
+    # Stored as a column on the target user row (the recovery endpoint is
+    # public/by-email and may be served by multiple workers, so an in-memory
+    # throttle cannot rate-limit it reliably).
+    PASSWORD_RECOVERY_EMAIL_COOLDOWN_SECONDS: int = 300  # 5 min between recovery sends
+    # Agent-creation caps keyed on confirmation status. Superusers are
+    # unlimited (short-circuit on is_superuser — no constant).
+    AGENT_LIMIT_UNCONFIRMED: int = 5
+    AGENT_LIMIT_CONFIRMED: int = 50
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def emails_enabled(self) -> bool:

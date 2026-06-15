@@ -17,6 +17,8 @@ from .users.user import (
     UpdatePassword,
     Message,
     NewPassword,
+    ConfirmEmailRequest,
+    ResendConfirmationResponse,
     Token,
     TokenPayload,
     SetPassword,

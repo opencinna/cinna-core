@@ -157,6 +157,23 @@ def generate_new_account_email(
     return EmailData(html_content=html_content, subject=subject)
 
 
+def generate_confirmation_email(email_to: str, email: str, token: str) -> EmailData:
+    project_name = settings.PROJECT_NAME
+    subject = f"{project_name} - Confirm your email address"
+    link = f"{settings.FRONTEND_HOST}/confirm-email?token={token}"
+    html_content = render_email_template(
+        template_name="confirm_email.html",
+        context={
+            "project_name": settings.PROJECT_NAME,
+            "username": email,
+            "email": email_to,
+            "valid_hours": settings.EMAIL_CONFIRM_TOKEN_EXPIRE_HOURS,
+            "link": link,
+        },
+    )
+    return EmailData(html_content=html_content, subject=subject)
+
+
 def generate_password_reset_token(email: str) -> str:
     delta = timedelta(hours=settings.EMAIL_RESET_TOKEN_EXPIRE_HOURS)
     now = datetime.now(timezone.utc)
@@ -178,6 +195,41 @@ def verify_password_reset_token(token: str) -> str | None:
         return str(decoded_token["sub"])
     except InvalidTokenError:
         return None
+
+
+# ── Email confirmation tokens ───────────────────────────────────────────
+# Parallel to the password-reset token pair, but with a distinct
+# ``purpose`` claim so a reset token can never be replayed as a confirm
+# token (and vice versa). ``verify_email_confirmation_token`` *requires*
+# the purpose claim; password-reset tokens carry none and are rejected.
+_EMAIL_CONFIRM_PURPOSE = "email_confirm"
+
+
+def generate_email_confirmation_token(email: str) -> str:
+    delta = timedelta(hours=settings.EMAIL_CONFIRM_TOKEN_EXPIRE_HOURS)
+    now = datetime.now(timezone.utc)
+    expires = now + delta
+    exp = expires.timestamp()
+    encoded_jwt = jwt.encode(
+        {"exp": exp, "nbf": now, "sub": email, "purpose": _EMAIL_CONFIRM_PURPOSE},
+        settings.SECRET_KEY,
+        algorithm=security.ALGORITHM,
+    )
+    return encoded_jwt
+
+
+def verify_email_confirmation_token(token: str) -> str | None:
+    try:
+        decoded_token = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
+        )
+    except InvalidTokenError:
+        return None
+    # Reject any token lacking the confirmation purpose (e.g. a
+    # password-reset token) so token types cannot cross-pollinate.
+    if decoded_token.get("purpose") != _EMAIL_CONFIRM_PURPOSE:
+        return None
+    return str(decoded_token["sub"])
 
 
 def get_base_url(request) -> str:

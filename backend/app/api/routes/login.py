@@ -13,6 +13,7 @@ from app.api.routes._mfa_errors import translate_mfa_error
 from app.core import security
 from app.core.config import settings
 from app.models import (
+    ConfirmEmailRequest,
     LoginResponse,
     LoginToken,
     Message,
@@ -24,6 +25,7 @@ from app.models import (
     User,
     UserPublic,
 )
+from app.services.users.email_confirmation_service import EmailConfirmationService
 from app.services.users.mfa_service import FIRST_FACTOR_PASSWORD, MfaService
 from app.services.users.user_service import UserService
 from app.utils import (
@@ -259,6 +261,39 @@ def reset_password(session: SessionDep, body: NewPassword) -> Message:
         else:
             raise HTTPException(status_code=404, detail=detail)
     return Message(message="Password updated successfully")
+
+
+@router.post("/confirm-email/")
+def confirm_email(session: SessionDep, body: ConfirmEmailRequest) -> Message:
+    """
+    Confirm an email address from the token in the confirmation link.
+
+    Public, token-bearing, idempotent — confirming an already-confirmed
+    user returns success without resending anything.
+    """
+    try:
+        EmailConfirmationService.confirm_email(session=session, token=body.token)
+    except ValueError as e:
+        detail = str(e)
+        if detail == "Invalid token":
+            raise HTTPException(status_code=400, detail=detail)
+        if detail == "Inactive user":
+            raise HTTPException(status_code=403, detail=detail)
+        raise HTTPException(status_code=404, detail=detail)
+    return Message(message="Email confirmed successfully")
+
+
+@router.post("/resend-confirmation/{email}")
+def resend_confirmation(email: str, session: SessionDep) -> Message:
+    """
+    Public, by-email resend of the confirmation email.
+
+    Non-enumerating: always returns the same generic success message
+    whether or not the email exists / is already confirmed / is in
+    cooldown. The actual send (if any) happens silently server-side.
+    """
+    EmailConfirmationService.resend_confirmation(session=session, email=email)
+    return Message(message="If the email is registered and unconfirmed, a confirmation email has been sent")
 
 
 @router.post(

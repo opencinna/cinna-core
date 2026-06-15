@@ -146,9 +146,13 @@ async def create_agent(
 
     Phase 3 — restricted to ``agent-developer`` and ``admin`` roles.
     """
-    agent = await AgentService.create_agent(
-        session=session, user_id=current_user.id, data=agent_in, user=current_user
-    )
+    try:
+        agent = await AgentService.create_agent(
+            session=session, user_id=current_user.id, data=agent_in, user=current_user
+        )
+    except ValueError as e:
+        # Agent-creation limit (and other domain rule failures).
+        raise HTTPException(status_code=403, detail=str(e))
     return agent
 
 
@@ -167,6 +171,16 @@ async def create_agent_with_flow(
 
     Phase 3 — restricted to ``agent-developer`` and ``admin`` roles.
     """
+    # Enforce the agent-creation cap before the stream starts so the client
+    # gets a clean 403 rather than an error event mid-stream. The service
+    # re-checks defensively.
+    try:
+        AgentService._enforce_agent_creation_limit(
+            session=session, user=current_user
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
     async def event_generator():
         async for event in AgentService.create_agent_flow(
             session=session,

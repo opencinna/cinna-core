@@ -140,6 +140,7 @@ class ExternalAccountConfigService:
             credential_id=credential.id,
             provider_type=cred_type,
             display_name=display_name,
+            credential_name=credential.name,
             descriptor_slug=slug,
             base_url=data.base_url,
             model=model,

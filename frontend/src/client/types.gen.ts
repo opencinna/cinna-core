@@ -215,6 +215,7 @@ export type AccountConfigProviderPublic = {
     credential_id: string;
     provider_type: AICredentialType;
     display_name: string;
+    credential_name: string;
     descriptor_slug: string;
     base_url?: (string | null);
     model?: (string | null);
@@ -659,6 +660,7 @@ export type AgentBundlePublic = {
     publisher_handle?: (string | null);
     publisher_name?: (string | null);
     publisher_email?: (string | null);
+    publisher_email_confirmed?: boolean;
     latest_revision_id: (string | null);
     latest_revision_number?: (number | null);
     is_listed: boolean;
@@ -2035,6 +2037,7 @@ export type CatalogEntryPublic = {
     publisher_handle: (string | null);
     publisher_name?: (string | null);
     publisher_email?: (string | null);
+    publisher_email_confirmed?: boolean;
     visibility: string;
     latest_revision_id: (string | null);
     latest_revision_number: (number | null);
@@ -2155,6 +2158,13 @@ export type CLITokenPublic = {
 export type CLITokensPublic = {
     data: Array<CLITokenPublic>;
     count: number;
+};
+
+/**
+ * POST body for ``/confirm-email/`` — the token from the email link.
+ */
+export type ConfirmEmailRequest = {
+    token: string;
 };
 
 /**
@@ -4132,6 +4142,25 @@ export type RefreshKnowledgeResponse = {
 };
 
 /**
+ * Response for the authenticated resend-confirmation endpoint.
+ *
+ * ``resend_available_at`` is the computed earliest time the next resend
+ * is permitted (``last_confirmation_email_sent_at + cooldown``); the UI
+ * uses it to disable the button with a countdown. ``None`` when no send
+ * has happened yet (or already confirmed).
+ *
+ * ``sent`` reports whether an email was actually dispatched on this call
+ * (False when suppressed by the cooldown, an already-confirmed account, or
+ * disabled email delivery) so the UI never claims success when nothing was
+ * sent.
+ */
+export type ResendConfirmationResponse = {
+    message: string;
+    sent?: boolean;
+    resend_available_at?: (string | null);
+};
+
+/**
  * Request to respond to a sub-task from source agent.
  */
 export type RespondToTaskRequest = {
@@ -5064,6 +5093,9 @@ export type UserPublic = {
     two_factor_enabled?: boolean;
     has_passkey?: boolean;
     has_totp?: boolean;
+    email_confirmed?: boolean;
+    email_confirmed_at?: (string | null);
+    confirmation_resend_available_at?: (string | null);
 };
 
 /**
@@ -5091,6 +5123,9 @@ export type UserPublicWithAICredentials = {
     two_factor_enabled?: boolean;
     has_passkey?: boolean;
     has_totp?: boolean;
+    email_confirmed?: boolean;
+    email_confirmed_at?: (string | null);
+    confirmation_resend_available_at?: (string | null);
     has_anthropic_api_key?: boolean;
     has_openai_api_key?: boolean;
     has_google_ai_api_key?: boolean;
@@ -7683,6 +7718,18 @@ export type LoginResetPasswordData = {
 
 export type LoginResetPasswordResponse = (Message);
 
+export type LoginConfirmEmailData = {
+    requestBody: ConfirmEmailRequest;
+};
+
+export type LoginConfirmEmailResponse = (Message);
+
+export type LoginResendConfirmationData = {
+    email: string;
+};
+
+export type LoginResendConfirmationResponse = (Message);
+
 export type LoginRecoverPasswordHtmlContentData = {
     email: string;
 };
@@ -8488,6 +8535,8 @@ export type UsersSetPasswordMeData = {
 };
 
 export type UsersSetPasswordMeResponse = (Message);
+
+export type UsersResendConfirmationMeResponse = (ResendConfirmationResponse);
 
 export type UsersReadMyRoleResponse = (UserRolePublic);
 

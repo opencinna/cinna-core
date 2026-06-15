@@ -25,6 +25,10 @@ class AccountConfigProviderPublic(SQLModel):
     credential_id: uuid.UUID
     provider_type: AICredentialType
     display_name: str
+    # The credential's own user-given name (e.g. "Work Claude"). Native clients
+    # append this to the provider-family display_name so multiple credentials of
+    # the same provider are distinguishable instead of all reading "Claude".
+    credential_name: str
     descriptor_slug: str
     base_url: str | None = None
     model: str | None = None
