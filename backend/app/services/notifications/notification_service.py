@@ -89,6 +89,15 @@ class SystemNotificationService:
             if not user or not user.is_active or not user.email:
                 return
 
+            # Outbound-email gate (anti-abuse): unconfirmed users do not
+            # receive system notifications. This single choke point covers
+            # every current and future notification type.
+            from app.services.users.email_confirmation_service import (
+                EmailConfirmationService,
+            )
+            if not EmailConfirmationService.is_outbound_email_allowed(user):
+                return
+
             if not NotificationSettingService.is_email_enabled(
                 db_session, user_id, notification_type
             ):

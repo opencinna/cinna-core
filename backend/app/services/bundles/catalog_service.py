@@ -178,11 +178,13 @@ class CatalogService:
         # row matches the trust model of an internal instance catalog.
         publisher_name: str | None = None
         publisher_email: str | None = None
+        publisher_email_confirmed = False
         if bundle.publisher_user_id:
             publisher = session.get(User, bundle.publisher_user_id)
             if publisher:
                 publisher_name = publisher.full_name or None
                 publisher_email = publisher.email or None
+                publisher_email_confirmed = bool(publisher.email_confirmed)
 
         return CatalogEntryPublic(
             bundle_id=bundle.bundle_id,
@@ -192,6 +194,7 @@ class CatalogService:
             publisher_handle=publisher_handle,
             publisher_name=publisher_name,
             publisher_email=publisher_email,
+            publisher_email_confirmed=publisher_email_confirmed,
             visibility=bundle.visibility,
             latest_revision_id=bundle.latest_revision_id,
             latest_revision_number=latest_rev_number,

@@ -4,12 +4,13 @@ User Service - Business logic for user management operations.
 import json
 import secrets
 import uuid
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, timezone, UTC
 from typing import Any
 
 from sqlalchemy import or_
 from sqlmodel import Session, col, delete, func, select
 
+from app.core.config import settings
 from app.core.security import get_password_hash, verify_password
 from app.models import (
     SecurityEvent,
@@ -24,8 +25,8 @@ from app.models import (
     UserUpdate,
 )
 from app.models.events import security_event as security_event_constants
-from app.models.users.user import UserRole
 from app.services.users.auth_service import AuthService
+from app.services.users.role_service import RoleService
 from app.utils import (
     generate_password_reset_token,
     generate_reset_password_email,
@@ -46,29 +47,36 @@ class UserService:
     def create_user(*, session: Session, user_create: UserCreate) -> User:
         """Create a new user with hashed password.
 
-        New users default to ``agent-user``; superusers are upgraded to
-        ``admin`` so the ``role ⇔ is_superuser`` invariant holds for
-        freshly created rows the same way the Phase 3 migration does
-        for existing rows.
+        Superusers are upgraded to ``admin`` so the
+        ``role ⇔ is_superuser`` invariant holds for freshly created rows.
+        Non-superusers default to the operator-configured
+        ``DEFAULT_USER_ROLE`` (``agent-user`` by default), resolved via
+        ``RoleService.derive_default_role`` — the single source of truth
+        for the creation-time default.
         """
         # Honour caller-provided role if present (e.g., admin creating
-        # a developer); otherwise derive from is_superuser.
+        # a developer); otherwise derive from is_superuser + config.
         provided = user_create.model_dump(exclude_unset=True)
         if "role" not in provided:
-            provided_role = (
-                UserRole.ADMIN.value if user_create.is_superuser
-                else UserRole.USER.value
+            provided_role = RoleService.derive_default_role(
+                is_superuser=user_create.is_superuser
             )
         else:
             provided_role = user_create.role
 
-        db_obj = User.model_validate(
-            user_create,
-            update={
-                "hashed_password": get_password_hash(user_create.password),
-                "role": provided_role,
-            },
-        )
+        update: dict[str, Any] = {
+            "hashed_password": get_password_hash(user_create.password),
+            "role": provided_role,
+        }
+        # Superusers are trusted/admin-bootstrapped and are auto-confirmed —
+        # an unconfirmed superuser would have its own notifications/email
+        # gated and agent limit clamped, which defeats the purpose. The
+        # anti-abuse gate targets ordinary public signups.
+        if user_create.is_superuser:
+            update["email_confirmed"] = True
+            update["email_confirmed_at"] = datetime.now(timezone.utc)
+
+        db_obj = User.model_validate(user_create, update=update)
         session.add(db_obj)
         session.commit()
         session.refresh(db_obj)
@@ -168,7 +176,16 @@ class UserService:
             )
 
         user_create = UserCreate(email=email, password=password, full_name=full_name)
-        return UserService.create_user(session=session, user_create=user_create)
+        user = UserService.create_user(session=session, user_create=user_create)
+        # First confirmation email at signup (force=True bypasses cooldown).
+        # Self-service signups start unconfirmed; this lets them confirm.
+        from app.services.users.email_confirmation_service import (
+            EmailConfirmationService,
+        )
+        EmailConfirmationService.send_confirmation_email(
+            session=session, user=user, force=True
+        )
+        return user
 
     @staticmethod
     def create_email_user(*, session: Session, email: str) -> User:
@@ -190,7 +207,18 @@ class UserService:
             password=random_password,
             is_active=True,
         )
-        return UserService.create_user(session=session, user_create=user_create)
+        user = UserService.create_user(session=session, user_create=user_create)
+        # Email-integration auto-created users start unconfirmed (D4). Send a
+        # confirmation email so they can later confirm if they become an
+        # operator; their agent-reply path remains gated on the agent/install
+        # OWNER, not this external sender, so legitimate replies are unaffected.
+        from app.services.users.email_confirmation_service import (
+            EmailConfirmationService,
+        )
+        EmailConfirmationService.send_confirmation_email(
+            session=session, user=user, force=True
+        )
+        return user
 
     @staticmethod
     def update_password(
@@ -317,6 +345,12 @@ class UserService:
         """
         Send a password recovery email.
 
+        Password recovery is NEVER gated by ``email_confirmed`` — an
+        unconfirmed user must still be able to recover their password.
+        A per-user cooldown (``last_password_recovery_email_sent_at``)
+        rate-limits repeated sends; while cooling down the send is skipped
+        SILENTLY so the public response stays a generic "email sent".
+
         Raises:
             ValueError: If user not found.
         """
@@ -325,6 +359,18 @@ class UserService:
             raise ValueError(
                 "The user with this email does not exist in the system."
             )
+        # Cooldown — skip the send silently if still cooling down (preserve
+        # the generic success message; never raise here).
+        last_sent = user.last_password_recovery_email_sent_at
+        if last_sent is not None:
+            if last_sent.tzinfo is None:
+                last_sent = last_sent.replace(tzinfo=timezone.utc)
+            interval = timedelta(
+                seconds=settings.PASSWORD_RECOVERY_EMAIL_COOLDOWN_SECONDS
+            )
+            if datetime.now(timezone.utc) - last_sent < interval:
+                return
+
         password_reset_token = generate_password_reset_token(email=email)
         email_data = generate_reset_password_email(
             email_to=user.email, email=email, token=password_reset_token
@@ -334,3 +380,6 @@ class UserService:
             subject=email_data.subject,
             html_content=email_data.html_content,
         )
+        user.last_password_recovery_email_sent_at = datetime.now(timezone.utc)
+        session.add(user)
+        session.commit()

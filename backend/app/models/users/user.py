@@ -124,6 +124,20 @@ class User(UserBase, table=True):
     two_factor_enrolled_at: datetime | None = Field(default=None)
     # Last successful second-factor verification (used by Security tab UI).
     two_factor_last_used_at: datetime | None = Field(default=None)
+    # ── Email confirmation (anti-abuse outbound-email gate) ──────────────
+    # The confirmation marker. Gates all non-recovery outbound email. New
+    # rows default unconfirmed; existing rows are backfilled to True by the
+    # migration (server_default true, then default dropped). Google-OAuth
+    # users are auto-confirmed.
+    email_confirmed: bool = Field(default=False)
+    # When the email was confirmed (audit / UI).
+    email_confirmed_at: datetime | None = Field(default=None)
+    # Cooldown anchor for resend-confirmation (last send timestamp).
+    last_confirmation_email_sent_at: datetime | None = Field(default=None)
+    # Cooldown anchor for password-recovery resend. Lives on the user row
+    # (not in memory) because the recovery endpoint is public/by-email and
+    # may be served by multiple workers.
+    last_password_recovery_email_sent_at: datetime | None = Field(default=None)
     agents: List["app.models.agents.agent.Agent"] = Relationship(back_populates="owner", cascade_delete=True)
     credentials: List["app.models.credentials.credential.Credential"] = Relationship(back_populates="owner", cascade_delete=True)
 
@@ -147,6 +161,14 @@ class UserPublic(UserBase):
     two_factor_enabled: bool = False
     has_passkey: bool = False
     has_totp: bool = False
+    # Email confirmation status. The raw cooldown timestamp is not exposed;
+    # instead ``confirmation_resend_available_at`` surfaces the derived
+    # earliest-next-resend time so the profile UI can restore the cooldown
+    # countdown after a page reload. Only ever returned to the account owner
+    # (``GET /users/me``) or an admin, so this is not a broad timing leak.
+    email_confirmed: bool = False
+    email_confirmed_at: datetime | None = None
+    confirmation_resend_available_at: datetime | None = None
 
 
 class UsersPublic(SQLModel):
@@ -201,6 +223,29 @@ class TokenPayload(SQLModel):
 class NewPassword(SQLModel):
     token: str
     new_password: str = Field(min_length=8, max_length=128)
+
+
+class ConfirmEmailRequest(SQLModel):
+    """POST body for ``/confirm-email/`` — the token from the email link."""
+    token: str
+
+
+class ResendConfirmationResponse(SQLModel):
+    """Response for the authenticated resend-confirmation endpoint.
+
+    ``resend_available_at`` is the computed earliest time the next resend
+    is permitted (``last_confirmation_email_sent_at + cooldown``); the UI
+    uses it to disable the button with a countdown. ``None`` when no send
+    has happened yet (or already confirmed).
+
+    ``sent`` reports whether an email was actually dispatched on this call
+    (False when suppressed by the cooldown, an already-confirmed account, or
+    disabled email delivery) so the UI never claims success when nothing was
+    sent.
+    """
+    message: str
+    sent: bool = False
+    resend_available_at: datetime | None = None
 
 
 # OAuth models

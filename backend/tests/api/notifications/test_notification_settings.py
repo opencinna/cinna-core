@@ -37,6 +37,7 @@ from sqlmodel import Session
 from app.core.config import settings
 from app.models.sessions.session import Session as ChatSession
 from app.models.agents.agent import Agent
+from app.utils import generate_email_confirmation_token
 from app.services.events.activity_service import ActivityService
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.user import (
@@ -638,6 +639,16 @@ def test_email_goes_to_session_owner_not_other_user(
     # ── Phase 1: create two users ─────────────────────────────────────────
     user_a, headers_a = create_random_user_with_headers(client)
     user_b, headers_b = create_random_user_with_headers(client)
+
+    # Confirm user A's email so the notification gate lets their email through.
+    # User B remains unconfirmed — they should NOT receive email (the test's point).
+    token_a = generate_email_confirmation_token(email=user_a["email"])
+    r_confirm = client.post(
+        f"{settings.API_V1_STR}/confirm-email/", json={"token": token_a}
+    )
+    assert r_confirm.status_code == 200, (
+        f"Email confirmation for owner failed: {r_confirm.text}"
+    )
 
     # Promote user A so they can create agents, and give them an AI credential
     promote_to_developer(client, superuser_token_headers, user_a["id"])

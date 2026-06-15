@@ -139,6 +139,12 @@ def test_usage_intent_suspended_environment(
     collected_tasks = []
 
     def _capture_task(coro, *, task_name=""):
+        # Close the coroutine instead of scheduling it: the real dispatcher
+        # would run it on the event loop, but the sync TestClient has none, so
+        # an un-awaited coroutine would later surface as a "coroutine
+        # '_activate_async' was never awaited" ResourceWarning. We only need the
+        # task_name for assertions, not the coroutine itself.
+        coro.close()
         collected_tasks.append((coro, task_name))
 
     with patch(_USAGE_INTENT_BG_TARGET, side_effect=_capture_task):

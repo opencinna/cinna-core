@@ -34,6 +34,7 @@ from typing import Any
 
 from sqlmodel import Session
 
+from app.core.config import settings
 from app.models import User
 from app.models.events.event import EventType
 from app.models.users.user import (
@@ -194,10 +195,26 @@ class RoleService:
     def derive_default_role(*, is_superuser: bool) -> str:
         """Default role for a freshly created user.
 
-        Mirrors the migration backfill so newly seeded users land in
-        the same shape as legacy rows.
+        Single source of truth for the creation-time default role.
+
+        * Superusers always map to ``admin`` (mirrors the migration
+          backfill and keeps the ``role ⇔ is_superuser`` invariant).
+        * Non-superusers pick up the operator-configured
+          ``settings.DEFAULT_USER_ROLE`` (``agent-user`` by default).
+
+        The config is constrained to ``agent-user`` / ``agent-developer``
+        via a ``Literal`` at load time, but this helper also defends the
+        no-``admin``-for-non-superuser invariant: any value outside
+        ``{agent-user, agent-developer}`` falls back to ``agent-user`` so
+        the helper can never emit ``admin`` for a non-superuser even if
+        the setting is later widened.
         """
-        return UserRole.ADMIN.value if is_superuser else UserRole.USER.value
+        if is_superuser:
+            return UserRole.ADMIN.value
+        configured = settings.DEFAULT_USER_ROLE
+        if configured in (UserRole.USER.value, UserRole.DEVELOPER.value):
+            return configured
+        return UserRole.USER.value
 
 
 __all__ = ["RoleService"]

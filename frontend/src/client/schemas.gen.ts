@@ -1528,6 +1528,10 @@ export const AccountConfigProviderPublicSchema = {
             type: 'string',
             title: 'Display Name'
         },
+        credential_name: {
+            type: 'string',
+            title: 'Credential Name'
+        },
         descriptor_slug: {
             type: 'string',
             title: 'Descriptor Slug'
@@ -1580,7 +1584,7 @@ export const AccountConfigProviderPublicSchema = {
         }
     },
     type: 'object',
-    required: ['credential_id', 'provider_type', 'display_name', 'descriptor_slug', 'api_key', 'is_default', 'is_admin_managed', 'default_chat_mode_label'],
+    required: ['credential_id', 'provider_type', 'display_name', 'credential_name', 'descriptor_slug', 'api_key', 'is_default', 'is_admin_managed', 'default_chat_mode_label'],
     title: 'AccountConfigProviderPublic',
     description: `One LLM provider descriptor for a native client, carrying the DECRYPTED
 api key. Every field except \`\`api_key\`\` is non-secret.`
@@ -3339,6 +3343,11 @@ export const AgentBundlePublicSchema = {
                 }
             ],
             title: 'Publisher Email'
+        },
+        publisher_email_confirmed: {
+            type: 'boolean',
+            title: 'Publisher Email Confirmed',
+            default: false
         },
         latest_revision_id: {
             anyOf: [
@@ -9565,6 +9574,11 @@ export const CatalogEntryPublicSchema = {
             ],
             title: 'Publisher Email'
         },
+        publisher_email_confirmed: {
+            type: 'boolean',
+            title: 'Publisher Email Confirmed',
+            default: false
+        },
         visibility: {
             type: 'string',
             title: 'Visibility'
@@ -9843,6 +9857,19 @@ export const CheckUpdatesResponseSchema = {
     required: ['pending_update', 'installed_revision_number', 'latest_revision_number', 'last_update_status', 'last_sync_at', 'update_mode'],
     title: 'CheckUpdatesResponse',
     description: 'Response of ``POST /agents/{agent_id}/check-updates``.'
+} as const;
+
+export const ConfirmEmailRequestSchema = {
+    properties: {
+        token: {
+            type: 'string',
+            title: 'Token'
+        }
+    },
+    type: 'object',
+    required: ['token'],
+    title: 'ConfirmEmailRequest',
+    description: 'POST body for ``/confirm-email/`` — the token from the email link.'
 } as const;
 
 export const ConnectAgentApiRequestSchema = {
@@ -11268,6 +11295,31 @@ export const DeviceInputSchema = {
     type: 'object',
     required: ['device_label', 'public_key'],
     title: 'DeviceInput'
+} as const;
+
+export const DisclaimerPublicSchema = {
+    properties: {
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled'
+        },
+        markdown: {
+            type: 'string',
+            title: 'Markdown'
+        },
+        display_mode: {
+            type: 'string',
+            title: 'Display Mode'
+        },
+        version: {
+            type: 'integer',
+            title: 'Version'
+        }
+    },
+    type: 'object',
+    required: ['enabled', 'markdown', 'display_mode', 'version'],
+    title: 'DisclaimerPublic',
+    description: 'Disclaimer projection returned to any authenticated user.'
 } as const;
 
 export const DiscoverableAgentSchema = {
@@ -18028,6 +18080,46 @@ export const RefreshKnowledgeResponseSchema = {
     description: 'Response for refresh knowledge endpoint.'
 } as const;
 
+export const ResendConfirmationResponseSchema = {
+    properties: {
+        message: {
+            type: 'string',
+            title: 'Message'
+        },
+        sent: {
+            type: 'boolean',
+            title: 'Sent',
+            default: false
+        },
+        resend_available_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Resend Available At'
+        }
+    },
+    type: 'object',
+    required: ['message'],
+    title: 'ResendConfirmationResponse',
+    description: `Response for the authenticated resend-confirmation endpoint.
+
+\`\`resend_available_at\`\` is the computed earliest time the next resend
+is permitted (\`\`last_confirmation_email_sent_at + cooldown\`\`); the UI
+uses it to disable the button with a countdown. \`\`None\`\` when no send
+has happened yet (or already confirmed).
+
+\`\`sent\`\` reports whether an email was actually dispatched on this call
+(False when suppressed by the cooldown, an already-confirmed account, or
+disabled email delivery) so the UI never claims success when nothing was
+sent.`
+} as const;
+
 export const RespondToTaskRequestSchema = {
     properties: {
         task_id: {
@@ -18710,6 +18802,100 @@ export const SendAnswerResponseSchema = {
     required: ['success'],
     title: 'SendAnswerResponse',
     description: 'Response from sending an email reply'
+} as const;
+
+export const ServerConfigSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        disclaimer_enabled: {
+            type: 'boolean',
+            title: 'Disclaimer Enabled',
+            default: false
+        },
+        disclaimer_markdown: {
+            type: 'string',
+            title: 'Disclaimer Markdown',
+            default: ''
+        },
+        disclaimer_display_mode: {
+            type: 'string',
+            title: 'Disclaimer Display Mode',
+            default: 'new_users'
+        },
+        disclaimer_version: {
+            type: 'integer',
+            title: 'Disclaimer Version',
+            default: 1
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        updated_by_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Updated By Id'
+        }
+    },
+    type: 'object',
+    title: 'ServerConfig',
+    description: `Singleton server-wide configuration.
+
+Only one row ever exists; it is created lazily on first access. Holds the
+admin-configurable disclaimer settings shown to users at login.`
+} as const;
+
+export const ServerConfigUpdateSchema = {
+    properties: {
+        disclaimer_enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Disclaimer Enabled'
+        },
+        disclaimer_markdown: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Disclaimer Markdown'
+        },
+        disclaimer_display_mode: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Disclaimer Display Mode'
+        }
+    },
+    type: 'object',
+    title: 'ServerConfigUpdate',
+    description: 'Admin update payload — all fields optional.'
 } as const;
 
 export const SessionCommandPublicSchema = {
@@ -22458,6 +22644,35 @@ export const UserPublicSchema = {
             type: 'boolean',
             title: 'Has Totp',
             default: false
+        },
+        email_confirmed: {
+            type: 'boolean',
+            title: 'Email Confirmed',
+            default: false
+        },
+        email_confirmed_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Email Confirmed At'
+        },
+        confirmation_resend_available_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Confirmation Resend Available At'
         }
     },
     type: 'object',
@@ -22641,6 +22856,35 @@ export const UserPublicWithAICredentialsSchema = {
             type: 'boolean',
             title: 'Has Totp',
             default: false
+        },
+        email_confirmed: {
+            type: 'boolean',
+            title: 'Email Confirmed',
+            default: false
+        },
+        email_confirmed_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Email Confirmed At'
+        },
+        confirmation_resend_available_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Confirmation Resend Available At'
         },
         has_anthropic_api_key: {
             type: 'boolean',

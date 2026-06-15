@@ -17,6 +17,8 @@ from .users.user import (
     UpdatePassword,
     Message,
     NewPassword,
+    ConfirmEmailRequest,
+    ResendConfirmationResponse,
     Token,
     TokenPayload,
     SetPassword,
@@ -436,6 +438,11 @@ from .email.mail_server_config import (
     MailServerConfigsPublic,
     MailServerType,
     EncryptionType,
+)
+from .server_config.server_config import (
+    ServerConfig,
+    ServerConfigUpdate,
+    DisclaimerPublic,
 )
 from .email.email_message import (
     EmailMessage,
@@ -1083,6 +1090,10 @@ __all__ = [
     "MailServerConfigsPublic",
     "MailServerType",
     "EncryptionType",
+    # Server Config
+    "ServerConfig",
+    "ServerConfigUpdate",
+    "DisclaimerPublic",
     # Email Messages
     "EmailMessage",
     "EmailMessagePublic",

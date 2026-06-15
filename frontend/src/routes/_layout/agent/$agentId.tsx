@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { ArrowLeft, EllipsisVertical, Package, Tag, User } from "lucide-react"
+import { ArrowLeft, EllipsisVertical, Mail, Package, Tag, User } from "lucide-react"
 import { useState, useEffect } from "react"
 
 import { AgentsService, BundlesService } from "@/client"
@@ -20,6 +20,7 @@ import DeleteAgent from "@/components/Agents/DeleteAgent"
 import UninstallAgent from "@/components/Agents/UninstallAgent"
 import PendingItems from "@/components/Pending/PendingItems"
 import { HashTabs } from "@/components/Common/HashTabs"
+import { PublisherEmailConfirmedIcon } from "@/components/Common/PublisherEmailConfirmedIcon"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -122,13 +123,26 @@ function AgentDetail() {
                       v{agent.installed_revision_version || agent.installed_revision_number}
                     </span>
                   )}
-                  {(bundle?.publisher_name || bundle?.publisher_email || bundle?.publisher_handle) && (
+                  {(bundle?.publisher_name || bundle?.publisher_handle) && (
                     <span
                       title="Bundle author"
                       className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs whitespace-nowrap opacity-50 hover:opacity-100 transition-opacity bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
                     >
                       <User className="h-3 w-3" />
-                      {bundle.publisher_name || bundle.publisher_email || bundle.publisher_handle}
+                      {bundle.publisher_name || bundle.publisher_handle}
+                    </span>
+                  )}
+                  {bundle?.publisher_email && (
+                    <span
+                      title="Publisher email"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs whitespace-nowrap opacity-50 hover:opacity-100 transition-opacity bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+                    >
+                      <Mail className="h-3 w-3" />
+                      {bundle.publisher_email}
+                      <PublisherEmailConfirmedIcon
+                        confirmed={bundle.publisher_email_confirmed ?? false}
+                        hasEmail={!!bundle.publisher_email}
+                      />
                     </span>
                   )}
                 </div>

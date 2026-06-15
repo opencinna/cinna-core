@@ -165,6 +165,21 @@ class Settings(BaseSettings):
 
     EMAIL_RESET_TOKEN_EXPIRE_HOURS: int = 48
 
+    # ── Email confirmation (anti-abuse outbound-email gate) ──────────────
+    # Expiry of the JWT confirm-email token (mirrors EMAIL_RESET_TOKEN_EXPIRE_HOURS).
+    EMAIL_CONFIRM_TOKEN_EXPIRE_HOURS: int = 48
+    # Minimum seconds between resend-confirmation emails for a given user.
+    CONFIRMATION_EMAIL_COOLDOWN_SECONDS: int = 300  # 5 min between resends
+    # Minimum seconds between password-recovery emails for a given user.
+    # Stored as a column on the target user row (the recovery endpoint is
+    # public/by-email and may be served by multiple workers, so an in-memory
+    # throttle cannot rate-limit it reliably).
+    PASSWORD_RECOVERY_EMAIL_COOLDOWN_SECONDS: int = 300  # 5 min between recovery sends
+    # Agent-creation caps keyed on confirmation status. Superusers are
+    # unlimited (short-circuit on is_superuser — no constant).
+    AGENT_LIMIT_UNCONFIRMED: int = 5
+    AGENT_LIMIT_CONFIRMED: int = 50
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def emails_enabled(self) -> bool:
@@ -204,6 +219,16 @@ class Settings(BaseSettings):
     def allow_user_email_change(self) -> bool:
         """Allow users to change their email. Disabled when domain whitelist is active."""
         return len(self.auth_whitelist_domains) == 0
+
+    # Role assigned to newly created NON-superuser accounts, on both password
+    # signup and Google OAuth first login. Creation-time only — it never touches
+    # existing users and never overrides an explicit caller-provided role or the
+    # superuser ⇒ ``admin`` mapping. Unset/empty falls back to ``agent-user`` via
+    # ``env_ignore_empty=True``; a present-but-invalid value fails loudly at
+    # startup (Literal). ``admin`` is intentionally not allowed here to preserve
+    # the role ⇔ is_superuser invariant. Values mirror ``UserRole`` enum members
+    # (UserRole.USER.value / UserRole.DEVELOPER.value) — keep them in sync.
+    DEFAULT_USER_ROLE: Literal["agent-user", "agent-developer"] = "agent-user"
 
     # Google AI Configuration (for ADK agents)
     GOOGLE_API_KEY: str | None = None

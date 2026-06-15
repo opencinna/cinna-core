@@ -51,6 +51,7 @@ from app.api.routes import (
     oauth_credentials,
     private,
     security_events,
+    server_config,
     sessions,
     shared_workspace,
     ssh_keys,
@@ -114,6 +115,7 @@ api_router.include_router(knowledge.router)
 api_router.include_router(knowledge_sources.router)
 api_router.include_router(admin_environments.router)
 api_router.include_router(admin_llm_providers.router)
+api_router.include_router(server_config.router)
 api_router.include_router(files.router)
 api_router.include_router(llm_plugins.router)
 api_router.include_router(input_tasks.router)

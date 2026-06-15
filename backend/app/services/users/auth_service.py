@@ -12,6 +12,7 @@ from sqlmodel import Session, select
 from app.core import security
 from app.core.config import settings
 from app.models import User, UserMfaChallenge
+from app.services.users.role_service import RoleService
 
 
 @dataclass
@@ -223,6 +224,14 @@ class AuthService:
             hashed_password=None,
             is_active=True,
             is_superuser=False,
+            # Google first-login users are always non-superuser, so they
+            # pick up the operator-configured DEFAULT_USER_ROLE via the
+            # single-source-of-truth helper instead of the column default.
+            role=RoleService.derive_default_role(is_superuser=False),
+            # Google verified the email — auto-confirm so the outbound-email
+            # gate never blocks a Google user.
+            email_confirmed=True,
+            email_confirmed_at=datetime.now(timezone.utc),
         )
         session.add(db_obj)
         session.commit()
@@ -346,6 +355,15 @@ class AuthService:
 
         if not user.is_active:
             raise ValueError("Inactive user")
+
+        # Auto-confirm any pre-existing account that logs in via Google —
+        # Google has verified the email. Covers users that signed up with a
+        # password (unconfirmed) and later authenticate through Google.
+        if not user.email_confirmed:
+            from app.services.users.email_confirmation_service import (
+                EmailConfirmationService,
+            )
+            EmailConfirmationService.mark_confirmed(session=session, user=user)
 
         # Branch through MFA when the user has 2FA enabled.
         if user.two_factor_enabled:

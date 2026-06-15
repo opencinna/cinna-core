@@ -25,6 +25,10 @@ class CatalogEntryPublic(SQLModel):
     publisher_handle: str | None  # Truncated identifier — never email/UUID
     publisher_name: str | None = None
     publisher_email: str | None = None
+    # Whether the resolved publisher's account email is confirmed — drives the
+    # green-check / amber-warning indicator next to the publisher email on the
+    # catalog and install cards.
+    publisher_email_confirmed: bool = False
     visibility: str
     latest_revision_id: uuid.UUID | None
     latest_revision_number: int | None

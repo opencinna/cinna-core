@@ -15,6 +15,10 @@ class OutgoingEmailStatus:
     PENDING = "pending"
     SENT = "sent"
     FAILED = "failed"
+    # Rejected because the platform account responsible for the mailbox/agent
+    # is not email-confirmed (outbound-email anti-abuse gate). Terminal — not
+    # retried.
+    BLOCKED_UNCONFIRMED = "blocked_unconfirmed"
 
 
 class OutgoingEmailQueueBase(SQLModel):

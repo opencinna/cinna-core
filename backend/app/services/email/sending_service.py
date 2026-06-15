@@ -30,6 +30,32 @@ MAX_RETRIES = 3
 class EmailSendingService:
 
     @staticmethod
+    def _resolve_responsible_user(
+        db_session: Session, entry: OutgoingEmailQueue
+    ) -> User | None:
+        """Resolve the platform user responsible for an outgoing queue entry.
+
+        This is the account whose confirmation status gates the send — the
+        owner of the mailbox/agent, NOT the external recipient.
+
+        - Task-mode entries (``input_task_id`` set): the task's owner.
+        - Otherwise: the owner of ``agent_id`` (the publisher install for
+          install-mode entries, the agent itself for owner-mode entries —
+          both resolve through ``Agent.owner_id``).
+        """
+        if entry.input_task_id is not None:
+            from app.models.tasks.input_task import InputTask
+
+            task = db_session.get(InputTask, entry.input_task_id)
+            if task and task.owner_id:
+                return db_session.get(User, task.owner_id)
+            # Fall through to agent owner if the task is gone (SET NULL FK).
+        agent = db_session.get(Agent, entry.agent_id)
+        if agent and agent.owner_id:
+            return db_session.get(User, agent.owner_id)
+        return None
+
+    @staticmethod
     def queue_outgoing_email(
         db_session: Session,
         session_id: uuid.UUID,
@@ -80,6 +106,7 @@ class EmailSendingService:
         if is_owner_mode:
             # Owner mode: session is on the publisher install itself
             parent_agent_id = session_agent.id
+            parent_agent = session_agent
             clone_agent_id_for_queue = None
 
             # Recipient is the original email sender (stored on session)
@@ -105,6 +132,7 @@ class EmailSendingService:
                 )
                 return None
             parent_agent_id = publisher_install.id
+            parent_agent = publisher_install
             clone_agent_id_for_queue = session_agent.id
 
             # Recipient is the install owner (= email sender's user account)
@@ -113,6 +141,25 @@ class EmailSendingService:
                 logger.warning(f"Install owner {session_agent.owner_id} not found")
                 return None
             recipient = recipient_user.email
+
+        # Outbound-email gate (anti-abuse): the platform account that owns
+        # the mailbox/agent must be email-confirmed. Reject at enqueue time
+        # so an unconfirmed owner never creates a silently-failing queue
+        # entry. The send-time gate in _send_single_email is defense-in-depth.
+        from app.services.users.email_confirmation_service import (
+            EmailConfirmationService,
+        )
+        owner = (
+            db_session.get(User, parent_agent.owner_id)
+            if parent_agent.owner_id
+            else None
+        )
+        if not EmailConfirmationService.is_outbound_email_allowed(owner):
+            logger.warning(
+                f"Outgoing email for agent {parent_agent_id} blocked: "
+                "responsible user email not confirmed"
+            )
+            return None
 
         # Get email integration config from parent
         stmt = select(AgentEmailIntegration).where(
@@ -191,6 +238,26 @@ class EmailSendingService:
         entry: OutgoingEmailQueue,
     ) -> None:
         """Send a single email from the queue."""
+        # Outbound-email gate (defense-in-depth): block the send if the
+        # responsible platform user is not email-confirmed. Marks the entry
+        # BLOCKED_UNCONFIRMED (terminal — never retried) so it cannot spam.
+        from app.services.users.email_confirmation_service import (
+            EmailConfirmationService,
+        )
+        responsible_user = EmailSendingService._resolve_responsible_user(
+            db_session, entry
+        )
+        if not EmailConfirmationService.is_outbound_email_allowed(responsible_user):
+            entry.status = OutgoingEmailStatus.BLOCKED_UNCONFIRMED
+            entry.last_error = "sender email not confirmed"
+            entry.updated_at = datetime.now(UTC)
+            db_session.add(entry)
+            db_session.commit()
+            logger.warning(
+                f"Email {entry.id}: blocked — responsible user email not confirmed"
+            )
+            return
+
         # Get parent agent's email integration for SMTP config
         stmt = select(AgentEmailIntegration).where(
             AgentEmailIntegration.agent_id == entry.agent_id,

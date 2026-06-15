@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.services.users.user_service import UserService
 from app.models import (
     Message,
+    ResendConfirmationResponse,
     SetPassword,
     UpdatePassword,
     User,
@@ -27,6 +28,7 @@ from app.models import (
     UserUpdate,
     UserUpdateMe,
 )
+from app.services.users.email_confirmation_service import EmailConfirmationService
 from app.models.users.user import (
     AIServiceCredentials,
     AIServiceCredentialsUpdate,
@@ -58,6 +60,11 @@ def _user_to_public(session, user: User) -> UserPublic:
         has_password=bool(user.hashed_password),
         has_passkey=MfaService.has_passkey(session=session, user_id=user.id),
         has_totp=MfaService.has_totp(session=session, user_id=user.id),
+        confirmation_resend_available_at=(
+            None
+            if user.email_confirmed
+            else EmailConfirmationService.resend_available_at(user)
+        ),
     )
 
 
@@ -151,6 +158,9 @@ def create_user(*, session: SessionDep, user_in: UserCreate) -> Any:
 
     user = UserService.create_user(session=session, user_create=user_in)
     if settings.emails_enabled and user_in.email:
+        # The new-account email carries the temp password and is
+        # admin-initiated/trusted, so it is sent regardless of the
+        # confirmation gate (D3).
         email_data = generate_new_account_email(
             email_to=user_in.email, username=user_in.email, password=user_in.password
         )
@@ -158,6 +168,12 @@ def create_user(*, session: SessionDep, user_in: UserCreate) -> Any:
             email_to=user_in.email,
             subject=email_data.subject,
             html_content=email_data.html_content,
+        )
+        # Admin-created non-superusers start unconfirmed — also send a
+        # confirmation email so they can confirm (D3). Superusers are
+        # auto-confirmed at create time and this no-ops for them.
+        EmailConfirmationService.send_confirmation_email(
+            session=session, user=user, force=True
         )
     return _user_to_public(session, user)
 
@@ -278,6 +294,40 @@ def read_user_me(session: SessionDep, current_user: CurrentUser) -> Any:
     Get current user.
     """
     return _user_to_public(session, current_user)
+
+
+@router.post("/me/resend-confirmation", response_model=ResendConfirmationResponse)
+def resend_confirmation_me(
+    session: SessionDep, current_user: CurrentUser
+) -> ResendConfirmationResponse:
+    """
+    Resend the email-confirmation email to the current user.
+
+    Cooldown-gated (shared with the public endpoint). Returns the computed
+    ``resend_available_at`` so the UI can disable the button with a
+    countdown. Always returns success — an already-confirmed user or one
+    in cooldown simply gets no new email. Preferred for the in-app button
+    since we already have the authenticated user.
+    """
+    if current_user.email_confirmed:
+        return ResendConfirmationResponse(
+            message="Email already confirmed", sent=False, resend_available_at=None
+        )
+    sent = EmailConfirmationService.send_confirmation_email(
+        session=session, user=current_user, force=False
+    )
+    return ResendConfirmationResponse(
+        message=(
+            "Confirmation email sent"
+            if sent
+            else "No email was sent — a confirmation was requested recently or "
+            "email delivery is unavailable. Please wait before trying again."
+        ),
+        sent=sent,
+        resend_available_at=EmailConfirmationService.resend_available_at(
+            current_user
+        ),
+    )
 
 
 @router.get("/me/role", response_model=UserRolePublic)

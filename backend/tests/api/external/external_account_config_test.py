@@ -162,6 +162,9 @@ def test_desktop_token_returns_providers_with_api_key(
     assert provider["api_key"] == sentinel_key  # DECRYPTED
     assert provider["provider_type"] == "anthropic"
     assert provider["display_name"] == "Claude"
+    # The credential's own name is exposed so native clients can disambiguate
+    # multiple credentials of the same provider family.
+    assert provider["credential_name"] == "Desktop Config Test Key"
     assert provider["descriptor_slug"] == "claude"
     assert "credential_id" in provider
     assert "is_default" in provider
