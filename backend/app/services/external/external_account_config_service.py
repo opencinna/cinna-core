@@ -144,6 +144,7 @@ class ExternalAccountConfigService:
             descriptor_slug=slug,
             base_url=data.base_url,
             model=model,
+            default_model=credential.default_model,
             api_key=data.api_key,
             is_default=credential.is_default,
             is_admin_managed=credential.is_admin_managed,

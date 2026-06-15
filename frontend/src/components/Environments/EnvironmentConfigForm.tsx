@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input"
 import { UsersService, AiCredentialsService } from "@/client"
 import type { AICredentialPublic, AgentEnvironmentPublic } from "@/client"
 import { Pencil, MessageCircle, Wrench, Save, Code2, Boxes } from "lucide-react"
+import { ListModelsButton } from "@/components/Common/ListModelsButton"
 
 // ============= Constants =============
 
@@ -371,13 +372,20 @@ export function EnvModeEditDialog({
             <Label className="text-sm">
               Model Override <span className="text-muted-foreground text-xs">(optional)</span>
             </Label>
-            <Input
-              list={datalistId}
-              value={modelOverride}
-              onChange={(e) => setModelOverride(e.target.value)}
-              placeholder={isConversation ? "e.g., claude-haiku-4-5" : "e.g., claude-opus-4"}
-              className="h-9"
-            />
+            <div className="flex items-center gap-2">
+              <Input
+                list={datalistId}
+                value={modelOverride}
+                onChange={(e) => setModelOverride(e.target.value)}
+                placeholder={isConversation ? "e.g., claude-haiku-4-5" : "e.g., claude-opus-4"}
+                className="h-9"
+              />
+              <ListModelsButton
+                credentialId={selectedCredential?.id ?? null}
+                credentialType={selectedCredential?.type ?? null}
+                onSelect={setModelOverride}
+              />
+            </div>
             {suggestedModels.length > 0 && (
               <datalist id={datalistId}>
                 {suggestedModels.map((m) => (

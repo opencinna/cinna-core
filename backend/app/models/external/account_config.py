@@ -31,7 +31,14 @@ class AccountConfigProviderPublic(SQLModel):
     credential_name: str
     descriptor_slug: str
     base_url: str | None = None
+    # Auto-resolved suggestion (legacy fallback chain). May land on a non-chat
+    # model for keys whose only signal is ``discovered_models`` — native clients
+    # should prefer ``default_model`` below.
     model: str | None = None
+    # The admin-curated preferred default model (``credential.default_model``,
+    # bare concrete id) — NULL for self-created credentials with no curation.
+    # Native clients use this as the authoritative default when present.
+    default_model: str | None = None
     # *** DECRYPTED *** — the security boundary; only delivered to native tokens.
     api_key: str
     is_default: bool

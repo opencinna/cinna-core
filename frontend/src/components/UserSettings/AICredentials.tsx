@@ -31,6 +31,7 @@ import useCustomToast from "@/hooks/useCustomToast"
 import { AICredentialDialog } from "./AICredentialDialog"
 import { AffectedEnvironmentsDialog } from "./AffectedEnvironmentsDialog"
 import { DeleteAICredentialDialog } from "./DeleteAICredentialDialog"
+import { ListModelsButton } from "@/components/Common/ListModelsButton"
 
 // SDK Engine options
 const SDK_ENGINE_OPTIONS = [
@@ -306,14 +307,22 @@ function SDKModeEditDialog({
             <Label className="text-sm">
               Model Override <span className="text-muted-foreground text-xs">(optional)</span>
             </Label>
-            <Input
-              list={datalistId}
-              value={modelOverride}
-              onChange={(e) => setModelOverride(e.target.value)}
-              placeholder={isConversation ? "e.g., claude-haiku-4-5" : "e.g., claude-opus-4"}
-              className="h-9"
-              disabled={isSaving}
-            />
+            <div className="flex items-center gap-2">
+              <Input
+                list={datalistId}
+                value={modelOverride}
+                onChange={(e) => setModelOverride(e.target.value)}
+                placeholder={isConversation ? "e.g., claude-haiku-4-5" : "e.g., claude-opus-4"}
+                className="h-9"
+                disabled={isSaving}
+              />
+              <ListModelsButton
+                credentialId={selectedCredential?.id ?? null}
+                credentialType={selectedCredential?.type ?? null}
+                onSelect={setModelOverride}
+                disabled={isSaving}
+              />
+            </div>
             {suggestedModels.length > 0 && (
               <datalist id={datalistId}>
                 {suggestedModels.map((m) => (
