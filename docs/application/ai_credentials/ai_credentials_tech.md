@@ -42,11 +42,13 @@
 ### Frontend
 
 **Components:**
-- `frontend/src/components/UserSettings/AICredentials.tsx` - Main credentials list with expiry badges, set-default, delete actions
+- `frontend/src/components/UserSettings/AICredentials.tsx` - Main credentials list with expiry badges, set-default, delete actions; houses `SDKModeEditDialog`
 - `frontend/src/components/UserSettings/AICredentialDialog.tsx` - Add/edit dialog with type selector, auto-fill expiry
 - `frontend/src/components/UserSettings/AnthropicCredentialsModal.tsx` - Instructions modal for Anthropic API Key / OAuth setup
 - `frontend/src/components/UserSettings/AffectedEnvironmentsDialog.tsx` - Post-update rebuild dialog
 - `frontend/src/components/Environments/AddEnvironment.tsx` - Environment creation dialog with compact summary rows + `EnvModeEditDialog` modal for SDK/credential/model selection per mode
+- `frontend/src/components/Environments/EnvironmentConfigForm.tsx` - Per-mode edit dialog (`EnvModeEditDialog`) for reconfiguring existing environments; also uses `ListModelsButton`
+- `frontend/src/components/Common/ListModelsButton.tsx` - Shared reusable "List models" button + modal (see below)
 - `frontend/src/components/Install/InstallAICredentialSection.tsx` - AI credential selection step in the install wizard
 - `frontend/src/components/Common/RelativeTime.tsx` - Extended with badge/color-code support for expiry display
 
@@ -290,6 +292,47 @@ Configured via `MODEL_DISCOVERY_ENABLED` (default `True`) and
 - Anthropic info banner with "Instructions" button opening `AnthropicCredentialsModal`
 - **Test Connection button** (footer, between Cancel and Create/Update): calls `POST /ai-credentials/test-connection`; shows an inline alert with the result above the footer. On success shows "Connection successful — N models available." On a benign skip (`oauth_token_unsupported`, `no_list_endpoint`, etc.) shows a type-specific informative note. On failure shows "Connection failed — the provider rejected this key." In the Edit case a successful test invalidates `["aiCredentialsList"]` so refreshed `discovered_models` appear in model-override datalists immediately.
 
+### `ListModelsButton.tsx` - Shared Live Model Picker
+
+**File:** `frontend/src/components/Common/ListModelsButton.tsx`
+
+A self-contained button + modal component that fetches the provider's live model list for a
+concrete saved credential and lets the user pick a model directly into a Model Override input.
+It is used by two call sites:
+
+1. `EnvModeEditDialog` in `frontend/src/components/Environments/EnvironmentConfigForm.tsx` — the per-mode edit dialog for existing agent environments.
+2. `SDKModeEditDialog` in `frontend/src/components/UserSettings/AICredentials.tsx` — the per-mode editor in Default SDK Preferences (Settings).
+
+**Props:**
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `credentialId` | `string \| null` | Stored credential id to probe. |
+| `credentialType` | `AICredentialType \| null` | Required by the test-connection request body. |
+| `onSelect` | `(modelId: string) => void` | Called with the bare model id the user picked; the caller writes it into the Model Override field. |
+| `disabled` | `boolean` (optional) | External disable (e.g. while the surrounding form is saving). |
+
+**Behavior:**
+
+- Button is disabled (with tooltip "Select a credential first") when `credentialId` or `credentialType` is null — this happens when the user has chosen "Use Default" instead of a concrete credential.
+- On click: resets any prior probe result, opens the modal, and immediately fires `AiCredentialsService.testAiCredentialConnection` (`POST /ai-credentials/test-connection`) with `{ type, credential_id }` — the backend resolves the key from the stored credential.
+- Picking a model row calls `onSelect(modelId)` with the bare model id (no `provider/` prefix) and closes the modal.
+
+**State machine inside the modal:**
+
+| State | Trigger | UI |
+|-------|---------|----|
+| Loading | `mutation.isPending` | Spinner |
+| Network/mutation error | `mutation.isError` | Error message + Retry button |
+| Hard failure | `result.success === false` | `describeError(result.error)` + Retry button |
+| Listing unsupported | `result.success && result.skip_reason` | `describeSkipReason(reason)` informative notice; user told they can type manually |
+| Empty list | `result.success && models.length === 0` | "No models returned" notice |
+| Model list | `result.success && models.length > 0` | Search/filter input + scrollable list of clickable model rows |
+
+The `filter` state is reset on every open to avoid stale search terms when the selected credential changes.
+
+**Test-connection reuse note:** `ListModelsButton` calls the identical `POST /ai-credentials/test-connection` endpoint used by the **Test Connection** button in `AICredentialDialog`. The key difference is that `ListModelsButton` passes only `credential_id + type` (no plaintext `api_key`) and does NOT persist updated `discovered_models` back to the database — it reads the live list for display only. Persistence only happens in the Edit-dialog Test Connection path (where a `credential_id` is supplied and `test_connection` service writes the result to the row).
+
 ## State Management
 
 **Query Keys:**
@@ -301,6 +344,41 @@ Configured via `MODEL_DISCOVERY_ENABLED` (default `True`) and
 - Create/Update/Delete invalidate both query keys
 - Set default also invalidates `["aiCredentialsStatus"]`
 - Test Connection (Edit, on success): invalidates `["aiCredentialsList"]` to surface refreshed `discovered_models`
+
+## Bare Model Override → Provider Prefix Re-qualification (OpenCode)
+
+**File:** `backend/app/services/environments/environment_lifecycle.py` — `_build_config` helper
+
+OpenCode's top-level `model` field expects the format `provider/model` (e.g. `openai/gpt-5.4-mini`,
+`anthropic/claude-haiku-4-5`). Catalog defaults are already stored with the prefix; however, the
+UI stores user-entered model overrides as **bare model ids** (no prefix) — this is intentional so
+the same model id string is portable across the UI's datalist, `discovered_models` cache,
+`ListModelsButton` picker, and env-override field without the user needing to know or type the
+provider prefix.
+
+The backend reconciles this at config-generation time inside `_build_config`:
+
+```python
+config_model = model if "/" in model else f"{provider}/{model}"
+```
+
+For `openai_compatible` providers the prefix is always `custom/` rather than the credential's
+provider string (since OpenCode registers them under a named custom provider):
+
+```python
+if "/" in model:
+    config_model = f"custom/{model.split('/', 1)[1]}"
+else:
+    config_model = f"custom/{model}"
+```
+
+**Why this matters:** without this re-qualification, a bare override such as `gpt-5.4-mini` was
+passed verbatim to OpenCode, which parsed the bare id as the provider name and an empty model
+string — resulting in a runtime error: `Model not found: gpt-5.4-mini/.`. The fix ensures all
+bare ids are correctly qualified before being written into `opencode.json`.
+
+Users always see and enter bare model ids in the UI (and the `ListModelsButton` picker inserts
+them bare). The backend is the single point responsible for adding the prefix.
 
 ## Encryption
 
@@ -319,4 +397,4 @@ Configured via `MODEL_DISCOVERY_ENABLED` (default `True`) and
 
 ---
 
-*Last updated: 2026-06-05 — added Test Connection endpoint + probe_models shared dispatch*
+*Last updated: 2026-06-15 — added ListModelsButton component; documented bare model override → provider prefix re-qualification in environment_lifecycle.py*

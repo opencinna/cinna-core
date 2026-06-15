@@ -2267,7 +2267,14 @@ MODEL_CONVERSATION={model_conversation}
                 else:
                     config_model = f"custom/{model}"
             else:
-                config_model = model
+                # OpenCode's top-level `model` field must be "provider/model".
+                # Catalog defaults are already provider-qualified, but a user
+                # model override is typically bare (the UI field offers bare
+                # ids, e.g. "gpt-5.4-mini"). Add the provider prefix when it's
+                # missing — otherwise OpenCode parses the bare id as the
+                # provider with an empty model (e.g. "gpt-5.4-mini" →
+                # "Model not found: gpt-5.4-mini/.").
+                config_model = model if "/" in model else f"{provider}/{model}"
 
             config = {
                 "$schema": "https://opencode.ai/config.json",

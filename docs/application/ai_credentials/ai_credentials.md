@@ -95,6 +95,27 @@ Note: `anthropic` credentials also support OAuth tokens (prefix `sk-ant-oat*`) �
 4. For a saved credential (Edit dialog) a successful test also persists the refreshed model list onto the credential row, replacing the last nightly-cron result immediately.
 5. For the Add dialog (no saved row yet), the probe result is shown but nothing is persisted.
 
+### Picking a Model from the Provider's Live List
+
+Anywhere a **Model Override** input appears — the environment per-mode edit dialog (both Conversation and Building modes) and the **Default SDK Preferences** per-mode editor in Settings — a **"List models"** button sits next to the text field.
+
+1. User selects a concrete credential in that dialog (not "Use Default").
+2. Clicks **List models**.
+3. The platform calls the same test-connection mechanism (`POST /ai-credentials/test-connection` with the stored credential's id) and opens a modal showing the provider's live model list.
+4. The modal has a search/filter box. User types to narrow the list.
+5. Clicking a model row inserts its bare model id (e.g. `gpt-5.4-mini`, `claude-haiku-4-5` — no `provider/` prefix) into the Model Override field and closes the modal.
+
+**States the modal handles:**
+- **Loading** — spinner while the test-connection call is in flight.
+- **Listing unsupported** (`success=true` + `skip_reason`) — an informative notice (e.g. "This credential uses an OAuth token, which can't list models.") tells the user they can still type a model id manually. Covers: OAuth tokens (`oauth_token_unsupported`), MiniMax (`no_list_endpoint`), openai_compatible without a base URL (`no_base_url`).
+- **Connection failure** (`success=false`) — error state with a **Retry** button.
+- **Empty list** — "No models returned for this credential."
+- **Button disabled** (with tooltip "Select a credential first") — when "Use Default" is chosen rather than a concrete credential.
+
+The datalist of suggestions (fed by `discovered_models` / `available_models`) remains in place alongside the button; the "List models" picker is additive, not a replacement.
+
+The bare model ids inserted by the picker match the `discovered_models` cache and what the UI datalist offers. The backend qualifies them with the provider prefix when generating OpenCode config — users always work with bare ids in the UI. See [Agent Environment Core](../../agents/agent_environment_core/multi_sdk.md) for details.
+
 ### Updating Credentials and Rebuilding Environments
 
 1. User updates an AI credential's API key
@@ -159,4 +180,4 @@ Clone created → Uses owner's shared or recipient's own credentials
 
 ---
 
-*Last updated: 2026-06-05 — added Test Connection user flow*
+*Last updated: 2026-06-15 — added "List models" picker flow*

@@ -398,6 +398,22 @@ const offeredModels = selectedCredential?.available_models?.length
 This ensures that when an admin has explicitly curated the allowed model list, users see
 only that curated set in the picker rather than the full auto-discovered list.
 
+### "List models" live picker
+
+A `ListModelsButton` component (`frontend/src/components/Common/ListModelsButton.tsx`)
+sits next to the Model Override input in both the per-mode environment edit dialog
+(`EnvModeEditDialog` in `EnvironmentConfigForm.tsx`) and the Default SDK Preferences
+per-mode editor (`SDKModeEditDialog` in `AICredentials.tsx`). It calls
+`POST /ai-credentials/test-connection` with the selected credential's id to fetch a live
+model list on demand — the same `probe_models` path that the discovery cron uses to
+populate `discovered_models`. The picker is therefore always in sync with what the cron
+would record; it just bypasses the 24-hour wait and shows results immediately.
+
+Model ids inserted by the picker are bare (no `provider/` prefix), matching the format
+in `discovered_models` and the datalist. The backend adds the required prefix at
+OpenCode config generation time. See [AI Credentials Tech](../../application/ai_credentials/ai_credentials_tech.md) for the component
+contract and the re-qualification logic.
+
 ---
 
 ## Security
@@ -412,4 +428,4 @@ only that curated set in the picker rather than the full auto-discovered list.
 
 ---
 
-*Last updated: 2026-06-14 — model-picker datalist now prefers admin-curated `available_models` over `discovered_models`; noted probe_models shared dispatch and Test Connection as manual force-refresh path*
+*Last updated: 2026-06-15 — added "List models" live picker cross-reference (ListModelsButton, same probe_models path as cron)*
