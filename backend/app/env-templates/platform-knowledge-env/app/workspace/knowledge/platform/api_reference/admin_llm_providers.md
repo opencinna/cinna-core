@@ -11,6 +11,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-llm-providers`
   - `api_key`: string (required)
   - `base_url`: string | null
   - `model`: string | null
+  - `default_model`: string | null
+  - `available_models`: array | null
   - `expiry_notification_date`: string | null
   - `target_user_ids`: uuid[] (required)
   - `set_as_default`: boolean
@@ -54,6 +56,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-llm-providers`
   - `api_key`: string | null
   - `base_url`: string | null
   - `model`: string | null
+  - `default_model`: string | null
+  - `available_models`: array | null
   - `expiry_notification_date`: string | null
   - `target_user_ids`: array | null
   - `set_as_default`: boolean | null

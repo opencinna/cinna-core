@@ -255,7 +255,21 @@ export function AgentRestApiCard({
                         </span>
                       ) : (
                         conn.consumer_agents.map((a) => (
-                          <AgentBadge key={a.id} agent={a} />
+                          // Show the owner's email next to the badge so
+                          // identical agent names (e.g. several bundle installs
+                          // of the same agent owned by different users) stay
+                          // distinguishable.
+                          <span
+                            key={a.id}
+                            className="inline-flex items-center gap-1.5"
+                          >
+                            <AgentBadge agent={a} />
+                            {a.owner_email && (
+                              <span className="text-xs text-muted-foreground truncate">
+                                {a.owner_email}
+                              </span>
+                            )}
+                          </span>
                         ))
                       )}
                       {conn.read_only && (

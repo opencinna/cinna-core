@@ -21,7 +21,6 @@ import { A2aAccessTokensManager } from "./A2aAccessTokensManager"
 import { AgentRestApiCard } from "./AgentRestApiCard"
 import { EmailIntegrationCard } from "./EmailIntegrationCard"
 import { GuestShareCard } from "./GuestShareCard"
-import { AgentStatusCard } from "./AgentStatusCard"
 import { McpConnectorsCard } from "./McpConnectorsCard"
 import { McpConnectorsCardSimple } from "./McpConnectorsCardSimple"
 import { WebappShareCard } from "./WebappShareCard"
@@ -191,9 +190,6 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
 
         {/* Local Development Card */}
         <LocalDevCard agentId={agent.id} />
-
-        {/* Agent Status Card — view status, configure the refresh command */}
-        <AgentStatusCard agent={agent} />
       </div>
     </div>
   )

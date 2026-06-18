@@ -54,7 +54,7 @@ Chain: `aa11 → aa22 → aa33 → aa44`. These migrations were authored togethe
 
 ### Frontend
 
-- `frontend/src/components/Agents/AgentRestApiCard.tsx` — producer "Agent REST API" card: enable toggle, error banner (compact summary + Details toggle + Retry), a View Spec + Refresh button row (View Spec opens the spec viewer tab via `openAgentApiSpec()`; Refresh calls `refreshAgentApiStatus` to re-harvest the spec + re-parse policy on demand), and the Connections list (consumer Bot badges + Disconnect). Hosted by `AgentIntegrationsTab.tsx`. Module helpers `parseHttpStatus()` / `summarizeBootError()` turn a raw `last_error` into the one-line summary.
+- `frontend/src/components/Agents/AgentRestApiCard.tsx` — producer "Agent REST API" card: enable toggle, error banner (compact summary + Details toggle + Retry), a View Spec + Refresh button row (View Spec opens the spec viewer tab via `openAgentApiSpec()`; Refresh calls `refreshAgentApiStatus` to re-harvest the spec + re-parse policy on demand), and the Connections list (consumer Bot badges + owner email + Disconnect). Hosted by `AgentIntegrationsTab.tsx`. Module helpers `parseHttpStatus()` / `summarizeBootError()` turn a raw `last_error` into the one-line summary.
 - `frontend/src/components/Agents/AgentIntegrationsTab.tsx` — renders `AgentRestApiCard`
 - `frontend/src/components/Credentials/AgentApiConnectionView.tsx` — `agent_api` credential detail panel: producer + connected agents (Bot badges) + View Spec (opens the producer's spec viewer tab) + editable name/notes
 - `frontend/src/routes/agent-api-spec/$agentId.tsx`, `frontend/src/components/Agents/OpenApiSpecViewer.tsx`, `frontend/src/utils/agentApiSpec.ts` — the rendered spec viewer (route + renderer + launch helper). See [spec_viewer_tech.md](spec_viewer_tech.md).
@@ -158,7 +158,7 @@ There are **no** token-CRUD routes; tokens are created only via `/connect` and r
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/credentials/{id}/agent-api-connection` | Connection detail for an `agent_api` credential: producer agent (+name), `base_url`/`spec_url`, `read_only`, and linked consumer agents (with `ui_color_preset`). Returns `AgentApiConnectionInfo`. Owner-only (404 on non-owner). |
+| `GET` | `/credentials/{id}/agent-api-connection` | Connection detail for an `agent_api` credential: producer agent (+name), `base_url`/`spec_url`, `read_only`, and linked consumer agents (with `ui_color_preset` and `owner_email`). Returns `AgentApiConnectionInfo`. Owner-only (404 on non-owner). |
 
 ### Consumer Serving (`backend/app/api/routes/agent_api_public.py`)
 
@@ -235,8 +235,9 @@ Agent disabled or not found → `404` (no existence leak). Invalid/revoked token
   **Workspace derivation rule (consumer-first):** the `user_workspace_id` on the created credential is derived as follows: (1) if `data.consumer_agent_id` is provided, use the consumer agent's `user_workspace_id`; (2) otherwise use the producer agent's `user_workspace_id`; (3) if neither agent has a workspace, the credential's `user_workspace_id` stays `NULL` (default workspace, unchanged from pre-feature behaviour). The credential is created with `allow_sharing=False` — the owner enables sharing explicitly afterwards.
 
   **Consumer agent ownership validated up front:** when `data.consumer_agent_id` is provided, the service immediately looks it up (`session.get(Agent, consumer_agent_id)`). If the agent does not exist it raises `AgentApiTokenError(404, "Consumer agent not found")`; if it exists but the caller does not own it (and is not superuser) it raises `AgentApiTokenError(403, "You do not own the consumer agent")`. This check runs **before** any token or credential is minted, so a rejected request leaves no orphaned credential behind.
-- `get_connection_info(session, credential_id, user_id, is_superuser)` → `AgentApiConnectionInfo` — decrypts the credential, resolves the producer agent name, reads `read_only` from the bound token, and lists linked consumer agents (with `ui_color_preset`). Owner-only (404 otherwise). Drives the credential detail page.
-- `list_producer_connections(session, agent_id, user_id, is_superuser)` → `list[AgentApiProducerConnection]` — one entry per token on this producer, each with its credential name + linked consumer agents (with `ui_color_preset`). Drives the producer card's Connections list.
+- `get_connection_info(session, credential_id, user_id, is_superuser)` → `AgentApiConnectionInfo` — decrypts the credential, resolves the producer agent name, reads `read_only` from the bound token, and lists linked consumer agents (via `_build_connected_agent`, with `ui_color_preset` and `owner_email`). Owner-only (404 otherwise). Drives the credential detail page.
+- `list_producer_connections(session, agent_id, user_id, is_superuser)` → `list[AgentApiProducerConnection]` — one entry per token on this producer, each with its credential name + linked consumer agents (via `_build_connected_agent`, with `ui_color_preset` and `owner_email`). Drives the producer card's Connections list.
+- `_build_connected_agent(session, agent)` → `AgentApiConnectedAgent` — shared projection helper that resolves the agent owner's email (`session.get(User, agent.owner_id)`) so identical agent names stay distinguishable in the UI. Used by both retrieval methods above.
 - `delete_producer_connection(session, agent_id, token_id, user_id, is_superuser)` — disconnect: deletes the bound credential via `CredentialsService.delete_credential` (cascade-deletes the token + triggers the credential-removed sync), or deletes an orphaned token directly. Owner-only.
 - `_verify_agent_ownership(session, agent_id, user_id, is_superuser)` — returns agent or raises `AgentApiTokenNotFoundError` (404, no existence leak).
 
@@ -329,7 +330,7 @@ Unknown keys are silently ignored. An empty or missing file applies `DEFAULT_POL
 
 ## Frontend Components
 
-- `AgentRestApiCard.tsx` — producer "Agent REST API" card: enable toggle, status badge from `["agentApiStatus", agentId]` (live-updated via `AGENT_API_STATUS_CHANGED`), a View Spec + Refresh button row (View Spec → `openAgentApiSpec(agentId)` opens a new tab; Refresh → `refreshAgentApiStatus` re-harvests spec + re-parses policy, seeds `["agentApiStatus", agentId]`, invalidates `["agentApiSpec", agentId]`, and toasts), and the **Connections** list from `["agentApiConnections", agentId]`. Each row renders consumer agents as Bot badges (`getColorPreset(ui_color_preset)`) with a Disconnect (`AlertDialog` → `deleteAgentApiConnection`) button. No token management UI. On `state === "error"` it shows the compact `summarizeBootError(last_error)` line with a **Details** toggle and a **Retry** button; Retry shares the same `refreshMutation` so a sticky error clears immediately.
+- `AgentRestApiCard.tsx` — producer "Agent REST API" card: enable toggle, status badge from `["agentApiStatus", agentId]` (live-updated via `AGENT_API_STATUS_CHANGED`), a View Spec + Refresh button row (View Spec → `openAgentApiSpec(agentId)` opens a new tab; Refresh → `refreshAgentApiStatus` re-harvests spec + re-parses policy, seeds `["agentApiStatus", agentId]`, invalidates `["agentApiSpec", agentId]`, and toasts), and the **Connections** list from `["agentApiConnections", agentId]`. Each row renders consumer agents as Bot badges (`getColorPreset(ui_color_preset)`), each paired with the owner's email (muted text) to disambiguate same-named agents, plus a Disconnect (`AlertDialog` → `deleteAgentApiConnection`) button. No token management UI. On `state === "error"` it shows the compact `summarizeBootError(last_error)` line with a **Details** toggle and a **Retry** button; Retry shares the same `refreshMutation` so a sticky error clears immediately.
 - `AgentApiConnectionView.tsx` — `agent_api` credential detail panel: fetches `["agentApiConnection", credentialId]` (`readAgentApiConnection`), shows producer + consumer Bot badges + View Spec (`openAgentApiSpec(producerAgentId)` → new tab) + editable name/notes.
 - `OpenApiSpecViewer.tsx` / `routes/agent-api-spec/$agentId.tsx` — rendered, read-only spec viewer opened by View Spec; the route reuses `useAgentApiSpec(agentId)` (`["agentApiSpec", agentId]`). See [spec_viewer_tech.md](spec_viewer_tech.md).
 - `ConnectAgentApiDialog.tsx` — wraps `AgentSelectorDialog`; selecting an API-enabled producer (excluding the current agent) calls `connectAgentApi` then invalidates `["credentials"]` + `["agentApiConnections", producerId]`.
@@ -369,7 +370,7 @@ Event `meta` payload:
 - Connect mints a token + creates an `agent_api` credential (prefix + base_url + spec_url); raw token readable only from the credential's decrypted data
 - Connection lifecycle: connect → token authenticates a consumer call → delete credential → token cascade-deleted → 401
 - Connection-info endpoint reports producer + consumers + `read_only`; non-owner → 404
-- Producer connections list: empty → linked (with consumer `ui_color_preset`) → unlinked; disconnect via `DELETE /connections/{token_id}` revokes the token (401) and drops the row; non-owner → 404
+- Producer connections list: empty → linked (with consumer `ui_color_preset` + `owner_email`) → unlinked; disconnect via `DELETE /connections/{token_id}` revokes the token (401) and drops the row; non-owner → 404
 - Hash lookup validates; disconnected/wrong-agent/garbage token → 401
 - Policy: `read_only` blocks non-GET/HEAD (405); body cap (413); rate limit (429); `expose_spec=false` (403)
 - Policy: `read_only_override` on token only narrows, never widens

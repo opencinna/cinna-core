@@ -49,13 +49,14 @@ Each file below documents one API domain.
 | Messages | [messages.md](./messages.md) | 5 |
 | Mfa | [mfa.md](./mfa.md) | 13 |
 | Notification Settings | [notification_settings.md](./notification_settings.md) | 2 |
+| Server Config | [server_config.md](./server_config.md) | 3 |
 | Sessions | [sessions.md](./sessions.md) | 9 |
 | Ssh Keys | [ssh_keys.md](./ssh_keys.md) | 6 |
 | Task Triggers | [task_triggers.md](./task_triggers.md) | 16 |
 | Tasks | [tasks.md](./tasks.md) | 26 |
 | User App Agent Routes | [user_app_agent_routes.md](./user_app_agent_routes.md) | 5 |
 | User Workspaces | [user_workspaces.md](./user_workspaces.md) | 5 |
-| Users | [users.md](./users.md) | 18 |
+| Users | [users.md](./users.md) | 19 |
 | Webapp | [webapp.md](./webapp.md) | 4 |
 | Webapp Chat | [webapp_chat.md](./webapp_chat.md) | 6 |
 | Webapp Interface Config | [webapp_interface_config.md](./webapp_interface_config.md) | 2 |

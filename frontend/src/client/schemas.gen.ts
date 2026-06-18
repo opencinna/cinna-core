@@ -1558,6 +1558,17 @@ export const AccountConfigProviderPublicSchema = {
             ],
             title: 'Model'
         },
+        default_model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Model'
+        },
         api_key: {
             type: 'string',
             title: 'Api Key'
@@ -3137,6 +3148,17 @@ export const AgentApiConnectedAgentSchema = {
                 }
             ],
             title: 'Ui Color Preset'
+        },
+        owner_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Email'
         }
     },
     type: 'object',

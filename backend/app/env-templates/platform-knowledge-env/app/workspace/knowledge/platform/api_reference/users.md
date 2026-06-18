@@ -97,6 +97,13 @@ Auto-generated from OpenAPI spec. Tag: `users`
 
 ---
 
+## POST `/api/v1/users/me/resend-confirmation`
+**Resend Confirmation Me**
+
+**Response:** `ResendConfirmationResponse`
+
+---
+
 ## GET `/api/v1/users/me/role`
 **Read My Role**
 

@@ -219,6 +219,7 @@ export type AccountConfigProviderPublic = {
     descriptor_slug: string;
     base_url?: (string | null);
     model?: (string | null);
+    default_model?: (string | null);
     api_key: string;
     is_default: boolean;
     is_admin_managed: boolean;
@@ -608,6 +609,7 @@ export type AgentApiConnectedAgent = {
     id: string;
     name: string;
     ui_color_preset?: (string | null);
+    owner_email?: (string | null);
 };
 
 /**
