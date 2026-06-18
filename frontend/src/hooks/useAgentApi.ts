@@ -54,20 +54,3 @@ export function useAgentApiStatus(agentId: string, enabled = true) {
 
   return query
 }
-
-/**
- * Fetches the harvested OpenAPI spec (owner preview).
- * Query key: ["agentApiSpec", agentId]
- */
-export function useAgentApiSpec(agentId: string, enabled = true) {
-  return useQuery<Record<string, unknown>>({
-    queryKey: ["agentApiSpec", agentId],
-    queryFn: () =>
-      AgentApiService.getAgentApiSpec({ agentId }) as Promise<
-        Record<string, unknown>
-      >,
-    enabled: !!agentId && enabled,
-    staleTime: 30_000,
-    retry: false,
-  })
-}

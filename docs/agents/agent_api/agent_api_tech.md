@@ -145,7 +145,7 @@ Prefix: `/api/v1/agents/{agent_id}/agent-api`; requires authenticated owner (or 
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/_status` | Build/run status. Never spawns the serving child. Works regardless of `agent_api_enabled` (reports `disabled`). |
-| `POST` | `/_refresh` | Force an import-only re-harvest (`get_spec(force_refresh=True)` + `load_policy(force_refresh=True)`) and return the updated status. Refreshes the cached spec **and** re-parses `policy.yaml`, and clears a sticky boot/harvest error that would otherwise only clear on the next automatic re-harvest. Best-effort — never raises on a harvest failure; the returned `last_error` reflects the outcome. Drives the producer card's **Refresh** and **Retry** buttons. |
+| `POST` | `/_refresh` | Force an import-only re-harvest (`get_spec(force_refresh=True)` + `load_policy(force_refresh=True)`) and return the updated status. Refreshes the cached spec **and** re-parses `policy.yaml`, and clears a sticky boot/harvest error that would otherwise only clear on the next automatic re-harvest. **Wake-on-refresh:** when the producer env is not running, the handler first attempts to wake it via `resolve_running_producer_env` (same cold-start machinery used by the consumer proxy: kicks `EnvironmentService.activate_environment`, then blocks up to `ACTIVATION_WAIT_SECONDS` via `_wait_for_running_env`). The re-harvest runs only once the env reaches `running`. On a successful wake, `update_last_activity` is bumped so the newly-woken env is not immediately re-suspended. The whole wake attempt is wrapped in `try/except AgentApiError` — best-effort, never raises; the returned `state` reflects reality (see **State semantics** below). No route signature or response-model change; no client regeneration was needed. Drives the producer card's **Refresh** and **Retry** buttons. |
 | `GET` | `/openapi.json` | Harvested spec from cache, or import-only harvest. Requires `agent_api_enabled`. |
 | `ANY` | `/proxy/{path:path}` | Full HTTP passthrough for owner testing. Requires running env. No policy enforcement (owner-only). Excluded from OpenAPI schema. |
 | `POST` | `/connect` | "Connect Agent API" helper — mints token + creates connection credential + optional consumer link. Returns `ConnectAgentApiResponse`. |
@@ -185,7 +185,7 @@ Agent disabled or not found → `404` (no existence leak). Invalid/revoked token
 - `authorize_consumer_request(session, agent, token, method, path, body_size, incoming_headers)` → `(environment, hop_headers)` — orchestrates: load cached policy → enforce it → compute request-loop headers → resolve + auto-activate-and-wait for env. Policy enforcement runs BEFORE env resolution so a 405/413/429 never wakes a suspended env.
 
 **Status and spec:**
-- `get_status(session, agent, environment)` → `dict` — reports `state` of `disabled` | `not_running` | `running` | `error`, spec availability, last error, policy summary, and `spec_fetched_at` (ISO timestamp of the last successful harvest, from `agent_api_spec_fetched_at`). `state` tracks the *serving child's* current health while `spec_fetched_at` dates the *cached spec* — the two are reported separately so a stale spec is visible instead of masquerading as current. Never spawns the serving child.
+- `get_status(session, agent, environment)` → `dict` — reports `state`, spec availability, last error, policy summary, and `spec_fetched_at` (ISO timestamp of the last successful harvest, from `agent_api_spec_fetched_at`). `state` tracks the *serving child's* current health (see **State semantics** below) while `spec_fetched_at` dates the *cached spec* — the two are reported separately so a stale spec is visible instead of masquerading as current. Never spawns the serving child.
 - `get_spec(session, environment, force_refresh)` → `dict` — serves from `agent_api_spec_parsed` cache when present; otherwise calls `adapter.get_agent_api_spec()` (import-only harvest via env-core, no child spawn). Caches result. Raises if env not running and cache is cold.
 - `cache_spec(session, environment, spec)` — persists spec + clears prior error.
 - `refresh_spec_cache(environment_id)` — async class method called on the env-core reload notification; re-harvests + re-caches spec + policy; emits `AGENT_API_STATUS_CHANGED` event. Best-effort, never raises.
@@ -330,19 +330,52 @@ Unknown keys are silently ignored. An empty or missing file applies `DEFAULT_POL
 
 ## Frontend Components
 
-- `AgentRestApiCard.tsx` — producer "Agent REST API" card: enable toggle, status badge from `["agentApiStatus", agentId]` (live-updated via `AGENT_API_STATUS_CHANGED`), a View Spec + Refresh button row (View Spec → `openAgentApiSpec(agentId)` opens a new tab; Refresh → `refreshAgentApiStatus` re-harvests spec + re-parses policy, seeds `["agentApiStatus", agentId]`, invalidates `["agentApiSpec", agentId]`, and toasts), and the **Connections** list from `["agentApiConnections", agentId]`. Each row renders consumer agents as Bot badges (`getColorPreset(ui_color_preset)`), each paired with the owner's email (muted text) to disambiguate same-named agents, plus a Disconnect (`AlertDialog` → `deleteAgentApiConnection`) button. No token management UI. On `state === "error"` it shows the compact `summarizeBootError(last_error)` line with a **Details** toggle and a **Retry** button; Retry shares the same `refreshMutation` so a sticky error clears immediately.
+- `AgentRestApiCard.tsx` — producer "Agent REST API" card: enable toggle, status badge from `["agentApiStatus", agentId]` (live-updated via `AGENT_API_STATUS_CHANGED`), a View Spec + Refresh button row (View Spec → `openAgentApiSpec(agentId)` opens a new tab; Refresh → polls `POST /_refresh` in a bounded loop applying the **terminal-state contract** below — shows **"Waking up agent…"** while `state === "not_running"`, then resolves terminally based on `envRunning` + `spec_available`/`last_error`; seeds `["agentApiStatus", agentId]` and invalidates `["agentApiSpec", agentId]`), and the **Connections** list from `["agentApiConnections", agentId]`. Each row renders consumer agents as Bot badges (`getColorPreset(ui_color_preset)`), each paired with the owner's email (muted text) to disambiguate same-named agents, plus a Disconnect (`AlertDialog` → `deleteAgentApiConnection`) button. No token management UI. On `state === "error"` or `last_error` it shows the compact `summarizeBootError(last_error)` line with a **Details** toggle and a **Retry** button; Retry shares the same refresh loop so a sticky error clears immediately.
 - `AgentApiConnectionView.tsx` — `agent_api` credential detail panel: fetches `["agentApiConnection", credentialId]` (`readAgentApiConnection`), shows producer + consumer Bot badges + View Spec (`openAgentApiSpec(producerAgentId)` → new tab) + editable name/notes.
-- `OpenApiSpecViewer.tsx` / `routes/agent-api-spec/$agentId.tsx` — rendered, read-only spec viewer opened by View Spec; the route reuses `useAgentApiSpec(agentId)` (`["agentApiSpec", agentId]`). See [spec_viewer_tech.md](spec_viewer_tech.md).
+- `OpenApiSpecViewer.tsx` / `routes/agent-api-spec/$agentId.tsx` — rendered, read-only spec viewer opened by View Spec; the route fetches the spec directly (interleaved with the wake-poll loop) rather than via `useAgentApiSpec`. See [spec_viewer_tech.md](spec_viewer_tech.md).
 - `ConnectAgentApiDialog.tsx` — wraps `AgentSelectorDialog`; selecting an API-enabled producer (excluding the current agent) calls `connectAgentApi` then invalidates `["credentials"]` + `["agentApiConnections", producerId]`.
 - `AgentEnvironmentsTab.tsx` — `agent_api_enabled` switch alongside `webapp_enabled`.
 - `EnvironmentPanel.tsx` — "Agent API" tab in the workspace file tree for browsing `agent_api/` files.
+
+### State semantics and terminal-state contract
+
+The `state` field in the `/_status` and `/_refresh` response has **two independent layers**:
+
+| `state` value | What it represents |
+|---|---|
+| `disabled` | `agent_api_enabled` is `false` on the Agent row |
+| `not_running` | The **env** (container) is not yet running (starting, suspended, stopped at the env lifecycle level) |
+| `running` | The **serving child app** (`uvicorn` subprocess on port 9100) is healthy |
+| `stopped` | Env is running but the serving child is idle (reaped after 5 min without proxy traffic) |
+| `empty` | Env is running, child is healthy, but no endpoints are exposed |
+| `error` | Boot or harvest error on the serving child or the import-only harvest |
+
+**Critical distinction:** `stopped` means the *serving child app* is idle, NOT that the environment is down. The spec is always served from the import-only harvest cache — the serving child is never needed for spec reads. A producer with `state === "stopped"` has a fully usable spec.
+
+**Terminal-state criterion** used by both `AgentRestApiCard.tsx` and `routes/agent-api-spec/$agentId.tsx`:
+
+```
+envRunning = (state !== "not_running")     // env lifecycle: is the container up?
+harvestFailed = (state === "error") || !!last_error
+specReady = !!spec_available && !last_error
+```
+
+Decision order (applied once `envRunning` is true — env container is up):
+
+1. **Failure** — `harvestFailed` → toast/show error; stop polling.
+2. **Success** — `specReady` → toast/render spec; stop polling. This fires for `state === "running"`, `"stopped"`, `"empty with prior spec"`, etc. — any running-env state where the spec is available and no error is set.
+3. **Empty** — env running, no spec, no error → toast "no endpoints yet"; stop polling.
+
+Only `state === "not_running"` (env container genuinely not up yet) keeps the poll alive. `spec_available` and `last_error` are mutually exclusive on the live path — a successful harvest sets `spec_available` and clears `last_error`; a failed one sets `last_error` only.
+
+The `AgentApiStatus` TypeScript interface in `frontend/src/hooks/useAgentApi.ts` mirrors these values: `state: "disabled" | "not_running" | "running" | "error" | "stopped" | "empty"`.
 
 ### React Query Keys
 
 - `["agentApiStatus", agentId]` — live build/run status (producer card)
 - `["agentApiConnections", agentId]` — producer's connection list
 - `["agentApiConnection", credentialId]` — single connection detail (credential page)
-- `["agentApiSpec", agentId]` — harvested spec
+- `["agentApiSpec", agentId]` — harvested spec (invalidated by Refresh; no longer backed by a `useAgentApiSpec` hook — the spec route fetches directly)
 
 ---
 
@@ -394,4 +427,4 @@ Event `meta` payload:
 
 ---
 
-*Last updated: 2026-06-04*
+*Last updated: 2026-06-18*

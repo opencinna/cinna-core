@@ -40,6 +40,15 @@ Business rules tested:
   25. Cold start: consumer call to a STOPPED producer env auto-activates too (parity)
   26. Cold start: activation failure (env → error) → consumer gets 503
   27. Cold start: env still not running after the grace window → consumer gets 503
+  28. _refresh: suspended producer env is woken before re-harvest; returns state=running (HTTP 200)
+  29. _refresh: stopped producer env is woken before re-harvest; returns state=running (HTTP 200)
+  30. _refresh: activation failure → HTTP 200 with non-running state (never raises 5xx)
+  31. _refresh: env still booting after grace window → HTTP 200 with non-running state (not 5xx)
+  32. _refresh: already-running env re-harvests spec and returns state=running (regression guard)
+  33. _refresh: running env whose producer child is stopped but spec is harvested reports
+      spec_available=True with no error and child state="stopped" — frontend terminal-success
+      contract (env running + spec_available + no last_error → treat as SUCCESS regardless of
+      child-app state). Sibling case: child state="empty" + no spec → spec_available=False.
 """
 import uuid
 from urllib.parse import urlsplit
@@ -70,6 +79,10 @@ def _owner_base(agent_id: str) -> str:
 
 def _status_url(agent_id: str) -> str:
     return f"{_owner_base(agent_id)}/_status"
+
+
+def _refresh_url(agent_id: str) -> str:
+    return f"{_owner_base(agent_id)}/_refresh"
 
 
 def _owner_spec_url(agent_id: str) -> str:
@@ -1875,3 +1888,438 @@ def test_consumer_proxy_activation_timeout_returns_503(
     )
     assert r.status_code == 503, r.text
     assert "still starting" in r.json().get("detail", "")
+
+
+# ── L. _refresh owner route: wake-before-harvest ──────────────────────────────
+#
+# POST /_refresh wakes a suspended/stopped producer env (mirrors the consumer
+# cold-start path in section K) and then re-harvests the spec. The key contract
+# differences from the consumer proxy cold-start:
+#
+#   1. The route is owner-authenticated (no token required), so the owner can
+#      force a spec/policy refresh even when the env is idle.
+#   2. _refresh is BEST-EFFORT / NEVER-RAISES: activation failure or a still-
+#      booting env are surfaced via the status payload (state != "running") at
+#      HTTP 200, not as a 5xx. The existing cold-start consumer tests confirm
+#      that the underlying resolve_running_producer_env does raise 503 when the
+#      env cannot come up, but the _refresh route catches that exception and
+#      falls through to get_status — so the HTTP response is always 200.
+#
+# Stubbing strategy mirrors section K exactly:
+#   - _set_env_status(): set the env row to "suspended" / "stopped" via the
+#     test DB session (same documented DB-seam helper used by K's tests).
+#   - monkeypatch EnvironmentService.activate_environment with _activate_stub()
+#     so the route's await sees the transition happen immediately.
+#   - A persistent EnvironmentTestAdapter injected via lm.get_adapter so
+#     get_agent_api_status() returns state="running" once the env is up.
+
+
+def test_refresh_wakes_suspended_producer_env(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+    monkeypatch,
+) -> None:
+    """
+    POST /_refresh on a suspended producer env:
+      1. Sets up an API-enabled agent whose env is put into "suspended" state.
+      2. Patches activate_environment to flip the env to "running" synchronously.
+      3. POST /_refresh → HTTP 200, state == "running" (wake + re-harvest succeeded).
+      4. activate_environment was called exactly once (the env was not already running).
+    """
+    agent = _setup_api_agent(client, superuser_token_headers, name="Refresh Wake Suspended")
+    agent_id = agent["id"]
+    env_id = _producer_env_id(client, superuser_token_headers, agent_id)
+
+    # ── Phase 1: put env into suspended state ────────────────────────────
+    _set_env_status(db, env_id, "suspended")
+
+    # ── Phase 2: stub activation to flip env to running ──────────────────
+    activate_calls: list = []
+    monkeypatch.setattr(
+        EnvironmentService,
+        "activate_environment",
+        _activate_stub("running", calls=activate_calls),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_api.agent_api_service.ACTIVATION_POLL_INTERVAL", 0.1
+    )
+
+    # Inject a persistent adapter so get_agent_api_status() returns running.
+    persistent = EnvironmentTestAdapter()
+    lm = EnvironmentService._lifecycle_manager
+    original_get_adapter = lm.get_adapter
+    lm.get_adapter = lambda env: persistent
+    try:
+        # ── Phase 3: POST /_refresh → 200, state == running ──────────────
+        r = client.post(_refresh_url(agent_id), headers=superuser_token_headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["state"] == "running", (
+            f"Expected state=running after wake+reharvest, got: {body}"
+        )
+        assert body["agent_api_enabled"] is True
+
+        # ── Phase 4: activation was triggered (env wasn't already running) ─
+        assert len(activate_calls) == 1, (
+            f"activate_environment should have been called once, got {len(activate_calls)}"
+        )
+    finally:
+        lm.get_adapter = original_get_adapter
+
+
+def test_refresh_wakes_stopped_producer_env(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+    monkeypatch,
+) -> None:
+    """
+    POST /_refresh on a stopped producer env auto-activates it (parity with
+    the suspended case and with the consumer cold-start stopped test).
+      1. Env put into "stopped" state.
+      2. Patches activate_environment to flip to "running".
+      3. POST /_refresh → HTTP 200, state == "running".
+      4. activate_environment called once.
+    """
+    agent = _setup_api_agent(client, superuser_token_headers, name="Refresh Wake Stopped")
+    agent_id = agent["id"]
+    env_id = _producer_env_id(client, superuser_token_headers, agent_id)
+
+    _set_env_status(db, env_id, "stopped")
+
+    activate_calls: list = []
+    monkeypatch.setattr(
+        EnvironmentService,
+        "activate_environment",
+        _activate_stub("running", calls=activate_calls),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_api.agent_api_service.ACTIVATION_POLL_INTERVAL", 0.1
+    )
+
+    persistent = EnvironmentTestAdapter()
+    lm = EnvironmentService._lifecycle_manager
+    original_get_adapter = lm.get_adapter
+    lm.get_adapter = lambda env: persistent
+    try:
+        r = client.post(_refresh_url(agent_id), headers=superuser_token_headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["state"] == "running", (
+            f"Expected state=running after wake+reharvest (stopped), got: {body}"
+        )
+        assert len(activate_calls) == 1
+    finally:
+        lm.get_adapter = original_get_adapter
+
+
+def test_refresh_activation_failure_returns_http_200_not_5xx(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+    monkeypatch,
+) -> None:
+    """
+    POST /_refresh when activation fails (env → error): the route is best-effort
+    and must return HTTP 200 (not 5xx) with a non-running state.
+
+    Bug regression: the old code raised 5xx when the env couldn't come up.
+    The fix catches AgentApiError from resolve_running_producer_env, re-reads
+    the env, and falls through to get_status — which returns 200 with the real
+    env state reflected in the payload.
+    """
+    agent = _setup_api_agent(client, superuser_token_headers, name="Refresh Fail Agent")
+    agent_id = agent["id"]
+    env_id = _producer_env_id(client, superuser_token_headers, agent_id)
+
+    _set_env_status(db, env_id, "suspended")
+
+    # Activation "succeeds" in the sense that the call returns, but the env
+    # is left in "error" status (container failed to start).
+    monkeypatch.setattr(
+        EnvironmentService,
+        "activate_environment",
+        _activate_stub("error", message="Container failed to boot"),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_api.agent_api_service.ACTIVATION_POLL_INTERVAL", 0.1
+    )
+
+    # POST /_refresh — must NOT raise or return 5xx.
+    r = client.post(_refresh_url(agent_id), headers=superuser_token_headers)
+    assert r.status_code == 200, (
+        f"_refresh must return HTTP 200 even when activation fails; got {r.status_code}: {r.text}"
+    )
+    body = r.json()
+    # state must not be "running" — the env errored out.
+    assert body["state"] != "running", (
+        f"state should reflect the failed activation, not 'running': {body}"
+    )
+    assert body["agent_api_enabled"] is True
+
+
+def test_refresh_activation_timeout_returns_http_200_not_5xx(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+    monkeypatch,
+) -> None:
+    """
+    POST /_refresh when the env never reaches "running" within the grace window:
+    returns HTTP 200 (not 5xx) with state != "running".
+
+    Mirrors the consumer proxy timeout test (section K) but verifies the owner
+    /_refresh route's best-effort contract: timeout is surfaced in the payload,
+    not as an exception.
+    """
+    agent = _setup_api_agent(client, superuser_token_headers, name="Refresh Timeout Agent")
+    agent_id = agent["id"]
+    env_id = _producer_env_id(client, superuser_token_headers, agent_id)
+
+    _set_env_status(db, env_id, "suspended")
+
+    # Activation fires but leaves the env in "starting" — grace window elapses.
+    monkeypatch.setattr(
+        EnvironmentService,
+        "activate_environment",
+        _activate_stub("starting"),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_api.agent_api_service.ACTIVATION_WAIT_SECONDS", 0.6
+    )
+    monkeypatch.setattr(
+        "app.services.agent_api.agent_api_service.ACTIVATION_POLL_INTERVAL", 0.1
+    )
+
+    r = client.post(_refresh_url(agent_id), headers=superuser_token_headers)
+    assert r.status_code == 200, (
+        f"_refresh must return HTTP 200 even when grace window elapses; got {r.status_code}: {r.text}"
+    )
+    body = r.json()
+    assert body["state"] != "running", (
+        f"state should be non-running when env is still starting: {body}"
+    )
+    assert body["agent_api_enabled"] is True
+
+
+def test_refresh_already_running_env_reharvests_and_returns_running(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+    monkeypatch,
+) -> None:
+    """
+    POST /_refresh on an already-running env:
+      1. Env is running (default stub state after _setup_api_agent).
+      2. POST /_refresh → HTTP 200, state == "running".
+      3. Re-harvest ran (spec_fetched_at is set, spec_available is True).
+      4. activate_environment was NOT called (env was already running).
+
+    Regression guard: the wake path must not break the happy path where
+    the env is already up.
+    """
+    agent = _setup_api_agent(client, superuser_token_headers, name="Refresh Running Agent")
+    agent_id = agent["id"]
+
+    # Confirm the env is running (the stub sets it to running on creation).
+    r = client.get(_status_url(agent_id), headers=superuser_token_headers)
+    assert r.status_code == 200
+    assert r.json()["state"] == "running"
+
+    activate_calls: list = []
+    monkeypatch.setattr(
+        EnvironmentService,
+        "activate_environment",
+        _activate_stub("running", calls=activate_calls),
+    )
+
+    # Persistent adapter returns state=running and a spec for the re-harvest.
+    persistent = EnvironmentTestAdapter()
+    lm = EnvironmentService._lifecycle_manager
+    original_get_adapter = lm.get_adapter
+    lm.get_adapter = lambda env: persistent
+    try:
+        r = client.post(_refresh_url(agent_id), headers=superuser_token_headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["state"] == "running", (
+            f"Already-running env should stay running after _refresh: {body}"
+        )
+        assert body["agent_api_enabled"] is True
+        # Re-harvest caches the spec → spec_available + spec_fetched_at populated.
+        assert body["spec_available"] is True, "Re-harvest should have populated the spec"
+        assert body.get("spec_fetched_at") is not None, (
+            "spec_fetched_at should be set after a successful re-harvest"
+        )
+
+        # activate_environment must NOT have been called (env was already running).
+        assert len(activate_calls) == 0, (
+            f"activate_environment should not be called for an already-running env, "
+            f"got {len(activate_calls)} calls"
+        )
+    finally:
+        lm.get_adapter = original_get_adapter
+
+
+def test_refresh_requires_owner_authentication(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    POST /_refresh ownership and authentication guards (regression guard for
+    the route's auth/ownership layer — identical contract to _status):
+      1. Unauthenticated request → 401/403.
+      2. Non-owner → 404 (no existence leak).
+      3. Ghost agent ID → 404.
+    """
+    agent = _setup_api_agent(client, superuser_token_headers, name="Refresh Auth Agent")
+    agent_id = agent["id"]
+
+    # ── Phase 1: unauthenticated → 401/403 ───────────────────────────────
+    r = client.post(_refresh_url(agent_id))
+    assert r.status_code in (401, 403), (
+        f"Unauthenticated _refresh should be rejected; got {r.status_code}"
+    )
+
+    # ── Phase 2: non-owner → 404 (no existence leak) ─────────────────────
+    _, other_headers = create_random_user_with_headers(client)
+    r = client.post(_refresh_url(agent_id), headers=other_headers)
+    assert r.status_code == 404, (
+        f"Non-owner _refresh should return 404; got {r.status_code}"
+    )
+
+    # ── Phase 3: ghost agent ID → 404 ────────────────────────────────────
+    ghost = str(uuid.uuid4())
+    r = client.post(_refresh_url(ghost), headers=superuser_token_headers)
+    assert r.status_code == 404
+
+
+def test_refresh_running_env_stopped_child_with_harvested_spec_reports_terminal_success(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    Frontend bug regression guard — contract: _refresh payload for a RUNNING env
+    whose producer child-app is stopped/idle but whose spec was already harvested.
+
+    The bug: the frontend Refresh / View-Spec loop only accepted state=="running"
+    as terminal success, so a "stopped" child-app (env running, spec available,
+    no error) spun forever.  The frontend fix treats
+    ``env running + spec_available=True + last_error=None`` as terminal SUCCESS
+    regardless of the child-app ``state``.
+
+    This test guards the backend payload contract that the fixed frontend relies
+    on:
+      1. POST /_refresh on a running env whose live adapter reports
+         state="stopped", child_running=False, has_app=True, spec_available=True,
+         last_error=None (the exact repro shape).
+      2. Response is HTTP 200.
+      3. spec_available is True — spec was harvested; frontend can show "View Spec".
+      4. last_error is None/falsy — no harvest error; frontend can treat as success.
+      5. state reflects the child-app state ("stopped") — the frontend must accept
+         this as terminal, not loop.
+
+    Sibling / complementary case (Phase 2):
+      6. Child app in "empty" state (state="empty", spec_available=False, no error):
+         response must report spec_available=False with no error, so the frontend's
+         "no endpoints yet" terminal branch is also contract-backed.
+
+    Adapter control: ``EnvironmentTestAdapter.get_agent_api_status()`` derives
+    ``spec_available`` as ``agent_api_spec is not None or agent_api_state == "running"``.
+    Setting ``agent_api_state="stopped"`` and ``agent_api_spec={...}`` (non-None)
+    produces ``spec_available=True, child_running=False, state="stopped"`` — the
+    exact harvested-but-idle shape from the bug report.
+    For the empty case: ``agent_api_state="empty"`` and ``agent_api_spec=None``
+    produces ``spec_available=False, state="empty"``.
+    No custom adapter subclass or new stub machinery is needed.
+    """
+    agent = _setup_api_agent(
+        client, superuser_token_headers, name="Stopped Child Harvested Spec Agent"
+    )
+    agent_id = agent["id"]
+
+    # ── Phase 1: running env, stopped child, spec already harvested ───────
+    #
+    # Inject an adapter that simulates the bug-repro shape:
+    #   state="stopped", child_running=False, has_app=True,
+    #   spec_available=True (because agent_api_spec is non-None), last_error=None.
+    stopped_child_adapter = EnvironmentTestAdapter()
+    stopped_child_adapter.agent_api_state = "stopped"
+    # A non-None spec causes spec_available=True in get_agent_api_status()
+    # even though the child is not running — the spec was harvested previously.
+    stopped_child_adapter.agent_api_spec = {
+        "openapi": "3.1.0",
+        "info": {"title": "Harvested Spec", "version": "1.0.0"},
+        "paths": {},
+    }
+
+    lm = EnvironmentService._lifecycle_manager
+    original_get_adapter = lm.get_adapter
+    lm.get_adapter = lambda env: stopped_child_adapter
+    try:
+        r = client.post(_refresh_url(agent_id), headers=superuser_token_headers)
+
+        # Contract assertion 1: always HTTP 200 (best-effort, never 5xx).
+        assert r.status_code == 200, (
+            f"_refresh must return HTTP 200 for running-env/stopped-child; got {r.status_code}: {r.text}"
+        )
+        body = r.json()
+
+        # Contract assertion 2: spec_available=True — spec was harvested;
+        # the frontend terminal-success branch depends on this.
+        assert body["spec_available"] is True, (
+            f"spec_available must be True when spec was harvested even if child is stopped: {body}"
+        )
+
+        # Contract assertion 3: last_error is falsy — no harvest error;
+        # the frontend uses this (with spec_available) to confirm success.
+        assert not body.get("last_error"), (
+            f"last_error must be None/falsy for a clean stopped-child state: {body}"
+        )
+
+        # Contract assertion 4: state reflects the child-app state "stopped";
+        # the frontend must accept this as terminal SUCCESS (not keep looping).
+        assert body["state"] == "stopped", (
+            f"state must reflect the child-app state 'stopped' in the payload: {body}"
+        )
+
+        # Child-running flag matches the stopped child (frontend may use this
+        # to decide whether to show a "start app" affordance).
+        assert body.get("child_running") is False, (
+            f"child_running must be False for a stopped child: {body}"
+        )
+
+        # ── Phase 2: empty child, no spec yet — frontend "no endpoints" branch ─
+        #
+        # state="empty" + spec_available=False + no error confirms that the
+        # "no endpoints yet" terminal branch is contract-backed on the backend.
+        empty_child_adapter = EnvironmentTestAdapter()
+        empty_child_adapter.agent_api_state = "empty"
+        empty_child_adapter.agent_api_spec = None  # spec not harvested yet
+
+        lm.get_adapter = lambda env: empty_child_adapter
+
+        r2 = client.post(_refresh_url(agent_id), headers=superuser_token_headers)
+        assert r2.status_code == 200, (
+            f"_refresh must return HTTP 200 for running-env/empty-child; got {r2.status_code}: {r2.text}"
+        )
+        body2 = r2.json()
+
+        # No spec harvested → spec_available=False (child never ran the app).
+        assert body2["spec_available"] is False, (
+            f"spec_available must be False when child is empty with no spec: {body2}"
+        )
+
+        # No error — the empty state is not an error condition.
+        assert not body2.get("last_error"), (
+            f"last_error must be None/falsy for an empty-child state: {body2}"
+        )
+
+        # State propagated correctly from the live adapter.
+        assert body2["state"] == "empty", (
+            f"state must reflect the child-app state 'empty' in the payload: {body2}"
+        )
+
+    finally:
+        lm.get_adapter = original_get_adapter

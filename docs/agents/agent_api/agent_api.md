@@ -90,6 +90,8 @@ Typed function parameters, `Query(le=, ge=, regex=)` constraints, and Pydantic `
 ```
 1. Owner enables agent_api on producer Agent A. Owner can click "View Spec"
    to open the rendered OpenAPI docs in a new tab (see [Spec Viewer](spec_viewer.md)).
+   If the producer env is suspended or stopped at that moment, the Spec Viewer
+   wakes it first (showing "Waking up agent…") before loading the spec.
 2. In a building session, agent A writes agent_api/*.py + policy.yaml.
    env-core reloads the supervised child; spec cache refreshes on the backend.
 3. From consumer Agent B's Credentials tab, the owner clicks "Connect Agent API"
@@ -169,7 +171,9 @@ The producer card is **enable + View Spec + Refresh + a Connections list** — t
 | **Error** | A **compact one-line summary** of the boot/harvest failure (e.g. "API failed to start. Error 404. Probably, not implemented yet."), a **Details** toggle that reveals the full raw error, and a **Retry** button. |
 | **Enabled** | Status badge, a **View Spec** button (opens the harvested OpenAPI as rendered docs in a new tab — see [Spec Viewer](spec_viewer.md)), a **Refresh** button, and a **Connections** section listing the agents consuming this API. |
 
-**Refresh button.** Next to **View Spec**, the **Refresh** button forces an on-demand re-harvest — it re-imports the producer's `agent_api/` modules to refresh the cached OpenAPI spec **and** re-parses `policy.yaml` to refresh the cached guardrails (`POST /_refresh` → `get_spec(force_refresh=True)` + `load_policy(force_refresh=True)`). By default both caches only refresh on the next *automatic* re-harvest (triggered when the producer edits a workspace file), so a `policy.yaml` edit applied out-of-band — or a transient harvest error — would otherwise stick until the next edit. Refresh clears it immediately. It is the same mechanism the error banner's **Retry** button uses.
+**Refresh button.** Next to **View Spec**, the **Refresh** button forces an on-demand re-harvest: it re-imports the producer's `agent_api/` modules to refresh the cached OpenAPI spec **and** re-parses `policy.yaml` to refresh the cached guardrails (`POST /_refresh` → `get_spec(force_refresh=True)` + `load_policy(force_refresh=True)`). By default both caches only refresh on the next *automatic* re-harvest (triggered when the producer edits a workspace file), so a `policy.yaml` edit applied out-of-band — or a transient harvest error — would otherwise stick until the next edit. Refresh clears it immediately. It is the same mechanism the error banner's **Retry** button uses.
+
+If the producer environment is **suspended or stopped** when Refresh is clicked, the button first wakes the environment — showing a **"Waking up agent…"** state and polling `_refresh` in a bounded loop until the env reports `running`. The re-harvest runs only once the env is up. On success it toasts confirmed; on `state === "error"` it toasts an error. There is no false "refreshed" toast while the env is still down.
 
 **Error banner — compact summary + Retry.** The raw boot/harvest error can be a long traceback or HTTP error string; the banner shows a short human summary (it extracts the HTTP status code when present and adds "Probably, not implemented yet." for a 404) with the full text behind **Details**. The error caches are *sticky* — env-core's in-memory boot error and the env-row spec error only clear on a successful re-harvest, which by default happens only when the producer edits a file. **Retry** forces an immediate re-harvest so a transient or already-fixed error clears without waiting for the next edit.
 
@@ -227,4 +231,4 @@ For bundles that need per-user authority on top of the shared connection, pair t
 
 ---
 
-*Last updated: 2026-06-02*
+*Last updated: 2026-06-18*
