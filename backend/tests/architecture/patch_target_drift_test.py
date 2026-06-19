@@ -56,6 +56,7 @@ HOW IT WORKS
 from __future__ import annotations
 
 import ast
+import functools
 import pathlib
 import re
 
@@ -112,6 +113,15 @@ ALLOWED_UNPATCHED_BG_TARGETS: set[str] = set()
 
 # ── Importer discovery (AST, module-level only) ─────────────────────────────────
 
+# Directories under app/ that hold *vendored* third-party code, not first-party
+# app modules. ``env-templates`` ships full agent-runtime virtualenvs (~10k .py
+# files); walking + AST-parsing them dominates this test's runtime (~12s/scan)
+# and they can never be patch targets. Pruning them at the directory level keeps
+# the scan to the ~600 real app modules (sub-second).
+_PRUNED_DIR_NAMES = frozenset(
+    {"env-templates", ".venv", "site-packages", "node_modules", "__pycache__"}
+)
+
 
 def _module_dotted_path(path: pathlib.Path) -> str:
     """`backend/app/services/x/y.py` -> `app.services.x.y`."""
@@ -119,14 +129,43 @@ def _module_dotted_path(path: pathlib.Path) -> str:
     return ".".join(rel.parts)
 
 
-def _collect_module_level_importers(source_module: str, name: str) -> set[str]:
-    """Return ``{"<module>.<bound_name>"}`` for top-level ``from <source_module> import <name> [as X]``.
+def _iter_app_source_files() -> list[pathlib.Path]:
+    """First-party ``.py`` files under ``app/``, pruning vendored subtrees.
+
+    Uses ``os.walk`` so pruned directories are skipped without descending into
+    them (``rglob`` would still traverse the whole vendored tree).
+    """
+    import os
+
+    files: list[pathlib.Path] = []
+    for dirpath, dirnames, filenames in os.walk(APP_ROOT):
+        dirnames[:] = [d for d in dirnames if d not in _PRUNED_DIR_NAMES]
+        for fn in filenames:
+            if fn.endswith(".py"):
+                files.append(pathlib.Path(dirpath) / fn)
+    return files
+
+
+# The (source_module, name) pairs this test cares about. Collected in a single
+# AST pass so the ~600-file source tree is parsed once, not once per pair.
+_TRACKED_IMPORTS = (
+    (_SESSION_SOURCE_MODULE, _SESSION_NAME),
+    (_BG_SOURCE_MODULE, _BG_NAME),
+)
+
+
+@functools.lru_cache(maxsize=None)
+def _scan_all_importers() -> dict[tuple[str, str], frozenset[str]]:
+    """Walk the app source tree ONCE; collect module-level importers per tracked pair.
+
+    Returns ``{(source_module, name): {"<module>.<bound_name>", ...}}``.
 
     Function-local imports are intentionally ignored (see module docstring): we
     only inspect ``tree.body`` (module scope), never nested function bodies.
+    Cached: every test in this module shares the single scan.
     """
-    targets: set[str] = set()
-    for path in sorted(APP_ROOT.rglob("*.py")):
+    tracked = {pair: set() for pair in _TRACKED_IMPORTS}
+    for path in sorted(_iter_app_source_files()):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, SyntaxError):
@@ -135,13 +174,18 @@ def _collect_module_level_importers(source_module: str, name: str) -> set[str]:
         for node in tree.body:  # module scope only
             if not isinstance(node, ast.ImportFrom):
                 continue
-            if (node.module or "") != source_module:
-                continue
+            src = node.module or ""
             for alias in node.names:
-                if alias.name == name:
+                pair = (src, alias.name)
+                if pair in tracked:
                     bound = alias.asname or alias.name
-                    targets.add(f"{module}.{bound}")
-    return targets
+                    tracked[pair].add(f"{module}.{bound}")
+    return {pair: frozenset(found) for pair, found in tracked.items()}
+
+
+def _collect_module_level_importers(source_module: str, name: str) -> frozenset[str]:
+    """Module-level importer targets for one tracked ``(source_module, name)`` pair."""
+    return _scan_all_importers()[(source_module, name)]
 
 
 # ── Patch-target union (fixtures constants + conftest inline literals) ──────────

@@ -13,7 +13,7 @@ the second-factor challenge.
 import uuid
 from datetime import datetime, UTC
 
-from sqlalchemy import Index
+from sqlalchemy import DateTime, Index
 from sqlmodel import Field, SQLModel
 
 
@@ -41,10 +41,15 @@ class UserTrustedDevice(SQLModel, table=True):
     token_hash: str = Field()
     # ``created_at + remember_device_days``. The skip is rejected once
     # ``now >= expires_at``.
-    expires_at: datetime = Field()
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    expires_at: datetime = Field(sa_type=DateTime(timezone=True))
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        sa_type=DateTime(timezone=True),
+    )
     # Updated each time the token is used to skip a challenge.
-    last_used_at: datetime | None = Field(default=None)
+    last_used_at: datetime | None = Field(
+        default=None, sa_type=DateTime(timezone=True)
+    )
     # Best-effort device label — truncated User-Agent captured at mint
     # time. Display-only.
     label: str | None = Field(default=None, max_length=256)

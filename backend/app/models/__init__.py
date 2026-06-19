@@ -14,6 +14,8 @@ from .users.user import (
     UserRole,
     UserRolePublic,
     UserRoleUpdate,
+    UserDetailsUpdate,
+    UserDetailsPublic,
     UpdatePassword,
     Message,
     NewPassword,

@@ -47,7 +47,7 @@ class CredentialBase(SQLModel):
     # the same slot; their names and token values differ. Steers the install-time
     # auto-prefill matcher (top-precedence tier) without carrying any authority
     # itself — plaintext, never encrypted, never redacted. NULL = legacy behavior.
-    service_uri: str | None = Field(default=None)
+    service_uri: str | None = Field(default=None, sa_type=Text)
     # Per-mode applicability for MCP_PROVIDER credentials. These live on the
     # credential row (not inside the encrypted blob) so the per-mode MCP manifest
     # collector can filter cheaply without decrypting, and so they appear plainly

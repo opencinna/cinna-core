@@ -20,6 +20,7 @@ from tests.utils.credential import (
     get_agent_credentials,
     get_credential_with_data,
     link_credential_to_agent,
+    real_credentials_json,
     unlink_credential_from_agent,
     update_credential,
 )
@@ -119,7 +120,7 @@ def test_service_account_credential_agent_env_sync(
     assert env_data, "Adapter should have received credentials"
 
     # credentials_json: one entry with file_path reference (no private key)
-    creds_json = env_data["credentials_json"]
+    creds_json = real_credentials_json(env_data)
     assert len(creds_json) == 1
     entry = creds_json[0]
     assert entry["id"] == credential_id
@@ -159,7 +160,7 @@ def test_service_account_credential_agent_env_sync(
 
     # ── Phase 7: Verify agent-env updated — credential removed ────────
     env_data_after = shared_adapter.credentials_set
-    assert env_data_after["credentials_json"] == []
+    assert real_credentials_json(env_data_after) == []
     assert env_data_after["service_account_files"] == []
 
     # Agent's credential list should be empty

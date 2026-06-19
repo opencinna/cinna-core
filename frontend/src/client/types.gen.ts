@@ -5035,6 +5035,30 @@ export type UserDashboardUpdate = {
     sort_order?: (number | null);
 };
 
+/**
+ * Response for ``GET``/``PATCH /users/me/details``.
+ *
+ * ``details_raw`` is what the user typed (verbatim, for re-opening the
+ * editor); ``details_parsed`` is the normalized ``{UPPER_SNAKE: "value"}``
+ * map. Both ``None`` when no details are set.
+ */
+export type UserDetailsPublic = {
+    details_raw: (string | null);
+    details_parsed: ({
+    [key: string]: unknown;
+} | null);
+};
+
+/**
+ * Request body for ``PATCH /users/me/details``.
+ *
+ * Free-text env-file content (``KEY = value`` lines). May be empty to
+ * clear the user's details. Parsed/normalized server-side.
+ */
+export type UserDetailsUpdate = {
+    details_raw: string;
+};
+
 export type UserInfoResponse = {
     sub: string;
     email: string;
@@ -8537,6 +8561,14 @@ export type UsersSetPasswordMeData = {
 };
 
 export type UsersSetPasswordMeResponse = (Message);
+
+export type UsersReadUserDetailsMeResponse = (UserDetailsPublic);
+
+export type UsersUpdateUserDetailsMeData = {
+    requestBody: UserDetailsUpdate;
+};
+
+export type UsersUpdateUserDetailsMeResponse = (UserDetailsPublic);
 
 export type UsersResendConfirmationMeResponse = (ResendConfirmationResponse);
 

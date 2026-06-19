@@ -19,7 +19,7 @@ from app.core.ssh_key_utils import (
     is_private_key_encrypted,
     validate_key_pair,
 )
-from app.models import Credential, Agent, AgentEnvironment, AgentCredentialLink, CredentialCreate, CredentialUpdate, CredentialType
+from app.models import Credential, Agent, AgentEnvironment, AgentCredentialLink, CredentialCreate, CredentialUpdate, CredentialType, User
 
 logger = logging.getLogger(__name__)
 
@@ -809,11 +809,50 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         lines.append("---")
         lines.append("")
 
+        # Current-user identity/details section (synthetic, not a real credential).
+        # Emitted whenever the reserved `current_user` entry is present so the
+        # agent knows who it is operating on behalf of. Carries no secrets.
+        for cred in credentials:
+            if cred.get("type") != "current_user":
+                continue
+            data = cred.get("credential_data", {}) or {}
+            full_name = data.get("full_name")
+            email = data.get("email")
+            who = full_name or email or "the install owner"
+            lines.append("## Current User")
+            lines.append("")
+            lines.append(
+                f"This agent is operating on behalf of **{who}**"
+                + (f" (`{email}`)" if email and email != who else "")
+                + "."
+            )
+            lines.append("")
+            lines.append(
+                "Read the owner's identity and self-authored details "
+                "programmatically:"
+            )
+            lines.append("")
+            lines.append("```python")
+            lines.append("creds = {c['id']: c['credential_data'] for c in all_credentials}")
+            lines.append("me = creds['current_user']")
+            lines.append("send_to = me['email']")
+            lines.append("detail = me['custom_details'].get('SOME_KEY')")
+            lines.append("```")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+            break
+
         # Add usage examples for each credential type that has data
         has_examples = False
         for cred in credentials:
             cred_type = cred["type"]
             credential_data = cred["credential_data"]
+
+            # The synthetic current_user entry has its own prose section above
+            # and is not a real credential type — skip the usage-example loop.
+            if cred_type == "current_user":
+                continue
 
             # Skip usage examples for empty credentials
             if not credential_data or credential_data == {}:
@@ -1218,6 +1257,32 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 cred["credential_data"]
             )
             filtered_credentials.append(filtered_cred)
+
+        # Inject the synthetic current_user identity/details block built from
+        # the agent owner's User row. This is NOT a real credential — it gives
+        # agent scripts a zero-config way to know who the install owner is and
+        # read the owner's self-authored custom_details. Appended (not
+        # prepended) so existing index-based assumptions are undisturbed.
+        # Guarded: a missing owner must never break credential sync.
+        try:
+            from app.services.users import user_details_service
+
+            agent = session.get(Agent, agent_id)
+            owner = session.get(User, agent.owner_id) if agent else None
+            if owner is not None:
+                filtered_credentials.append(
+                    user_details_service.build_current_user_block(owner)
+                )
+            else:
+                logger.warning(
+                    "Could not resolve owner for agent %s; omitting current_user block",
+                    agent_id,
+                )
+        except Exception:
+            logger.exception(
+                "Failed to build current_user block for agent %s; skipping",
+                agent_id,
+            )
 
         # Generate README with redacted data (for agent prompt context)
         # IMPORTANT: Use filtered_credentials so README matches credentials.json structure

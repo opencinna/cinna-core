@@ -22344,6 +22344,58 @@ export const UserDashboardUpdateSchema = {
     title: 'UserDashboardUpdate'
 } as const;
 
+export const UserDetailsPublicSchema = {
+    properties: {
+        details_raw: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Details Raw'
+        },
+        details_parsed: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Details Parsed'
+        }
+    },
+    type: 'object',
+    required: ['details_raw', 'details_parsed'],
+    title: 'UserDetailsPublic',
+    description: `Response for \`\`GET\`\`/\`\`PATCH /users/me/details\`\`.
+
+\`\`details_raw\`\` is what the user typed (verbatim, for re-opening the
+editor); \`\`details_parsed\`\` is the normalized \`\`{UPPER_SNAKE: "value"}\`\`
+map. Both \`\`None\`\` when no details are set.`
+} as const;
+
+export const UserDetailsUpdateSchema = {
+    properties: {
+        details_raw: {
+            type: 'string',
+            title: 'Details Raw'
+        }
+    },
+    type: 'object',
+    required: ['details_raw'],
+    title: 'UserDetailsUpdate',
+    description: `Request body for \`\`PATCH /users/me/details\`\`.
+
+Free-text env-file content (\`\`KEY = value\`\` lines). May be empty to
+clear the user's details. Parsed/normalized server-side.`
+} as const;
+
 export const UserInfoResponseSchema = {
     properties: {
         sub: {

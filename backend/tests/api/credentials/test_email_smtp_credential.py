@@ -19,6 +19,7 @@ from tests.utils.credential import (
     get_credential_with_data,
     get_agent_credentials,
     link_credential_to_agent,
+    real_credentials_json,
     unlink_credential_from_agent,
 )
 from app.core.config import settings
@@ -225,7 +226,7 @@ def test_email_smtp_agent_env_sync_whitelisting_and_redaction(
     env_data = shared_adapter.credentials_set
     assert env_data, "Adapter should have received credentials"
 
-    creds_json = env_data["credentials_json"]
+    creds_json = real_credentials_json(env_data)
     assert len(creds_json) == 1
     entry = creds_json[0]
     assert entry["id"] == credential_id
@@ -263,7 +264,7 @@ def test_email_smtp_agent_env_sync_whitelisting_and_redaction(
     assert result["message"] == "Credential unlinked successfully"
 
     env_data_after = shared_adapter.credentials_set
-    assert env_data_after["credentials_json"] == []
+    assert real_credentials_json(env_data_after) == []
 
     # Agent's credential list should be empty
     agent_creds = get_agent_credentials(client, superuser_token_headers, agent_id)
