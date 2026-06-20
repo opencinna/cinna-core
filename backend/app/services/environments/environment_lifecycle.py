@@ -99,7 +99,14 @@ class EnvironmentLifecycleManager:
         """
         if environment.type == "docker":
             env_dir = self.instances_dir / str(environment.id)
-            port = environment.config.get("port", self._allocate_port())
+            # NOTE: use an explicit None-check rather than ``config.get("port",
+            # self._allocate_port())`` — dict.get evaluates its default eagerly,
+            # so the latter would call _allocate_port() on every get_adapter()
+            # call (even when a port is already assigned), leaking a port from
+            # the in-memory set each time and eventually exhausting the range.
+            port = environment.config.get("port")
+            if port is None:
+                port = self._allocate_port()
             auth_token = environment.config.get("auth_token")
 
             return DockerEnvironmentAdapter(
@@ -198,7 +205,7 @@ class EnvironmentLifecycleManager:
             db_session.add(environment)
             db_session.commit()
 
-            port = self._allocate_port()
+            port = self._allocate_port(db_session)
             environment.config["port"] = port
             environment.config["container_name"] = f"agent-{environment.id}"
             flag_modified(environment, "config")
@@ -2422,14 +2429,35 @@ MODEL_CONVERSATION={model_conversation}
 
         logger.info(f"Wrote Claude Code hook settings for environment {environment.id}")
 
-    def _allocate_port(self) -> int:
-        """Allocate available port."""
+    def _allocate_port(self, db_session: Session | None = None) -> int:
+        """Allocate an available port.
+
+        The in-memory ``_allocated_ports`` set is per-process (one per worker)
+        and resets on restart, so it is NOT an authoritative record of which
+        ports are in use. When a DB session is available we seed the set with
+        the ports already assigned to existing environments, so allocation
+        cannot hand out a port that is already bound by another environment
+        (e.g. one created by a different worker, or before the last restart).
+        """
+        if db_session is not None:
+            for assigned in self._assigned_ports_from_db(db_session):
+                self._allocated_ports.add(assigned)
+
         for port in range(self.port_range_start, self.port_range_end):
             if port not in self._allocated_ports:
                 self._allocated_ports.add(port)
                 return port
 
         raise Exception("No available ports")
+
+    def _assigned_ports_from_db(self, db_session: Session) -> set[int]:
+        """Return the set of ports currently assigned to environments in the DB."""
+        assigned: set[int] = set()
+        for env in db_session.exec(select(AgentEnvironment)).all():
+            port = (env.config or {}).get("port")
+            if isinstance(port, int):
+                assigned.add(port)
+        return assigned
 
     def _generate_auth_token(self, user_id: UUID) -> str:
         """
