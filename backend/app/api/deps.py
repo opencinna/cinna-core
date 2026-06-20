@@ -380,20 +380,20 @@ async def get_cli_context_ws(websocket: WebSocket, db: SessionDep) -> CLIContext
     WebSocket variant of ``get_cli_context``.
 
     Extracts the CLI JWT from the WS handshake (Authorization header or
-    ``?token=`` query param). On auth failure closes the WebSocket with
-    code 1008 and raises ``WebSocketDisconnect``.
+    ``?token=`` query param). On auth failure raises ``WebSocketException``,
+    which Starlette's default handler turns into a clean close (code 1008 /
+    403 pre-accept). Note: we must NOT raise ``WebSocketDisconnect`` here —
+    Starlette has no handler for it, so it bubbles up as an unhandled
+    "Exception in ASGI application" traceback even though the connection is
+    correctly rejected.
     """
-    from starlette.websockets import WebSocketDisconnect, WebSocketState
+    from starlette.exceptions import WebSocketException
 
     from app.services.cli.cli_auth import CLIAuthError, CLIAuthService
 
     async def _close_and_raise(reason: str) -> None:
-        try:
-            if websocket.client_state != WebSocketState.DISCONNECTED:
-                await websocket.close(code=1008)
-        except Exception:
-            pass
-        raise WebSocketDisconnect(code=1008, reason=reason)
+        # WebSocket close reason frames are capped at 123 bytes.
+        raise WebSocketException(code=1008, reason=reason[:123])
 
     try:
         raw_token = CLIAuthService.decode_cli_jwt_from_websocket(websocket)
@@ -590,12 +590,14 @@ def get_env_console_context_ws(require_terminal: bool):
     ``?token=``, loads the environment named by the ``{id}`` path param, enforces
     owner/superuser access, and — when ``require_terminal`` is True — additionally
     requires the ``agent-developer`` role (or superuser). On any failure it
-    closes the WebSocket with code ``1008`` and raises ``WebSocketDisconnect``
-    (mirrors ``get_cli_context_ws``).
+    raises ``WebSocketException`` (code 1008), which Starlette's default
+    handler turns into a clean close / 403 — mirrors ``get_cli_context_ws``.
+    Raising ``WebSocketDisconnect`` here would bubble up as an unhandled
+    "Exception in ASGI application" traceback (Starlette has no handler for it).
     """
 
     async def _dep(websocket: WebSocket, db: SessionDep) -> EnvConsoleContext:
-        from starlette.websockets import WebSocketDisconnect, WebSocketState
+        from starlette.exceptions import WebSocketException
 
         from app.services.environments.environment_service import (
             EnvironmentService,
@@ -606,12 +608,8 @@ def get_env_console_context_ws(require_terminal: bool):
         from app.services.users.role_service import RoleService
 
         async def _close_and_raise(reason: str) -> None:
-            try:
-                if websocket.client_state != WebSocketState.DISCONNECTED:
-                    await websocket.close(code=1008)
-            except Exception:
-                pass
-            raise WebSocketDisconnect(code=1008, reason=reason)
+            # WebSocket close reason frames are capped at 123 bytes.
+            raise WebSocketException(code=1008, reason=reason[:123])
 
         # 1. Resolve user from the platform JWT
         try:
