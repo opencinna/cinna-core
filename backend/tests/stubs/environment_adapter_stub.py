@@ -89,6 +89,15 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
             "rebuild_overwrite_files": rebuild_overwrite_files,
             "was_running": was_running,
         })
+        # Mirror the real DockerEnvironmentAdapter: when the container was
+        # running before the rebuild, it is started again afterwards. Without
+        # this, get_status() stays "stopped" through the post-rebuild
+        # _setup_new_container, so the lifecycle's container-liveness probe
+        # (is_container_running) wrongly treats a setup-step failure on a
+        # live container as an offline container and re-raises instead of
+        # entering critical state.
+        if was_running:
+            self._status = "running"
         return True
 
     # --- Configuration ---

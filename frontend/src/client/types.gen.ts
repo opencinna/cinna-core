@@ -445,6 +445,9 @@ export type AdminAgentEnvironmentPublic = {
     status: string;
     status_message: (string | null);
     is_active: boolean;
+    critical_state?: boolean;
+    critical_cause?: (string | null);
+    critical_since?: (string | null);
     created_at: string;
     updated_at: string;
     last_health_check: (string | null);
@@ -805,6 +808,29 @@ export type AgentEmailIntegrationPublic = {
     updated_at: string;
 };
 
+/**
+ * Public response model for AgentEnvActionLog.
+ */
+export type AgentEnvActionLogPublic = {
+    id: string;
+    environment_id: string;
+    agent_id: string;
+    action: string;
+    status: string;
+    cause: (string | null);
+    summary: (string | null);
+    detail: (string | null);
+    executed_at: string;
+};
+
+/**
+ * List response model for AgentEnvActionLog.
+ */
+export type AgentEnvActionLogsPublic = {
+    data: Array<AgentEnvActionLogPublic>;
+    count: number;
+};
+
 export type AgentEnvironmentCreate = {
     env_name: string;
     env_version?: string;
@@ -832,6 +858,9 @@ export type AgentEnvironmentPublic = {
     status: string;
     status_message: (string | null);
     is_active: boolean;
+    critical_state?: boolean;
+    critical_cause?: (string | null);
+    critical_since?: (string | null);
     created_at: string;
     updated_at: string;
     last_health_check: (string | null);
@@ -7169,6 +7198,13 @@ export type EnvironmentsGetEnvironmentLogsData = {
 export type EnvironmentsGetEnvironmentLogsResponse = ({
     [key: string]: unknown;
 });
+
+export type EnvironmentsGetEnvironmentActionLogsData = {
+    environmentId: string;
+    limit?: number;
+};
+
+export type EnvironmentsGetEnvironmentActionLogsResponse = (AgentEnvActionLogsPublic);
 
 export type EnvironmentsWorkspaceFilesChangedData = {
     authorization?: (string | null);

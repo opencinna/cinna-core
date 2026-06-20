@@ -114,6 +114,22 @@ async def _poll_due_schedules() -> None:
                     )
                     continue
 
+                # CRON gating: a critical (running-but-degraded) env receives no
+                # scheduled runs. Record the skip, notify (throttled), advance
+                # next_execution to avoid a per-minute skip loop, and continue.
+                # Only CRON is gated — sessions/chat/terminals are untouched.
+                environment = AgentSchedulerService.get_active_environment(
+                    db_session, agent.id
+                )
+                if environment is not None and environment.critical_state:
+                    await _skip_schedule_for_critical_env(
+                        schedule=schedule,
+                        agent=agent,
+                        environment=environment,
+                        db_session=db_session,
+                    )
+                    continue
+
                 if schedule.schedule_type == "script_trigger":
                     await _execute_script_trigger(
                         schedule=schedule,
@@ -136,6 +152,116 @@ async def _poll_due_schedules() -> None:
                 logger.error(
                     f"Error executing schedule {schedule.id}: {e}", exc_info=True
                 )
+
+
+async def _skip_schedule_for_critical_env(
+    *,
+    schedule: AgentSchedule,
+    agent: Agent,
+    environment: Any,
+    db_session: DBSession,
+) -> None:
+    """Record a CRON skip for a critical environment and notify the owner.
+
+    Writes a ``skipped`` AgentScheduleLog + a ``cron_skipped`` env action-log,
+    notifies the owner (throttled by the environment_id dedup scope), and
+    advances ``next_execution`` so the schedule is re-evaluated next cycle
+    rather than re-firing the same due time every minute. All side effects are
+    best-effort — a surfacing failure must never break the poll, and the
+    next_execution advance always runs so the skip loop is broken even if a
+    log/notify step raised.
+    """
+    reason = (
+        "Skipped: environment is in a critical state and is not eligible for "
+        "scheduled execution. Resolve the environment issue and the schedule "
+        "will resume."
+    )
+
+    # 1) Schedule-side record (skipped) — surfaces in the execution-logs modal.
+    try:
+        AgentSchedulerService.create_log(
+            db_session,
+            schedule_id=schedule.id,
+            agent_id=agent.id,
+            schedule_type=schedule.schedule_type,
+            status="skipped",
+            prompt_used=schedule.prompt if schedule.schedule_type != "script_trigger" else None,
+            command_executed=schedule.command if schedule.schedule_type == "script_trigger" else None,
+            error_message=reason,
+        )
+    except Exception as exc:
+        logger.warning(
+            f"Schedule {schedule.id}: failed to write skipped schedule-log: {exc}"
+        )
+
+    # 2) Env-side action-log record (cron_skipped).
+    try:
+        from app.services.environments.agent_env_action_log_service import (
+            AgentEnvActionLogService,
+        )
+
+        AgentEnvActionLogService.record(
+            db_session,
+            environment_id=environment.id,
+            agent_id=agent.id,
+            action="cron_skipped",
+            status="skipped",
+            cause=environment.critical_cause,
+            summary="Scheduled run skipped — environment critical",
+            detail=(
+                f"Schedule '{schedule.name}' skipped because the environment is "
+                f"critical (cause: {environment.critical_cause or 'unknown'})."
+            ),
+        )
+    except Exception as exc:
+        logger.warning(
+            f"Schedule {schedule.id}: failed to write cron_skipped action-log: {exc}"
+        )
+
+    # 3) Owner notification (throttled by environment_id dedup).
+    try:
+        from app.core.config import settings
+        from app.services.notifications.notification_catalog import NotificationType
+        from app.services.notifications.notification_service import (
+            SystemNotificationService,
+        )
+
+        await SystemNotificationService.notify(
+            db_session,
+            user_id=agent.owner_id,
+            notification_type=NotificationType.ENVIRONMENT_CRITICAL,
+            context={
+                "project_name": settings.PROJECT_NAME,
+                "agent_name": agent.name or "your agent",
+                "instance_name": environment.instance_name or str(environment.id),
+                "environment_id": str(environment.id),
+                "reason": "a scheduled run was skipped",
+                "detail": "a scheduled run was skipped",
+                "link": f"{settings.FRONTEND_HOST}/agents/{agent.id}",
+            },
+        )
+    except Exception as exc:
+        logger.debug(
+            f"Schedule {schedule.id}: failed to dispatch cron-skip notification: {exc}"
+        )
+
+    # 4) Advance next_execution to break the per-minute skip loop. This must
+    #    always run (do NOT advance last_execution — that would imply success).
+    try:
+        AgentSchedulerService.update_execution_time(
+            session=db_session,
+            schedule_id=schedule.id,
+            last_execution=schedule.last_execution,
+        )
+    except Exception as exc:
+        logger.warning(
+            f"Schedule {schedule.id}: failed to advance next_execution after "
+            f"critical-env skip: {exc}"
+        )
+
+    logger.info(
+        f"Schedule {schedule.id}: skipped — environment {environment.id} is critical"
+    )
 
 
 async def _execute_static_prompt(

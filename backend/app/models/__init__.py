@@ -190,6 +190,11 @@ from .environments.environment import (
     AdminBulkRebuildRequest,
     AdminBulkRebuildResponse,
 )
+from .environments.agent_env_action_log import (
+    AgentEnvActionLog,
+    AgentEnvActionLogPublic,
+    AgentEnvActionLogsPublic,
+)
 from .agents.agent_status import (
     AgentStatusPublic,
     AgentStatusListPublic,
@@ -868,6 +873,9 @@ __all__ = [
     "AdminBulkSkipped",
     "AdminBulkRebuildRequest",
     "AdminBulkRebuildResponse",
+    "AgentEnvActionLog",
+    "AgentEnvActionLogPublic",
+    "AgentEnvActionLogsPublic",
     # Sessions
     "Session",
     "SessionCreate",

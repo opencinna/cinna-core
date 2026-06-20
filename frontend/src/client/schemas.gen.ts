@@ -2424,6 +2424,34 @@ export const AdminAgentEnvironmentPublicSchema = {
             type: 'boolean',
             title: 'Is Active'
         },
+        critical_state: {
+            type: 'boolean',
+            title: 'Critical State',
+            default: false
+        },
+        critical_cause: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Critical Cause'
+        },
+        critical_since: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Critical Since'
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -4289,6 +4317,96 @@ export const AgentEmailIntegrationPublicSchema = {
     title: 'AgentEmailIntegrationPublic'
 } as const;
 
+export const AgentEnvActionLogPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        environment_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Environment Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        action: {
+            type: 'string',
+            title: 'Action'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        cause: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Cause'
+        },
+        summary: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Summary'
+        },
+        detail: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Detail'
+        },
+        executed_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Executed At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'environment_id', 'agent_id', 'action', 'status', 'cause', 'summary', 'detail', 'executed_at'],
+    title: 'AgentEnvActionLogPublic',
+    description: 'Public response model for AgentEnvActionLog.'
+} as const;
+
+export const AgentEnvActionLogsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentEnvActionLogPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AgentEnvActionLogsPublic',
+    description: 'List response model for AgentEnvActionLog.'
+} as const;
+
 export const AgentEnvironmentCreateSchema = {
     properties: {
         env_name: {
@@ -4441,6 +4559,34 @@ export const AgentEnvironmentPublicSchema = {
         is_active: {
             type: 'boolean',
             title: 'Is Active'
+        },
+        critical_state: {
+            type: 'boolean',
+            title: 'Critical State',
+            default: false
+        },
+        critical_cause: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Critical Cause'
+        },
+        critical_since: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Critical Since'
         },
         created_at: {
             type: 'string',

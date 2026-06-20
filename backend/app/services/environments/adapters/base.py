@@ -208,6 +208,17 @@ class EnvironmentAdapter(ABC):
         """
         pass
 
+    async def is_container_running(self) -> bool:
+        """
+        Cheap liveness probe — is the container still alive?
+
+        Concrete default wrapping ``get_status()`` (returns True for "running"
+        or "starting"). Used by the lifecycle's critical-state branching to
+        distinguish "a setup step failed while the container is up" from "the
+        container is gone". Adapters may override for a cheaper probe.
+        """
+        return await self.get_status() in {"running", "starting"}
+
     @abstractmethod
     async def rebuild(
         self,

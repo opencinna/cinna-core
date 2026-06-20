@@ -1,0 +1,19 @@
+<mjml>
+  <mj-body background-color="#fafbfc">
+    <mj-section background-color="#fff" padding="40px 20px">
+      <mj-column vertical-align="middle" width="100%">
+        <mj-text align="center" padding="35px" font-size="20px" font-family="Arial, Helvetica, sans-serif" color="#333">{{ project_name }} - Environment Needs Attention</mj-text>
+        <mj-text align="center" font-size="16px" padding-left="25px" padding-right="25px" font-family="Arial, Helvetica, sans-serif" color="#555">The container is running, but a setup step didn't finish. Your agent may not behave as expected until this is resolved.</mj-text>
+        <mj-text align="center" font-size="16px" padding-left="25px" padding-right="25px" font-family="Arial, Helvetica, sans-serif" color="#555"><span>Agent: <strong>{{ agent_name }}</strong></span></mj-text>
+        <mj-text align="center" font-size="16px" padding-left="25px" padding-right="25px" font-family="Arial, Helvetica, sans-serif" color="#555"><span>Environment: {{ instance_name }}</span></mj-text>
+        <mj-text align="center" font-size="16px" padding-left="25px" padding-right="25px" font-family="Arial, Helvetica, sans-serif" color="#555"><span>Reason: {{ reason }}</span></mj-text>
+        <mj-text align="center" font-size="14px" padding="15px 25px" font-family="Arial, Helvetica, sans-serif" color="#777" background-color="#fff7ed">{{ detail }}</mj-text>
+        <mj-button align="center" font-size="18px" background-color="#ea580c" border-radius="8px" color="#fff" href="{{ link }}" padding="15px 30px">View environment</mj-button>
+        <mj-text align="center" font-size="16px" padding-left="25px" padding-right="25px" font-family="Arial, Helvetica, sans-serif" color="#555">Or copy and paste the following link into your browser:</mj-text>
+        <mj-text align="center" font-size="16px" padding-left="25px" padding-right="25px" font-family="Arial, Helvetica, sans-serif" color="#555"><a href="{{ link }}">{{ link }}</a></mj-text>
+        <mj-divider border-color="#ccc" border-width="2px"></mj-divider>
+        <mj-text align="center" font-size="14px" padding-left="25px" padding-right="25px" font-family="Arial, Helvetica, sans-serif" color="#555">Turn these off in Settings &rarr; Notifications.</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

@@ -155,6 +155,7 @@ a false alarm when it simply has no data yet.
 | [Admin Agent Environments](../../application/admin_agent_environments/admin_agent_environments.md) | `model_health_warning` column surfaces alongside `is_stale` in the fleet console. |
 | [System Notifications](../../application/system_notifications/system_notifications.md) | `model_deprecated` catalog type; dispatched from the discovery cron on transition into a warning state. |
 | [Agent Environments](agent_environments.md) | `model_health` is a transient field on `AgentEnvironmentPublic`; no new DB column on the environment. |
+| [Agent Environment Critical State](agent_env_critical_state.md) | A sibling amber-badge surface on the environment card: `EnvironmentCriticalBadge` (persisted, event-driven) coexists with `ModelHealthBadge` (transient, per-request). Both use the same orange palette. Critical state is independent of model health — both can be visible simultaneously. |
 
 ## Edge Cases
 

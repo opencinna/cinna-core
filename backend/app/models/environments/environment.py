@@ -13,6 +13,13 @@ class AgentEnvironment(SQLModel, table=True):
             "sync_active",
             postgresql_where=sa.text("sync_active = TRUE"),
         ),
+        # Partial index for the scheduler's hot-path critical-state check and
+        # any admin fleet query — only critical envs are indexed.
+        sa.Index(
+            "ix_agent_environment_critical_state",
+            "critical_state",
+            postgresql_where=sa.text("critical_state = true"),
+        ),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -24,6 +31,21 @@ class AgentEnvironment(SQLModel, table=True):
     status: str = "stopped"  # "stopped" | "creating" | "building" | "initializing" | "starting" | "running" | "rebuilding" | "suspended" | "activating" | "error" | "deprecated"
     is_active: bool = Field(default=False)
     status_message: str | None = None  # Detailed status message for UI (e.g., "Building Docker image...")
+    # Critical state — the container is running but a post-start/post-rebuild
+    # provisioning step failed (e.g. custom package install, credential sync).
+    # Coexists with status="running" (a separate axis from the lifecycle/container
+    # status) so sessions/chat/terminals keep working while the env-card surfaces
+    # an amber "Action required" warning. Raised/cleared only by the lifecycle.
+    critical_state: bool = Field(
+        default=False,
+        sa_column=Column(sa.Boolean, nullable=False, server_default=sa.false()),
+    )
+    critical_cause: str | None = Field(
+        default=None, sa_column=Column(sa.String(64), nullable=True)
+    )  # "package_install_failed" | "credential_sync_failed" | "file_sync_failed" | "provisioning_failed"
+    critical_since: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )  # When critical state was entered (onset; stamped only on the False→True transition)
     config: dict = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -157,6 +179,12 @@ class AgentEnvironmentPublic(SQLModel):
     status: str
     status_message: str | None
     is_active: bool
+    # Critical state (persisted columns — auto-populate from model_validate, no
+    # transient attachment needed unlike model_health). True ⇒ container running
+    # but env degraded; the frontend renders an amber "Action required" block.
+    critical_state: bool = False
+    critical_cause: str | None = None
+    critical_since: datetime | None = None
     created_at: datetime
     updated_at: datetime
     last_health_check: datetime | None

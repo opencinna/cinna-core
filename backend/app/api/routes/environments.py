@@ -17,8 +17,13 @@ from app.models import (
     AgentEnvironmentUpdate,
     AgentEnvironmentReconfigure,
     AgentEnvironmentPublic,
+    AgentEnvActionLogPublic,
+    AgentEnvActionLogsPublic,
     UsageIntentResponse,
     Message,
+)
+from app.services.environments.agent_env_action_log_service import (
+    AgentEnvActionLogService,
 )
 from app.services.environments.environment_service import (
     EnvironmentService,
@@ -387,6 +392,41 @@ async def get_environment_logs(
         _handle_service_error(e)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get logs: {str(e)}")
+
+
+@router.get(
+    "/{environment_id}/action-logs", response_model=AgentEnvActionLogsPublic
+)
+def get_environment_action_logs(
+    session: SessionDep,
+    current_user: CurrentUser,
+    environment_id: uuid.UUID,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> Any:
+    """
+    Get the recent action/event log for an environment (owner-gated).
+
+    Powers the env-card "Show details" modal: full, untruncated error detail for
+    rebuild/setup/package-install/credential-sync/cron-skip operations, newest
+    first. Resolves the environment → agent → asserts ownership (superuser
+    allowed); 404 for a missing env, 403 for a non-owner.
+    """
+    try:
+        # Reuse the per-environment ownership helper (404 missing / 403 non-owner).
+        EnvironmentService.get_environment_with_access_check(
+            session, environment_id, current_user.id, current_user.is_superuser
+        )
+    except AgentEnvironmentError as e:
+        _handle_service_error(e)
+
+    rows = AgentEnvActionLogService.list_for_environment(
+        session, environment_id, limit=limit
+    )
+    count = AgentEnvActionLogService.count_for_environment(session, environment_id)
+    return AgentEnvActionLogsPublic(
+        data=[AgentEnvActionLogPublic.model_validate(r, from_attributes=True) for r in rows],
+        count=count,
+    )
 
 
 # ── Env-core callback endpoints ──────────────────────────────────────────────

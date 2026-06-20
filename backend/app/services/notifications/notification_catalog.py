@@ -24,6 +24,7 @@ class NotificationType(str, Enum):
     SESSION_ERROR = "session_error"
     MODEL_DEPRECATED = "model_deprecated"
     PLUGIN_SYNC_FAILED = "plugin_sync_failed"
+    ENVIRONMENT_CRITICAL = "environment_critical"
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,25 @@ NOTIFICATION_CATALOG: dict[NotificationType, NotificationTypeMeta] = {
         ),
         # Dedup on the environment so a flaky marketplace doesn't spam on every
         # start/rebuild within the throttle window.
+        dedup_scope="environment_id",
+    ),
+    NotificationType.ENVIRONMENT_CRITICAL: NotificationTypeMeta(
+        label="Environment needs attention",
+        description=(
+            "Email me when one of my agent environments starts but a setup step "
+            "fails, or a scheduled run is skipped because the environment is "
+            "unstable."
+        ),
+        default_email_enabled=True,
+        email_template="environment_critical.html",
+        subject=lambda ctx: (
+            f"{settings.PROJECT_NAME} — Action needed for "
+            f"{ctx.get('instance_name', 'your environment')}"
+        ),
+        # Single dedup scope shared by BOTH the setup-failure and cron-skip
+        # paths: once the owner is told "this env needs attention," the
+        # every-minute cron poll must not storm them (one 30-min TTL across both
+        # causes — see the plan's "ONE type, TWO dedup scopes" decision).
         dedup_scope="environment_id",
     ),
 }
