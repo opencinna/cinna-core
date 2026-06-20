@@ -128,6 +128,10 @@ from app.services.cli.cli_setup_token_scheduler import (
     start_scheduler as start_cli_cleanup_scheduler,
     shutdown_scheduler as shutdown_cli_cleanup_scheduler
 )
+from app.services.cli.device_login_scheduler import (
+    start_scheduler as start_device_login_cleanup_scheduler,
+    shutdown_scheduler as shutdown_device_login_cleanup_scheduler
+)
 from app.services.desktop_auth.desktop_auth_scheduler import (
     start_scheduler as start_desktop_auth_cleanup_scheduler,
     shutdown_scheduler as shutdown_desktop_auth_cleanup_scheduler
@@ -168,6 +172,7 @@ async def lifespan(app: FastAPI):
         start_email_sending_scheduler()
         start_env_status_scheduler()
         start_cli_cleanup_scheduler()
+        start_device_login_cleanup_scheduler()
         start_desktop_auth_cleanup_scheduler()
         start_app_data_orphan_scheduler()
         start_app_data_gc_scheduler()
@@ -358,6 +363,7 @@ async def lifespan(app: FastAPI):
         shutdown_email_sending_scheduler()
         shutdown_env_status_scheduler()
         shutdown_cli_cleanup_scheduler()
+        shutdown_device_login_cleanup_scheduler()
         shutdown_desktop_auth_cleanup_scheduler()
         shutdown_app_data_orphan_scheduler()
         shutdown_app_data_gc_scheduler()

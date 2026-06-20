@@ -97,6 +97,23 @@ Auto-generated from OpenAPI spec. Tag: `users`
 
 ---
 
+## GET `/api/v1/users/me/details`
+**Read User Details Me**
+
+**Response:** `UserDetailsPublic`
+
+---
+
+## PATCH `/api/v1/users/me/details`
+**Update User Details Me**
+
+**Request body** (`UserDetailsUpdate`):
+  - `details_raw`: string (required)
+
+**Response:** `UserDetailsPublic`
+
+---
+
 ## POST `/api/v1/users/me/resend-confirmation`
 **Resend Confirmation Me**
 

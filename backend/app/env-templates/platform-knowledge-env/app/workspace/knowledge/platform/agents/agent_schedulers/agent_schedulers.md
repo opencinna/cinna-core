@@ -122,7 +122,23 @@ Both schedule types auto-activate the agent environment if it is not running:
 - `stopped` → starts and waits until running
 - `activating`/`starting` → waits until running (another process may have triggered it)
 - `error` → logs error, skips execution
+- `running` but `critical_state=true` → skips execution (see below)
 - Activation timeout: 120 seconds
+
+### Critical Environment Gating
+
+When a due schedule's active environment is `running` but in a **critical state** (the container is up but a provisioning step failed), the schedule is not dispatched. Instead:
+- A `skipped` `AgentScheduleLog` entry is written with a reason message
+- A `cron_skipped` action-log row is written to the environment's action log
+- The owner is notified via the `environment_critical` notification type (dedup-throttled: at most one email per 30 minutes per environment)
+- `next_execution` is advanced so the scheduler does not re-fire the same due time every minute
+- `last_execution` is NOT updated (advancing it would imply a successful run)
+
+Manual "Run now" (`execute_now`) against a critical environment returns HTTP 400 with a clear message. Sessions, chat, terminals, and logs are unaffected — only scheduled and manual runs are gated.
+
+Schedules resume automatically once the owner resolves the critical state (successful rebuild clears the flag).
+
+See [Agent Environment Critical State](../agent_environments/agent_env_critical_state.md) for the full feature description.
 
 For **manual execution** (Run Now), the behavior differs from the cron path: instead of blocking the HTTP request for up to 120 s, the route returns immediately with a deferred-execution notification and the activation runs in a background task. The user sees the "Environment is starting" toast right away rather than waiting for the environment to come up.
 
@@ -142,6 +158,7 @@ All schedule executions (both types) create an immutable `AgentScheduleLog` reco
 | `success` | static_prompt: session created; script_trigger: command returned "OK" |
 | `session_triggered` | script_trigger only: command returned non-OK, session was created |
 | `error` | Execution failed (timeout, network error, env not available) |
+| `skipped` | Due schedule was not dispatched because the active environment is in a critical state (see [Agent Environment Critical State](../agent_environments/agent_env_critical_state.md)) |
 
 - Logs are append-only, never updated
 - Deleted only via cascade when parent schedule or agent is deleted
@@ -281,6 +298,7 @@ L = Logs, E = Edit, T = Toggle enabled/disabled, D = Delete with confirmation
 
 - **[Agent Sessions](../../application/agent_sessions/agent_sessions.md)** — Schedule execution creates new sessions via SessionService (always for static_prompt, conditionally for script_trigger)
 - **[Agent Environments](../agent_environments/agent_environments.md)** — Script trigger executes commands inside the agent's Docker container via `/exec` endpoint; both types auto-activate environments
+- **[Agent Environment Critical State](../agent_environments/agent_env_critical_state.md)** — Critical environments block CRON dispatch and manual "Run now"; skipped schedules write a `skipped` `AgentScheduleLog` entry and a `cron_skipped` env action-log row; owner is notified via `environment_critical`
 - **[Agent Prompts](../agent_prompts/agent_prompts.md)** — Falls back to agent's `entrypoint_prompt` when static_prompt schedule has no custom prompt
 - **[Agent Bundles & Installs](../agent_bundles/agent_bundles.md)** — Schedules are snapshotted into bundle revisions at publish time; materialised onto consumer installs at install time; merged on apply-update using behavioral signatures; consumers can only enable/disable and run bundle-owned schedules
 - **[Task Triggers](../../application/input_tasks/task_triggers.md)** — Separate but related feature: task-level CRON/webhook/date triggers use similar AI schedule generation

@@ -58,6 +58,14 @@ from app.models.cli.account_convenience import (
     AccountRestartEnvResult,
     AccountStatusRefreshCommandBody,
 )
+from app.models.cli.cli_device_login import (
+    DeviceLoginPollRequest,
+    DeviceLoginPollResponse,
+    DeviceLoginRequestPublic,
+    DeviceLoginResolveBody,
+    DeviceLoginStartRequest,
+    DeviceLoginStartResponse,
+)
 from app.models.cli.cli_setup_token import CLISetupTokenCreate, CLISetupTokenCreated
 from app.models.cli.cli_token import (
     CLIAccountTokensPublic,
@@ -81,6 +89,10 @@ from app.services.cli.account_cli_service import (
 )
 from app.services.cli.cli_service import CLIService
 from app.services.cli.context_package_service import ContextPackageService
+from app.services.cli.device_login_service import (
+    DeviceLoginError,
+    DeviceLoginService,
+)
 
 if TYPE_CHECKING:
     from app.services.agents.agent_service import CanBuildError
@@ -1479,3 +1491,126 @@ async def account_api_proxy(
             else status.HTTP_403_FORBIDDEN
         )
         raise HTTPException(status_code=code, detail=e.message)
+
+
+# ── Account Device-Login Flow (``cinna login``, RFC 8628) ────────────────────
+# Five endpoints under ``/api/v1/cli/account/login/*``:
+#   - start / poll / request are UNAUTHENTICATED (the caller's account token may
+#     be dead — the user authenticates in the browser instead). They take only
+#     ``SessionDep`` + ``Request`` (no auth dep), mirroring desktop_auth's public
+#     ``/authorize`` / ``/token``.
+#   - approve / reject require a signed-in platform user (``CurrentUser``), ANY
+#     role — the requirements only ask that the approver be an authenticated
+#     platform user, so there is intentionally NO developer-role gate here.
+# ``poll`` ALWAYS returns HTTP 200; the flow state lives in ``status``.
+
+
+def _map_device_login_error(e: DeviceLoginError) -> None:
+    """Map a ``DeviceLoginError`` reason → HTTP status (existence-leak-safe)."""
+    code = (
+        status.HTTP_409_CONFLICT
+        if e.reason == "already_resolved"
+        else status.HTTP_404_NOT_FOUND  # not_found / expired
+    )
+    raise HTTPException(status_code=code, detail=e.message)
+
+
+@router.post("/account/login/start", response_model=DeviceLoginStartResponse)
+def device_login_start(
+    body: DeviceLoginStartRequest,
+    request: Request,
+    db: SessionDep,
+) -> Any:
+    """Begin a device-login request (``cinna login``). Unauthenticated.
+
+    Returns the ``device_code`` (raw, single-use), a human ``user_code``, the
+    verification URLs, and the poll ``interval`` / ``expires_in``. Per-IP rate
+    limited (429).
+    """
+    return DeviceLoginService.start(
+        db=db,
+        machine_name=body.machine_name,
+        machine_info=body.machine_info,
+        request=request,
+    )
+
+
+@router.post(
+    "/account/login/poll",
+    response_model=DeviceLoginPollResponse,
+    response_model_exclude_none=True,
+)
+async def device_login_poll(
+    body: DeviceLoginPollRequest,
+    request: Request,
+    db: SessionDep,
+) -> Any:
+    """Poll for the device-login result. Unauthenticated; ALWAYS HTTP 200.
+
+    The flow state is in ``status`` (``authorization_pending`` / ``slow_down`` /
+    ``authorized`` / ``access_denied`` / ``expired_token``). Only ``authorized``
+    carries ``account_token`` + the URL/machine extras (single-use — a second
+    poll returns ``expired_token``).
+    """
+    return await DeviceLoginService.poll(
+        db=db, device_code=body.device_code, request=request
+    )
+
+
+@router.get("/account/login/request", response_model=DeviceLoginRequestPublic)
+def device_login_request_metadata(
+    user_code: str,
+    db: SessionDep,
+) -> Any:
+    """Browser display metadata for a ``user_code``. Unauthenticated (display only).
+
+    Returns ``user_code`` / ``machine_name`` / ``machine_info`` / ``status`` — no
+    ``device_code``, token, IP, or approver. Unknown / consumed → 404.
+    """
+    public = DeviceLoginService.get_request_for_display(db=db, user_code=user_code)
+    if public is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Login request not found"
+        )
+    return public
+
+
+@router.post("/account/login/approve", response_model=Message)
+async def device_login_approve(
+    body: DeviceLoginResolveBody,
+    request: Request,
+    db: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """Approve a pending device-login request (signed-in platform user, any role).
+
+    Mints a fresh account CLI token bound to the approver and flips the poll to
+    ``authorized``. 404 (unknown/expired) / 409 (already resolved).
+    """
+    try:
+        await DeviceLoginService.approve(
+            db=db, user=current_user, user_code=body.user_code, request=request
+        )
+    except DeviceLoginError as e:
+        _map_device_login_error(e)
+    return Message(message="Device login approved")
+
+
+@router.post("/account/login/reject", response_model=Message)
+async def device_login_reject(
+    body: DeviceLoginResolveBody,
+    request: Request,
+    db: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """Reject a pending device-login request (signed-in platform user, any role).
+
+    Flips the poll to ``access_denied``; no token is minted. 404 / 409 as above.
+    """
+    try:
+        await DeviceLoginService.reject(
+            db=db, user=current_user, user_code=body.user_code, request=request
+        )
+    except DeviceLoginError as e:
+        _map_device_login_error(e)
+    return Message(message="Device login rejected")

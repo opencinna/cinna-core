@@ -11465,6 +11465,186 @@ export const DeviceInputSchema = {
     title: 'DeviceInput'
 } as const;
 
+export const DeviceLoginPollRequestSchema = {
+    properties: {
+        device_code: {
+            type: 'string',
+            title: 'Device Code'
+        }
+    },
+    type: 'object',
+    required: ['device_code'],
+    title: 'DeviceLoginPollRequest',
+    description: 'CLI → backend: poll with the raw device_code.'
+} as const;
+
+export const DeviceLoginPollResponseSchema = {
+    properties: {
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        account_token: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Account Token'
+        },
+        platform_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Platform Url'
+        },
+        frontend_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Frontend Url'
+        },
+        machine_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Machine Name'
+        }
+    },
+    type: 'object',
+    required: ['status'],
+    title: 'DeviceLoginPollResponse',
+    description: `Backend → CLI: always HTTP 200; the flow state lives in \`\`status\`\`.
+
+Only the \`\`authorized\`\` state carries the extra fields; the route uses
+\`\`response_model_exclude_none\`\` so the other statuses are bare \`\`{status}\`\`.`
+} as const;
+
+export const DeviceLoginRequestPublicSchema = {
+    properties: {
+        user_code: {
+            type: 'string',
+            title: 'User Code'
+        },
+        machine_name: {
+            type: 'string',
+            title: 'Machine Name'
+        },
+        machine_info: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Machine Info'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        }
+    },
+    type: 'object',
+    required: ['user_code', 'machine_name', 'machine_info', 'status'],
+    title: 'DeviceLoginRequestPublic',
+    description: 'Browser display metadata. No device_code, token, IP, or approver.'
+} as const;
+
+export const DeviceLoginResolveBodySchema = {
+    properties: {
+        user_code: {
+            type: 'string',
+            title: 'User Code'
+        }
+    },
+    type: 'object',
+    required: ['user_code'],
+    title: 'DeviceLoginResolveBody',
+    description: 'Browser → backend: approve / reject body.'
+} as const;
+
+export const DeviceLoginStartRequestSchema = {
+    properties: {
+        machine_name: {
+            type: 'string',
+            maxLength: 100,
+            title: 'Machine Name'
+        },
+        machine_info: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 200
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Machine Info'
+        }
+    },
+    type: 'object',
+    required: ['machine_name'],
+    title: 'DeviceLoginStartRequest',
+    description: `CLI → backend: begin a device-login request.
+
+Lengths mirror the table columns so over-long labels are rejected as a clean
+422 at this unauthenticated endpoint rather than a DB truncation 500.`
+} as const;
+
+export const DeviceLoginStartResponseSchema = {
+    properties: {
+        device_code: {
+            type: 'string',
+            title: 'Device Code'
+        },
+        user_code: {
+            type: 'string',
+            title: 'User Code'
+        },
+        verification_uri: {
+            type: 'string',
+            title: 'Verification Uri'
+        },
+        verification_uri_complete: {
+            type: 'string',
+            title: 'Verification Uri Complete'
+        },
+        interval: {
+            type: 'integer',
+            title: 'Interval'
+        },
+        expires_in: {
+            type: 'integer',
+            title: 'Expires In'
+        }
+    },
+    type: 'object',
+    required: ['device_code', 'user_code', 'verification_uri', 'verification_uri_complete', 'interval', 'expires_in'],
+    title: 'DeviceLoginStartResponse',
+    description: 'Backend → CLI: device + user codes and the verification URLs (RFC 8628).'
+} as const;
+
 export const DisclaimerPublicSchema = {
     properties: {
         enabled: {

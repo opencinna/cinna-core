@@ -26,11 +26,11 @@ Each file below documents one API domain.
 | App Data | [app_data.md](./app_data.md) | 3 |
 | Bundles | [bundles.md](./bundles.md) | 9 |
 | Catalog | [catalog.md](./catalog.md) | 5 |
-| Cli | [cli.md](./cli.md) | 47 |
+| Cli | [cli.md](./cli.md) | 52 |
 | Credentials | [credentials.md](./credentials.md) | 19 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
 | Email Integration | [email_integration.md](./email_integration.md) | 6 |
-| Environments | [environments.md](./environments.md) | 16 |
+| Environments | [environments.md](./environments.md) | 17 |
 | Events | [events.md](./events.md) | 3 |
 | External | [external.md](./external.md) | 8 |
 | External A2A | [external_a2a.md](./external_a2a.md) | 9 |
@@ -56,7 +56,7 @@ Each file below documents one API domain.
 | Tasks | [tasks.md](./tasks.md) | 26 |
 | User App Agent Routes | [user_app_agent_routes.md](./user_app_agent_routes.md) | 5 |
 | User Workspaces | [user_workspaces.md](./user_workspaces.md) | 5 |
-| Users | [users.md](./users.md) | 19 |
+| Users | [users.md](./users.md) | 21 |
 | Webapp | [webapp.md](./webapp.md) | 4 |
 | Webapp Chat | [webapp_chat.md](./webapp_chat.md) | 6 |
 | Webapp Interface Config | [webapp_interface_config.md](./webapp_interface_config.md) | 2 |

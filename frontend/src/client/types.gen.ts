@@ -2560,6 +2560,67 @@ export type DeviceInput = {
 };
 
 /**
+ * CLI → backend: poll with the raw device_code.
+ */
+export type DeviceLoginPollRequest = {
+    device_code: string;
+};
+
+/**
+ * Backend → CLI: always HTTP 200; the flow state lives in ``status``.
+ *
+ * Only the ``authorized`` state carries the extra fields; the route uses
+ * ``response_model_exclude_none`` so the other statuses are bare ``{status}``.
+ */
+export type DeviceLoginPollResponse = {
+    status: string;
+    account_token?: (string | null);
+    platform_url?: (string | null);
+    frontend_url?: (string | null);
+    machine_name?: (string | null);
+};
+
+/**
+ * Browser display metadata. No device_code, token, IP, or approver.
+ */
+export type DeviceLoginRequestPublic = {
+    user_code: string;
+    machine_name: string;
+    machine_info: (string | null);
+    status: string;
+};
+
+/**
+ * Browser → backend: approve / reject body.
+ */
+export type DeviceLoginResolveBody = {
+    user_code: string;
+};
+
+/**
+ * CLI → backend: begin a device-login request.
+ *
+ * Lengths mirror the table columns so over-long labels are rejected as a clean
+ * 422 at this unauthenticated endpoint rather than a DB truncation 500.
+ */
+export type DeviceLoginStartRequest = {
+    machine_name: string;
+    machine_info?: (string | null);
+};
+
+/**
+ * Backend → CLI: device + user codes and the verification URLs (RFC 8628).
+ */
+export type DeviceLoginStartResponse = {
+    device_code: string;
+    user_code: string;
+    verification_uri: string;
+    verification_uri_complete: string;
+    interval: number;
+    expires_in: number;
+};
+
+/**
  * Disclaimer projection returned to any authenticated user.
  */
 export type DisclaimerPublic = {
@@ -6752,6 +6813,36 @@ export type CliAccountApiProxyData = {
 };
 
 export type CliAccountApiProxyResponse = (unknown);
+
+export type CliDeviceLoginStartData = {
+    requestBody: DeviceLoginStartRequest;
+};
+
+export type CliDeviceLoginStartResponse = (DeviceLoginStartResponse);
+
+export type CliDeviceLoginPollData = {
+    requestBody: DeviceLoginPollRequest;
+};
+
+export type CliDeviceLoginPollResponse = (DeviceLoginPollResponse);
+
+export type CliDeviceLoginRequestMetadataData = {
+    userCode: string;
+};
+
+export type CliDeviceLoginRequestMetadataResponse = (DeviceLoginRequestPublic);
+
+export type CliDeviceLoginApproveData = {
+    requestBody: DeviceLoginResolveBody;
+};
+
+export type CliDeviceLoginApproveResponse = (Message);
+
+export type CliDeviceLoginRejectData = {
+    requestBody: DeviceLoginResolveBody;
+};
+
+export type CliDeviceLoginRejectResponse = (Message);
 
 export type CliGetBootstrapScriptData = {
     token: string;

@@ -92,6 +92,15 @@ CLI_ACCOUNT_SCHEDULE_RUN = "CLI_ACCOUNT_SCHEDULE_RUN"
 # audited (mirrors the REST status read).
 CLI_ACCOUNT_STATUS_COMMAND_SET = "CLI_ACCOUNT_STATUS_COMMAND_SET"
 
+# ── Account-CLI device-login (``cinna login``) ────────────────────────
+# A device-login approval mints a fresh account CLI token (same audit as the
+# setup-token path via ``CLI_ACCOUNT_TOKEN_CREATED``); these record the
+# browser-side decision (who approved/rejected, which machine, source IP). Start
+# and poll are unauthenticated with no user yet, so they are not audited here —
+# the approval is the moment a user is bound to the request.
+CLI_DEVICE_LOGIN_APPROVED = "CLI_DEVICE_LOGIN_APPROVED"
+CLI_DEVICE_LOGIN_REJECTED = "CLI_DEVICE_LOGIN_REJECTED"
+
 
 class SecurityEvent(SQLModel, table=True):
     """

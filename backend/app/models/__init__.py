@@ -584,6 +584,15 @@ from .cli.cli_token import (
     CLIAccountTokenPublic,
     CLIAccountTokensPublic,
 )
+from .cli.cli_device_login import (
+    CLIDeviceLoginRequest,
+    DeviceLoginStartRequest,
+    DeviceLoginStartResponse,
+    DeviceLoginPollRequest,
+    DeviceLoginPollResponse,
+    DeviceLoginRequestPublic,
+    DeviceLoginResolveBody,
+)
 from .agentic_teams.agentic_team import (
     AgenticTeam,
     AgenticTeamCreate,

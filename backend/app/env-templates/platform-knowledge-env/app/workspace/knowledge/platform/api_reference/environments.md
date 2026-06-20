@@ -149,6 +149,19 @@ Auto-generated from OpenAPI spec. Tag: `environments`
 
 ---
 
+## GET `/api/v1/environments/{environment_id}/action-logs`
+**Get Environment Action Logs**
+
+**Path parameters:**
+- `environment_id`: uuid
+
+**Query parameters:**
+- `limit`: integer, default: `50`
+
+**Response:** `AgentEnvActionLogsPublic`
+
+---
+
 ## POST `/api/v1/environments/{id}/workspace-files-changed`
 **Workspace Files Changed**
 

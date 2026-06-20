@@ -474,6 +474,57 @@ Auto-generated from OpenAPI spec. Tag: `cli`
 
 ---
 
+## POST `/api/v1/cli/account/login/start`
+**Device Login Start**
+
+**Request body** (`DeviceLoginStartRequest`):
+  - `machine_name`: string (required)
+  - `machine_info`: string | null
+
+**Response:** `DeviceLoginStartResponse`
+
+---
+
+## POST `/api/v1/cli/account/login/poll`
+**Device Login Poll**
+
+**Request body** (`DeviceLoginPollRequest`):
+  - `device_code`: string (required)
+
+**Response:** `DeviceLoginPollResponse`
+
+---
+
+## GET `/api/v1/cli/account/login/request`
+**Device Login Request Metadata**
+
+**Query parameters:**
+- `user_code`: string (required)
+
+**Response:** `DeviceLoginRequestPublic`
+
+---
+
+## POST `/api/v1/cli/account/login/approve`
+**Device Login Approve**
+
+**Request body** (`DeviceLoginResolveBody`):
+  - `user_code`: string (required)
+
+**Response:** `Message`
+
+---
+
+## POST `/api/v1/cli/account/login/reject`
+**Device Login Reject**
+
+**Request body** (`DeviceLoginResolveBody`):
+  - `user_code`: string (required)
+
+**Response:** `Message`
+
+---
+
 ## GET `/api/cli-setup/{token}`
 **Get Bootstrap Script**
 

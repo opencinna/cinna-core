@@ -167,6 +167,73 @@ class AccountCLIService:
         )
 
     @staticmethod
+    async def mint_account_cli_token(
+        db: Session,
+        *,
+        owner_id: uuid.UUID,
+        machine_name: str,
+        machine_info: str | None,
+        request: Request,
+    ) -> tuple[str, CLIToken]:
+        """Mint a fresh account CLI token (``token_type="cli-account"``).
+
+        The SINGLE source of truth for account-token minting — shared by the
+        setup-token paste path (``exchange_account_setup_token``) and the device-
+        login approval path (``DeviceLoginService.approve``) so a token minted by
+        either route is provably scoped identically: ``agent_id=None``,
+        ``token_type="cli-account"``, 7-day rolling expiry, owned by ``owner_id``.
+
+        Creates the ``CLIToken``, **commits**, and emits
+        ``CLI_ACCOUNT_TOKEN_CREATED``. Returns ``(raw_jwt, cli_token)``.
+
+        COMMIT ORDERING: the helper owns the single ``db.commit()``. A caller that
+        needs to persist additional rows atomically with the token (e.g. marking a
+        setup token used) must ``db.add(...)`` them BEFORE calling this helper so
+        they ride this commit — see ``exchange_account_setup_token``.
+        """
+        now = datetime.now(UTC)
+        cli_token_id = uuid.uuid4()
+        cli_expires_at = now + timedelta(days=CLI_TOKEN_EXPIRY_DAYS)
+
+        jwt_value = CLIAuthService.create_cli_jwt(
+            cli_token_id=cli_token_id,
+            agent_id=None,
+            owner_id=owner_id,
+            expires_at=cli_expires_at,
+            token_type="cli-account",
+        )
+        token_hash = CLIAuthService.hash_token(jwt_value)
+        prefix = jwt_value[:12]
+
+        cli_token = CLIToken(
+            id=cli_token_id,
+            agent_id=None,
+            owner_id=owner_id,
+            name=machine_name,
+            token_hash=token_hash,
+            prefix=prefix,
+            token_type="cli-account",
+            machine_info=machine_info,
+            expires_at=cli_expires_at,
+        )
+        db.add(cli_token)
+        db.commit()
+        db.refresh(cli_token)
+
+        await SecurityEventService.create_event(
+            session=db,
+            user_id=owner_id,
+            data=SecurityEventCreate(
+                agent_id=None,
+                event_type=CLI_ACCOUNT_TOKEN_CREATED,
+                severity="medium",
+                details={"machine_name": machine_name, "ip": _client_ip(request)},
+            ),
+        )
+
+        return jwt_value, cli_token
+
+    @staticmethod
     async def exchange_account_setup_token(
         db: Session,
         token_str: str,
@@ -178,10 +245,10 @@ class AccountCLIService:
         Exchange an account setup token for an account CLI token + bootstrap
         payload.
 
-        Validates the setup token (kind=="account", not used, not expired),
-        creates a ``CLIToken`` with ``agent_id=None, token_type="cli-account"``,
-        marks the setup token used, writes a ``CLI_ACCOUNT_TOKEN_CREATED``
-        security event, and returns the account bootstrap payload.
+        Validates the setup token (kind=="account", not used, not expired), marks
+        it used, and delegates to ``mint_account_cli_token`` for the actual mint +
+        audit. The setup token is marked used (``db.add``) BEFORE the helper's
+        commit so both the token and the used-flag persist atomically.
         """
         stmt = select(CLISetupToken).where(CLISetupToken.token == token_str)
         setup_token = db.exec(stmt).first()
@@ -196,45 +263,16 @@ class AccountCLIService:
         if _ensure_utc(setup_token.expires_at) < now:
             raise ValueError("Setup token has expired")
 
-        cli_token_id = uuid.uuid4()
-        cli_expires_at = now + timedelta(days=CLI_TOKEN_EXPIRY_DAYS)
-
-        jwt_value = CLIAuthService.create_cli_jwt(
-            cli_token_id=cli_token_id,
-            agent_id=None,
-            owner_id=setup_token.owner_id,
-            expires_at=cli_expires_at,
-            token_type="cli-account",
-        )
-        token_hash = CLIAuthService.hash_token(jwt_value)
-        prefix = jwt_value[:12]
-
-        cli_token = CLIToken(
-            id=cli_token_id,
-            agent_id=None,
-            owner_id=setup_token.owner_id,
-            name=machine_name,
-            token_hash=token_hash,
-            prefix=prefix,
-            token_type="cli-account",
-            machine_info=machine_info,
-            expires_at=cli_expires_at,
-        )
-        db.add(cli_token)
-
+        # Mark used BEFORE minting so it rides the helper's single commit.
         setup_token.is_used = True
         db.add(setup_token)
-        db.commit()
 
-        await SecurityEventService.create_event(
-            session=db,
-            user_id=setup_token.owner_id,
-            data=SecurityEventCreate(
-                agent_id=None,
-                event_type=CLI_ACCOUNT_TOKEN_CREATED,
-                severity="medium",
-                details={"machine_name": machine_name, "ip": _client_ip(request)},
-            ),
+        jwt_value, _cli_token = await AccountCLIService.mint_account_cli_token(
+            db,
+            owner_id=setup_token.owner_id,
+            machine_name=machine_name,
+            machine_info=machine_info,
+            request=request,
         )
 
         platform_url = _get_platform_url(request)
