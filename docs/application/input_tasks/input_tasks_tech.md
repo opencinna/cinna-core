@@ -246,10 +246,10 @@ Index: `ix_task_status_history_task_id`
 
 ### File: `backend/app/api/routes/task_agent_api.py`
 
-Called by MCP tools inside agent environments. Authentication via JWT (same CurrentUser dep). Agent identity resolved from `task.selected_agent_id`.
+Called by MCP tools inside agent environments. Authentication via the scoped `AgentEnvContextDep` (`backend/app/api/deps.py`) — the env token is rejected by `get_current_user`, so these routes are reachable only by the owning environment, confined to its `(environment, agent, owner)` scope. Agent identity comes from `ctx.agent`; handlers assert the target task/session belongs to `ctx.owner` (+ `ctx.agent` for session-resolved calls). See [Agent Environment Core](../../agents/agent_environment_core/agent_environment_core_tech.md#jwt-authentication-scoped-env-token).
 
 **Helper (module-level):**
-- `_resolve_task_from_session(db_session, session_id) -> InputTask` — queries `InputTask WHERE session_id = session_id`; raises `ValidationError("No task linked to this session")` if not found; used by all `current/*` endpoints
+- `_resolve_task_from_session(db_session, session_id, ctx) -> InputTask` — resolves via `Session.source_task_id` (immutable FK, survives task re-execution); enforces scope by asserting `session.user_id == ctx.owner.id AND session.agent_id == ctx.agent.id` and `task.owner_id == ctx.owner.id` (raises `PermissionDeniedError` otherwise — a compromised container cannot drive another owner's task by guessing a session UUID); raises `ValidationError` if no linked task; used by all `current/*` endpoints
 
 **Endpoints:**
 - `POST /agent/tasks/create` — agent creates standalone task; resolves `assigned_to` by name, inherits team context from session, auto-executes if assigned

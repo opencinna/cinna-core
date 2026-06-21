@@ -16,10 +16,12 @@ Scenarios:
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from sqlmodel import Session
 
 from app.core.config import settings
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.utils.agent import create_agent_via_api
+from tests.utils.agent_env import create_env_with_token
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.input_task import (
     create_task,
@@ -32,6 +34,13 @@ _BASE = f"{settings.API_V1_STR}"
 _ACTIVITIES_BASE = f"{settings.API_V1_STR}/activities"
 _AGENT_ENV_PATCH = "app.services.sessions.message_service.agent_env_connector"
 _IS_USER_CONNECTED_PATCH = "app.services.events.event_service.event_service.is_user_connected"
+
+
+def _get_superuser_id(client: TestClient, headers: dict) -> str:
+    """Return the superuser's user ID as a string."""
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=headers)
+    assert r.status_code == 200
+    return r.json()["id"]
 
 
 def _get_activities(
@@ -51,6 +60,7 @@ def _get_activities(
 def test_task_lifecycle_activities(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     Task status transitions create and dismiss lifecycle Activity records.
@@ -62,11 +72,15 @@ def test_task_lifecycle_activities(
       Phase D: Fresh task, agent marks completed → task_completed activity in Logs
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     # Create agent so tasks can have selected_agent_id (required for agent status API)
     agent = create_agent_via_api(client, headers, name="Lifecycle Test Agent")
     drain_tasks()  # drain agent creation background tasks (environment provisioning)
     agent_id = agent["id"]
+
+    # Create scoped env token for the agent — all /agent/tasks/* calls use this.
+    _, env_headers = create_env_with_token(db, agent_id=agent_id, owner_id=owner_id)
 
     # ── Phase A: Task blocked → task_blocked activity ─────────────────────────
 
@@ -116,8 +130,8 @@ def test_task_lifecycle_activities(
         task_id_for_block = task_id
 
     if task_id_for_block is not None:
-        # Transition to blocked
-        agent_update_status(client, headers, task_id_for_block, "blocked", "Waiting for external input")
+        # Transition to blocked — use env_headers (scoped agent token)
+        agent_update_status(client, env_headers, task_id_for_block, "blocked", "Waiting for external input")
         drain_tasks()
 
         blocked_activities = _get_activities(client, headers, activity_type="task_blocked")
@@ -136,7 +150,7 @@ def test_task_lifecycle_activities(
 
         # ── Phase B: Unblock → task_blocked activity dismissed ────────────────
         # blocked → in_progress is a valid transition
-        agent_update_status(client, headers, task_id_for_block, "cancelled", "Cancelled instead")
+        agent_update_status(client, env_headers, task_id_for_block, "cancelled", "Cancelled instead")
         drain_tasks()
 
         blocked_after_cancel = [
@@ -156,7 +170,7 @@ def test_task_lifecycle_activities(
     )
     task_c_id = task_c["id"]
 
-    agent_update_status(client, headers, task_c_id, "cancelled", "No longer needed")
+    agent_update_status(client, env_headers, task_c_id, "cancelled", "No longer needed")
     drain_tasks()
 
     cancelled_activities = [
@@ -186,7 +200,7 @@ def test_task_lifecycle_activities(
     # Session-driven completion auto-transitions task to completed.
     # If still in_progress (e.g. result_state not set), explicitly complete.
     if task_d_after["status"] == "in_progress":
-        agent_update_status(client, headers, task_d_id, "completed", "All done")
+        agent_update_status(client, env_headers, task_d_id, "completed", "All done")
         drain_tasks()
 
     completed_activities = [
@@ -203,6 +217,7 @@ def test_task_lifecycle_activities(
 def test_task_blocked_deduplication(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     Setting a task to blocked twice without unblocking creates only one task_blocked activity.
@@ -212,10 +227,13 @@ def test_task_blocked_deduplication(
       3. Agent sets status to blocked again → still only one activity (duplicate guard)
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     agent = create_agent_via_api(client, headers, name="Dedup Test Agent")
     drain_tasks()  # drain agent creation background tasks
     agent_id = agent["id"]
+
+    _, env_headers = create_env_with_token(db, agent_id=agent_id, owner_id=owner_id)
 
     task = create_task(
         client, headers,
@@ -234,8 +252,8 @@ def test_task_blocked_deduplication(
         # Task auto-completed, dedup test not applicable for this path
         return
 
-    # First block
-    agent_update_status(client, headers, task_id, "blocked", "First block")
+    # First block — use env_headers
+    agent_update_status(client, env_headers, task_id, "blocked", "First block")
     drain_tasks()
 
     first_blocked = [
@@ -251,7 +269,7 @@ def test_task_blocked_deduplication(
     # Instead verify the existing activity is still only 1 after attempting the same transition.
     r = client.post(
         f"{_BASE}/agent/tasks/{task_id}/status",
-        headers=headers,
+        headers=env_headers,
         json={"status": "blocked"},
     )
     # This should either fail (400 invalid transition) or succeed — in either case
@@ -447,6 +465,7 @@ def test_archive_logs_and_filtering(
 def test_activity_task_fields_present(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     ActivityPublicExtended returns task_short_code, task_title, and agent_id for
@@ -458,11 +477,14 @@ def test_activity_task_fields_present(
       Phase D: Assert task_short_code, task_title, agent_id are populated
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     # ── Phase A: Create agent and task ───────────────────────────────────────
     agent = create_agent_via_api(client, headers, name="Task Fields Test Agent")
     drain_tasks()
     agent_id = agent["id"]
+
+    _, env_headers = create_env_with_token(db, agent_id=agent_id, owner_id=owner_id)
 
     task_title = "Task fields integration test"
     task = create_task(
@@ -475,7 +497,7 @@ def test_activity_task_fields_present(
     assert task_short_code is not None, "Task should have a short_code assigned"
 
     # ── Phase B: Cancel task → task_cancelled lifecycle activity created ──────
-    agent_update_status(client, headers, task_id, "cancelled", "Testing fields")
+    agent_update_status(client, env_headers, task_id, "cancelled", "Testing fields")
     drain_tasks()
 
     # ── Phase C: Find the task_cancelled activity for our task ───────────────

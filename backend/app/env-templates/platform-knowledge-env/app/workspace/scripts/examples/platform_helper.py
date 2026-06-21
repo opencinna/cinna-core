@@ -1,6 +1,18 @@
 """
 Platform API helper — shared authentication and request utilities.
 Import this in your scripts for authenticated API calls.
+
+IMPORTANT (security scoping): ``AGENT_AUTH_TOKEN`` is a SCOPED agent-environment
+token. It authenticates ONLY the environment's own callback routes
+(``/agent/tasks/*``, ``/knowledge/query``, ``/security-events/report``, and the
+``/environments/{id}/...`` callbacks) via the backend's ``AgentEnvContextDep``.
+It is REJECTED by the generic ``CurrentUser`` dependency, so it CANNOT call
+owner-wide endpoints such as ``/credentials/*``, ``/agents/*``, ``/sessions/*``,
+``/workspaces/*`` or ``/mail-servers/*`` — those now return 401/403. The example
+scripts in this directory that call those endpoints are historical and will not
+authenticate with the env token; they are kept only as API-shape references.
+Requests through this helper must also send the ``X-Agent-Env-Id`` header for the
+scoped routes (see ``ENV_ID`` below).
 """
 import os
 import sys
@@ -8,6 +20,7 @@ import httpx
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8000")
 AGENT_AUTH_TOKEN = os.getenv("AGENT_AUTH_TOKEN")
+ENV_ID = os.getenv("ENV_ID", "")  # scopes the auth token to this environment
 
 if not AGENT_AUTH_TOKEN:
     print("ERROR: AGENT_AUTH_TOKEN environment variable not set", file=sys.stderr)
@@ -15,6 +28,7 @@ if not AGENT_AUTH_TOKEN:
 
 HEADERS = {
     "Authorization": f"Bearer {AGENT_AUTH_TOKEN}",
+    "X-Agent-Env-Id": ENV_ID,
     "Content-Type": "application/json",
 }
 

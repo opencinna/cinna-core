@@ -47,6 +47,16 @@ class AgentEnvironment(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )  # When critical state was entered (onset; stamped only on the False→True transition)
     config: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    # SHA-256 hex of the current env auth token (AGENT_AUTH_TOKEN). Set on every
+    # configure (create/start/restart/rebuild). AgentEnvContextDep verifies the
+    # presented token's sha256 against this column — mutating it (to a new hash
+    # or NULL) instantly revokes all previously-issued tokens for this env. The
+    # raw token still lives in config["auth_token"] because the inbound-bearer
+    # and HMAC-signing roles read it back verbatim; this hash is the authoritative
+    # verification + revocation anchor. NULL ⇒ never rotated (grace-window
+    # fallback compares against config["auth_token"] verbatim). Internal only —
+    # never serialized to clients.
+    auth_token_hash: str | None = Field(default=None, index=True, max_length=64)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     last_health_check: datetime | None = None

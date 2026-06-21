@@ -1,11 +1,12 @@
 from collections.abc import Generator
 from datetime import UTC, datetime
 from typing import Annotated, Any
+import hashlib
 import logging
 import uuid
 
 import jwt
-from fastapi import Depends, HTTPException, WebSocket, status
+from fastapi import Depends, Header, HTTPException, WebSocket, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt.exceptions import InvalidTokenError
 from pydantic import ValidationError
@@ -40,11 +41,46 @@ def get_current_user(session: SessionDep, token: TokenDep) -> User:
         token_data = TokenPayload(**payload)
     except (InvalidTokenError, ValidationError) as e:
         logger.error(f"Token validation failed: {type(e).__name__}: {str(e)}")
-        logger.error(f"Token received: {token[:50]}...")
+        logger.error(f"Token received: {token[:8]}...")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Could not validate credentials",
         )
+
+    # ── Load-bearing security fix ────────────────────────────────────────
+    # Agent-environment tokens carry the owner id in ``sub`` (so the HMAC /
+    # owner-resolution roles keep working), which would otherwise resolve them to
+    # the FULL owner User with no scoping — one-container-compromise =
+    # full-account-takeover. An env token authenticates ONLY via
+    # ``AgentEnvContextDep`` and must never satisfy ``CurrentUser``.
+    #
+    # PRIMARY GATE (decode-time): the minted env token carries ``aud ==
+    # "agent_env"``. ``jwt.decode`` above passes no ``audience=``, so PyJWT
+    # raises ``InvalidAudienceError`` (an ``InvalidTokenError``) on any
+    # aud-bearing token → caught above → 403. This is the SAME mechanism that
+    # already rejects the ``aud="agent_api_caller"`` identity token (which has
+    # ``sub=owner_id`` and NO ``token_type`` claim), and it is what actually
+    # stops the real minted env token (so the env reject does NOT reach the
+    # ``token_type`` block below for a well-formed token).
+    #
+    # ⚠️ DO NOT add ``options={"verify_aud": False}`` to the decode above to make
+    # the ``token_type`` 401 path "fire": that would also disable audience
+    # verification for the ``agent_api_identity`` token (``aud`` + ``sub=owner``,
+    # no ``token_type``), letting it resolve to the FULL owner here and
+    # reintroducing the exact privilege-escalation this guards against — for a
+    # different token. The decode-time ``aud`` rejection must stay the gate.
+    #
+    # SECONDARY GATE (defense-in-depth): an explicit ``token_type`` reject in
+    # case an env token is ever minted without ``aud`` (or PyJWT's aud handling
+    # changes). Runs BEFORE any ``session.get(User, ...)``. Real user / CLI /
+    # desktop tokens carry neither ``aud`` nor ``token_type == "agent_env"`` and
+    # are unaffected.
+    if payload.get("token_type") == "agent_env":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Agent-environment tokens cannot be used on this endpoint",
+        )
+
     user = session.get(User, token_data.sub)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -153,6 +189,18 @@ def get_current_user_or_guest(
 
     role = payload.get("role")
     token_type = payload.get("token_type")
+
+    # Defense-in-depth: an agent-environment token must never resolve to the
+    # owner User on this alternate decode path either (sessions/files/messages/
+    # workspace routes use this dep). A well-formed env token is already rejected
+    # at decode above (its ``aud`` claim → ``InvalidAudienceError`` → 403, same
+    # as get_current_user); this is the secondary ``token_type`` gate for a
+    # hypothetical no-aud env token. Mirrors the reject in get_current_user.
+    if token_type == "agent_env":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Agent-environment tokens cannot be used on this endpoint",
+        )
 
     if role == "chat-guest" and token_type == "guest_share":
         # Guest share JWT — build GuestShareContext from claims
@@ -491,6 +539,224 @@ def get_account_cli_context(token: TokenDep, db: SessionDep) -> AccountCLIContex
 AccountCLIContextDep = Annotated[AccountCLIContext, Depends(get_account_cli_context)]
 
 
+# ── Agent-environment scoped token context ─────────────────────────────
+
+
+class AgentEnvContext(SQLModel):
+    """
+    Context object for agent-environment-authenticated routes (env→backend
+    callbacks: task tools, knowledge query, security-event report, env
+    file/spec callbacks).
+
+    Returned by ``get_agent_env_context`` when the Bearer token is a valid,
+    scoped agent-environment JWT (``token_type == "agent_env"``). The token is
+    bound to exactly one ``(env_id, agent_id, owner_id)`` triple — every handler
+    must operate strictly on ``ctx.environment`` / ``ctx.agent`` / ``ctx.owner``
+    and never on an arbitrary caller-supplied id outside that scope.
+
+    Uses ``Any`` for agent/environment to avoid circular imports with models
+    that depend on deps indirectly.
+    """
+    environment: Any  # AgentEnvironment
+    agent: Any         # Agent
+    owner: User
+
+
+class AgentEnvAuthError(Exception):
+    """Raised by ``_resolve_agent_env_context`` on any auth failure.
+
+    ``reason`` drives the HTTP status mapping in the wrapper deps:
+    - ``env_mismatch`` / ``agent_mismatch`` → 403 (scope violation)
+    - ``env_missing`` / ``owner_missing``   → 404
+    - everything else (decode / type / revoked / expired / empty) → 401
+    """
+
+    def __init__(self, reason: str, message: str) -> None:
+        self.reason = reason
+        self.message = message
+        super().__init__(message)
+
+
+def _resolve_agent_env_context(
+    db: Session,
+    raw_token: str,
+    env_id_header: str | None = None,
+    path_env_id: uuid.UUID | None = None,
+) -> AgentEnvContext:
+    """
+    Resolve a scoped agent-environment JWT → ``AgentEnvContext``.
+
+    Steps (fail-closed — any failure raises ``AgentEnvAuthError``):
+
+    1. Decode the JWT with ``audience="agent_env"`` and require
+       ``token_type == "agent_env"``.  (New-format token path.)
+    2. Resolve the bound ``env_id`` from the claim; if an ``X-Agent-Env-Id``
+       header and/or a path ``{id}`` are present, require them to match it.
+    3. Load the environment; verify the presented token against the env's
+       ``auth_token_hash`` (authoritative) or — during the grace window, when the
+       hash is still NULL — against ``config["auth_token"]`` verbatim. A hash
+       mismatch means the token was rotated/revoked → 401.
+    4. Load the agent and assert the ``agent_id`` claim matches ``env.agent_id``.
+    5. Load the active owner ``User``.
+
+    **Back-compat (grace window):** an OLD-format env token (a plain owner JWT
+    minted before the scoping change — no ``token_type``/``aud``/``env_id``
+    claims) is accepted only when ``settings.AGENT_ENV_TOKEN_ACCEPT_LEGACY`` is
+    True AND an ``X-Agent-Env-Id`` header (or path ``{id}``) is supplied to
+    locate the env, then verified by verbatim ``config["auth_token"]`` compare.
+    This keeps already-running containers (knowledge + env callbacks, which
+    already send the header) working until the deploy-time bulk rebuild rotates
+    them. After the window, set the flag False to accept new-format only.
+    """
+    from app.models import Agent, AgentEnvironment
+
+    if not raw_token:
+        raise AgentEnvAuthError("invalid_token", "Missing authentication token")
+
+    # Parse the env-id header / path once (used by both new- and old-format
+    # paths). A malformed header is NOT fatal on its own: for a new-format token
+    # the env_id claim is authoritative, so we simply ignore an unparseable
+    # header. It IS fatal on the legacy path (the header is the only locator
+    # there) — that case is handled below.
+    header_env_id: uuid.UUID | None = None
+    if env_id_header:
+        try:
+            header_env_id = uuid.UUID(env_id_header)
+        except (ValueError, AttributeError):
+            header_env_id = None
+
+    # ── New-format token: decode with audience + token_type gate ─────────
+    try:
+        payload = jwt.decode(
+            raw_token,
+            settings.SECRET_KEY,
+            algorithms=[security.ALGORITHM],
+            audience="agent_env",
+        )
+        is_new_format = payload.get("token_type") == "agent_env"
+    except InvalidTokenError:
+        # Could not decode as a new-format env token (wrong/absent audience,
+        # expired, bad signature, …). Fall through to the legacy path, which
+        # itself re-decodes without an audience requirement.
+        payload = None
+        is_new_format = False
+
+    if is_new_format:
+        try:
+            claim_env_id = uuid.UUID(payload["env_id"])
+        except (KeyError, ValueError, TypeError):
+            raise AgentEnvAuthError("invalid_token", "Invalid env token payload")
+
+        # Header / path must match the bound env (when supplied).
+        if header_env_id is not None and header_env_id != claim_env_id:
+            raise AgentEnvAuthError(
+                "env_mismatch", "X-Agent-Env-Id does not match the token's environment"
+            )
+        if path_env_id is not None and path_env_id != claim_env_id:
+            raise AgentEnvAuthError(
+                "env_mismatch", "Path environment id does not match the token's environment"
+            )
+
+        env = db.get(AgentEnvironment, claim_env_id)
+        if not env:
+            raise AgentEnvAuthError("env_missing", "Environment not found")
+
+        # Revocation / rotation gate.
+        if env.auth_token_hash:
+            presented_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+            if presented_hash != env.auth_token_hash:
+                raise AgentEnvAuthError(
+                    "invalid_token", "Env token has been rotated or revoked"
+                )
+        else:
+            # Hash not yet set (env not rotated since deploy) — fall back to the
+            # verbatim compare against the stored raw token.
+            stored = (env.config or {}).get("auth_token")
+            if not stored or stored != raw_token:
+                raise AgentEnvAuthError("invalid_token", "Invalid env token")
+
+        agent = db.get(Agent, env.agent_id)
+        if not agent:
+            raise AgentEnvAuthError("env_missing", "Agent not found")
+        if payload.get("agent_id") != str(env.agent_id):
+            raise AgentEnvAuthError(
+                "agent_mismatch", "Env token agent does not match the environment"
+            )
+
+        owner = db.get(User, agent.owner_id)
+        if not owner or not owner.is_active:
+            raise AgentEnvAuthError("owner_missing", "Owner not found or inactive")
+
+        return AgentEnvContext(environment=env, agent=agent, owner=owner)
+
+    # ── Legacy / grace-window path ───────────────────────────────────────
+    # An old-format env token is an ordinary owner JWT (sub=owner_id, no env
+    # claims). We cannot identify the env from the token, so it MUST present an
+    # X-Agent-Env-Id header (or a path {id}) and is verified by the verbatim
+    # config compare (the exact behavior of the two legacy deps this replaces).
+    if not settings.AGENT_ENV_TOKEN_ACCEPT_LEGACY:
+        raise AgentEnvAuthError("invalid_token", "Invalid env token")
+
+    locator_env_id = header_env_id if header_env_id is not None else path_env_id
+    if locator_env_id is None:
+        raise AgentEnvAuthError("invalid_token", "Missing X-Agent-Env-Id header")
+    if header_env_id is not None and path_env_id is not None and header_env_id != path_env_id:
+        raise AgentEnvAuthError("env_mismatch", "Environment id mismatch")
+
+    # On the legacy path the caller is unauthenticated until the verbatim token
+    # compare succeeds, so a missing env / agent is reported as 401 (not 404) to
+    # avoid leaking environment existence — exactly the behavior of the two
+    # legacy deps this path preserves.
+    env = db.get(AgentEnvironment, locator_env_id)
+    if not env:
+        raise AgentEnvAuthError("invalid_token", "Invalid environment ID")
+
+    stored = (env.config or {}).get("auth_token")
+    if not stored or stored != raw_token:
+        raise AgentEnvAuthError("invalid_token", "Invalid env token")
+
+    agent = db.get(Agent, env.agent_id)
+    if not agent:
+        raise AgentEnvAuthError("invalid_token", "Invalid environment")
+
+    owner = db.get(User, agent.owner_id)
+    if not owner or not owner.is_active:
+        raise AgentEnvAuthError("invalid_token", "Invalid environment owner")
+
+    return AgentEnvContext(environment=env, agent=agent, owner=owner)
+
+
+def get_agent_env_context(
+    token: TokenDep,
+    db: SessionDep,
+    x_agent_env_id: Annotated[str | None, Header()] = None,
+) -> AgentEnvContext:
+    """
+    Validate a scoped agent-environment JWT (HTTP) and return its context.
+
+    The single env-auth mechanism for env→backend callbacks. Replaces the two
+    legacy duplicate deps (``verify_agent_auth_token`` in knowledge.py and
+    ``_verify_env_agent_auth`` in environments.py).
+
+    For routes that carry the env in a path ``{id}`` param, the handler keeps a
+    one-line ``if ctx.environment.id != id: 403`` check (the dep cannot see the
+    path param generically); header-only routes are fully covered here.
+    """
+    try:
+        return _resolve_agent_env_context(db, token, env_id_header=x_agent_env_id)
+    except AgentEnvAuthError as e:
+        if e.reason in ("env_mismatch", "agent_mismatch"):
+            code = status.HTTP_403_FORBIDDEN
+        elif e.reason in ("env_missing", "owner_missing"):
+            code = status.HTTP_404_NOT_FOUND
+        else:
+            code = status.HTTP_401_UNAUTHORIZED
+        raise HTTPException(status_code=code, detail=e.message)
+
+
+AgentEnvContextDep = Annotated[AgentEnvContext, Depends(get_agent_env_context)]
+
+
 # ── Environment console (web terminal + logs) WS context ───────────────
 
 
@@ -514,7 +780,7 @@ class EnvConsoleContext(SQLModel):
 # guest-share and webapp-viewer JWTs are narrowly scoped to chat and must not
 # be promotable to a full shell / logs stream (defense-in-depth on top of the
 # ownership + role checks below).
-_DISALLOWED_CONSOLE_TOKEN_TYPES = {"guest_share", "webapp_share"}
+_DISALLOWED_CONSOLE_TOKEN_TYPES = {"guest_share", "webapp_share", "agent_env"}
 _DISALLOWED_CONSOLE_ROLES = {"chat-guest", "webapp-viewer"}
 
 

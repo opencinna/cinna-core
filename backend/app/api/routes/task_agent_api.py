@@ -1,12 +1,19 @@
 """
 Agent Task API Routes — internal endpoints called by MCP tools in agent environments.
 
-Authentication: These endpoints use the same Bearer token auth as other agent-facing
-endpoints (CurrentUser resolves agent identity via JWT token created per-session).
+Authentication: scoped agent-environment token via ``AgentEnvContextDep``. The
+Bearer token is the env's ``AGENT_AUTH_TOKEN`` (``token_type == "agent_env"``),
+bound to exactly one ``(env, agent, owner)`` triple. It is REJECTED by the
+generic ``CurrentUser`` dependency — these routes are the only task surface it
+can reach, and only for its own owner.
 
-Agent identity is resolved via task.selected_agent_id (the agent assigned to the task).
-The caller authenticates as the task owner using their JWT; the agent identity is then
-derived from the task record itself.
+Scope model: every task service call is owner-scoped (``task.owner_id ==
+ctx.owner.id``), which closes cross-owner access — a compromised container can
+never touch another owner's tasks. Within the owner, the existing team model
+deliberately lets an agent operate on teammates' tasks (subtasks / team scope),
+so we do NOT additionally pin every task to ``ctx.agent`` (that would break team
+workflows); ``ctx.agent`` is the authoritative *acting* agent identity for the
+calling env, used where a route previously trusted unauthenticated derivation.
 
 Routes:
   POST  /agent/tasks/create              — Agent creates a new standalone task
@@ -27,7 +34,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import AgentEnvContext, AgentEnvContextDep, SessionDep
 from app.models import (
     InputTask,
     InputTasksPublicExtended,
@@ -42,6 +49,7 @@ from app.models import (
 from app.services.tasks.input_task_service import (
     InputTaskService,
     InputTaskError,
+    PermissionDeniedError,
     ValidationError,
 )
 from app.services.tasks.task_comment_service import TaskCommentService, AgentCommentResult
@@ -57,22 +65,35 @@ def _handle_error(e: InputTaskError) -> None:
 
 
 def _resolve_task_from_session(
-    db_session, session_id: uuid.UUID,
+    db_session, session_id: uuid.UUID, ctx: AgentEnvContext,
 ) -> InputTask:
-    """Resolve the current task linked to a session.
+    """Resolve the current task linked to a session, scoped to the calling env.
 
     Uses Session.source_task_id (immutable FK set at session creation) rather
     than InputTask.session_id which is overwritten on task re-execution and
     would break resolution for agents still running in older sessions.
+
+    Security: the ``source_session_id`` is supplied by the (untrusted) container,
+    so we MUST verify the session — and the task it resolves to — belong to the
+    env's owner before acting. The session must additionally belong to the env's
+    own agent (a session always runs for exactly one agent). Without this a
+    compromised container could drive comment/status/subtask actions against
+    another owner's task by guessing a session UUID.
     """
     session_obj = db_session.get(Session, session_id)
     if not session_obj:
         raise ValidationError("Session not found")
+    # Scope the session to this env's owner + agent.
+    if session_obj.user_id != ctx.owner.id or session_obj.agent_id != ctx.agent.id:
+        raise PermissionDeniedError("Session does not belong to this environment")
     if not session_obj.source_task_id:
         raise ValidationError("No task linked to this session")
     task = db_session.get(InputTask, session_obj.source_task_id)
     if not task:
         raise ValidationError("No task linked to this session")
+    # Defense-in-depth: the linked task must also belong to the env's owner.
+    if task.owner_id != ctx.owner.id:
+        raise PermissionDeniedError("Task does not belong to this environment")
     return task
 
 
@@ -101,7 +122,7 @@ def _build_agent_comment_response(
 async def agent_create_task(
     *,
     db_session: SessionDep,
-    current_user: CurrentUser,
+    ctx: AgentEnvContextDep,
     data: AgentTaskCreate,
 ) -> Any:
     """
@@ -115,7 +136,7 @@ async def agent_create_task(
     try:
         task, resolved_name = await InputTaskService.create_task_from_agent(
             db_session=db_session,
-            user_id=current_user.id,
+            user_id=ctx.owner.id,
             data=data,
         )
         return AgentTaskOperationResponse(
@@ -132,7 +153,7 @@ async def agent_create_task(
 def agent_resolve_task_by_code(
     *,
     db_session: SessionDep,
-    current_user: CurrentUser,
+    ctx: AgentEnvContextDep,
     short_code: str,
 ) -> Any:
     """
@@ -145,7 +166,7 @@ def agent_resolve_task_by_code(
         task = InputTaskService.get_task_by_short_code(
             db_session=db_session,
             short_code=short_code,
-            user_id=current_user.id,
+            user_id=ctx.owner.id,
         )
         return {"task_id": str(task.id), "short_code": task.short_code}
     except InputTaskError as e:
@@ -156,7 +177,7 @@ def agent_resolve_task_by_code(
 async def agent_add_comment_current(
     *,
     db_session: SessionDep,
-    current_user: CurrentUser,
+    ctx: AgentEnvContextDep,
     data: AgentTaskCommentCreate,
 ) -> Any:
     """
@@ -167,7 +188,7 @@ async def agent_add_comment_current(
     try:
         if not data.source_session_id:
             raise ValidationError("source_session_id is required")
-        task = _resolve_task_from_session(db_session, data.source_session_id)
+        task = _resolve_task_from_session(db_session, data.source_session_id, ctx)
         result = TaskCommentService.add_comment_from_agent(
             db_session=db_session,
             task_id=task.id,
@@ -183,7 +204,7 @@ async def agent_add_comment_current(
 async def agent_update_status_current(
     *,
     db_session: SessionDep,
-    current_user: CurrentUser,
+    ctx: AgentEnvContextDep,
     data: AgentTaskStatusUpdate,
 ) -> Any:
     """
@@ -194,7 +215,7 @@ async def agent_update_status_current(
     try:
         if not data.source_session_id:
             raise ValidationError("source_session_id is required")
-        task = _resolve_task_from_session(db_session, data.source_session_id)
+        task = _resolve_task_from_session(db_session, data.source_session_id, ctx)
         if not task.selected_agent_id:
             raise ValidationError("Current task has no assigned agent")
         updated = InputTaskService.update_task_status_from_agent(
@@ -215,7 +236,7 @@ async def agent_update_status_current(
 @router.get("/agent/tasks/current/details")
 async def agent_get_task_details_current(
     db_session: SessionDep,
-    current_user: CurrentUser,
+    ctx: AgentEnvContextDep,
     source_session_id: uuid.UUID,
 ) -> Any:
     """
@@ -225,11 +246,11 @@ async def agent_get_task_details_current(
     Automatically uploads task files to the calling agent's workspace.
     """
     try:
-        task = _resolve_task_from_session(db_session, source_session_id)
+        task = _resolve_task_from_session(db_session, source_session_id, ctx)
         details = InputTaskService.get_agent_task_details(
             db_session=db_session,
             task_id=task.id,
-            user_id=current_user.id,
+            user_id=ctx.owner.id,
         )
         return await InputTaskService.upload_task_files_to_agent_env(
             db_session, details, source_session_id,
@@ -242,7 +263,7 @@ async def agent_get_task_details_current(
 async def agent_create_subtask_current(
     *,
     db_session: SessionDep,
-    current_user: CurrentUser,
+    ctx: AgentEnvContextDep,
     data: AgentSubtaskCreate,
 ) -> Any:
     """
@@ -253,7 +274,7 @@ async def agent_create_subtask_current(
     try:
         if not data.source_session_id:
             raise ValidationError("source_session_id is required")
-        current_task = _resolve_task_from_session(db_session, data.source_session_id)
+        current_task = _resolve_task_from_session(db_session, data.source_session_id, ctx)
         if not current_task.selected_agent_id:
             raise ValidationError("Current task has no assigned agent")
 
@@ -278,7 +299,7 @@ async def agent_create_subtask_current(
 async def agent_add_comment(
     *,
     db_session: SessionDep,
-    current_user: CurrentUser,
+    ctx: AgentEnvContextDep,
     task_id: uuid.UUID,
     data: AgentTaskCommentCreate,
 ) -> Any:
@@ -291,7 +312,7 @@ async def agent_add_comment(
         task = InputTaskService.get_task_with_ownership_check(
             db_session=db_session,
             task_id=task_id,
-            user_id=current_user.id,
+            user_id=ctx.owner.id,
         )
         result = TaskCommentService.add_comment_from_agent(
             db_session=db_session,
@@ -308,7 +329,7 @@ async def agent_add_comment(
 async def agent_update_status(
     *,
     db_session: SessionDep,
-    current_user: CurrentUser,
+    ctx: AgentEnvContextDep,
     task_id: uuid.UUID,
     data: AgentTaskStatusUpdate,
 ) -> Any:
@@ -325,7 +346,7 @@ async def agent_update_status(
         task = InputTaskService.get_task_with_ownership_check(
             db_session=db_session,
             task_id=task_id,
-            user_id=current_user.id,
+            user_id=ctx.owner.id,
         )
         if not task.selected_agent_id:
             raise ValidationError("Task has no assigned agent")
@@ -349,7 +370,7 @@ async def agent_update_status(
 async def agent_create_subtask(
     *,
     db_session: SessionDep,
-    current_user: CurrentUser,
+    ctx: AgentEnvContextDep,
     task_id: uuid.UUID,
     data: AgentSubtaskCreate,
 ) -> Any:
@@ -364,7 +385,7 @@ async def agent_create_subtask(
         task = InputTaskService.get_task_with_ownership_check(
             db_session=db_session,
             task_id=task_id,
-            user_id=current_user.id,
+            user_id=ctx.owner.id,
         )
         if not task.selected_agent_id:
             raise ValidationError("Task has no assigned agent")
@@ -389,7 +410,7 @@ async def agent_create_subtask(
 @router.get("/agent/tasks/my-tasks", response_model=InputTasksPublicExtended)
 def agent_list_tasks(
     db_session: SessionDep,
-    current_user: CurrentUser,
+    ctx: AgentEnvContextDep,
     status: str | None = None,
     scope: str = "assigned",
 ) -> Any:
@@ -406,7 +427,7 @@ def agent_list_tasks(
     try:
         data, count = InputTaskService.list_agent_tasks(
             db_session=db_session,
-            user_id=current_user.id,
+            user_id=ctx.owner.id,
             status=status,
             scope=scope,
         )
@@ -418,7 +439,7 @@ def agent_list_tasks(
 @router.get("/agent/tasks/{task_id}/details")
 async def agent_get_task_details(
     db_session: SessionDep,
-    current_user: CurrentUser,
+    ctx: AgentEnvContextDep,
     task_id: uuid.UUID,
     source_session_id: uuid.UUID | None = None,
 ) -> Any:
@@ -434,7 +455,7 @@ async def agent_get_task_details(
         details = InputTaskService.get_agent_task_details(
             db_session=db_session,
             task_id=task_id,
-            user_id=current_user.id,
+            user_id=ctx.owner.id,
         )
         if source_session_id:
             return await InputTaskService.upload_task_files_to_agent_env(

@@ -12,7 +12,7 @@ Each file below documents one API domain.
 | Activities | [activities.md](./activities.md) | 8 |
 | Admin Environments | [admin_environments.md](./admin_environments.md) | 3 |
 | Admin Llm Providers | [admin_llm_providers.md](./admin_llm_providers.md) | 7 |
-| Agent Api | [agent_api.md](./agent_api.md) | 6 |
+| Agent Api | [agent_api.md](./agent_api.md) | 11 |
 | Agent Api Public | [agent_api_public.md](./agent_api_public.md) | 1 |
 | Agent App Mcp Routes | [agent_app_mcp_routes.md](./agent_app_mcp_routes.md) | 7 |
 | Agent Hooks | [agent_hooks.md](./agent_hooks.md) | 1 |

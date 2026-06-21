@@ -1,5 +1,6 @@
 import os
 import shutil
+import hashlib
 import logging
 import asyncio
 from pathlib import Path
@@ -1778,9 +1779,19 @@ class EnvironmentLifecycleManager:
             google_api_key: Google API key (for opencode/google)
             image_tag: Shared template image tag from TemplateImageService (substituted as ${TEMPLATE_IMAGE_TAG})
         """
-        # 1. Generate new auth token
-        auth_token = self._generate_auth_token(agent.owner_id)
+        # 1. Generate new auth token (rotates on every configure — create /
+        #    start / restart / rebuild). The raw token stays in config so the
+        #    inbound-bearer + HMAC roles read it back verbatim; auth_token_hash
+        #    is the authoritative verification + revocation anchor checked by
+        #    AgentEnvContextDep. Rotating both together (same configure step)
+        #    keeps the HMAC sign/verify keys in lockstep.
+        auth_token = self._generate_auth_token(
+            agent.owner_id, environment.id, environment.agent_id
+        )
         environment.config["auth_token"] = auth_token
+        environment.auth_token_hash = hashlib.sha256(
+            auth_token.encode("utf-8")
+        ).hexdigest()
         flag_modified(environment, "config")
         logger.debug(f"Generated new auth token for environment {environment.id}")
 
@@ -2802,25 +2813,49 @@ MODEL_CONVERSATION={model_conversation}
                 assigned.add(port)
         return assigned
 
-    def _generate_auth_token(self, user_id: UUID) -> str:
+    def _generate_auth_token(
+        self, user_id: UUID, env_id: UUID, agent_id: UUID
+    ) -> str:
         """
-        Generate JWT authentication token for agent container.
+        Generate the scoped JWT authentication token for an agent container.
 
-        The token contains the user_id of the agent owner, allowing the agent
-        to authenticate as that user when making API calls back to the backend.
+        The token is bound to exactly one ``(env_id, agent_id, owner_id)`` triple
+        and is marked with ``token_type``/``aud == "agent_env"`` so that:
+
+        - the generic ``get_current_user`` dependency **rejects** it (it can no
+          longer impersonate the owner on ``CurrentUser`` routes — the
+          load-bearing security fix), and
+        - the scoped ``AgentEnvContextDep`` is the *only* dependency that
+          authenticates it, resolving ``(environment, agent, owner)`` scoped to
+          this one install.
+
+        ``sub`` is kept as the owner id so the HMAC role (the token doubles as
+        the ``session_context`` signing key) and owner resolution in the scoped
+        dep still work. The TTL is bounded (``AGENT_ENV_TOKEN_EXPIRE_DAYS``,
+        default 1 year, was effectively 10 years) — the token is rotated on
+        every configure anyway, and the per-env ``auth_token_hash`` (rotated with
+        it) is the real, immediate revocation anchor, so the TTL is only a
+        backstop. 1 year avoids an expiry cliff for ``always_on`` environments
+        that never idle-suspend.
 
         Args:
-            user_id: UUID of the agent owner
+            user_id: UUID of the agent owner (``sub``)
+            env_id: UUID of the environment the token is bound to
+            agent_id: UUID of the agent the token is bound to
 
         Returns:
             JWT token string
         """
-        # Create a JWT token that expires in 10 years (agents are long-lived)
-        # The token contains the user_id so the agent can authenticate as the owner
-        access_token_expires = timedelta(days=365 * 10)
+        access_token_expires = timedelta(days=settings.AGENT_ENV_TOKEN_EXPIRE_DAYS)
         return security.create_access_token(
             subject=str(user_id),
-            expires_delta=access_token_expires
+            expires_delta=access_token_expires,
+            extra_claims={
+                "token_type": "agent_env",
+                "aud": "agent_env",
+                "env_id": str(env_id),
+                "agent_id": str(agent_id),
+            },
         )
 
     async def copy_workspace_between_environments(

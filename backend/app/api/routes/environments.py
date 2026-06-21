@@ -2,11 +2,12 @@ import logging
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, WebSocket, status
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, status
 from pydantic import BaseModel
 from sqlmodel import Session
 
 from app.api.deps import (
+    AgentEnvContextDep,
     CurrentUser,
     EnvConsoleContext,
     SessionDep,
@@ -39,67 +40,6 @@ router = APIRouter(prefix="/environments", tags=["environments"])
 # ``docs/infrastructure/nginx_setup.md``.
 console_ws_router = APIRouter(prefix="/env-console", tags=["environments"])
 logger = logging.getLogger(__name__)
-
-
-async def _verify_env_agent_auth(
-    session: SessionDep,
-    authorization: Annotated[str | None, Header()] = None,
-    x_agent_env_id: Annotated[str | None, Header()] = None,
-):
-    """
-    Verify an inbound request from an agent environment container.
-
-    Validates that the Authorization bearer token matches the environment's
-    stored AGENT_AUTH_TOKEN and the X-Agent-Env-Id identifies a live environment.
-    Used by env→backend callback endpoints.
-    """
-    if not authorization:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing Authorization header",
-        )
-    if not x_agent_env_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing X-Agent-Env-Id header",
-        )
-
-    try:
-        scheme, token = authorization.split(" ", 1)
-        if scheme.lower() != "bearer":
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication scheme",
-            )
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Authorization header format",
-        )
-
-    try:
-        env_id = uuid.UUID(x_agent_env_id)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid X-Agent-Env-Id format",
-        )
-
-    env = session.get(AgentEnvironment, env_id)
-    if not env:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid environment ID",
-        )
-
-    stored_token = env.config.get("auth_token") if env.config else None
-    if not stored_token or token != stored_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid agent auth token",
-        )
-
-    return env
 
 
 def _handle_service_error(e: AgentEnvironmentError) -> None:
@@ -431,9 +371,10 @@ def get_environment_action_logs(
 
 # ── Env-core callback endpoints ──────────────────────────────────────────────
 # Called by agent environment containers over the internal Docker network.
-# Auth: Authorization: Bearer {AGENT_AUTH_TOKEN} + X-Agent-Env-Id: {env_id}
-
-_EnvFromAgentAuth = Annotated[AgentEnvironment, Depends(_verify_env_agent_auth)]
+# Auth: scoped agent-environment token via AgentEnvContextDep
+#       (Authorization: Bearer {AGENT_AUTH_TOKEN} + X-Agent-Env-Id: {env_id}).
+# The dep verifies the token + env-id match; each handler additionally asserts
+# the path {id} equals the token's environment (the dep cannot see path params).
 
 
 class WorkspaceFilesChangedRequest(BaseModel):
@@ -475,7 +416,7 @@ async def _emit_workspace_files_changed_callback(
 async def workspace_files_changed(
     id: uuid.UUID,
     session: SessionDep,
-    env: _EnvFromAgentAuth,
+    ctx: AgentEnvContextDep,
     body: WorkspaceFilesChangedRequest | None = None,
 ) -> Message:
     """
@@ -485,11 +426,11 @@ async def workspace_files_changed(
     Emits ``WORKSPACE_FILES_CHANGED``; downstream handlers refresh the agent's
     prompts, CLI commands cache, and status snapshot.
 
-    Auth: AGENT_AUTH_TOKEN bearer + X-Agent-Env-Id environment header (internal only).
+    Auth: scoped agent-environment token (AgentEnvContextDep) — internal only.
     """
     return await _emit_workspace_files_changed_callback(
         session=session,
-        env=env,
+        env=ctx.environment,
         path_id=id,
         changed_files=body.changed_files if body else None,
     )
@@ -499,18 +440,18 @@ async def workspace_files_changed(
 async def prompt_file_changed(
     id: uuid.UUID,
     session: SessionDep,
-    env: _EnvFromAgentAuth,
+    ctx: AgentEnvContextDep,
 ) -> Message:
     """
     Legacy alias — emits ``WORKSPACE_FILES_CHANGED`` with no ``changed_files``
     list. Kept so agent environments built before the generic watcher shipped
     keep working without a rebuild.
 
-    Auth: AGENT_AUTH_TOKEN bearer + X-Agent-Env-Id environment header (internal only).
+    Auth: scoped agent-environment token (AgentEnvContextDep) — internal only.
     """
     return await _emit_workspace_files_changed_callback(
         session=session,
-        env=env,
+        env=ctx.environment,
         path_id=id,
         changed_files=None,
     )
@@ -519,7 +460,7 @@ async def prompt_file_changed(
 @router.post("/{id}/agent-api-reloaded")
 async def agent_api_reloaded(
     id: uuid.UUID,
-    env: _EnvFromAgentAuth,
+    ctx: AgentEnvContextDep,
 ) -> Message:
     """
     Callback from an agent environment after its agent REST API child reloads
@@ -533,8 +474,9 @@ async def agent_api_reloaded(
     list and notifies the backend for prompt / CLI-command refreshes, whereas
     the agent_api reload is driven by uvicorn's own reloader.
 
-    Auth: AGENT_AUTH_TOKEN bearer + X-Agent-Env-Id environment header (internal only).
+    Auth: scoped agent-environment token (AgentEnvContextDep) — internal only.
     """
+    env = ctx.environment
     if env.id != id:
         raise HTTPException(status_code=403, detail="Environment ID mismatch")
     from app.services.agent_api.agent_api_service import AgentApiService
