@@ -126,6 +126,9 @@ class AgentApiConnectedAgent(SQLModel):
     # Agent's UI colour preset, so the frontend renders the same Bot badge it
     # uses everywhere else for this agent.
     ui_color_preset: str | None = None
+    # Owner's email — disambiguates identical agent names (e.g. multiple
+    # bundle installs of the same agent owned by different users).
+    owner_email: str | None = None
 
 
 class AgentApiConnectionInfo(SQLModel):

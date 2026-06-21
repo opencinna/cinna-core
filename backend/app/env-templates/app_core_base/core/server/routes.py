@@ -319,7 +319,10 @@ async def proxy_security_event(event: _SecurityEventReport) -> _SecurityEventRes
             response = await client.post(
                 f"{backend_url}/api/v1/security-events/report",
                 json=event.model_dump(),
-                headers={"Authorization": f"Bearer {auth_token}"},
+                headers={
+                    "Authorization": f"Bearer {auth_token}",
+                    "X-Agent-Env-Id": ENV_ID,
+                },
             )
             response.raise_for_status()
             data = response.json()

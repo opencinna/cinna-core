@@ -38,8 +38,10 @@ Valid transitions (from InputTaskStatus.VALID_TRANSITIONS):
 import uuid
 
 from fastapi.testclient import TestClient
+from sqlmodel import Session
 
 from app.core.config import settings
+from tests.utils.agent_env import create_env_with_token
 from tests.utils.input_task import (
     create_task,
     get_task,
@@ -48,6 +50,13 @@ from tests.utils.input_task import (
 from tests.utils.user import create_random_user, user_authentication_headers
 
 _BASE = f"{settings.API_V1_STR}/tasks"
+
+
+def _get_superuser_id(client: TestClient, headers: dict) -> str:
+    """Return the superuser's user ID as a string."""
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=headers)
+    assert r.status_code == 200
+    return r.json()["id"]
 
 
 def test_archive_new_task_succeeds(
@@ -161,6 +170,7 @@ def test_archive_unauthenticated_rejected(
 def test_status_history_created_by_agent_status_api(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     The collaboration layer (agent status API) creates status history entries
@@ -168,16 +178,20 @@ def test_status_history_created_by_agent_status_api(
 
     This test verifies the full collaboration status update path:
       1. Create task with agent assigned
-      2. Agent updates status to cancelled via /agent/tasks/{id}/status
-      3. Status history appears in task detail
-      4. System comment of type status_change appears in comments
-      5. History entry has correct from/to status and task_id
+      2. Create scoped env token for the agent
+      3. Agent updates status to cancelled via /agent/tasks/{id}/status (env token)
+      4. Status history appears in task detail
+      5. System comment of type status_change appears in comments
+      6. History entry has correct from/to status and task_id
     """
     from tests.utils.agent import create_agent_via_api
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     agent = create_agent_via_api(client, headers, name="Status History Test Agent")
     agent_id = agent["id"]
+
+    _, env_headers = create_env_with_token(db, agent_id=agent_id, owner_id=owner_id)
 
     task = create_task(
         client, headers,
@@ -187,10 +201,10 @@ def test_status_history_created_by_agent_status_api(
     task_id = task["id"]
     original_status = task["status"]  # "new"
 
-    # Agent updates status: new → cancelled
+    # Agent updates status: new → cancelled (using scoped env token)
     r = client.post(
         f"{settings.API_V1_STR}/agent/tasks/{task_id}/status",
-        headers=headers,
+        headers=env_headers,
         json={"status": "cancelled", "reason": "Test cancellation reason"},
     )
     assert r.status_code == 200, f"Agent status update failed: {r.text}"
@@ -233,6 +247,7 @@ def test_status_history_created_by_agent_status_api(
 def test_invalid_transition_via_agent_api_returns_400(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     Invalid status transitions return 400 via the agent status API:
@@ -245,9 +260,12 @@ def test_invalid_transition_via_agent_api_returns_400(
     """
     from tests.utils.agent import create_agent_via_api
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     agent = create_agent_via_api(client, headers, name="Invalid Transition Test Agent")
     agent_id = agent["id"]
+
+    _, env_headers = create_env_with_token(db, agent_id=agent_id, owner_id=owner_id)
 
     # Create a task, cancel it (new → cancelled)
     task = create_task(
@@ -259,7 +277,7 @@ def test_invalid_transition_via_agent_api_returns_400(
 
     r = client.post(
         f"{settings.API_V1_STR}/agent/tasks/{task_id}/status",
-        headers=headers,
+        headers=env_headers,
         json={"status": "cancelled"},
     )
     assert r.status_code == 200
@@ -267,7 +285,7 @@ def test_invalid_transition_via_agent_api_returns_400(
     # Now try cancelled → completed (invalid transition)
     r = client.post(
         f"{settings.API_V1_STR}/agent/tasks/{task_id}/status",
-        headers=headers,
+        headers=env_headers,
         json={"status": "completed"},
     )
     assert r.status_code == 400, (

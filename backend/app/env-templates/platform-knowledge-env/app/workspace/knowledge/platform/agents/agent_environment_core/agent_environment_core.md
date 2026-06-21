@@ -87,7 +87,7 @@ Server-verified metadata injected into system prompts for integration-aware beha
 5. Prompts available in UI and for other environments
 
 **Environment to Backend** (CLI live sync):
-1. A watched workspace file (`docs/WORKFLOW_PROMPT.md`, `docs/ENTRYPOINT_PROMPT.md`, `docs/REFINER_PROMPT.md`, `docs/CLI_COMMANDS.yaml`, or `app-data/storage/STATUS.md`) is modified in the workspace (e.g., via a synced local edit)
+1. A watched workspace file (`docs/WORKFLOW_PROMPT.md`, `docs/ENTRYPOINT_PROMPT.md`, `docs/REFINER_PROMPT.md`, `docs/CLI_COMMANDS.yaml`, or `app-data/storage/STATUS.md`) is modified in the workspace (e.g., via a synced local edit) <!-- nocheck -->
 2. Env-core's lightweight mtime-poll watcher detects the change and waits for the file to stabilise (debounce)
 3. Env-core POSTs to `POST /api/v1/environments/{id}/workspace-files-changed` with the list of changed paths (the legacy `prompt-file-changed` endpoint is kept as an alias for environments built before the generic watcher shipped)
 4. Backend emits `WORKSPACE_FILES_CHANGED`; handlers run `sync_agent_prompts_from_environment()`, refresh the CLI commands cache, and pull the STATUS.md snapshot — same downstream effects as a post-building-session resync
@@ -123,10 +123,31 @@ Server-verified metadata injected into system prompts for integration-aware beha
 
 ### Authentication
 
-- All HTTP endpoints require `Authorization: Bearer {token}` header
-- Token is a signed JWT (HS256) with user ID as subject, 10-year expiration
-- Regenerated on every environment rebuild and start operation
-- Bypassed only when `AGENT_AUTH_TOKEN` not configured (development mode)
+The `AGENT_AUTH_TOKEN` is a **scoped, audience-restricted JWT** (HS256) bound to
+exactly one `(env_id, agent_id, owner_id)` triple. It plays three roles: inbound
+bearer (backend→container, verified by string match), outbound bearer
+(container→backend, scoped), and HMAC signing key for `session_context`.
+
+- All container HTTP endpoints require `Authorization: Bearer {token}` header
+  (verified by the container against its own `AGENT_AUTH_TOKEN` by string match).
+- The token carries `token_type`/`aud == "agent_env"` plus `env_id`/`agent_id`
+  claims and a bounded TTL (`AGENT_ENV_TOKEN_EXPIRE_DAYS`, default 1 year — was
+  a 10-year plain owner JWT). The TTL is only a backstop: the token is rotated on
+  every configure (create/start/wake/rebuild) and the per-env `auth_token_hash`
+  rotated with it is the immediate revocation anchor. `sub` is still the owner id
+  (for the HMAC role and owner resolution).
+- **It cannot impersonate the owner.** The generic `get_current_user` dependency
+  rejects it (its `aud` fails an audience-less decode), so credential / agent /
+  session / file endpoints are inaccessible to it. Container→backend callbacks
+  (task tools, knowledge query, security-event report, env file/spec callbacks)
+  authenticate ONLY via the scoped `AgentEnvContextDep`, which resolves
+  `(environment, agent, owner)` and enforces that the call touches only the
+  originating env's own scope. Outbound callbacks also send `X-Agent-Env-Id`.
+- **Rotated** on every configure (create / start / restart / rebuild) and
+  **server-side revocable**: a SHA-256 hash of the current token is stored on
+  `agent_environment.auth_token_hash`; mutating it (or rotating the token)
+  instantly invalidates all previously-issued tokens for that env.
+- Regenerated on every environment rebuild and start operation.
 
 ## Architecture Overview
 

@@ -27,6 +27,7 @@ from tests.utils.background_tasks import drain_tasks
 from tests.utils.credential import (
     get_agent_credentials,
     link_credential_to_agent,
+    real_credentials_json,
     unlink_credential_from_agent,
 )
 from tests.utils.ssh_key_credential import (
@@ -296,7 +297,7 @@ def test_ssh_key_delete_removes_from_env_bundle(
     assert after_delete.get("ssh_keys", []) == [], (
         "ssh_keys bundle must be empty after credential is deleted"
     )
-    assert after_delete.get("credentials_json", []) == []
+    assert real_credentials_json(after_delete) == []
 
     # ── Phase 4: Credential gone from API ────────────────────────────
     r = client.get(
@@ -390,7 +391,7 @@ def test_ssh_key_sharing_and_revocation(
     )
 
     # Whitelist still enforced in credentials_json for recipient
-    recipient_creds_json = recipient_env["credentials_json"]
+    recipient_creds_json = real_credentials_json(recipient_env)
     assert len(recipient_creds_json) == 1
     recipient_cred_entry = recipient_creds_json[0]["credential_data"]
     assert "private_key" not in recipient_cred_entry, (

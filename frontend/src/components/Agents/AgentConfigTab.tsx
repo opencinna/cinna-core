@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/card"
 import { AgentSchedulesCard } from "./AgentSchedulesCard"
 import { AgentHandovers } from "./AgentHandovers"
+import { AgentStatusCard } from "./AgentStatusCard"
 import { EditDescriptionModal } from "./EditDescriptionModal"
 import { EditEntrypointPromptModal } from "./EditEntrypointPromptModal"
 import { EditWorkflowPromptModal } from "./EditWorkflowPromptModal"
@@ -134,6 +135,15 @@ export function AgentConfigTab({
 
           {/* Handover to Agents — owner-only, not shown on foreign installs */}
           {showOperationalSettings && <AgentHandovers agent={agent} />}
+        </div>
+      )}
+
+      {/* Agent status — self-reported health + the refresh command.
+          Owner-facing configuration (editable command), so it follows the
+          same developer-tier gate as Handovers. */}
+      {showOperationalSettings && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <AgentStatusCard agent={agent} />
         </div>
       )}
 

@@ -7,6 +7,8 @@ import { EnvironmentsService, AiCredentialsService } from "@/client"
 import type { AgentEnvironmentPublic, AgentEnvironmentReconfigure } from "@/client"
 import { EnvironmentStatusBadge } from "./EnvironmentStatusBadge"
 import { ModelHealthBadge } from "./ModelHealthBadge"
+import { EnvironmentCriticalBadge } from "./EnvironmentCriticalBadge"
+import { EnvironmentActionLogsModal } from "./EnvironmentActionLogsModal"
 import {
   EnvModeEditDialog,
   composeEnvModeConfigFields,
@@ -53,7 +55,10 @@ const getTemplateDisplayName = (envName: string): string => {
 
 // Helper to get SDK display name from full SDK ID or engine prefix
 const getSDKDisplayName = (sdk: string | null | undefined): string => {
-  if (!sdk) return "Anthropic"
+  // Null SDK means "use the platform default", which the backend resolves to
+  // ``claude-code/anthropic`` — mirror that here so the badge never shows a
+  // misleading provider name for an unconfigured mode.
+  if (!sdk) return "Claude Code"
   if (sdk === "claude-code/anthropic" || sdk === "claude-code") return "Claude Code"
   if (sdk === "opencode" || sdk === "opencode/anthropic") return "OpenCode"
   // OpenCode with specific provider — show provider in parentheses
@@ -127,6 +132,9 @@ export function EnvironmentCard({
   // Per-mode (conversation/building) config editor — clicking a mode badge opens
   // the shared EnvModeEditDialog; saving reconfigures the env and rebuilds it.
   const [editingMode, setEditingMode] = useState<"conversation" | "building" | null>(null)
+
+  // Lazily-fetched env action-log modal, opened from the amber critical block.
+  const [actionLogsOpen, setActionLogsOpen] = useState(false)
 
   const { data: aiCredentialsData } = useQuery({
     queryKey: ["aiCredentialsList"],
@@ -371,7 +379,7 @@ export function EnvironmentCard({
             {getSDKBadgeLabel(environment.agent_sdk_conversation, environment.model_override_conversation)}
           </Badge>
         )}
-        {canEditMode && environment.agent_sdk_building ? (
+        {canEditMode ? (
           <button
             type="button"
             onClick={() => setEditingMode("building")}
@@ -411,6 +419,15 @@ export function EnvironmentCard({
           }
         />
       </div>
+
+      {/* Persisted critical-state surface: container running but setup failed.
+          Distinct from the green status badge — see EnvironmentCriticalBadge.
+          "Show details" is owner-only (the action-logs route is owner-gated),
+          so read-only cards render the block informationally without it. */}
+      <EnvironmentCriticalBadge
+        environment={environment}
+        onShowDetails={readOnly ? undefined : () => setActionLogsOpen(true)}
+      />
 
       {environment.last_health_check && (
         <p className="text-xs text-muted-foreground">
@@ -538,6 +555,17 @@ export function EnvironmentCard({
           }
           credentials={credentials}
           onSave={handleModeSave}
+        />
+      )}
+
+      {/* Action-log modal opened from the amber critical block's "Show details".
+          Owner-only — the route is owner-gated, so it's not mounted in
+          read-only (agent-user) cards. */}
+      {!readOnly && (
+        <EnvironmentActionLogsModal
+          environmentId={environment.id}
+          open={actionLogsOpen}
+          onOpenChange={setActionLogsOpen}
         />
       )}
     </Card>

@@ -13,6 +13,13 @@ class AgentEnvironment(SQLModel, table=True):
             "sync_active",
             postgresql_where=sa.text("sync_active = TRUE"),
         ),
+        # Partial index for the scheduler's hot-path critical-state check and
+        # any admin fleet query — only critical envs are indexed.
+        sa.Index(
+            "ix_agent_environment_critical_state",
+            "critical_state",
+            postgresql_where=sa.text("critical_state = true"),
+        ),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -24,7 +31,32 @@ class AgentEnvironment(SQLModel, table=True):
     status: str = "stopped"  # "stopped" | "creating" | "building" | "initializing" | "starting" | "running" | "rebuilding" | "suspended" | "activating" | "error" | "deprecated"
     is_active: bool = Field(default=False)
     status_message: str | None = None  # Detailed status message for UI (e.g., "Building Docker image...")
+    # Critical state — the container is running but a post-start/post-rebuild
+    # provisioning step failed (e.g. custom package install, credential sync).
+    # Coexists with status="running" (a separate axis from the lifecycle/container
+    # status) so sessions/chat/terminals keep working while the env-card surfaces
+    # an amber "Action required" warning. Raised/cleared only by the lifecycle.
+    critical_state: bool = Field(
+        default=False,
+        sa_column=Column(sa.Boolean, nullable=False, server_default=sa.false()),
+    )
+    critical_cause: str | None = Field(
+        default=None, sa_column=Column(sa.String(64), nullable=True)
+    )  # "package_install_failed" | "credential_sync_failed" | "file_sync_failed" | "provisioning_failed"
+    critical_since: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )  # When critical state was entered (onset; stamped only on the False→True transition)
     config: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    # SHA-256 hex of the current env auth token (AGENT_AUTH_TOKEN). Set on every
+    # configure (create/start/restart/rebuild). AgentEnvContextDep verifies the
+    # presented token's sha256 against this column — mutating it (to a new hash
+    # or NULL) instantly revokes all previously-issued tokens for this env. The
+    # raw token still lives in config["auth_token"] because the inbound-bearer
+    # and HMAC-signing roles read it back verbatim; this hash is the authoritative
+    # verification + revocation anchor. NULL ⇒ never rotated (grace-window
+    # fallback compares against config["auth_token"] verbatim). Internal only —
+    # never serialized to clients.
+    auth_token_hash: str | None = Field(default=None, index=True, max_length=64)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     last_health_check: datetime | None = None
@@ -157,6 +189,12 @@ class AgentEnvironmentPublic(SQLModel):
     status: str
     status_message: str | None
     is_active: bool
+    # Critical state (persisted columns — auto-populate from model_validate, no
+    # transient attachment needed unlike model_health). True ⇒ container running
+    # but env degraded; the frontend renders an amber "Action required" block.
+    critical_state: bool = False
+    critical_cause: str | None = None
+    critical_since: datetime | None = None
     created_at: datetime
     updated_at: datetime
     last_health_check: datetime | None

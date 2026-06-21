@@ -90,6 +90,8 @@ Typed function parameters, `Query(le=, ge=, regex=)` constraints, and Pydantic `
 ```
 1. Owner enables agent_api on producer Agent A. Owner can click "View Spec"
    to open the rendered OpenAPI docs in a new tab (see [Spec Viewer](spec_viewer.md)).
+   If the producer env is suspended or stopped at that moment, the Spec Viewer
+   wakes it first (showing "Waking up agent…") before loading the spec.
 2. In a building session, agent A writes agent_api/*.py + policy.yaml.
    env-core reloads the supervised child; spec cache refreshes on the backend.
 3. From consumer Agent B's Credentials tab, the owner clicks "Connect Agent API"
@@ -127,6 +129,65 @@ Typed function parameters, `Query(le=, ge=, regex=)` constraints, and Pydantic `
 - `last_used_at` updated on each validated use.
 - `read_only_override`: a token may only narrow the producer's policy (force read-only), never widen it. (Not exposed in the simplified connect UI; the producer's `policy.yaml` is the primary read-only control, and it defaults to read-only.)
 - 2FA does not apply — machine credential, consistent with A2A tokens.
+
+---
+
+## Caller Identity & Producer Scopes
+
+The connection model above is **anonymous by design**: every consumer calls the producer with the *same* shared token (Level 1), so neither the platform nor the producer can tell *which user* is behind a call. This feature adds a second, automatic layer that lets the producer **know who is calling** and **control what each user may do** — with zero token management for the end user and no change to how a building agent writes API calls.
+
+### The two-level model
+
+- **Level 1 — Connection token (UNCHANGED).** The shared `agent_api` token = "you may reach Agent A's API at all." Granted by the producer's owner to anyone, shareable, transport-agnostic. The connect flow, the token, and bundle credential-sharing are untouched.
+- **Level 2 — Caller identity (NEW).** A platform-minted, **auto-injected**, self-describing `owner_identity_token` placed in the consumer's `credentials.json`. The agent sends it as a second header alongside the L1 bearer. The platform proxy verifies it, resolves the *owner of the calling install*, looks up that owner's producer-defined scopes, and injects trusted `X-Cinna-Caller-*` headers into the forwarded request. The raw identity token is **stripped** before the request reaches the producer.
+
+Attribution is "the cinna-core user who owns the calling install," not "whoever runs the code" — and it is owner-agnostic, so it works regardless of whether the producer's owner is the same person as the consumer's owner (e.g. across a bundle install).
+
+### Anonymous-by-default contract
+
+Identity is **never required**. If the identity token is absent, expired, or invalid (a raw caller, a legacy shared-token connection, a long-idle env whose token lapsed before its next sync), the proxy injects **no** caller headers and the producer sees an **anonymous** caller — never an error. Existing connections keep working unchanged; the producer decides what an anonymous caller may do.
+
+### Zero token management for the user
+
+The `owner_identity_token` is delivered exactly like the synthetic [`current_user`](../agent_credentials/agent_credentials.md#current-user-context) entry: computed **host-side** from the install owner each time credentials are prepared, **never stored**, **never redacted**, **never user-editable**. It is injected **only** when the env has at least one linked `agent_api` credential (no point shipping it to envs that never call a producer). The building agent never "knows" anything — the entry is **self-describing** (it carries the header name and a usage note), and the credentials `README.md` documents it under an *Owner Identity* section, so the agent just reads the entry and sends the header it names. The platform re-mints the token on every credential sync, so running envs always carry a fresh one.
+
+### Owner assigns scopes; the platform resolves them live; the producer enforces
+
+The producer's owner assigns **scopes** to individual platform users from the **Integrations → Agent REST API → Access & Scopes** card (an opt-in switch plus a user picker with per-user scope chips — see [UI States](#ui-states)). Available scope names come from a catalog the producer declares in `policy.yaml`.
+
+- **Live resolution.** Scopes live in a grant table, *not* in the token. The proxy resolves `grant(producer, owner) → scopes` on **every call** and injects them as `X-Cinna-Caller-Scopes`. Editing or deleting a user's scopes takes effect on the **next call** — no token re-mint, no re-sync. This is the "control access from my side, from the UI" requirement.
+- **No grant ⇒ no scopes.** An attributed-but-unscoped (or anonymous) caller arrives with an empty scope list; the producer decides what such a caller may do.
+- **The producer is the primary enforcer.** It reads `caller.scopes` (capability level) and does the **data-level** authorization the platform cannot know ("user-E may touch archive-E, not archive-F"). The platform can *optionally* hard-deny scope-gated endpoints at the edge (see below), but that is defense-in-depth, not a replacement.
+- **Scopes opt-in.** Scope injection (and the optional edge enforcement) only happen when the producer turns on the per-user-scopes switch (`agent_api_identity_enabled`). Identity *attribution* (`X-Cinna-Caller-User-Id/-Email/-Username`) is honored regardless of the flag — only scopes are gated by it, keeping the change backward-compatible.
+
+### How the producer reads it (SDK `caller`)
+
+Inside the producer's `agent_api/` code, the `cinna_api` SDK exposes a request-scoped `caller` accessor:
+
+```python
+from cinna_api import api, caller, Caller, error
+
+@api.get("/orders")
+def list_orders(me: Caller = caller):
+    if me.is_anonymous:
+        raise error(401, "Sign-in required")
+    if not me.has_scope("orders.read"):
+        raise error(403, "Missing scope")
+    return {"orders": orders_for(me.user_id)}   # me.user_id / me.email / me.username
+```
+
+`caller` is a FastAPI dependency: `me.user_id`, `me.email`, `me.username`, `me.scopes`, plus `me.is_anonymous` and `me.has_scope(...)`. The header params are hidden from the harvested OpenAPI spec. **The `caller` accessor requires an environment rebuild** (it is new SDK code shipped in the env template).
+
+### Four non-negotiable proxy security rules
+
+All four hold at the `consumer_proxy` chokepoint and *are* the security model:
+
+1. **Verify, then strip the identity token.** The proxy verifies the `X-Cinna-Caller-Identity` token (signature + audience + expiry), resolves the owner, then **removes the header before forwarding**. The producer *never* receives the raw identity token — otherwise a malicious producer could harvest callers' tokens and replay them to impersonate those users elsewhere. This is the linchpin.
+2. **Strip inbound `X-Cinna-Caller-*` and set them authoritatively.** The identity token is the *only* accepted identity input. Any client-supplied `X-Cinna-Caller-*` headers are discarded and re-set by the proxy from the resolved owner + live grant.
+3. **Producer reachable only via the proxy.** If a container could reach the producer's API directly it could forge `X-Cinna-Caller-*`. This invariant already holds (consumers only ever get the internal proxy origin in `credentials.json`).
+4. **Missing identity ⇒ anonymous, never an error.** (The anonymous-by-default contract above.)
+
+The identity token is a narrow, audience-restricted JWT (`aud="agent_api_caller"`, HS256/`SECRET_KEY`, verified backend-only) — useless as a general backend credential, so a leak is bounded to "I am owner-E" assertions on agent-api calls, and capability is still gated by the live grant.
 
 ---
 
@@ -169,11 +230,15 @@ The producer card is **enable + View Spec + Refresh + a Connections list** — t
 | **Error** | A **compact one-line summary** of the boot/harvest failure (e.g. "API failed to start. Error 404. Probably, not implemented yet."), a **Details** toggle that reveals the full raw error, and a **Retry** button. |
 | **Enabled** | Status badge, a **View Spec** button (opens the harvested OpenAPI as rendered docs in a new tab — see [Spec Viewer](spec_viewer.md)), a **Refresh** button, and a **Connections** section listing the agents consuming this API. |
 
-**Refresh button.** Next to **View Spec**, the **Refresh** button forces an on-demand re-harvest — it re-imports the producer's `agent_api/` modules to refresh the cached OpenAPI spec **and** re-parses `policy.yaml` to refresh the cached guardrails (`POST /_refresh` → `get_spec(force_refresh=True)` + `load_policy(force_refresh=True)`). By default both caches only refresh on the next *automatic* re-harvest (triggered when the producer edits a workspace file), so a `policy.yaml` edit applied out-of-band — or a transient harvest error — would otherwise stick until the next edit. Refresh clears it immediately. It is the same mechanism the error banner's **Retry** button uses.
+**Refresh button.** Next to **View Spec**, the **Refresh** button forces an on-demand re-harvest: it re-imports the producer's `agent_api/` modules to refresh the cached OpenAPI spec **and** re-parses `policy.yaml` to refresh the cached guardrails (`POST /_refresh` → `get_spec(force_refresh=True)` + `load_policy(force_refresh=True)`). By default both caches only refresh on the next *automatic* re-harvest (triggered when the producer edits a workspace file), so a `policy.yaml` edit applied out-of-band — or a transient harvest error — would otherwise stick until the next edit. Refresh clears it immediately. It is the same mechanism the error banner's **Retry** button uses.
+
+If the producer environment is **suspended or stopped** when Refresh is clicked, the button first wakes the environment — showing a **"Waking up agent…"** state and polling `_refresh` in a bounded loop until the env reports `running`. The re-harvest runs only once the env is up. On success it toasts confirmed; on `state === "error"` it toasts an error. There is no false "refreshed" toast while the env is still down.
 
 **Error banner — compact summary + Retry.** The raw boot/harvest error can be a long traceback or HTTP error string; the banner shows a short human summary (it extracts the HTTP status code when present and adds "Probably, not implemented yet." for a 404) with the full text behind **Details**. The error caches are *sticky* — env-core's in-memory boot error and the env-row spec error only clear on a successful re-harvest, which by default happens only when the producer edits a file. **Retry** forces an immediate re-harvest so a transient or already-fixed error clears without waiting for the next edit.
 
-**Connections section:** one row per connection (token + its credential), showing the linked consumer agent(s) as their normal Bot badge (icon + agent colour preset), a read-only badge when applicable, and a **Disconnect** (trash) button. Disconnect deletes the connection credential (or an orphaned token directly) — cascade-deleting the token. A connection created without a consumer link shows "Not linked to an agent" and can still be disconnected.
+**Connections section:** one row per connection (token + its credential), showing the linked consumer agent(s) as their normal Bot badge (icon + agent colour preset), the agent **owner's email** next to each badge, a read-only badge when applicable, and a **Disconnect** (trash) button. The owner email disambiguates identical agent names — e.g. several users who each installed the same bundle and connected their copy produce same-named consumer agents that would otherwise be indistinguishable. Disconnect deletes the connection credential (or an orphaned token directly) — cascade-deleting the token. A connection created without a consumer link shows "Not linked to an agent" and can still be disconnected.
+
+**Access & Scopes card.** Inside the same producer "Agent REST API" card sits an **Access & Scopes** sub-card for caller identity and per-user scopes. It has an opt-in switch ("identify calling users and grant each one capability scopes") that toggles `agent_api_identity_enabled`; while off, calls are still attributed to a user but carry no scopes. With it on, a `UserAllowlistPicker` (the same server-search picker credential sharing and the MCP connector ACL use) adds platform users, and each granted user gets a row of **scope chips**: catalog scopes the producer declared in `policy.yaml` are offered as quick-add suggestions, and free-text scope names can be added too. Changes are written through the grant routes and take effect on the next call.
 
 ### Consumer View
 
@@ -187,7 +252,7 @@ The `agent_api` connection credential appears in the Credentials page and Agent 
 
 - **[A2A Access Tokens](../../application/a2a_integration/a2a_access_tokens/a2a_access_tokens.md)** — `agent_api_token` mirrors the A2A token security model (opaque value, SHA256 hash at rest, prefix, `last_used`). Unlike A2A tokens, `agent_api` tokens are not JWTs, never expire, and are not created or revoked directly — they live and die with their connection credential.
 
-- **[Agent Credentials / Whitelist / Sharing](../agent_credentials/agent_credentials.md)** — new `AGENT_API` credential type rides the entire pipeline: credential sync to containers, whitelist (`base_url`, `spec_url`, `token`, `label`, `producer_agent_id` allowed), redaction (`token` appears as `***REDACTED***` in `README.md`), and `CredentialShare` for cross-user access.
+- **[Agent Credentials / Whitelist / Sharing](../agent_credentials/agent_credentials.md)** — new `AGENT_API` credential type rides the entire pipeline: credential sync to containers, whitelist (`base_url`, `spec_url`, `token`, `label`, `producer_agent_id` allowed), redaction (`token` appears as `***REDACTED***` in `README.md`), and `CredentialShare` for cross-user access. The caller-identity feature adds a second synthetic credentials.json entry (`owner_identity_token`) alongside `current_user` — see [Current User Context](../agent_credentials/agent_credentials.md#current-user-context).
 
 - **[Agent Environment Core](../agent_environment_core/agent_environment_core.md)** — new `cinna_api` SDK package, supervised uvicorn child, and env-core HTTP routes live in the container. The lazy child supervision pattern mirrors the OpenCode child supervision (`opencode_sdk_adapter.py`).
 
@@ -216,6 +281,10 @@ Accepted trade-offs with this model:
 
 For bundles that need per-user authority on top of the shared connection, pair the PBP connection credential with a PBU per-user `api_token` second credential stamped with a `service_uri` slot id. The install-time matcher auto-suggests the correct pre-shared per-user token even when its name differs from the spec. See [Credential Sharing — `service_uri` Slot ID](../agent_credentials/credential_sharing.md#service_uri-slot-id-and-the-per-user-token-pattern) for the full two-credential pattern and ordering constraint.
 
+### Caller-identity `/introspect` endpoint — Deferred
+
+Plan item 10 proposed an optional producer-facing `/introspect` endpoint (an OAuth-resource-server style "resolve identity per call" round-trip) for producers wanting a richer or lazy lookup instead of inline headers. It was **skipped** as redundant with the inline `X-Cinna-Caller-*` injection (which avoids a per-call round-trip and avoids handing the producer a backend credential). Inline injection is the only identity path; `/introspect` remains future work if a need emerges.
+
 ### Out of Scope (§12 of the original plan)
 
 - **Declarative manifest mode** — pure-YAML "map upstream call → exposed endpoint" for non-coding owners.
@@ -227,4 +296,4 @@ For bundles that need per-user authority on top of the shared connection, pair t
 
 ---
 
-*Last updated: 2026-06-02*
+*Last updated: 2026-06-21*

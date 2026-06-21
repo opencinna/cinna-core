@@ -30,7 +30,7 @@ interface AgentStatusCardProps {
 }
 
 /**
- * Integrations-tab card for an agent's self-reported status.
+ * Configuration-tab card for an agent's self-reported status.
  *
  * - Shows the current cached snapshot (severity dot, summary, timestamps).
  * - Refresh button runs the configured pre-command then re-fetches STATUS.md.
@@ -38,7 +38,8 @@ interface AgentStatusCardProps {
  * - Surfaces the backend `refresh_command_warning` (source of truth) and an
  *   optional advisory client-side `/run:` not-found hint.
  *
- * Owner-only — mounted only in the non-agent-user branch of AgentIntegrationsTab.
+ * Owner-only — mounted in AgentConfigTab behind the `showOperationalSettings`
+ * (developer-tier) gate, alongside Schedules and Handovers.
  */
 export function AgentStatusCard({ agent }: AgentStatusCardProps) {
   const queryClient = useQueryClient()

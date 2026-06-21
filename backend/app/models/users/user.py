@@ -3,6 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List
 from pydantic import EmailStr
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, SQLModel, Column, Text
 
 
@@ -138,6 +139,15 @@ class User(UserBase, table=True):
     # (not in memory) because the recovery endpoint is public/by-email and
     # may be served by multiple workers.
     last_password_recovery_email_sent_at: datetime | None = Field(default=None)
+    # ── User's Details (current_user context) ───────────────────────────
+    # Free-text env-file content the user types in the "User's Details"
+    # Profile card, stored verbatim so the editor can re-open exactly what
+    # they wrote. Capped at 10 KB by the route validator. ``NULL`` = unset.
+    details_raw: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    # Normalized ``{UPPER_SNAKE: "value"}`` map parsed from ``details_raw``.
+    # Source of truth for the ``custom_details`` block injected into the
+    # agent environment's credentials.json. ``NULL`` = no details.
+    details_parsed: dict | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
     agents: List["app.models.agents.agent.Agent"] = Relationship(back_populates="owner", cascade_delete=True)
     credentials: List["app.models.credentials.credential.Credential"] = Relationship(back_populates="owner", cascade_delete=True)
 
@@ -202,6 +212,26 @@ class UserRolePublic(SQLModel):
 class UserRoleUpdate(SQLModel):
     """Request body for ``PATCH /users/{user_id}/role`` — admin only."""
     role: str
+
+
+class UserDetailsUpdate(SQLModel):
+    """Request body for ``PATCH /users/me/details``.
+
+    Free-text env-file content (``KEY = value`` lines). May be empty to
+    clear the user's details. Parsed/normalized server-side.
+    """
+    details_raw: str
+
+
+class UserDetailsPublic(SQLModel):
+    """Response for ``GET``/``PATCH /users/me/details``.
+
+    ``details_raw`` is what the user typed (verbatim, for re-opening the
+    editor); ``details_parsed`` is the normalized ``{UPPER_SNAKE: "value"}``
+    map. Both ``None`` when no details are set.
+    """
+    details_raw: str | None
+    details_parsed: dict | None
 
 
 # Generic message

@@ -23,12 +23,18 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.api.deps import CurrentUser, SessionDep
 from app.models import (
+    AgentApiAccessGrantCreate,
+    AgentApiAccessGrantPublic,
+    AgentApiAccessGrantsPublic,
+    AgentApiAccessGrantUpdate,
     AgentApiProducerConnections,
+    AgentApiScopeCatalog,
     AgentEnvironment,
     ConnectAgentApiRequest,
     ConnectAgentApiResponse,
     Message,
 )
+from app.services.agent_api.agent_api_grant_service import AgentApiGrantService
 from app.services.agent_api.agent_api_service import (
     AgentApiError,
     AgentApiService,
@@ -88,16 +94,24 @@ async def refresh_agent_api_status(
     current_user: CurrentUser,
 ):
     """
-    Force a fresh import-only re-harvest (spec + policy) and return the status.
+    Wake a suspended env if needed, force a fresh import-only re-harvest
+    (spec + policy), and return the status.
 
     The cached spec/policy and any boot error (env-core in-memory + the env row)
     otherwise only refresh on the next *automatic* re-harvest (a producer file
     edit), so a transient harvest failure can stick on screen indefinitely and a
     policy.yaml edit won't take effect until the next reload. This lets the owner
     force it on demand: a successful re-harvest refreshes the spec, re-parses the
-    policy, and clears the error; a failed one re-records it. The status is
-    returned either way (never raises on a harvest failure — the returned
-    ``last_error`` reflects the outcome).
+    policy, and clears the error; a failed one re-records it.
+
+    A re-harvest can only run against a *running* env, so when the producer's env
+    is suspended / stopped (idle) this endpoint first kicks off activation (and
+    blocks briefly for it to come up), mirroring the consumer cold-start path —
+    so a Refresh after an idle period wakes the env and only reports success once
+    it is running and the re-harvest actually ran. If the env is still booting
+    after the grace window, the returned ``state`` reflects that (``not_running``
+    with ``env_status: starting``) and the caller polls again; it never raises on
+    a wake/harvest failure (the returned ``state``/``last_error`` reflect it).
     """
     try:
         agent = AgentApiService.resolve_agent_only(
@@ -110,11 +124,33 @@ async def refresh_agent_api_status(
     if agent.active_environment_id:
         environment = session.get(AgentEnvironment, agent.active_environment_id)
 
+    # Wake a suspended/stopped env so the re-harvest below has something to talk
+    # to. Best-effort: resolve_running_producer_env handles the fast path (already
+    # running → returned immediately) and the cold path (kick off activation +
+    # block up to the grace window). On failure / still-booting we fall through
+    # to report the live status; we never raise here (Refresh is best-effort).
+    if agent.agent_api_enabled and environment is not None and environment.status != "running":
+        try:
+            environment = await AgentApiService.resolve_running_producer_env(
+                session, agent
+            )
+        except AgentApiError:
+            # Activation failed or still booting after the grace window. Re-read
+            # the env so the status below reflects its current state, and let the
+            # caller poll again.
+            if agent.active_environment_id:
+                environment = session.get(
+                    AgentEnvironment, agent.active_environment_id
+                )
+
     # Best-effort re-harvest. Only meaningful when enabled + env running; the
     # error (if any) is persisted by get_spec, and the status below reflects it.
     # Re-parse the policy.yaml alongside the spec so a policy edit is picked up
     # on demand (mirrors the background refresh_spec_cache).
     if agent.agent_api_enabled and environment is not None and environment.status == "running":
+        # Bump keep-alive so a freshly woken env survives long enough for the
+        # refreshed state to be useful (mirrors the spec/proxy routes).
+        AgentApiService.update_last_activity(session, environment)
         try:
             await AgentApiService.get_spec(session, environment, force_refresh=True)
         except AgentApiError:
@@ -283,3 +319,105 @@ async def delete_agent_api_connection(
         return Message(message="Disconnected")
     except AgentApiTokenError as e:
         _handle_token_error(e)
+
+
+# ── Access & Scopes (per-user grants, owner-gated) ───────────────────────────
+# Prefix: /api/v1/agents/{agent_id}/agent-api/grants
+#
+# The producer agent's owner assigns scopes to individual platform users. The
+# proxy resolves these live and injects X-Cinna-Caller-Scopes (see
+# agent_api_public.consumer_proxy). Routes mirror the MCP connector ACL shape:
+# the frontend uses UserAllowlistPicker + GET /users/search to pick users.
+
+
+@router.get("/grants/scope-catalog", response_model=AgentApiScopeCatalog)
+def get_agent_api_scope_catalog(
+    agent_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+):
+    """Available scopes the producer declared in policy.yaml (for the picker).
+
+    Graceful: an empty catalog when none are declared in the policy ``scopes:``
+    map.
+    """
+    try:
+        return AgentApiGrantService.get_scope_catalog(
+            session, agent_id, current_user.id,
+            is_superuser=current_user.is_superuser,
+        )
+    except AgentApiError as e:
+        _handle_agent_api_error(e)
+
+
+@router.get("/grants", response_model=AgentApiAccessGrantsPublic)
+def list_agent_api_grants(
+    agent_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+):
+    """List per-user access grants for this producer agent (owner-gated)."""
+    try:
+        grants = AgentApiGrantService.list_grants(
+            session, agent_id, current_user.id,
+            is_superuser=current_user.is_superuser,
+        )
+        data = [AgentApiGrantService.to_public(session, g) for g in grants]
+        return AgentApiAccessGrantsPublic(data=data, count=len(data))
+    except AgentApiError as e:
+        _handle_agent_api_error(e)
+
+
+@router.post("/grants", response_model=AgentApiAccessGrantPublic)
+async def create_agent_api_grant(
+    agent_id: uuid.UUID,
+    body: AgentApiAccessGrantCreate,
+    session: SessionDep,
+    current_user: CurrentUser,
+):
+    """Grant a platform user scopes on this producer agent's API (owner-gated)."""
+    try:
+        grant = await AgentApiGrantService.create_grant(
+            session, agent_id, current_user.id, body,
+            is_superuser=current_user.is_superuser,
+        )
+        return AgentApiGrantService.to_public(session, grant)
+    except AgentApiError as e:
+        _handle_agent_api_error(e)
+
+
+@router.put("/grants/{grant_id}", response_model=AgentApiAccessGrantPublic)
+async def update_agent_api_grant(
+    agent_id: uuid.UUID,
+    grant_id: uuid.UUID,
+    body: AgentApiAccessGrantUpdate,
+    session: SessionDep,
+    current_user: CurrentUser,
+):
+    """Update a grant's scopes (owner-gated). Takes effect on the next call."""
+    try:
+        grant = await AgentApiGrantService.update_grant(
+            session, agent_id, grant_id, current_user.id, body,
+            is_superuser=current_user.is_superuser,
+        )
+        return AgentApiGrantService.to_public(session, grant)
+    except AgentApiError as e:
+        _handle_agent_api_error(e)
+
+
+@router.delete("/grants/{grant_id}")
+async def delete_agent_api_grant(
+    agent_id: uuid.UUID,
+    grant_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Message:
+    """Remove a user's grant (owner-gated). Takes effect on the next call."""
+    try:
+        await AgentApiGrantService.delete_grant(
+            session, agent_id, grant_id, current_user.id,
+            is_superuser=current_user.is_superuser,
+        )
+        return Message(message="Grant removed")
+    except AgentApiError as e:
+        _handle_agent_api_error(e)

@@ -157,7 +157,7 @@ An optional mixin interface for adapters that can provide direct local filesyste
 - `_setup_new_container()` - Install workspace Python packages and system packages (only for new containers)
 - `_update_environment_config(image_tag)` - Regenerate auth token, docker-compose.yml (with `${TEMPLATE_IMAGE_TAG}` substituted), .env
 - `_generate_compose_file(image_tag)` - Produce docker-compose.yml; substitutes `${TEMPLATE_IMAGE_TAG}` with the tag from `TemplateImageService`
-- `_generate_auth_token()` - Create 10-year JWT with user ID as subject
+- `_generate_auth_token(user_id, env_id, agent_id)` - Mint the scoped env JWT (`aud`/`token_type == "agent_env"`, `env_id`/`agent_id` claims, `sub` = owner id, TTL `AGENT_ENV_TOKEN_EXPIRE_DAYS`); caller stores `sha256(token)` on `auth_token_hash`
 - `_generate_env_file()` - Generate .env with AI credential auto-detection by prefix
 
 **Constants**:
@@ -330,8 +330,8 @@ The `app/core/` directory is maintained in a single shared location (`backend/ap
 ### JWT Authentication
 
 - All agent-env HTTP endpoints require `Authorization: Bearer {token}` header
-- Token: 10-year JWT with agent owner's user ID as subject, signed with `settings.SECRET_KEY` (HS256)
-- Regenerated on every rebuild and start operation
+- Token: **scoped, audience-restricted JWT** bound to one `(env_id, agent_id, owner_id)` triple (`token_type`/`aud == "agent_env"`), signed with `settings.SECRET_KEY` (HS256), TTL `AGENT_ENV_TOKEN_EXPIRE_DAYS` (default 365). `sub` is still the owner id (HMAC role + owner resolution), but it is **rejected by `get_current_user`** so it cannot impersonate the owner on general routes — container→backend callbacks authenticate only via the scoped `AgentEnvContextDep`. See [Agent Environment Core](../agent_environment_core/agent_environment_core_tech.md#jwt-authentication-scoped-env-token) for the full scoping model.
+- Regenerated on every rebuild and start operation; `sha256(token)` stored on `agent_environment.auth_token_hash` as the immediate revocation anchor
 - Stored in `environment.config["auth_token"]` and `.env` file
 
 ### Session Context HMAC Verification

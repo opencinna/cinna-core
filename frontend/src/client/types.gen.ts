@@ -219,6 +219,7 @@ export type AccountConfigProviderPublic = {
     descriptor_slug: string;
     base_url?: (string | null);
     model?: (string | null);
+    default_model?: (string | null);
     api_key: string;
     is_default: boolean;
     is_admin_managed: boolean;
@@ -444,6 +445,9 @@ export type AdminAgentEnvironmentPublic = {
     status: string;
     status_message: (string | null);
     is_active: boolean;
+    critical_state?: boolean;
+    critical_cause?: (string | null);
+    critical_since?: (string | null);
     created_at: string;
     updated_at: string;
     last_health_check: (string | null);
@@ -601,6 +605,31 @@ export type AgentAccessTokenUpdate = {
     is_revoked?: (boolean | null);
 };
 
+export type AgentApiAccessGrantCreate = {
+    scopes?: Array<(string)>;
+    user_id: string;
+};
+
+export type AgentApiAccessGrantPublic = {
+    id: string;
+    producer_agent_id: string;
+    user_id: string;
+    scopes: Array<(string)>;
+    user?: (AgentApiGrantUser | null);
+    created_by: string;
+    created_at: string;
+    updated_at: string;
+};
+
+export type AgentApiAccessGrantsPublic = {
+    data: Array<AgentApiAccessGrantPublic>;
+    count: number;
+};
+
+export type AgentApiAccessGrantUpdate = {
+    scopes?: (Array<(string)> | null);
+};
+
 /**
  * A consumer agent that has the agent_api credential linked to it.
  */
@@ -608,6 +637,7 @@ export type AgentApiConnectedAgent = {
     id: string;
     name: string;
     ui_color_preset?: (string | null);
+    owner_email?: (string | null);
 };
 
 /**
@@ -623,6 +653,12 @@ export type AgentApiConnectionInfo = {
     spec_url: string;
     read_only: boolean;
     consumer_agents: Array<AgentApiConnectedAgent>;
+};
+
+export type AgentApiGrantUser = {
+    id: string;
+    email: string;
+    full_name?: (string | null);
 };
 
 /**
@@ -646,6 +682,21 @@ export type AgentApiProducerConnection = {
 export type AgentApiProducerConnections = {
     data: Array<AgentApiProducerConnection>;
     count: number;
+};
+
+/**
+ * One available scope the producer declared in policy.yaml.
+ */
+export type AgentApiScope = {
+    name: string;
+    description?: (string | null);
+};
+
+/**
+ * The available-scope catalog offered to the owner's scope picker.
+ */
+export type AgentApiScopeCatalog = {
+    scopes: Array<AgentApiScope>;
 };
 
 /**
@@ -803,6 +854,29 @@ export type AgentEmailIntegrationPublic = {
     updated_at: string;
 };
 
+/**
+ * Public response model for AgentEnvActionLog.
+ */
+export type AgentEnvActionLogPublic = {
+    id: string;
+    environment_id: string;
+    agent_id: string;
+    action: string;
+    status: string;
+    cause: (string | null);
+    summary: (string | null);
+    detail: (string | null);
+    executed_at: string;
+};
+
+/**
+ * List response model for AgentEnvActionLog.
+ */
+export type AgentEnvActionLogsPublic = {
+    data: Array<AgentEnvActionLogPublic>;
+    count: number;
+};
+
 export type AgentEnvironmentCreate = {
     env_name: string;
     env_version?: string;
@@ -830,6 +904,9 @@ export type AgentEnvironmentPublic = {
     status: string;
     status_message: (string | null);
     is_active: boolean;
+    critical_state?: boolean;
+    critical_cause?: (string | null);
+    critical_since?: (string | null);
     created_at: string;
     updated_at: string;
     last_health_check: (string | null);
@@ -1139,6 +1216,7 @@ export type AgentPublic = {
     inactivity_period_limit?: (string | null);
     webapp_enabled?: boolean;
     agent_api_enabled?: boolean;
+    agent_api_identity_enabled?: boolean;
     created_at: string;
     updated_at: string;
     owner_id: string;
@@ -1324,6 +1402,7 @@ export type AgentUpdate = {
     inactivity_period_limit?: (string | null);
     webapp_enabled?: (boolean | null);
     agent_api_enabled?: (boolean | null);
+    agent_api_identity_enabled?: (boolean | null);
     update_mode?: (string | null);
     publish_settings?: ({
     [key: string]: unknown;
@@ -2526,6 +2605,67 @@ export type DeviceInput = {
     device_label: string;
     public_key: string;
     external_client_id?: (string | null);
+};
+
+/**
+ * CLI → backend: poll with the raw device_code.
+ */
+export type DeviceLoginPollRequest = {
+    device_code: string;
+};
+
+/**
+ * Backend → CLI: always HTTP 200; the flow state lives in ``status``.
+ *
+ * Only the ``authorized`` state carries the extra fields; the route uses
+ * ``response_model_exclude_none`` so the other statuses are bare ``{status}``.
+ */
+export type DeviceLoginPollResponse = {
+    status: string;
+    account_token?: (string | null);
+    platform_url?: (string | null);
+    frontend_url?: (string | null);
+    machine_name?: (string | null);
+};
+
+/**
+ * Browser display metadata. No device_code, token, IP, or approver.
+ */
+export type DeviceLoginRequestPublic = {
+    user_code: string;
+    machine_name: string;
+    machine_info: (string | null);
+    status: string;
+};
+
+/**
+ * Browser → backend: approve / reject body.
+ */
+export type DeviceLoginResolveBody = {
+    user_code: string;
+};
+
+/**
+ * CLI → backend: begin a device-login request.
+ *
+ * Lengths mirror the table columns so over-long labels are rejected as a clean
+ * 422 at this unauthenticated endpoint rather than a DB truncation 500.
+ */
+export type DeviceLoginStartRequest = {
+    machine_name: string;
+    machine_info?: (string | null);
+};
+
+/**
+ * Backend → CLI: device + user codes and the verification URLs (RFC 8628).
+ */
+export type DeviceLoginStartResponse = {
+    device_code: string;
+    user_code: string;
+    verification_uri: string;
+    verification_uri_complete: string;
+    interval: number;
+    expires_in: number;
 };
 
 /**
@@ -5033,6 +5173,30 @@ export type UserDashboardUpdate = {
     sort_order?: (number | null);
 };
 
+/**
+ * Response for ``GET``/``PATCH /users/me/details``.
+ *
+ * ``details_raw`` is what the user typed (verbatim, for re-opening the
+ * editor); ``details_parsed`` is the normalized ``{UPPER_SNAKE: "value"}``
+ * map. Both ``None`` when no details are set.
+ */
+export type UserDetailsPublic = {
+    details_raw: (string | null);
+    details_parsed: ({
+    [key: string]: unknown;
+} | null);
+};
+
+/**
+ * Request body for ``PATCH /users/me/details``.
+ *
+ * Free-text env-file content (``KEY = value`` lines). May be empty to
+ * clear the user's details. Parsed/normalized server-side.
+ */
+export type UserDetailsUpdate = {
+    details_raw: string;
+};
+
 export type UserInfoResponse = {
     sub: string;
     email: string;
@@ -5533,6 +5697,40 @@ export type AgentApiDeleteAgentApiConnectionData = {
 };
 
 export type AgentApiDeleteAgentApiConnectionResponse = (Message);
+
+export type AgentApiGetAgentApiScopeCatalogData = {
+    agentId: string;
+};
+
+export type AgentApiGetAgentApiScopeCatalogResponse = (AgentApiScopeCatalog);
+
+export type AgentApiListAgentApiGrantsData = {
+    agentId: string;
+};
+
+export type AgentApiListAgentApiGrantsResponse = (AgentApiAccessGrantsPublic);
+
+export type AgentApiCreateAgentApiGrantData = {
+    agentId: string;
+    requestBody: AgentApiAccessGrantCreate;
+};
+
+export type AgentApiCreateAgentApiGrantResponse = (AgentApiAccessGrantPublic);
+
+export type AgentApiUpdateAgentApiGrantData = {
+    agentId: string;
+    grantId: string;
+    requestBody: AgentApiAccessGrantUpdate;
+};
+
+export type AgentApiUpdateAgentApiGrantResponse = (AgentApiAccessGrantPublic);
+
+export type AgentApiDeleteAgentApiGrantData = {
+    agentId: string;
+    grantId: string;
+};
+
+export type AgentApiDeleteAgentApiGrantResponse = (Message);
 
 export type AgentApiPublicConsumerSpecData = {
     agentId: string;
@@ -6698,6 +6896,36 @@ export type CliAccountApiProxyData = {
 
 export type CliAccountApiProxyResponse = (unknown);
 
+export type CliDeviceLoginStartData = {
+    requestBody: DeviceLoginStartRequest;
+};
+
+export type CliDeviceLoginStartResponse = (DeviceLoginStartResponse);
+
+export type CliDeviceLoginPollData = {
+    requestBody: DeviceLoginPollRequest;
+};
+
+export type CliDeviceLoginPollResponse = (DeviceLoginPollResponse);
+
+export type CliDeviceLoginRequestMetadataData = {
+    userCode: string;
+};
+
+export type CliDeviceLoginRequestMetadataResponse = (DeviceLoginRequestPublic);
+
+export type CliDeviceLoginApproveData = {
+    requestBody: DeviceLoginResolveBody;
+};
+
+export type CliDeviceLoginApproveResponse = (Message);
+
+export type CliDeviceLoginRejectData = {
+    requestBody: DeviceLoginResolveBody;
+};
+
+export type CliDeviceLoginRejectResponse = (Message);
+
 export type CliGetBootstrapScriptData = {
     token: string;
 };
@@ -7143,6 +7371,13 @@ export type EnvironmentsGetEnvironmentLogsData = {
 export type EnvironmentsGetEnvironmentLogsResponse = ({
     [key: string]: unknown;
 });
+
+export type EnvironmentsGetEnvironmentActionLogsData = {
+    environmentId: string;
+    limit?: number;
+};
+
+export type EnvironmentsGetEnvironmentActionLogsResponse = (AgentEnvActionLogsPublic);
 
 export type EnvironmentsWorkspaceFilesChangedData = {
     authorization?: (string | null);
@@ -8535,6 +8770,14 @@ export type UsersSetPasswordMeData = {
 };
 
 export type UsersSetPasswordMeResponse = (Message);
+
+export type UsersReadUserDetailsMeResponse = (UserDetailsPublic);
+
+export type UsersUpdateUserDetailsMeData = {
+    requestBody: UserDetailsUpdate;
+};
+
+export type UsersUpdateUserDetailsMeResponse = (UserDetailsPublic);
 
 export type UsersResendConfirmationMeResponse = (ResendConfirmationResponse);
 

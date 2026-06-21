@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { FileJson, Lock, Network, RefreshCw, Trash2 } from "lucide-react"
-import { useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import type { AgentApiProducerConnection } from "@/client"
 import { AgentApiService, AgentsService } from "@/client"
 import {
@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
 import type { AgentApiStatus } from "@/hooks/useAgentApi"
+import { AgentApiAccessScopesCard } from "./AgentApiAccessScopesCard"
 import { AgentBadge } from "@/components/Common/AgentBadge"
 import { useAgentApiStatus } from "@/hooks/useAgentApi"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -33,6 +34,8 @@ import { openAgentApiSpec } from "@/utils/agentApiSpec"
 interface AgentRestApiCardProps {
   agentId: string
   agentApiEnabled: boolean
+  /** Producer opt-in for per-user identity + scope grants (L2). */
+  agentApiIdentityEnabled: boolean
 }
 
 /** Extracts an HTTP status code (100–599) from a boot/status error string, if present. */
@@ -62,10 +65,18 @@ const STATE_BADGE: Record<string, { label: string; className: string }> = {
 export function AgentRestApiCard({
   agentId,
   agentApiEnabled,
+  agentApiIdentityEnabled,
 }: AgentRestApiCardProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const [errorDetailsOpen, setErrorDetailsOpen] = useState(false)
+  // Refresh is more than a single call: when the producer env is suspended,
+  // _refresh wakes it (blocking briefly server-side) and may still report it as
+  // booting, so we poll until it is running before reporting success. This local
+  // state drives the "Waking up..." progress label and disables the button.
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [refreshLabel, setRefreshLabel] = useState("Refresh")
+  const refreshActiveRef = useRef(false)
 
   const { data: status } = useAgentApiStatus(agentId, agentApiEnabled)
 
@@ -89,21 +100,101 @@ export function AgentRestApiCard({
     onError: (e: any) => showErrorToast(e?.message || "Failed to disconnect"),
   })
 
-  const refreshMutation = useMutation({
-    mutationFn: () => AgentApiService.refreshAgentApiStatus({ agentId }),
-    onSuccess: (data) => {
-      // The endpoint returns the freshly re-harvested status; seed the cache
-      // with it so a stale boot error clears immediately.
-      queryClient.setQueryData(
-        ["agentApiStatus", agentId],
-        data as AgentApiStatus,
-      )
-      queryClient.invalidateQueries({ queryKey: ["agentApiStatus", agentId] })
-      queryClient.invalidateQueries({ queryKey: ["agentApiSpec", agentId] })
-      showSuccessToast("Agent REST API refreshed")
-    },
-    onError: (e: any) => showErrorToast(e?.message || "Failed to refresh"),
-  })
+  // Number of _refresh polls before we give up waking a suspended env. Each
+  // _refresh blocks up to ~10s server-side while activating, so this is a
+  // generous ceiling for a producer that never boots.
+  const MAX_REFRESH_POLLS = 12
+
+  useEffect(() => {
+    // Abort any in-flight refresh loop on unmount.
+    return () => {
+      refreshActiveRef.current = false
+    }
+  }, [])
+
+  const handleRefresh = useCallback(async () => {
+    if (refreshActiveRef.current) return
+    refreshActiveRef.current = true
+    setIsRefreshing(true)
+    setRefreshLabel("Refresh")
+
+    const sleep = (ms: number) =>
+      new Promise((resolve) => setTimeout(resolve, ms))
+
+    try {
+      let attempt = 0
+      while (refreshActiveRef.current && attempt < MAX_REFRESH_POLLS) {
+        attempt += 1
+        // _refresh wakes a suspended env (blocking briefly), re-harvests when
+        // running, and returns the live status.
+        const data = (await AgentApiService.refreshAgentApiStatus({
+          agentId,
+        })) as AgentApiStatus
+
+        if (!refreshActiveRef.current) return
+
+        // Seed the cache with the freshly re-harvested status so a stale boot
+        // error / badge clears immediately.
+        queryClient.setQueryData(["agentApiStatus", agentId], data)
+
+        // The serving child app being idle/stopped is irrelevant to whether the
+        // refresh succeeded — the spec is harvested import-only without it. So
+        // the decision keys off the env-lifecycle + spec availability, not the
+        // raw child-app `state`. The ONLY "still waking" case is `not_running`
+        // (env genuinely not up yet); once the env is running every outcome is
+        // terminal:
+        //   success → spec harvested + usable
+        //   failure → boot/harvest error (`state === "error"` or `last_error`)
+        //   empty   → env up, nothing to harvest (no endpoints exposed)
+        const envRunning = data.state !== "not_running"
+        const harvestFailed = data.state === "error" || !!data.last_error
+        const specReady = !!data.spec_available && !data.last_error
+
+        if (envRunning) {
+          queryClient.invalidateQueries({
+            queryKey: ["agentApiStatus", agentId],
+          })
+          queryClient.invalidateQueries({
+            queryKey: ["agentApiSpec", agentId],
+          })
+          if (refreshActiveRef.current) {
+            if (harvestFailed) {
+              showErrorToast(
+                data.last_error
+                  ? `API failed to build: ${data.last_error}`
+                  : "The spec could not be harvested",
+              )
+            } else if (specReady) {
+              showSuccessToast("Agent REST API refreshed")
+            } else {
+              // Running but nothing to harvest — no endpoints exposed yet.
+              showSuccessToast("Refreshed — no endpoints are exposed yet")
+            }
+          }
+          return
+        }
+
+        // not_running (env still coming up) — keep waking. Show progress and
+        // poll again (the server already blocked while activating).
+        setRefreshLabel("Waking up agent...")
+        await sleep(1500)
+      }
+
+      if (refreshActiveRef.current) {
+        // Exhausted the budget without the env coming up.
+        queryClient.invalidateQueries({ queryKey: ["agentApiStatus", agentId] })
+        showErrorToast(
+          "The agent's environment is still starting. Please try again shortly.",
+        )
+      }
+    } catch (e: any) {
+      showErrorToast(e?.message || "Failed to refresh")
+    } finally {
+      refreshActiveRef.current = false
+      setIsRefreshing(false)
+      setRefreshLabel("Refresh")
+    }
+  }, [agentId, queryClient, showSuccessToast, showErrorToast])
 
   const toggleMutation = useMutation({
     mutationFn: (enabled: boolean) =>
@@ -164,14 +255,14 @@ export function AgentRestApiCard({
                     variant="ghost"
                     size="sm"
                     className="h-6 px-2 text-rose-700 hover:text-rose-800 hover:bg-rose-100 dark:text-rose-300 dark:hover:bg-rose-900/40"
-                    onClick={() => refreshMutation.mutate()}
-                    disabled={refreshMutation.isPending}
-                    title="Re-check the API (re-harvests the spec and clears a stale error)"
+                    onClick={handleRefresh}
+                    disabled={isRefreshing}
+                    title="Re-check the API (wakes a suspended env, re-harvests the spec, and clears a stale error)"
                   >
                     <RefreshCw
-                      className={`h-3 w-3 mr-1 ${refreshMutation.isPending ? "animate-spin" : ""}`}
+                      className={`h-3 w-3 mr-1 ${isRefreshing ? "animate-spin" : ""}`}
                     />
-                    Retry
+                    {isRefreshing ? refreshLabel : "Retry"}
                   </Button>
                   <Button
                     variant="ghost"
@@ -209,14 +300,14 @@ export function AgentRestApiCard({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => refreshMutation.mutate()}
-              disabled={refreshMutation.isPending}
-              title="Re-parse the API (re-harvests the spec and re-reads policy.yaml)"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              title="Re-parse the API (wakes a suspended env, re-harvests the spec, and re-reads policy.yaml)"
             >
               <RefreshCw
-                className={`h-4 w-4 mr-1 ${refreshMutation.isPending ? "animate-spin" : ""}`}
+                className={`h-4 w-4 mr-1 ${isRefreshing ? "animate-spin" : ""}`}
               />
-              Refresh
+              {isRefreshing ? refreshLabel : "Refresh"}
             </Button>
           </div>
 
@@ -255,7 +346,21 @@ export function AgentRestApiCard({
                         </span>
                       ) : (
                         conn.consumer_agents.map((a) => (
-                          <AgentBadge key={a.id} agent={a} />
+                          // Show the owner's email next to the badge so
+                          // identical agent names (e.g. several bundle installs
+                          // of the same agent owned by different users) stay
+                          // distinguishable.
+                          <span
+                            key={a.id}
+                            className="inline-flex items-center gap-1.5"
+                          >
+                            <AgentBadge agent={a} />
+                            {a.owner_email && (
+                              <span className="text-xs text-muted-foreground truncate">
+                                {a.owner_email}
+                              </span>
+                            )}
+                          </span>
                         ))
                       )}
                       {conn.read_only && (
@@ -305,6 +410,12 @@ export function AgentRestApiCard({
               </div>
             )}
           </div>
+
+          {/* Access & Scopes — per-user identity + scope grants (L2). */}
+          <AgentApiAccessScopesCard
+            agentId={agentId}
+            identityEnabled={agentApiIdentityEnabled}
+          />
         </CardContent>
       )}
     </Card>

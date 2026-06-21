@@ -35,7 +35,7 @@ Two-factor header-based auth (separate from user JWT):
 1. `Authorization: Bearer <AGENT_AUTH_TOKEN>` - Token generated at environment creation, stored in `environment.config["auth_token"]`
 2. `X-Agent-Env-Id: <ENV_ID>` - Environment UUID header
 
-Backend validates both match the database record, preventing token reuse across environments.
+Authenticated by the scoped `AgentEnvContextDep`: the bearer token must decode as this env's `agent_env` JWT (or match `auth_token_hash`) AND the `X-Agent-Env-Id` must match the token's bound env, preventing token reuse across environments. The env token is rejected by `get_current_user`, so it cannot reach owner routes.
 
 ## Environment Variables
 
@@ -58,7 +58,7 @@ Set in the container `.env` file by `backend/app/services/environments/environme
 
 - **Tool implementation**: `backend/app/env-templates/app_core_base/core/server/tools/knowledge_query.py`
 - **Adapter registration**: `backend/app/env-templates/app_core_base/core/server/adapters/claude_code_sdk_adapter.py`
-- **Backend endpoint**: `backend/app/api/routes/knowledge.py` - `query_knowledge()` + `verify_agent_auth_token()` dependency
+- **Backend endpoint**: `backend/app/api/routes/knowledge.py` - `query_knowledge()` + `AgentEnvContextDep` (`backend/app/api/deps.py`) dependency
 - **Pre-allowed list**: `backend/app/services/sessions/message_service.py`
 - **Frontend rendering**: `frontend/src/components/Chat/ToolCallBlock.tsx` - `KnowledgeQueryToolBlock` component
 

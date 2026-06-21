@@ -15,6 +15,8 @@ class AgentScheduleLog(SQLModel, table=True):
     - "success": static_prompt session created OK, or script_trigger returned "OK"
     - "session_triggered": script_trigger returned non-OK, session was created with context
     - "error": execution failed (timeout, network error, env not available)
+    - "skipped": run skipped because the agent's environment is in a critical state
+      (running-but-degraded) and is not eligible for scheduled execution
     """
     __tablename__ = "agent_schedule_log"
     __table_args__ = (
@@ -31,7 +33,7 @@ class AgentScheduleLog(SQLModel, table=True):
     schedule_type: str  # "static_prompt" or "script_trigger"
 
     # Execution outcome
-    status: str  # "success", "session_triggered", "error"
+    status: str  # "success", "session_triggered", "error", "skipped"
 
     # static_prompt fields
     prompt_used: str | None = Field(default=None, sa_type=Text)

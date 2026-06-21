@@ -71,6 +71,23 @@ async def _check_environment_statuses():
                             f"Environment became unreachable: {health.message}"
                         )
 
+                        # Offline supersedes critical: the container is now
+                        # confirmed down, so clear any running-but-degraded
+                        # critical state (we don't want both a red "Error" badge
+                        # and an amber "Action required" badge). Same commit.
+                        critical_cleared = False
+                        if env.critical_state:
+                            env.critical_state = False
+                            env.critical_cause = None
+                            env.critical_since = None
+                            critical_cleared = True
+                            # Discard from the lifecycle's transition set so a
+                            # future re-failure (after recovery) re-emails.
+                            from app.services.environments.environment_lifecycle import (
+                                _critical_warned_env_ids,
+                            )
+                            _critical_warned_env_ids.discard(str(env.id))
+
                         # Get agent for owner_id
                         agent = session.get(Agent, env.agent_id)
                         if agent:
@@ -87,6 +104,22 @@ async def _check_environment_statuses():
                                     "message": health.message,
                                 },
                             )
+                            # Also notify narrow critical-event subscribers that
+                            # the amber state is gone (offline superseded it).
+                            if critical_cleared:
+                                await event_service.emit_event(
+                                    event_type=EventType.ENVIRONMENT_CRITICAL_STATE_CHANGED,
+                                    model_id=env.id,
+                                    user_id=agent.owner_id,
+                                    meta={
+                                        "environment_id": str(env.id),
+                                        "agent_id": str(agent.id),
+                                        "instance_name": env.instance_name,
+                                        "critical_state": False,
+                                        "cause": None,
+                                        "summary": None,
+                                    },
+                                )
 
                         error_count += 1
 

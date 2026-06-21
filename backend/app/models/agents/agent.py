@@ -66,6 +66,10 @@ class AgentUpdate(SQLModel):
     inactivity_period_limit: str | None = None
     webapp_enabled: bool | None = None
     agent_api_enabled: bool | None = None
+    # When True, the agent-api proxy honors per-user identity + scope grants for
+    # this producer (injects X-Cinna-Caller-Scopes from the live grant). When
+    # False, callers are attributed but carry no scopes. See plan D5.
+    agent_api_identity_enabled: bool | None = None
     # Install owners can update update mode for bundle updates
     update_mode: str | None = None  # "automatic" | "manual"
     # Publisher override map (Phase 5). Only meaningful on the publisher
@@ -149,6 +153,9 @@ class Agent(AgentBase, table=True):
     inactivity_period_limit: str | None = Field(default=None)  # None="10min" | "2_days" | "1_week" | "1_month" | "always_on"
     webapp_enabled: bool = Field(default=False)  # Whether webapp feature is active
     agent_api_enabled: bool = Field(default=False)  # Whether the agent REST API (cinna_api) feature is active
+    # Whether the agent-api proxy honors per-user identity + scope grants for
+    # this producer (L2). Default off — opt-in for UI clarity (plan D5).
+    agent_api_identity_enabled: bool = Field(default=False)
     # Status refresh pre-command (see AgentBase). Stored as VARCHAR(1024),
     # nullable, with a server default so existing rows backfill to "/run:status"
     # on migration. The Python model default governs new rows.
@@ -249,6 +256,7 @@ class AgentPublic(SQLModel):
     inactivity_period_limit: str | None = None
     webapp_enabled: bool = False
     agent_api_enabled: bool = False
+    agent_api_identity_enabled: bool = False
     created_at: datetime
     updated_at: datetime
     owner_id: uuid.UUID

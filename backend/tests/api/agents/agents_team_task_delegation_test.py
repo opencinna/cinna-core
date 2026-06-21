@@ -14,6 +14,11 @@ the SDK processes a message, calls MCP tools (HTTP requests back to the backend)
 mid-stream, then completes. Status transitions are driven by session lifecycle
 events — no explicit agent_update_status workarounds.
 
+Auth model (post-hardening):
+  - Task creation, session management, listing = regular user JWT (superuser_token_headers)
+  - All /agent/tasks/* MCP tool calls = scoped agent-environment JWT
+  - ScriptedAgentEnvConnector.auth_headers must be the env token for the ACTING agent
+
 This test validates the interaction between:
   Backend API ←→ Agent Environment (stubbed with scripted tool calls) ←→ MCP Tools
 """
@@ -28,6 +33,7 @@ from tests.stubs.agent_env_stub import (
     ScriptedAgentEnvConnector,
 )
 from tests.utils.agent import create_agent_via_api, get_agent
+from tests.utils.agent_env import create_env_with_token
 from tests.utils.agentic_team import (
     create_team,
     create_node,
@@ -53,6 +59,13 @@ from tests.utils.input_task import (
 _BASE = f"{settings.API_V1_STR}"
 
 
+def _get_superuser_id(client: TestClient, headers: dict) -> str:
+    """Return the superuser's user ID as a string."""
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=headers)
+    assert r.status_code == 200
+    return r.json()["id"]
+
+
 def test_agentic_team_full_delegation_lifecycle(
     client: TestClient,
     superuser_token_headers: dict[str, str],
@@ -63,16 +76,17 @@ def test_agentic_team_full_delegation_lifecycle(
     Full agentic team task delegation with session-driven completion:
       1.  Create two agents (Lead, Worker) and a team "HR" with connection
       2.  Create team-scoped task — auto-assigned to lead
-      3.  Execute task — lead SDK calls create_subtask mid-stream
-      4.  Worker auto-executes with scripted add_comment MCP calls
+      3.  Execute task — lead SDK calls create_subtask mid-stream (env token)
+      4.  Worker auto-executes with scripted add_comment MCP calls (worker env token)
       5.  Session completion automatically transitions subtask → completed
       6.  Parent task stays in_progress until subtask completes, then → completed
-      7.  Lead reads subtask details, posts summary on parent
+      7.  Lead reads subtask details, posts summary on parent (lead env token)
       8.  Verify full task tree, comments, status history
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
-    # ── Phase 1: Create agents and team ──────────────────────────────────
+    # ── Phase 1: Create agents, env tokens, and team ─────────────────────
     lead_agent = create_agent_via_api(client, headers, name="HR Lead Agent")
     worker_agent = create_agent_via_api(client, headers, name="Recruiting Agent")
     drain_tasks()
@@ -81,6 +95,12 @@ def test_agentic_team_full_delegation_lifecycle(
     worker_agent = get_agent(client, headers, worker_agent["id"])
     lead_agent_id = lead_agent["id"]
     worker_agent_id = worker_agent["id"]
+
+    # Create scoped env tokens for each agent. These are used for /agent/tasks/* calls.
+    # The lead env token is what the lead agent's environment would present.
+    # The worker env token is what the worker agent's environment would present.
+    _, lead_env_headers = create_env_with_token(db, agent_id=lead_agent_id, owner_id=owner_id)
+    _, worker_env_headers = create_env_with_token(db, agent_id=worker_agent_id, owner_id=owner_id)
 
     team = create_team(client, headers, name="HR Team")
     team_id = team["id"]
@@ -126,10 +146,12 @@ def test_agentic_team_full_delegation_lifecycle(
     assert exec_result["success"] is True
     lead_session_id = str(exec_result["session_id"])
 
-    # Now build the real lead stub with session_id available for tool call
+    # Now build the real lead stub with session_id available for tool call.
+    # auth_headers=lead_env_headers: the lead agent's env token is what the
+    # real SDK would use when calling back to the backend MCP endpoints.
     lead_stub = ScriptedAgentEnvConnector(
         client=client,
-        auth_headers=headers,
+        auth_headers=lead_env_headers,
         steps=[
             {
                 "type": "assistant",
@@ -204,14 +226,14 @@ def test_agentic_team_full_delegation_lifecycle(
     ]
     assert len(delegation_comments) >= 1
 
-    # ── Phase 6: Lead reads subtask details ──────────────────────────────
-    subtask_details = agent_get_task_details(client, headers, task_id=subtask_id)
+    # ── Phase 6: Lead reads subtask details via env token ────────────────
+    subtask_details = agent_get_task_details(client, lead_env_headers, task_id=subtask_id)
     assert subtask_details["task"] == subtask_short_code
     assert subtask_details["status"] == "completed"
 
-    # ── Phase 7: Lead posts summary on parent ────────────────────────────
+    # ── Phase 7: Lead posts summary on parent via env token ──────────────
     agent_add_comment(
-        client, headers,
+        client, lead_env_headers,
         task_id=parent_task_id,
         content="Recruiting completed. 3 qualified candidates identified:\n"
                 "1. Alice Chen (recommended)\n"
@@ -261,10 +283,15 @@ def test_agentic_team_scripted_worker_comments_during_stream(
       4. Session completion automatically transitions subtask → completed
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     lead = create_agent_via_api(client, headers, name="Script Lead")
     worker = create_agent_via_api(client, headers, name="Script Worker")
     drain_tasks()
+
+    # Env tokens for each agent — used for /agent/tasks/* MCP calls
+    _, lead_env_headers = create_env_with_token(db, agent_id=lead["id"], owner_id=owner_id)
+    _, worker_env_headers = create_env_with_token(db, agent_id=worker["id"], owner_id=owner_id)
 
     team = create_team(client, headers, name="Script Team")
     team_id = team["id"]
@@ -295,9 +322,10 @@ def test_agentic_team_scripted_worker_comments_during_stream(
 
     lead_session_id = str(exec_result["session_id"])
 
-    # Create subtask — schedules auto-execute as background task
+    # Create subtask — schedules auto-execute as background task.
+    # Uses lead_env_headers: the lead agent is making this subtask API call.
     subtask_result = agent_create_subtask(
-        client, headers,
+        client, lead_env_headers,
         task_id=parent_id,
         title="Analyze competitor data",
         description="Review Q1 reports from top 5 competitors",
@@ -308,10 +336,12 @@ def test_agentic_team_scripted_worker_comments_during_stream(
     subtask_data = get_task_by_code(client, headers, subtask_code)
     subtask_id = subtask_data["id"]
 
-    # Worker's auto-execute uses scripted MCP tool calls
+    # Worker's auto-execute uses scripted MCP tool calls.
+    # auth_headers=worker_env_headers: the worker agent's env token is what the
+    # real SDK would use when calling back to the backend MCP endpoints.
     worker_stub = ScriptedAgentEnvConnector(
         client=client,
-        auth_headers=headers,
+        auth_headers=worker_env_headers,
         steps=[
             {"type": "assistant", "content": "Analyzing competitor reports..."},
             {
@@ -381,16 +411,20 @@ def test_agentic_team_delegation_topology_enforcement(
       1. Create 3 agents: Lead, Worker A, Worker B
       2. Create team with connection Lead→A only (no Lead→B)
       3. Create parent task with lead agent
-      4. Agent delegates to Worker A — succeeds
+      4. Agent delegates to Worker A — succeeds (using lead env token)
       5. Agent delegates to Worker B — fails (no connection)
       6. Agent delegates to non-existent team member — fails
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     lead = create_agent_via_api(client, headers, name="Topo Lead")
     worker_a = create_agent_via_api(client, headers, name="Topo Worker A")
     worker_b = create_agent_via_api(client, headers, name="Topo Worker B")
     drain_tasks()
+
+    # Lead's env token for making subtask API calls
+    _, lead_env_headers = create_env_with_token(db, agent_id=lead["id"], owner_id=owner_id)
 
     team = create_team(client, headers, name="Topology Team")
     team_id = team["id"]
@@ -418,7 +452,7 @@ def test_agentic_team_delegation_topology_enforcement(
     stub_a = StubAgentEnvConnector(response_text="On it")
     with patch("app.services.sessions.message_service.agent_env_connector", stub_a):
         result_a = agent_create_subtask(
-            client, headers,
+            client, lead_env_headers,
             task_id=parent_id,
             title="Task for Worker A",
             assigned_to=node_a["name"],
@@ -429,7 +463,7 @@ def test_agentic_team_delegation_topology_enforcement(
     # ── Delegate to Worker B — should fail (no connection) ───────────────
     r = client.post(
         f"{_BASE}/agent/tasks/{parent_id}/subtask",
-        headers=headers,
+        headers=lead_env_headers,
         json={"title": "Task for Worker B", "assigned_to": node_b["name"]},
     )
     assert r.status_code == 400
@@ -438,7 +472,7 @@ def test_agentic_team_delegation_topology_enforcement(
     # ── Delegate to non-existent member — should fail ────────────────────
     r = client.post(
         f"{_BASE}/agent/tasks/{parent_id}/subtask",
-        headers=headers,
+        headers=lead_env_headers,
         json={"title": "Task for Ghost Agent", "assigned_to": "Nonexistent Agent"},
     )
     assert r.status_code == 400
@@ -459,9 +493,12 @@ def test_agentic_team_task_short_code_prefix(
       4. Agent creates subtask in team — subtask also uses team prefix
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     agent = create_agent_via_api(client, headers, name="Prefix Test Agent")
     drain_tasks()
+
+    _, agent_env_headers = create_env_with_token(db, agent_id=agent["id"], owner_id=owner_id)
 
     team = create_team(client, headers, name="Engineering Team")
     team_id = team["id"]
@@ -476,7 +513,7 @@ def test_agentic_team_task_short_code_prefix(
     assert standalone_task["short_code"].startswith("TASK-")
 
     subtask_result = agent_create_subtask(
-        client, headers, task_id=team_task["id"], title="Sub-engineering task",
+        client, agent_env_headers, task_id=team_task["id"], title="Sub-engineering task",
     )
     drain_tasks()
     assert subtask_result["success"] is True
@@ -492,16 +529,21 @@ def test_agentic_team_current_session_endpoints(
     """
     Agent "current" endpoints resolve task from session:
       1. Create team, parent task, execute it (creates session)
-      2. POST /agent/tasks/current/subtask with source_session_id
-      3. POST /agent/tasks/current/comment with source_session_id
-      4. GET /agent/tasks/current/details with source_session_id
+      2. POST /agent/tasks/current/subtask with source_session_id (lead env token)
+      3. POST /agent/tasks/current/comment with source_session_id (lead env token)
+      4. GET /agent/tasks/current/details with source_session_id (lead env token)
       5. All resolve correctly to the parent task
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     lead = create_agent_via_api(client, headers, name="Current EP Lead")
     worker = create_agent_via_api(client, headers, name="Current EP Worker")
     drain_tasks()
+
+    # Lead's env token — the "current" endpoints check session.agent_id == ctx.agent.id,
+    # so the env token must be for the same agent that created the session.
+    _, lead_env_headers = create_env_with_token(db, agent_id=lead["id"], owner_id=owner_id)
 
     team = create_team(client, headers, name="Current EP Team")
     team_id = team["id"]
@@ -535,7 +577,7 @@ def test_agentic_team_current_session_endpoints(
     stub_worker = StubAgentEnvConnector(response_text="Working on it")
     with patch("app.services.sessions.message_service.agent_env_connector", stub_worker):
         sub_result = agent_create_subtask_current(
-            client, headers,
+            client, lead_env_headers,
             title="Subtask via current endpoint",
             source_session_id=session_id,
             assigned_to=worker_node["name"],
@@ -548,7 +590,7 @@ def test_agentic_team_current_session_endpoints(
     # ── POST /agent/tasks/current/comment ────────────────────────────────
     from tests.utils.input_task import agent_add_comment_current
     comment = agent_add_comment_current(
-        client, headers,
+        client, lead_env_headers,
         content="Progress update from current endpoint",
         source_session_id=session_id,
     )
@@ -557,7 +599,7 @@ def test_agentic_team_current_session_endpoints(
 
     # ── GET /agent/tasks/current/details ─────────────────────────────────
     from tests.utils.input_task import agent_get_task_details_current
-    details = agent_get_task_details_current(client, headers, source_session_id=session_id)
+    details = agent_get_task_details_current(client, lead_env_headers, source_session_id=session_id)
     assert details["task"] == parent["short_code"]
     recent_contents = [c["content"] for c in details["recent_comments"]]
     assert any("Progress update" in c for c in recent_contents)

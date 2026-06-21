@@ -2,18 +2,26 @@
 Security Events API Tests
 
 Tests for:
-- POST /api/v1/security-events/report  — blockable ingest (returns action decision)
-- POST /api/v1/security-events/        — fire-and-forget ingest
-- GET  /api/v1/security-events/        — list events (paginated, filterable)
+- POST /api/v1/security-events/report  — blockable ingest (agent-env auth)
+- POST /api/v1/security-events/        — fire-and-forget ingest (user auth)
+- GET  /api/v1/security-events/        — list events (user auth, paginated, filterable)
 
-All tests use the HTTP API exclusively (no direct DB access).
-Auth: Standard user JWT via superuser_token_headers fixture.
+Auth model (post-hardening):
+  - POST /report uses AgentEnvContextDep (scoped agent-environment JWT).
+    A plain user JWT is REJECTED — this is the security boundary being tested.
+  - POST / and GET / use the standard CurrentUser dependency (regular user JWT).
+
+Tests that call /report use a scoped env token created via create_env_with_token.
+Tests that call POST / or GET / continue to use superuser_token_headers.
 """
 import uuid
 
 from fastapi.testclient import TestClient
+from sqlmodel import Session
 
 from app.core.config import settings
+from app.models import Agent, AgentEnvironment
+from tests.utils.agent_env import create_env_with_token
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -51,15 +59,52 @@ def _valid_ingest_payload(event_type: str = "OUTPUT_REDACTED") -> dict:
     }
 
 
+def _get_superuser_id(client: TestClient, headers: dict) -> str:
+    """Return the superuser's user ID as a string."""
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=headers)
+    assert r.status_code == 200
+    return r.json()["id"]
+
+
+def _make_env_headers(
+    client: TestClient,
+    db: Session,
+    superuser_token_headers: dict,
+) -> dict[str, str]:
+    """Insert a minimal Agent + AgentEnvironment directly via db and return env headers.
+
+    Uses direct DB insertion (like the knowledge_query test does) to avoid the agent
+    creation API path which requires the agents conftest fixtures (env adapter stubs,
+    background task collectors, etc.) that the security_events conftest does not supply.
+    """
+    owner_id = _get_superuser_id(client, superuser_token_headers)
+    owner_uuid = uuid.UUID(owner_id)
+
+    # Insert a minimal Agent row. bundle_id is required NOT NULL.
+    agent = Agent(
+        name=f"SecurityEvent Test Agent {uuid.uuid4().hex[:6]}",
+        owner_id=owner_uuid,
+        bundle_id=f"localhost.test.security.{uuid.uuid4().hex[:8]}",
+    )
+    db.add(agent)
+    db.flush()
+
+    _, env_headers = create_env_with_token(db, agent_id=agent.id, owner_id=owner_uuid)
+    return env_headers
+
+
 # ── POST /report — blockable ingest ───────────────────────────────────────────
 
 def test_report_security_event_returns_allow(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """Blockable report endpoint always returns action='allow' initially."""
+    env_headers = _make_env_headers(client, db, superuser_token_headers)
     response = client.post(
         _report_url(),
-        headers=superuser_token_headers,
+        headers=env_headers,
         json=_valid_report_payload("CREDENTIAL_READ_ATTEMPT"),
     )
     assert response.status_code == 200
@@ -69,18 +114,21 @@ def test_report_security_event_returns_allow(
 
 
 def test_report_security_event_logs_event(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """Reporting via /report creates a retrievable event in the list endpoint."""
+    env_headers = _make_env_headers(client, db, superuser_token_headers)
     report_payload = _valid_report_payload("CREDENTIAL_BASH_ACCESS")
     report_response = client.post(
         _report_url(),
-        headers=superuser_token_headers,
+        headers=env_headers,
         json=report_payload,
     )
     assert report_response.status_code == 200
 
-    # The event should appear in the list
+    # The event should appear in the list (list uses user auth)
     list_response = client.get(
         _list_url(),
         headers=superuser_token_headers,
@@ -94,9 +142,12 @@ def test_report_security_event_logs_event(
 
 
 def test_report_security_event_with_text_fields(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """Report endpoint accepts all non-FK optional fields."""
+    env_headers = _make_env_headers(client, db, superuser_token_headers)
     payload = {
         "event_type": "CREDENTIAL_WRITE_ATTEMPT",
         "tool_name": "Write",
@@ -106,7 +157,7 @@ def test_report_security_event_with_text_fields(
     }
     response = client.post(
         _report_url(),
-        headers=superuser_token_headers,
+        headers=env_headers,
         json=payload,
     )
     assert response.status_code == 200
@@ -122,22 +173,47 @@ def test_report_security_event_requires_auth(client: TestClient) -> None:
     assert response.status_code == 401
 
 
-def test_report_security_event_requires_event_type(
-    client: TestClient, superuser_token_headers: dict[str, str]
+def test_report_security_event_plain_user_jwt_rejected(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
 ) -> None:
-    """Report endpoint requires event_type field."""
+    """
+    POST /report rejects a plain user JWT (CurrentUser would resolve it, but
+    AgentEnvContextDep requires a scoped env token). This is the load-bearing
+    security boundary — a regular user JWT must not satisfy the env route.
+    """
     response = client.post(
         _report_url(),
-        headers=superuser_token_headers,
+        headers=superuser_token_headers,  # plain user JWT, not env token
+        json=_valid_report_payload(),
+    )
+    # A new-format env token carries aud="agent_env" which AgentEnvContextDep requires.
+    # A plain user JWT has no aud and is rejected.
+    assert response.status_code in (401, 403)
+
+
+def test_report_security_event_requires_event_type(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    """Report endpoint requires event_type field."""
+    env_headers = _make_env_headers(client, db, superuser_token_headers)
+    response = client.post(
+        _report_url(),
+        headers=env_headers,
         json={"tool_name": "Read"},  # Missing event_type
     )
     assert response.status_code == 422
 
 
 def test_report_security_event_invalid_uuid_fields_are_ignored(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """Invalid UUID strings in optional fields should not cause 500 — they are silently ignored."""
+    env_headers = _make_env_headers(client, db, superuser_token_headers)
     payload = {
         "event_type": "CREDENTIAL_READ_ATTEMPT",
         "session_id": "not-a-uuid",
@@ -146,7 +222,7 @@ def test_report_security_event_invalid_uuid_fields_are_ignored(
     }
     response = client.post(
         _report_url(),
-        headers=superuser_token_headers,
+        headers=env_headers,
         json=payload,
     )
     # Should succeed — invalid UUIDs are parsed as None by _safe_uuid()

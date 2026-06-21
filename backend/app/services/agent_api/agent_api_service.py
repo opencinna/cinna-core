@@ -10,10 +10,10 @@ import-only harvest — *never* by spawning the serving child), keeps the env
 alive for API traffic, auto-activates a suspended producer env, and loads the
 declarative ``policy.yaml`` guardrails (fail-closed on parse error).
 
-Phase 1 is producer / owner-only: there are no tokens, no consumer routes, and
-no proxy-edge policy enforcement yet (that is Phase 2). The policy is loaded and
-cached here because the spec/status surfaces it, but ``enforce_policy`` is not
-implemented in this phase.
+It also enforces the producer's policy at the proxy edge before a consumer
+request reaches the producer's app (``enforce_policy``): method / body / rate /
+path guardrails, plus optional per-user scope gating declared in
+``policy.yaml`` (the producer remains the primary authorizer).
 
 The environment-resolution rule is inherited verbatim from
 ``WebappService.resolve_agent_environment()`` so the resolved env is stable
@@ -87,6 +87,9 @@ DEFAULT_POLICY: dict = {
     "rate_limit": "60/min",
     "expose_spec": True,
     "allowed_paths": ["*"],
+    # Per-user scope catalog (D6). Canonical form: list of
+    # {name, description, requires:[{method, path}]}. Empty = no scopes declared.
+    "scopes": [],
 }
 # Policy used when parsing fails — deny everything (fail closed). A parse error
 # means we cannot trust the producer's stated guardrails, so we lock the API
@@ -99,6 +102,7 @@ FAIL_CLOSED_POLICY: dict = {
     "rate_limit": "0/min",
     "expose_spec": False,
     "allowed_paths": [],
+    "scopes": [],
     "error": "policy.yaml could not be parsed — failing closed (deny-all)",
 }
 
@@ -399,15 +403,21 @@ class AgentApiService:
         path: str,
         body_size: int,
         incoming_headers: dict,
+        caller_scopes: list[str] | None = None,
     ) -> tuple[AgentEnvironment, dict]:
         """
         Authorize a token-authenticated consumer request end-to-end.
 
         Orchestrates: load the cached policy (fail-closed; defaults when cold) →
-        enforce it (method / body / rate / path / hop-depth) → compute the
-        propagated deadline + hop-depth headers → resolve + auto-activate the
-        producer env. Enforcement runs BEFORE env resolution so a 405/413/429
+        enforce it (method / body / rate / path / hop-depth / scopes) → compute
+        the propagated deadline + hop-depth headers → resolve + auto-activate the
+        producer env. Enforcement runs BEFORE env resolution so a 405/413/429/403
         never wakes a suspended env.
+
+        ``caller_scopes`` is the per-user grant resolved by the proxy (Phase 2);
+        combined with the producer's ``agent_api_identity_enabled`` opt-in it
+        drives the OPTIONAL edge scope enforcement (D8). It is resolved by the
+        caller (the proxy) so identity resolution stays at the proxy chokepoint.
 
         Returns ``(environment, hop_headers)`` where ``hop_headers`` must be
         injected into the downstream proxy request.
@@ -424,6 +434,8 @@ class AgentApiService:
             body_size=body_size,
             token=token,
             hop_depth=AgentApiService.incoming_hop_depth(incoming_headers),
+            caller_scopes=caller_scopes,
+            identity_enabled=bool(agent.agent_api_identity_enabled),
         )
 
         hop_headers = AgentApiService.next_hop_headers(incoming_headers)
@@ -773,7 +785,118 @@ class AgentApiService:
         ):
             if key in data:
                 policy[key] = data[key]
+
+        # Per-user scope catalog (D6). Parsed into a normalized canonical form
+        # (list of {name, description, requires}) so the grant-service catalog
+        # endpoint and edge enforcement read it consistently. A malformed
+        # ``scopes:`` subsection degrades to an EMPTY catalog WITHOUT failing the
+        # rest of the (otherwise-valid) policy closed — only a fully unparseable
+        # YAML fails closed (handled above). Absent ``scopes:`` ⇒ empty list.
+        policy["scopes"] = AgentApiService._parse_scopes_catalog(data.get("scopes"))
         return policy
+
+    @staticmethod
+    def _parse_scopes_catalog(raw) -> list[dict]:
+        """Normalize a ``policy.yaml`` ``scopes:`` value to a canonical catalog.
+
+        Returns a list of ``{"name": str, "description": str | None, "requires":
+        [{"method": str, "path": str}, ...]}``. This is the single canonical form
+        the catalog endpoint and edge enforcement both read.
+
+        Two authoring forms are accepted (D6):
+
+        1. Bare ``{name: description}`` mapping (or a bare ``[name, ...]`` list) —
+           a documentation-only catalog, no edge enforcement::
+
+               scopes:
+                 orders.read: "Read orders"
+                 orders.write: "Create/modify orders"
+
+        2. Rich ``{name: {description, requires: [{method, path}]}}`` mapping —
+           declares method/path patterns the platform edge-enforces (a request
+           matching one of ``requires`` is 403 unless the caller's grant carries
+           the scope; see ``enforce_policy``)::
+
+               scopes:
+                 orders.write:
+                   description: "Create/modify orders"
+                   requires:
+                     - { method: POST, path: /orders }
+                     - { method: PUT,  path: /orders }
+
+        Graceful: a malformed catalog (wrong types, bad entries) is skipped
+        entry-by-entry and never raises — the worst case is an empty/partial
+        catalog, which means "no edge enforcement," not a closed policy.
+        """
+        # Bare list of names → documentation-only scopes (no requires).
+        if isinstance(raw, list):
+            catalog: list[dict] = []
+            for item in raw:
+                if isinstance(item, str) and item.strip():
+                    catalog.append(
+                        {"name": item.strip(), "description": None, "requires": []}
+                    )
+            return catalog
+
+        if not isinstance(raw, dict):
+            return []
+
+        catalog = []
+        for name, spec in raw.items():
+            if not isinstance(name, str) or not name.strip():
+                continue
+            scope_name = name.strip()
+
+            # Form 1: name -> description string (or None / empty).
+            if spec is None or isinstance(spec, str):
+                description = spec.strip() if isinstance(spec, str) and spec.strip() else None
+                catalog.append(
+                    {"name": scope_name, "description": description, "requires": []}
+                )
+                continue
+
+            # Form 2: name -> {description, requires}.
+            if isinstance(spec, dict):
+                desc_raw = spec.get("description")
+                description = (
+                    desc_raw.strip()
+                    if isinstance(desc_raw, str) and desc_raw.strip()
+                    else None
+                )
+                requires = AgentApiService._parse_scope_requires(spec.get("requires"))
+                catalog.append(
+                    {"name": scope_name, "description": description, "requires": requires}
+                )
+                continue
+
+            # Any other shape for the entry → skip it (graceful).
+        return catalog
+
+    @staticmethod
+    def _parse_scope_requires(raw) -> list[dict]:
+        """Normalize a scope's ``requires:`` list to ``[{method, path}, ...]``.
+
+        Each entry needs at least a ``path`` (a path-prefix); ``method`` is
+        optional and defaults to ``*`` (any method). Method is upper-cased.
+        Malformed entries are skipped (never raises).
+        """
+        if not isinstance(raw, list):
+            return []
+        out: list[dict] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            path = entry.get("path")
+            if not isinstance(path, str) or not path.strip():
+                continue
+            method = entry.get("method")
+            method_norm = (
+                method.strip().upper()
+                if isinstance(method, str) and method.strip()
+                else "*"
+            )
+            out.append({"method": method_norm, "path": path.strip()})
+        return out
 
     @staticmethod
     def _cache_policy(
@@ -861,6 +984,8 @@ class AgentApiService:
         body_size: int,
         token: "AgentApiToken | None",
         hop_depth: int = 0,
+        caller_scopes: list[str] | None = None,
+        identity_enabled: bool = False,
     ) -> None:
         """
         Enforce the producer's policy at the proxy edge, BEFORE forwarding.
@@ -870,9 +995,14 @@ class AgentApiService:
           - 413: body over ``max_body_bytes``
           - 429: per-token rate limit exceeded (with retry_after)
           - 403: path not in ``allowed_paths`` (or hop-depth exceeded)
+          - 403: a scope-gated endpoint the caller's grant doesn't cover (D8)
 
         The token's ``read_only_override`` may only narrow the producer's
         policy, never widen it.
+
+        ``caller_scopes`` is the resolved per-user grant (Phase 2) and
+        ``identity_enabled`` is the producer's opt-in flag; together they gate the
+        OPTIONAL edge scope enforcement (D8) — see ``_enforce_scopes``.
         """
         method = method.upper()
 
@@ -915,6 +1045,92 @@ class AgentApiService:
 
         # Rate limit (per-token bucket, limit from the producer's policy).
         AgentApiService._enforce_rate_limit(policy, token)
+
+        # Optional edge scope enforcement (D8) — defense-in-depth on top of the
+        # producer's own (primary) enforcement. Last, so it never short-circuits
+        # the coarse guardrails above.
+        AgentApiService._enforce_scopes(
+            policy, method, path, caller_scopes or [], identity_enabled
+        )
+
+    @staticmethod
+    def _enforce_scopes(
+        policy: dict,
+        method: str,
+        path: str,
+        caller_scopes: list[str],
+        identity_enabled: bool,
+    ) -> None:
+        """
+        OPTIONAL edge scope enforcement (D8) — defense-in-depth, conservative.
+
+        A scope declared in ``policy.yaml`` with a non-empty ``requires:`` list
+        edge-gates the matching method/path patterns: a request matching one of
+        those patterns is rejected ``403`` unless the caller's resolved grant
+        carries that scope. Endpoints not matched by any ``requires`` pattern pass
+        through to the producer unchanged.
+
+        Opt-in is intentionally conservative so this NEVER hard-denies connections
+        that worked before this phase (Phase-1 SECURITY rule 4):
+
+          - Only fires when the producer enabled identity (``identity_enabled``).
+            A producer that hasn't opted into identity is never edge-denied.
+          - Only fires for scopes that explicitly declare ``requires:`` patterns.
+            A documentation-only catalog (names + descriptions, no ``requires``)
+            is never edge-enforced — the producer remains the sole enforcer (D6).
+
+        When both conditions hold and a request matches a gated pattern, an
+        anonymous / no-grant caller (empty ``caller_scopes``) IS denied — but only
+        because the producer explicitly asked for it. The producer is still the
+        primary enforcer; this is hardening, not a replacement.
+        """
+        # Conservative gate: never edge-deny a producer that hasn't opted in.
+        if not identity_enabled:
+            return
+
+        scopes_catalog = policy.get("scopes")
+        if not isinstance(scopes_catalog, list) or not scopes_catalog:
+            return
+
+        method = method.upper()
+        normalized_path = path.lstrip("/")
+        held = set(caller_scopes or [])
+
+        for scope in scopes_catalog:
+            if not isinstance(scope, dict):
+                continue
+            requires = scope.get("requires")
+            if not isinstance(requires, list) or not requires:
+                # Documentation-only scope — not edge-enforced.
+                continue
+            scope_name = scope.get("name")
+            if not isinstance(scope_name, str) or not scope_name:
+                continue
+
+            for pattern in requires:
+                if not isinstance(pattern, dict):
+                    continue
+                pat_method = str(pattern.get("method", "*")).upper()
+                pat_path = str(pattern.get("path", "")).lstrip("/")
+                method_matches = pat_method == "*" or pat_method == method
+                # Segment-accurate prefix: ``/orders`` gates ``/orders`` and
+                # ``/orders/123`` but NOT ``/orders-archive`` (a raw startswith
+                # would over-gate the latter). Match the exact path or the path
+                # followed by a ``/`` boundary.
+                path_matches = bool(pat_path) and (
+                    normalized_path == pat_path
+                    or normalized_path.startswith(pat_path + "/")
+                )
+                if method_matches and path_matches:
+                    # This endpoint is gated by ``scope_name``; the caller must
+                    # hold it.
+                    if scope_name not in held:
+                        raise AgentApiPolicyError(
+                            f"This endpoint requires the '{scope_name}' scope",
+                            status_code=403,
+                        )
+                    # Caller holds it — stop checking this scope's patterns.
+                    break
 
     @staticmethod
     def _enforce_rate_limit(policy: dict, token: "AgentApiToken | None") -> None:

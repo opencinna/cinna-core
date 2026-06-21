@@ -4,6 +4,22 @@ from app.core.config import settings
 from tests.utils.utils import random_lower_string
 
 
+def real_credentials_json(env_data: dict) -> list[dict]:
+    """Return an env adapter's ``credentials_json`` with synthetic entries removed.
+
+    Every agent environment's credentials.json now carries a synthetic
+    ``current_user`` identity/details block (``type == "current_user"``)
+    appended after the real credentials. It is not a real credential, so
+    tests asserting on the set of *real* credentials filter it out via this
+    helper instead of counting it.
+    """
+    return [
+        entry
+        for entry in env_data.get("credentials_json", [])
+        if entry.get("type") != "current_user"
+    ]
+
+
 def create_random_credential(
     client: TestClient,
     token_headers: dict[str, str],

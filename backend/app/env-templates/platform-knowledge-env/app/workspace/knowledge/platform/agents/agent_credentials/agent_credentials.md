@@ -173,6 +173,64 @@ workspace/
 - [Agent Prompts](../agent_prompts/agent_prompts.md) - Credentials README included in building mode prompt <!-- TODO: create agent_prompts docs -->
 - [Agent Bundles & Installs](../agent_bundles/agent_bundles.md) - Install-time placeholder credentials and the runtime gate; the Credentials tab is the primary surface for resolving gate blocks after install
 
+## Current User Context
+
+Every agent environment's `credentials.json` contains a **synthetic, reserved entry** with `id="current_user"`. It is not a real `Credential` row and has no `CredentialType` — it is built on-the-fly from the agent owner's `User` row (`agent.owner_id`) each time credentials are prepared for the environment. It carries no secrets and appears unredacted in `credentials/README.md` so the agent's system prompt always knows who it is operating on behalf of.
+
+### Shape
+
+```json
+{
+  "id": "current_user",
+  "name": "Current User",
+  "type": "current_user",
+  "notes": "Auto-generated identity & details of the agent owner. Not a real credential.",
+  "credential_data": {
+    "username": "evgeny",
+    "full_name": "Evgeny L.",
+    "email": "owner@example.com",
+    "email_confirmed": true,
+    "custom_details": {
+      "REAL_NAME": "Evgeny L.",
+      "FAVORITE_FOOD": "hotdogs"
+    }
+  }
+}
+```
+
+The `id` is a fixed sentinel (not a UUID). Real credential IDs are UUIDs, so there is no collision.
+
+### Consuming it in scripts
+
+```python
+import json
+
+with open("workspace/credentials/credentials.json") as f:
+    creds = {c["id"]: c["credential_data"] for c in json.load(f)}
+
+me = creds["current_user"]
+send_to = me["email"]
+real_name = me["custom_details"].get("REAL_NAME")
+```
+
+The standard dict-comprehension consumer pattern absorbs the synthetic entry naturally: `creds["current_user"]` is the identity + `custom_details` map. No script changes needed for existing consumers.
+
+### custom_details — User's Details card
+
+`custom_details` is a user-authored `KEY = value` map. Users edit it from **Settings → My profile → User's Details** (the card after Notifications). Input is free-text env-file style: `REAL_NAME = Master of the universe`. On save, the backend normalizes each key to `UPPER_SNAKE` form and stores both the raw text (for re-opening the editor) and the normalized map. Invalid input (bad key, duplicates, >100 keys, >10 KB) returns a 422 with a line-referencing error shown inline in the editor.
+
+### Re-sync fan-out
+
+When a user saves their details, the platform re-syncs **all running environments of all agents the user owns**. The block injected into any given environment always reflects that environment's install owner — so foreign installs (agents installed by someone else) show the installer's details, not the original publisher's.
+
+### Prompt visibility
+
+Because the block carries no secrets (only the owner's public identity and their own self-authored notes), it is intentionally exempt from the whitelist/redaction machinery and appears fully unredacted in `credentials/README.md`. The `## Current User` section in the README tells the agent who it is operating on behalf of and includes a one-line access snippet.
+
+### Related synthetic entry: `owner_identity_token`
+
+`current_user` is not the only synthetic, host-computed entry. When an environment has at least one linked `agent_api` connection, a second reserved entry (`id="owner_identity"`, `type="owner_identity_token"`) is appended the same way — built host-side from the install owner, never stored, never redacted, never user-editable. It carries a short-lived signed token the agent sends on Agent REST API calls so the producer can identify the calling user (and apply per-user scopes). It appears unredacted in `credentials/README.md` (the token is meant to be sent on the wire, not hidden). Full detail lives in the agent_api feature docs — see [Agent REST API → Caller Identity & Producer Scopes](../agent_api/agent_api.md#caller-identity--producer-scopes).
+
 ## Best Practices
 
 ### For Users
@@ -186,3 +244,4 @@ workspace/
 - Handle errors gracefully - credentials might be invalid or expired
 - OAuth tokens are auto-refreshed before each stream - no manual refresh needed
 - Never hardcode credentials - always read from the credentials file
+- Use `creds["current_user"]["email"]` to know who to notify without any per-agent config

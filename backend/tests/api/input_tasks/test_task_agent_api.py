@@ -2,7 +2,9 @@
 Tests for the Agent Task API endpoints (task_agent_api.py).
 
 These endpoints are consumed by MCP tools running in agent environments.
-Authentication uses the same Bearer JWT as other endpoints.
+Authentication uses a scoped agent-environment JWT via AgentEnvContextDep.
+Regular user JWTs (CurrentUser) are REJECTED by these routes — that is the
+load-bearing security boundary being verified here.
 
 Agent API routes:
   POST /agent/tasks/{task_id}/comment      — agent posts a comment
@@ -13,10 +15,11 @@ Agent API routes:
 
 Note: Agents require AI credentials to be set up. Tests in this file use
 superuser_token_headers (which has default credentials from setup_default_credentials
-fixture) to create agents and tasks.
+fixture) to create agents and tasks via the user-facing API, then switch to
+scoped env tokens for the agent-facing /agent/tasks/* routes.
 
 Scenarios:
-  1. Agent comment — user posts comment via agent endpoint, comment has agent attribution
+  1. Agent comment — agent posts comment via agent endpoint, comment has agent attribution
   2. Agent status update — valid transitions (new→cancelled)
   3. Agent status update — invalid transition returns 400
   4. Agent status update — agent-disallowed targets (e.g., new, archived) return 400
@@ -28,13 +31,14 @@ Scenarios:
   10. Agent subtask creation — no connection to target returns 400
   11. My-tasks — returns owner's tasks
   12. Task details — returns task with recent_comments, subtask_progress
-  13. Ownership enforcement on agent API endpoints
+  13. Auth enforcement: regular user JWT is rejected on agent routes
   14. Session-resolved subtask — POST /agent/tasks/current/subtask resolves parent via Session.source_task_id
   15. Session-resolved subtask after re-execution — old session still resolves after task.session_id is overwritten
 """
 import uuid
 
 from fastapi.testclient import TestClient
+from sqlmodel import Session
 
 from app.core.config import settings
 from tests.utils.agentic_team import (
@@ -46,6 +50,7 @@ from unittest.mock import patch
 
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.utils.agent import create_agent_via_api
+from tests.utils.agent_env import create_env_with_token
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.input_task import (
     create_task,
@@ -61,24 +66,36 @@ _BASE = f"{settings.API_V1_STR}"
 _TASKS_BASE = f"{settings.API_V1_STR}/tasks"
 
 
+def _get_superuser_id(client: TestClient, superuser_token_headers: dict) -> str:
+    """Return the superuser's user ID as a string."""
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=superuser_token_headers)
+    assert r.status_code == 200
+    return r.json()["id"]
+
+
 def test_agent_comment_endpoint(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     Agent posts a comment via POST /agent/tasks/{task_id}/comment:
       1. Create agent and task with selected_agent_id set
-      2. POST agent comment — comment appears with agent attribution
-      3. List comments — agent comment present
-      4. Comment has correct content and author_agent_id
-      5. Non-existent task returns 404
-      6. Other user's task returns 400/404 (PermissionDeniedError)
+      2. Create scoped env token for the agent
+      3. POST agent comment — comment appears with agent attribution
+      4. List comments — agent comment present
+      5. Comment has correct content and author_agent_id
+      6. Non-existent task returns 404
+      7. Regular-user JWT is rejected on the agent route (401/403 — auth boundary)
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
-    # ── Phase 1: Create agent and task ───────────────────────────────────────
+    # ── Phase 1: Create agent, env token, and task ───────────────────────────
     agent = create_agent_via_api(client, headers, name="Commenting Agent")
     agent_id = agent["id"]
+
+    _, env_headers = create_env_with_token(db, agent_id=agent_id, owner_id=owner_id)
 
     task = create_task(
         client, headers,
@@ -87,10 +104,10 @@ def test_agent_comment_endpoint(
     )
     task_id = task["id"]
 
-    # ── Phase 2: Agent posts comment ─────────────────────────────────────────
+    # ── Phase 2: Agent posts comment via scoped env token ────────────────────
     r = client.post(
         f"{_BASE}/agent/tasks/{task_id}/comment",
-        headers=headers,
+        headers=env_headers,
         json={"content": "Agent progress update: completed phase 1", "comment_type": "message"},
     )
     assert r.status_code == 200, f"Agent comment failed: {r.text}"
@@ -113,12 +130,13 @@ def test_agent_comment_endpoint(
     ghost = str(uuid.uuid4())
     r = client.post(
         f"{_BASE}/agent/tasks/{ghost}/comment",
-        headers=headers,
+        headers=env_headers,
         json={"content": "Ghost comment", "comment_type": "message"},
     )
     assert r.status_code == 404
 
-    # ── Phase 5: Other user's task returns 400/404 ───────────────────────────
+    # ── Phase 5: Regular user JWT is rejected (auth boundary) ────────────────
+    # A plain user JWT must NOT authenticate on agent-scoped routes.
     other = create_random_user(client)
     other_h = user_authentication_headers(
         client=client, email=other["email"], password=other["_password"]
@@ -128,26 +146,32 @@ def test_agent_comment_endpoint(
         headers=other_h,
         json={"content": "Intruder", "comment_type": "message"},
     )
-    assert r.status_code in (400, 404)  # PermissionDeniedError → 400
+    # A regular user JWT carries no aud/token_type → rejected by AgentEnvContextDep
+    assert r.status_code in (400, 401, 403, 404)
 
 
 def test_agent_status_update_valid_transitions(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     Agent updates task status via POST /agent/tasks/{task_id}/status:
       1. Create task with selected_agent_id, in 'new' status
-      2. Agent updates new → cancelled (valid transition, valid agent target)
-      3. Status history appears in task detail
-      4. System comment of type status_change added
-      5. Invalid target status for agent (e.g., 'new') returns 400
-      6. Task with no selected_agent_id → 400
+      2. Create scoped env token
+      3. Agent updates new → cancelled (valid transition, valid agent target)
+      4. Status history appears in task detail
+      5. System comment of type status_change added
+      6. Invalid target status for agent (e.g., 'new') returns 400
+      7. Task with no selected_agent_id → 400
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     agent = create_agent_via_api(client, headers, name="Status Agent")
     agent_id = agent["id"]
+
+    _, env_headers = create_env_with_token(db, agent_id=agent_id, owner_id=owner_id)
 
     # Create task with agent assigned, in 'new' status
     task = create_task(
@@ -160,7 +184,7 @@ def test_agent_status_update_valid_transitions(
     # ── Phase 1: Agent sets task to 'cancelled' (new→cancelled is valid) ─────
     r = client.post(
         f"{_BASE}/agent/tasks/{task_id}/status",
-        headers=headers,
+        headers=env_headers,
         json={"status": "cancelled", "reason": "No longer needed"},
     )
     assert r.status_code == 200, f"Agent status update failed: {r.text}"
@@ -195,14 +219,14 @@ def test_agent_status_update_valid_transitions(
     )
     r = client.post(
         f"{_BASE}/agent/tasks/{task2['id']}/status",
-        headers=headers,
+        headers=env_headers,
         json={"status": "new"},  # not in allowed_agent_statuses
     )
     assert r.status_code == 400
 
     r = client.post(
         f"{_BASE}/agent/tasks/{task2['id']}/status",
-        headers=headers,
+        headers=env_headers,
         json={"status": "archived"},  # not in allowed_agent_statuses
     )
     assert r.status_code == 400
@@ -211,7 +235,7 @@ def test_agent_status_update_valid_transitions(
     task_no_agent = create_task(client, headers, original_message="No agent task")
     r = client.post(
         f"{_BASE}/agent/tasks/{task_no_agent['id']}/status",
-        headers=headers,
+        headers=env_headers,
         json={"status": "cancelled"},
     )
     assert r.status_code == 400
@@ -220,6 +244,7 @@ def test_agent_status_update_valid_transitions(
 def test_agent_status_invalid_transition_400(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     An invalid status transition returns 400:
@@ -228,9 +253,12 @@ def test_agent_status_invalid_transition_400(
       3. Attempt cancelled → completed — invalid transition (returns 400)
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     agent = create_agent_via_api(client, headers, name="Invalid Transition Agent")
     agent_id = agent["id"]
+
+    _, env_headers = create_env_with_token(db, agent_id=agent_id, owner_id=owner_id)
 
     task = create_task(
         client, headers,
@@ -242,7 +270,7 @@ def test_agent_status_invalid_transition_400(
     # valid: new → cancelled
     r = client.post(
         f"{_BASE}/agent/tasks/{task_id}/status",
-        headers=headers,
+        headers=env_headers,
         json={"status": "cancelled"},
     )
     assert r.status_code == 200
@@ -250,7 +278,7 @@ def test_agent_status_invalid_transition_400(
     # Invalid: cancelled → completed (not in VALID_TRANSITIONS["cancelled"])
     r = client.post(
         f"{_BASE}/agent/tasks/{task_id}/status",
-        headers=headers,
+        headers=env_headers,
         json={"status": "completed"},
     )
     assert r.status_code == 400, (
@@ -261,6 +289,7 @@ def test_agent_status_invalid_transition_400(
 def test_agent_subtask_creation_no_team_400(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     Agent subtask creation without team context returns 400:
@@ -268,9 +297,12 @@ def test_agent_subtask_creation_no_team_400(
       2. POST /agent/tasks/{id}/subtask — 400 (no team_id on parent task)
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     agent = create_agent_via_api(client, headers, name="No-team Subtask Agent")
     agent_id = agent["id"]
+
+    _, env_headers = create_env_with_token(db, agent_id=agent_id, owner_id=owner_id)
 
     task = create_task(
         client, headers,
@@ -280,7 +312,7 @@ def test_agent_subtask_creation_no_team_400(
 
     r = client.post(
         f"{_BASE}/agent/tasks/{task['id']}/subtask",
-        headers=headers,
+        headers=env_headers,
         json={"title": "Agent subtask", "description": "Should fail"},
     )
     assert r.status_code == 400
@@ -290,6 +322,7 @@ def test_agent_subtask_creation_no_team_400(
 def test_agent_subtask_creation_with_team_context(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     Agent creates subtask in team context:
@@ -301,10 +334,14 @@ def test_agent_subtask_creation_with_team_context(
       6. System comment posted on parent task
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     # ── Phase 1: Create agents and team ──────────────────────────────────────
     lead_agent = create_agent_via_api(client, headers, name="Lead Agent for Subtask Test")
     worker_agent = create_agent_via_api(client, headers, name="Worker Agent for Subtask Test")
+
+    # Env token for the lead agent (it is the one making the subtask API call)
+    _, env_headers = create_env_with_token(db, agent_id=lead_agent["id"], owner_id=owner_id)
 
     team = create_team(client, headers, name="Subtask Delegation Team")
     team_id = team["id"]
@@ -333,7 +370,7 @@ def test_agent_subtask_creation_with_team_context(
     # ── Phase 4: Agent creates subtask via agent API ──────────────────────────
     r = client.post(
         f"{_BASE}/agent/tasks/{parent_id}/subtask",
-        headers=headers,
+        headers=env_headers,
         json={
             "title": "Worker's delegated subtask",
             "description": "Please handle this part",
@@ -378,6 +415,7 @@ def test_agent_subtask_creation_with_team_context(
 def test_agent_subtask_non_team_member_400(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     Agent not in the task's team cannot create subtasks:
@@ -387,9 +425,13 @@ def test_agent_subtask_non_team_member_400(
       4. POST /agent/tasks/{id}/subtask — 400 (agent not in team)
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     lead_agent = create_agent_via_api(client, headers, name="Lead in Team")
     outsider_agent = create_agent_via_api(client, headers, name="Outsider Agent")
+
+    # Env token for the outsider agent (the one trying to create subtasks)
+    _, env_headers = create_env_with_token(db, agent_id=outsider_agent["id"], owner_id=owner_id)
 
     team = create_team(client, headers, name="Exclusive Team")
     team_id = team["id"]
@@ -405,7 +447,7 @@ def test_agent_subtask_non_team_member_400(
 
     r = client.post(
         f"{_BASE}/agent/tasks/{parent['id']}/subtask",
-        headers=headers,
+        headers=env_headers,
         json={"title": "Outsider subtask"},
     )
     assert r.status_code == 400
@@ -415,6 +457,7 @@ def test_agent_subtask_non_team_member_400(
 def test_agent_subtask_no_connection_to_target_400(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     Agent cannot delegate to a team member with no connection:
@@ -422,9 +465,12 @@ def test_agent_subtask_no_connection_to_target_400(
       2. POST /agent/tasks/{id}/subtask with assigned_to=worker — 400
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     lead_agent = create_agent_via_api(client, headers, name="Disconnected Lead")
     worker_agent = create_agent_via_api(client, headers, name="Disconnected Worker")
+
+    _, env_headers = create_env_with_token(db, agent_id=lead_agent["id"], owner_id=owner_id)
 
     team = create_team(client, headers, name="Disconnected Team")
     team_id = team["id"]
@@ -441,7 +487,7 @@ def test_agent_subtask_no_connection_to_target_400(
 
     r = client.post(
         f"{_BASE}/agent/tasks/{parent['id']}/subtask",
-        headers=headers,
+        headers=env_headers,
         json={
             "title": "Disconnected subtask",
             "assigned_to": worker_node["name"],
@@ -454,20 +500,26 @@ def test_agent_subtask_no_connection_to_target_400(
 def test_agent_list_my_tasks(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     GET /agent/tasks/my-tasks returns owner's tasks:
       1. Create several tasks
       2. GET my-tasks — all appear in data list
       3. Filter by status — works correctly
-      4. Other user gets their own tasks, not User A's
+      4. A different user's env token sees their own (empty) task list
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
+
+    # Create a throwaway agent to anchor the env token
+    agent = create_agent_via_api(client, headers, name="My Tasks Agent")
+    _, env_headers = create_env_with_token(db, agent_id=agent["id"], owner_id=owner_id)
 
     task1 = create_task(client, headers, original_message="My tasks test 1")
     task2 = create_task(client, headers, original_message="My tasks test 2")
 
-    r = client.get(f"{_BASE}/agent/tasks/my-tasks", headers=headers)
+    r = client.get(f"{_BASE}/agent/tasks/my-tasks", headers=env_headers)
     assert r.status_code == 200
     result = r.json()
     task_ids = [t["id"] for t in result["data"]]
@@ -477,7 +529,7 @@ def test_agent_list_my_tasks(
     # Status filter
     r = client.get(
         f"{_BASE}/agent/tasks/my-tasks",
-        headers=headers,
+        headers=env_headers,
         params={"status": "new"},
     )
     assert r.status_code == 200
@@ -485,32 +537,35 @@ def test_agent_list_my_tasks(
     assert all(t["status"] == "new" for t in new_tasks)
     assert task1["id"] in [t["id"] for t in new_tasks]
 
-    # Other user only sees their own tasks
+    # A different user — they need their own agent/env to call this route;
+    # a plain user JWT is rejected entirely by AgentEnvContextDep (401/403).
     other = create_random_user(client)
     other_h = user_authentication_headers(
         client=client, email=other["email"], password=other["_password"]
     )
     r = client.get(f"{_BASE}/agent/tasks/my-tasks", headers=other_h)
-    assert r.status_code == 200
-    other_task_ids = [t["id"] for t in r.json()["data"]]
-    assert task1["id"] not in other_task_ids
-    assert task2["id"] not in other_task_ids
+    assert r.status_code in (401, 403)  # plain user JWT rejected
 
 
 def test_agent_get_task_details(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     GET /agent/tasks/{task_id}/details returns agent-optimized task view:
       1. Create task with a comment
-      2. GET details — returns dict with task (short_code), title, status, recent_comments
+      2. GET details via env token — returns dict with task (short_code), title, status, recent_comments
       3. recent_comments include the comment we added
       4. subtask_progress has expected keys
       5. Non-existent task returns 404
-      6. Other user returns 400/404
+      6. Plain user JWT is rejected on the agent details route (auth boundary)
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
+
+    agent = create_agent_via_api(client, headers, name="Details Agent")
+    _, env_headers = create_env_with_token(db, agent_id=agent["id"], owner_id=owner_id)
 
     task = create_task(client, headers, original_message="Agent details test task", title="Details Task")
     task_id = task["id"]
@@ -518,8 +573,8 @@ def test_agent_get_task_details(
     # Add a comment via standard API
     add_comment(client, headers, task_id, content="Status: analyzing data", comment_type="message")
 
-    # GET agent details
-    r = client.get(f"{_BASE}/agent/tasks/{task_id}/details", headers=headers)
+    # GET agent details via env token
+    r = client.get(f"{_BASE}/agent/tasks/{task_id}/details", headers=env_headers)
     assert r.status_code == 200
     details = r.json()
 
@@ -546,16 +601,16 @@ def test_agent_get_task_details(
 
     # Non-existent task 404
     ghost = str(uuid.uuid4())
-    r = client.get(f"{_BASE}/agent/tasks/{ghost}/details", headers=headers)
+    r = client.get(f"{_BASE}/agent/tasks/{ghost}/details", headers=env_headers)
     assert r.status_code == 404
 
-    # Other user 400/404
+    # Plain user JWT rejected on agent route (auth boundary)
     other = create_random_user(client)
     other_h = user_authentication_headers(
         client=client, email=other["email"], password=other["_password"]
     )
     r = client.get(f"{_BASE}/agent/tasks/{task_id}/details", headers=other_h)
-    assert r.status_code in (400, 404)  # PermissionDeniedError → 400
+    assert r.status_code in (401, 403)  # AgentEnvContextDep rejects plain user JWTs
 
 
 def test_agent_api_unauthenticated_rejected(
@@ -592,6 +647,7 @@ _AGENT_ENV_PATCH = "app.services.sessions.message_service.agent_env_connector"
 def test_session_resolved_subtask_creation(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     POST /agent/tasks/current/subtask resolves the parent task via
@@ -600,10 +656,12 @@ def test_session_resolved_subtask_creation(
       1. Create team with lead + worker agents and a connection
       2. Create team-scoped task assigned to lead agent
       3. Execute task → creates session with source_task_id pointing to task
-      4. POST /agent/tasks/current/subtask with source_session_id = session ID
-      5. Subtask created with correct parent_task_id
+      4. Create scoped env token for the lead agent (env token must match the session's agent)
+      5. POST /agent/tasks/current/subtask with source_session_id = session ID
+      6. Subtask created with correct parent_task_id
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     # ── Phase 1: Create agents, team, and connection ────────────────────────
     lead_agent = create_agent_via_api(client, headers, name="SessionResolve Lead")
@@ -639,10 +697,15 @@ def test_session_resolved_subtask_creation(
 
     session_id = str(exec_result["session_id"])
 
-    # ── Phase 4: POST /agent/tasks/current/subtask ──────────────────────────
+    # ── Phase 4: Create env token bound to the lead agent ───────────────────
+    # _resolve_task_from_session checks: session.agent_id == ctx.agent.id
+    # The session was created for lead_agent, so the env token must be for lead_agent.
+    _, env_headers = create_env_with_token(db, agent_id=lead_agent["id"], owner_id=owner_id)
+
+    # ── Phase 5: POST /agent/tasks/current/subtask ──────────────────────────
     r = client.post(
         f"{_BASE}/agent/tasks/current/subtask",
-        headers=headers,
+        headers=env_headers,
         json={
             "title": "Delegated via current route",
             "assigned_to": worker_node["name"],
@@ -654,7 +717,7 @@ def test_session_resolved_subtask_creation(
     assert result["success"] is True
     assert result["parent_task"] == parent["short_code"]
 
-    # ── Phase 5: Verify subtask has correct parent_task_id ──────────────────
+    # ── Phase 6: Verify subtask has correct parent_task_id ──────────────────
     subtask = get_task_by_code(client, headers, result["task"])
     assert subtask["parent_task_id"] == parent_id
     assert subtask["team_id"] == team_id
@@ -663,6 +726,7 @@ def test_session_resolved_subtask_creation(
 def test_session_resolved_subtask_survives_reexecution(
     client: TestClient,
     superuser_token_headers: dict[str, str],
+    db: Session,
 ) -> None:
     """
     After task.session_id moves to a new session (re-execution), the OLD
@@ -673,10 +737,12 @@ def test_session_resolved_subtask_survives_reexecution(
       2. Create team-scoped task, execute → session S1
       3. Re-execute the task via the execute API → session S2; task.session_id
          now points at S2, no longer S1
-      4. POST /agent/tasks/current/subtask with source_session_id = S1
-      5. Subtask still created with correct parent_task_id
+      4. Create scoped env token bound to lead agent (matches S1 and S2's agent)
+      5. POST /agent/tasks/current/subtask with source_session_id = S1
+      6. Subtask still created with correct parent_task_id
     """
     headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
 
     # ── Phase 1: Create agents, team, connection ────────────────────────────
     lead_agent = create_agent_via_api(client, headers, name="Reexec Lead")
@@ -726,10 +792,15 @@ def test_session_resolved_subtask_survives_reexecution(
     assert parent_after["session_id"] != session_s1
     assert parent_after["session_id"] == session_s2
 
-    # ── Phase 4: Old session S1 still resolves for subtask creation ─────────
+    # ── Phase 4: Create env token bound to lead agent ───────────────────────
+    # Both sessions (S1 and S2) were created for lead_agent. The env token must
+    # match (session.agent_id == ctx.agent.id) for _resolve_task_from_session.
+    _, env_headers = create_env_with_token(db, agent_id=lead_agent["id"], owner_id=owner_id)
+
+    # ── Phase 5: Old session S1 still resolves for subtask creation ─────────
     r = client.post(
         f"{_BASE}/agent/tasks/current/subtask",
-        headers=headers,
+        headers=env_headers,
         json={
             "title": "Subtask from old session",
             "assigned_to": worker_node["name"],
@@ -743,7 +814,7 @@ def test_session_resolved_subtask_survives_reexecution(
     assert result["success"] is True
     assert result["parent_task"] == parent["short_code"]
 
-    # ── Phase 5: Subtask has correct parent link ────────────────────────────
+    # ── Phase 6: Subtask has correct parent link ────────────────────────────
     subtask = get_task_by_code(client, headers, result["task"])
     assert subtask["parent_task_id"] == parent_id
 

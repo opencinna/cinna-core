@@ -66,9 +66,10 @@ Agents use this tool to post findings, results, and progress as comments on thei
 
 ## Authentication
 
-Same bearer token mechanism as other agent-env → backend calls:
-- `Authorization: Bearer <AGENT_AUTH_TOKEN>` — token generated at environment creation
-- Validated against the environment record in the backend database
+Same scoped env-token mechanism as other agent-env → backend calls:
+- `Authorization: Bearer <AGENT_AUTH_TOKEN>` — scoped env JWT minted at environment creation
+- `X-Agent-Env-Id: <ENV_ID>` — environment UUID header
+- Authenticated by the scoped `AgentEnvContextDep` (not `get_current_user`); resolves and is confined to the calling env's own `(environment, agent, owner)` scope. See [Agent Environment Core](agent_environment_core_tech.md#jwt-authentication-scoped-env-token).
 
 ## File References
 

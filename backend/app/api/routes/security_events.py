@@ -3,9 +3,12 @@ Security Events API — ingest and retrieval of credential access and output
 redaction events from agent environments.
 
 Authentication:
-- POST endpoints use AGENT_AUTH_TOKEN (agent environment's JWT) which resolves
-  to the owning user via the standard CurrentUser dependency.
-- GET endpoint uses the user's own JWT for frontend audit access.
+- ``POST /report`` is called by an agent environment container; it authenticates
+  with the scoped agent-environment token via ``AgentEnvContextDep`` and the
+  event is attributed to the reporting env's agent/owner (the container-supplied
+  ``environment_id``/``agent_id`` in the body are NOT trusted for attribution).
+- ``POST /`` (bare ingest) and ``GET /`` are user/SDK-facing audit endpoints and
+  use the standard ``CurrentUser`` dependency.
 """
 import uuid
 import logging
@@ -14,7 +17,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
-from app.api.deps import SessionDep, CurrentUser
+from app.api.deps import AgentEnvContextDep, SessionDep, CurrentUser
 from app.models.events.security_event import (
     SecurityEventCreate,
     SecurityEventPublic,
@@ -58,7 +61,7 @@ class SecurityEventReportResponse(BaseModel):
 async def report_security_event(
     event_data: SecurityEventReport,
     session: SessionDep,
-    current_user: CurrentUser,
+    ctx: AgentEnvContextDep,
 ) -> SecurityEventReportResponse:
     """
     Blockable security event ingest.
@@ -70,19 +73,23 @@ async def report_security_event(
     always returns "allow". When policy evaluation is added, "block" can be
     returned here without any SDK-side changes.
 
-    Auth: AGENT_AUTH_TOKEN (agent environment JWT resolves to owning user)
+    Auth: scoped agent-environment token (AgentEnvContextDep). The event is
+    attributed to the reporting env's agent/owner — the container-supplied
+    ``environment_id``/``agent_id`` in the body are ignored for attribution
+    (they are untrusted), so a compromised container cannot misattribute events
+    to another agent/env. ``session_id`` is retained as informational metadata.
     """
     await SecurityEventService.create_event_from_report(
         session=session,
-        user_id=current_user.id,
+        user_id=ctx.owner.id,
         event_type=event_data.event_type,
         severity=event_data.severity,
         details=event_data.details,
         tool_name=event_data.tool_name,
         tool_input=event_data.tool_input,
-        environment_id=event_data.environment_id,
+        environment_id=str(ctx.environment.id),
         session_id=event_data.session_id,
-        agent_id=event_data.agent_id,
+        agent_id=str(ctx.agent.id),
     )
 
     # Policy hook point — always allow for now.

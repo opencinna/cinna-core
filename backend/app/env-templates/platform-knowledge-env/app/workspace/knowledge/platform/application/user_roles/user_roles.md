@@ -17,7 +17,7 @@ Introduce a three-value role system (`agent-user`, `agent-developer`, `admin`) t
 ### New User Signs Up
 
 1. User completes registration (email/password or Google OAuth)
-2. `User.role` defaults to `agent-user`
+2. `User.role` is set to the value of `DEFAULT_USER_ROLE` (default: `agent-user`; can be operator-configured to `agent-developer`)
 3. User sees the unified sidebar: Dashboard, Tasks, Agents, Sessions, Credentials in the main nav and Activities + Catalog + User menu in the footer. The User Settings link lives inside the user-icon dropdown at the bottom of the sidebar (shared by every role)
 4. Agent creation, building-mode sessions, bundle management, and the workspace switcher are not visible (workspace switcher is gated by the `workspacesEnabled` toggle, which defaults to off for new users — see [user_workspaces.md](../user_workspaces/user_workspaces.md))
 5. On first login after the role system is introduced, an `AgentUserWelcomeBanner` appears explaining the role split (dismissible, shown once)
@@ -45,7 +45,7 @@ Introduce a three-value role system (`agent-user`, `agent-developer`, `admin`) t
 
 ## Business Rules
 
-- **Default on signup** — every new `User` row starts with `role = 'agent-user'`; the only exception is a user created with `is_superuser = true`, who gets `role = 'admin'`
+- **Default on signup** — the role assigned to a new non-superuser account is operator-configurable via `DEFAULT_USER_ROLE` in `.env` (allowed values: `agent-user` and `agent-developer`; default: `agent-user`). Unset or empty falls back to `agent-user` with no behaviour change. A present-but-invalid value (e.g. `admin`) fails loudly at startup — it will not be silently ignored. The setting is useful for standing up a server where all self-signup accounts are developers from day one; the `admin` value is intentionally excluded to preserve the `role ⇔ is_superuser` invariant. The superuser exception is unaffected: any user created with `is_superuser = true` always gets `role = 'admin'` regardless of the setting
 - **Admin invariant** — `is_superuser = true` ↔ `role = 'admin'`. The dedicated `PATCH /users/{user_id}/role` endpoint enforces this strictly (cannot demote a superuser there, cannot promote to admin there). The general `PATCH /users/{user_id}` admin form does **not** enforce the invariant — superusers operating that form are trusted to keep `is_superuser` and `role` consistent (the form exposes both fields side-by-side)
 - **Cannot change own role via `/role` endpoint** — `set_role` raises ValueError if `target_user.id == changed_by.id`. The general user-edit form does not block self-edit, so a superuser can adjust their own `role` (e.g., to keep it in sync after toggling `is_superuser`)
 - **Role changes are admin-only** — both `PATCH /users/{user_id}/role` and `PATCH /users/{user_id}` are gated on `get_current_active_superuser`
@@ -143,4 +143,4 @@ User.role (string column, "agent-user" | "agent-developer" | "admin")
 |---------|-------------|
 | [Agent Bundles & Installs](../../agents/agent_bundles/agent_bundles.md) | Publish, bundle-id edit, and bundle CRUD require `agent-developer` |
 | [Agent Management](../agent_management/agent_management.md) | Agent create/update/delete require `agent-developer`; the Bundle tab is only rendered for developers |
-| [Auth](../auth/auth.md) | `User.role` is stored on the `User` model; exposed in `UserPublic` response and `GET /users/me/role`; default set at signup |
+| [Auth](../auth/auth.md) | `User.role` is stored on the `User` model; exposed in `UserPublic` response and `GET /users/me/role`; default set at signup via `RoleService.derive_default_role` (reads `DEFAULT_USER_ROLE` from config; applies to both password signup and Google OAuth first login) |

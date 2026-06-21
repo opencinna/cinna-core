@@ -1,3 +1,4 @@
+import logging
 import uuid
 from typing import Any
 
@@ -22,6 +23,8 @@ from app.models import (
     UserRegister,
     UserRolePublic,
     UserRoleUpdate,
+    UserDetailsUpdate,
+    UserDetailsPublic,
     UsersPublic,
     UserSearchResult,
     UsersSearchPublic,
@@ -38,11 +41,14 @@ from app.models.users.user import (
     VALID_USER_ROLES,
 )
 from app.services.users.role_service import RoleService
+from app.services.users import user_details_service
 from app.services.environments.sdk_constants import is_valid_sdk
 from app.services.users.mfa_service import MfaService
 from app.models.credentials.ai_credential import AICredentialType
 from app.services.credentials.ai_credentials_service import ai_credentials_service
 from app.utils import generate_new_account_email, send_email
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -294,6 +300,72 @@ def read_user_me(session: SessionDep, current_user: CurrentUser) -> Any:
     Get current user.
     """
     return _user_to_public(session, current_user)
+
+
+@router.get("/me/details", response_model=UserDetailsPublic)
+def read_user_details_me(current_user: CurrentUser) -> UserDetailsPublic:
+    """Return the current user's free-text details (raw + normalized).
+
+    Owner-scoped: a user can only read their own details. The card renders
+    the normalized ``details_parsed`` map; ``details_raw`` is returned so the
+    editor can re-open exactly what was typed.
+    """
+    return UserDetailsPublic(
+        details_raw=current_user.details_raw,
+        details_parsed=current_user.details_parsed,
+    )
+
+
+@router.patch("/me/details", response_model=UserDetailsPublic)
+async def update_user_details_me(
+    *, session: SessionDep, body: UserDetailsUpdate, current_user: CurrentUser
+) -> UserDetailsPublic:
+    """Save the current user's free-text details.
+
+    Parses/normalizes the env-file text, persists the raw + parsed values,
+    and best-effort re-syncs every running environment of every agent the
+    user owns so the injected ``current_user`` block reflects the change.
+
+    Owner-scoped. A parse error returns 422 with a line-referencing message;
+    a downstream sync failure must NOT 500 the save.
+    """
+    raw = body.details_raw or ""
+
+    # Enforce the 10 KB cap before parsing (measured in bytes). The parser
+    # also enforces this limit (it is reachable directly), so this is an
+    # intentional double-guard giving the route a clean 422 before parsing.
+    if len(raw.encode("utf-8")) > user_details_service.MAX_RAW_BYTES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Details are too large (max {user_details_service.MAX_RAW_BYTES // 1024} KB).",
+        )
+
+    try:
+        parsed = user_details_service.parse_user_details(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    current_user.details_raw = raw or None
+    current_user.details_parsed = parsed or None
+    session.add(current_user)
+    session.commit()
+    session.refresh(current_user)
+
+    # Best-effort fan-out: a sync failure must not 500 the save.
+    try:
+        await user_details_service.event_user_details_updated(
+            session=session, user_id=current_user.id
+        )
+    except Exception:
+        logger.exception(
+            "Failed to re-sync agent environments after user %s details update",
+            current_user.id,
+        )
+
+    return UserDetailsPublic(
+        details_raw=current_user.details_raw,
+        details_parsed=current_user.details_parsed,
+    )
 
 
 @router.post("/me/resend-confirmation", response_model=ResendConfirmationResponse)

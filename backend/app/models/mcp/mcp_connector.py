@@ -43,7 +43,9 @@ class MCPConnector(MCPConnectorBase, table=True):
     allowed_emails: list = Field(default_factory=list, sa_column=Column(JSON))
     # Exact platform-user ACL (UUIDs stored as list of str). Preferred over
     # allowed_emails; allowed_emails is retained as a fallback for legacy shares.
-    allowed_user_ids: list = Field(default_factory=list, sa_column=Column(JSON))
+    allowed_user_ids: list = Field(
+        default_factory=list, sa_column=Column(JSON, nullable=False)
+    )
     # Gates direct-token generation. When False, clients must use OAuth.
     allow_token_access: bool = Field(default=False)
     max_clients: int = Field(default=10)

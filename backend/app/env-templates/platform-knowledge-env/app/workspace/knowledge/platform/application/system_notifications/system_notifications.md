@@ -4,8 +4,10 @@
 
 System notifications are platform-initiated messages sent to users when significant events occur in their agent ecosystem. The feature introduces a **generic notification layer** designed to carry any number of future notification types without requiring re-architecture: a typed catalog drives all dispatch logic, per-user preferences live in a dedicated table, and a built-in throttle prevents inbox storms.
 
-Two notification types are currently active: `session_error` (session ended with an error) and
-`model_deprecated` (an environment's AI model is deprecated or unavailable).
+Three notification types are currently active: `session_error` (session ended with an error),
+`model_deprecated` (an environment's AI model is deprecated or unavailable), and
+`environment_critical` (a running environment's provisioning step failed, or a CRON run was skipped
+because the environment is in a critical state).
 
 ## Core Concepts
 
@@ -69,6 +71,34 @@ In both cases the `error_occurred` activity is always created first; the notific
 - Body: agent name, session title, truncated error text (at most 500 characters), a "View session" button linking to `{FRONTEND_HOST}/sessions/{session_id}`, and a footer note: "Turn these off in Settings → Notifications."
 - No stack traces, credentials, or full prompt text are ever included.
 
+---
+
+### `environment_critical` — Environment needs attention email
+
+**Label:** "Environment needs attention"
+**Description:** "Email me when one of my agent environments starts but a setup step fails, or a scheduled run is skipped because the environment is unstable."
+**Default:** enabled for all users
+**Recipient:** the agent owner (`Agent.owner_id`)
+
+**When it fires**
+
+Two scenarios share this single notification type:
+
+1. **Setup failure** (`_enter_critical_state` in `EnvironmentLifecycleManager`): a Docker container starts healthy but a post-start step fails (custom package install, system package install, credential sync) while the container remains alive. Fires exactly once per `false → true` transition, gated by a process-local set (`_critical_warned_env_ids`). A recovered environment is removed from the set so a future re-failure re-emails.
+
+2. **CRON skip** (`_skip_schedule_for_critical_env` in `agent_schedule_scheduler`): a due schedule is skipped because the active environment is in critical state. The scheduler polls every minute; the shared `environment_id` dedup key throttles this to at most one email per 30 minutes per environment.
+
+The two scenarios share one dedup key (`environment_id`) so that once the owner is told "this env needs attention," the repeated CRON polls do not produce additional emails within the throttle window.
+
+**Email content**
+
+- Subject: `{PROJECT_NAME} — Action needed for {instance_name}`
+- Body: agent name, instance name, brief cause line (`summary`, ≤500 characters), a link to the agent page (`{FRONTEND_HOST}/agents/{agent_id}`)
+- Full `detail` (raw uv output, full exception text) is **intentionally omitted** from the email — it lives behind the owner-gated action-log route
+- `dedup_scope="environment_id"`
+
+See [Agent Environment Critical State](../../agents/agent_environments/agent_env_critical_state.md) for the full feature description.
+
 ## User Flows
 
 ### 1. Receive a session-error email
@@ -110,6 +140,7 @@ In both cases the `error_occurred` activity is always created first; the notific
 - [Agent Sessions](../agent_sessions/agent_sessions.md) — the session row provides the owner (`user_id`), session title, and the `session_id` used for dedup and the deep link in the email.
 - [AI Credentials](../ai_credentials/ai_credentials.md) — the daily model-discovery cron populates `AICredential.discovered_models`, which `dispatch_model_deprecation_notifications` reads to evaluate model health and fire `model_deprecated` notifications.
 - [Model Freshness](../../agents/agent_environments/model_freshness.md) — the `model_deprecated` notification type is dispatched from the discovery cron when an environment newly transitions into a warning state.
+- [Agent Environment Critical State](../../agents/agent_environments/agent_env_critical_state.md) — the `environment_critical` notification type is dispatched on the `false → true` critical-state transition (setup failure) and on each CRON skip (throttled).
 - [Auth / Users](../auth/auth.md) — preferences live in a new table FK-referenced to `user`; no new column on the `user` table. The recipient address is `User.email`.
 - [Realtime Events](../realtime_events/event_bus_system.md) — the `STREAM_ERROR` and `SESSION_STATE_UPDATED` events on the event bus are what trigger the two error paths in `ActivityService`.
 - [Email Integration / Mail Servers](../email_integration/mail_servers.md) — **distinct** from per-user IMAP/SMTP mail servers used for agent email automation. System notifications use the platform-level SMTP sender configured via `SMTP_*` environment variables, not the `mail_server_config` table.

@@ -41,6 +41,7 @@ from app.models import (
     CredentialCreate,
 )
 from app.models.credentials.credential import Credential, CredentialType
+from app.models.users.user import User
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,23 @@ class AgentApiTokenService:
         if agent.owner_id != user_id and not is_superuser:
             raise AgentApiTokenNotFoundError("Agent not found")
         return agent
+
+    @staticmethod
+    def _build_connected_agent(
+        session: Session, agent: Agent
+    ) -> AgentApiConnectedAgent:
+        """
+        Build the consumer-agent projection, resolving the owner's email so the
+        UI can disambiguate identical agent names (e.g. several bundle installs
+        of the same agent owned by different users).
+        """
+        owner = session.get(User, agent.owner_id)
+        return AgentApiConnectedAgent(
+            id=agent.id,
+            name=agent.name,
+            ui_color_preset=agent.ui_color_preset,
+            owner_email=owner.email if owner is not None else None,
+        )
 
     # ------------------------------------------------------------------ #
     # CRUD                                                                 #
@@ -343,11 +361,7 @@ class AgentApiTokenService:
             agent = session.get(Agent, aid)
             if agent is not None:
                 consumer_agents.append(
-                    AgentApiConnectedAgent(
-                        id=agent.id,
-                        name=agent.name,
-                        ui_color_preset=agent.ui_color_preset,
-                    )
+                    AgentApiTokenService._build_connected_agent(session, agent)
                 )
 
         return AgentApiConnectionInfo(
@@ -398,10 +412,8 @@ class AgentApiTokenService:
                     agent = session.get(Agent, aid)
                     if agent is not None:
                         consumer_agents.append(
-                            AgentApiConnectedAgent(
-                                id=agent.id,
-                                name=agent.name,
-                                ui_color_preset=agent.ui_color_preset,
+                            AgentApiTokenService._build_connected_agent(
+                                session, agent
                             )
                         )
 

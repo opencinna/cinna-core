@@ -1,5 +1,6 @@
 import os
 import shutil
+import hashlib
 import logging
 import asyncio
 from pathlib import Path
@@ -29,6 +30,14 @@ from .sdk_constants import (
 from .model_catalog import resolve_model
 
 logger = logging.getLogger(__name__)
+
+# Process-local set of environment ids for which a critical-state email has
+# already been dispatched (transition-once gating for the setup-failure path,
+# mirroring model_discovery_service._warned_env_ids). A persistently-critical
+# env that is rebuilt again does not re-email; clearing critical state discards
+# the id so a future re-failure re-emails. Reset on process restart is
+# acceptable (at most one extra email after deploy).
+_critical_warned_env_ids: set[str] = set()
 
 # Files from template root that should be overwritten during rebuild
 # These are infrastructure files that may be updated in the template
@@ -99,7 +108,14 @@ class EnvironmentLifecycleManager:
         """
         if environment.type == "docker":
             env_dir = self.instances_dir / str(environment.id)
-            port = environment.config.get("port", self._allocate_port())
+            # NOTE: use an explicit None-check rather than ``config.get("port",
+            # self._allocate_port())`` — dict.get evaluates its default eagerly,
+            # so the latter would call _allocate_port() on every get_adapter()
+            # call (even when a port is already assigned), leaking a port from
+            # the in-memory set each time and eventually exhausting the range.
+            port = environment.config.get("port")
+            if port is None:
+                port = self._allocate_port()
             auth_token = environment.config.get("auth_token")
 
             return DockerEnvironmentAdapter(
@@ -198,7 +214,7 @@ class EnvironmentLifecycleManager:
             db_session.add(environment)
             db_session.commit()
 
-            port = self._allocate_port()
+            port = self._allocate_port(db_session)
             environment.config["port"] = port
             environment.config["container_name"] = f"agent-{environment.id}"
             flag_modified(environment, "config")
@@ -316,7 +332,23 @@ class EnvironmentLifecycleManager:
             session=db_session,
             agent_id=agent.id
         )
-        await adapter.set_credentials(credentials_data)
+        try:
+            await adapter.set_credentials(credentials_data)
+        except Exception as e:
+            # SANITIZE: log only the failure type/transport reason, NEVER the
+            # credential payload. set_credentials raises HTTP/transport errors,
+            # not the secrets themselves, but we still scrub to the type + str.
+            sanitized = f"{type(e).__name__}: {e}"
+            if await self._container_alive_else_raise(adapter, e):
+                await self._enter_critical_state(
+                    db_session,
+                    environment,
+                    agent,
+                    cause="credential_sync_failed",
+                    summary="Failed to sync credentials to the environment",
+                    detail=sanitized,
+                    action="credential_sync",
+                )
 
         # Sync plugins to environment
         environment.status_message = "Syncing plugins..."
@@ -543,6 +575,220 @@ class EnvironmentLifecycleManager:
         except Exception as e:
             logger.debug(f"Plugin failure surfacing failed for env {environment.id}: {e}")
 
+    async def _container_alive_else_raise(
+        self,
+        adapter: EnvironmentAdapter,
+        original_exc: Exception,
+    ) -> bool:
+        """Probe whether the container is still alive after a setup step raised.
+
+        Returns ``True`` if the container is up (caller should enter critical
+        state and continue). Re-raises ``original_exc`` if the container is gone
+        OR the probe itself errors — failing safe toward the existing offline
+        ``status="error"`` path rather than masking a dead container as merely
+        "critical".
+        """
+        try:
+            alive = await adapter.is_container_running()
+        except Exception as probe_exc:
+            logger.warning(
+                f"Container liveness probe failed after a setup step error "
+                f"({type(probe_exc).__name__}); treating as offline."
+            )
+            raise original_exc
+        if not alive:
+            raise original_exc
+        return True
+
+    async def _emit_critical_state_event(
+        self,
+        environment: AgentEnvironment,
+        agent: Agent,
+        *,
+        critical_state: bool,
+        cause: str | None,
+        summary: str | None,
+    ) -> None:
+        """Emit ENVIRONMENT_CRITICAL_STATE_CHANGED (best-effort, never raises)."""
+        try:
+            from app.services.events.event_service import event_service
+            from app.models.events.event import EventType
+
+            await event_service.emit_event(
+                event_type=EventType.ENVIRONMENT_CRITICAL_STATE_CHANGED,
+                model_id=environment.id,
+                user_id=agent.owner_id,
+                meta={
+                    "environment_id": str(environment.id),
+                    "agent_id": str(agent.id),
+                    "instance_name": environment.instance_name,
+                    "critical_state": critical_state,
+                    "cause": cause,
+                    "summary": summary,
+                },
+            )
+        except Exception as e:
+            logger.debug(
+                f"Failed to emit ENVIRONMENT_CRITICAL_STATE_CHANGED for env "
+                f"{environment.id}: {e}"
+            )
+
+    async def _enter_critical_state(
+        self,
+        db_session: Session,
+        environment: AgentEnvironment,
+        agent: Agent,
+        *,
+        cause: str,
+        summary: str,
+        detail: str | None = None,
+        action: str = "provisioning",
+    ) -> None:
+        """Enter (or refresh) critical state for a running-but-degraded env.
+
+        The container is alive — status STAYS "running" so sessions/chat/terminals
+        keep working. Records a full-detail action-log row, sets the persisted
+        critical columns (stamping ``critical_since`` only on the False→True
+        transition), emits the realtime event, and dispatches the owner email
+        once per transition. Best-effort throughout: a notification/action-log
+        failure must never abort the lifecycle.
+
+        ``detail`` is operational text only — callers must already have stripped
+        any secret/credential payload before passing it here.
+        """
+        was_critical = bool(environment.critical_state)
+        env_key = str(environment.id)
+
+        # 1) Record the full-detail action-log row (best-effort).
+        try:
+            from app.services.environments.agent_env_action_log_service import (
+                AgentEnvActionLogService,
+            )
+
+            AgentEnvActionLogService.record(
+                db_session,
+                environment_id=environment.id,
+                agent_id=agent.id,
+                action=action,
+                status="error",
+                cause=cause,
+                summary=summary,
+                detail=detail,
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to record critical action-log for env {environment.id}: {e}"
+            )
+            db_session.rollback()
+
+        # 2) Set the persisted critical columns. status STAYS "running".
+        environment.critical_state = True
+        environment.critical_cause = cause
+        if not was_critical:
+            environment.critical_since = datetime.now(UTC)
+        environment.status_message = f"Running, but setup incomplete: {summary}"
+        db_session.add(environment)
+        db_session.commit()
+
+        # 3) Realtime event so the env card updates live.
+        await self._emit_critical_state_event(
+            environment,
+            agent,
+            critical_state=True,
+            cause=cause,
+            summary=summary,
+        )
+
+        # 4) Transition-gated owner email (fire-once per transition).
+        if env_key in _critical_warned_env_ids:
+            return
+        _critical_warned_env_ids.add(env_key)
+        try:
+            from app.services.notifications.notification_catalog import (
+                NotificationType,
+            )
+            from app.services.notifications.notification_service import (
+                SystemNotificationService,
+            )
+
+            await SystemNotificationService.notify(
+                db_session,
+                user_id=agent.owner_id,
+                notification_type=NotificationType.ENVIRONMENT_CRITICAL,
+                context={
+                    "project_name": settings.PROJECT_NAME,
+                    "agent_name": agent.name or "your agent",
+                    "instance_name": environment.instance_name or env_key,
+                    "environment_id": env_key,
+                    "reason": summary,
+                    "detail": summary,
+                    "link": f"{settings.FRONTEND_HOST}/agents/{agent.id}",
+                },
+            )
+        except Exception as e:
+            logger.debug(
+                f"Failed to dispatch ENVIRONMENT_CRITICAL notification for env "
+                f"{environment.id}: {e}"
+            )
+
+    async def _clear_critical_state(
+        self,
+        db_session: Session,
+        environment: AgentEnvironment,
+        agent: Agent,
+        *,
+        action: str = "provisioning",
+        summary: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        """Clear critical state after a subsequent successful setup.
+
+        Records a ``success`` action-log row, clears the persisted critical
+        columns, restores a normal status_message, emits the realtime event, and
+        discards the env from the transition set so a future re-failure re-emails.
+        Best-effort throughout.
+        """
+        if not environment.critical_state:
+            return
+
+        try:
+            from app.services.environments.agent_env_action_log_service import (
+                AgentEnvActionLogService,
+            )
+
+            AgentEnvActionLogService.record(
+                db_session,
+                environment_id=environment.id,
+                agent_id=agent.id,
+                action=action,
+                status="success",
+                summary=summary or "Environment setup completed; critical state cleared",
+                detail=detail,
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to record critical-clear action-log for env "
+                f"{environment.id}: {e}"
+            )
+            db_session.rollback()
+
+        environment.critical_state = False
+        environment.critical_cause = None
+        environment.critical_since = None
+        environment.status_message = "Environment is running"
+        db_session.add(environment)
+        db_session.commit()
+
+        _critical_warned_env_ids.discard(str(environment.id))
+
+        await self._emit_critical_state_event(
+            environment,
+            agent,
+            critical_state=False,
+            cause=None,
+            summary=summary,
+        )
+
     async def _setup_new_container(
         self,
         db_session: Session,
@@ -568,19 +814,47 @@ class EnvironmentLifecycleManager:
         """
         adapter = self.get_adapter(environment)
 
-        # Install custom packages (only needed for new containers)
+        # Install custom packages (only needed for new containers).
+        # If the install fails while the container is still alive, the env is
+        # running-but-degraded: enter critical state and continue (the env stays
+        # usable). Only re-raise (→ status="error" offline path) if the container
+        # is gone. Probe errors default to re-raise (fail safe toward offline).
         environment.status_message = "Installing custom packages..."
         db_session.add(environment)
         db_session.commit()
 
-        await adapter.install_custom_packages()
+        try:
+            await adapter.install_custom_packages()
+        except Exception as e:
+            if await self._container_alive_else_raise(adapter, e):
+                await self._enter_critical_state(
+                    db_session,
+                    environment,
+                    agent,
+                    cause="package_install_failed",
+                    summary="Failed to install custom packages",
+                    detail=str(e),
+                    action="package_install",
+                )
 
-        # Install system packages (only needed for new containers)
+        # Install system packages (only needed for new containers).
         environment.status_message = "Installing system packages..."
         db_session.add(environment)
         db_session.commit()
 
-        await adapter.install_system_packages()
+        try:
+            await adapter.install_system_packages()
+        except Exception as e:
+            if await self._container_alive_else_raise(adapter, e):
+                await self._enter_critical_state(
+                    db_session,
+                    environment,
+                    agent,
+                    cause="package_install_failed",
+                    summary="Failed to install system packages",
+                    detail=str(e),
+                    action="system_package_install",
+                )
 
         # Install plugins the same way libraries are installed: declaratively,
         # from the workspace manifest, by the container itself. For a rebuilt
@@ -681,13 +955,45 @@ class EnvironmentLifecycleManager:
 
             await adapter.start()
 
-            # Setup new container if it was just created
-            if not container_existed:
-                logger.info(f"Setting up new container for environment {environment.id}")
-                await self._setup_new_container(db_session, environment, agent)
+            # Snapshot critical state before setup so we can auto-recover a
+            # previously-critical env when this bring-up fully succeeds.
+            was_critical_before = bool(environment.critical_state)
+            # Track whether any setup step re-entered critical state this run.
+            # We cannot rely on environment.critical_state for this because it
+            # retains its old value (True) if no step raised and therefore
+            # _enter_critical_state was never called — the value is only
+            # refreshed by _enter_critical_state (→ True) or _clear_critical_state
+            # (→ False). Using a local flag avoids the false-negative where
+            # "env was already critical, setup succeeded, flag still True" would
+            # suppress the recovery call.
+            entered_critical_this_run = False
 
-            # Always sync dynamic data
-            await self._sync_dynamic_data(db_session, environment, agent)
+            # Monkey-patch _enter_critical_state on this call only so it also
+            # flips the local flag. Store original, wrap it, restore after.
+            _orig_enter = self._enter_critical_state
+
+            async def _tracked_enter(*args, **kwargs):
+                nonlocal entered_critical_this_run
+                entered_critical_this_run = True
+                return await _orig_enter(*args, **kwargs)
+
+            self._enter_critical_state = _tracked_enter
+
+            try:
+                # Setup new container if it was just created
+                if not container_existed:
+                    logger.info(f"Setting up new container for environment {environment.id}")
+                    await self._setup_new_container(db_session, environment, agent)
+
+                # Always sync dynamic data
+                await self._sync_dynamic_data(db_session, environment, agent)
+            finally:
+                self._enter_critical_state = _orig_enter
+
+            # If the env was critical and no step this run re-entered critical
+            # state, the issue is resolved — clear the flag and record recovery.
+            if was_critical_before and not entered_critical_this_run:
+                await self._clear_critical_state(db_session, environment, agent)
 
             # Update status
             environment.status = "running"
@@ -888,7 +1194,30 @@ class EnvironmentLifecycleManager:
             # Container already exists and was previously set up, so skip container setup
             # Only sync dynamic data (prompts and credentials)
             logger.info(f"Syncing dynamic data for suspended environment {environment.id}")
-            await self._sync_dynamic_data(db_session, environment, agent)
+            # Snapshot critical state so a previously-critical env (e.g. from a
+            # credential-sync failure) recovers automatically when this
+            # resume-from-suspend completes its dynamic-data sync successfully.
+            was_critical_before = bool(environment.critical_state)
+            entered_critical_this_run = False
+
+            _orig_enter_rst = self._enter_critical_state
+
+            async def _tracked_enter_rst(*args, **kwargs):
+                nonlocal entered_critical_this_run
+                entered_critical_this_run = True
+                return await _orig_enter_rst(*args, **kwargs)
+
+            self._enter_critical_state = _tracked_enter_rst
+
+            try:
+                await self._sync_dynamic_data(db_session, environment, agent)
+            finally:
+                self._enter_critical_state = _orig_enter_rst
+
+            # Auto-recover: clear critical state if the sync completed without
+            # re-entering critical this run.
+            if was_critical_before and not entered_critical_this_run:
+                await self._clear_critical_state(db_session, environment, agent)
 
             # Update status
             environment.status = "running"
@@ -1176,12 +1505,34 @@ class EnvironmentLifecycleManager:
 
             # If container was restarted, setup new container and sync data
             if was_running:
-                # Setup new container (install packages, etc.)
-                logger.info(f"Setting up new container after rebuild for environment {environment.id}")
-                await self._setup_new_container(db_session, environment, agent)
+                # Snapshot critical state so a previously-critical env recovers
+                # automatically when this rebuild's setup fully succeeds.
+                was_critical_before = bool(environment.critical_state)
+                entered_critical_this_run = False
 
-                # Sync dynamic data
-                await self._sync_dynamic_data(db_session, environment, agent)
+                _orig_enter_rb = self._enter_critical_state
+
+                async def _tracked_enter_rb(*args, **kwargs):
+                    nonlocal entered_critical_this_run
+                    entered_critical_this_run = True
+                    return await _orig_enter_rb(*args, **kwargs)
+
+                self._enter_critical_state = _tracked_enter_rb
+
+                try:
+                    # Setup new container (install packages, etc.)
+                    logger.info(f"Setting up new container after rebuild for environment {environment.id}")
+                    await self._setup_new_container(db_session, environment, agent)
+
+                    # Sync dynamic data
+                    await self._sync_dynamic_data(db_session, environment, agent)
+                finally:
+                    self._enter_critical_state = _orig_enter_rb
+
+                # Auto-recover: clear critical state if this rebuild's setup
+                # completed without re-entering critical.
+                if was_critical_before and not entered_critical_this_run:
+                    await self._clear_critical_state(db_session, environment, agent)
 
                 environment.status = "running"
                 environment.status_message = "Environment rebuilt and restarted"
@@ -1428,9 +1779,19 @@ class EnvironmentLifecycleManager:
             google_api_key: Google API key (for opencode/google)
             image_tag: Shared template image tag from TemplateImageService (substituted as ${TEMPLATE_IMAGE_TAG})
         """
-        # 1. Generate new auth token
-        auth_token = self._generate_auth_token(agent.owner_id)
+        # 1. Generate new auth token (rotates on every configure — create /
+        #    start / restart / rebuild). The raw token stays in config so the
+        #    inbound-bearer + HMAC roles read it back verbatim; auth_token_hash
+        #    is the authoritative verification + revocation anchor checked by
+        #    AgentEnvContextDep. Rotating both together (same configure step)
+        #    keeps the HMAC sign/verify keys in lockstep.
+        auth_token = self._generate_auth_token(
+            agent.owner_id, environment.id, environment.agent_id
+        )
         environment.config["auth_token"] = auth_token
+        environment.auth_token_hash = hashlib.sha256(
+            auth_token.encode("utf-8")
+        ).hexdigest()
         flag_modified(environment, "config")
         logger.debug(f"Generated new auth token for environment {environment.id}")
 
@@ -2422,8 +2783,20 @@ MODEL_CONVERSATION={model_conversation}
 
         logger.info(f"Wrote Claude Code hook settings for environment {environment.id}")
 
-    def _allocate_port(self) -> int:
-        """Allocate available port."""
+    def _allocate_port(self, db_session: Session | None = None) -> int:
+        """Allocate an available port.
+
+        The in-memory ``_allocated_ports`` set is per-process (one per worker)
+        and resets on restart, so it is NOT an authoritative record of which
+        ports are in use. When a DB session is available we seed the set with
+        the ports already assigned to existing environments, so allocation
+        cannot hand out a port that is already bound by another environment
+        (e.g. one created by a different worker, or before the last restart).
+        """
+        if db_session is not None:
+            for assigned in self._assigned_ports_from_db(db_session):
+                self._allocated_ports.add(assigned)
+
         for port in range(self.port_range_start, self.port_range_end):
             if port not in self._allocated_ports:
                 self._allocated_ports.add(port)
@@ -2431,25 +2804,58 @@ MODEL_CONVERSATION={model_conversation}
 
         raise Exception("No available ports")
 
-    def _generate_auth_token(self, user_id: UUID) -> str:
-        """
-        Generate JWT authentication token for agent container.
+    def _assigned_ports_from_db(self, db_session: Session) -> set[int]:
+        """Return the set of ports currently assigned to environments in the DB."""
+        assigned: set[int] = set()
+        for env in db_session.exec(select(AgentEnvironment)).all():
+            port = (env.config or {}).get("port")
+            if isinstance(port, int):
+                assigned.add(port)
+        return assigned
 
-        The token contains the user_id of the agent owner, allowing the agent
-        to authenticate as that user when making API calls back to the backend.
+    def _generate_auth_token(
+        self, user_id: UUID, env_id: UUID, agent_id: UUID
+    ) -> str:
+        """
+        Generate the scoped JWT authentication token for an agent container.
+
+        The token is bound to exactly one ``(env_id, agent_id, owner_id)`` triple
+        and is marked with ``token_type``/``aud == "agent_env"`` so that:
+
+        - the generic ``get_current_user`` dependency **rejects** it (it can no
+          longer impersonate the owner on ``CurrentUser`` routes — the
+          load-bearing security fix), and
+        - the scoped ``AgentEnvContextDep`` is the *only* dependency that
+          authenticates it, resolving ``(environment, agent, owner)`` scoped to
+          this one install.
+
+        ``sub`` is kept as the owner id so the HMAC role (the token doubles as
+        the ``session_context`` signing key) and owner resolution in the scoped
+        dep still work. The TTL is bounded (``AGENT_ENV_TOKEN_EXPIRE_DAYS``,
+        default 1 year, was effectively 10 years) — the token is rotated on
+        every configure anyway, and the per-env ``auth_token_hash`` (rotated with
+        it) is the real, immediate revocation anchor, so the TTL is only a
+        backstop. 1 year avoids an expiry cliff for ``always_on`` environments
+        that never idle-suspend.
 
         Args:
-            user_id: UUID of the agent owner
+            user_id: UUID of the agent owner (``sub``)
+            env_id: UUID of the environment the token is bound to
+            agent_id: UUID of the agent the token is bound to
 
         Returns:
             JWT token string
         """
-        # Create a JWT token that expires in 10 years (agents are long-lived)
-        # The token contains the user_id so the agent can authenticate as the owner
-        access_token_expires = timedelta(days=365 * 10)
+        access_token_expires = timedelta(days=settings.AGENT_ENV_TOKEN_EXPIRE_DAYS)
         return security.create_access_token(
             subject=str(user_id),
-            expires_delta=access_token_expires
+            expires_delta=access_token_expires,
+            extra_claims={
+                "token_type": "agent_env",
+                "aud": "agent_env",
+                "env_id": str(env_id),
+                "agent_id": str(agent_id),
+            },
         )
 
     async def copy_workspace_between_environments(

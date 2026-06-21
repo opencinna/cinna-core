@@ -90,9 +90,21 @@ export function AgentEnvironmentsTab({ agentId }: AgentEnvironmentsTabProps) {
       if (eventAgentId && eventAgentId !== agentId) return
       queryClient.invalidateQueries({ queryKey: ["environments", agentId] })
       queryClient.invalidateQueries({ queryKey: ["agent", agentId] })
+      // A critical-state transition also changes the env's action log, which is
+      // surfaced by the per-card "Show details" modal — refresh it so an open
+      // modal reflects the new entry immediately.
+      if (event.type === EventTypes.ENVIRONMENT_CRITICAL_STATE_CHANGED) {
+        const environmentId = event.meta?.environment_id as string | undefined
+        if (environmentId) {
+          queryClient.invalidateQueries({
+            queryKey: ["env-action-logs", environmentId],
+          })
+        }
+      }
     }
     const subIds = [
       EventTypes.ENVIRONMENT_STATUS_CHANGED,
+      EventTypes.ENVIRONMENT_CRITICAL_STATE_CHANGED,
       EventTypes.ENVIRONMENT_ACTIVATING,
       EventTypes.ENVIRONMENT_ACTIVATED,
       EventTypes.ENVIRONMENT_ACTIVATION_FAILED,

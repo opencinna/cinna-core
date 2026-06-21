@@ -284,6 +284,40 @@ class Settings(BaseSettings):
     # internal network instead of the public FRONTEND_HOST.
     AGENT_ENV_BACKEND_URL: str = "http://backend:8000"
 
+    # Agent-API caller-identity token (L2).
+    # A narrow, audience-restricted JWT (aud="agent_api_caller", sub=owner) that
+    # is auto-injected into a consumer env's credentials.json so the agent-api
+    # proxy can attribute calls to the install owner. It is RE-MINTED on every
+    # credential sync (env start / resync), so the TTL only needs to comfortably
+    # exceed the worst-case interval between syncs — a long-idle env whose token
+    # lapses before its next sync simply degrades to anonymous. Chosen generously
+    # (30 days). Revocation lives at the grant layer, not the token, so this is
+    # NOT placed on the pre-stream refresh hook.
+    AGENT_API_IDENTITY_TOKEN_EXPIRE_DAYS: int = 30
+
+    # Agent-environment internal token (AGENT_AUTH_TOKEN).
+    # The per-environment JWT minted into each container's .env. It is a scoped,
+    # audience-restricted token (aud/token_type="agent_env", env_id, agent_id)
+    # that authenticates ONLY via AgentEnvContextDep and is rejected by the
+    # generic CurrentUser dependency. It is RE-MINTED (rotated) on every
+    # configure (create / start / restart / rebuild), which also rotates the
+    # per-env auth_token_hash — so the HASH is the real, immediate revocation
+    # anchor; this TTL is only a backstop for a token whose env later vanishes.
+    # Set to 1 year so continuously-running "always_on" environments (which never
+    # idle-suspend and have no background token-refresh job) don't hit an expiry
+    # cliff between rebuilds; revocation does not depend on it.
+    # (Was effectively a 10-year plain owner JWT before the scoping hardening.)
+    AGENT_ENV_TOKEN_EXPIRE_DAYS: int = 365
+
+    # Agent-environment token back-compat grace window.
+    # During this window after deploy, AgentEnvContextDep ALSO accepts
+    # old-format env tokens (plain owner JWTs minted before the scoping change)
+    # that present an X-Agent-Env-Id header, so already-running environments keep
+    # working until the deploy-time bulk rebuild rotates them to the new format.
+    # Set to False (after the bulk rebuild sweep completes) to harden fully so
+    # only new-format env tokens authenticate.
+    AGENT_ENV_TOKEN_ACCEPT_LEGACY: bool = True
+
     # Agent Authentication
     # Token for backend to authenticate with agent containers
     AGENT_AUTH_TOKEN: str = secrets.token_urlsafe(32)

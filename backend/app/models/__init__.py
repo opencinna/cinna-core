@@ -14,6 +14,8 @@ from .users.user import (
     UserRole,
     UserRolePublic,
     UserRoleUpdate,
+    UserDetailsUpdate,
+    UserDetailsPublic,
     UpdatePassword,
     Message,
     NewPassword,
@@ -188,6 +190,11 @@ from .environments.environment import (
     AdminBulkRebuildRequest,
     AdminBulkRebuildResponse,
 )
+from .environments.agent_env_action_log import (
+    AgentEnvActionLog,
+    AgentEnvActionLogPublic,
+    AgentEnvActionLogsPublic,
+)
 from .agents.agent_status import (
     AgentStatusPublic,
     AgentStatusListPublic,
@@ -355,6 +362,17 @@ from .agent_api.agent_api_token import (
     AgentApiProducerConnections,
     ConnectAgentApiRequest,
     ConnectAgentApiResponse,
+)
+from .agent_api.agent_api_access_grant import (
+    AgentApiAccessGrant,
+    AgentApiAccessGrantBase,
+    AgentApiAccessGrantCreate,
+    AgentApiAccessGrantUpdate,
+    AgentApiAccessGrantPublic,
+    AgentApiAccessGrantsPublic,
+    AgentApiGrantUser,
+    AgentApiScope,
+    AgentApiScopeCatalog,
 )
 from .sharing.agent_guest_share import (
     AgentGuestShare,
@@ -576,6 +594,15 @@ from .cli.cli_token import (
     CLITokenPayload,
     CLIAccountTokenPublic,
     CLIAccountTokensPublic,
+)
+from .cli.cli_device_login import (
+    CLIDeviceLoginRequest,
+    DeviceLoginStartRequest,
+    DeviceLoginStartResponse,
+    DeviceLoginPollRequest,
+    DeviceLoginPollResponse,
+    DeviceLoginRequestPublic,
+    DeviceLoginResolveBody,
 )
 from .agentic_teams.agentic_team import (
     AgenticTeam,
@@ -866,6 +893,9 @@ __all__ = [
     "AdminBulkSkipped",
     "AdminBulkRebuildRequest",
     "AdminBulkRebuildResponse",
+    "AgentEnvActionLog",
+    "AgentEnvActionLogPublic",
+    "AgentEnvActionLogsPublic",
     # Sessions
     "Session",
     "SessionCreate",
@@ -1014,6 +1044,15 @@ __all__ = [
     "AgentApiConnectionInfo",
     "AgentApiProducerConnection",
     "AgentApiProducerConnections",
+    "AgentApiAccessGrant",
+    "AgentApiAccessGrantBase",
+    "AgentApiAccessGrantCreate",
+    "AgentApiAccessGrantUpdate",
+    "AgentApiAccessGrantPublic",
+    "AgentApiAccessGrantsPublic",
+    "AgentApiGrantUser",
+    "AgentApiScope",
+    "AgentApiScopeCatalog",
     "ConnectAgentApiRequest",
     "ConnectAgentApiResponse",
     # Agent Guest Shares

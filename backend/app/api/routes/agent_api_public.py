@@ -32,6 +32,14 @@ from app.services.agent_api.agent_api_service import (
     AgentApiPolicyError,
     AgentApiService,
 )
+from app.services.agent_api.agent_api_grant_service import AgentApiGrantService
+from app.services.agent_api.agent_api_identity_service import (
+    CALLER_HEADER_PREFIX,
+    CALLER_SCOPES_HEADER,
+    CALLER_USER_ID_HEADER,
+    IDENTITY_HEADER,
+    AgentApiIdentityService,
+)
 from app.services.agent_api.agent_api_token_service import AgentApiTokenService
 from app.services.environments.environment_service import EnvironmentService
 
@@ -81,6 +89,8 @@ async def consumer_spec(
     session: SessionDep,
 ):
     """Spec passthrough for consumers (subject to ``expose_spec`` in policy)."""
+    # Spec retrieval is gated ONLY by ``expose_spec`` — per-endpoint scope gating
+    # (enforce_policy) applies to data routes (consumer_proxy), not the spec.
     creds: HTTPAuthorizationCredentials | None = await _bearer(request)
     try:
         agent, token = _validate_token_or_401(session, agent_id, creds)
@@ -119,10 +129,40 @@ async def consumer_proxy(
     body = await request.body()
 
     try:
+        # Token validation is the gate — it runs first, so all caller-identity /
+        # grant work below stays behind the authenticated boundary (no DB grant
+        # lookup for an unauthenticated request).
         agent, token = _validate_token_or_401(session, agent_id, creds)
+
+        # Resolve caller identity (L2) → trusted attribution headers + per-user
+        # grant scopes. Computed BEFORE policy enforcement because edge scope
+        # enforcement (Phase 3 / D8) gates inside enforce_policy. Missing /
+        # invalid / expired identity token ⇒ empty dict ⇒ anonymous (never an
+        # error). Never log the identity token. Caller resolution makes no authz
+        # decision on its own — the token validation above is the gate.
+        caller_headers = AgentApiIdentityService.resolve_caller_headers(
+            session, request.headers.get(IDENTITY_HEADER)
+        )
+        # When the caller was attributed AND the producer opted in
+        # (agent_api_identity_enabled), resolve the live grant. The owner user_id
+        # is read back from the just-set attribution header (single source of
+        # truth — no second token verify). Identity ATTRIBUTION is unchanged from
+        # Phase 1 and is honored regardless of the flag (backward compatible);
+        # only SCOPES (and the optional edge enforcement) are gated by the flag.
+        resolved_user_id = caller_headers.get(CALLER_USER_ID_HEADER)
+        identity_enabled = bool(agent.agent_api_identity_enabled)
+        caller_scopes: list[str] = []
+        if resolved_user_id and identity_enabled:
+            caller_scopes = AgentApiGrantService.resolve_scopes_for_caller(
+                session, agent_id, uuid.UUID(resolved_user_id)
+            )
+            if caller_scopes:
+                caller_headers[CALLER_SCOPES_HEADER] = " ".join(caller_scopes)
+
         # Single auditable orchestration: enforce policy BEFORE env resolution so
-        # a 405/413/429 never wakes a suspended env; returns the propagated
-        # deadline + hop-depth headers to inject downstream.
+        # a 405/413/429/403 never wakes a suspended env; returns the propagated
+        # deadline + hop-depth headers to inject downstream. Edge scope
+        # enforcement (D8) uses caller_scopes + the producer's identity opt-in.
         environment, hop_headers = await AgentApiService.authorize_consumer_request(
             session,
             agent=agent,
@@ -131,17 +171,34 @@ async def consumer_proxy(
             path=path,
             body_size=len(body),
             incoming_headers=dict(request.headers),
+            caller_scopes=caller_scopes,
         )
     except AgentApiError as e:
         _handle_agent_api_error(e)
 
     AgentApiService.update_last_activity(session, environment)
 
-    # Forward headers: drop the consumer's bearer (it's for our edge, not the
-    # producer's app) and inject the request-loop guard headers.
+    # Forward headers, applying the four non-negotiable proxy rules:
+    #  1. Strip the consumer's bearer — it's for our edge, not the producer's app.
+    #  2. Strip the raw identity token — the producer must NEVER receive it
+    #     (otherwise it could harvest + replay it to impersonate callers).
+    #  3. Strip ALL inbound X-Cinna-Caller-* headers — the identity token is the
+    #     ONLY accepted identity input; client-supplied caller headers are forged.
+    #  4. Set X-Cinna-Caller-* authoritatively from the resolved owner (none when
+    #     anonymous). Then inject the request-loop guard headers.
+    # Header keys are lowercased before comparison (request.headers yields raw
+    # wire casing). The identity header is stripped explicitly AND is also
+    # covered by the X-Cinna-Caller-* prefix strip — the redundant explicit
+    # clause future-proofs rule 1 against a rename that moves the identity header
+    # outside the prefix.
     fwd_headers = {
-        k: v for k, v in request.headers.items() if k.lower() != "authorization"
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() != "authorization"
+        and k.lower() != IDENTITY_HEADER.lower()
+        and not k.lower().startswith(CALLER_HEADER_PREFIX)
     }
+    fwd_headers.update(caller_headers)
     fwd_headers.update(hop_headers)
 
     lifecycle = EnvironmentService.get_lifecycle_manager()

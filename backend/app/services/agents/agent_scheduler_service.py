@@ -824,7 +824,7 @@ class AgentSchedulerService:
             schedule_id: Schedule that was executed
             agent_id: Agent the schedule belongs to
             schedule_type: Type snapshot at execution time
-            status: "success", "session_triggered", or "error"
+            status: "success", "session_triggered", "error", or "skipped"
             prompt_used: Prompt sent (static_prompt only)
             command_executed: Command that ran (script_trigger only)
             command_output: stdout from command (script_trigger only)
@@ -947,6 +947,17 @@ class AgentSchedulerService:
         if env_status == "error":
             raise ScheduleError(
                 "Agent environment is in an error state and cannot be started",
+                status_code=400,
+            )
+
+        # Block manual runs against a critical (running-but-degraded) env so the
+        # contract matches the cron gate. The container is up, but a setup step
+        # failed — running a schedule against it would behave unpredictably.
+        if environment.critical_state:
+            raise ScheduleError(
+                "Agent environment is in a critical state (the container is "
+                "running but a setup step failed). Resolve the environment "
+                "issue, then run the schedule again.",
                 status_code=400,
             )
 

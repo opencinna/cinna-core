@@ -21,6 +21,7 @@ from tests.utils.background_tasks import drain_tasks
 from tests.utils.credential import (
     get_agent_credentials,
     link_credential_to_agent,
+    real_credentials_json,
     unlink_credential_from_agent,
 )
 from tests.utils.ssh_key_credential import (
@@ -126,7 +127,7 @@ def test_ssh_key_env_sync_whitelist_and_bundle(
     assert bundle_entry.get("passphrase") is None
 
     # ── Phase 5: credentials_json whitelist enforcement ───────────────
-    creds_json = env_data["credentials_json"]
+    creds_json = real_credentials_json(env_data)
     assert len(creds_json) == 1
     entry = creds_json[0]
     assert entry["id"] == cred_id
@@ -237,7 +238,7 @@ def test_ssh_key_env_sync_multiple_credentials_in_bundle(
         assert entry["private_key"], f"private_key must be non-empty for {entry['credential_id']}"
 
     # credentials_json must also have 2 entries, neither with private_key
-    creds_json = env_data["credentials_json"]
+    creds_json = real_credentials_json(env_data)
     assert len(creds_json) == 2
     for entry in creds_json:
         assert "private_key" not in entry["credential_data"]
@@ -290,7 +291,7 @@ def test_ssh_key_env_sync_null_host_aliases_defaults_to_wildcard(
     )
 
     # credentials_json: host_aliases must also be ["*"] (via _process_ssh_key_for_env)
-    creds_json = env_data["credentials_json"]
+    creds_json = real_credentials_json(env_data)
     assert len(creds_json) == 1
     cred_data = creds_json[0]["credential_data"]
     assert cred_data["host_aliases"] == ["*"], (

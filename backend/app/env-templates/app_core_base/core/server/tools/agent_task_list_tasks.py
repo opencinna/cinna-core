@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8000")
 AGENT_AUTH_TOKEN = os.getenv("AGENT_AUTH_TOKEN")
+ENV_ID = os.getenv("ENV_ID", "")  # scopes the auth token to this environment
 
 from ..sdk_manager import get_backend_session_id
 
@@ -81,6 +82,7 @@ async def agent_task_list_tasks(args: dict[str, Any]) -> dict[str, Any]:
 
     headers = {
         "Authorization": f"Bearer {AGENT_AUTH_TOKEN}",
+        "X-Agent-Env-Id": ENV_ID,
         "Content-Type": "application/json",
     }
 

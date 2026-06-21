@@ -94,10 +94,11 @@ Task creation availability is injected into the conversation mode system prompt 
 
 ## Authentication
 
-The tools use the same bearer token as other agent-env → backend calls:
+The tools use the same scoped env token as other agent-env → backend calls:
 
-- `Authorization: Bearer <AGENT_AUTH_TOKEN>` — token generated at environment creation
-- Validated against the environment record in the backend database
+- `Authorization: Bearer <AGENT_AUTH_TOKEN>` — scoped env JWT minted at environment creation
+- `X-Agent-Env-Id: <ENV_ID>` — environment UUID header
+- Authenticated by the scoped `AgentEnvContextDep` (not `get_current_user`), which resolves `(environment, agent, owner)`; handlers further assert the target task/session belongs to that owner + agent. See [Agent Environment Core](agent_environment_core_tech.md#jwt-authentication-scoped-env-token).
 
 ## File References
 

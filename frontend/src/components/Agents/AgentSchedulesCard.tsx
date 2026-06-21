@@ -8,6 +8,7 @@ import {
   Check,
   Clock,
   AlertCircle,
+  MinusCircle,
   Power,
   PowerOff,
   Terminal,
@@ -160,6 +161,17 @@ function LogStatusBadge({ log }: { log: AgentScheduleLogPublic }) {
       >
         <Terminal className="h-3 w-3 mr-1" />
         Session triggered
+      </Badge>
+    )
+  }
+  if (log.status === "skipped") {
+    return (
+      <Badge
+        variant="outline"
+        className="text-xs text-gray-600 border-gray-300 bg-gray-50"
+      >
+        <MinusCircle className="h-3 w-3 mr-1" />
+        Skipped
       </Badge>
     )
   }

@@ -122,7 +122,9 @@ class AICredential(AICredentialBase, table=True):
     discovered_models: list[str] | None = Field(
         default=None, sa_column=Column(sa.JSON, nullable=True)
     )
-    models_discovered_at: datetime | None = Field(default=None)
+    models_discovered_at: datetime | None = Field(
+        default=None, sa_type=sa.DateTime(timezone=True)
+    )
     models_discovery_error: str | None = Field(
         default=None, sa_column=Column(Text, nullable=True)
     )

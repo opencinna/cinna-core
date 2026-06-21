@@ -27,7 +27,8 @@ Render a producer agent's harvested OpenAPI spec as friendly, read-only API docs
 - **Source of truth is the same harvested spec.** The viewer reads the cached, import-only-harvested OpenAPI document (see [OpenAPI Spec is Always Accurate](agent_api.md)) — it does not start the serving child and does not introduce a new spec source.
 - **Auth is inherited, not re-implemented.** Because the viewer is an in-app route, an unauthenticated tab is bounced to login; an authenticated tab fetches the spec exactly as any other request would.
 - **Read-only / no live calls.** No "Try it"/"Send request" affordance, no client/SDK export, no third-party branding — only rendered docs.
-- **Graceful failure.** If the spec cannot be loaded (producer API stopped or failing to build), the viewer shows a short "could not load" message pointing the user back to the agent's build status, mirroring the producer card's error surfacing.
+- **Wake before load.** If the producer environment is suspended or stopped when the viewer opens, it first wakes the environment — displaying a **"Waking up agent…"** progress indicator while polling in a bounded loop — and then proceeds to load the spec once the env is running. A separate **"Loading spec…"** phase follows the wake.
+- **Graceful failure.** The "could not load" error message and **Retry** button appear only for genuine failures: the Agent REST API feature is disabled, the producer env cannot be resolved, the env fails to start within the grace window, or the spec fetch itself errors. Retry restarts the entire wake-and-load sequence cleanly (a run-token mechanism cancels the prior attempt before restarting).
 - **Consumer access depends on producer resolvability.** The consumer's View Spec button is disabled when the producer agent is no longer accessible.
 
 ## Architecture Overview
@@ -47,4 +48,4 @@ View Spec button (producer card / connection credential)
 
 ---
 
-*Last updated: 2026-05-26*
+*Last updated: 2026-06-18*

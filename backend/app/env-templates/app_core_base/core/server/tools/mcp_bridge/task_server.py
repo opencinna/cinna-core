@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8000")
 AGENT_AUTH_TOKEN = os.getenv("AGENT_AUTH_TOKEN", "")
+ENV_ID = os.getenv("ENV_ID", "")  # scopes the auth token to this environment
 
 # Session context is written by the adapter into the opencode serve runtime dir
 # (/tmp/.opencode_{mode}/session_context.json). Once sessions are bound to
@@ -67,6 +68,7 @@ def _read_backend_session_id() -> str | None:
 def _auth_headers() -> dict[str, str]:
     return {
         "Authorization": f"Bearer {AGENT_AUTH_TOKEN}",
+        "X-Agent-Env-Id": ENV_ID,
         "Content-Type": "application/json",
     }
 

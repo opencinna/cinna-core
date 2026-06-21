@@ -1558,6 +1558,17 @@ export const AccountConfigProviderPublicSchema = {
             ],
             title: 'Model'
         },
+        default_model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Model'
+        },
         api_key: {
             type: 'string',
             title: 'Api Key'
@@ -2413,6 +2424,34 @@ export const AdminAgentEnvironmentPublicSchema = {
             type: 'boolean',
             title: 'Is Active'
         },
+        critical_state: {
+            type: 'boolean',
+            title: 'Critical State',
+            default: false
+        },
+        critical_cause: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Critical Cause'
+        },
+        critical_since: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Critical Since'
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -3116,6 +3155,122 @@ export const AgentAccessTokensPublicSchema = {
     title: 'AgentAccessTokensPublic'
 } as const;
 
+export const AgentApiAccessGrantCreateSchema = {
+    properties: {
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Scopes',
+            default: []
+        },
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        }
+    },
+    type: 'object',
+    required: ['user_id'],
+    title: 'AgentApiAccessGrantCreate'
+} as const;
+
+export const AgentApiAccessGrantPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        producer_agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Producer Agent Id'
+        },
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Scopes'
+        },
+        user: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AgentApiGrantUser'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        created_by: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Created By'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'producer_agent_id', 'user_id', 'scopes', 'created_by', 'created_at', 'updated_at'],
+    title: 'AgentApiAccessGrantPublic'
+} as const;
+
+export const AgentApiAccessGrantUpdateSchema = {
+    properties: {
+        scopes: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Scopes'
+        }
+    },
+    type: 'object',
+    title: 'AgentApiAccessGrantUpdate'
+} as const;
+
+export const AgentApiAccessGrantsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiAccessGrantPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AgentApiAccessGrantsPublic'
+} as const;
+
 export const AgentApiConnectedAgentSchema = {
     properties: {
         id: {
@@ -3137,6 +3292,17 @@ export const AgentApiConnectedAgentSchema = {
                 }
             ],
             title: 'Ui Color Preset'
+        },
+        owner_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Email'
         }
     },
     type: 'object',
@@ -3197,6 +3363,34 @@ export const AgentApiConnectionInfoSchema = {
 detail page. \`\`producer_agent_name\`\` is best-effort (None if the producer
 agent is no longer accessible); \`\`consumer_agents\`\` are the agents the
 credential is currently linked to.`
+} as const;
+
+export const AgentApiGrantUserSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        email: {
+            type: 'string',
+            title: 'Email'
+        },
+        full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Full Name'
+        }
+    },
+    type: 'object',
+    required: ['id', 'email'],
+    title: 'AgentApiGrantUser'
 } as const;
 
 export const AgentApiProducerConnectionSchema = {
@@ -3278,6 +3472,46 @@ export const AgentApiProducerConnectionsSchema = {
     type: 'object',
     required: ['data', 'count'],
     title: 'AgentApiProducerConnections'
+} as const;
+
+export const AgentApiScopeSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'AgentApiScope',
+    description: 'One available scope the producer declared in policy.yaml.'
+} as const;
+
+export const AgentApiScopeCatalogSchema = {
+    properties: {
+        scopes: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiScope'
+            },
+            type: 'array',
+            title: 'Scopes'
+        }
+    },
+    type: 'object',
+    required: ['scopes'],
+    title: 'AgentApiScopeCatalog',
+    description: "The available-scope catalog offered to the owner's scope picker."
 } as const;
 
 export const AgentBundlePublicSchema = {
@@ -4267,6 +4501,96 @@ export const AgentEmailIntegrationPublicSchema = {
     title: 'AgentEmailIntegrationPublic'
 } as const;
 
+export const AgentEnvActionLogPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        environment_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Environment Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        action: {
+            type: 'string',
+            title: 'Action'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        cause: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Cause'
+        },
+        summary: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Summary'
+        },
+        detail: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Detail'
+        },
+        executed_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Executed At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'environment_id', 'agent_id', 'action', 'status', 'cause', 'summary', 'detail', 'executed_at'],
+    title: 'AgentEnvActionLogPublic',
+    description: 'Public response model for AgentEnvActionLog.'
+} as const;
+
+export const AgentEnvActionLogsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentEnvActionLogPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AgentEnvActionLogsPublic',
+    description: 'List response model for AgentEnvActionLog.'
+} as const;
+
 export const AgentEnvironmentCreateSchema = {
     properties: {
         env_name: {
@@ -4419,6 +4743,34 @@ export const AgentEnvironmentPublicSchema = {
         is_active: {
             type: 'boolean',
             title: 'Is Active'
+        },
+        critical_state: {
+            type: 'boolean',
+            title: 'Critical State',
+            default: false
+        },
+        critical_cause: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Critical Cause'
+        },
+        critical_since: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Critical Since'
         },
         created_at: {
             type: 'string',
@@ -5486,6 +5838,11 @@ export const AgentPublicSchema = {
             title: 'Agent Api Enabled',
             default: false
         },
+        agent_api_identity_enabled: {
+            type: 'boolean',
+            title: 'Agent Api Identity Enabled',
+            default: false
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -6513,6 +6870,17 @@ export const AgentUpdateSchema = {
                 }
             ],
             title: 'Agent Api Enabled'
+        },
+        agent_api_identity_enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Api Identity Enabled'
         },
         update_mode: {
             anyOf: [
@@ -11295,6 +11663,186 @@ export const DeviceInputSchema = {
     type: 'object',
     required: ['device_label', 'public_key'],
     title: 'DeviceInput'
+} as const;
+
+export const DeviceLoginPollRequestSchema = {
+    properties: {
+        device_code: {
+            type: 'string',
+            title: 'Device Code'
+        }
+    },
+    type: 'object',
+    required: ['device_code'],
+    title: 'DeviceLoginPollRequest',
+    description: 'CLI → backend: poll with the raw device_code.'
+} as const;
+
+export const DeviceLoginPollResponseSchema = {
+    properties: {
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        account_token: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Account Token'
+        },
+        platform_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Platform Url'
+        },
+        frontend_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Frontend Url'
+        },
+        machine_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Machine Name'
+        }
+    },
+    type: 'object',
+    required: ['status'],
+    title: 'DeviceLoginPollResponse',
+    description: `Backend → CLI: always HTTP 200; the flow state lives in \`\`status\`\`.
+
+Only the \`\`authorized\`\` state carries the extra fields; the route uses
+\`\`response_model_exclude_none\`\` so the other statuses are bare \`\`{status}\`\`.`
+} as const;
+
+export const DeviceLoginRequestPublicSchema = {
+    properties: {
+        user_code: {
+            type: 'string',
+            title: 'User Code'
+        },
+        machine_name: {
+            type: 'string',
+            title: 'Machine Name'
+        },
+        machine_info: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Machine Info'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        }
+    },
+    type: 'object',
+    required: ['user_code', 'machine_name', 'machine_info', 'status'],
+    title: 'DeviceLoginRequestPublic',
+    description: 'Browser display metadata. No device_code, token, IP, or approver.'
+} as const;
+
+export const DeviceLoginResolveBodySchema = {
+    properties: {
+        user_code: {
+            type: 'string',
+            title: 'User Code'
+        }
+    },
+    type: 'object',
+    required: ['user_code'],
+    title: 'DeviceLoginResolveBody',
+    description: 'Browser → backend: approve / reject body.'
+} as const;
+
+export const DeviceLoginStartRequestSchema = {
+    properties: {
+        machine_name: {
+            type: 'string',
+            maxLength: 100,
+            title: 'Machine Name'
+        },
+        machine_info: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 200
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Machine Info'
+        }
+    },
+    type: 'object',
+    required: ['machine_name'],
+    title: 'DeviceLoginStartRequest',
+    description: `CLI → backend: begin a device-login request.
+
+Lengths mirror the table columns so over-long labels are rejected as a clean
+422 at this unauthenticated endpoint rather than a DB truncation 500.`
+} as const;
+
+export const DeviceLoginStartResponseSchema = {
+    properties: {
+        device_code: {
+            type: 'string',
+            title: 'Device Code'
+        },
+        user_code: {
+            type: 'string',
+            title: 'User Code'
+        },
+        verification_uri: {
+            type: 'string',
+            title: 'Verification Uri'
+        },
+        verification_uri_complete: {
+            type: 'string',
+            title: 'Verification Uri Complete'
+        },
+        interval: {
+            type: 'integer',
+            title: 'Interval'
+        },
+        expires_in: {
+            type: 'integer',
+            title: 'Expires In'
+        }
+    },
+    type: 'object',
+    required: ['device_code', 'user_code', 'verification_uri', 'verification_uri_complete', 'interval', 'expires_in'],
+    title: 'DeviceLoginStartResponse',
+    description: 'Backend → CLI: device + user codes and the verification URLs (RFC 8628).'
 } as const;
 
 export const DisclaimerPublicSchema = {
@@ -22320,6 +22868,58 @@ export const UserDashboardUpdateSchema = {
     },
     type: 'object',
     title: 'UserDashboardUpdate'
+} as const;
+
+export const UserDetailsPublicSchema = {
+    properties: {
+        details_raw: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Details Raw'
+        },
+        details_parsed: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Details Parsed'
+        }
+    },
+    type: 'object',
+    required: ['details_raw', 'details_parsed'],
+    title: 'UserDetailsPublic',
+    description: `Response for \`\`GET\`\`/\`\`PATCH /users/me/details\`\`.
+
+\`\`details_raw\`\` is what the user typed (verbatim, for re-opening the
+editor); \`\`details_parsed\`\` is the normalized \`\`{UPPER_SNAKE: "value"}\`\`
+map. Both \`\`None\`\` when no details are set.`
+} as const;
+
+export const UserDetailsUpdateSchema = {
+    properties: {
+        details_raw: {
+            type: 'string',
+            title: 'Details Raw'
+        }
+    },
+    type: 'object',
+    required: ['details_raw'],
+    title: 'UserDetailsUpdate',
+    description: `Request body for \`\`PATCH /users/me/details\`\`.
+
+Free-text env-file content (\`\`KEY = value\`\` lines). May be empty to
+clear the user's details. Parsed/normalized server-side.`
 } as const;
 
 export const UserInfoResponseSchema = {

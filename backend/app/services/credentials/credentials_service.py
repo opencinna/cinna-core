@@ -19,7 +19,7 @@ from app.core.ssh_key_utils import (
     is_private_key_encrypted,
     validate_key_pair,
 )
-from app.models import Credential, Agent, AgentEnvironment, AgentCredentialLink, CredentialCreate, CredentialUpdate, CredentialType
+from app.models import Credential, Agent, AgentEnvironment, AgentCredentialLink, CredentialCreate, CredentialUpdate, CredentialType, User
 
 logger = logging.getLogger(__name__)
 
@@ -809,11 +809,91 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         lines.append("---")
         lines.append("")
 
+        # Current-user identity/details section (synthetic, not a real credential).
+        # Emitted whenever the reserved `current_user` entry is present so the
+        # agent knows who it is operating on behalf of. Carries no secrets.
+        for cred in credentials:
+            if cred.get("type") != "current_user":
+                continue
+            data = cred.get("credential_data", {}) or {}
+            full_name = data.get("full_name")
+            email = data.get("email")
+            who = full_name or email or "the install owner"
+            lines.append("## Current User")
+            lines.append("")
+            lines.append(
+                f"This agent is operating on behalf of **{who}**"
+                + (f" (`{email}`)" if email and email != who else "")
+                + "."
+            )
+            lines.append("")
+            lines.append(
+                "Read the owner's identity and self-authored details "
+                "programmatically:"
+            )
+            lines.append("")
+            lines.append("```python")
+            lines.append("creds = {c['id']: c['credential_data'] for c in all_credentials}")
+            lines.append("me = creds['current_user']")
+            lines.append("send_to = me['email']")
+            lines.append("detail = me['custom_details'].get('SOME_KEY')")
+            lines.append("```")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+            break
+
+        # Owner-identity (L2) section (synthetic, NOT a real credential, NOT
+        # redacted — the token is meant to be sent on the wire). Emitted whenever
+        # the reserved `owner_identity` entry is present, i.e. when this env has an
+        # agent_api connection. Self-describing so the agent just reads + sends it.
+        for cred in credentials:
+            if cred.get("type") != "owner_identity_token":
+                continue
+            data = cred.get("credential_data", {}) or {}
+            header = data.get("header", "X-Cinna-Caller-Identity")
+            lines.append("## Owner Identity (agent_api calls)")
+            lines.append("")
+            lines.append(
+                "When you call an `agent_api` connection, send this auto-generated "
+                f"identity token in the `{header}` header **in addition to** the "
+                "`Authorization: Bearer` token from the paired `agent_api` "
+                "credential. It lets the producer agent know which user is calling "
+                "so it can apply per-user access. You never manage this token — the "
+                "platform mints and refreshes it for you. This token is shown in "
+                "full on purpose: it is yours to send on the wire, not a secret to "
+                "hide — do not try to redact it."
+            )
+            lines.append("")
+            lines.append("```python")
+            lines.append("creds = {c['id']: c['credential_data'] for c in all_credentials}")
+            lines.append("identity = creds['owner_identity']")
+            lines.append("")
+            lines.append("# Pair with the agent_api connection credential")
+            lines.append("api = next(c['credential_data'] for c in all_credentials")
+            lines.append("           if c['type'] == 'agent_api')")
+            lines.append("headers = {")
+            lines.append("    'Authorization': f\"Bearer {api['token']}\",")
+            lines.append("    identity['header']: identity['token'],")
+            lines.append("}")
+            lines.append("response = requests.get(f\"{api['base_url']}/some/endpoint\", headers=headers)")
+            lines.append("```")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+            break
+
         # Add usage examples for each credential type that has data
         has_examples = False
         for cred in credentials:
             cred_type = cred["type"]
             credential_data = cred["credential_data"]
+
+            # The synthetic current_user / owner_identity_token entries have their
+            # own prose sections above and are not real credential types — skip
+            # the usage-example loop.
+            if cred_type in ("current_user", "owner_identity_token"):
+                continue
 
             # Skip usage examples for empty credentials
             if not credential_data or credential_data == {}:
@@ -1062,6 +1142,40 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 lines.append("        break")
                 lines.append("```")
                 lines.append("")
+            elif cred_type == "agent_api":
+                lines.append(f"### Agent API Connection: {cred_name}")
+                lines.append(f"**ID**: `{cred_id}`")
+                lines.append("")
+                lines.append(
+                    "This is a connection to another agent's REST API. Fetch "
+                    "`{base_url}/openapi.json` to discover its endpoints, then call "
+                    "them with the `Authorization: Bearer` token. **If an "
+                    "`owner_identity` entry is present** (see the *Owner Identity* "
+                    "section above), also send its `header`/`token` on every call so "
+                    "the producer can identify the calling user."
+                )
+                lines.append("")
+                lines.append("```python")
+                lines.append("import json")
+                lines.append("import requests")
+                lines.append("")
+                lines.append("with open('credentials/credentials.json', 'r') as f:")
+                lines.append("    all_credentials = json.load(f)")
+                lines.append("creds = {c['id']: c['credential_data'] for c in all_credentials}")
+                lines.append("")
+                lines.append(f"api = creds['{cred_id}']")
+                lines.append("headers = {'Authorization': f\"Bearer {api['token']}\"}")
+                lines.append("")
+                lines.append("# Attach the owner identity header when available")
+                lines.append("identity = creds.get('owner_identity')")
+                lines.append("if identity:")
+                lines.append("    headers[identity['header']] = identity['token']")
+                lines.append("")
+                lines.append("# Discover the API, then call it")
+                lines.append("spec = requests.get(api['spec_url'], headers=headers).json()")
+                lines.append("response = requests.get(f\"{api['base_url']}/some/endpoint\", headers=headers)")
+                lines.append("```")
+                lines.append("")
             elif cred_type == "ssh_key":
                 lines.append(f"### SSH Key Credential: {cred_name}")
                 lines.append(f"**ID**: `{cred_id}`")
@@ -1218,6 +1332,66 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 cred["credential_data"]
             )
             filtered_credentials.append(filtered_cred)
+
+        # Inject the synthetic current_user identity/details block built from
+        # the agent owner's User row. This is NOT a real credential — it gives
+        # agent scripts a zero-config way to know who the install owner is and
+        # read the owner's self-authored custom_details. Appended (not
+        # prepended) so existing index-based assumptions are undisturbed.
+        # Guarded: a missing owner must never break credential sync.
+        try:
+            from app.services.users import user_details_service
+
+            agent = session.get(Agent, agent_id)
+            owner = session.get(User, agent.owner_id) if agent else None
+            if owner is not None:
+                filtered_credentials.append(
+                    user_details_service.build_current_user_block(owner)
+                )
+            else:
+                logger.warning(
+                    "Could not resolve owner for agent %s; omitting current_user block",
+                    agent_id,
+                )
+        except Exception:
+            logger.exception(
+                "Failed to build current_user block for agent %s; skipping",
+                agent_id,
+            )
+
+        # Inject the synthetic owner_identity_token (L2) block — a per-env,
+        # auto-injected JWT the agent sends on agent_api calls so the producer
+        # can attribute them to the install owner. Like current_user, it is
+        # computed host-side, never stored, never redacted, never user-editable.
+        # Conditional: only ship it when the env has ≥1 linked agent_api
+        # credential (no point — and less surface — for envs that never call a
+        # producer). Detected from the unfiltered `credentials` list by type.
+        # Re-minted for free on every sync, keeping running envs fresh (D7).
+        # Guarded: a missing owner must never break credential sync.
+        try:
+            has_agent_api_cred = any(c["type"] == "agent_api" for c in credentials)
+            if has_agent_api_cred:
+                from app.services.agent_api.agent_api_identity_service import (
+                    AgentApiIdentityService,
+                )
+
+                agent = session.get(Agent, agent_id)
+                owner = session.get(User, agent.owner_id) if agent else None
+                if owner is not None:
+                    filtered_credentials.append(
+                        AgentApiIdentityService.build_owner_identity_block(owner.id)
+                    )
+                else:
+                    logger.warning(
+                        "Could not resolve owner for agent %s; omitting "
+                        "owner_identity_token block",
+                        agent_id,
+                    )
+        except Exception:
+            logger.exception(
+                "Failed to build owner_identity_token block for agent %s; skipping",
+                agent_id,
+            )
 
         # Generate README with redacted data (for agent prompt context)
         # IMPORTANT: Use filtered_credentials so README matches credentials.json structure

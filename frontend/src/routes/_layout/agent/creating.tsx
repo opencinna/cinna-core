@@ -81,7 +81,7 @@ function AgentCreating() {
   const [steps, setSteps] = useState<Step[]>([
     { id: "create_agent", label: "Creating agent", status: "pending" },
     { id: "start_environment", label: "Starting default environment", status: "pending" },
-    { id: "create_session", label: "Creating conversation session", status: "pending" },
+    { id: "create_session", label: "Preparing session", status: "pending" },
     { id: "redirect", label: "Ready to start", status: "pending" },
   ])
   const [error, setError] = useState<string | null>(null)
