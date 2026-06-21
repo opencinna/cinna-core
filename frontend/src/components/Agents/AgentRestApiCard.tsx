@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
 import type { AgentApiStatus } from "@/hooks/useAgentApi"
+import { AgentApiAccessScopesCard } from "./AgentApiAccessScopesCard"
 import { AgentBadge } from "@/components/Common/AgentBadge"
 import { useAgentApiStatus } from "@/hooks/useAgentApi"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -33,6 +34,8 @@ import { openAgentApiSpec } from "@/utils/agentApiSpec"
 interface AgentRestApiCardProps {
   agentId: string
   agentApiEnabled: boolean
+  /** Producer opt-in for per-user identity + scope grants (L2). */
+  agentApiIdentityEnabled: boolean
 }
 
 /** Extracts an HTTP status code (100–599) from a boot/status error string, if present. */
@@ -62,6 +65,7 @@ const STATE_BADGE: Record<string, { label: string; className: string }> = {
 export function AgentRestApiCard({
   agentId,
   agentApiEnabled,
+  agentApiIdentityEnabled,
 }: AgentRestApiCardProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -406,6 +410,12 @@ export function AgentRestApiCard({
               </div>
             )}
           </div>
+
+          {/* Access & Scopes — per-user identity + scope grants (L2). */}
+          <AgentApiAccessScopesCard
+            agentId={agentId}
+            identityEnabled={agentApiIdentityEnabled}
+          />
         </CardContent>
       )}
     </Card>

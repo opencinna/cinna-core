@@ -59,8 +59,43 @@ from cinna_api import StreamingResponse, BaseModel, Field
   - **Reads the file fresh on every call** — never cache the result; a token may
     have just been refreshed.
 - `error(status, detail)` — raise it to return a consistent JSON error body.
+- `caller` — a request-scoped dependency exposing **who is calling** (see below).
 - Re-exports: `UploadFile`, `File`, `Query`, `Body`, `StreamingResponse`,
   `BaseModel`, `Field`.
+
+## Knowing Who Is Calling (`caller`)
+The platform identifies the calling user for you. Add a `caller` parameter to any
+handler and read the resolved identity — no token parsing on your side:
+
+```python
+from cinna_api import api, caller, Caller, error
+
+@api.get("/orders")
+def list_orders(me: Caller = caller):
+    if me.is_anonymous:
+        raise error(401, "Sign-in required")
+    # Identify the user and authorize against YOUR data model:
+    return {"orders": orders_for_user(me.user_id)}
+```
+
+`Caller` fields (all read-only, all trustworthy — the platform verifies the
+caller's identity and strips any client-forged values before your code runs):
+
+- `me.user_id` / `me.email` / `me.username` — the calling cinna-core user, or
+  `None` when the call is anonymous.
+- `me.is_anonymous` — `True` when the platform could not attribute the call
+  (no identity, an expired identity, or a legacy shared-token connection).
+- `me.scopes` — the **list of capability scopes** the platform resolved for this
+  caller (see *Per-user scopes* under Policy). Empty when the caller has no grant
+  or you haven't enabled per-user access.
+- `me.has_scope("orders.write")` — convenience check against `me.scopes`.
+
+**You are the primary authorizer.** `caller` tells you *who* and *what scopes*;
+only your code knows the data-level rules ("user-E may touch archive-E, not
+archive-F"). Branch on `me.user_id` / `me.scopes` and enforce your own
+permissions. Anonymous callers should be handled explicitly (allow read-only,
+deny writes, or `raise error(401, ...)`), because a connection without an
+identity token reaches you as anonymous by design.
 
 ## Naming Your API (OpenAPI metadata)
 Label the spec by defining these **module-level constants** in any of your
@@ -147,6 +182,7 @@ edge, before a request reaches your code**:
 | `rate_limit` | `60/min` | Per-token rate limit (429). |
 | `expose_spec` | `true` | When `false`, blocks `/openapi.json` passthrough. |
 | `allowed_paths` | `["*"]` | Optional path-prefix allowlist. |
+| `scopes` | (none) | Per-user capability catalog (see *Per-user scopes* below). |
 
 A missing `policy.yaml` uses these defaults. A **malformed** `policy.yaml` fails
 **closed** (deny-all) — the platform locks the API down rather than open it up.
@@ -155,6 +191,54 @@ A missing `policy.yaml` uses these defaults. A **malformed** `policy.yaml` fails
 state change*. A `GET` handler can still mutate its upstream. The proxy
 guarantees the **method / body / rate** envelope; semantic safety is your
 responsibility. Keep `GET` handlers genuinely read-only.
+
+### Per-user scopes (`scopes:`)
+Declare a **scope catalog** in `policy.yaml` to assign capabilities to individual
+platform users. You assign scopes to users from this agent's **Integrations →
+Agent REST API → Access & Scopes** card; the platform resolves them **live on
+every call** and hands them to your code as `caller.scopes`. Editing a user's
+scopes takes effect on the **next call** — no redeploy, no token re-mint.
+
+Two authoring forms are supported:
+
+```yaml
+# Form 1 — documentation only (names + descriptions). The names show up in the
+# UI picker and arrive as caller.scopes; YOUR code enforces them.
+scopes:
+  orders.read: "Read orders"
+  orders.write: "Create or modify orders"
+
+# Form 2 — also lets the PLATFORM hard-deny at the edge (defense-in-depth).
+# A request matching a `requires` pattern is rejected 403 BEFORE reaching your
+# code unless the caller's grant carries that scope.
+scopes:
+  orders.read: "Read orders"
+  orders.write:
+    description: "Create or modify orders"
+    requires:
+      - { method: POST, path: /orders }   # method optional; omit for "any verb"
+      - { method: PUT,  path: /orders }
+  admin:
+    description: "Administrative endpoints"
+    requires:
+      - { path: /admin }                  # any method under /admin
+```
+
+- `path` is a **prefix** (`/orders` gates `/orders` and `/orders/123`). `method`
+  is optional and defaults to **any** verb.
+- **Edge enforcement is opt-in and conservative.** It only activates when (a) you
+  enable per-user access on the Access & Scopes card, AND (b) the scope declares
+  `requires:` patterns. A documentation-only catalog (Form 1) is never
+  edge-enforced, and a producer that hasn't enabled per-user access is never
+  edge-denied — existing connections keep working unchanged.
+- **You remain the primary enforcer.** Edge enforcement is a coarse backstop on
+  method/path; only your code knows data-level rules. Always check
+  `caller.scopes` / `caller.has_scope(...)` in handlers that need it, even for
+  edge-gated endpoints.
+
+A malformed `scopes:` section degrades to **no catalog** (and no edge
+enforcement) without failing the rest of the policy — but a `policy.yaml` that
+is wholly unparseable still fails **closed** (deny-all).
 
 ## Security Rules
 - **Never return the upstream credential** (or any secret) in a response body.

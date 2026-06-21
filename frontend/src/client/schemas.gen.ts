@@ -3155,6 +3155,122 @@ export const AgentAccessTokensPublicSchema = {
     title: 'AgentAccessTokensPublic'
 } as const;
 
+export const AgentApiAccessGrantCreateSchema = {
+    properties: {
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Scopes',
+            default: []
+        },
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        }
+    },
+    type: 'object',
+    required: ['user_id'],
+    title: 'AgentApiAccessGrantCreate'
+} as const;
+
+export const AgentApiAccessGrantPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        producer_agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Producer Agent Id'
+        },
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Scopes'
+        },
+        user: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AgentApiGrantUser'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        created_by: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Created By'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'producer_agent_id', 'user_id', 'scopes', 'created_by', 'created_at', 'updated_at'],
+    title: 'AgentApiAccessGrantPublic'
+} as const;
+
+export const AgentApiAccessGrantUpdateSchema = {
+    properties: {
+        scopes: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Scopes'
+        }
+    },
+    type: 'object',
+    title: 'AgentApiAccessGrantUpdate'
+} as const;
+
+export const AgentApiAccessGrantsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiAccessGrantPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AgentApiAccessGrantsPublic'
+} as const;
+
 export const AgentApiConnectedAgentSchema = {
     properties: {
         id: {
@@ -3249,6 +3365,34 @@ agent is no longer accessible); \`\`consumer_agents\`\` are the agents the
 credential is currently linked to.`
 } as const;
 
+export const AgentApiGrantUserSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        email: {
+            type: 'string',
+            title: 'Email'
+        },
+        full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Full Name'
+        }
+    },
+    type: 'object',
+    required: ['id', 'email'],
+    title: 'AgentApiGrantUser'
+} as const;
+
 export const AgentApiProducerConnectionSchema = {
     properties: {
         token_id: {
@@ -3328,6 +3472,46 @@ export const AgentApiProducerConnectionsSchema = {
     type: 'object',
     required: ['data', 'count'],
     title: 'AgentApiProducerConnections'
+} as const;
+
+export const AgentApiScopeSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'AgentApiScope',
+    description: 'One available scope the producer declared in policy.yaml.'
+} as const;
+
+export const AgentApiScopeCatalogSchema = {
+    properties: {
+        scopes: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiScope'
+            },
+            type: 'array',
+            title: 'Scopes'
+        }
+    },
+    type: 'object',
+    required: ['scopes'],
+    title: 'AgentApiScopeCatalog',
+    description: "The available-scope catalog offered to the owner's scope picker."
 } as const;
 
 export const AgentBundlePublicSchema = {
@@ -5654,6 +5838,11 @@ export const AgentPublicSchema = {
             title: 'Agent Api Enabled',
             default: false
         },
+        agent_api_identity_enabled: {
+            type: 'boolean',
+            title: 'Agent Api Identity Enabled',
+            default: false
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -6681,6 +6870,17 @@ export const AgentUpdateSchema = {
                 }
             ],
             title: 'Agent Api Enabled'
+        },
+        agent_api_identity_enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Api Identity Enabled'
         },
         update_mode: {
             anyOf: [

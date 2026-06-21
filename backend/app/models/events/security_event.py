@@ -101,6 +101,17 @@ CLI_ACCOUNT_STATUS_COMMAND_SET = "CLI_ACCOUNT_STATUS_COMMAND_SET"
 CLI_DEVICE_LOGIN_APPROVED = "CLI_DEVICE_LOGIN_APPROVED"
 CLI_DEVICE_LOGIN_REJECTED = "CLI_DEVICE_LOGIN_REJECTED"
 
+# ── Agent-API per-user access grant (L2 scopes) ───────────────────────
+# Emitted by ``AgentApiGrantService`` when a producer agent's owner assigns,
+# edits, or removes the scopes granted to a platform user on the agent's REST
+# API. Each grant is a discrete capability change (it controls what that user may
+# do through the proxy), so create / update / delete are audited per call —
+# mirrors the MCP connector ACL audit. The identity/scope tokens themselves are
+# never logged (the grant carries no secret, only scope names).
+AGENT_API_GRANT_CREATED = "AGENT_API_GRANT_CREATED"
+AGENT_API_GRANT_UPDATED = "AGENT_API_GRANT_UPDATED"
+AGENT_API_GRANT_DELETED = "AGENT_API_GRANT_DELETED"
+
 
 class SecurityEvent(SQLModel, table=True):
     """

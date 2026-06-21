@@ -23,12 +23,18 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.api.deps import CurrentUser, SessionDep
 from app.models import (
+    AgentApiAccessGrantCreate,
+    AgentApiAccessGrantPublic,
+    AgentApiAccessGrantsPublic,
+    AgentApiAccessGrantUpdate,
     AgentApiProducerConnections,
+    AgentApiScopeCatalog,
     AgentEnvironment,
     ConnectAgentApiRequest,
     ConnectAgentApiResponse,
     Message,
 )
+from app.services.agent_api.agent_api_grant_service import AgentApiGrantService
 from app.services.agent_api.agent_api_service import (
     AgentApiError,
     AgentApiService,
@@ -313,3 +319,105 @@ async def delete_agent_api_connection(
         return Message(message="Disconnected")
     except AgentApiTokenError as e:
         _handle_token_error(e)
+
+
+# ── Access & Scopes (per-user grants, owner-gated) ───────────────────────────
+# Prefix: /api/v1/agents/{agent_id}/agent-api/grants
+#
+# The producer agent's owner assigns scopes to individual platform users. The
+# proxy resolves these live and injects X-Cinna-Caller-Scopes (see
+# agent_api_public.consumer_proxy). Routes mirror the MCP connector ACL shape:
+# the frontend uses UserAllowlistPicker + GET /users/search to pick users.
+
+
+@router.get("/grants/scope-catalog", response_model=AgentApiScopeCatalog)
+def get_agent_api_scope_catalog(
+    agent_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+):
+    """Available scopes the producer declared in policy.yaml (for the picker).
+
+    Graceful: an empty catalog when none are declared in the policy ``scopes:``
+    map.
+    """
+    try:
+        return AgentApiGrantService.get_scope_catalog(
+            session, agent_id, current_user.id,
+            is_superuser=current_user.is_superuser,
+        )
+    except AgentApiError as e:
+        _handle_agent_api_error(e)
+
+
+@router.get("/grants", response_model=AgentApiAccessGrantsPublic)
+def list_agent_api_grants(
+    agent_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+):
+    """List per-user access grants for this producer agent (owner-gated)."""
+    try:
+        grants = AgentApiGrantService.list_grants(
+            session, agent_id, current_user.id,
+            is_superuser=current_user.is_superuser,
+        )
+        data = [AgentApiGrantService.to_public(session, g) for g in grants]
+        return AgentApiAccessGrantsPublic(data=data, count=len(data))
+    except AgentApiError as e:
+        _handle_agent_api_error(e)
+
+
+@router.post("/grants", response_model=AgentApiAccessGrantPublic)
+async def create_agent_api_grant(
+    agent_id: uuid.UUID,
+    body: AgentApiAccessGrantCreate,
+    session: SessionDep,
+    current_user: CurrentUser,
+):
+    """Grant a platform user scopes on this producer agent's API (owner-gated)."""
+    try:
+        grant = await AgentApiGrantService.create_grant(
+            session, agent_id, current_user.id, body,
+            is_superuser=current_user.is_superuser,
+        )
+        return AgentApiGrantService.to_public(session, grant)
+    except AgentApiError as e:
+        _handle_agent_api_error(e)
+
+
+@router.put("/grants/{grant_id}", response_model=AgentApiAccessGrantPublic)
+async def update_agent_api_grant(
+    agent_id: uuid.UUID,
+    grant_id: uuid.UUID,
+    body: AgentApiAccessGrantUpdate,
+    session: SessionDep,
+    current_user: CurrentUser,
+):
+    """Update a grant's scopes (owner-gated). Takes effect on the next call."""
+    try:
+        grant = await AgentApiGrantService.update_grant(
+            session, agent_id, grant_id, current_user.id, body,
+            is_superuser=current_user.is_superuser,
+        )
+        return AgentApiGrantService.to_public(session, grant)
+    except AgentApiError as e:
+        _handle_agent_api_error(e)
+
+
+@router.delete("/grants/{grant_id}")
+async def delete_agent_api_grant(
+    agent_id: uuid.UUID,
+    grant_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Message:
+    """Remove a user's grant (owner-gated). Takes effect on the next call."""
+    try:
+        await AgentApiGrantService.delete_grant(
+            session, agent_id, grant_id, current_user.id,
+            is_superuser=current_user.is_superuser,
+        )
+        return Message(message="Grant removed")
+    except AgentApiError as e:
+        _handle_agent_api_error(e)

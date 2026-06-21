@@ -284,6 +284,17 @@ class Settings(BaseSettings):
     # internal network instead of the public FRONTEND_HOST.
     AGENT_ENV_BACKEND_URL: str = "http://backend:8000"
 
+    # Agent-API caller-identity token (L2).
+    # A narrow, audience-restricted JWT (aud="agent_api_caller", sub=owner) that
+    # is auto-injected into a consumer env's credentials.json so the agent-api
+    # proxy can attribute calls to the install owner. It is RE-MINTED on every
+    # credential sync (env start / resync), so the TTL only needs to comfortably
+    # exceed the worst-case interval between syncs — a long-idle env whose token
+    # lapses before its next sync simply degrades to anonymous. Chosen generously
+    # (30 days). Revocation lives at the grant layer, not the token, so this is
+    # NOT placed on the pre-stream refresh hook.
+    AGENT_API_IDENTITY_TOKEN_EXPIRE_DAYS: int = 30
+
     # Agent Authentication
     # Token for backend to authenticate with agent containers
     AGENT_AUTH_TOKEN: str = secrets.token_urlsafe(32)

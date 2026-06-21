@@ -605,6 +605,31 @@ export type AgentAccessTokenUpdate = {
     is_revoked?: (boolean | null);
 };
 
+export type AgentApiAccessGrantCreate = {
+    scopes?: Array<(string)>;
+    user_id: string;
+};
+
+export type AgentApiAccessGrantPublic = {
+    id: string;
+    producer_agent_id: string;
+    user_id: string;
+    scopes: Array<(string)>;
+    user?: (AgentApiGrantUser | null);
+    created_by: string;
+    created_at: string;
+    updated_at: string;
+};
+
+export type AgentApiAccessGrantsPublic = {
+    data: Array<AgentApiAccessGrantPublic>;
+    count: number;
+};
+
+export type AgentApiAccessGrantUpdate = {
+    scopes?: (Array<(string)> | null);
+};
+
 /**
  * A consumer agent that has the agent_api credential linked to it.
  */
@@ -630,6 +655,12 @@ export type AgentApiConnectionInfo = {
     consumer_agents: Array<AgentApiConnectedAgent>;
 };
 
+export type AgentApiGrantUser = {
+    id: string;
+    email: string;
+    full_name?: (string | null);
+};
+
 /**
  * One connection to a producer agent's API — surfaced on the producer's
  * "Agent REST API" card (where the token list used to be). Each connection is
@@ -651,6 +682,21 @@ export type AgentApiProducerConnection = {
 export type AgentApiProducerConnections = {
     data: Array<AgentApiProducerConnection>;
     count: number;
+};
+
+/**
+ * One available scope the producer declared in policy.yaml.
+ */
+export type AgentApiScope = {
+    name: string;
+    description?: (string | null);
+};
+
+/**
+ * The available-scope catalog offered to the owner's scope picker.
+ */
+export type AgentApiScopeCatalog = {
+    scopes: Array<AgentApiScope>;
 };
 
 /**
@@ -1170,6 +1216,7 @@ export type AgentPublic = {
     inactivity_period_limit?: (string | null);
     webapp_enabled?: boolean;
     agent_api_enabled?: boolean;
+    agent_api_identity_enabled?: boolean;
     created_at: string;
     updated_at: string;
     owner_id: string;
@@ -1355,6 +1402,7 @@ export type AgentUpdate = {
     inactivity_period_limit?: (string | null);
     webapp_enabled?: (boolean | null);
     agent_api_enabled?: (boolean | null);
+    agent_api_identity_enabled?: (boolean | null);
     update_mode?: (string | null);
     publish_settings?: ({
     [key: string]: unknown;
@@ -5649,6 +5697,40 @@ export type AgentApiDeleteAgentApiConnectionData = {
 };
 
 export type AgentApiDeleteAgentApiConnectionResponse = (Message);
+
+export type AgentApiGetAgentApiScopeCatalogData = {
+    agentId: string;
+};
+
+export type AgentApiGetAgentApiScopeCatalogResponse = (AgentApiScopeCatalog);
+
+export type AgentApiListAgentApiGrantsData = {
+    agentId: string;
+};
+
+export type AgentApiListAgentApiGrantsResponse = (AgentApiAccessGrantsPublic);
+
+export type AgentApiCreateAgentApiGrantData = {
+    agentId: string;
+    requestBody: AgentApiAccessGrantCreate;
+};
+
+export type AgentApiCreateAgentApiGrantResponse = (AgentApiAccessGrantPublic);
+
+export type AgentApiUpdateAgentApiGrantData = {
+    agentId: string;
+    grantId: string;
+    requestBody: AgentApiAccessGrantUpdate;
+};
+
+export type AgentApiUpdateAgentApiGrantResponse = (AgentApiAccessGrantPublic);
+
+export type AgentApiDeleteAgentApiGrantData = {
+    agentId: string;
+    grantId: string;
+};
+
+export type AgentApiDeleteAgentApiGrantResponse = (Message);
 
 export type AgentApiPublicConsumerSpecData = {
     agentId: string;

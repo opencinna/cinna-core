@@ -175,7 +175,11 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
         <WebappShareCard agentId={agent.id} webappEnabled={agent.webapp_enabled ?? false} />
 
         {/* Agent REST API Card (cinna_api producer side) */}
-        <AgentRestApiCard agentId={agent.id} agentApiEnabled={agent.agent_api_enabled ?? false} />
+        <AgentRestApiCard
+          agentId={agent.id}
+          agentApiEnabled={agent.agent_api_enabled ?? false}
+          agentApiIdentityEnabled={agent.agent_api_identity_enabled ?? false}
+        />
 
         {/* Email Integration Card — only for the publisher install (or
             unpublished agents). Foreign installs of a published bundle

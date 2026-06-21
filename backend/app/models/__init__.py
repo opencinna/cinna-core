@@ -363,6 +363,17 @@ from .agent_api.agent_api_token import (
     ConnectAgentApiRequest,
     ConnectAgentApiResponse,
 )
+from .agent_api.agent_api_access_grant import (
+    AgentApiAccessGrant,
+    AgentApiAccessGrantBase,
+    AgentApiAccessGrantCreate,
+    AgentApiAccessGrantUpdate,
+    AgentApiAccessGrantPublic,
+    AgentApiAccessGrantsPublic,
+    AgentApiGrantUser,
+    AgentApiScope,
+    AgentApiScopeCatalog,
+)
 from .sharing.agent_guest_share import (
     AgentGuestShare,
     AgentGuestShareBase,
@@ -1033,6 +1044,15 @@ __all__ = [
     "AgentApiConnectionInfo",
     "AgentApiProducerConnection",
     "AgentApiProducerConnections",
+    "AgentApiAccessGrant",
+    "AgentApiAccessGrantBase",
+    "AgentApiAccessGrantCreate",
+    "AgentApiAccessGrantUpdate",
+    "AgentApiAccessGrantPublic",
+    "AgentApiAccessGrantsPublic",
+    "AgentApiGrantUser",
+    "AgentApiScope",
+    "AgentApiScopeCatalog",
     "ConnectAgentApiRequest",
     "ConnectAgentApiResponse",
     # Agent Guest Shares

@@ -227,6 +227,10 @@ When a user saves their details, the platform re-syncs **all running environment
 
 Because the block carries no secrets (only the owner's public identity and their own self-authored notes), it is intentionally exempt from the whitelist/redaction machinery and appears fully unredacted in `credentials/README.md`. The `## Current User` section in the README tells the agent who it is operating on behalf of and includes a one-line access snippet.
 
+### Related synthetic entry: `owner_identity_token`
+
+`current_user` is not the only synthetic, host-computed entry. When an environment has at least one linked `agent_api` connection, a second reserved entry (`id="owner_identity"`, `type="owner_identity_token"`) is appended the same way — built host-side from the install owner, never stored, never redacted, never user-editable. It carries a short-lived signed token the agent sends on Agent REST API calls so the producer can identify the calling user (and apply per-user scopes). It appears unredacted in `credentials/README.md` (the token is meant to be sent on the wire, not hidden). Full detail lives in the agent_api feature docs — see [Agent REST API → Caller Identity & Producer Scopes](../agent_api/agent_api.md#caller-identity--producer-scopes).
+
 ## Best Practices
 
 ### For Users
