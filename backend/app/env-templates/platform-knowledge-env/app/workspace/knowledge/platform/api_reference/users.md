@@ -36,6 +36,7 @@ Auto-generated from OpenAPI spec. Tag: `users`
 **Query parameters:**
 - `q`: string (required)
 - `limit`: integer, default: `10`
+- `include_self`: boolean, default: `False`
 
 **Response:** `UsersSearchPublic`
 

@@ -43,6 +43,10 @@ interface UserAllowlistPickerProps {
   // them (unlike ``selected``, which both filters and renders). Use for users
   // that are already committed elsewhere and shouldn't be re-picked.
   excludeUserIds?: string[]
+  // Include the current user in search results. Off by default (sharing with
+  // yourself is meaningless for share/assignment pickers). Turn on for pickers
+  // where self-selection is valid — e.g. assigning yourself agent-api scopes.
+  includeSelf?: boolean
 }
 
 const MIN_QUERY_LENGTH = 2
@@ -58,6 +62,7 @@ export function UserAllowlistPicker({
   label,
   enabled = true,
   excludeUserIds,
+  includeSelf = false,
 }: UserAllowlistPickerProps) {
   const [query, setQuery] = useState("")
   const trimmedQuery = query.trim()
@@ -72,10 +77,15 @@ export function UserAllowlistPicker({
 
   // Server-side search via GET /users/search — available to any authenticated
   // user (unlike the admin-only GET /users/), so non-admin owners can find
-  // recipients. The current user is excluded server-side.
+  // recipients. The current user is excluded server-side unless ``includeSelf``.
   const { data: searchData, isFetching: isSearching } = useQuery({
-    queryKey: ["user-search", debouncedQuery],
-    queryFn: () => UsersService.searchUsers({ q: debouncedQuery, limit: 10 }),
+    queryKey: ["user-search", debouncedQuery, includeSelf],
+    queryFn: () =>
+      UsersService.searchUsers({
+        q: debouncedQuery,
+        limit: 10,
+        includeSelf,
+      }),
     enabled: enabled && debouncedQuery.length >= MIN_QUERY_LENGTH,
     staleTime: 30000,
   })

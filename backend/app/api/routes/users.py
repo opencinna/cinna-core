@@ -120,15 +120,20 @@ def search_users(
     current_user: CurrentUser,
     q: str,
     limit: int = 10,
+    include_self: bool = False,
 ) -> Any:
     """
     Search users by email or name for sharing pickers.
 
     Available to any authenticated user — returns a minimal projection
     (``id``, ``email``, ``full_name``) only, so it does not leak the full
-    ``UserPublic`` payload. The current user is excluded from results.
-    Requires a query of at least 2 characters; shorter queries return an
-    empty list. ``limit`` is clamped to the range 1-25.
+    ``UserPublic`` payload. The current user is excluded from results by
+    default (sharing-with-yourself is meaningless for the share/assignment
+    pickers). Set ``include_self=true`` for pickers where granting yourself is
+    a valid operation — e.g. the Agent REST API "Access & Scopes" card, where
+    the producer owner is often the caller and must be able to assign scopes to
+    themselves. Requires a query of at least 2 characters; shorter queries
+    return an empty list. ``limit`` is clamped to the range 1-25.
     """
     limit = max(1, min(limit, 25))
     term = (q or "").strip()
@@ -138,7 +143,7 @@ def search_users(
     users = UserService.search_users(
         session=session,
         query=term,
-        exclude_user_id=current_user.id,
+        exclude_user_id=None if include_self else current_user.id,
         limit=limit,
     )
     results = [

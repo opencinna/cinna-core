@@ -12,7 +12,7 @@
 
 ### Backend - Services
 - `backend/app/services/credentials/credential_share_service.py` - Core direct-sharing logic: share, revoke, toggle, access checks
-- `backend/app/services/users/user_service.py` - `search_users(session, query, exclude_user_id, limit)` — case-insensitive substring match on `email` / `full_name` over active users, ordered by email, excludes the requester; backs `GET /users/search`
+- `backend/app/services/users/user_service.py` - `search_users(session, query, exclude_user_id, limit)` — case-insensitive substring match on `email` / `full_name` over active users, ordered by email; excludes the requester when `exclude_user_id` is set (`None` includes them); backs `GET /users/search`
 - `backend/app/services/credentials/credentials_service.py` - `link_credential_to_agent()` accepts shared credentials; `update_credential()` flips `is_placeholder=False` only when `check_credential_completeness == "complete"` (load-bearing for the template setup flow)
 - `backend/app/services/bundles/publish_service.py` - `_collect_credential_specs`, `_validate_publisher_provides`, `_template_payload_for` produce/validate `provided_by="template"` specs with `template_data` + `template_private_fields`
 - `backend/app/services/bundles/install_service.py` - `_setup_install_credentials` template branch + `_materialise_template_credential` create the installer-owned placeholder pre-seeded with template defaults
@@ -83,7 +83,7 @@ Each entry the publish flow emits:
 ## API Endpoints
 
 ### User Search for Sharing Pickers (`backend/app/api/routes/users.py`)
-- `GET /api/v1/users/search?q=&limit=` - Case-insensitive substring search on `email` / `full_name` for the sharing pickers. Available to **any authenticated user** (not superuser-gated like `GET /users/`), so non-admin owners (agent-developers) can find recipients. Returns a minimal `UsersSearchPublic` projection (`UserSearchResult`: id / email / full_name only) — never the full `UserPublic` payload. Requires `q` of at least 2 characters (shorter → empty list); `limit` clamped to 1-25; excludes the requester. Declared **before** `GET /users/{user_id}` so the literal `/search` path is matched first. Backed by `UserService.search_users`.
+- `GET /api/v1/users/search?q=&limit=&include_self=` - Case-insensitive substring search on `email` / `full_name` for the sharing pickers. Available to **any authenticated user** (not superuser-gated like `GET /users/`), so non-admin owners (agent-developers) can find recipients. Returns a minimal `UsersSearchPublic` projection (`UserSearchResult`: id / email / full_name only) — never the full `UserPublic` payload. Requires `q` of at least 2 characters (shorter → empty list); `limit` clamped to 1-25. Excludes the requester by default; `include_self=true` keeps them in results (for owner-self pickers like the Agent REST API Access & Scopes card). Declared **before** `GET /users/{user_id}` so the literal `/search` path is matched first. Backed by `UserService.search_users`.
 - `GET /api/v1/credentials/{credential_id}/shares` - List all shares for a credential
 - `DELETE /api/v1/credentials/{credential_id}/shares/{share_id}` - Revoke specific share
 - `GET /api/v1/credentials/shared-with-me` - Get credentials shared with current user

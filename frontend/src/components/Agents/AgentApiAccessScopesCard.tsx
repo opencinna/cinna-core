@@ -395,6 +395,7 @@ function GrantDialog({
           {!isEdit && (
             <UserAllowlistPicker
               enabled={open}
+              includeSelf
               selected={selectedUser ? [selectedUser] : []}
               excludeUserIds={excludedUserIds}
               label={

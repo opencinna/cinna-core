@@ -6160,36 +6160,42 @@ export type AgentsGenerateRouterTriggerPromptEndpointResponse = (GenerateRouterT
 
 export type AgentTasksAgentCreateTaskData = {
     requestBody: AgentTaskCreate;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentCreateTaskResponse = (AgentTaskOperationResponse);
 
 export type AgentTasksAgentResolveTaskByCodeData = {
     shortCode: string;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentResolveTaskByCodeResponse = (unknown);
 
 export type AgentTasksAgentAddCommentCurrentData = {
     requestBody: AgentTaskCommentCreate;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentAddCommentCurrentResponse = (AgentCommentResponse);
 
 export type AgentTasksAgentUpdateStatusCurrentData = {
     requestBody: AgentTaskStatusUpdate;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentUpdateStatusCurrentResponse = (AgentTaskOperationResponse);
 
 export type AgentTasksAgentGetTaskDetailsCurrentData = {
     sourceSessionId: string;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentGetTaskDetailsCurrentResponse = (unknown);
 
 export type AgentTasksAgentCreateSubtaskCurrentData = {
     requestBody: AgentSubtaskCreate;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentCreateSubtaskCurrentResponse = (AgentTaskOperationResponse);
@@ -6197,6 +6203,7 @@ export type AgentTasksAgentCreateSubtaskCurrentResponse = (AgentTaskOperationRes
 export type AgentTasksAgentAddCommentData = {
     requestBody: AgentTaskCommentCreate;
     taskId: string;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentAddCommentResponse = (AgentCommentResponse);
@@ -6204,6 +6211,7 @@ export type AgentTasksAgentAddCommentResponse = (AgentCommentResponse);
 export type AgentTasksAgentUpdateStatusData = {
     requestBody: AgentTaskStatusUpdate;
     taskId: string;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentUpdateStatusResponse = (AgentTaskOperationResponse);
@@ -6211,6 +6219,7 @@ export type AgentTasksAgentUpdateStatusResponse = (AgentTaskOperationResponse);
 export type AgentTasksAgentCreateSubtaskData = {
     requestBody: AgentSubtaskCreate;
     taskId: string;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentCreateSubtaskResponse = (AgentTaskOperationResponse);
@@ -6218,6 +6227,7 @@ export type AgentTasksAgentCreateSubtaskResponse = (AgentTaskOperationResponse);
 export type AgentTasksAgentListTasksData = {
     scope?: string;
     status?: (string | null);
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentListTasksResponse = (InputTasksPublicExtended);
@@ -6225,6 +6235,7 @@ export type AgentTasksAgentListTasksResponse = (InputTasksPublicExtended);
 export type AgentTasksAgentGetTaskDetailsData = {
     sourceSessionId?: (string | null);
     taskId: string;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentGetTaskDetailsResponse = (unknown);
@@ -7380,7 +7391,6 @@ export type EnvironmentsGetEnvironmentActionLogsData = {
 export type EnvironmentsGetEnvironmentActionLogsResponse = (AgentEnvActionLogsPublic);
 
 export type EnvironmentsWorkspaceFilesChangedData = {
-    authorization?: (string | null);
     id: string;
     requestBody?: (WorkspaceFilesChangedRequest | null);
     xAgentEnvId?: (string | null);
@@ -7389,7 +7399,6 @@ export type EnvironmentsWorkspaceFilesChangedData = {
 export type EnvironmentsWorkspaceFilesChangedResponse = (Message);
 
 export type EnvironmentsPromptFileChangedData = {
-    authorization?: (string | null);
     id: string;
     xAgentEnvId?: (string | null);
 };
@@ -7397,7 +7406,6 @@ export type EnvironmentsPromptFileChangedData = {
 export type EnvironmentsPromptFileChangedResponse = (Message);
 
 export type EnvironmentsAgentApiReloadedData = {
-    authorization?: (string | null);
     id: string;
     xAgentEnvId?: (string | null);
 };
@@ -7754,7 +7762,6 @@ export type InstallsUpdateSetupCredentialData = {
 export type InstallsUpdateSetupCredentialResponse = (CredentialPublic);
 
 export type KnowledgeQueryKnowledgeData = {
-    authorization?: (string | null);
     requestBody: KnowledgeQueryRequest;
     xAgentEnvId?: (string | null);
 };
@@ -8326,6 +8333,7 @@ export type PrivateCreateUserResponse = (UserPublic);
 
 export type SecurityEventsReportSecurityEventData = {
     requestBody: SecurityEventReport;
+    xAgentEnvId?: (string | null);
 };
 
 export type SecurityEventsReportSecurityEventResponse = (SecurityEventReportResponse);
@@ -8743,6 +8751,7 @@ export type UsersCreateUserData = {
 export type UsersCreateUserResponse = (UserPublic);
 
 export type UsersSearchUsersData = {
+    includeSelf?: boolean;
     limit?: number;
     q: string;
 };

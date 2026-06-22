@@ -9,13 +9,17 @@ A single, reusable way to let a user pick *other users* to share something with 
 `frontend/src/components/Common/UserAllowlistPicker.tsx`
 
 - Renders: a search `Input`, a results dropdown, and the current selection as removable **pills**.
-- Search is **server-side** via `UsersService.searchUsers({ q, limit })` under React Query key `["user-search", <debounced query>]`; fires only when the query is ≥ 2 chars. The current user is excluded server-side.
+- Search is **server-side** via `UsersService.searchUsers({ q, limit, includeSelf })` under React Query key `["user-search", <debounced query>, includeSelf]`; fires only when the query is ≥ 2 chars. The current user is **excluded server-side by default**; pass `includeSelf` to include them (see below).
 - The query is **debounced ~250ms** — keystrokes update an immediate `query` state, but the React Query key tracks a `debouncedQuery` that lags behind, so a request fires only after typing pauses (no per-keystroke fetch).
 - The dropdown shows a **"Searching…"** state for the whole window where an answer isn't ready yet — debounce-pending (`query !== debouncedQuery`), request in flight, or data not yet loaded. This avoids a "No matching users." flash in the gap between a keystroke and the debounced fetch starting.
 - The results dropdown renders as an **absolute-positioned popover** (`absolute … top-full z-50`, on `bg-popover`) anchored to the input inside a `relative` wrapper, so it overlays content below instead of reflowing — host containers (e.g. a settings card) don't jump in height as the user types. Caveat: a host that clips with `overflow-hidden` and little room below can clip the popover.
 - The component no longer loads the full user list, so **pill labels come from `fallbackLabel`** on each selected item. Callers must supply it (a name or email); when omitted the pill renders the literal text "Unknown user".
 
-Props: `selected: UserAllowlistSelectedItem[]` (`{ id, userId, fallbackLabel? }` — `id` is the caller's delete key e.g. share/assignment id, `userId` is the platform user id used to filter results), `onAdd(user)`, `onRemove(item)`, `isAdding?`, `isRemoving?`, `searchPlaceholder?`, `emptyHint?`, `label?` (ReactNode | null to hide), `enabled?` (gate the fetch, pass the dialog-open boolean).
+Props: `selected: UserAllowlistSelectedItem[]` (`{ id, userId, fallbackLabel? }` — `id` is the caller's delete key e.g. share/assignment id, `userId` is the platform user id used to filter results), `onAdd(user)`, `onRemove(item)`, `isAdding?`, `isRemoving?`, `searchPlaceholder?`, `emptyHint?`, `label?` (ReactNode | null to hide), `enabled?` (gate the fetch, pass the dialog-open boolean), `excludeUserIds?` (extra ids filtered from results without rendering pills), `includeSelf?` (include the current user in results — off by default).
+
+### Self-selection (`includeSelf`)
+
+Most pickers share *something with someone else*, so self-selection is meaningless and the current user is filtered out server-side. Some surfaces, however, legitimately target the owner themselves — the Agent REST API **Access & Scopes** card is the canonical case: the producer's owner is frequently the calling user (when one of their own agents calls the producer API) and must be able to assign scopes to themselves. Those pickers pass `includeSelf`, which forwards `include_self=true` to the endpoint so the requester is no longer excluded. Default behaviour (and every share/assignment picker) is unchanged.
 
 ## The endpoint
 
@@ -23,7 +27,7 @@ Props: `selected: UserAllowlistSelectedItem[]` (`{ id, userId, fallbackLabel? }`
 
 - Available to **any authenticated user** (contrast with admin-only `GET /users/`).
 - Returns a minimal `UsersSearchPublic` projection (`UserSearchResult`: `id` / `email` / `full_name`) — never the full `UserPublic`.
-- Min query length 2, `limit` clamped 1-25, excludes the requester, LIKE wildcards escaped.
+- Min query length 2, `limit` clamped 1-25, LIKE wildcards escaped. Excludes the requester by default; `include_self=true` keeps them in results (passes `exclude_user_id=None` to the service).
 - Backend: `UserService.search_users()` (`backend/app/services/users/user_service.py`), route in `backend/app/api/routes/users.py` (declared before `/{user_id}`).
 
 ## Callers
@@ -32,6 +36,7 @@ Props: `selected: UserAllowlistSelectedItem[]` (`{ id, userId, fallbackLabel? }`
 - `frontend/src/components/Agents/McpConnectorsCard.tsx` — App MCP route create + edit pickers, and the identity create + edit pickers.
 - `frontend/src/components/UserSettings/IdentityServerCard.tsx` — identity binding edit picker.
 - `frontend/src/components/Agents/AgentBundleTab.tsx` — bundle access grants.
+- `frontend/src/components/Agents/AgentApiAccessScopesCard.tsx` — Agent REST API per-user scope grants; the only caller that passes `includeSelf` (owner-grants-self is valid here).
 
 ## Pill labels for edit pickers
 

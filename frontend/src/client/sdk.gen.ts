@@ -945,8 +945,8 @@ export class AgentApiService {
      * Get Agent Api Scope Catalog
      * Available scopes the producer declared in policy.yaml (for the picker).
      *
-     * Graceful: an empty catalog when none are declared yet (Phase 3 formalizes
-     * the policy.yaml ``scopes:`` map).
+     * Graceful: an empty catalog when none are declared in the policy ``scopes:``
+     * map.
      * @param data The data for the request.
      * @param data.agentId
      * @returns AgentApiScopeCatalog Successful Response
@@ -2644,6 +2644,7 @@ export class AgentTasksService {
      * Called by the mcp__agent_task__create_task MCP tool.
      * @param data The data for the request.
      * @param data.requestBody
+     * @param data.xAgentEnvId
      * @returns AgentTaskOperationResponse Successful Response
      * @throws ApiError
      */
@@ -2651,6 +2652,9 @@ export class AgentTasksService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/api/v1/agent/tasks/create',
+            headers: {
+                'x-agent-env-id': data.xAgentEnvId
+            },
             body: data.requestBody,
             mediaType: 'application/json',
             errors: {
@@ -2667,6 +2671,7 @@ export class AgentTasksService {
      * for subsequent API calls.
      * @param data The data for the request.
      * @param data.shortCode
+     * @param data.xAgentEnvId
      * @returns unknown Successful Response
      * @throws ApiError
      */
@@ -2676,6 +2681,9 @@ export class AgentTasksService {
             url: '/api/v1/agent/tasks/by-code/{short_code}',
             path: {
                 short_code: data.shortCode
+            },
+            headers: {
+                'x-agent-env-id': data.xAgentEnvId
             },
             errors: {
                 422: 'Validation Error'
@@ -2690,6 +2698,7 @@ export class AgentTasksService {
      * Called by the mcp__agent_task__add_comment MCP tool when no task short code is specified.
      * @param data The data for the request.
      * @param data.requestBody
+     * @param data.xAgentEnvId
      * @returns AgentCommentResponse Successful Response
      * @throws ApiError
      */
@@ -2697,6 +2706,9 @@ export class AgentTasksService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/api/v1/agent/tasks/current/comment',
+            headers: {
+                'x-agent-env-id': data.xAgentEnvId
+            },
             body: data.requestBody,
             mediaType: 'application/json',
             errors: {
@@ -2712,6 +2724,7 @@ export class AgentTasksService {
      * Called by the mcp__agent_task__update_status MCP tool when no task short code is specified.
      * @param data The data for the request.
      * @param data.requestBody
+     * @param data.xAgentEnvId
      * @returns AgentTaskOperationResponse Successful Response
      * @throws ApiError
      */
@@ -2719,6 +2732,9 @@ export class AgentTasksService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/api/v1/agent/tasks/current/status',
+            headers: {
+                'x-agent-env-id': data.xAgentEnvId
+            },
             body: data.requestBody,
             mediaType: 'application/json',
             errors: {
@@ -2735,6 +2751,7 @@ export class AgentTasksService {
      * Automatically uploads task files to the calling agent's workspace.
      * @param data The data for the request.
      * @param data.sourceSessionId
+     * @param data.xAgentEnvId
      * @returns unknown Successful Response
      * @throws ApiError
      */
@@ -2742,6 +2759,9 @@ export class AgentTasksService {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/api/v1/agent/tasks/current/details',
+            headers: {
+                'x-agent-env-id': data.xAgentEnvId
+            },
             query: {
                 source_session_id: data.sourceSessionId
             },
@@ -2758,6 +2778,7 @@ export class AgentTasksService {
      * Called by the mcp__agent_task__create_subtask MCP tool.
      * @param data The data for the request.
      * @param data.requestBody
+     * @param data.xAgentEnvId
      * @returns AgentTaskOperationResponse Successful Response
      * @throws ApiError
      */
@@ -2765,6 +2786,9 @@ export class AgentTasksService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/api/v1/agent/tasks/current/subtask',
+            headers: {
+                'x-agent-env-id': data.xAgentEnvId
+            },
             body: data.requestBody,
             mediaType: 'application/json',
             errors: {
@@ -2781,6 +2805,7 @@ export class AgentTasksService {
      * @param data The data for the request.
      * @param data.taskId
      * @param data.requestBody
+     * @param data.xAgentEnvId
      * @returns AgentCommentResponse Successful Response
      * @throws ApiError
      */
@@ -2790,6 +2815,9 @@ export class AgentTasksService {
             url: '/api/v1/agent/tasks/{task_id}/comment',
             path: {
                 task_id: data.taskId
+            },
+            headers: {
+                'x-agent-env-id': data.xAgentEnvId
             },
             body: data.requestBody,
             mediaType: 'application/json',
@@ -2811,6 +2839,7 @@ export class AgentTasksService {
      * @param data The data for the request.
      * @param data.taskId
      * @param data.requestBody
+     * @param data.xAgentEnvId
      * @returns AgentTaskOperationResponse Successful Response
      * @throws ApiError
      */
@@ -2820,6 +2849,9 @@ export class AgentTasksService {
             url: '/api/v1/agent/tasks/{task_id}/status',
             path: {
                 task_id: data.taskId
+            },
+            headers: {
+                'x-agent-env-id': data.xAgentEnvId
             },
             body: data.requestBody,
             mediaType: 'application/json',
@@ -2839,6 +2871,7 @@ export class AgentTasksService {
      * @param data The data for the request.
      * @param data.taskId
      * @param data.requestBody
+     * @param data.xAgentEnvId
      * @returns AgentTaskOperationResponse Successful Response
      * @throws ApiError
      */
@@ -2848,6 +2881,9 @@ export class AgentTasksService {
             url: '/api/v1/agent/tasks/{task_id}/subtask',
             path: {
                 task_id: data.taskId
+            },
+            headers: {
+                'x-agent-env-id': data.xAgentEnvId
             },
             body: data.requestBody,
             mediaType: 'application/json',
@@ -2870,6 +2906,7 @@ export class AgentTasksService {
      * @param data The data for the request.
      * @param data.status
      * @param data.scope
+     * @param data.xAgentEnvId
      * @returns InputTasksPublicExtended Successful Response
      * @throws ApiError
      */
@@ -2877,6 +2914,9 @@ export class AgentTasksService {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/api/v1/agent/tasks/my-tasks',
+            headers: {
+                'x-agent-env-id': data.xAgentEnvId
+            },
             query: {
                 status: data.status,
                 scope: data.scope
@@ -2898,6 +2938,7 @@ export class AgentTasksService {
      * @param data The data for the request.
      * @param data.taskId
      * @param data.sourceSessionId
+     * @param data.xAgentEnvId
      * @returns unknown Successful Response
      * @throws ApiError
      */
@@ -2907,6 +2948,9 @@ export class AgentTasksService {
             url: '/api/v1/agent/tasks/{task_id}/details',
             path: {
                 task_id: data.taskId
+            },
+            headers: {
+                'x-agent-env-id': data.xAgentEnvId
             },
             query: {
                 source_session_id: data.sourceSessionId
@@ -7322,10 +7366,9 @@ export class EnvironmentsService {
      * Emits ``WORKSPACE_FILES_CHANGED``; downstream handlers refresh the agent's
      * prompts, CLI commands cache, and status snapshot.
      *
-     * Auth: AGENT_AUTH_TOKEN bearer + X-Agent-Env-Id environment header (internal only).
+     * Auth: scoped agent-environment token (AgentEnvContextDep) — internal only.
      * @param data The data for the request.
      * @param data.id
-     * @param data.authorization
      * @param data.xAgentEnvId
      * @param data.requestBody
      * @returns Message Successful Response
@@ -7339,7 +7382,6 @@ export class EnvironmentsService {
                 id: data.id
             },
             headers: {
-                authorization: data.authorization,
                 'x-agent-env-id': data.xAgentEnvId
             },
             body: data.requestBody,
@@ -7356,10 +7398,9 @@ export class EnvironmentsService {
      * list. Kept so agent environments built before the generic watcher shipped
      * keep working without a rebuild.
      *
-     * Auth: AGENT_AUTH_TOKEN bearer + X-Agent-Env-Id environment header (internal only).
+     * Auth: scoped agent-environment token (AgentEnvContextDep) — internal only.
      * @param data The data for the request.
      * @param data.id
-     * @param data.authorization
      * @param data.xAgentEnvId
      * @returns Message Successful Response
      * @throws ApiError
@@ -7372,7 +7413,6 @@ export class EnvironmentsService {
                 id: data.id
             },
             headers: {
-                authorization: data.authorization,
                 'x-agent-env-id': data.xAgentEnvId
             },
             errors: {
@@ -7394,10 +7434,9 @@ export class EnvironmentsService {
      * list and notifies the backend for prompt / CLI-command refreshes, whereas
      * the agent_api reload is driven by uvicorn's own reloader.
      *
-     * Auth: AGENT_AUTH_TOKEN bearer + X-Agent-Env-Id environment header (internal only).
+     * Auth: scoped agent-environment token (AgentEnvContextDep) — internal only.
      * @param data The data for the request.
      * @param data.id
-     * @param data.authorization
      * @param data.xAgentEnvId
      * @returns Message Successful Response
      * @throws ApiError
@@ -7410,7 +7449,6 @@ export class EnvironmentsService {
                 id: data.id
             },
             headers: {
-                authorization: data.authorization,
                 'x-agent-env-id': data.xAgentEnvId
             },
             errors: {
@@ -8729,7 +8767,6 @@ export class KnowledgeService {
      * Discovery response (article list) or retrieval response (full articles)
      * @param data The data for the request.
      * @param data.requestBody
-     * @param data.authorization
      * @param data.xAgentEnvId
      * @returns unknown Successful Response
      * @throws ApiError
@@ -8739,7 +8776,6 @@ export class KnowledgeService {
             method: 'POST',
             url: '/api/v1/knowledge/query',
             headers: {
-                authorization: data.authorization,
                 'x-agent-env-id': data.xAgentEnvId
             },
             body: data.requestBody,
@@ -10978,9 +11014,14 @@ export class SecurityEventsService {
      * always returns "allow". When policy evaluation is added, "block" can be
      * returned here without any SDK-side changes.
      *
-     * Auth: AGENT_AUTH_TOKEN (agent environment JWT resolves to owning user)
+     * Auth: scoped agent-environment token (AgentEnvContextDep). The event is
+     * attributed to the reporting env's agent/owner — the container-supplied
+     * ``environment_id``/``agent_id`` in the body are ignored for attribution
+     * (they are untrusted), so a compromised container cannot misattribute events
+     * to another agent/env. ``session_id`` is retained as informational metadata.
      * @param data The data for the request.
      * @param data.requestBody
+     * @param data.xAgentEnvId
      * @returns SecurityEventReportResponse Successful Response
      * @throws ApiError
      */
@@ -10988,6 +11029,9 @@ export class SecurityEventsService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/api/v1/security-events/report',
+            headers: {
+                'x-agent-env-id': data.xAgentEnvId
+            },
             body: data.requestBody,
             mediaType: 'application/json',
             errors: {
@@ -12501,12 +12545,17 @@ export class UsersService {
      *
      * Available to any authenticated user — returns a minimal projection
      * (``id``, ``email``, ``full_name``) only, so it does not leak the full
-     * ``UserPublic`` payload. The current user is excluded from results.
-     * Requires a query of at least 2 characters; shorter queries return an
-     * empty list. ``limit`` is clamped to the range 1-25.
+     * ``UserPublic`` payload. The current user is excluded from results by
+     * default (sharing-with-yourself is meaningless for the share/assignment
+     * pickers). Set ``include_self=true`` for pickers where granting yourself is
+     * a valid operation — e.g. the Agent REST API "Access & Scopes" card, where
+     * the producer owner is often the caller and must be able to assign scopes to
+     * themselves. Requires a query of at least 2 characters; shorter queries
+     * return an empty list. ``limit`` is clamped to the range 1-25.
      * @param data The data for the request.
      * @param data.q
      * @param data.limit
+     * @param data.includeSelf
      * @returns UsersSearchPublic Successful Response
      * @throws ApiError
      */
@@ -12516,7 +12565,8 @@ export class UsersService {
             url: '/api/v1/users/search',
             query: {
                 q: data.q,
-                limit: data.limit
+                limit: data.limit,
+                include_self: data.includeSelf
             },
             errors: {
                 422: 'Validation Error'
