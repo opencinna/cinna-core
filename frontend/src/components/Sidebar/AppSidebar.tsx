@@ -159,12 +159,18 @@ export function AppSidebar() {
         <Main items={menuItems} />
       </SidebarContent>
       <SidebarFooter>
-        <ActivitiesMenu />
-        <CatalogMenu />
-        {isDeveloper && <SidebarDashboardSwitcher />}
-        {isDeveloper && <AgenticTeamsSwitcher />}
-        {currentUser?.is_superuser && <AdminMenu />}
-        <User user={currentUser} />
+        <SidebarGroup className="p-0">
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <ActivitiesMenu />
+              <CatalogMenu />
+              {isDeveloper && <SidebarDashboardSwitcher />}
+              {isDeveloper && <AgenticTeamsSwitcher />}
+              {currentUser?.is_superuser && <AdminMenu />}
+              <User user={currentUser} />
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
       </SidebarFooter>
     </Sidebar>
   )

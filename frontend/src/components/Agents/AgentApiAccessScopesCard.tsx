@@ -329,14 +329,19 @@ function GrantDialog({
   const [customScope, setCustomScope] = useState("")
 
   // Reset local state whenever the dialog (re)opens, so add starts empty and
-  // edit starts from the grant's current scopes.
+  // edit starts from the grant's current scopes. The key tracks `open` too —
+  // we must record the closed state so a later close→open transition is
+  // detected; otherwise two consecutive "Add user" opens share the same key
+  // and the reset never re-fires, leaking the previous record's scopes.
   const resetKey = `${open}:${editingGrant?.id ?? "add"}`
   const [lastResetKey, setLastResetKey] = useState("")
-  if (open && resetKey !== lastResetKey) {
+  if (resetKey !== lastResetKey) {
     setLastResetKey(resetKey)
-    setSelectedUser(null)
-    setScopes(editingGrant?.scopes ?? [])
-    setCustomScope("")
+    if (open) {
+      setSelectedUser(null)
+      setScopes(editingGrant?.scopes ?? [])
+      setCustomScope("")
+    }
   }
 
   const toggleScope = (scope: string) =>
