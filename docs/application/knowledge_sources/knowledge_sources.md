@@ -22,10 +22,13 @@ Knowledge Sources is an **admin-only feature**. Only superusers can:
 - Create, edit, and delete knowledge sources
 - Trigger check-access and refresh operations
 - View the discoverable sources list from other admins
+- Preview individual article content and export a source
 
 Regular users do not see Knowledge Sources in the UI and cannot call its API endpoints.
 
 The sidebar entry lives inside the **Admin** dropdown (between Users and Plugin Marketplaces), not in the main navigation.
+
+**Read access for content and export**: Previewing article content and exporting a source follow a broader "read" boundary than strict ownership. A superuser has read access to a source if they are the owner, OR if the source is publicly discoverable (`public_discovery=True`), enabled (`is_enabled=True`), and connected (`status=connected`). This mirrors the cross-admin visibility already implied by the Discoverable Sources list — no new sharing table or permission model was introduced. All write operations (create, update, delete, enable/disable, check-access, refresh) remain strict owner-only.
 
 ## User Stories / Flows
 
@@ -61,6 +64,22 @@ The sidebar entry lives inside the **Admin** dropdown (between Users and Plugin 
 2. The **Discoverable Sources** section at the bottom lists public sources from other admins
 3. The list is read-only — no enable/disable controls — it exists for cross-admin visibility
 4. These sources are automatically included in all users' queries; no action is required
+
+### Previewing an Article (Admin)
+
+1. Admin opens a source detail page and navigates to the Articles tab
+2. Clicking any article row opens a Dialog showing the full article body rendered as Markdown
+3. The dialog title shows the article title; a loading skeleton is shown while the content fetches
+4. Works for own sources and for publicly discoverable sources the admin can see in the Discoverable Sources list
+
+### Exporting a Source as Markdown (Admin)
+
+1. Admin opens a source detail page
+2. Clicks the vertical-ellipsis menu in the page header and selects **Export as Markdown**
+3. The browser downloads a single `.md` file named `knowledge-source-{source_id}.md`
+4. The file contains a top-level heading with the source name and optional description, followed by each article as a `##`-level section (title, source file path, description blockquote, full content body), articles ordered by file path
+5. An empty source (no articles yet) produces a valid header-only document
+6. Works for own sources and for publicly discoverable sources the admin can see in the Discoverable Sources list
 
 ### Agent Knowledge Query (Two-Step)
 
@@ -183,6 +202,7 @@ Agent (building mode)
 - Article access verified against source ownership and workspace permissions
 - Public sources are automatically accessible to all users' agents — there is no mechanism for users to disable their own access to public sources
 - Repository access errors never expose SSH key contents in responses or logs
+- Article preview and source export use a service-level read-access check (`_get_source_for_read`): owner OR publicly discoverable source. A source that is private, disabled, or not connected is not readable by non-owners — the route returns 404 (no existence leak)
 
 ## Troubleshooting
 

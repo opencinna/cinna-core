@@ -20,11 +20,18 @@ from tests.utils.knowledge_source import (
     delete_knowledge_source,
     disable_knowledge_source,
     enable_knowledge_source,
+    export_knowledge_source,
+    get_knowledge_article,
     get_knowledge_source,
+    list_knowledge_articles,
     list_knowledge_sources,
     update_knowledge_source,
 )
-from tests.utils.user import create_random_user, user_authentication_headers
+from tests.utils.user import (
+    create_random_user,
+    create_random_user_with_headers,
+    user_authentication_headers,
+)
 from tests.utils.utils import random_lower_string
 
 _BASE = f"{settings.API_V1_STR}/knowledge-sources"
@@ -79,6 +86,76 @@ def _refresh_patches():
             return_value="abc123",
         ),
     )
+
+
+def _refresh_patches_with_article(article_holder: dict):
+    """Like ``_refresh_patches`` but ``process_repository_articles`` inserts a
+    real ``KnowledgeArticle`` row using the live request session, so the
+    article-content/export endpoints have data to read.
+
+    ``article_holder`` is mutated in place with the created article's ``id``
+    and ``content`` so the test can assert against them.
+    """
+    from app.models.knowledge.knowledge import KnowledgeArticle
+
+    content = article_holder.get("content", "# Heading\n\nBody text.")
+    title = article_holder.get("title", "Test Article")
+    file_path = article_holder.get("file_path", "articles/test.md")
+
+    def _insert_article(*, session, git_repo_id, repo_path, commit_hash):
+        article = KnowledgeArticle(
+            git_repo_id=uuid.UUID(str(git_repo_id)),
+            title=title,
+            description="An article description that is fairly long for testing.",
+            tags=["alpha", "beta"],
+            features=["search"],
+            file_path=file_path,
+            content=content,
+            content_hash="hash123",
+            commit_hash=commit_hash,
+        )
+        session.add(article)
+        session.flush()
+        article_holder["id"] = str(article.id)
+        return {"total": 1, "created": 1, "updated": 0, "skipped": 0, "errors": []}
+
+    base = list(_refresh_patches())
+    # Replace the process_repository_articles patch (index 2) with the inserter.
+    base[2] = patch(
+        "app.services.knowledge.knowledge_source_service.process_repository_articles",
+        side_effect=_insert_article,
+    )
+    return tuple(base)
+
+
+def _make_second_superuser(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> dict[str, str]:
+    """Create a fresh user and promote them to superuser via the admin API.
+
+    Returns auth headers for the new superuser.
+    """
+    user, _ = create_random_user_with_headers(client)
+    r = client.patch(
+        f"{settings.API_V1_STR}/users/{user['id']}",
+        headers=superuser_token_headers,
+        json={"is_superuser": True},
+    )
+    assert r.status_code == 200, r.text
+    return user_authentication_headers(
+        client=client, email=user["email"], password=user["_password"]
+    )
+
+
+def _connect_source(
+    client: TestClient, headers: dict[str, str], source_id: str
+) -> None:
+    """Drive a source to ``connected`` status via check-access."""
+    with patch(
+        "app.services.knowledge.knowledge_source_service.verify_repository_access",
+        return_value=(True, "Repository accessible"),
+    ):
+        client.post(f"{_BASE}/{source_id}/check-access", headers=headers)
 
 
 # ---------------------------------------------------------------------------
@@ -345,3 +422,124 @@ def test_discoverable_sources_flow(
     r = client.get(f"{_BASE}/discoverable/list", headers=superuser_token_headers)
     assert r.status_code == 200
     assert not any(s["id"] == source_id for s in r.json())
+
+
+# ---------------------------------------------------------------------------
+# Scenario 4: Article content preview + Markdown export
+# ---------------------------------------------------------------------------
+
+def test_article_content_and_export(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    Article preview content + source export, including the broadened
+    owner-OR-public-discoverable read boundary:
+      1.  Owner creates source, connects it, refreshes → one article persisted
+      2.  Owner GET article content → 200, body has content + commit_hash
+      3.  GET with random article id → 404
+      4.  GET with article id from a *different* source → 404
+      5.  Owner GET export → 200, text/markdown, attachment, body has content
+      6.  Export of an empty source → 200, header-only doc (no crash)
+      7.  Non-owner superuser, source NOT discoverable → article 404 + export 404
+      8.  Source made public_discovery + enabled + connected →
+          non-owner superuser gets article 200 + export 200
+      9.  Non-superuser is rejected (403) on both endpoints
+    """
+    article_holder: dict = {
+        "content": "# Title\n\nLong markdown body for preview.",
+        "title": "Preview Article",
+        "file_path": "articles/preview.md",
+    }
+
+    # ── Phase 1: Create + connect + refresh (inserts one real article) ─────
+    source = create_knowledge_source(client, superuser_token_headers)
+    source_id = source["id"]
+    _connect_source(client, superuser_token_headers, source_id)
+
+    patches = _refresh_patches_with_article(article_holder)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        r = client.post(f"{_BASE}/{source_id}/refresh", headers=superuser_token_headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "success"
+
+    articles = list_knowledge_articles(client, superuser_token_headers, source_id)
+    assert len(articles) == 1
+    article_id = articles[0]["id"]
+    # listing endpoint must NOT leak content
+    assert "content" not in articles[0]
+
+    # ── Phase 2: Owner reads article content ──────────────────────────────
+    r = get_knowledge_article(client, superuser_token_headers, source_id, article_id)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["content"] == article_holder["content"]
+    assert body["commit_hash"] == "abc123"
+    assert body["title"] == "Preview Article"
+
+    # ── Phase 3: Random article id → 404 ──────────────────────────────────
+    r = get_knowledge_article(
+        client, superuser_token_headers, source_id, str(uuid.uuid4())
+    )
+    assert r.status_code == 404
+
+    # ── Phase 4: Article from a different source → 404 ────────────────────
+    other_source = create_knowledge_source(client, superuser_token_headers)
+    r = get_knowledge_article(
+        client, superuser_token_headers, other_source["id"], article_id
+    )
+    assert r.status_code == 404
+
+    # ── Phase 5: Owner export ─────────────────────────────────────────────
+    r = export_knowledge_source(client, superuser_token_headers, source_id)
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/markdown")
+    assert "attachment" in r.headers.get("content-disposition", "")
+    assert ".md" in r.headers.get("content-disposition", "")
+    assert source["name"] in r.text
+    assert "Preview Article" in r.text
+    assert "Long markdown body for preview." in r.text
+
+    # ── Phase 6: Export of an empty source → header-only doc ──────────────
+    empty_source = create_knowledge_source(client, superuser_token_headers)
+    r = export_knowledge_source(client, superuser_token_headers, empty_source["id"])
+    assert r.status_code == 200
+    assert empty_source["name"] in r.text
+
+    # ── Phase 7: Non-owner superuser, source NOT discoverable → 404 ───────
+    second_su_headers = _make_second_superuser(client, superuser_token_headers)
+    assert (
+        get_knowledge_article(client, second_su_headers, source_id, article_id).status_code
+        == 404
+    )
+    assert (
+        export_knowledge_source(client, second_su_headers, source_id).status_code == 404
+    )
+
+    # ── Phase 8: Source public_discovery + enabled + connected → 200 ──────
+    update_knowledge_source(
+        client, superuser_token_headers, source_id, public_discovery=True
+    )
+    # update of a non-git field keeps connected status, but re-connect to be safe
+    _connect_source(client, superuser_token_headers, source_id)
+
+    r = get_knowledge_article(client, second_su_headers, source_id, article_id)
+    assert r.status_code == 200, r.text
+    assert r.json()["content"] == article_holder["content"]
+
+    r = export_knowledge_source(client, second_su_headers, source_id)
+    assert r.status_code == 200
+    assert "Preview Article" in r.text
+
+    # ── Phase 9: Non-superuser rejected on both endpoints ─────────────────
+    normal_user = create_random_user(client)
+    normal_headers = user_authentication_headers(
+        client=client, email=normal_user["email"], password=normal_user["_password"]
+    )
+    assert (
+        get_knowledge_article(client, normal_headers, source_id, article_id).status_code
+        == 403
+    )
+    assert (
+        export_knowledge_source(client, normal_headers, source_id).status_code == 403
+    )

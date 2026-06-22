@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useState, useEffect } from "react"
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query"
-import { ArrowLeft, EllipsisVertical, Edit, Trash } from "lucide-react"
+import { ArrowLeft, EllipsisVertical, Edit, Trash, Download } from "lucide-react"
 
 import { KnowledgeSourcesService } from "@/client"
 import { useNavigationHistory } from "@/hooks/useNavigationHistory"
@@ -51,6 +51,44 @@ function KnowledgeSourceDetailPage() {
     }
   }
 
+  const handleExport = async () => {
+    // The export is a file download (not JSON), so use a raw authenticated
+    // fetch + blob download — the generated SDK cannot stream file downloads.
+    const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000"
+    const token = localStorage.getItem("access_token")
+    try {
+      const response = await fetch(
+        `${apiUrl}/api/v1/knowledge-sources/${sourceId}/export`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      )
+      if (!response.ok) {
+        throw new Error("Export failed")
+      }
+
+      // Resolve filename from Content-Disposition, fall back to a sane default.
+      const disposition = response.headers.get("content-disposition") || ""
+      const match = disposition.match(/filename="?([^"]+)"?/)
+      const filename = match?.[1] || `knowledge-source-${sourceId}.md`
+
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+      showSuccessToast("Knowledge source exported")
+    } catch (error: any) {
+      showErrorToast(error.message || "Failed to export knowledge source")
+    }
+  }
+
   const {
     data: source,
     isLoading,
@@ -88,6 +126,10 @@ function KnowledgeSourceDetailPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={handleExport}>
+                <Download className="mr-2 h-4 w-4" />
+                Export as Markdown
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setIsEditModalOpen(true)}>
                 <Edit className="mr-2 h-4 w-4" />
                 Edit Source

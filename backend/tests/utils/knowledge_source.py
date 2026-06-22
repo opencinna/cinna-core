@@ -88,3 +88,35 @@ def disable_knowledge_source(
     r = client.post(f"{_BASE}/{source_id}/disable", headers=token_headers)
     assert r.status_code == 200, r.text
     return r.json()
+
+
+def list_knowledge_articles(
+    client: TestClient,
+    token_headers: dict[str, str],
+    source_id: str,
+) -> list:
+    """GET /knowledge-sources/{id}/articles and return the list of articles."""
+    r = client.get(f"{_BASE}/{source_id}/articles", headers=token_headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def get_knowledge_article(
+    client: TestClient,
+    token_headers: dict[str, str],
+    source_id: str,
+    article_id: str,
+):
+    """GET /knowledge-sources/{id}/articles/{article_id} and return the raw response."""
+    return client.get(
+        f"{_BASE}/{source_id}/articles/{article_id}", headers=token_headers
+    )
+
+
+def export_knowledge_source(
+    client: TestClient,
+    token_headers: dict[str, str],
+    source_id: str,
+):
+    """GET /knowledge-sources/{id}/export and return the raw response."""
+    return client.get(f"{_BASE}/{source_id}/export", headers=token_headers)

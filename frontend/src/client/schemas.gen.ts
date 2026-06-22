@@ -14897,6 +14897,93 @@ export const KeyEnvelopeInputSchema = {
     title: 'KeyEnvelopeInput'
 } as const;
 
+export const KnowledgeArticleDetailSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        git_repo_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Git Repo Id'
+        },
+        title: {
+            type: 'string',
+            title: 'Title'
+        },
+        description: {
+            type: 'string',
+            title: 'Description'
+        },
+        tags: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Tags'
+        },
+        features: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Features'
+        },
+        file_path: {
+            type: 'string',
+            title: 'File Path'
+        },
+        embedding_model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Embedding Model'
+        },
+        embedding_dimensions: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Embedding Dimensions'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        content: {
+            type: 'string',
+            title: 'Content'
+        },
+        commit_hash: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Commit Hash'
+        }
+    },
+    type: 'object',
+    required: ['id', 'git_repo_id', 'title', 'description', 'tags', 'features', 'file_path', 'embedding_model', 'embedding_dimensions', 'updated_at', 'content', 'commit_hash'],
+    title: 'KnowledgeArticleDetail',
+    description: 'Detailed schema for knowledge article including content.'
+} as const;
+
 export const KnowledgeArticlePublicSchema = {
     properties: {
         id: {

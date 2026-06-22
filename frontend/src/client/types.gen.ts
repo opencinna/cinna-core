@@ -3332,6 +3332,24 @@ export type KeyEnvelopeInput = {
 export type wrap_method = 'device' | 'recovery' | 'passphrase';
 
 /**
+ * Detailed schema for knowledge article including content.
+ */
+export type KnowledgeArticleDetail = {
+    id: string;
+    git_repo_id: string;
+    title: string;
+    description: string;
+    tags: Array<(string)>;
+    features: Array<(string)>;
+    file_path: string;
+    embedding_model: (string | null);
+    embedding_dimensions: (number | null);
+    updated_at: string;
+    content: string;
+    commit_hash: (string | null);
+};
+
+/**
  * Public schema for knowledge article.
  */
 export type KnowledgeArticlePublic = {
@@ -7832,6 +7850,19 @@ export type KnowledgeSourcesListKnowledgeArticlesData = {
 };
 
 export type KnowledgeSourcesListKnowledgeArticlesResponse = (Array<KnowledgeArticlePublic>);
+
+export type KnowledgeSourcesGetKnowledgeArticleData = {
+    articleId: string;
+    sourceId: string;
+};
+
+export type KnowledgeSourcesGetKnowledgeArticleResponse = (KnowledgeArticleDetail);
+
+export type KnowledgeSourcesExportKnowledgeSourceData = {
+    sourceId: string;
+};
+
+export type KnowledgeSourcesExportKnowledgeSourceResponse = (string);
 
 export type KnowledgeSourcesListDiscoverableSourcesData = {
     limit?: number;
