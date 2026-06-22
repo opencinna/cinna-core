@@ -25,6 +25,7 @@ from app.models import (
     UserRoleUpdate,
     UserDetailsUpdate,
     UserDetailsPublic,
+    UserLocaleDefaults,
     UsersPublic,
     UserSearchResult,
     UsersSearchPublic,
@@ -39,6 +40,7 @@ from app.models.users.user import (
     VALID_SDK_OPTIONS,
     VALID_AI_FUNCTIONS_SDK_OPTIONS,
     VALID_USER_ROLES,
+    VALID_CONVERSATION_STYLES,
 )
 from app.services.users.role_service import RoleService
 from app.services.users import user_details_service
@@ -190,7 +192,7 @@ def create_user(*, session: SessionDep, user_in: UserCreate) -> Any:
 
 
 @router.patch("/me", response_model=UserPublic)
-def update_user_me(
+async def update_user_me(
     *, session: SessionDep, user_in: UserUpdateMe, current_user: CurrentUser
 ) -> Any:
     """
@@ -225,6 +227,20 @@ def update_user_me(
             status_code=400,
             detail=f"Invalid AI functions SDK. Must be one of: {VALID_AI_FUNCTIONS_SDK_OPTIONS}",
         )
+    # Validate conversation style if provided. The column is NOT NULL, so an
+    # explicit ``null`` must be rejected (it would otherwise pass through and
+    # 500 at commit on the not-null constraint).
+    if "conversation_style" in user_in.model_fields_set:
+        if user_in.conversation_style is None:
+            raise HTTPException(
+                status_code=400,
+                detail="conversation_style cannot be null",
+            )
+        if user_in.conversation_style not in VALID_CONVERSATION_STYLES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid conversation style. Must be one of: {VALID_CONVERSATION_STYLES}",
+            )
     # When switching to "system", clear the credential_id
     if user_in.default_ai_functions_sdk and not user_in.default_ai_functions_sdk.startswith("personal:"):
         user_in.default_ai_functions_credential_id = None
@@ -256,11 +272,34 @@ def update_user_me(
                     detail="OAuth tokens cannot be used with the Anthropic API for AI functions. "
                            "Please select a credential with an API key (sk-ant-api*).",
                 )
-    user_data = user_in.model_dump(exclude_unset=True)
-    current_user.sqlmodel_update(user_data)
+    # Detect whether any personalization field changed BEFORE applying the
+    # update, so a change can trigger the same re-sync fan-out as the
+    # "User's Details" editor (the four fields ride the current_user block
+    # into every owned agent's credentials.json).
+    personalization_fields = ("timezone", "language", "locale", "conversation_style")
+    incoming = user_in.model_dump(exclude_unset=True)
+    personalization_changed = any(
+        field in incoming and getattr(current_user, field) != incoming[field]
+        for field in personalization_fields
+    )
+
+    current_user.sqlmodel_update(incoming)
     session.add(current_user)
     session.commit()
     session.refresh(current_user)
+
+    if personalization_changed:
+        # Best-effort fan-out: a sync failure must not 500 the save.
+        try:
+            await user_details_service.event_user_details_updated(
+                session=session, user_id=current_user.id
+            )
+        except Exception:
+            logger.exception(
+                "Failed to re-sync agent environments after user %s profile update",
+                current_user.id,
+            )
+
     return _user_to_public(session, current_user)
 
 
@@ -371,6 +410,46 @@ async def update_user_details_me(
         details_raw=current_user.details_raw,
         details_parsed=current_user.details_parsed,
     )
+
+
+@router.patch("/me/locale-defaults", response_model=UserPublic)
+async def update_user_locale_defaults(
+    *, session: SessionDep, defaults_in: UserLocaleDefaults, current_user: CurrentUser
+) -> Any:
+    """Fill browser-detected timezone/language/locale ONLY where still unset.
+
+    Idempotent and clobber-safe: a field is written only when the stored
+    value is currently NULL, so an explicit user choice (made in Settings) is
+    never overwritten by a later browser session on a different machine. The
+    NULL-only guard is server-side and authoritative. Owner-scoped.
+
+    Returns ``UserPublic`` so the frontend can read back the now-populated
+    values. Re-syncs owned agents' running environments only when a field was
+    actually filled (a no-op login call does not thrash every env).
+    """
+    changed = False
+    for field in ("timezone", "language", "locale"):
+        incoming = getattr(defaults_in, field)
+        if incoming and getattr(current_user, field) is None:
+            setattr(current_user, field, incoming)
+            changed = True
+
+    if changed:
+        session.add(current_user)
+        session.commit()
+        session.refresh(current_user)
+        # Best-effort fan-out: a sync failure must not 500 the fill.
+        try:
+            await user_details_service.event_user_details_updated(
+                session=session, user_id=current_user.id
+            )
+        except Exception:
+            logger.exception(
+                "Failed to re-sync agent environments after user %s locale-defaults fill",
+                current_user.id,
+            )
+
+    return _user_to_public(session, current_user)
 
 
 @router.post("/me/resend-confirmation", response_model=ResendConfirmationResponse)

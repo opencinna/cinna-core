@@ -5226,6 +5226,18 @@ export type UserInfoResponse = {
     username?: (string | null);
 };
 
+/**
+ * Browser-detected locale defaults; server fills only still-NULL fields.
+ *
+ * Used by ``PATCH /users/me/locale-defaults``. ``conversation_style`` is
+ * deliberately absent — it is never browser-detected.
+ */
+export type UserLocaleDefaults = {
+    timezone?: (string | null);
+    language?: (string | null);
+    locale?: (string | null);
+};
+
 export type UserNotificationSettingUpdate = {
     email_enabled: boolean;
 };
@@ -5282,6 +5294,10 @@ export type UserPublic = {
     email_confirmed?: boolean;
     email_confirmed_at?: (string | null);
     confirmation_resend_available_at?: (string | null);
+    timezone?: (string | null);
+    language?: (string | null);
+    locale?: (string | null);
+    conversation_style?: string;
 };
 
 /**
@@ -5312,6 +5328,10 @@ export type UserPublicWithAICredentials = {
     email_confirmed?: boolean;
     email_confirmed_at?: (string | null);
     confirmation_resend_available_at?: (string | null);
+    timezone?: (string | null);
+    language?: (string | null);
+    locale?: (string | null);
+    conversation_style?: string;
     has_anthropic_api_key?: boolean;
     has_openai_api_key?: boolean;
     has_google_ai_api_key?: boolean;
@@ -5386,6 +5406,10 @@ export type UserUpdateMe = {
     default_ai_credential_building_id?: (string | null);
     default_model_override_conversation?: (string | null);
     default_model_override_building?: (string | null);
+    timezone?: (string | null);
+    language?: (string | null);
+    locale?: (string | null);
+    conversation_style?: (string | null);
 };
 
 export type UserWorkspaceCreate = {
@@ -8828,6 +8852,12 @@ export type UsersUpdateUserDetailsMeData = {
 };
 
 export type UsersUpdateUserDetailsMeResponse = (UserDetailsPublic);
+
+export type UsersUpdateUserLocaleDefaultsData = {
+    requestBody: UserLocaleDefaults;
+};
+
+export type UsersUpdateUserLocaleDefaultsResponse = (UserPublic);
 
 export type UsersResendConfirmationMeResponse = (ResendConfirmationResponse);
 

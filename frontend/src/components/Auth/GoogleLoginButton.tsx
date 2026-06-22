@@ -8,7 +8,7 @@ import { useMfaChallenge } from "@/components/Auth/MfaChallengeContext"
 import { Button } from "@/components/ui/button"
 import { isMfaChallengeResponse } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
-import { clearLoginScopedDisclaimerAck, safeRedirectPath } from "@/utils"
+import { clearLoginScopedDisclaimerAck, persistDetectedLocaleDefaults, safeRedirectPath } from "@/utils"
 import { getTrustedDeviceToken } from "@/utils/trustedDevice"
 
 const GOOGLE_REDIRECT_KEY = "google_oauth_redirect"
@@ -54,6 +54,9 @@ export function GoogleLoginButton() {
 
       localStorage.setItem("access_token", data.access_token)
       clearLoginScopedDisclaimerAck()
+      // Fire-and-forget: persist browser-detected locale defaults (NULL-only
+      // fill server-side). Must not block navigation; errors are swallowed.
+      persistDetectedLocaleDefaults()
       if (safeTarget) {
         window.location.assign(safeTarget)
         return

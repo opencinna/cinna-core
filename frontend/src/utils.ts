@@ -1,7 +1,48 @@
 import { AxiosError } from "axios"
 import type { ApiError } from "./client"
+import { UsersService } from "./client"
 
 export const APP_NAME = import.meta.env.VITE_APP_NAME || "Cinna"
+
+/**
+ * Fire-and-forget: persist the browser-detected timezone/language/locale to the
+ * current user, filling only fields that are still NULL server-side. Called
+ * right after a token is stored on browser login (password + Google OAuth).
+ *
+ * The server enforces the NULL-only guarantee, so it is safe to send detected
+ * values on every login — an explicit choice the user made in Settings is never
+ * overwritten. Best-effort: all errors are swallowed and it never blocks
+ * navigation. Detection is guarded so unsupported environments simply send less.
+ */
+export const persistDetectedLocaleDefaults = (): void => {
+  try {
+    const timezone =
+      typeof Intl !== "undefined" &&
+      typeof Intl.DateTimeFormat === "function"
+        ? Intl.DateTimeFormat().resolvedOptions().timeZone
+        : undefined
+    const fullLocale =
+      typeof navigator !== "undefined" ? navigator.language : undefined
+    const language = fullLocale ? fullLocale.split("-")[0] : undefined
+
+    const requestBody: {
+      timezone?: string | null
+      language?: string | null
+      locale?: string | null
+    } = {}
+    if (timezone) requestBody.timezone = timezone
+    if (language) requestBody.language = language
+    if (fullLocale) requestBody.locale = fullLocale
+
+    if (Object.keys(requestBody).length === 0) return
+
+    void UsersService.updateUserLocaleDefaults({ requestBody }).catch(() => {
+      // Best-effort: detection/persistence failures must not affect login.
+    })
+  } catch {
+    // Detection itself failed (very old browser) — ignore.
+  }
+}
 
 function extractErrorMessage(err: ApiError): string {
   if (err instanceof AxiosError) {

@@ -145,6 +145,16 @@ Auto-generated from OpenAPI spec. Tag: `cli`
 
 ---
 
+## POST `/api/v1/cli/account/files/upload`
+**Account Upload File**
+
+**Request body** (`Body_cli-account_upload_file`):
+  - `file`: binary (required)
+
+**Response:** `FileUploadPublic`
+
+---
+
 ## POST `/api/v1/cli/account/agents/{agent_id}/mint`
 **Mint Child Token**
 

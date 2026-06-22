@@ -699,6 +699,93 @@ Behavioural notes:
   `CLI_ACCOUNT_STATUS_COMMAND_SET`. Reads / refreshes are diagnostic and not
   audited.
 
+### 7e. Testing an Agent via Console Chat (`cinna chat`)
+
+Once an agent is built and running, the orchestrator can smoke-test it end-to-end
+through the real platform session pipeline — including sending local files — without
+leaving the terminal. `cinna chat` is the account-workspace equivalent of opening a
+session in the browser, and is the canonical final-verification step before
+publishing or handing over an agent.
+
+**Purpose:** drive the target agent through the same `MessageService` / session
+pipeline the UI uses, so integration problems (wrong prompt wiring, broken
+credential injection, file-handling bugs) are caught at the chat level, not just
+by unit-testing scripts.
+
+**Session control plane (api-proxy):** all session routes are reachable via the
+standard `POST /account/api-proxy` escape hatch. The `sessions` prefix is **not**
+on the exclusion denylist, so the following routes are already proxyable:
+
+| Route | Purpose |
+|-------|---------|
+| `POST sessions/` | Create a new session for the target agent |
+| `GET sessions/{id}` | Fetch session metadata |
+| `POST sessions/{id}/messages/stream` | Send a message (returns a JSON ack, not an SSE body — see below) |
+| `GET sessions/{id}/messages` | Poll for the reply messages |
+| `GET sessions/{id}/messages/streaming-status` | Poll for streaming progress |
+| `POST sessions/{id}/messages/interrupt` | Cancel a running generation |
+
+**Polling, not streaming:** `POST sessions/{id}/messages/stream` returns a JSON
+ack dict (`MessageService.build_stream_response`), not an SSE body. Real-time
+streaming is over socket.io, which is not available to the CLI. The CLI observes
+progress by polling `GET sessions/{id}/messages` and
+`GET sessions/{id}/messages/streaming-status` until the reply is complete. The
+api-proxy would block a genuine `text/event-stream` response anyway (that is a
+documented proxy limit), but the stream endpoint is JSON, so the proxy delivers it
+normally.
+
+**File upload (the one new backend route):** the api-proxy carries only JSON
+bodies. To attach a local file, `cinna chat --file <path>` calls the dedicated
+multipart route `POST /api/v1/cli/account/files/upload` (authenticated by the
+account CLI token) first. This route:
+- is implemented in `backend/app/api/routes/cli.py` (function
+  `account_upload_file`)
+- delegates to `FileService.create_file_upload(session=db, user_id=..., file=file)`
+  — the same service the normal `POST /files/upload` route uses, so it inherits
+  the same size cap, MIME-type whitelist, and per-user storage quota validation
+- returns `FileUploadPublic` (`id`, `filename`, `file_size`, `mime_type`, `status`,
+  `uploaded_at`); new uploads start with `status="temporary"` and become durable
+  when referenced in a session message's `file_ids`
+- attributed to the account token's owning user; no new model, no migration, no
+  config knobs
+
+Once the file is uploaded, `cinna chat` creates (or reuses) a session via the
+api-proxy and sends a message with the returned file id in `file_ids` — identical
+to the UI flow.
+
+**File download through the proxy:** `GET files/{id}/download` also works through
+the api-proxy. The proxy mirrors binary response bodies 1:1, bounded by the 8 MiB
+response cap. This lets `cinna chat` fetch any files the agent attaches in its
+reply.
+
+**The canonical chat-with-file flow:**
+
+```
+# 1. Upload the local file
+#    → returns { id, filename, ... status="temporary" }
+cinna chat --agent billing-agent --file ./q3_payouts.csv
+
+# 2. Behind the scenes:
+#    POST /account/files/upload (multipart)  → FileUploadPublic { id: <file_id> }
+#    POST sessions/  (via api-proxy)         → { id: <session_id> }
+#    POST sessions/<id>/messages/stream      → JSON ack
+#         body: { content: "Analyse this file", file_ids: ["<file_id>"] }
+#    poll GET sessions/<id>/messages         → until reply complete
+#    poll GET sessions/<id>/messages/streaming-status
+
+# 3. Agent reply (and any attached files) are printed to the terminal.
+```
+
+**Security:** the upload route and the chat flow add no new security events. File
+upload is a normal authenticated account-user upload (same audit surface as the
+regular `POST /files/upload`); session activity is recorded by the session
+infrastructure unchanged.
+
+**No new models, no migration, no config knobs.** The only backend addition is
+the `POST /api/v1/cli/account/files/upload` route. Everything else — session
+creation, message sending, polling, and file download — reaches existing platform
+infrastructure through the api-proxy.
+
 ### 8. Managing Account Sessions (UI)
 
 1. Settings → Channels → Local Development card lists active account sessions.
@@ -868,6 +955,12 @@ The backend contract these commands consume:
 | `cinna agent status refresh <agent>` | `GET …/status?force_refresh=true` | Force a live STATUS.md re-read (wakes a suspended env; never raises) |
 | `cinna agent status set-command <agent> <cmd>` | `POST …/status/refresh-command` | Set `status_refresh_command`; 403 if not developer |
 
+**Console chat (file upload + session control via proxy):**
+
+| Command | Backend endpoints | Behavior |
+|---------|-----------------|----------|
+| `cinna chat --agent <agent> [--file <path>] [<message>]` | `POST /api/v1/cli/account/files/upload` (multipart, if `--file` given) then `POST sessions/`, `POST sessions/{id}/messages/stream`, `GET sessions/{id}/messages`, `GET sessions/{id}/messages/streaming-status` all via `POST /api/v1/cli/account/api-proxy` | Upload file → create session → send message with `file_ids` → poll for reply; stream endpoint returns JSON ack (polling not SSE); file download (`GET files/{id}/download`) also via proxy (binary 1:1, 8 MiB cap) |
+
 ### `.cinna/account.json` Schema
 
 ```json
@@ -959,7 +1052,11 @@ This document covers **Phases 1 through 5** — all phases are now shipped:
   `AgentSchedulerService` / `AgentStatusService` / `AgentService` (so behaviour,
   the per-type frequency floor, and the foreign-install read-only contract match
   the UI). Five new `CLI_ACCOUNT_SCHEDULE_*` / `CLI_ACCOUNT_STATUS_COMMAND_SET`
-  security events; no new models persisted, no migration.
+  security events; no new models persisted, no migration. Also ships `cinna chat`
+  (flow 7e): a dedicated `POST /api/v1/cli/account/files/upload` multipart route
+  lets `cinna chat --file` upload a local file and get back a file id; all session
+  control (create / send / poll) rides the existing api-proxy; no new models,
+  migration, or security events.
 
 ## Integration Points
 
@@ -1020,3 +1117,10 @@ This document covers **Phases 1 through 5** — all phases are now shipped:
   (AI-generate routing sentence) are also reachable via `cinna api`. The
   three-way reconcile and SEED_PUSH mechanics are described in
   [agent_prompts.md](../../agents/agent_prompts/agent_prompts.md)
+- **file_uploads** (Phase 5 / flow 7e) — `POST /account/files/upload` delegates
+  to `FileService.create_file_upload`, the same service behind the normal
+  `POST /files/upload` route; inherits the size cap, MIME-type whitelist, and
+  quota enforcement. File ids returned by the upload are threaded into session
+  messages via the api-proxy. `GET files/{id}/download` is also proxied (binary
+  1:1 mirroring, 8 MiB cap). No dedicated integration doc; the file-upload feature
+  is documented in the files feature area.

@@ -828,9 +828,20 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             )
             lines.append("")
             lines.append(
-                "Read the owner's identity and self-authored details "
-                "programmatically:"
+                "The `current_user` entry's `credential_data` may contain these keys:"
             )
+            lines.append("")
+            lines.append("- `username` — the owner's username.")
+            lines.append("- `full_name` — the owner's full name.")
+            lines.append("- `email` — the owner's email address.")
+            lines.append("- `email_confirmed` — whether the email is confirmed.")
+            lines.append("- `custom_details` — owner-authored `{KEY: value}` map.")
+            lines.append("- `timezone` — IANA timezone (e.g. `Europe/Berlin`).")
+            lines.append("- `language` — communication language (e.g. `en`).")
+            lines.append("- `locale` — BCP-47 formatting locale (e.g. `en-US`).")
+            lines.append("- `conversation_style` — tone hint.")
+            lines.append("")
+            lines.append("Read these programmatically:")
             lines.append("")
             lines.append("```python")
             lines.append("creds = {c['id']: c['credential_data'] for c in all_credentials}")

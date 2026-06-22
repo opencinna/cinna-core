@@ -16,6 +16,7 @@ import { SecurityTab } from "@/components/UserSettings/Security/SecurityTab"
 import { SSHKeys } from "@/components/UserSettings/SSHKeys"
 import { UserDetailsSettings } from "@/components/UserSettings/UserDetailsSettings"
 import UserInformation from "@/components/UserSettings/UserInformation"
+import UserPreferences from "@/components/UserSettings/UserPreferences"
 import { WorkspaceSettings } from "@/components/UserSettings/WorkspaceSettings"
 import { AgenticTeamSettings } from "@/components/AgenticTeams/AgenticTeamSettings"
 import { DashboardSettings } from "@/components/UserSettings/DashboardSettings"
@@ -60,8 +61,9 @@ function UserSettings() {
       content: (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <UserInformation />
-          <NotificationSettings />
           <UserDetailsSettings />
+          <UserPreferences />
+          <NotificationSettings />
         </div>
       ),
     },

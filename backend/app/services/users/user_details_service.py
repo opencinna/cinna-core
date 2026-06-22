@@ -177,6 +177,10 @@ def build_current_user_block(user: User) -> dict:
             "full_name": user.full_name,
             "email": user.email,
             "email_confirmed": user.email_confirmed,
+            "timezone": user.timezone,
+            "language": user.language,
+            "locale": user.locale,
+            "conversation_style": user.conversation_style,
             "custom_details": user.details_parsed or {},
         },
     }

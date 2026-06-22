@@ -112,10 +112,11 @@ The `AgentEnvironment` table (defined in `backend/app/models/environments/enviro
 - `_load_credentials_readme()` - Reads workspace `credentials/README.md`
 - `_get_knowledge_topics()` - Scans workspace `knowledge/` for subdirectory names, returns comma-separated list
 - `_load_handover_prompt()` - Reads `handover_prompt` field from workspace `{workspace}/docs/agent_handover_config.json`; returns the consolidated handover instructions string or None if file absent or empty
+- `_load_conversation_style()` - Reads `credentials/credentials.json`, locates the `type == "current_user"` entry, and returns `credential_data.conversation_style` as a string, or `None` if the file is absent or the entry is missing. Never raises. Used exclusively by `generate_conversation_mode_prompt`.
 - `_get_environment_context()` - Builds environment context metadata section
 - `build_session_context_section(session_context)` - Builds session metadata section from session context dict
 - `generate_building_mode_prompt(session_context)` - Assembles full building mode prompt. Returns `SystemPromptPreset` dict: `{"type": "preset", "preset": "claude_code", "append": combined_docs}`
-- `generate_conversation_mode_prompt(session_context)` - Assembles conversation mode prompt. Returns plain string. Assembly order: WORKFLOW_PROMPT.md → scripts/README.md → credentials/README.md → knowledge topics → environment context → session context section → task context section (if session has a linked task) → handover prompt (from `{workspace}/docs/agent_handover_config.json`, if present)
+- `generate_conversation_mode_prompt(session_context)` - Assembles conversation mode prompt. Returns plain string. Assembly order: WORKFLOW_PROMPT.md → scripts/README.md → credentials/README.md → knowledge topics → environment context → session context section → task context section (if session has a linked task) → handover prompt (from `{workspace}/docs/agent_handover_config.json`, if present) → **Communication Style section** (optional — appended last; present only for `concise_direct` and `friendly_chatty`; `ai_default` appends nothing). The Communication Style section is a single-sentence Markdown block (`## Communication Style`) read from `credentials.json` `current_user.conversation_style`. Note: this file lives in the env-template and is baked into the agent Docker image — the tone sentence takes effect **only after the environment image is rebuilt and the environment is recreated**. The four locale/style fields in `credentials.json` and `credentials/README.md` propagate immediately via normal credential sync without a rebuild.
 - `generate_prompt(mode, session_state)` - Factory method routing to building or conversation prompt generator
 
 ### SDKManager (`sdk_manager.py`)
@@ -205,7 +206,8 @@ The `AgentEnvironment` table (defined in `backend/app/models/environments/enviro
 - Conversation mode: All files loaded fresh per request (no caching)
 - Empty or missing prompt files are silently skipped during assembly
 - Knowledge topics scan ignores hidden directories (starting with `.`)
-- Conversation mode appends the handover prompt (from `{workspace}/docs/agent_handover_config.json`) last, after the task context section; silently skipped if the file is absent or the `handover_prompt` field is empty
+- Conversation mode appends the handover prompt (from `{workspace}/docs/agent_handover_config.json`) last before the Communication Style section; silently skipped if the file is absent or the `handover_prompt` field is empty
+- Conversation mode appends the Communication Style section after the handover prompt when `conversation_style` is `concise_direct` or `friendly_chatty`; `ai_default` appends nothing (zero prompt change). This is a single sentence inside a `## Communication Style` Markdown block. Because `prompt_generator.py` is baked into the agent Docker image, this section takes effect only after an environment image rebuild.
 
 ## Tests
 

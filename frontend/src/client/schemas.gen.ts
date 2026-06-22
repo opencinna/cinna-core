@@ -23060,6 +23060,53 @@ export const UserInfoResponseSchema = {
     title: 'UserInfoResponse'
 } as const;
 
+export const UserLocaleDefaultsSchema = {
+    properties: {
+        timezone: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Timezone'
+        },
+        language: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Language'
+        },
+        locale: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Locale'
+        }
+    },
+    type: 'object',
+    title: 'UserLocaleDefaults',
+    description: `Browser-detected locale defaults; server fills only still-NULL fields.
+
+Used by \`\`PATCH /users/me/locale-defaults\`\`. \`\`conversation_style\`\` is
+deliberately absent — it is never browser-detected.`
+} as const;
+
 export const UserNotificationSettingUpdateSchema = {
     properties: {
         email_enabled: {
@@ -23373,6 +23420,44 @@ export const UserPublicSchema = {
                 }
             ],
             title: 'Confirmation Resend Available At'
+        },
+        timezone: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Timezone'
+        },
+        language: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Language'
+        },
+        locale: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Locale'
+        },
+        conversation_style: {
+            type: 'string',
+            title: 'Conversation Style',
+            default: 'ai_default'
         }
     },
     type: 'object',
@@ -23585,6 +23670,44 @@ export const UserPublicWithAICredentialsSchema = {
                 }
             ],
             title: 'Confirmation Resend Available At'
+        },
+        timezone: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Timezone'
+        },
+        language: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Language'
+        },
+        locale: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Locale'
+        },
+        conversation_style: {
+            type: 'string',
+            title: 'Conversation Style',
+            default: 'ai_default'
         },
         has_anthropic_api_key: {
             type: 'boolean',
@@ -23929,6 +24052,54 @@ export const UserUpdateMeSchema = {
                 }
             ],
             title: 'Default Model Override Building'
+        },
+        timezone: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Timezone'
+        },
+        language: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Language'
+        },
+        locale: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Locale'
+        },
+        conversation_style: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 32
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Conversation Style'
         }
     },
     type: 'object',

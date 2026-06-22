@@ -217,6 +217,27 @@ class PromptGenerator:
             logger.error(f"Failed to load agent_handover_config.json: {e}")
             return None
 
+    def _load_current_user_personalization(self) -> Dict[str, Any]:
+        """Read the current_user.credential_data block from credentials.json.
+
+        Returns the ``credential_data`` dict (carrying ``language``,
+        ``timezone``, ``locale``, ``conversation_style``, etc.), or an empty
+        dict if absent/unreadable. Never raises — a missing or malformed
+        credentials file simply yields no personalization.
+        """
+        creds_path = self.workspace_dir / "credentials" / "credentials.json"
+        if not creds_path.exists():
+            return {}
+        try:
+            with open(creds_path, "r", encoding="utf-8") as f:
+                entries = json.load(f)
+            for entry in entries:
+                if entry.get("type") == "current_user":
+                    return entry.get("credential_data") or {}
+        except Exception as e:
+            logger.warning(f"Could not read current_user personalization: {e}")
+        return {}
+
     def _get_knowledge_topics(self) -> Optional[str]:
         """
         Get a minimal list of available knowledge topics (subdirectories).
@@ -715,6 +736,53 @@ class PromptGenerator:
         if handover_prompt_content:
             conversation_prompt_parts.append(handover_prompt_content)
             logger.info("Included handover prompt in conversation mode prompt")
+
+        # Append the owner's personalization instructions. Emit a line ONLY for
+        # fields that are set; omit unset fields entirely (never describe
+        # defaults). If nothing is set, no header and no block are emitted —
+        # zero added tokens (a true no-op preserving the pre-feature prompt).
+        personalization = self._load_current_user_personalization()
+        personalization_lines: List[str] = []
+
+        language = (personalization.get("language") or "").strip()
+        if language:
+            personalization_lines.append(
+                f"Communicate with the user in {language}."
+            )
+
+        timezone = (personalization.get("timezone") or "").strip()
+        if timezone:
+            personalization_lines.append(
+                f"When stating dates and times, use the user's timezone ({timezone})."
+            )
+
+        locale = (personalization.get("locale") or "").strip()
+        if locale:
+            personalization_lines.append(
+                f"Format dates, times, and numbers using the {locale} locale."
+            )
+
+        style = (personalization.get("conversation_style") or "").strip()
+        style_sentence = {
+            "concise_direct": (
+                "Communicate concisely and directly: keep responses brief and to "
+                "the point, avoiding unnecessary elaboration."
+            ),
+            "friendly_chatty": (
+                "Adopt a warm, friendly, and conversational tone in your responses."
+            ),
+        }.get(style)
+        if style_sentence:
+            personalization_lines.append(style_sentence)
+
+        if personalization_lines:
+            body = "\n".join(f"- {line}" for line in personalization_lines)
+            conversation_prompt_parts.append(
+                f"\n\n---\n\n## Communication Style\n\n{body}"
+            )
+            logger.info(
+                f"Appended personalization block ({len(personalization_lines)} line(s))"
+            )
 
         # Combine all parts into a single system prompt string
         if conversation_prompt_parts:
