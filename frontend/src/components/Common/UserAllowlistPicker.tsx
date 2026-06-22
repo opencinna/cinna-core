@@ -39,6 +39,10 @@ interface UserAllowlistPickerProps {
   label?: ReactNode | null
   // Gate the user-search fetch (e.g. only fetch when picker is visible).
   enabled?: boolean
+  // Extra user ids to filter out of search results WITHOUT rendering pills for
+  // them (unlike ``selected``, which both filters and renders). Use for users
+  // that are already committed elsewhere and shouldn't be re-picked.
+  excludeUserIds?: string[]
 }
 
 const MIN_QUERY_LENGTH = 2
@@ -53,6 +57,7 @@ export function UserAllowlistPicker({
   emptyHint,
   label,
   enabled = true,
+  excludeUserIds,
 }: UserAllowlistPickerProps) {
   const [query, setQuery] = useState("")
   const trimmedQuery = query.trim()
@@ -75,10 +80,13 @@ export function UserAllowlistPicker({
     staleTime: 30000,
   })
 
-  const selectedUserIds = new Set(selected.map((s) => s.userId))
+  const filteredUserIds = new Set([
+    ...selected.map((s) => s.userId),
+    ...(excludeUserIds ?? []),
+  ])
   const results: UserItem[] = (searchData?.data ?? [])
     .map((u) => ({ id: u.id, email: u.email, full_name: u.full_name ?? null }))
-    .filter((u) => !selectedUserIds.has(u.id))
+    .filter((u) => !filteredUserIds.has(u.id))
 
   // While the debounce hasn't caught up to what's typed (or the request is
   // in flight / hasn't produced data yet) we're still "searching" — without

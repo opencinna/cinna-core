@@ -211,6 +211,7 @@ class AgentService:
             inactivity_period_limit=agent.inactivity_period_limit,
             webapp_enabled=agent.webapp_enabled,
             agent_api_enabled=agent.agent_api_enabled,
+            agent_api_identity_enabled=agent.agent_api_identity_enabled,
             created_at=agent.created_at,
             updated_at=agent.updated_at,
             owner_id=agent.owner_id,

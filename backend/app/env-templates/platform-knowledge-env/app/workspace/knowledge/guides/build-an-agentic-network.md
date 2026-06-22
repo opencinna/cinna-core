@@ -155,10 +155,12 @@ cinna dev                      # inside agents/concierge/
 cinna exec --agent concierge -- cat workspace/AGENTS.md
 ```
 
-Building each agent's logic is outside the scope of this playbook; see your
-platform knowledge docs for the per-agent development guide. Return here once
-the basic logic for each agent is sketched in (even a placeholder prompt is
-enough to register the team; you can iterate afterwards).
+Building each agent's logic is outside the scope of this playbook. For a
+producer agent's REST API specifically (like crm-agent below), see
+[building-an-agent-api.md](building-an-agent-api.md) — it covers the handler
+files, `policy.yaml`, the per-user `scopes:` catalog, and verifying the spec.
+Return here once the basic logic for each agent is sketched in (even a
+placeholder prompt is enough to register the team; you can iterate afterwards).
 
 One important note for crm-agent: its REST API only works when
 `agent_api_enabled` is set to true. You can do this from the CLI:
