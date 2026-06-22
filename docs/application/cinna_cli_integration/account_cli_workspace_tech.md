@@ -69,6 +69,19 @@
   **Knowledge search:**
   - `async search_knowledge(db, user, query, topic=None) -> list[dict]` — account-level analogue of the per-agent knowledge search. No `require_developer` (read). Delegates to `CLIService.search_user_knowledge` with `workspace_id=None`. No SecurityEvent / audit (high-frequency read; mirrors the unaudited per-agent route).
 
+  **Console-chat file upload (Phase 5):**
+  - `POST /api/v1/cli/account/files/upload` — `AccountCLIContextDep`; multipart `UploadFile` body; `response_model=FileUploadPublic`. Dedicated multipart route needed because the JSON-only api-proxy cannot carry a binary `multipart/form-data` body. Implemented in `backend/app/api/routes/cli.py` (function `account_upload_file`). Delegates to `FileService.create_file_upload(session=db, user_id=account_ctx.user.id, file=file)` — the same service the normal `POST /files/upload` uses, so it inherits the same size cap, MIME-type whitelist, and per-user storage quota validation. New uploads start with `status="temporary"` and become durable when referenced in a session message's `file_ids`. Returns `FileUploadPublic` (`id`, `filename`, `file_size`, `mime_type`, `status`, `uploaded_at`). Status codes: 200 / 400 (oversize / invalid MIME / quota exceeded) / 401. No new model, no migration, no config knob. No SecurityEvent — an authenticated account-user file upload is equivalent to the normal upload route's audit surface.
+
+  **Session control plane via api-proxy (Phase 5 / `cinna chat`):**
+  The session routes are NOT on `EXCLUDED_PREFIXES`, so `cinna chat` reaches all of them through the existing `POST /account/api-proxy` escape hatch — no new session routes were added:
+  - `POST sessions/` — create a session
+  - `GET sessions/{id}` — fetch session metadata
+  - `POST sessions/{id}/messages/stream` — send a message; returns a JSON ack dict (`MessageService.build_stream_response`), **not** an SSE body (real-time streaming is over socket.io, unavailable to the CLI). The api-proxy would block a genuine `text/event-stream` response (→ 502), but this endpoint returns JSON so the proxy delivers it normally.
+  - `GET sessions/{id}/messages` — poll for reply messages
+  - `GET sessions/{id}/messages/streaming-status` — poll for streaming progress
+  - `POST sessions/{id}/messages/interrupt` — cancel a running generation
+  - `GET files/{id}/download` — retrieve files the agent attaches in its reply; the proxy mirrors binary response bodies 1:1 (bounded by the 8 MiB `ACCOUNT_API_PROXY_MAX_RESPONSE_BYTES` cap).
+
   **Credential drafting verbs** (metadata + structure only — the account token never reads or writes a credential's secret value; these expose the *safe* slice of an otherwise denylisted surface):
   - `GET /api/v1/cli/account/credentials/types` — `AccountCLIContextDep`; response `AccountCredentialTypesPublic`; static catalogue of `CredentialType` + per-type `required_fields` (from `CredentialsService.REQUIRED_FIELDS`). No `require_developer` (read).
   - `GET /api/v1/cli/account/credentials` — `AccountCLIContextDep`; query `?user_workspace_id=` (omitted = all, `""` = Default, UUID = that workspace); response `CredentialsPublic` (metadata only via the same projection as the credentials route — `share_count` + computed `status`, **never `credential_data`**). No `require_developer`.
@@ -372,6 +385,9 @@
   - **Scenario 22** (`test_account_schedule_management`) — full schedule CRUD via the account token: empty list → generate-preview (AI mocked) → create static_prompt → `script_trigger` without command 400 → list reflects → update toggle → run now (stub env running) → logs → delete → empty list; gating (ghost 404, other user's agent 404 no-leak, user JWT 401, demoted agent-user 403 on write); **foreign (bundle) install → 403 on create** (publish + install a bundle into a fresh developer's account, then assert create is 403).
   - **Scenario 23** (`test_account_agent_status`) — status verbs: cached read → `AccountAgentStatusResult` shape (`status` + `status_refresh_command`); force refresh never raises; set-command updates and echoes the new command; subsequent read reflects it; gating (ghost 404, user JWT 401, demoted agent-user 403 on set-command).
 
+  - **Scenario 24** (`test_account_file_upload`) — happy path: valid account token + multipart file → 200, response matches `FileUploadPublic` shape (`id`, `filename`, `file_size`, `mime_type`, `status="temporary"`, `uploaded_at`). Auth matrix: per-agent CLI token → 401; regular user JWT → 401; missing auth → 401; revoked account token → 401; valid account token → 200. Error cases: invalid MIME type → 400; oversize file → 400.
+  - **Scenario 25** (`test_account_chat_flow_proxy_contract`) — asserts that the session routes and `files/{id}/download` are NOT on the proxy denylist via `assert_api_proxy_allowed` (load-bearing: these must never be added to `EXCLUDED_PREFIXES` without breaking `cinna chat`). End-to-end flow through the api-proxy: upload a file via `POST /account/files/upload` → create session via proxy (`POST sessions/`) → send message with `file_ids` via proxy (`POST sessions/{id}/messages/stream`) → assert the stream endpoint returns a JSON ack dict (not `text/event-stream`) → poll messages (`GET sessions/{id}/messages`) → poll streaming-status (`GET sessions/{id}/messages/streaming-status`). Auth matrix for the proxy session calls (same as standard api-proxy auth matrix).
+
   **Phase 4 additional assertions (agentic-teams escape-hatch reachability):**
   The Phase 3 chokepoint test (`test_account_api_proxy_policy.py`) asserts that
   `GET /agentic-teams`, `POST /agentic-teams`, `POST /agentic-teams/{id}/nodes/`,
@@ -462,6 +478,7 @@ Response:
 | `DELETE` | `/api/v1/cli/account/credentials/{credential_id}` | 200 / 400 / 403 / 404 / 409 | Delete (blast-radius tier-gated; 409+impact on Tier 2 unless `?force=true`); `require_developer`-gated; response `Message` |
 | `POST` | `/api/v1/cli/account/credentials/{credential_id}/share-with-agent` | 200 / 400 / 403 / 404 | Attach credential to an owned agent; `require_developer`-gated; body `AccountCredentialShareBody`; response `Message` |
 | `POST` | `/api/v1/cli/account/knowledge/search` | 200 / 401 | Search knowledge sources accessible to the account user; body `KnowledgeSearchBody {query, topic?}`; response `{results: [{content, source, similarity}]}`; empty list when no accessible sources; no `require_developer` (read); no audit |
+| `POST` | `/api/v1/cli/account/files/upload` | 200 / 400 / 401 | Upload a file (multipart `UploadFile`); response `FileUploadPublic`; delegates to `FileService.create_file_upload`; inherits normal upload's size cap / MIME whitelist / quota; new uploads start `status="temporary"`; no audit event |
 | `POST` | `/api/v1/cli/account/api-proxy` | inner / 400 / 403 / 413 / 429 / 502 | Generic escape hatch; body `AccountApiProxyRequest`; raw `Response` passthrough |
 | `GET` | `/api/v1/cli/account/agents/{agent_id}/schedules` | 200 / 401 / 404 | List schedules; response `AgentSchedulesPublic` |
 | `POST` | `/api/v1/cli/account/agents/{agent_id}/schedules/generate` | 200 / 401 / 404 | NL → cron preview (stateless); body `ScheduleRequest`; response `ScheduleResponse` |
@@ -481,6 +498,8 @@ router prefix (`/agentic-teams`) is not on `EXCLUDED_PREFIXES`, so the full surf
 proxyable verbatim.
 
 **Knowledge search note:** No new models, no migration, no config knobs, no audit. `KnowledgeSearchBody` is reused from the per-agent route. The CLI-side MCP proxy wiring (`.mcp.json` entry that maps the `knowledge_query` tool to `POST /account/knowledge/search`) lives in the `cinna-cli` repo.
+
+**Console-chat / file-upload note:** No new models, no migration, no config knobs, no security events. The only backend addition is the `POST /api/v1/cli/account/files/upload` route (one function in `backend/app/api/routes/cli.py`). Session-control routes are reached through the pre-existing api-proxy. The `cinna chat` client implementation lives in the `cinna-cli` repo.
 
 Mint request body:
 ```json

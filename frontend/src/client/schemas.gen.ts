@@ -9203,6 +9203,19 @@ export const BlockLayoutUpdateSchema = {
     title: 'BlockLayoutUpdate'
 } as const;
 
+export const Body_cli_account_upload_fileSchema = {
+    properties: {
+        file: {
+            type: 'string',
+            format: 'binary',
+            title: 'File'
+        }
+    },
+    type: 'object',
+    required: ['file'],
+    title: 'Body_cli-account_upload_file'
+} as const;
+
 export const Body_credentials_update_credential_sharingSchema = {
     properties: {
         allow_sharing: {

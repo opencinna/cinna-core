@@ -1990,6 +1990,10 @@ export type BlockLayoutUpdate = {
     grid_h: number;
 };
 
+export type Body_cli_account_upload_file = {
+    file: (Blob | File);
+};
+
 export type Body_credentials_update_credential_sharing = {
     allow_sharing: boolean;
 };
@@ -6753,6 +6757,12 @@ export type CliAccountSearchKnowledgeData = {
 };
 
 export type CliAccountSearchKnowledgeResponse = (unknown);
+
+export type CliAccountUploadFileData = {
+    formData: Body_cli_account_upload_file;
+};
+
+export type CliAccountUploadFileResponse = (FileUploadPublic);
 
 export type CliMintChildTokenData = {
     agentId: string;

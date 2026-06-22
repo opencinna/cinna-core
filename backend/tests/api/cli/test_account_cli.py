@@ -1,5 +1,6 @@
 """
-Backend tests for the Account CLI Workspace — Phase 1 + Phase 2 + Phase 3.
+Backend tests for the Account CLI Workspace — Phase 1 + Phase 2 + Phase 3 + Phase 4
+(file upload + chat flow).
 
 Covers:
 - Account setup-token creation (developer-gated), exchange, and lifecycle guards
@@ -49,6 +50,15 @@ Phase 3 — Convenience verbs + generic API escape hatch:
   expected/valid; optional ``topic`` accepted; auth matrix (per-agent child token /
   user JWT / revoked account token / no auth → 401)
 
+Phase 4 — File upload route + chat-flow proxy contract (Scenarios 24–25):
+- POST /account/files/upload (Scenario 24): multipart upload attributed to the
+  account user; status="temporary"; auth matrix; MIME rejection; oversize rejection.
+- Chat-flow proxy contract (Scenario 25): session routes (sessions/, messages,
+  messages/stream, streaming-status, interrupt, files download) are all reachable
+  through the escape hatch (none is on the denylist); upload → message reference
+  end-to-end contract (upload file, create session, send message with file_ids →
+  ack JSON returned through the proxy, messages list reachable through proxy).
+
 Notes:
 - Unit tests for the pure exclusion-policy chokepoint (all denylist prefixes,
   segment boundaries, method allowlist, malformed-path detection, normalization)
@@ -56,6 +66,7 @@ Notes:
   API-observable behavior only.
 - Rate-limit testing is noted as a coverage gap below (see test_proxy_rate_limit).
 """
+import io
 import uuid
 
 from fastapi.testclient import TestClient
@@ -3266,4 +3277,441 @@ def test_account_agent_status(
     )
     assert r.status_code == 403, (
         f"Set-command by a demoted (agent-user) account token must be 403, got {r.status_code}"
+    )
+
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  Phase 4 — File upload route + chat-flow proxy contract (Scenarios 24–25)  ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+# ── Scenario 24: POST /account/files/upload ──────────────────────────────────
+
+
+def test_account_file_upload(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    POST /account/files/upload — multipart file upload attributed to the account user:
+
+      1. Happy path: valid text/plain file → 200, FileUploadPublic shape,
+         status="temporary", filename/mime_type/file_size correct.
+      2. Auth matrix (structural isolation — the route requires AccountCLIContextDep):
+         a. Per-agent child CLI token → 401
+         b. Regular user JWT → 401
+         c. No auth header → 401
+         d. Revoked account token → 401
+         e. Fresh valid account token → 200 (sanity)
+      3. Invalid MIME type (application/octet-stream, not in whitelist) → 400,
+         detail mentions the disallowed type.
+      4. Oversize file (content > UPLOAD_MAX_FILE_SIZE_MB MB) → 400, detail
+         mentions size / max.
+    """
+    from unittest.mock import patch
+
+    # ── Phase 1: Bootstrap account token ──────────────────────────────────
+    account_jwt, account_token_id = bootstrap_account_token(
+        client, superuser_token_headers, machine_name="File Upload Machine"
+    )
+    acc_headers = account_cli_headers(account_jwt)
+
+    # ── Phase 2: Happy path — valid text/plain file ────────────────────────
+    file_content = b"Hello from the account CLI upload test!"
+    filename = "hello.txt"
+    r = client.post(
+        f"{_BASE}/account/files/upload",
+        headers=acc_headers,
+        files={"file": (filename, io.BytesIO(file_content), "text/plain")},
+    )
+    assert r.status_code == 200, (
+        f"POST /account/files/upload must return 200 for a valid account CLI token, "
+        f"got {r.status_code}: {r.text}"
+    )
+    body = r.json()
+
+    # FileUploadPublic shape
+    assert "id" in body, "Response must contain 'id'"
+    assert "filename" in body, "Response must contain 'filename'"
+    assert "file_size" in body, "Response must contain 'file_size'"
+    assert "mime_type" in body, "Response must contain 'mime_type'"
+    assert "status" in body, "Response must contain 'status'"
+    assert "uploaded_at" in body, "Response must contain 'uploaded_at'"
+
+    # Value assertions
+    assert body["filename"] == filename, (
+        f"Response filename must match uploaded filename, got {body['filename']!r}"
+    )
+    assert body["mime_type"] == "text/plain", (
+        f"Response mime_type must be 'text/plain', got {body['mime_type']!r}"
+    )
+    assert body["file_size"] == len(file_content), (
+        f"Response file_size must match content length {len(file_content)}, "
+        f"got {body['file_size']}"
+    )
+    assert body["status"] == "temporary", (
+        f"New uploads must start with status='temporary', got {body['status']!r}"
+    )
+    file_id = body["id"]
+    assert file_id, "id must be a non-empty string"
+
+    # No sensitive DB-internal fields in the response
+    assert "file_path" not in body, "Response must not expose file_path"
+    assert "user_id" not in body, "Response must not expose user_id"
+
+    # ── Phase 3: Auth matrix — per-agent child token → 401 ────────────────
+    agent = create_agent_via_api(client, superuser_token_headers)
+    child_mint = mint_child_token(
+        client, acc_headers, agent["id"], machine_name="Upload Child"
+    )
+    child_headers = cli_auth_headers(child_mint["token"])
+
+    r_child = client.post(
+        f"{_BASE}/account/files/upload",
+        headers=child_headers,
+        files={"file": (filename, io.BytesIO(file_content), "text/plain")},
+    )
+    assert r_child.status_code == 401, (
+        f"Per-agent child CLI token must be rejected on /account/files/upload, "
+        f"got {r_child.status_code}: {r_child.text}"
+    )
+
+    # ── Phase 4: Auth matrix — regular user JWT → 401 ─────────────────────
+    r_jwt = client.post(
+        f"{_BASE}/account/files/upload",
+        headers=superuser_token_headers,
+        files={"file": (filename, io.BytesIO(file_content), "text/plain")},
+    )
+    assert r_jwt.status_code == 401, (
+        f"Regular user JWT must be rejected on /account/files/upload, "
+        f"got {r_jwt.status_code}: {r_jwt.text}"
+    )
+
+    # ── Phase 5: Auth matrix — no auth → 401 ──────────────────────────────
+    r_no_auth = client.post(
+        f"{_BASE}/account/files/upload",
+        files={"file": (filename, io.BytesIO(file_content), "text/plain")},
+    )
+    assert r_no_auth.status_code in (401, 403), (
+        f"Missing auth must be rejected on /account/files/upload, "
+        f"got {r_no_auth.status_code}: {r_no_auth.text}"
+    )
+
+    # ── Phase 6: Auth matrix — revoked account token → 401 ────────────────
+    revoke_account_token(client, superuser_token_headers, account_token_id)
+    r_revoked = client.post(
+        f"{_BASE}/account/files/upload",
+        headers=acc_headers,
+        files={"file": (filename, io.BytesIO(file_content), "text/plain")},
+    )
+    assert r_revoked.status_code == 401, (
+        f"Revoked account token must return 401 on /account/files/upload, "
+        f"got {r_revoked.status_code}: {r_revoked.text}"
+    )
+
+    # ── Phase 7: Fresh valid account token sanity check ───────────────────
+    fresh_jwt, _ = bootstrap_account_token(
+        client, superuser_token_headers, machine_name="File Upload Sanity Machine"
+    )
+    fresh_headers = account_cli_headers(fresh_jwt)
+    r_sanity = client.post(
+        f"{_BASE}/account/files/upload",
+        headers=fresh_headers,
+        files={"file": ("sanity.txt", io.BytesIO(b"sanity"), "text/plain")},
+    )
+    assert r_sanity.status_code == 200, (
+        f"Fresh valid account token must return 200 on /account/files/upload, "
+        f"got {r_sanity.status_code}: {r_sanity.text}"
+    )
+    assert r_sanity.json()["status"] == "temporary"
+
+    # ── Phase 8: Invalid MIME type → 400 ──────────────────────────────────
+    # application/octet-stream is not in the UPLOAD_ALLOWED_MIME_TYPES whitelist.
+    r_bad_mime = client.post(
+        f"{_BASE}/account/files/upload",
+        headers=fresh_headers,
+        files={
+            "file": ("binary.bin", io.BytesIO(b"\x00\x01\x02"), "application/octet-stream")
+        },
+    )
+    assert r_bad_mime.status_code == 400, (
+        f"Upload with invalid MIME type must return 400, "
+        f"got {r_bad_mime.status_code}: {r_bad_mime.text}"
+    )
+    bad_mime_detail = r_bad_mime.json().get("detail", "")
+    assert (
+        "octet-stream" in bad_mime_detail.lower()
+        or "not allowed" in bad_mime_detail.lower()
+        or "type" in bad_mime_detail.lower()
+    ), (
+        f"Error detail must mention the disallowed MIME type, got: {bad_mime_detail!r}"
+    )
+
+    # ── Phase 9: Oversize file → 400 ──────────────────────────────────────
+    # Patch the size limit to 1 byte so we can trigger the check without
+    # allocating a huge buffer.
+    with patch.object(
+        settings.__class__,
+        "upload_max_file_size_bytes",
+        new_callable=lambda: property(lambda self: 1),
+    ):
+        r_oversize = client.post(
+            f"{_BASE}/account/files/upload",
+            headers=fresh_headers,
+            files={"file": ("big.txt", io.BytesIO(b"more than one byte"), "text/plain")},
+        )
+    assert r_oversize.status_code == 400, (
+        f"Oversize upload must return 400, got {r_oversize.status_code}: {r_oversize.text}"
+    )
+    oversize_detail = r_oversize.json().get("detail", "")
+    assert (
+        "large" in oversize_detail.lower()
+        or "size" in oversize_detail.lower()
+        or "max" in oversize_detail.lower()
+    ), (
+        f"Error detail must mention the size limit, got: {oversize_detail!r}"
+    )
+
+
+# ── Scenario 25: Chat-flow proxy contract ────────────────────────────────────
+
+
+def test_account_chat_flow_proxy_contract(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    Chat-flow proxy contract — locking that the session control-plane routes the
+    CLI's ``cinna chat`` command relies on are all reachable through the
+    /account/api-proxy escape hatch (none is on the EXCLUDED_PREFIXES denylist)
+    and that the upload-then-reference flow works end-to-end.
+
+      1. Proxy policy: assert_api_proxy_allowed passes (no ApiProxyDenied raised)
+         for every route the chat flow depends on:
+           - POST sessions/
+           - GET  sessions/
+           - GET  sessions/{id}
+           - GET  sessions/{id}/messages
+           - POST sessions/{id}/messages/stream  (JSON ack, not SSE — proxy-safe)
+           - GET  sessions/{id}/streaming-status
+           - POST sessions/{id}/interrupt
+           - GET  files/{id}/download
+      2. Happy path — proxy correctly reaches the session routes end-to-end:
+         a. Upload a file via POST /account/files/upload → file_id.
+         b. Create a session via the proxy (POST sessions/) → session_id.
+         c. Send a message referencing the file via the proxy
+            (POST sessions/{id}/messages/stream with file_ids=[file_id]) →
+            proxy returns 200, body is a JSON ack (has "session_id" or "id" key),
+            confirming the route returns JSON (not SSE) and the proxy can buffer it.
+         d. Poll messages via the proxy (GET sessions/{id}/messages) →
+            200, body has "data" list (messages list shape).
+         e. GET streaming-status via the proxy →  200, body is JSON
+            (has "status" key).
+      3. Auth matrix (must mirror all other account-CLI routes):
+         a. Regular user JWT → 401 on every proxy sub-call
+         b. Per-agent child CLI token → 401
+         c. Revoked account token → 401
+
+    Notes:
+    - The actual agent streaming (SSE via socket.io) is NOT tested here — the
+      proxy contract tests only confirm the control-plane HTTP layer.
+    - The send-message call schedules a background task; drain_tasks() is NOT
+      called here because the test only asserts the ack shape (the proxy route
+      returns the JSON ack immediately before streaming begins).
+    - Policy assertions (Phase 1) import from the service module directly but
+      are pure Python with no I/O — justified by the README exemption for
+      architecture/unit tests; analogous assertions already exist in
+      tests/unit/test_api_proxy_policy.py for the existing TestDefaultAllow class.
+    """
+    from app.services.cli.account_api_proxy_policy import (
+        ApiProxyDenied,
+        assert_api_proxy_allowed,
+    )
+
+    _API = settings.API_V1_STR
+
+    # ── Phase 1: Policy gate — session routes are not on the denylist ──────
+
+    chat_flow_paths: list[tuple[str, str]] = [
+        ("POST", f"{_API}/sessions/"),
+        ("GET",  f"{_API}/sessions/"),
+        ("GET",  f"{_API}/sessions/{uuid.uuid4()}"),
+        ("GET",  f"{_API}/sessions/{uuid.uuid4()}/messages"),
+        # messages/stream returns JSON ack (not SSE) → proxy-safe
+        ("POST", f"{_API}/sessions/{uuid.uuid4()}/messages/stream"),
+        # streaming-status lives under /messages/ (not directly on the session)
+        ("GET",  f"{_API}/sessions/{uuid.uuid4()}/messages/streaming-status"),
+        # interrupt lives under /messages/ (POST /sessions/{id}/messages/interrupt)
+        ("POST", f"{_API}/sessions/{uuid.uuid4()}/messages/interrupt"),
+        ("GET",  f"{_API}/files/{uuid.uuid4()}/download"),
+    ]
+    for method, path in chat_flow_paths:
+        try:
+            assert_api_proxy_allowed(method, path)
+        except ApiProxyDenied as exc:
+            raise AssertionError(
+                f"Chat-flow route {method} {path} must NOT be on the proxy denylist, "
+                f"but assert_api_proxy_allowed raised ApiProxyDenied: {exc.reason!r} — "
+                f"{exc.message}"
+            ) from exc
+
+    # ── Phase 2: Bootstrap account token ──────────────────────────────────
+    account_jwt, account_token_id = bootstrap_account_token(
+        client, superuser_token_headers, machine_name="Chat Flow Machine"
+    )
+    acc_headers = account_cli_headers(account_jwt)
+
+    # Create an agent so we have something to attach the session to.
+    agent = create_agent_via_api(client, superuser_token_headers)
+    drain_tasks()
+    agent_id = agent["id"]
+
+    # ── Phase 3a: Upload a file via the dedicated upload route ────────────
+    upload_content = b"Chat test file content for file_ids reference."
+    r_upload = client.post(
+        f"{_BASE}/account/files/upload",
+        headers=acc_headers,
+        files={"file": ("chat_attachment.txt", io.BytesIO(upload_content), "text/plain")},
+    )
+    assert r_upload.status_code == 200, (
+        f"File upload for chat-flow test must return 200, "
+        f"got {r_upload.status_code}: {r_upload.text}"
+    )
+    upload_body = r_upload.json()
+    assert upload_body["status"] == "temporary", (
+        "Uploaded file must start as 'temporary'"
+    )
+    file_id = upload_body["id"]
+    assert file_id, "Upload must return a non-empty file id"
+
+    # ── Phase 3b: Create session through the proxy ────────────────────────
+    r_session = client.post(
+        f"{_BASE}/account/api-proxy",
+        headers=acc_headers,
+        json={
+            "method": "POST",
+            "path": "sessions/",
+            "json_body": {"agent_id": agent_id, "mode": "conversation"},
+        },
+    )
+    assert r_session.status_code == 200, (
+        f"Proxy POST sessions/ must return 200, "
+        f"got {r_session.status_code}: {r_session.text}"
+    )
+    session_data = r_session.json()
+    assert "id" in session_data, (
+        f"Session creation via proxy must return a session with 'id', got: {session_data}"
+    )
+    session_id = session_data["id"]
+
+    # ── Phase 3c: Send a message with file_ids through the proxy ──────────
+    # sessions/{id}/messages/stream returns a JSON ack dict (not SSE), so the
+    # buffered proxy can handle it.  The ack shape is: {"session_id": ..., ...}
+    r_msg = client.post(
+        f"{_BASE}/account/api-proxy",
+        headers=acc_headers,
+        json={
+            "method": "POST",
+            "path": f"sessions/{session_id}/messages/stream",
+            "json_body": {
+                "content": "Test message with file attachment",
+                "file_ids": [file_id],
+            },
+        },
+    )
+    assert r_msg.status_code == 200, (
+        f"Proxy POST sessions/{session_id}/messages/stream must return 200, "
+        f"got {r_msg.status_code}: {r_msg.text}"
+    )
+    msg_ack = r_msg.json()
+    # The ack must be a JSON dict (not SSE text) — confirms the proxy can buffer it.
+    assert isinstance(msg_ack, dict), (
+        f"messages/stream ack must be a JSON dict (not SSE), got: {type(msg_ack)}"
+    )
+    # The ack carries session_id (from MessageService.build_stream_response)
+    assert "session_id" in msg_ack or "id" in msg_ack, (
+        f"messages/stream ack must carry session_id or id, got keys: {list(msg_ack.keys())}"
+    )
+
+    # ── Phase 3d: Poll messages through the proxy ─────────────────────────
+    r_msgs = client.post(
+        f"{_BASE}/account/api-proxy",
+        headers=acc_headers,
+        json={
+            "method": "GET",
+            "path": f"sessions/{session_id}/messages",
+        },
+    )
+    assert r_msgs.status_code == 200, (
+        f"Proxy GET sessions/{session_id}/messages must return 200, "
+        f"got {r_msgs.status_code}: {r_msgs.text}"
+    )
+    msgs_body = r_msgs.json()
+    assert "data" in msgs_body, (
+        f"Messages response must have a 'data' list, got: {msgs_body}"
+    )
+    assert isinstance(msgs_body["data"], list), (
+        f"'data' in messages response must be a list, got: {type(msgs_body['data'])}"
+    )
+
+    # ── Phase 3e: Poll streaming-status through the proxy ─────────────────
+    # The route is GET /sessions/{id}/messages/streaming-status and returns
+    # {"is_streaming": bool, "stream_info": dict | None}.
+    r_status = client.post(
+        f"{_BASE}/account/api-proxy",
+        headers=acc_headers,
+        json={
+            "method": "GET",
+            "path": f"sessions/{session_id}/messages/streaming-status",
+        },
+    )
+    assert r_status.status_code == 200, (
+        f"Proxy GET sessions/{session_id}/messages/streaming-status must return 200, "
+        f"got {r_status.status_code}: {r_status.text}"
+    )
+    status_body = r_status.json()
+    assert isinstance(status_body, dict), (
+        f"streaming-status response must be a JSON dict, got: {type(status_body)}"
+    )
+    # The status payload has an "is_streaming" field.
+    assert "is_streaming" in status_body, (
+        f"streaming-status response must have an 'is_streaming' key, got: {status_body}"
+    )
+
+    # ── Phase 4: Auth matrix ───────────────────────────────────────────────
+
+    # a. Regular user JWT → 401 (account CLI token required by /account/api-proxy)
+    r_jwt = client.post(
+        f"{_BASE}/account/api-proxy",
+        headers=superuser_token_headers,
+        json={"method": "GET", "path": "sessions/"},
+    )
+    assert r_jwt.status_code == 401, (
+        f"Regular user JWT must be rejected on api-proxy, got {r_jwt.status_code}"
+    )
+
+    # b. Per-agent child CLI token → 401
+    child_mint = mint_child_token(
+        client, acc_headers, agent_id, machine_name="Chat Flow Child"
+    )
+    child_headers = cli_auth_headers(child_mint["token"])
+    r_child = client.post(
+        f"{_BASE}/account/api-proxy",
+        headers=child_headers,
+        json={"method": "GET", "path": "sessions/"},
+    )
+    assert r_child.status_code == 401, (
+        f"Per-agent child CLI token must be rejected on api-proxy, "
+        f"got {r_child.status_code}"
+    )
+
+    # c. Revoked account token → 401
+    revoke_account_token(client, superuser_token_headers, account_token_id)
+    r_revoked = client.post(
+        f"{_BASE}/account/api-proxy",
+        headers=acc_headers,
+        json={"method": "GET", "path": "sessions/"},
+    )
+    assert r_revoked.status_code == 401, (
+        f"Revoked account token must return 401 on api-proxy, "
+        f"got {r_revoked.status_code}"
     )

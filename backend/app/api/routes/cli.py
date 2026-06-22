@@ -13,7 +13,16 @@ Live sync model (replaces tarball push/pull and local container):
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, status
+from fastapi import (
+    APIRouter,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    WebSocket,
+    status,
+)
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session
@@ -76,6 +85,7 @@ from app.models.credentials.credential import (
     CredentialPublic,
     CredentialsPublic,
 )
+from app.models.files.file_upload import FileUploadPublic
 from app.models.mcp.mcp_provider import (
     DiscoverableAgents,
     MCPProviderConnectionResponse,
@@ -93,6 +103,7 @@ from app.services.cli.device_login_service import (
     DeviceLoginError,
     DeviceLoginService,
 )
+from app.services.files.file_service import FileService
 
 if TYPE_CHECKING:
     from app.services.agents.agent_service import CanBuildError
@@ -623,6 +634,41 @@ async def account_search_knowledge(
         db=db, user=account_ctx.user, query=body.query, topic=body.topic,
     )
     return {"results": results}
+
+
+@router.post("/account/files/upload", response_model=FileUploadPublic)
+async def account_upload_file(
+    *,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+    file: UploadFile = File(...),
+) -> Any:
+    """Upload a file for the account user and return its File record.
+
+    The account-CLI analogue of ``POST /files/upload``. The generic
+    ``/account/api-proxy`` escape hatch is JSON-only (it cannot carry a
+    multipart/binary body), so ``cinna chat --file`` needs a dedicated
+    multipart route to materialize a platform ``File`` it can then reference by
+    id in a session message's ``file_ids``.
+
+    The created file is attributed to the account token's owning user and is
+    subject to the same size / mime-type / quota validation as the normal
+    upload route. New uploads start as ``status="temporary"`` and are
+    referenced (made durable) when attached to a message.
+    """
+    db_file = await FileService.create_file_upload(
+        session=db,
+        user_id=account_ctx.user.id,
+        file=file,
+    )
+    return FileUploadPublic(
+        id=db_file.id,
+        filename=db_file.filename,
+        file_size=db_file.file_size,
+        mime_type=db_file.mime_type,
+        status=db_file.status,
+        uploaded_at=db_file.uploaded_at,
+    )
 
 
 class MintChildTokenBody(BaseModel):
