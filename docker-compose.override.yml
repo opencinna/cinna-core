@@ -45,8 +45,11 @@ services:
     restart: "no"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 10s
-      retries: 5
+      # First probe fires after `interval`; Postgres is ready in ~2s, so a short
+      # interval lets the backend's `depends_on: service_healthy` gate clear
+      # quickly instead of waiting ~10s on every cold `make up`.
+      interval: 2s
+      retries: 15
       start_period: 30s
       timeout: 10s
     ports:
