@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Copy, Check } from "lucide-react"
+import { Copy, Check, Waypoints } from "lucide-react"
 import { useState } from "react"
 
 import type { AgentPublic } from "@/client"
@@ -99,7 +99,10 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
           <CardHeader>
             <div className="flex items-start justify-between">
               <div className="space-y-1.5">
-                <CardTitle>A2A Integration</CardTitle>
+                <CardTitle className="flex items-center gap-2">
+                  <Waypoints className="h-5 w-5" />
+                  A2A Integration
+                </CardTitle>
                 <CardDescription>
                   Enable Agent-to-Agent protocol for external agent communication
                 </CardDescription>

@@ -120,7 +120,10 @@ export function EmailIntegrationCard({ agentId }: EmailIntegrationCardProps) {
       <CardHeader>
         <div className="flex items-start justify-between">
           <div className="space-y-1.5">
-            <CardTitle>Email Integration</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <Mail className="h-5 w-5" />
+              Email Integration
+            </CardTitle>
             <CardDescription>
               Receive and respond to emails as agent sessions
             </CardDescription>

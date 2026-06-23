@@ -111,8 +111,17 @@ def read_agents(
         apply_workspace_filter=apply_filter,
     )
 
-    # Convert to public format with clone info
-    agents_public = [_agent_to_public(session, a) for a in agents]
+    # Convert to public format with clone info. Capability flags are computed
+    # in a single batched query (not per-agent) to keep the list off N+1.
+    capability_map = AgentService.compute_capability_flags(
+        session, [a.id for a in agents]
+    )
+    agents_public = [
+        AgentService.to_public_with_clone_info(
+            session, a, capabilities=capability_map.get(a.id)
+        )
+        for a in agents
+    ]
     return AgentsPublic(data=agents_public, count=count)
 
 

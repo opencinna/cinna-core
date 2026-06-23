@@ -124,7 +124,7 @@ const AddCredential = () => {
       <DialogTrigger asChild>
         <Button className="my-4">
           <Plus className="mr-2" />
-          Add Credential
+          New Credential
         </Button>
       </DialogTrigger>
 

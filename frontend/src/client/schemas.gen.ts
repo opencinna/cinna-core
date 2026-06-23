@@ -5843,6 +5843,21 @@ export const AgentPublicSchema = {
             title: 'Agent Api Identity Enabled',
             default: false
         },
+        has_email_integration: {
+            type: 'boolean',
+            title: 'Has Email Integration',
+            default: false
+        },
+        has_mcp_connectors: {
+            type: 'boolean',
+            title: 'Has Mcp Connectors',
+            default: false
+        },
+        has_webhooks: {
+            type: 'boolean',
+            title: 'Has Webhooks',
+            default: false
+        },
         created_at: {
             type: 'string',
             format: 'date-time',

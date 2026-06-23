@@ -134,6 +134,19 @@ def enable_email_integration(
 # imports (same pattern as tests/utils/session.py for active_streaming_manager).
 # ---------------------------------------------------------------------------
 
+def list_agents(
+    client: TestClient,
+    token_headers: dict[str, str],
+) -> dict:
+    """List agents via GET /api/v1/agents/. Returns the full {data, count} JSON body."""
+    r = client.get(
+        f"{settings.API_V1_STR}/agents/",
+        headers=token_headers,
+    )
+    assert r.status_code == 200, f"List agents failed: {r.text}"
+    return r.json()
+
+
 def set_agent_status_rate_limit(env_id: "uuid.UUID") -> None:
     """Pre-populate the force-refresh rate-limit lock for an environment.
 

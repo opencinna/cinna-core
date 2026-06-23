@@ -257,6 +257,14 @@ class AgentPublic(SQLModel):
     webapp_enabled: bool = False
     agent_api_enabled: bool = False
     agent_api_identity_enabled: bool = False
+
+    # Computed capability flags — surface the agent's "purpose" on list cards
+    # without per-card queries. Reflect whether each integration is actively
+    # enabled (not merely configured). Populated in the public conversion.
+    has_email_integration: bool = False
+    has_mcp_connectors: bool = False
+    has_webhooks: bool = False
+
     created_at: datetime
     updated_at: datetime
     owner_id: uuid.UUID

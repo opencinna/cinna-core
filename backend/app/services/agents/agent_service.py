@@ -174,12 +174,74 @@ class AgentService:
             )
 
     @staticmethod
-    def to_public_with_clone_info(session: Session, agent: Agent) -> AgentPublic:
+    def compute_capability_flags(
+        session: Session, agent_ids: list[UUID]
+    ) -> dict[UUID, dict[str, bool]]:
+        """Batched lookup of active integration flags for a set of agents.
+
+        Returns a mapping ``agent_id -> {has_email_integration, has_mcp_connectors,
+        has_webhooks}``. Only *enabled/active* integrations count. Agents with no
+        matching rows are absent from the per-capability sets and default to False.
+
+        Single grouped query per capability keeps the agents-list endpoint off the
+        N+1 path.
+        """
+        from app.models.email.agent_email_integration import AgentEmailIntegration
+        from app.models.mcp.mcp_connector import MCPConnector
+        from app.models.agents.agent_webhook import AgentWebhook
+
+        if not agent_ids:
+            return {}
+
+        email_ids = set(
+            session.exec(
+                select(AgentEmailIntegration.agent_id).where(
+                    AgentEmailIntegration.agent_id.in_(agent_ids),
+                    AgentEmailIntegration.enabled == True,  # noqa: E712
+                )
+            ).all()
+        )
+        mcp_ids = set(
+            session.exec(
+                select(MCPConnector.agent_id).where(
+                    MCPConnector.agent_id.in_(agent_ids),
+                    MCPConnector.is_active == True,  # noqa: E712
+                )
+            ).all()
+        )
+        webhook_ids = set(
+            session.exec(
+                select(AgentWebhook.agent_id).where(
+                    AgentWebhook.agent_id.in_(agent_ids),
+                    AgentWebhook.enabled == True,  # noqa: E712
+                )
+            ).all()
+        )
+
+        return {
+            aid: {
+                "has_email_integration": aid in email_ids,
+                "has_mcp_connectors": aid in mcp_ids,
+                "has_webhooks": aid in webhook_ids,
+            }
+            for aid in agent_ids
+        }
+
+    @staticmethod
+    def to_public_with_clone_info(
+        session: Session,
+        agent: Agent,
+        capabilities: dict[str, bool] | None = None,
+    ) -> AgentPublic:
         """Convert Agent to AgentPublic with resolved bundle information.
 
         The legacy method name is kept temporarily for callers; the body now
         resolves the new ``installed_revision_number`` for installs of
         published bundles.
+
+        ``capabilities`` may carry precomputed integration flags (see
+        ``compute_capability_flags``) to avoid per-agent queries in list views;
+        when omitted they are computed for this single agent.
         """
         from app.models.bundles.agent_bundle_revision import AgentBundleRevision
 
@@ -190,6 +252,11 @@ class AgentService:
             if rev:
                 installed_revision_number = rev.revision_number
                 installed_revision_version = rev.version
+
+        if capabilities is None:
+            capabilities = AgentService.compute_capability_flags(
+                session, [agent.id]
+            ).get(agent.id, {})
 
         return AgentPublic(
             id=agent.id,
@@ -212,6 +279,9 @@ class AgentService:
             webapp_enabled=agent.webapp_enabled,
             agent_api_enabled=agent.agent_api_enabled,
             agent_api_identity_enabled=agent.agent_api_identity_enabled,
+            has_email_integration=capabilities.get("has_email_integration", False),
+            has_mcp_connectors=capabilities.get("has_mcp_connectors", False),
+            has_webhooks=capabilities.get("has_webhooks", False),
             created_at=agent.created_at,
             updated_at=agent.updated_at,
             owner_id=agent.owner_id,

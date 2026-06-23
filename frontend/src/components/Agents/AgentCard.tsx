@@ -1,7 +1,19 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { Bot, Share2, AlertCircle, Loader2 } from "lucide-react"
-import type { MouseEvent } from "react"
+import {
+  Bot,
+  Share2,
+  AlertCircle,
+  Loader2,
+  Network,
+  Globe,
+  Mail,
+  Unplug,
+  Webhook,
+  Waypoints,
+  Package,
+} from "lucide-react"
+import type { ComponentType, MouseEvent } from "react"
 
 import type { AgentPublic, AgentStatusPublic } from "@/client"
 import { InstallsService } from "@/client"
@@ -13,6 +25,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
 import { getColorPreset } from "@/utils/colorPresets"
 import { AgentStatusCardFooter } from "./AgentStatusCardFooter"
 
@@ -27,6 +40,22 @@ export function AgentCard({ agent, status }: AgentCardProps) {
   const colorPreset = getColorPreset(agent.ui_color_preset)
   const hasStatusFooter =
     !!status && (status.severity != null || status.raw != null)
+
+  // Capability badges summarise the agent's "purpose" on the card. When the
+  // agent exposes any integration, these replace the entrypoint-prompt preview.
+  const a2aEnabled =
+    !!(agent.a2a_config as { enabled?: boolean } | null)?.enabled
+  const capabilityBadges: { label: string; icon: ComponentType<{ className?: string }> }[] = [
+    ...(agent.bundle_uuid && agent.is_publisher_install
+      ? [{ label: "Bundle", icon: Package }]
+      : []),
+    ...(agent.agent_api_enabled ? [{ label: "API", icon: Network }] : []),
+    ...(agent.webapp_enabled ? [{ label: "Web App", icon: Globe }] : []),
+    ...(agent.has_email_integration ? [{ label: "Email", icon: Mail }] : []),
+    ...(agent.has_mcp_connectors ? [{ label: "MCP", icon: Unplug }] : []),
+    ...(agent.has_webhooks ? [{ label: "Webhooks", icon: Webhook }] : []),
+    ...(a2aEnabled ? [{ label: "A2A", icon: Waypoints }] : []),
+  ]
 
   const applyUpdate = useMutation({
     mutationFn: () => InstallsService.applyUpdate({ agentId: agent.id }),
@@ -77,12 +106,25 @@ export function AgentCard({ agent, status }: AgentCardProps) {
             </div>
           </div>
         </CardHeader>
-        {agent.entrypoint_prompt && (
+        {capabilityBadges.length > 0 ? (
           <CardContent className="pt-0 flex-1 min-h-0">
-            <pre className="text-xs bg-muted/50 rounded-md p-3 overflow-hidden whitespace-pre-wrap break-words font-mono line-clamp-4">
-              {agent.entrypoint_prompt}
-            </pre>
+            <div className="flex flex-wrap gap-1.5">
+              {capabilityBadges.map(({ label, icon: Icon }) => (
+                <Badge key={label} variant="secondary" className="gap-1.5">
+                  <Icon className="h-3.5 w-3.5" />
+                  {label}
+                </Badge>
+              ))}
+            </div>
           </CardContent>
+        ) : (
+          agent.entrypoint_prompt && (
+            <CardContent className="pt-0 flex-1 min-h-0">
+              <pre className="text-xs bg-muted/50 rounded-md p-3 overflow-hidden whitespace-pre-wrap break-words font-mono line-clamp-4">
+                {agent.entrypoint_prompt}
+              </pre>
+            </CardContent>
+          )
         )}
       </Link>
       {agent.pending_update && (

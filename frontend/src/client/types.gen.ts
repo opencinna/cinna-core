@@ -1217,6 +1217,9 @@ export type AgentPublic = {
     webapp_enabled?: boolean;
     agent_api_enabled?: boolean;
     agent_api_identity_enabled?: boolean;
+    has_email_integration?: boolean;
+    has_mcp_connectors?: boolean;
+    has_webhooks?: boolean;
     created_at: string;
     updated_at: string;
     owner_id: string;
