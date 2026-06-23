@@ -301,20 +301,22 @@
   card:
   - Rendered only when `useRole().isDeveloper` is true
   - React Query key `["account-cli-tokens"]` → `CliService.listAccountTokens()`
-  - "Set up Local Development" button → `CliService.createAccountSetupToken()`
+  - "Setup" button (header) → `CliService.createAccountSetupToken()`
     mutation; on success stores token in component state and starts a 1-second
     expiry countdown
   - Setup-command section: read-only `Input` + three icon buttons (Regenerate,
     Copy token, Copy command); countdown hidden once expired
-  - Active sessions list: one row per token showing machine name, synced-child
-    count ("N agents synced"), Disconnect icon with an `AlertDialog` that names
-    the count in the warning text; `revokeAccountToken` mutation invalidates
+  - Active sessions list: styled to match the App Sessions card (`divide-y`
+    list, leading `Laptop` icon, name + muted sub-line) — one row per token
+    showing machine name, synced-child count ("N agents synced"), and a ghost
+    Disconnect icon button (`Unplug`) with an `AlertDialog` that names the count
+    in the warning text; `revokeAccountToken` mutation invalidates
     `["account-cli-tokens"]`
 
 ### Frontend — Placement
 
-- `frontend/src/routes/_layout/settings.tsx` — `LocalDevelopmentCard` added to
-  the **Channels** tab grid (alongside `AppAgentRoutesCard`)
+- `frontend/src/routes/_layout/settings.tsx` — `LocalDevelopmentCard` lives in
+  the **Security** tab grid (alongside `DesktopSessionsCard`)
 
 ### Frontend — Generated Client
 

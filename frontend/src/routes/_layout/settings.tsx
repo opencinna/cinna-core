@@ -76,6 +76,7 @@ function UserSettings() {
           <OAuthAccounts />
           <SecurityTab />
           <DesktopSessionsCard />
+          <LocalDevelopmentCard />
         </div>
       ),
     },
@@ -99,7 +100,6 @@ function UserSettings() {
           <MailServerSettings />
           <AppAgentRoutesCard />
           <IdentityServerCard />
-          <LocalDevelopmentCard />
         </div>
       ),
     },

@@ -17,7 +17,7 @@ token's provenance differs from one set up manually.
 
 | Concept | Description |
 |---------|-------------|
-| **Account Setup Token** | Short-lived (15 min), single-use token with `kind="account"`. Created from Settings → Channels → Local Development. The `curl | python3` one-liner exchanges it for an account CLI token |
+| **Account Setup Token** | Short-lived (15 min), single-use token with `kind="account"`. Created from Settings → Security → Local Development. The `curl | python3` one-liner exchanges it for an account CLI token |
 | **Account CLI Token** | Long-lived JWT (`token_type="cli-account"`, `agent_id=NULL`). Stored in `.cinna/account.json` on the user's machine. Scoped **only** to the `/account/*` route group — rejected by all per-agent routes |
 | **Child Token (minted)** | A standard per-agent `token_type="cli"` token minted by the account token via `POST /account/agents/{id}/mint`. Carries `minted_by_account_token_id` as provenance. Authenticates the existing per-agent sync / exec / workspace endpoints unchanged |
 | **Building-rights predicate (`can_build`)** | `developer-or-admin role AND not a foreign install AND user owns the agent`. The single gate for setup-token creation (both per-agent and account), the mint endpoint, and the `can_build` flag in the agents listing |
@@ -28,10 +28,10 @@ token's provenance differs from one set up manually.
 
 ### 1. Bootstrapping the Account Workspace
 
-1. User navigates to **Settings → Channels** tab.
+1. User navigates to **Settings → Security** tab.
 2. The **Local Development** card is visible only to `agent-developer` / `admin`
    users (agent-users do not see it at all).
-3. User clicks **Set up Local Development** — the platform generates a
+3. User clicks **Setup** — the platform generates a
    15-minute single-use account setup token and displays a `curl | python3`
    one-liner.
 4. User copies the command and runs it in their terminal.
@@ -788,7 +788,9 @@ infrastructure through the api-proxy.
 
 ### 8. Managing Account Sessions (UI)
 
-1. Settings → Channels → Local Development card lists active account sessions.
+1. Settings → Security → Local Development card lists active account sessions.
+   The list uses the same row style as the App Sessions card (`divide-y` list,
+   leading device icon, name + muted sub-line).
 2. Each row shows machine name, token prefix, and the synced-child count
    (e.g. "3 agents synced"), giving the cascade blast radius at a glance.
 3. **Disconnect** (icon-only button, destructive alert dialog) — revokes the

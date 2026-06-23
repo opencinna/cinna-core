@@ -43,8 +43,8 @@
 - `frontend/src/components/Auth/NativeAuthConsentPage.tsx` — Shared consent screen component for both native surfaces; parameterized by the service endpoints (`getRequest`/`submitConsent`) and renders "Cinna Mobile" vs "Cinna Desktop" copy from `client_kind`
 - `frontend/src/routes/desktop-auth/consent.tsx` — Public SPA consent page at `/desktop-auth/consent?request={nonce}` (thin wrapper around `NativeAuthConsentPage` wired to `DesktopAuthService`)
 - `frontend/src/routes/app-auth/consent.tsx` — Public SPA consent page at `/app-auth/consent?request={nonce}` (wrapper wired to `AppAuthService`)
-- `frontend/src/components/UserSettings/DesktopSessionsCard.tsx` — Connected devices list + disconnect dialog
-- `frontend/src/routes/_layout/settings.tsx` — DesktopSessionsCard added to Security tab
+- `frontend/src/components/UserSettings/DesktopSessionsCard.tsx` — "App Sessions" card: connected devices list (desktop + mobile, since both client kinds share the `desktop_oauth_client` table) + disconnect dialog. Platform icon maps macOS/Windows/Linux/iOS/Android; disconnect is a ghost icon button (`Unplug`)
+- `frontend/src/routes/_layout/settings.tsx` — DesktopSessionsCard added to Security tab (the Local Development card was also moved here from the Channels tab)
 - `frontend/src/client/sdk.gen.ts` — `DesktopAuthService` + `AppAuthService` (auto-generated)
 
 ## Database Schema

@@ -20,7 +20,7 @@ Cinna Mobile uses the **same flow** through a parallel route namespace mounted a
 - **Token pair** — Short-lived access token (15 min) + long-lived refresh token (30 days)
 - **Silent refresh** — Desktop app renews access tokens without user interaction
 - **Multi-instance** — User can be logged into multiple instances simultaneously
-- **Per-device session management** — Each desktop installation registers as a separate client; revoke individual devices from Settings
+- **Per-device session management** — Each desktop or mobile installation registers as a separate client; revoke individual devices from Settings. Because both surfaces share the `DesktopOAuthClient` table, the Settings card lists desktop and mobile clients together
 - **User profile lookup** — Desktop apps can call a dedicated `/userinfo` endpoint to display the signed-in user's email and full name after a successful token exchange
 
 ## User Flows
@@ -61,9 +61,9 @@ Desktop app silently refreshes the access token before it expires:
 
 ### Disconnecting from Settings
 
-1. User navigates to **Settings > Security > Desktop Sessions**
-2. Sees a list of all connected desktop apps (device name, platform, last used time)
-3. Clicks "Disconnect" on a device and confirms in the dialog
+1. User navigates to **Settings > Security > App Sessions**
+2. Sees a list of all connected desktop and mobile apps (device name, platform, last used time)
+3. Clicks the disconnect icon button on a device and confirms in the dialog
 4. Backend revokes the client and all its refresh tokens
 5. The next API call from that desktop app — even with a still-valid (unexpired) access token — is rejected with `401 Desktop session has been revoked`, because `get_current_user` checks `DesktopOAuthClient.is_revoked` on every request whose JWT carries `client_kind="desktop"`
 6. The refresh endpoint also rejects the refresh token with `invalid_grant`
@@ -134,9 +134,9 @@ The `/.well-known/cinna-desktop` (desktop) and `/.well-known/cinna-app` (mobile)
 
 ## Settings UI
 
-**Settings > Security > Desktop Sessions card** shows:
-- List of connected desktop apps with device name, platform icon, app version badge, and last-used time
-- "Disconnect" button (destructive, requires confirmation) to revoke a specific device
-- Empty state with download prompt when no devices are connected
+**Settings > Security > App Sessions card** shows:
+- List of connected **desktop and mobile** apps — both surfaces share the `DesktopOAuthClient` table, so the card lists every native client kind together — with device name, platform icon (macOS/Windows/Linux/iOS/Android, falling back to a generic device icon), app version badge, and last-used time
+- Disconnect icon button (ghost, turns destructive-red on hover, requires confirmation) to revoke a specific device
+- Empty state with a "Download Cinna Desktop or Cinna Mobile" prompt when no devices are connected
 
-Note: There is no separate "Register" button in the UI — clients are created automatically during the first consent flow from Cinna Desktop.
+Note: There is no separate "Register" button in the UI — clients are created automatically during the first consent flow from Cinna Desktop or Cinna Mobile.
