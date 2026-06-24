@@ -138,44 +138,75 @@ def test_owned_credential_categorization(
     )
 
 
-# ── Scenario 2: mcp_provider credential is "automatic" and not duplicated ────
+# ── Scenario 2: mcp_provider categorization splits agent2agent vs external ───
 
 
-def test_mcp_provider_credential_is_automatic(
+def test_mcp_provider_categorization_agent2agent_vs_external(
     client: TestClient,
     superuser_token_headers: dict[str, str],
 ) -> None:
-    """An mcp_provider credential is folded into 'automatic', not 'mine' or 'bundle'.
+    """mcp_provider categorization depends on ``mcp_auth_mode``.
 
-    1. Create an mcp_provider credential directly.
-    2. List GET /credentials/ and verify category == "automatic".
-    3. Ensure it appears only ONCE in the list (not duplicated).
+    Only an auto-managed platform agent-to-agent connection
+    (``mcp_auth_mode == "agent2agent"``) is "Automatic Credentials". A manually
+    added external MCP server (none / fixed_token / oauth_dcr → NULL here) is an
+    ordinary "My Credentials" entry.
+
+    1. Create an external mcp_provider (no agent2agent mode) → category "mine".
+    2. Create an agent2agent mcp_provider → category "automatic".
+    3. Each appears exactly once in GET /credentials/.
     """
-    # ── Phase 1: create mcp_provider credential directly ──────────────────────
+    # ── Phase 1: external mcp_provider → "mine" ───────────────────────────────
     r = client.post(
         f"{API}/credentials/",
         headers=superuser_token_headers,
         json={
-            "name": f"mcp-test-{uuid.uuid4().hex[:8]}",
+            "name": f"mcp-external-{uuid.uuid4().hex[:8]}",
             "type": "mcp_provider",
+            "mcp_auth_mode": "fixed_token",
             "credential_data": {
-                "server_url": "https://mcp.example.com",
-                "name": "test-mcp-server",
+                "endpoint_url": "https://mcp.example.com/mcp",
+                "auth_mode": "fixed_token",
             },
         },
     )
     assert r.status_code == 200, r.text
-    mcp_cred_id = r.json()["id"]
+    external_id = r.json()["id"]
 
-    # ── Phase 2: verify category == "automatic" in the owned list ─────────────
+    # ── Phase 2: agent2agent mcp_provider → "automatic" ───────────────────────
+    r = client.post(
+        f"{API}/credentials/",
+        headers=superuser_token_headers,
+        json={
+            "name": f"mcp-a2a-{uuid.uuid4().hex[:8]}",
+            "type": "mcp_provider",
+            "mcp_auth_mode": "agent2agent",
+            "credential_data": {
+                "endpoint_url": "https://mcp.example.com/abc/mcp",
+                "auth_mode": "agent2agent",
+            },
+        },
+    )
+    assert r.status_code == 200, r.text
+    a2a_id = r.json()["id"]
+
+    # ── Phase 3: verify categories in the owned list ──────────────────────────
     owned = _list_owned_credentials(client, superuser_token_headers)
 
-    mcp_entries = [c for c in owned if c["id"] == mcp_cred_id]
-    assert len(mcp_entries) == 1, (
-        f"Expected mcp_provider credential to appear exactly once; got {len(mcp_entries)}"
+    external_entries = [c for c in owned if c["id"] == external_id]
+    assert len(external_entries) == 1, (
+        f"Expected external mcp_provider exactly once; got {len(external_entries)}"
     )
-    assert mcp_entries[0]["category"] == "automatic", (
-        f"mcp_provider should be 'automatic'; got '{mcp_entries[0]['category']}'"
+    assert external_entries[0]["category"] == "mine", (
+        f"external mcp_provider should be 'mine'; got '{external_entries[0]['category']}'"
+    )
+
+    a2a_entries = [c for c in owned if c["id"] == a2a_id]
+    assert len(a2a_entries) == 1, (
+        f"Expected agent2agent mcp_provider exactly once; got {len(a2a_entries)}"
+    )
+    assert a2a_entries[0]["category"] == "automatic", (
+        f"agent2agent mcp_provider should be 'automatic'; got '{a2a_entries[0]['category']}'"
     )
 
 

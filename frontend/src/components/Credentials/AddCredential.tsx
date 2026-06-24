@@ -119,6 +119,7 @@ const AddCredential = () => {
     <ConnectMcpProviderDialog
       open={connectMcpOpen}
       onOpenChange={setConnectMcpOpen}
+      defaultWorkspaceId={workspaceFilter || undefined}
     />
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>

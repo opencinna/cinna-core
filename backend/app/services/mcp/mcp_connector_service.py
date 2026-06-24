@@ -108,6 +108,14 @@ class MCPConnectorService:
         if connector.owner_id != owner_id:
             raise MCPPermissionDeniedError()
 
+        # Auto-cleanup on disconnect (Fix 4A): delete every agent2agent
+        # mcp_provider credential built from this connector BEFORE the connector
+        # (and its CASCADE-bound mcp_tokens) is removed, so we can still resolve
+        # credential <- bound token <- connector. Manual/external mcp_provider
+        # credentials and all other types are left untouched (the helper gate is
+        # auth_mode=="agent2agent").
+        MCPConnectorService._cleanup_agent2agent_credentials(db_session, connector_id)
+
         db_session.delete(connector)
 
         # Evict MCP server from registry
@@ -116,6 +124,62 @@ class MCPConnectorService:
 
         db_session.commit()
         return True
+
+    @staticmethod
+    def _cleanup_agent2agent_credentials(
+        db_session: DBSession,
+        connector_id: uuid.UUID,
+    ) -> None:
+        """
+        Delete agent2agent ``mcp_provider`` credentials bound to ``connector_id``.
+
+        Resolves the credentials via their bound ``mcp_token`` (whose
+        ``connector_id`` points at this connector), gates each on the shared
+        agent2agent helper, and deletes via the gate-bypassing internal delete
+        (the connector owner is not necessarily the credential owner, and this is
+        the intended disconnect path for a dead pair connection). Each delete
+        cascade-removes the bound token + ``AgentCredentialLink`` rows and fires
+        the consumer env-sync so the dead MCP server drops from ``user_mcp.json``.
+
+        ``delete_connector`` is a sync route handler with no running event loop, so
+        the async credential-delete + env-sync is driven via ``asyncio.run``
+        (the established sync→async bridge, e.g. ``model_discovery_scheduler``).
+        """
+        import asyncio
+
+        from app.models.mcp.mcp_token import MCPToken
+        from app.models.credentials.credential import Credential
+        from app.services.credentials.credentials_service import CredentialsService
+
+        credential_ids = {
+            cid
+            for cid in db_session.exec(
+                select(MCPToken.credential_id).where(
+                    MCPToken.connector_id == connector_id,
+                    MCPToken.credential_id.is_not(None),
+                )
+            ).all()
+            if cid is not None
+        }
+        if not credential_ids:
+            return
+
+        async def _delete_all() -> None:
+            for credential_id in credential_ids:
+                credential = db_session.get(Credential, credential_id)
+                if credential is None:
+                    continue
+                if not CredentialsService._is_agent2agent_mcp_provider(
+                    db_session, credential
+                ):
+                    # Defensive: a non-agent2agent credential bound to this
+                    # connector should not exist, but never auto-delete one.
+                    continue
+                await CredentialsService._delete_credential_internal(
+                    db_session, credential
+                )
+
+        asyncio.run(_delete_all())
 
     @staticmethod
     def check_user_access(

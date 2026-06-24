@@ -38,6 +38,13 @@ interface ConnectMcpProviderDialogProps {
   onOpenChange: (open: boolean) => void
   /** Optional consumer agent to link the new credential to immediately. */
   defaultConsumerAgentId?: string
+  /**
+   * Active workspace to stamp a new *external* provider with when there is no
+   * consumer agent (so a manual external MCP server lands in the user's current
+   * workspace, like any "My Credentials" entry). Ignored for the platform path
+   * (that workspace follows the producer/consumer agents).
+   */
+  defaultWorkspaceId?: string
   /** Called after a successful connect (e.g. to refresh the parent list). */
   onConnected?: () => void
 }
@@ -58,6 +65,7 @@ export function ConnectMcpProviderDialog({
   open,
   onOpenChange,
   defaultConsumerAgentId,
+  defaultWorkspaceId,
   onConnected,
 }: ConnectMcpProviderDialogProps) {
   const queryClient = useQueryClient()
@@ -168,6 +176,12 @@ export function ConnectMcpProviderDialog({
           auth_mode: authMode,
           token: authMode === "fixed_token" ? token.trim() : null,
           consumer_agent_id: defaultConsumerAgentId ?? null,
+          // Only relevant when there is no consumer agent — a manual external
+          // provider follows the user's active workspace (backend ignores it
+          // when a consumer agent is supplied).
+          user_workspace_id: defaultConsumerAgentId
+            ? null
+            : (defaultWorkspaceId ?? null),
           label: label.trim() || null,
           mcp_mode_conversation: modeConversation,
           mcp_mode_building: modeBuilding,
@@ -229,6 +243,11 @@ export function ConnectMcpProviderDialog({
           </>
         )}
 
+        {/* (Fix 3) The Platform-Agent path intentionally has NO endpoint-URL
+            field: the MCP server URL is derived server-side from the chosen
+            connector ({MCP_SERVER_BASE_URL}/{connector_id}/mcp). Do not
+            reintroduce a URL input here — URL entry belongs only to the
+            `flow === "external"` block below. */}
         {flow === "platform" && (
           <>
             <DialogHeader>

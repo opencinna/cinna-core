@@ -97,6 +97,7 @@ def _credential_to_public(
         category=category,
         agent_usage_count=agent_usage_count,
         used_in_bundle=used_in_bundle,
+        mcp_consumer_agent_id=credential.mcp_consumer_agent_id,
     )
 
 
@@ -176,6 +177,7 @@ def read_credentials(
                 is_owned=True,
                 credential_type=c.type,
                 share_source=None,
+                mcp_auth_mode=c.mcp_auth_mode,
             ),
         )
         for c in credentials

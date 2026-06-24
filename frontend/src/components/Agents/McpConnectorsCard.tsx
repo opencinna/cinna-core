@@ -816,7 +816,12 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
     ) {
       body.allowed_user_ids = newUserIds
     }
-    if (editAllowTokenAccess !== editingConnector.allow_token_access) {
+    // The "Allow token access" switch is hidden for agent2agent connectors,
+    // where it must stay auto-enabled — never send the now-hidden state for them.
+    if (
+      !editingConnector.is_agent_to_agent &&
+      editAllowTokenAccess !== editingConnector.allow_token_access
+    ) {
       body.allow_token_access = editAllowTokenAccess
     }
     updateConnectorMutation.mutate({ connectorId: editingConnector.id, body })
@@ -1791,7 +1796,7 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent side="top" className="text-xs">
-                            Edit connector & manage tokens
+                            Edit connector
                           </TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
@@ -2198,31 +2203,41 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                 </p>
               )}
             </div>
-            <Separator />
-            <div className="flex items-center justify-between py-1">
-              <div className="space-y-0.5 pr-4">
-                <Label className="text-sm">Allow token access</Label>
-                <p className="text-xs text-muted-foreground">
-                  When off, clients must authorize via OAuth. When on, you can generate a
-                  direct access token that a client uses without an account — it connects
-                  under your name, for this connector only.
-                </p>
-              </div>
-              <Switch
-                checked={editAllowTokenAccess}
-                onCheckedChange={setEditAllowTokenAccess}
-              />
-            </div>
-            {editingConnector && editAllowTokenAccess && (
+            {/* Agent2agent connectors expose their agent as a peer MCP server
+                for other agents (not external LLM clients): token access is
+                auto-enabled and managed by the consumer connect helper, and the
+                public MCP URL is not user-facing. Hide both external-only blocks
+                so the agent2agent edit form mirrors its create form (name / mode
+                / allowed users only). */}
+            {editingConnector && !editingConnector.is_agent_to_agent && (
               <>
                 <Separator />
-                <McpDirectTokensManager
-                  agentId={agentId}
-                  connectorId={editingConnector.id}
-                />
+                <div className="flex items-center justify-between py-1">
+                  <div className="space-y-0.5 pr-4">
+                    <Label className="text-sm">Allow token access</Label>
+                    <p className="text-xs text-muted-foreground">
+                      When off, clients must authorize via OAuth. When on, you can generate a
+                      direct access token that a client uses without an account — it connects
+                      under your name, for this connector only.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={editAllowTokenAccess}
+                    onCheckedChange={setEditAllowTokenAccess}
+                  />
+                </div>
+                {editAllowTokenAccess && (
+                  <>
+                    <Separator />
+                    <McpDirectTokensManager
+                      agentId={agentId}
+                      connectorId={editingConnector.id}
+                    />
+                  </>
+                )}
               </>
             )}
-            {editingConnector && (
+            {editingConnector && !editingConnector.is_agent_to_agent && (
               <div className="space-y-2">
                 <Label>MCP Server URL</Label>
                 {getMcpServerUrl(editingConnector.id) ? (

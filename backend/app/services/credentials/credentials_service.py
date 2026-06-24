@@ -1620,6 +1620,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             service_uri=credential_in.service_uri,
             mcp_mode_conversation=credential_in.mcp_mode_conversation,
             mcp_mode_building=credential_in.mcp_mode_building,
+            mcp_consumer_agent_id=credential_in.mcp_consumer_agent_id,
+            mcp_auth_mode=credential_in.mcp_auth_mode,
             template_private_fields=template_private_fields,
             encrypted_data=encrypted_data,
             owner_id=owner_id,
@@ -1876,6 +1878,74 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 session=session,
                 credential_id=credential_id,
                 agent_ids=affected_agent_ids
+            )
+
+    @staticmethod
+    def _is_agent2agent_mcp_provider(
+        session: Session, credential: Credential
+    ) -> bool:
+        """
+        True iff ``credential`` is an *agent2agent* ``mcp_provider`` connection.
+
+        This is the single distinguishing test for every agent2agent-only
+        behavior (Fix 4 auto-cleanup, Fix 5 one-per-pair). The encrypted blob is
+        decrypted ONLY for ``MCP_PROVIDER`` rows so we never pay the decrypt cost
+        on other credential types. External/manual mcp_provider credentials
+        (``auth_mode`` in ``none`` / ``fixed_token`` / ``oauth_dcr``) return False
+        and are left completely unaffected.
+        """
+        if credential.type != CredentialType.MCP_PROVIDER:
+            return False
+        try:
+            data = CredentialsService.decrypt_credential_data(
+                session=session, credential=credential
+            )
+        except Exception:
+            # A blob we cannot decrypt is not safe to auto-delete; treat as
+            # non-agent2agent so the gates become no-ops.
+            return False
+        return data.get("auth_mode") == "agent2agent"
+
+    @staticmethod
+    async def _delete_credential_internal(
+        session: Session,
+        credential: Credential,
+        affected_agent_ids: list[uuid.UUID] | None = None,
+    ) -> None:
+        """
+        Delete a credential bypassing the blast-radius (deletion-impact) gate.
+
+        This is the auto-disconnect path for agent2agent ``mcp_provider``
+        credentials (Fix 4): the connector owner is not necessarily the credential
+        owner, and auto-delete-on-disconnect is the *intended* lifecycle for a dead
+        pair connection — so the gate that protects shared/published credentials
+        from accidental manual deletion does not apply.
+
+        Mirrors the tail of ``delete_credential``: collect affected agents BEFORE
+        the row (and its cascading ``AgentCredentialLink`` / bound ``MCPToken``)
+        is removed, delete + commit, then fire the env-sync event so the dead MCP
+        server drops out of each consumer's ``user_mcp.json`` on the next sync.
+
+        ``affected_agent_ids`` may be supplied by callers that have already removed
+        the credential's ``AgentCredentialLink`` rows (e.g. the unlink-delete path,
+        which deletes the consumer link before reaching here). In that case a
+        post-delete re-query would miss the just-removed consumer, so the caller
+        passes the agents captured BEFORE the link delete. When ``None`` the
+        affected agents are resolved from the surviving links (connector-delete
+        path, where the links are still intact at this point).
+        """
+        credential_id = credential.id
+        if affected_agent_ids is None:
+            affected_agent_ids = CredentialsService.get_affected_agents(
+                session, credential_id
+            )
+        session.delete(credential)
+        session.commit()
+        if affected_agent_ids:
+            await CredentialsService.event_credential_deleted(
+                session=session,
+                credential_id=credential_id,
+                agent_ids=affected_agent_ids,
             )
 
     @staticmethod
@@ -2186,6 +2256,34 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         if not CredentialShareService.can_user_access_credential(session, credential_id, owner_id):
             raise ValueError("Not enough permissions to access this credential")
 
+        # Agent2agent one-per-pair binding (Fix 5). Only mcp_provider rows are
+        # candidates; the cheap column check handles the mismatch case without any
+        # decryption, and we decrypt (via the shared helper) ONLY to confirm the
+        # agent2agent flavor before binding a floating connection. External/manual
+        # mcp_provider and every other credential type are untouched here — freely
+        # linkable / relinkable / shareable.
+        if credential.type == CredentialType.MCP_PROVIDER:
+            if (
+                credential.mcp_consumer_agent_id is not None
+                and credential.mcp_consumer_agent_id != agent_id
+            ):
+                raise ValueError(
+                    "This agent-to-agent MCP connection is bound to a different "
+                    "agent and cannot be linked elsewhere."
+                )
+            if (
+                credential.mcp_consumer_agent_id is None
+                and CredentialsService._is_agent2agent_mcp_provider(
+                    session, credential
+                )
+            ):
+                # Floating agent2agent connection (connected without a consumer):
+                # the first link establishes the pair so the consumer column is
+                # always set for a linked agent2agent credential.
+                credential.mcp_consumer_agent_id = agent_id
+                session.add(credential)
+                session.commit()
+
         # Link credential to agent (idempotent)
         existing_link = session.exec(
             select(AgentCredentialLink).where(
@@ -2232,6 +2330,17 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         if not is_superuser and agent.owner_id != owner_id:
             raise ValueError("Not enough permissions to access this agent")
 
+        # Capture the agents affected by this credential BEFORE removing the link.
+        # On the agent2agent auto-delete path (below) the link is gone by the time
+        # we delete the credential, so a post-delete re-query of AgentCredentialLink
+        # would miss the just-unlinked consumer and skip its env-sync entirely —
+        # leaving the now-dead MCP server in the consumer's running container until
+        # some unrelated later sync. Capturing here (and always including agent_id)
+        # guarantees the consumer's env-sync fires when the pair credential dies.
+        affected_agent_ids = CredentialsService.get_affected_agents(
+            session, credential_id
+        )
+
         # Unlink credential from agent
         link = session.exec(
             select(AgentCredentialLink).where(
@@ -2242,6 +2351,37 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         if link:
             session.delete(link)
             session.commit()
+
+        # Auto-delete on disconnect (Fix 4B): an agent2agent mcp_provider
+        # connection has no meaning detached from its consumer, so unlinking the
+        # *bound* consumer deletes the credential (and cascade-deletes its bound
+        # direct token). The cheap column check gates the decrypt: only when the
+        # unlinked agent IS the recorded consumer do we confirm the agent2agent
+        # flavor and delete. Any other case — a non-bound agent (extra share-link),
+        # a NULL column, an external/manual mcp_provider, or any other type —
+        # falls through to a plain unlink, protecting manual providers and shares.
+        credential = session.get(Credential, credential_id)
+        if (
+            credential is not None
+            and credential.mcp_consumer_agent_id == agent_id
+            and CredentialsService._is_agent2agent_mcp_provider(session, credential)
+        ):
+            # The internal delete bypasses the blast-radius gate. Safe on this
+            # consumer-owned path too: an agent2agent pair credential is created
+            # with allow_sharing=False and is never bundle-published, so it can
+            # never be a Tier-2 (PBP / shared) credential the gate protects.
+            #
+            # Pass the pre-captured affected agents (the link was deleted above, so
+            # a re-query would miss the consumer). The unlinked agent_id is always
+            # included so the consumer's env-sync fires even if it was somehow the
+            # only link.
+            sync_agent_ids = list(affected_agent_ids)
+            if agent_id not in sync_agent_ids:
+                sync_agent_ids.append(agent_id)
+            await CredentialsService._delete_credential_internal(
+                session, credential, affected_agent_ids=sync_agent_ids
+            )
+            return
 
         # Sync to running environments
         await CredentialsService.event_credential_unshared(
@@ -2623,6 +2763,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         is_owned: bool,
         credential_type: CredentialType,
         share_source: str | None,
+        mcp_auth_mode: str | None = None,
     ) -> str:
         """Categorize a credential into a UI tab discriminator.
 
@@ -2632,17 +2773,25 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         this; no caller should re-derive provenance or automatic-ness.
 
         Rules:
-          1. Owned + type ∈ {AGENT_API, MCP_PROVIDER} → "automatic".
-          2. Owned + any other type                   → "mine".
-          3. Shared + share_source == "bundle_install" → "bundle".
-          4. Shared + share_source ∈ {"direct", None}  → "mine".
+          1. Owned + AGENT_API                                  → "automatic".
+          2. Owned + MCP_PROVIDER with mcp_auth_mode=="agent2agent"
+                                                                 → "automatic".
+             (An external MCP server — none/fixed_token/oauth_dcr — is manually
+             managed, so it is "mine", not auto-managed.)
+          3. Owned + any other type                             → "mine".
+          4. Shared + share_source == "bundle_install"          → "bundle".
+          5. Shared + share_source ∈ {"direct", None}           → "mine".
              (NULL = legacy = direct.)
 
         Returns: "mine" | "automatic" | "bundle".
         """
         if is_owned:
-            if credential_type in CredentialsService.AUTOMATIC_TYPES:
+            if credential_type == CredentialType.AGENT_API:
                 return "automatic"
+            if credential_type == CredentialType.MCP_PROVIDER:
+                # Only auto-managed agent-to-agent pairs are "automatic"; a
+                # manually-added external MCP server is an ordinary credential.
+                return "automatic" if mcp_auth_mode == "agent2agent" else "mine"
             return "mine"
         # Shared (not owned) credentials are never "automatic".
         if share_source == "bundle_install":

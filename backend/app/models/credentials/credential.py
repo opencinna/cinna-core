@@ -55,6 +55,23 @@ class CredentialBase(SQLModel):
     # for all other types. Default true so a freshly connected provider is active.
     mcp_mode_conversation: bool = Field(default=True)
     mcp_mode_building: bool = Field(default=True)
+    # The consumer agent an *agent2agent* MCP_PROVIDER credential is bound to (the
+    # pair's consumer side). Set ONLY by MCPProviderService.connect_to_agent for
+    # auth_mode=="agent2agent" (and bound on first link for floating connections).
+    # NULL for every other credential type and for external/manual mcp_provider
+    # credentials. First-class column (not in the encrypted blob) so it is directly
+    # queryable: drives one-per-pair enforcement (Fix 5), unlink-on-disconnect
+    # detection (Fix 4), and consumer-agent display (Fix 2). The FK + index +
+    # ON DELETE SET NULL live on the Credential table model below.
+    mcp_consumer_agent_id: uuid.UUID | None = Field(default=None)
+    # The auth mode of an MCP_PROVIDER credential, mirrored out of the encrypted
+    # blob into a cheap, non-secret column: "agent2agent" for an auto-managed
+    # platform agent-to-agent connection, or "none"/"fixed_token"/"oauth_dcr" for
+    # a manually-managed external MCP server. NULL for every other credential type.
+    # First-class column so the UI tab classifier can tell automatic (agent2agent)
+    # from manual (external) without decrypting: only agent2agent rows are
+    # "Automatic Credentials"; external ones are ordinary "My Credentials".
+    mcp_auth_mode: str | None = Field(default=None)
 
 
 # Type-specific credential data models (for validation)
@@ -218,6 +235,21 @@ class Credential(CredentialBase, table=True):
             ["credential.id"],
             name="fk_credential_placeholder_source",
             ondelete="SET NULL",
+        ),
+        # Agent2agent MCP consumer-pair binding. SET NULL (not CASCADE): deleting
+        # the consumer agent should not silently delete the credential mid-flight;
+        # the AgentCredentialLink already cascades and the now-NULL row is a
+        # harmless orphan the owner can delete (Fix 4/5 cleanup paths handle the
+        # active cases). Indexed for the one-per-pair / unlink-detection queries.
+        ForeignKeyConstraint(
+            ["mcp_consumer_agent_id"],
+            ["agent.id"],
+            name="fk_credential_mcp_consumer_agent_id",
+            ondelete="SET NULL",
+        ),
+        Index(
+            "ix_credential_mcp_consumer_agent_id",
+            "mcp_consumer_agent_id",
         ),
     )
 

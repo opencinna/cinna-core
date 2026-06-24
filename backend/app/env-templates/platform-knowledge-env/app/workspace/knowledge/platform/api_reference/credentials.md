@@ -80,6 +80,8 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
   - `service_uri`: string | null
   - `mcp_mode_conversation`: boolean
   - `mcp_mode_building`: boolean
+  - `mcp_consumer_agent_id`: string | null
+  - `mcp_auth_mode`: string | null
   - `credential_data`: object | null
   - `user_workspace_id`: string | null
   - `template_private_fields`: array | null

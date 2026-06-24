@@ -10467,6 +10467,18 @@ export const ConnectMcpProviderExternalRequestSchema = {
             ],
             title: 'Consumer Agent Id'
         },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
+        },
         mcp_mode_conversation: {
             type: 'boolean',
             title: 'Mcp Mode Conversation',
@@ -10887,6 +10899,29 @@ export const CredentialCreateSchema = {
             title: 'Mcp Mode Building',
             default: true
         },
+        mcp_consumer_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Mcp Consumer Agent Id'
+        },
+        mcp_auth_mode: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Mcp Auth Mode'
+        },
         credential_data: {
             anyOf: [
                 {
@@ -11052,6 +11087,29 @@ export const CredentialPublicSchema = {
             type: 'boolean',
             title: 'Mcp Mode Building',
             default: true
+        },
+        mcp_consumer_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Mcp Consumer Agent Id'
+        },
+        mcp_auth_mode: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Mcp Auth Mode'
         },
         id: {
             type: 'string',
@@ -11459,6 +11517,29 @@ export const CredentialWithDataSchema = {
             type: 'boolean',
             title: 'Mcp Mode Building',
             default: true
+        },
+        mcp_consumer_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Mcp Consumer Agent Id'
+        },
+        mcp_auth_mode: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Mcp Auth Mode'
         },
         id: {
             type: 'string',
@@ -16393,6 +16474,27 @@ export const MCPProviderStatusSchema = {
             title: 'Mcp Mode Building'
         },
         target_agent: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/MCPProviderTargetAgent'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        connector_mode: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Connector Mode'
+        },
+        consumer_agent: {
             anyOf: [
                 {
                     '$ref': '#/components/schemas/MCPProviderTargetAgent'

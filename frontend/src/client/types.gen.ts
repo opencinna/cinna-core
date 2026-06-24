@@ -2308,6 +2308,7 @@ export type ConnectMcpProviderExternalRequest = {
     auth_mode?: string;
     token?: (string | null);
     consumer_agent_id?: (string | null);
+    user_workspace_id?: (string | null);
     mcp_mode_conversation?: boolean;
     mcp_mode_building?: boolean;
     label?: (string | null);
@@ -2421,6 +2422,8 @@ export type CredentialCreate = {
     service_uri?: (string | null);
     mcp_mode_conversation?: boolean;
     mcp_mode_building?: boolean;
+    mcp_consumer_agent_id?: (string | null);
+    mcp_auth_mode?: (string | null);
     credential_data?: ({
     [key: string]: unknown;
 } | null);
@@ -2471,6 +2474,8 @@ export type CredentialPublic = {
     service_uri?: (string | null);
     mcp_mode_conversation?: boolean;
     mcp_mode_building?: boolean;
+    mcp_consumer_agent_id?: (string | null);
+    mcp_auth_mode?: (string | null);
     id: string;
     owner_id: string;
     user_workspace_id: (string | null);
@@ -2570,6 +2575,8 @@ export type CredentialWithData = {
     service_uri?: (string | null);
     mcp_mode_conversation?: boolean;
     mcp_mode_building?: boolean;
+    mcp_consumer_agent_id?: (string | null);
+    mcp_auth_mode?: (string | null);
     id: string;
     owner_id: string;
     user_workspace_id: (string | null);
@@ -3826,6 +3833,8 @@ export type MCPProviderStatus = {
     mcp_mode_conversation: boolean;
     mcp_mode_building: boolean;
     target_agent?: (MCPProviderTargetAgent | null);
+    connector_mode?: (string | null);
+    consumer_agent?: (MCPProviderTargetAgent | null);
     last_error?: (string | null);
 };
 

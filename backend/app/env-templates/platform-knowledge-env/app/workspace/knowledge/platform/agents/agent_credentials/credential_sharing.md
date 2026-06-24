@@ -186,16 +186,18 @@ Tab membership is driven by a server-computed `category` field (`"mine"` | `"aut
 
 ### Categorization rules
 
-The single source of truth is `CredentialsService.classify_credential_category(*, is_owned, credential_type, share_source)`, which holds `AUTOMATIC_TYPES = {CredentialType.AGENT_API, CredentialType.MCP_PROVIDER}`:
+The single source of truth is `CredentialsService.classify_credential_category(*, is_owned, credential_type, share_source, mcp_auth_mode=None)`:
 
 | Credential | Rule | Tab |
 |-----------|------|-----|
-| Owned, type ∈ `{agent_api, mcp_provider}` | Automatic types → automatic | **Automatic Credentials** |
+| Owned, type `agent_api` | Always automatic | **Automatic Credentials** |
+| Owned, type `mcp_provider`, `mcp_auth_mode == "agent2agent"` | Auto-managed pair → automatic | **Automatic Credentials** |
+| Owned, type `mcp_provider`, external (`none` / `fixed_token` / `oauth_dcr` / NULL) | Manually managed → mine | **My Credentials** |
 | Owned, any other type | | **My Credentials** |
 | Shared (received), `share.source == "bundle_install"` | Bundle-installed → bundle | **Bundle Credentials** |
 | Shared (received), `share.source ∈ {"direct", NULL}` | NULL is read as "direct" | **My Credentials** |
 
-`agent_api` and `mcp_provider` connection credentials are always owned (a shared `agent_api` credential still belongs to the recipient as an owned credential after connect); they appear under Automatic Credentials regardless of whether they are shared further.
+`agent_api` and **agent2agent** `mcp_provider` connection credentials are always owned (a shared `agent_api` credential still belongs to the recipient as an owned credential after connect); they appear under Automatic Credentials regardless of whether they are shared further. An **external** `mcp_provider` server is a manually-managed credential and appears under My Credentials. The `mcp_auth_mode` discriminator is a cheap non-secret column on `Credential` (mirrored out of the encrypted blob), so the classifier never decrypts to decide the tab.
 
 ### URL hash navigation
 

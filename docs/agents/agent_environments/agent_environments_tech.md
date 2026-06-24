@@ -147,10 +147,10 @@ An optional mixin interface for adapters that can provide direct local filesyste
 
 - `create_environment_instance()` - Copy template (excluding `TEMPLATE_ONLY_FILES`) + shared core, call `TemplateImageService.ensure_template_image()`, generate configs with image tag, validate compose
 - `start_environment()` - UP operation with smart container detection (new vs existing); calls `ensure_template_image()` before compose regeneration
-- `stop_environment()` - STOP operation, keep container
+- `stop_environment(update_status=True)` - STOP operation, keep container. Persists `status="stopped"` by default; callers that own their own in-progress status (the rebuild path) pass `update_status=False` so the stop does not clobber it. The error path still stamps `status="error"` regardless of the flag
 - `suspend_environment()` - STOP operation with `suspended` status
 - `activate_suspended_environment()` - UP operation optimized for existing containers; calls `ensure_template_image()` before compose regeneration
-- `rebuild_environment()` - DOWN → UP with full setup; calls `ensure_template_image()` before compose regeneration; core replaced from shared `app_core_base`; no `docker-compose build` step
+- `rebuild_environment()` - DOWN → UP with full setup; calls `ensure_template_image()` before compose regeneration; core replaced from shared `app_core_base`; no `docker-compose build` step. Holds `status="rebuilding"` for the whole operation: emits `ENVIRONMENT_STATUS_CHANGED{rebuilding}` up front, stops the old container via `stop_environment(update_status=False)` then re-asserts `rebuilding`, and only writes the terminal status (`running` + `ENVIRONMENT_ACTIVATED`, or `stopped`) at the end — preventing a mid-rebuild status poll from surfacing a transient `stopped`
 - `delete_environment_instance()` - DOWN operation with volume cleanup
 - `_container_exists()` - Check if Docker container exists (stopped or running)
 - `_sync_dynamic_data()` - Sync prompts and credentials to running environment

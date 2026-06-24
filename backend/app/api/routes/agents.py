@@ -386,6 +386,10 @@ def read_agent_credentials(
                 "template_private_fields": list(credential.template_private_fields or []),
                 "owner_id": credential.owner_id,
                 "user_workspace_id": credential.user_workspace_id,
+                # agent2agent mcp_provider credentials appear in this list (they
+                # are linked to their consumer agent); without this the new
+                # consumer-binding column would always project as null here.
+                "mcp_consumer_agent_id": credential.mcp_consumer_agent_id,
                 "is_placeholder": credential.is_placeholder,
                 "placeholder_source_id": credential.placeholder_source_id,
                 "status": status,
