@@ -178,19 +178,72 @@ AI credentials (LLM provider keys) follow the same 409 / force pattern but have 
 
 - The Sharing card on the credential detail page (sharing toggle, share dialog, shares list) is hidden for `agent-user` accounts — they don't share their credentials with anyone. The card is rendered only for `agent-developer` and `admin` owners. See [User Roles](../../application/user_roles/user_roles.md) for the role model.
 
+## Credentials Page: Filter Tabs and Category Assignment
+
+The `/credentials` page organises credentials into three **filter tabs** (mirroring the Catalog page's filter-pill idiom): **My Credentials** (default), **Automatic Credentials**, and **Bundle Credentials**. The old stacked "My Credentials / Automatic Credentials / Shared with Me" sections are replaced by this single tab bar.
+
+Tab membership is driven by a server-computed `category` field (`"mine"` | `"automatic"` | `"bundle"`) returned on every `CredentialPublic` and `SharedCredentialPublic` response. The frontend filters the merged owned+shared list purely on this field — no client-side re-derivation.
+
+### Categorization rules
+
+The single source of truth is `CredentialsService.classify_credential_category(*, is_owned, credential_type, share_source)`, which holds `AUTOMATIC_TYPES = {CredentialType.AGENT_API, CredentialType.MCP_PROVIDER}`:
+
+| Credential | Rule | Tab |
+|-----------|------|-----|
+| Owned, type ∈ `{agent_api, mcp_provider}` | Automatic types → automatic | **Automatic Credentials** |
+| Owned, any other type | | **My Credentials** |
+| Shared (received), `share.source == "bundle_install"` | Bundle-installed → bundle | **Bundle Credentials** |
+| Shared (received), `share.source ∈ {"direct", NULL}` | NULL is read as "direct" | **My Credentials** |
+
+`agent_api` and `mcp_provider` connection credentials are always owned (a shared `agent_api` credential still belongs to the recipient as an owned credential after connect); they appear under Automatic Credentials regardless of whether they are shared further.
+
+### URL hash navigation
+
+The active tab is reflected in the URL hash: `#my`, `#automatic`, or `#bundle`. Absent or unknown hash defaults to My Credentials. Changing tabs updates the hash; back/forward navigation restores the tab.
+
+## `CredentialShare.source` Provenance Marker
+
+A nullable `source` column (`varchar(20)`) on the `credential_shares` table records **how** a share was created:
+
+| Value | Meaning |
+|-------|---------|
+| `"direct"` | Created by the owner explicitly sharing with a specific user |
+| `"bundle_install"` | Created automatically when an installer installed a bundle that provides this credential (PBP flow) |
+| `NULL` | Legacy row (pre-feature); read as `"direct"` everywhere |
+
+The value is **stamped at creation time, never updated after the fact**. Two code paths stamp it:
+
+- `CredentialShareService.share_credential(...)` — the direct-sharing path — stamps `source="direct"`.
+- `InstallService._try_link_publisher_credential(...)` — the PBP install path — stamps `source="bundle_install"` on **insert only** (see first-writer-wins below).
+
+**First-writer-wins re-install rule:** if a `CredentialShare` row already exists (because the owner previously shared the credential directly with this user, OR because the bundle was already installed), the insert is skipped and the existing `source` is never overwritten. This means:
+- A pre-existing `source="direct"` share survives a later bundle install unchanged → the credential stays in **My Credentials** for that recipient.
+- A pre-existing `source="bundle_install"` row is unaffected by a subsequent direct share (the unique constraint prevents a second row; the owner would need to revoke the bundle share first).
+
+**Publisher workflow implication:** the publisher maintains a **single who-can-install list** (the `CredentialShare` table). Installing the bundle auto-adds the installer to that list with `source="bundle_install"`. There is no separate "directly shared" list to maintain — the provenance marker is the only difference between the two kinds of share.
+
 ## Architecture Overview
 
 ```
 Direct / Full Sharing:
 Owner enables sharing → Shares credential by recipient email
          │
-         └→ CredentialShare record created
+         └→ CredentialShare record created (source="direct")
                     │
-                    ├→ Recipient sees in "Shared with Me" UI section
+                    ├→ Recipient sees credential in "My Credentials" tab
                     ├→ Recipient links shared credential to their agents
                     └→ Agent environments receive shared credential data (same as owned)
 
 Owner revokes share → CredentialShare record deleted → Immediate access removal
+
+Bundle Install (PBP):
+Installer installs bundle with publisher-provided credential
+         │
+         └→ _try_link_publisher_credential (insert path only)
+                    │
+                    └→ CredentialShare created (source="bundle_install")  [idempotent]
+                                │
+                                └→ Recipient sees credential in "Bundle Credentials" tab
 
 Template Sharing (bundle context):
 Publisher sets allow_template_sharing=true + marks private fields

@@ -4,7 +4,8 @@
 
 ### Backend - Models
 - `backend/app/models/credentials/credential_share.py` - CredentialShare table model, CredentialSharePublic, CredentialShareCreate, SharedCredentialPublic response models
-- `backend/app/models/credentials/credential.py` - Adds `allow_sharing` and `allow_template_sharing` fields to CredentialBase, `template_private_fields` (JSON list[str]) to Credential / CredentialCreate / CredentialUpdate / CredentialPublic; `service_uri: str | None` to `CredentialBase` (flows through `CredentialCreate`, `CredentialPublic`, and the DB model automatically) and to `CredentialUpdate` (editable, nullable); not sensitive — appears in `CredentialPublic` without redaction; `share_count`, `is_shared`, `owner_email` on CredentialPublic; `CredentialAffectedAgent` (id, name, ui_color_preset); `CredentialDeletionImpact` (tier, affected_own_agents, direct_share_count, bundle_usages, bundle_pbp_usages, active_install_count)
+- `backend/app/models/credentials/credential.py` - Adds `allow_sharing` and `allow_template_sharing` fields to CredentialBase, `template_private_fields` (JSON list[str]) to Credential / CredentialCreate / CredentialUpdate / CredentialPublic; `service_uri: str | None` to `CredentialBase` (flows through `CredentialCreate`, `CredentialPublic`, and the DB model automatically) and to `CredentialUpdate` (editable, nullable); not sensitive — appears in `CredentialPublic` without redaction; `share_count`, `is_shared`, `owner_email` on CredentialPublic; `CredentialAffectedAgent` (id, name, ui_color_preset); `CredentialDeletionImpact` (tier, affected_own_agents, direct_share_count, bundle_usages, bundle_pbp_usages, active_install_count). New fields on `CredentialPublic`: `category: str` (default `"mine"`), `agent_usage_count: int` (default `0`), `used_in_bundle: bool` (default `False`).
+- New fields on `SharedCredentialPublic` (in `credential_share.py`): `category: str` (default `"mine"`), `source: str | None`, `agent_usage_count: int` (default `0`). The `used_in_bundle` field is always `False` for shared rows in the current implementation (bundle badge is an owner concept; kept for shape symmetry).
 - `backend/app/models/credentials/ai_credential.py` - `AICredentialBundleUsage` (bundle_uuid, bundle_id, display_name, publisher_install_id, used_for_conversation, used_for_building); `AICredentialDeletionImpact` (tier, bundle_usages)
 
 ### Backend - Models (user search picker)
@@ -24,10 +25,11 @@
 - `backend/app/api/routes/installs.py` - `PATCH /agents/{id}/publish-settings` accepts `provided_by="template"`; `GET /agents/{id}/setup-credentials` returns `template_private_fields` + `template_prefilled_data` per placeholder; `update_setup_credential` re-runs the gate
 
 ### Frontend - Components
+- `frontend/src/components/Credentials/CredentialFilters.tsx` — **new**. Filter-tab pills component for `/credentials`. Mirrors `CatalogFilters.tsx` exactly. Exports `CredentialFilter = "mine" | "automatic" | "bundle"`. Three pills: `My Credentials` (Key icon), `Automatic Credentials` (Link2 icon), `Bundle Credentials` (Package icon). Props: `{ value, onChange }`.
 - `frontend/src/components/Credentials/CredentialSharing.tsx` - Direct-sharing toggle, share dialog, shares list, "Used in Bundles" block filtered to `provided_by="publisher"` usages
 - `frontend/src/components/Credentials/CredentialTemplateSharing.tsx` - "Share as Template" toggle, per-field private/template checkboxes (with form labels mirrored from `CredentialFields/`), force-private message for OAuth + service account, "Used in Bundles" block filtered to `provided_by="template"` usages
-- `frontend/src/components/Credentials/SharedWithMeCredentials.tsx` - "Shared with Me" credential list with owner email and share date
-- `frontend/src/components/Credentials/CredentialCard.tsx` - "Shareable" badge, user count badge for active shares
+- `SharedWithMeCredentials.tsx` (deleted) — the standalone "Shared with Me" list section is gone; its "Shared" badge treatment is folded into `CredentialCard`. Shared credentials now appear under the My Credentials or Bundle Credentials tab depending on their `category`.
+- `frontend/src/components/Credentials/CredentialCard.tsx` - Updated: renders for both owned and shared rows (driven off the merged view-model). Added badges: **agents-using** (`<Bot/> N`, tooltip "Used by N agent(s)", shown when `agent_usage_count > 0`) and **bundle** (`<Package/> bundle`, tooltip "This credential is used in a bundle", shown when `used_in_bundle`). Both are outline-variant low-emphasis badges. The existing "Shareable" and share-count badges remain, gated on `!is_shared`. `is_shared` / `category === "bundle"` rows retain the existing blue "Shared" badge treatment.
 - `frontend/src/components/Credentials/CredentialFields/ApiTokenFields.tsx` - optional `service_uri` field for `api_token` credentials; helper text: "Audience/slot id shared across all per-user tokens for the same bundle; not secret."
 - `frontend/src/components/Credentials/CredentialForms/GenericCredentialForm.tsx` / `EditCredential.tsx` - optional `service_uri` field surfaced for `api_token` (and optionally `agent_api`) credentials; not surfaced for other types
 - `frontend/src/components/Agents/CredentialProvisioningSection.tsx` - Per-spec `User provides` / `Embedded (shared)` / `Template (defaults + private)` dropdown on the publisher install's Bundle tab
@@ -35,7 +37,7 @@
 - `frontend/src/components/Install/InstallSetupForm.tsx` - `initialChoiceForSpec` returns `"skip"` for template specs (the install service short-circuits into the template branch)
 
 ### Frontend - Routes
-- `frontend/src/routes/_layout/credentials.tsx` - "My Credentials" and "Shared with Me" sections
+- `frontend/src/routes/_layout/credentials.tsx` - **Reworked**: three filter tabs (`<CredentialFilters />`); fetches both owned (`["credentials", workspaceFilter]`) and shared (`["credentials-shared-with-me"]`) lists; merges into one categorized view-model; filters by active tab (`credential.category`). Per-tab empty states. URL hash `#my` / `#automatic` / `#bundle` mirrors and initializes the active tab. The inline `AUTOMATIC_TYPES` client-side split and the standalone "Shared with Me" section are removed.
 - `frontend/src/routes/_layout/credential/$credentialId.tsx` - SharedCredentialView (read-only) vs OwnedCredentialView (full edit); owned view wraps `CredentialSharing` and `CredentialTemplateSharing` in a 2-column grid
 - `frontend/src/routes/_layout/agent/$agentId/setup-credentials.tsx` - Setup page renders one card per placeholder; template placeholders show a read-only "pre-filled by publisher" panel and one input row per private field
 - `frontend/src/components/Agents/AgentCredentialsTab.tsx` - Fetches both owned and shared credentials, shows "Shared" indicator in dropdown
@@ -44,12 +46,14 @@
 - `backend/app/alembic/versions/g7b8c9d0e1f2_add_credential_sharing.py` - `allow_sharing` column on credential table, new `credential_shares` table
 - `backend/app/alembic/versions/cc3de4f5a6b7_add_template_sharing_to_credential.py` - `allow_template_sharing` (boolean, default `false`) and `template_private_fields` (JSON list, default `[]`) on credential table
 - `backend/app/alembic/versions/3f8f2a2e7f23_add_credential_service_uri.py` - `service_uri` (TEXT, nullable) column on credential table; partial btree index `ix_credential_service_uri (service_uri) WHERE service_uri IS NOT NULL`. All existing rows backfill to NULL (legacy behavior unchanged). Downgrade drops the index then the column
+- `backend/app/alembic/versions/3c3c37a5e144_add_credential_share_source.py` - Adds `source` (VARCHAR(20), nullable, no server default) to `credential_shares`. `down_revision = 65d1ef4899be`. No index, no FK, no data backfill — existing rows default to NULL (read everywhere as `"direct"`). Downgrade drops the column.
 
 ### Router Registration
 - `backend/app/api/main.py` - Added `credential_shares.router` import and registration
 
 ### Tests
 - `backend/tests/api/agents/agents_bundles_template_sharing_test.py` - Eight scenario tests: CRUD persistence, publish spec shape, override validation, install materialisation, completion → ready, partial fill stays needs_setup, `use_existing` opt-out, re-publish guard when consent flag is revoked
+- `backend/tests/api/agents/agents_credentials_categorization_test.py` - Categorization correctness tests: owned `agent_api`/`mcp_provider` → `"automatic"`; owned other type → `"mine"`; direct-shared → recipient `"mine"`; PBP-install-shared → recipient `"bundle"`; install idempotency + first-writer-wins; NULL source legacy → `"mine"`; agent-usage count recipient-scoped; `used_in_bundle` flag accuracy; `mcp_provider` folds into Automatic tab.
 
 ## Database Schema
 
@@ -68,6 +72,7 @@
 - `shared_by_user_id` (UUID, FK → user)
 - `shared_at` (datetime)
 - `access_level` (varchar, default 'read')
+- `source` (varchar(20), nullable) — provenance marker: `"direct"` | `"bundle_install"` | NULL (legacy, read as `"direct"`). Stamped at creation, never updated. Added in migration `3c3c37a5e144` (nullable, no server default, no index, no backfill).
 - Unique constraint: `(credential_id, shared_with_user_id)`
 
 ### Bundle Revision Spec (no DB column — JSON inside `agent_bundle_revision.required_credential_specs`)
@@ -108,16 +113,19 @@ Each entry the publish flow emits:
 ## Services & Key Methods
 
 ### CredentialShareService (`backend/app/services/credentials/credential_share_service.py`)
-- `share_credential()` - Create share with validations (ownership, allow_sharing, target exists, not self, not duplicate)
+- `share_credential(..., source="direct")` - Create share with validations (ownership, allow_sharing, target exists, not self, not duplicate); stamps `source="direct"` on the new `CredentialShare` row. The direct-sharing UI passes the default; no client-supplied source is accepted.
 - `revoke_credential_share()` - Delete share record with ownership check
 - `get_shares_by_credential()` - List shares with resolved user emails
-- `get_credentials_shared_with_me()` - Query shares where user is recipient
+- `get_credentials_shared_with_me()` - Query shares where user is recipient; enriched to compute `category` via `classify_credential_category(is_owned=False, ...)` from `share.source`, populate `agent_usage_count` via batched `get_agent_usage_counts` (recipient-scoped), and carry `source` on `SharedCredentialPublic`.
 - `get_share_count_for_credential()` - Count shares for a credential
 - `update_credential_sharing()` - Toggle allow_sharing; auto-revokes all shares when disabled
 - `can_user_access_credential()` - Check if user owns OR has share
 - `delete_all_shares_for_credential()` - Bulk delete for credential deletion
 
 ### CredentialsService (`backend/app/services/credentials/credentials_service.py`)
+- `classify_credential_category(*, is_owned, credential_type, share_source)` — **the categorization SSOT**. Pure static method. Holds `AUTOMATIC_TYPES = {CredentialType.AGENT_API, CredentialType.MCP_PROVIDER}`. Rules: owned + automatic type → `"automatic"`; owned + other type → `"mine"`; shared + `source="bundle_install"` → `"bundle"`; shared + `source in {"direct", None}` → `"mine"`. NULL is coalesced to `"direct"`. Both the `/credentials` projection and `get_credentials_shared_with_me` delegate to this function — the frontend never re-derives category.
+- `get_agent_usage_counts(session, credential_ids, owner_scope=None)` — **batched** count helper. One `GROUP BY` query over `AgentCredentialLink` for the whole page, returning `{credential_id: count}`. For shared credentials, pass `owner_scope=recipient_id` to count only the recipient's own agents. Avoids per-row N+1.
+- `get_used_in_bundle_flags(session, *, owner_id, credential_ids)` — **batched** boolean helper. Single `DISTINCT credential_id` query over the `list_bundle_usages` join, returning the subset of ids that appear in ≥1 of the owner's bundles. Owner-scoped (only the owner's published bundles count).
 - `link_credential_to_agent()` - Allows linking shared credentials (not just owned)
 - `update_credential()` - Persists `allow_template_sharing` + `template_private_fields`; flips `is_placeholder=False` only when `check_credential_completeness == "complete"` (so partial fills on template placeholders keep the gate engaged); rejects non-`list[str]` `template_private_fields` payloads; also persists `service_uri` (editable, nullable)
 - `check_credential_completeness()` - Per-type required-field check the placeholder-flip relies on
@@ -143,7 +151,7 @@ Each entry the publish flow emits:
 ### InstallService (`backend/app/services/bundles/install_service.py`)
 - `_setup_install_credentials()` - Walks `required_credential_specs`; for `provided_by="template"` calls `_materialise_template_credential` unless the installer opted in with `mode="use_existing"`
 - `_materialise_template_credential()` - Creates a fresh `Credential` row owned by the installer with `encrypted_data` seeded from `spec["template_data"]`, `is_placeholder=True`, `allow_sharing=False`, `allow_template_sharing=False`, and `template_private_fields` mirrored from the spec; sets `last_update_status="degraded"` on materialisation fallback
-- `_try_link_publisher_credential()` - Existing PBP path
+- `_try_link_publisher_credential()` - PBP path: ensures a `CredentialShare` exists for the installer. On **insert** stamps `source="bundle_install"`. **Idempotent / first-writer-wins**: if a share row already exists (prior direct share or prior install), skips the insert — existing `source` is never overwritten. This means a prior `source="direct"` share keeps the credential in My Credentials for that recipient even after a bundle install.
 - `update_publish_settings()` - Validates and persists partial updates to `install.publish_settings` (`credential_overrides` map and pre-publish AI credential draft); enforces publisher-install scope, that override keys reference linked credential names, that each `provided_by` is one of `"user"`/`"publisher"`/`"template"`, and that AI credential ids are owned by the install owner. Backs `PATCH /agents/{id}/publish-settings`
 - `list_setup_credentials()` - Returns `SetupCredentialSummary` items for placeholder credentials linked to the install. For template-materialised rows, decrypts and surfaces non-private fields under `template_prefilled_data` (decryption failures fall back to `{}` so the row still surfaces). Backs `GET /agents/{id}/setup-credentials`
 
@@ -202,10 +210,8 @@ Each entry the publish flow emits:
 ### SSH Key Edit View (`frontend/src/components/Credentials/CredentialForms/SSHKeyEditView.tsx`)
 - "Private key is encrypted..." Alert wraps content in a `<p>` so the shadcn `AlertDescription` (which uses `display: grid`) keeps the sentence inline instead of breaking into stacked grid items
 
-### SharedWithMeCredentials (`frontend/src/components/Credentials/SharedWithMeCredentials.tsx`)
-- Displays credentials shared with current user
-- Shows owner email and share date
-- Blue "Shared" badge to distinguish from owned credentials
+### SharedWithMeCredentials (deleted)
+- Previously displayed credentials shared with the current user as a standalone list section. Deleted as part of the filter-tabs feature. Shared credentials now appear inline in the My Credentials and Bundle Credentials tabs based on their `category`. The blue "Shared" badge treatment was ported into `CredentialCard`.
 
 ### Credential Detail Route (`frontend/src/routes/_layout/credential/$credentialId.tsx`)
 - Detects `is_shared` flag to switch between SharedCredentialView (read-only) and OwnedCredentialView (full edit)

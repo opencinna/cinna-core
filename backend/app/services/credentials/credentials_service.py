@@ -2606,6 +2606,114 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             )
         return False
 
+    # ── Categorization SSOT ──────────────────────────────────────────────────
+    # The single set of types treated as "Automatic Credentials" — connection
+    # records auto-created by a "Connect" helper. Lives here once so the backend
+    # projection and (transitively) the frontend tab assignment cannot drift.
+    AUTOMATIC_TYPES = {CredentialType.AGENT_API, CredentialType.MCP_PROVIDER}
+
+    @staticmethod
+    def classify_credential_category(
+        *,
+        is_owned: bool,
+        credential_type: CredentialType,
+        share_source: str | None,
+    ) -> str:
+        """Categorize a credential into a UI tab discriminator.
+
+        The single source-of-truth for the "My / Automatic / Bundle"
+        categorization. Both the ``/credentials`` projection and (via the
+        ``category`` field it returns) the frontend tab assignment depend on
+        this; no caller should re-derive provenance or automatic-ness.
+
+        Rules:
+          1. Owned + type ∈ {AGENT_API, MCP_PROVIDER} → "automatic".
+          2. Owned + any other type                   → "mine".
+          3. Shared + share_source == "bundle_install" → "bundle".
+          4. Shared + share_source ∈ {"direct", None}  → "mine".
+             (NULL = legacy = direct.)
+
+        Returns: "mine" | "automatic" | "bundle".
+        """
+        if is_owned:
+            if credential_type in CredentialsService.AUTOMATIC_TYPES:
+                return "automatic"
+            return "mine"
+        # Shared (not owned) credentials are never "automatic".
+        if share_source == "bundle_install":
+            return "bundle"
+        return "mine"
+
+    @staticmethod
+    def get_agent_usage_counts(
+        session: Session,
+        credential_ids: list[uuid.UUID],
+        owner_scope: uuid.UUID | None = None,
+    ) -> dict[uuid.UUID, int]:
+        """Batched agent-usage counts for a page of credentials.
+
+        Returns ``{credential_id: count_of_agents_linked}`` via a single
+        ``GROUP BY`` over ``AgentCredentialLink`` — avoids the per-row N+1.
+        Callers must pass the full id list once.
+
+        When ``owner_scope`` is set, the count is scoped to agents owned by that
+        user (join ``AgentCredentialLink`` → ``Agent.owner_id == owner_scope``).
+        For owned credentials pass ``owner_scope = owner_id``; for shared
+        credentials pass ``owner_scope = recipient_id`` so the badge reflects
+        "agents *of mine* using this", not the owner's global link count.
+        """
+        if not credential_ids:
+            return {}
+
+        stmt = select(
+            AgentCredentialLink.credential_id,
+            func_sql.count(),
+        ).where(AgentCredentialLink.credential_id.in_(credential_ids))
+
+        if owner_scope is not None:
+            stmt = stmt.join(
+                Agent, Agent.id == AgentCredentialLink.agent_id
+            ).where(Agent.owner_id == owner_scope)
+
+        stmt = stmt.group_by(AgentCredentialLink.credential_id)
+        return {cred_id: count for cred_id, count in session.exec(stmt).all()}
+
+    @staticmethod
+    def get_used_in_bundle_flags(
+        session: Session,
+        *,
+        owner_id: uuid.UUID,
+        credential_ids: list[uuid.UUID],
+    ) -> set[uuid.UUID]:
+        """Batched "used in ≥1 bundle" flags for a page of credentials.
+
+        Returns the subset of ``credential_ids`` that appear in at least one of
+        the owner's bundles, via a single ``DISTINCT credential_id`` query over
+        the whole id list. Reuses the publisher-install join from
+        :meth:`list_bundle_usages` (owner-scoped — only the owner's bundles
+        count) rather than calling the full impact path per credential.
+        """
+        if not credential_ids:
+            return set()
+
+        from app.models.bundles.agent_bundle import AgentBundle
+
+        stmt = (
+            select(AgentCredentialLink.credential_id)
+            .distinct()
+            .join(Agent, Agent.id == AgentCredentialLink.agent_id)
+            .join(
+                AgentBundle,
+                (AgentBundle.id == Agent.bundle_uuid)
+                & (AgentBundle.publisher_user_id == owner_id),
+            )
+            .where(
+                Agent.is_publisher_install == True,  # noqa: E712
+                AgentCredentialLink.credential_id.in_(credential_ids),
+            )
+        )
+        return set(session.exec(stmt).all())
+
     @staticmethod
     def list_bundle_usages(
         session: Session,

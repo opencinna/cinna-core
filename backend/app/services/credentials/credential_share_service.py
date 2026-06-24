@@ -13,6 +13,7 @@ from app.models.credentials.credential_share import (
     SharedCredentialPublic,
 )
 from app.models.users.user import User
+from app.services.credentials.credentials_service import CredentialsService
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,8 @@ class CredentialShareService:
         session: Session,
         credential_id: UUID,
         owner_id: UUID,
-        shared_with_email: str
+        shared_with_email: str,
+        source: str = "direct",
     ) -> CredentialSharePublic:
         """
         Share a credential with another user.
@@ -44,6 +46,10 @@ class CredentialShareService:
         - Target user must exist (by email)
         - Cannot share with yourself
         - Cannot create duplicate share
+
+        ``source`` is the provenance marker stamped on the new
+        ``CredentialShare`` ("direct" for user→user shares). It is set by the
+        server at the call site, never from client input.
 
         Returns:
             CredentialSharePublic with resolved user info
@@ -92,7 +98,8 @@ class CredentialShareService:
             credential_id=credential_id,
             shared_with_user_id=target_user.id,
             shared_by_user_id=owner_id,
-            access_level="read"
+            access_level="read",
+            source=source,
         )
         session.add(share)
         session.commit()
@@ -113,7 +120,8 @@ class CredentialShareService:
             shared_by_user_id=owner_id,
             shared_by_email=owner.email if owner else "",
             shared_at=share.shared_at,
-            access_level=share.access_level
+            access_level=share.access_level,
+            source=share.source,
         )
 
     @staticmethod
@@ -193,7 +201,8 @@ class CredentialShareService:
                 shared_by_user_id=share.shared_by_user_id,
                 shared_by_email=owner.email if owner else "",
                 shared_at=share.shared_at,
-                access_level=share.access_level
+                access_level=share.access_level,
+                source=share.source,
             ))
 
         return result
@@ -214,13 +223,30 @@ class CredentialShareService:
         )
         shares = session.exec(statement).all()
 
-        result = []
+        # Resolve all credentials first, then batch the agent-usage counts so we
+        # never issue a per-row count query (avoids the N+1 flagged in the plan).
+        resolved: list[tuple[CredentialShare, Credential]] = []
         for share in shares:
             credential = session.get(Credential, share.credential_id)
             if not credential:
                 continue  # Skip if credential was deleted
+            resolved.append((share, credential))
 
+        credential_ids = [credential.id for _, credential in resolved]
+        usage_counts = CredentialsService.get_agent_usage_counts(
+            session=session,
+            credential_ids=credential_ids,
+            owner_scope=user_id,  # recipient-scoped: agents *of mine* using it
+        )
+
+        result = []
+        for share, credential in resolved:
             owner = session.get(User, credential.owner_id)
+            category = CredentialsService.classify_credential_category(
+                is_owned=False,
+                credential_type=credential.type,
+                share_source=share.source,
+            )
             result.append(SharedCredentialPublic(
                 id=credential.id,
                 name=credential.name,
@@ -229,7 +255,11 @@ class CredentialShareService:
                 owner_id=credential.owner_id,
                 owner_email=owner.email if owner else "",
                 shared_at=share.shared_at,
-                access_level=share.access_level
+                access_level=share.access_level,
+                category=category,
+                source=share.source,
+                agent_usage_count=usage_counts.get(credential.id, 0),
+                used_in_bundle=False,
             ))
 
         return result

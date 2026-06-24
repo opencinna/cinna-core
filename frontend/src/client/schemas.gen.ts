@@ -11109,6 +11109,21 @@ export const CredentialPublicSchema = {
                 }
             ],
             title: 'Status'
+        },
+        category: {
+            type: 'string',
+            title: 'Category',
+            default: 'mine'
+        },
+        agent_usage_count: {
+            type: 'integer',
+            title: 'Agent Usage Count',
+            default: 0
+        },
+        used_in_bundle: {
+            type: 'boolean',
+            title: 'Used In Bundle',
+            default: false
         }
     },
     type: 'object',
@@ -11175,6 +11190,17 @@ export const CredentialSharePublicSchema = {
         access_level: {
             type: 'string',
             title: 'Access Level'
+        },
+        source: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source'
         }
     },
     type: 'object',
@@ -11490,6 +11516,21 @@ export const CredentialWithDataSchema = {
                 }
             ],
             title: 'Status'
+        },
+        category: {
+            type: 'string',
+            title: 'Category',
+            default: 'mine'
+        },
+        agent_usage_count: {
+            type: 'integer',
+            title: 'Agent Usage Count',
+            default: 0
+        },
+        used_in_bundle: {
+            type: 'boolean',
+            title: 'Used In Bundle',
+            default: false
         },
         credential_data: {
             additionalProperties: true,
@@ -20611,6 +20652,32 @@ export const SharedCredentialPublicSchema = {
         access_level: {
             type: 'string',
             title: 'Access Level'
+        },
+        category: {
+            type: 'string',
+            title: 'Category',
+            default: 'mine'
+        },
+        source: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source'
+        },
+        agent_usage_count: {
+            type: 'integer',
+            title: 'Agent Usage Count',
+            default: 0
+        },
+        used_in_bundle: {
+            type: 'boolean',
+            title: 'Used In Bundle',
+            default: false
         }
     },
     type: 'object',

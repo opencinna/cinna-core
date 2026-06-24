@@ -2479,6 +2479,9 @@ export type CredentialPublic = {
     is_placeholder?: boolean;
     placeholder_source_id?: (string | null);
     status?: (string | null);
+    category?: string;
+    agent_usage_count?: number;
+    used_in_bundle?: boolean;
 };
 
 /**
@@ -2502,6 +2505,7 @@ export type CredentialSharePublic = {
     shared_by_email: string;
     shared_at: string;
     access_level: string;
+    source?: (string | null);
 };
 
 /**
@@ -2574,6 +2578,9 @@ export type CredentialWithData = {
     is_placeholder?: boolean;
     placeholder_source_id?: (string | null);
     status?: (string | null);
+    category?: string;
+    agent_usage_count?: number;
+    used_in_bundle?: boolean;
     credential_data: {
         [key: string]: unknown;
     };
@@ -4687,6 +4694,10 @@ export type SharedCredentialPublic = {
     owner_email: string;
     shared_at: string;
     access_level: string;
+    category?: string;
+    source?: (string | null);
+    agent_usage_count?: number;
+    used_in_bundle?: boolean;
 };
 
 /**

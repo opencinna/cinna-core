@@ -268,6 +268,13 @@ class CredentialPublic(CredentialBase):
     is_placeholder: bool = False
     placeholder_source_id: uuid.UUID | None = None
     status: str | None = None  # "complete" | "incomplete" for UI (computed field)
+    # Tab discriminator computed via CredentialsService.classify_credential_category.
+    # "mine" | "automatic" | "bundle". For owned rows this is "mine" or "automatic".
+    category: str = "mine"
+    # Count of agents linked to this credential via AgentCredentialLink.
+    agent_usage_count: int = 0
+    # True if the credential is used in ≥1 of the owner's bundles.
+    used_in_bundle: bool = False
 
 
 # Properties to return via API with decrypted data

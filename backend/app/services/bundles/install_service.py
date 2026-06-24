@@ -1058,11 +1058,16 @@ class InstallService:
                 )
             ).first()
             if existing_share is None:
+                # First-writer-wins: stamp provenance only on insert. A
+                # pre-existing direct share (source="direct") is left untouched,
+                # so the credential stays under "My Credentials" rather than
+                # being flipped to "bundle_install".
                 session.add(CredentialShare(
                     credential_id=publisher_credential_id,
                     shared_with_user_id=install.owner_id,
                     shared_by_user_id=publisher_cred.owner_id,
                     access_level="read",
+                    source="bundle_install",
                 ))
                 session.flush()
 
