@@ -120,6 +120,7 @@ class AgentApiTokenService:
             id=agent.id,
             name=agent.name,
             ui_color_preset=agent.ui_color_preset,
+            owner_name=owner.full_name if owner is not None else None,
             owner_email=owner.email if owner is not None else None,
         )
 
@@ -338,10 +339,12 @@ class AgentApiTokenService:
         )
 
         producer_agent_name: str | None = None
+        producer_ui_color_preset: str | None = None
         if producer_agent_id is not None:
             producer = session.get(Agent, producer_agent_id)
             if producer is not None:
                 producer_agent_name = producer.name
+                producer_ui_color_preset = producer.ui_color_preset
 
         # read_only is taken from the token bound to this credential.
         read_only = False
@@ -367,6 +370,7 @@ class AgentApiTokenService:
         return AgentApiConnectionInfo(
             producer_agent_id=producer_agent_id,
             producer_agent_name=producer_agent_name,
+            producer_ui_color_preset=producer_ui_color_preset,
             base_url=data.get("base_url", ""),
             spec_url=data.get("spec_url", ""),
             read_only=read_only,

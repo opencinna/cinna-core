@@ -108,6 +108,10 @@ function getCredentialTypeLabel(type: string): string {
       return "API Token"
     case "ssh_key":
       return "SSH Key"
+    case "agent_api":
+      return "Agent REST API"
+    case "mcp_provider":
+      return "MCP Provider"
     default:
       return type
   }

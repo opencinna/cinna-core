@@ -1925,6 +1925,11 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             "template_private_fields": list(credential.template_private_fields or []),
             "owner_id": credential.owner_id,
             "user_workspace_id": credential.user_workspace_id,
+            # Per-mode applicability (MCP_PROVIDER); without these the response
+            # falls back to the model defaults (True/True) and the detail-view
+            # toggles never reflect a saved disable.
+            "mcp_mode_conversation": credential.mcp_mode_conversation,
+            "mcp_mode_building": credential.mcp_mode_building,
             "credential_data": credential_data
         }
 

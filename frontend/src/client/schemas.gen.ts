@@ -3293,6 +3293,17 @@ export const AgentApiConnectedAgentSchema = {
             ],
             title: 'Ui Color Preset'
         },
+        owner_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Name'
+        },
         owner_email: {
             anyOf: [
                 {
@@ -3335,6 +3346,17 @@ export const AgentApiConnectionInfoSchema = {
                 }
             ],
             title: 'Producer Agent Name'
+        },
+        producer_ui_color_preset: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Producer Ui Color Preset'
         },
         base_url: {
             type: 'string',

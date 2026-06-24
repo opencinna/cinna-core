@@ -464,7 +464,18 @@ class MCPProviderOAuthService:
                     endpoint_url, json=list_body, headers=headers
                 )
         except httpx.HTTPError as e:
-            return {"ok": False, "tools": [], "error": f"Connection failed: {e}"}
+            # httpx connection errors (DNS failure, offline host, refused
+            # connection) frequently carry an empty ``str(e)``, which left the
+            # toast reading "Connection failed: " with no detail. Fall back to
+            # the exception type and surface the underlying OS cause when present.
+            detail = str(e).strip()
+            cause = e.__cause__
+            if cause is not None and str(cause).strip():
+                cause_text = str(cause).strip()
+                detail = f"{detail} ({cause_text})" if detail else cause_text
+            if not detail:
+                detail = type(e).__name__
+            return {"ok": False, "tools": [], "error": f"Connection failed: {detail}"}
 
         tools: list[str] = []
         parsed = MCPProviderOAuthService._parse_jsonrpc(list_resp)

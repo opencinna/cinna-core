@@ -637,6 +637,7 @@ export type AgentApiConnectedAgent = {
     id: string;
     name: string;
     ui_color_preset?: (string | null);
+    owner_name?: (string | null);
     owner_email?: (string | null);
 };
 
@@ -649,6 +650,7 @@ export type AgentApiConnectedAgent = {
 export type AgentApiConnectionInfo = {
     producer_agent_id: (string | null);
     producer_agent_name: (string | null);
+    producer_ui_color_preset?: (string | null);
     base_url: string;
     spec_url: string;
     read_only: boolean;

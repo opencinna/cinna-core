@@ -132,6 +132,27 @@ Tabs: **Configuration** (read-only, Information + Agent Prompts only), **Credent
 ### Read-only Configuration tab
 Foreign installs render the Configuration tab read-only. The tab uses `AgentConfigTab` with `readOnly={true}`, which passes `readOnly` into each edit modal — Description, Entrypoint prompt, Workflow prompt, Refiner prompt, and Example Prompts modals disable their inputs and hide the Save button.
 
+## Agents List Page — Card Presentation
+
+The `/agents` route renders one `AgentCard` per agent. Each card communicates the agent's purpose through a content area below the agent name:
+
+- **Capability badges** — when the agent has at least one active integration, a row of labelled icon badges replaces the entrypoint-prompt preview. Badges appear for every enabled integration:
+
+  | Badge label | Source flag | Lucide icon |
+  |-------------|-------------|-------------|
+  | API | `agent_api_enabled` | Network |
+  | Web App | `webapp_enabled` | Globe |
+  | Email | `has_email_integration` | Mail |
+  | MCP | `has_mcp_connectors` | Unplug |
+  | Webhooks | `has_webhooks` | Webhook |
+  | A2A | `a2a_config.enabled` | Waypoints |
+
+- **Entrypoint-prompt preview** — when no integration is active, a monospace block shows the first four lines of `entrypoint_prompt` (if set). This is the fallback; the badge row takes precedence whenever any badge would appear.
+
+The three `has_*` flags (`has_email_integration`, `has_mcp_connectors`, `has_webhooks`) are computed server-side and carried on `AgentPublic`. They reflect only *actively enabled* integrations — `AgentEmailIntegration.enabled`, `MCPConnector.is_active`, and `AgentWebhook.enabled` respectively. The other three flags (`agent_api_enabled`, `webapp_enabled`, `a2a_config.enabled`) are pre-existing fields on the agent record.
+
+See [Agent Status Tracking — Tech](../../agents/agent_status_tracking/agent_status_tracking_tech.md) for the `AgentPublic` model changes and `compute_capability_flags` service method that backs this feature.
+
 ## Agent Creation Wizard
 
 The entry point for all agent management is the **New Agent Creation Wizard** — a multi-step SSE-streaming flow that creates the agent, spins up its first environment, optionally links credentials, and opens the first session in one go.

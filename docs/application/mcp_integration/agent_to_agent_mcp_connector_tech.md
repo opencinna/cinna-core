@@ -54,8 +54,8 @@ Down-revision: `2ca38822e945` (single head, verified).
 
 - `frontend/src/components/Agents/McpConnectorsCard.tsx` — adds "Agent to Agent MCP Connector" sub-tab (4th tab) that lists and creates `is_agent_to_agent=true` connectors; `UserAllowlistPicker` for ACL; auto-enable `allow_token_access`
 - `frontend/src/components/Credentials/ConnectMcpProviderDialog.tsx` — dialog with two paths: platform agent picker (uses `DiscoverableAgents` from `GET /mcp-providers/discoverable-agents`) and external server form (endpoint URL, transport, auth mode, token field, mode checkboxes)
-- `frontend/src/components/Credentials/McpProviderConnectionView.tsx` — `mcp_provider` credential detail panel: endpoint URL, transport, auth mode, target agent Bot badge (agent2agent), status badge, Test button, Reauthorize button for `oauth_dcr`
-- `frontend/src/routes/_layout/credential/$credentialId.tsx` — `mcp_provider` branch: (1) Basic Information card (editable name, notes, per-mode toggles); (2) `McpProviderConnectionView`; (3) `CredentialSharing` (role-gated). `CredentialTemplateSharing` omitted.
+- `frontend/src/components/Credentials/McpProviderConnectionView.tsx` — `mcp_provider` credential detail panel; two-column card: left = editable name/notes, right = connection summary (target agent via shared `AgentBadge`, auth-mode + status badges — transport badge removed, endpoint URL copy, Test, Reauthorize for `oauth_dcr`) + the `Switch`-based per-mode (`mcp_mode_conversation` / `mcp_mode_building`) toggles
+- `frontend/src/routes/_layout/credential/$credentialId.tsx` — `mcp_provider` branch: `McpProviderConnectionView` (owns name/notes + per-mode toggles) followed by `CredentialSharing` (role-gated). `CredentialTemplateSharing` omitted.
 - `frontend/src/routes/_layout/credentials.tsx` — `mcp_provider` type added to the Automatic Credentials partition (alongside `agent_api`)
 - `frontend/src/components/Credentials/AddCredential.tsx` — "Connect MCP Provider" entry point in the add-credential picker
 - `frontend/src/components/Agents/AgentCredentialsTab.tsx` — per-agent "Connect MCP Provider" button (passes `consumer_agent_id`)
@@ -86,6 +86,8 @@ Down-revision: `2ca38822e945` (single head, verified).
 | `mcp_mode_building` | `BOOL NOT NULL` | `true` | Inject this MCP provider into the building-mode SDK config. Only meaningful for `MCP_PROVIDER` rows; ignored for all other types. |
 
 `CredentialType` PostgreSQL native enum extended with `'MCP_PROVIDER'` (stored as uppercase member name, consistent with `'AGENT_API'`, `'API_TOKEN'`, etc.).
+
+Both mode columns are surfaced through the read path that drives the detail-view toggles: `CredentialsService.get_credential_with_data()` explicitly copies `mcp_mode_conversation` / `mcp_mode_building` into its hand-built response dict. Omitting them (the prior bug) made `CredentialWithData` fall back to the model defaults (`True`/`True`) on every read, so a saved "disable" never reflected in the UI — the switch snapped back on after refetch.
 
 ### `mcp_token` table (modified)
 
@@ -196,7 +198,7 @@ Backend-side OAuth 2.1 / DCR client. `client_secret` and `refresh_token` never l
 - `begin_authorization(session, credential, user_id)` → `authorize_url` — discovers AS, performs DCR (idempotent: reuses existing `oauth_client_id` if present), persists client creds + AS endpoints, builds PKCE S256 pair, stores CSRF state (`_put_state`), returns authorization URL with `client_id` / `redirect_uri` / `state` / `code_challenge` / `code_challenge_method` / `resource` params.
 - `handle_callback(session, code, state)` → `Credential` — validates + pops CSRF state (`_take_state`), exchanges authorization code (PKCE verifier) for tokens via `_token_request`, calls `_apply_token_response` (stores `token` / `oauth_refresh_token` / `oauth_token_expires_at` / `oauth_scope`), persists encrypted, returns updated credential.
 - `refresh_access_token(session, credential)` → `Credential` — refresh grant via `_token_request`; on failure records `last_error` on the credential and re-raises; caller continues with stale token (graceful).
-- `probe(session, credential)` → `dict` — opens MCP `initialize` + `tools/list` against the endpoint; returns `{ ok, tools, error }`. Goes through `assert_url_allowed`.
+- `probe(session, credential)` → `dict` — opens MCP `initialize` + `tools/list` against the endpoint; returns `{ ok, tools, error }`. Goes through `assert_url_allowed`. On `httpx.HTTPError` the `error` detail is built robustly (offline host / DNS failure / refused connection): `str(e)`, then the underlying `e.__cause__` OS message in parens when present, falling back to the exception class name — so the Test toast never shows a bare "Connection failed:" with no detail.
 
 **CSRF state store:** in-memory `_oauth_states` dict, keyed by random nonce, 10-minute TTL. `_put_state` / `_take_state` (single-use). Mirrors the Google OAuth `_oauth_states` pattern; moves to Redis in a multi-worker deployment.
 
@@ -260,22 +262,16 @@ Two-mode dialog:
 
 ### `McpProviderConnectionView.tsx`
 
-Displays the `MCPProviderStatus` response from `GET /{id}/status`:
+Single card split into two columns. **Left column**: editable name/notes form (metadata-only `PATCH /credentials/{id}` with `{name, notes}`). **Right column**: the `MCPProviderStatus` response from `GET /{id}/status` plus the per-mode toggles:
+- "Connects to" header row: target agent rendered via the shared `AgentBadge` (agent2agent — whole pill clickable/colour-tinted via `ui_color_preset`) or an "External server" badge; auth-mode badge; status badge (green `connected`, amber `awaiting_auth`/`expired`, red `error`). The transport badge was removed.
 - Copyable endpoint URL.
-- Transport badge.
-- Auth mode badge.
-- Target agent Bot badge (agent2agent only) with `ui_color_preset`.
-- Status badge: green (`connected`), amber (`awaiting_auth` / `expired`), red (`error`).
 - `last_error` text for `error` state.
-- **Test** button → `POST /{id}/test` → shows tool names or error.
-- **Reauthorize** button (shown for `oauth_dcr`) → `POST /{id}/oauth/reauthorize` → opens authorize URL.
+- **Test** button → `POST /{id}/test` → shows tool names or the error detail; **Reauthorize** button (shown for `oauth_dcr`) → `POST /{id}/oauth/reauthorize` → opens authorize URL.
+- **Apply to modes** — `mcp_mode_conversation` / `mcp_mode_building` rendered as `Switch` toggles, each firing its own `PATCH /credentials/{id}`. Inert warning when both are off.
 
 ### `$credentialId.tsx` — `mcp_provider` branch
 
-Three stacked cards:
-1. **Basic Information** — editable `name`, `notes`, `mcp_mode_conversation` toggle, `mcp_mode_building` toggle. Calls `PATCH /credentials/{id}` with `{name, notes, mcp_mode_conversation, mcp_mode_building}`.
-2. **Connection panel** — `McpProviderConnectionView`.
-3. **Sharing** — `CredentialSharing` (role-gated). `CredentialTemplateSharing` is NOT rendered (a connection has no user-fillable private fields).
+Renders `McpProviderConnectionView` (the two-column card owns name/notes and the per-mode toggles) followed by `CredentialSharing` (role-gated). `CredentialTemplateSharing` is NOT rendered (a connection has no user-fillable private fields).
 
 ### `credentials.tsx` — Automatic Credentials partition
 

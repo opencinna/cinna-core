@@ -1,8 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
 import {
-  Bot,
   Check,
   CheckCircle2,
   Copy,
@@ -27,7 +25,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Checkbox } from "@/components/ui/checkbox"
+import { Switch } from "@/components/ui/switch"
 import {
   Form,
   FormControl,
@@ -40,6 +38,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { LoadingButton } from "@/components/ui/loading-button"
 import { Textarea } from "@/components/ui/textarea"
+import { AgentBadge } from "@/components/Common/AgentBadge"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 import { openMcpProviderOAuthPopup } from "@/utils/mcpProviderOAuth"
@@ -202,8 +201,6 @@ export function McpProviderConnectionView({
     status?.endpoint_url || (data?.endpoint_url as string | undefined) || ""
   const authMode =
     status?.auth_mode || (data?.auth_mode as string | undefined) || "none"
-  const transport =
-    status?.transport || (data?.transport as string | undefined) || ""
   const targetAgent = status?.target_agent ?? null
   const isOAuth = authMode === "oauth_dcr"
   const statusKey = status?.status ?? "connected"
@@ -225,25 +222,79 @@ export function McpProviderConnectionView({
           credential to disconnect.
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-6">
-        {/* Connection summary */}
-        <div className="rounded-lg border p-4 space-y-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2">
-              {targetAgent ? (
-                <Badge
-                  asChild
-                  variant="secondary"
-                  className="gap-1 hover:underline transition-colors"
-                >
-                  <Link
-                    to="/agent/$agentId"
-                    params={{ agentId: targetAgent.id }}
+      <CardContent>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Left column: editable label / notes */}
+          <Form {...form}>
+            <form
+              onSubmit={form.handleSubmit((d) => updateMutation.mutate(d))}
+              className="space-y-4"
+            >
+              <FormField
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      Name <span className="text-destructive">*</span>
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="Connection name"
+                        type="text"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="notes"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Notes</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        placeholder="Additional notes..."
+                        className="min-h-[120px]"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              {form.formState.isDirty && (
+                <div className="flex justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => form.reset()}
+                    disabled={updateMutation.isPending}
                   >
-                    <Bot className="h-3 w-3" />
-                    {targetAgent.name}
-                  </Link>
-                </Badge>
+                    Reset
+                  </Button>
+                  <LoadingButton
+                    type="submit"
+                    loading={updateMutation.isPending}
+                  >
+                    Save Changes
+                  </LoadingButton>
+                </div>
+              )}
+            </form>
+          </Form>
+
+          {/* Right column: connection summary + per-mode applicability */}
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                Connects to
+              </span>
+              {targetAgent ? (
+                <AgentBadge agent={targetAgent} linkTo="agent" />
               ) : (
                 <Badge variant="secondary" className="gap-1">
                   <Server className="h-3 w-3" />
@@ -254,11 +305,6 @@ export function McpProviderConnectionView({
                 <KeyRound className="h-3 w-3" />
                 {AUTH_MODE_LABEL[authMode] ?? authMode}
               </Badge>
-              {transport && (
-                <Badge variant="outline" className="text-xs">
-                  {transport}
-                </Badge>
-              )}
               {!statusLoading && (
                 <Badge
                   variant="outline"
@@ -273,151 +319,91 @@ export function McpProviderConnectionView({
                 </Badge>
               )}
             </div>
-          </div>
 
-          {endpointUrl && (
+            {endpointUrl && (
+              <div className="flex items-center gap-2">
+                <code className="text-xs text-muted-foreground truncate flex-1">
+                  {endpointUrl}
+                </code>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="shrink-0 h-7 w-7"
+                  onClick={() => handleCopy(endpointUrl)}
+                  title="Copy endpoint URL"
+                >
+                  {copied ? (
+                    <Check className="h-3.5 w-3.5 text-green-500" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              </div>
+            )}
+
+            {status?.last_error && (
+              <p className="text-xs text-red-600 dark:text-red-400">
+                {status.last_error}
+              </p>
+            )}
+
             <div className="flex items-center gap-2">
-              <code className="text-xs text-muted-foreground truncate flex-1">
-                {endpointUrl}
-              </code>
-              <Button
-                variant="outline"
-                size="icon"
-                className="shrink-0 h-7 w-7"
-                onClick={() => handleCopy(endpointUrl)}
-                title="Copy endpoint URL"
-              >
-                {copied ? (
-                  <Check className="h-3.5 w-3.5 text-green-500" />
-                ) : (
-                  <Copy className="h-3.5 w-3.5" />
-                )}
-              </Button>
-            </div>
-          )}
-
-          {status?.last_error && (
-            <p className="text-xs text-red-600 dark:text-red-400">
-              {status.last_error}
-            </p>
-          )}
-
-          <div className="flex items-center gap-2 pt-1">
-            <LoadingButton
-              variant="outline"
-              size="sm"
-              loading={testMutation.isPending}
-              onClick={() => testMutation.mutate()}
-            >
-              <RefreshCw className="h-4 w-4 mr-1" />
-              Test
-            </LoadingButton>
-            {isOAuth && (
               <LoadingButton
                 variant="outline"
                 size="sm"
-                loading={authorizeMutation.isPending}
-                onClick={() => authorizeMutation.mutate()}
+                loading={testMutation.isPending}
+                onClick={() => testMutation.mutate()}
               >
-                <KeyRound className="h-4 w-4 mr-1" />
-                {statusKey === "awaiting_auth" ? "Authorize" : "Reauthorize"}
+                <RefreshCw className="h-4 w-4 mr-1" />
+                Test
               </LoadingButton>
-            )}
-          </div>
-        </div>
-
-        {/* Per-mode applicability */}
-        <div className="space-y-2">
-          <Label>Apply to modes</Label>
-          <div className="flex items-center gap-6">
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox
-                checked={modeConversation}
-                disabled={modeMutation.isPending}
-                onCheckedChange={(c) =>
-                  modeMutation.mutate({ mcp_mode_conversation: c === true })
-                }
-              />
-              Conversation
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox
-                checked={modeBuilding}
-                disabled={modeMutation.isPending}
-                onCheckedChange={(c) =>
-                  modeMutation.mutate({ mcp_mode_building: c === true })
-                }
-              />
-              Building
-            </label>
-          </div>
-          {!modeConversation && !modeBuilding && (
-            <p className="text-xs text-amber-600 dark:text-amber-400">
-              Both modes are off — this provider is currently inert and will not
-              be injected into any session.
-            </p>
-          )}
-        </div>
-
-        {/* Editable label / notes */}
-        <Form {...form}>
-          <form
-            onSubmit={form.handleSubmit((d) => updateMutation.mutate(d))}
-            className="space-y-4"
-          >
-            <FormField
-              control={form.control}
-              name="name"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>
-                    Name <span className="text-destructive">*</span>
-                  </FormLabel>
-                  <FormControl>
-                    <Input
-                      placeholder="Connection name"
-                      type="text"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="notes"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Notes</FormLabel>
-                  <FormControl>
-                    <Textarea
-                      placeholder="Additional notes..."
-                      className="min-h-[80px]"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            {form.formState.isDirty && (
-              <div className="flex justify-end gap-2">
-                <Button
-                  type="button"
+              {isOAuth && (
+                <LoadingButton
                   variant="outline"
-                  onClick={() => form.reset()}
-                  disabled={updateMutation.isPending}
+                  size="sm"
+                  loading={authorizeMutation.isPending}
+                  onClick={() => authorizeMutation.mutate()}
                 >
-                  Reset
-                </Button>
-                <LoadingButton type="submit" loading={updateMutation.isPending}>
-                  Save Changes
+                  <KeyRound className="h-4 w-4 mr-1" />
+                  {statusKey === "awaiting_auth" ? "Authorize" : "Reauthorize"}
                 </LoadingButton>
+              )}
+            </div>
+
+            {/* Per-mode applicability */}
+            <div className="space-y-2 border-t pt-4">
+              <Label>Apply to modes</Label>
+              <div className="flex items-center gap-6">
+                <label className="flex items-center gap-2 text-sm">
+                  <Switch
+                    checked={modeConversation}
+                    disabled={modeMutation.isPending}
+                    onCheckedChange={(c) =>
+                      modeMutation.mutate({ mcp_mode_conversation: c })
+                    }
+                  />
+                  Conversation
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <Switch
+                    checked={modeBuilding}
+                    disabled={modeMutation.isPending}
+                    onCheckedChange={(c) =>
+                      modeMutation.mutate({ mcp_mode_building: c })
+                    }
+                  />
+                  Building
+                </label>
               </div>
-            )}
-          </form>
-        </Form>
+              {!modeConversation && !modeBuilding && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  Both modes are off — this provider is currently inert and will
+                  not be injected into any session.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
       </CardContent>
     </Card>
   )
