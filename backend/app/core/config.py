@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     MUTAGEN_VERSION: str = "0.18.1"
     # Platform API version advertised to the CLI alongside the Mutagen pin.
     PLATFORM_API_VERSION: str = "1.0"
+    # Minimum cinna-cli version the platform's setup flow supports. Embedded in
+    # the `curl | python3` bootstrap script: when a locally-installed `cinna` is
+    # older than this, the bootstrap prints upgrade instructions and stops
+    # instead of invoking a subcommand the old CLI doesn't have (which would
+    # otherwise fail with a confusing "No such command" error). Bump this when a
+    # setup-flow change requires a newer CLI.
+    MINIMUM_CLI_VERSION: str = "0.2.3"
 
     # ── Environment console (web terminal + logs follow) ─────────────────
     # Idle timeout for an interactive PTY shell: the env-core /shell/pty
