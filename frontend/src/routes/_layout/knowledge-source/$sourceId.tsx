@@ -18,6 +18,7 @@ import { KnowledgeSourceConfigurationTab } from "@/components/KnowledgeSources/K
 import { KnowledgeSourceArticlesTab } from "@/components/KnowledgeSources/KnowledgeSourceArticlesTab"
 import { EditSourceModal } from "@/components/KnowledgeSources/EditSourceModal"
 import PendingItems from "@/components/Pending/PendingItems"
+import NotFound from "@/components/Common/NotFound"
 import { usePageHeader } from "@/routes/_layout"
 
 export const Route = createFileRoute("/_layout/knowledge-source/$sourceId")({
@@ -154,6 +155,17 @@ function KnowledgeSourceDetailPage() {
   }
 
   if (error || !source) {
+    const isMissing = !error || (error as { status?: number }).status === 404
+    if (isMissing) {
+      return (
+        <NotFound
+          inline
+          fallbackPath="/knowledge-sources"
+          title="Knowledge source not found"
+          message="This knowledge source doesn't exist, was deleted, or belongs to another user."
+        />
+      )
+    }
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <p className="text-destructive">Error loading knowledge source details</p>

@@ -22,6 +22,7 @@ import { useSessionStreaming } from "@/hooks/useSessionStreaming"
 import { usePageHeader } from "@/routes/_layout"
 import { AnimatedPlaceholder } from "@/components/Common/AnimatedPlaceholder"
 import { EnvironmentPanel } from "@/components/Environment/EnvironmentPanel"
+import NotFound from "@/components/Common/NotFound"
 import { eventService, EventTypes } from "@/services/eventService"
 
 export const Route = createFileRoute("/_layout/session/$sessionId")({
@@ -630,6 +631,18 @@ function ChatInterface() {
   }
 
   if (sessionError || !session) {
+    const isMissing =
+      !sessionError || (sessionError as { status?: number }).status === 404
+    if (isMissing) {
+      return (
+        <NotFound
+          inline
+          fallbackPath="/sessions"
+          title="Session not found"
+          message="This session doesn't exist, was deleted, or belongs to another user."
+        />
+      )
+    }
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <p className="text-destructive mb-4">Error loading session</p>

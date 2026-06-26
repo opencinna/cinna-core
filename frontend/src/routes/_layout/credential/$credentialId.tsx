@@ -10,6 +10,7 @@ import { CredentialsService } from "@/client"
 import { useNavigationHistory } from "@/hooks/useNavigationHistory"
 import type { CredentialPublic, CredentialWithData } from "@/client"
 import PendingItems from "@/components/Pending/PendingItems"
+import NotFound from "@/components/Common/NotFound"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -568,6 +569,18 @@ function CredentialDetail() {
   }
 
   if (metaError || !credentialMeta) {
+    const isMissing =
+      !metaError || (metaError as { status?: number }).status === 404
+    if (isMissing) {
+      return (
+        <NotFound
+          inline
+          fallbackPath="/credentials"
+          title="Credential not found"
+          message="This credential doesn't exist, was deleted, or belongs to another user."
+        />
+      )
+    }
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <p className="text-destructive">Error loading credential details</p>
