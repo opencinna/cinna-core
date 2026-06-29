@@ -37,6 +37,8 @@ the output clearly names which method has too few callers.
 """
 from __future__ import annotations
 
+import functools
+import os
 import pathlib
 import re
 
@@ -54,6 +56,12 @@ DEFINITION_SITE = APP_ROOT / "services" / "sessions" / "channel_ingestion_servic
 # Phase 3 steady state. A2A + App MCP are both live callers; this is the
 # §9.4 production guardrail enforcing the ≥2-callers rule.
 EXPECTED_CALLER_THRESHOLD = 2
+
+# Directory names pruned from the walk. `app/env-templates/` ships bundled
+# virtualenvs (.venv/site-packages) with ~10k vendored .py files — reading all
+# of them per method made this test take seconds. None of them are production
+# callers, so skip the whole subtree. __pycache__ is byte-compiled noise.
+EXCLUDED_DIR_NAMES = frozenset({"env-templates", ".venv", "site-packages", "__pycache__", "node_modules"})
 
 # Public methods to check.  Add / remove here if the service surface changes.
 PUBLIC_METHODS = [
@@ -81,32 +89,50 @@ def _pattern_for_method(method: str) -> re.Pattern[str]:
 # ── File-walker ───────────────────────────────────────────────────────────────
 
 
-def _collect_caller_modules(method: str) -> list[pathlib.Path]:
-    """Return the list of distinct .py files under APP_ROOT that call `method`.
+@functools.lru_cache(maxsize=1)
+def _source_files() -> tuple[tuple[pathlib.Path, str], ...]:
+    """Read every candidate .py file under APP_ROOT exactly once.
+
+    Cached so the three parametrized methods share a single filesystem pass —
+    reads over the macOS Docker bind mount are the dominant cost (~3ms/file),
+    so reading once instead of per-method is a ~3x speedup.
 
     Excludes:
-      - The definition site itself.
-      - Files ending in _test.py (defense-in-depth against scope drift).
-      - Any file not under APP_ROOT (tests/ and alembic/ are outside APP_ROOT).
+      - The definition site itself (so the service is not its own caller).
+      - Files ending in _test.py / starting with test_ (scope-drift guard).
+      - Vendored / generated subtrees (see EXCLUDED_DIR_NAMES) — most notably
+        the bundled virtualenvs under app/env-templates/ (~10k files).
     """
+    definition_site = DEFINITION_SITE.resolve()
+    files: list[tuple[pathlib.Path, str]] = []
+
+    for dirpath, dirnames, filenames in os.walk(APP_ROOT):
+        # Prune excluded subtrees in place so os.walk never descends into them
+        # (avoids stat-ing / reading ~10k vendored site-package files).
+        dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIR_NAMES]
+
+        for filename in filenames:
+            if not filename.endswith(".py"):
+                continue
+            # Exclude test files (belt-and-suspenders: tests/ is outside APP_ROOT anyway).
+            if filename.endswith("_test.py") or filename.startswith("test_"):
+                continue
+            path = pathlib.Path(dirpath) / filename
+            # Always exclude the definition site.
+            if path.resolve() == definition_site:
+                continue
+            try:
+                files.append((path, path.read_text(encoding="utf-8")))
+            except (OSError, UnicodeDecodeError):
+                continue
+
+    return tuple(sorted(files, key=lambda pt: pt[0]))
+
+
+def _collect_caller_modules(method: str) -> list[pathlib.Path]:
+    """Return the list of distinct .py files under APP_ROOT that call `method`."""
     pattern = _pattern_for_method(method)
-    callers: list[pathlib.Path] = []
-
-    for path in sorted(APP_ROOT.rglob("*.py")):
-        # Always exclude the definition site.
-        if path.resolve() == DEFINITION_SITE.resolve():
-            continue
-        # Exclude test files (belt-and-suspenders: tests/ is outside APP_ROOT anyway).
-        if path.name.endswith("_test.py") or path.name.startswith("test_"):
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        if pattern.search(text):
-            callers.append(path)
-
-    return callers
+    return [path for path, text in _source_files() if pattern.search(text)]
 
 
 # ── Parametrized test ─────────────────────────────────────────────────────────
