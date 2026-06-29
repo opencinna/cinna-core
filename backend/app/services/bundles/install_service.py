@@ -28,6 +28,7 @@ Key flows:
   service. Auto-promotes the publisher install into a bundle on first
   email-driven install (mirrors today's ``create_auto_share`` semantics).
 """
+import copy
 import json
 import logging
 import uuid
@@ -185,6 +186,41 @@ class InstallService:
         )
 
     @staticmethod
+    def _apply_revision_metadata(
+        install: Agent, revision: AgentBundleRevision
+    ) -> None:
+        """Copy agent-row definitional metadata from a revision onto an install.
+
+        Publisher-authoritative + missing-key-tolerant (agent-metadata-snapshot
+        plan, locked decisions 1 & 2): each field is overwritten ONLY when the
+        revision actually carries it (``is not None``). A field absent from an
+        older snapshot (NULL column / pre-existing revision) leaves the install's
+        current value untouched — it is never clobbered to null. Shared by fresh
+        install / checkout, apply-update, and git pull so all three restore paths
+        stay identical. Tokens / grants / per-install UI prefs are deliberately
+        NOT part of this set (see plan exclusions).
+        """
+        if revision.description is not None:
+            install.description = revision.description
+        if revision.example_prompts is not None:
+            # Deep-copy the mutable JSON payloads so the install never aliases the
+            # (immutable) revision row's object — a later in-place edit of the
+            # install's config must not reach back into the snapshot it came from.
+            install.example_prompts = copy.deepcopy(revision.example_prompts)
+        if revision.status_refresh_command is not None:
+            install.status_refresh_command = revision.status_refresh_command
+        if revision.agent_api_enabled is not None:
+            install.agent_api_enabled = revision.agent_api_enabled
+        if revision.agent_api_identity_enabled is not None:
+            install.agent_api_identity_enabled = revision.agent_api_identity_enabled
+        if revision.a2a_config is not None:
+            install.a2a_config = copy.deepcopy(revision.a2a_config)
+        if revision.agent_sdk_config is not None:
+            install.agent_sdk_config = copy.deepcopy(revision.agent_sdk_config)
+        if revision.webapp_enabled is not None:
+            install.webapp_enabled = revision.webapp_enabled
+
+    @staticmethod
     async def _install_from_revision(
         *,
         session: Session,
@@ -223,6 +259,13 @@ class InstallService:
             last_sync_at=datetime.now(UTC),
             last_update_status="synced",
         )
+        # Restore agent-row definitional metadata captured in the revision.
+        # ``description`` was seeded from ``bundle.description`` above as a
+        # display fallback; this overwrites it with the revision's value when
+        # the snapshot carries one (and likewise fills the other definitional
+        # columns, leaving the Agent defaults in place for any field an older
+        # snapshot omits).
+        InstallService._apply_revision_metadata(install, revision)
         # Ensure name is unique per owner — append "(2)" etc.
         install.name = await InstallService._ensure_unique_name(
             session, user.id, install.name
@@ -1212,6 +1255,11 @@ class InstallService:
             install.entrypoint_prompt = revision.entrypoint_prompt
             install.refiner_prompt = revision.refiner_prompt
             install.router_trigger_prompt = revision.router_trigger_prompt
+            # Overwrite the agent-row definitional metadata from the new revision
+            # (publisher-authoritative), but only for the fields the revision
+            # actually carries — an older snapshot that omits a field leaves the
+            # consumer's current value untouched.
+            InstallService._apply_revision_metadata(install, revision)
             # The DB just authoritatively changed — bump the per-prompt logical
             # clocks so the prompt-sync reconcile treats the revision content as
             # the newest DB-side edit (out-ranking any stale env mtime in LWW).

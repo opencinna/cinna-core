@@ -57,15 +57,40 @@ def _make_env_workspace(root: Path, tree: dict) -> None:
 
 
 def _fake_install(**overrides):
+    # Stands in for an ``Agent`` row. ``build_manifest`` reads the prompts AND the
+    # schema_version-2 ``metadata`` block (agent-row definitional columns) directly
+    # off this object, so the stub must carry every column those reads touch — in
+    # production an Agent always has these columns.
     base = dict(
         bundle_id="io.test.revision.format",
         workflow_prompt="WORKFLOW",
         entrypoint_prompt="ENTRY",
         refiner_prompt="REFINER",
         router_trigger_prompt="TRIGGER",
+        # schema_version-2 metadata block (definitional agent-row fields).
+        description="A test agent.",
+        example_prompts=["do the thing", "do the other thing"],
+        status_refresh_command="/run:status",
+        agent_api_enabled=True,
+        agent_api_identity_enabled=False,
+        a2a_config={"enabled": True},
+        agent_sdk_config={"foo": "bar"},
+        webapp_enabled=True,
     )
     base.update(overrides)
     return types.SimpleNamespace(**base)
+
+
+_EXPECTED_METADATA = {
+    "description": "A test agent.",
+    "example_prompts": ["do the thing", "do the other thing"],
+    "status_refresh_command": "/run:status",
+    "agent_api_enabled": True,
+    "agent_api_identity_enabled": False,
+    "a2a_config": {"enabled": True},
+    "agent_sdk_config": {"foo": "bar"},
+    "webapp_enabled": True,
+}
 
 
 def _fake_env(**overrides):
@@ -119,6 +144,8 @@ def test_build_manifest_shape_with_env() -> None:
     assert manifest["required_credential_specs"] == _CRED_SPECS
     assert manifest["schedules"] == _SCHEDULE_SPECS
     assert manifest["plugin_specs"] == _PLUGIN_SPECS
+    # schema_version-2 agent-row definitional metadata block.
+    assert manifest["metadata"] == _EXPECTED_METADATA
     # content_hash is added by write_tree, not build_manifest.
     assert "content_hash" not in manifest
 
@@ -140,6 +167,9 @@ def test_build_manifest_no_env_nulls_sdk_slots() -> None:
         "model_override_building": None,
         "model_override_conversation": None,
     }
+    # The metadata block is read off the install (Agent row), not the env, so it
+    # is fully populated even for a prompts-only / no-env revision.
+    assert manifest["metadata"] == _EXPECTED_METADATA
 
 
 # ── write_tree ────────────────────────────────────────────────────────────────
@@ -274,6 +304,14 @@ def test_read_manifest_round_trip(tmp_path: Path) -> None:
         "plugin_specs": _PLUGIN_SPECS,
         "version": "1.1",
         "release_notes": "changelog",
+        "description": "A test agent.",
+        "example_prompts": ["do the thing", "do the other thing"],
+        "status_refresh_command": "/run:status",
+        "agent_api_enabled": True,
+        "agent_api_identity_enabled": False,
+        "a2a_config": {"enabled": True},
+        "agent_sdk_config": {"foo": "bar"},
+        "webapp_enabled": True,
     }
 
 

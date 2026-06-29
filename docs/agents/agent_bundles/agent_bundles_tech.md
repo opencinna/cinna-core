@@ -99,6 +99,15 @@ Indexes: `ix_agent_bundle_publisher` on `publisher_user_id`; `ix_agent_bundle_li
 | `model_override_conversation` | varchar(128) | |
 | `required_credential_specs` | JSON | `[{name, type, allow_sharing, allow_template_sharing, description, provided_by, publisher_credential_id, template_data?, template_private_fields?, service_uri?}]`. `provided_by` is `"user"`, `"publisher"`, or `"template"`; `publisher_credential_id` is a UUID string or null (only set when `provided_by="publisher"`); `template_data` and `template_private_fields` are present only when `provided_by="template"`; `service_uri` is a plaintext slot-id string or absent (coalesces to `None` on read — legacy-safe). Revisions written before Phase 1 lack these fields — readers default missing keys to `"user"` / `null` / absent |
 | `schedules` | JSON | `[{name, cron_string, description, prompt, schedule_type, command, enabled}]` — snapshot of the publisher install's `AgentSchedule` rows at publish time. `next_execution`/`last_execution` are never stored; they are recomputed per-install on materialisation. Empty list `[]` on revisions created before bundle-scheduler propagation was introduced (fully backward compatible) |
+| `plugin_specs` | JSON | `[{marketplace_name, plugin_name, version, commit_hash, conversation_mode, building_mode, disabled, config, snapshot_subdir}]` — snapshot of the publisher install's `AgentPluginLink` rows at publish time; plugin files live in the snapshot tree under `plugins/`. Empty list `[]` on revisions published before plugin propagation was introduced |
+| `description` | text NULLABLE | Snapshot of `Agent.description` at publish time. `NULL` means "this snapshot did not carry the field" — restore skips the field rather than clobbering the consumer's current value (missing-key-tolerant). Added in migration `d9b3e1a7c45f` |
+| `example_prompts` | JSON NULLABLE | Snapshot of `Agent.example_prompts` (list of strings). `NULL` = absent from older snapshots — restore skips. Added in migration `d9b3e1a7c45f` |
+| `status_refresh_command` | varchar(1024) NULLABLE | Snapshot of `Agent.status_refresh_command`. `NULL` = absent from older snapshots — restore skips. Note: `STATUS.md` content is per-install App Data and is deliberately NOT snapshotted. Added in migration `d9b3e1a7c45f` |
+| `agent_api_enabled` | bool NULLABLE | Snapshot of `Agent.agent_api_enabled`. The `agent_api/` workspace dir and `policy.yaml` also travel in the workspace tree; this flag restores the on/off switch. Per-install tokens and access grants are NOT snapshotted. `NULL` = absent from older snapshots. Added in migration `d9b3e1a7c45f` |
+| `agent_api_identity_enabled` | bool NULLABLE | Snapshot of `Agent.agent_api_identity_enabled`. `NULL` = absent from older snapshots. Added in migration `d9b3e1a7c45f` |
+| `a2a_config` | JSON NULLABLE | Snapshot of the full `Agent.a2a_config` dict (skills / version / generated_at / enabled). The A2A card (`skills` with LLM-generated descriptions) does not auto-regenerate on install, so the published capability contract is preserved here. Per-install `AgentAccessToken` rows are NOT snapshotted. `NULL` = absent from older snapshots. Added in migration `d9b3e1a7c45f` |
+| `agent_sdk_config` | JSON NULLABLE | Snapshot of `Agent.agent_sdk_config` (tool approval allowlists). `NULL` = absent from older snapshots. Added in migration `d9b3e1a7c45f` |
+| `webapp_enabled` | bool NULLABLE | Snapshot of `Agent.webapp_enabled`. `NULL` = absent from older snapshots. Added in migration `d9b3e1a7c45f` |
 | `snapshot_path` | varchar(1024) NOT NULL | Absolute path under `BUNDLE_STORAGE_DIR` |
 | `content_hash` | varchar(64) NOT NULL | SHA-256 hex over snapshot tree + manifest |
 | `published_by_user_id` | UUID FK → user ON DELETE SET NULL | |
@@ -266,7 +275,8 @@ Publish flow detail:
 | `install_bundle(session, user, bundle, request)` | Idempotent for consumer installs — returns the existing consumer install (`is_publisher_install=False`) if one already exists for `(owner_id, bundle_uuid)`. If the caller is the bundle's publisher and only a publisher install exists (no consumer copy yet), a fresh consumer install is created. Calls `_link_publisher_ai_credential` BEFORE the idempotent early-return so re-installs self-heal a deleted `AICredentialShare` |
 | `install_bundle_for_email(session, publisher_agent_id, recipient_user_id)` | Auto-publishes on first call if bundle has no revisions |
 | `admin_install(session, target_user, bundle, request)` | Thin wrapper over install_bundle |
-| `apply_update(session, install)` | Stops env, calls `replace_bundle_content`, updates prompts + bookkeeping fields, refreshes the auto-managed App MCP route, merges schedules via `schedule_sync.merge`, restarts env, emits `INSTALL_UPDATE_APPLIED` event |
+| `_apply_revision_metadata(install, revision)` | Static helper shared by fresh install / checkout, apply-update, and git pull. Copies the 8 definitional metadata fields (`description`, `example_prompts`, `status_refresh_command`, `agent_api_enabled`, `agent_api_identity_enabled`, `a2a_config`, `agent_sdk_config`, `webapp_enabled`) from a revision onto an install. **Publisher-authoritative + missing-key-tolerant**: each field is written ONLY when the revision column is not `None` — a `NULL` column (older snapshot that predates the field) leaves the install's current value untouched. Deep-copies mutable JSON payloads so the install never aliases the immutable revision row. Tokens / grants / per-install UI prefs are NOT included |
+| `apply_update(session, install)` | Stops env, calls `replace_bundle_content`, updates prompts + bookkeeping fields, calls `_apply_revision_metadata` to overwrite the 8 definitional metadata fields from the new revision (publisher-authoritative, missing-key-tolerant), refreshes the auto-managed App MCP route, merges schedules via `schedule_sync.merge`, restarts env, emits `INSTALL_UPDATE_APPLIED` event |
 | `uninstall(session, install)` | Delegates to `AgentService.delete_agent` which handles orphaning |
 | `set_update_mode(session, install, mode)` | |
 | `check_for_updates(session, install)` | Returns `CheckUpdatesResponse`: `{pending_update, installed_revision_number, latest_revision_number, installed_version, latest_version, last_update_status, last_sync_at, update_mode}`. `installed_version` and `latest_version` are the human-friendly `AgentBundleRevision.version` labels (e.g. `"1.0"`, `"1.1"`); both are nullable — `null` when the revision was created before version labels were introduced, with the UI falling back to revision numbers |
@@ -284,7 +294,7 @@ Publish flow detail:
 | `_refresh_or_create_auto_route_on_update(session, install, revision)` | Apply-update hook. If an `is_auto_managed=True` route exists, refreshes `trigger_prompt` and `name` from the new revision. If no route exists and a manual (`is_auto_managed=False`) route is already present, does nothing. If neither exists and the revision has a trigger prompt, calls `_auto_create_app_mcp_route` |
 
 Install flow (`_install_from_revision`):
-1. `Agent` row created from revision prompts + SDK settings
+1. `Agent` row created from revision prompts + SDK settings; `_apply_revision_metadata` is then called to overwrite the 8 definitional metadata fields from the revision (publisher-authoritative, missing-key-tolerant — `NULL` revision columns leave the `Agent` defaults in place)
 2. Name uniqueness enforced (appends "(2)", "(3)" etc.)
 3. AI credential resolution — before env creation, the resolution chain is applied for each mode: (a) `bundle.publisher_ai_credential_*_id` if non-null; (b) the installer's `request.ai_credential_selections` value; (c) `None`. `_link_publisher_ai_credential` is called first so the `AICredentialShare` row exists at env-create time when the bundle provides an AI credential
 4. `AgentEnvironment` created via `EnvironmentService.create_environment` with the resolved credential ids **and `bundle_snapshot_path=revision.snapshot_path`**. The env service uses `ai_credentials_service.can_access_credential(user, cred)` (owner OR share recipient) rather than a strict `owner_id == user.id` check, so shared publisher AI credentials pass through at this step
@@ -410,7 +420,8 @@ Each revision writes `manifest.json` into the snapshot directory:
   "prompts": {
     "workflow": "...",
     "entrypoint": "...",
-    "refiner": "..."
+    "refiner": "...",
+    "router_trigger": "..."
   },
   "sdk": {
     "building": "claude-code/anthropic",
@@ -463,9 +474,30 @@ Each revision writes `manifest.json` into the snapshot directory:
       "enabled": true
     }
   ],
+  "plugin_specs": [],
+  "metadata": {
+    "description": "Collects and summarises daily market data.",
+    "example_prompts": ["Show me today's summary", "Compare last week vs this week"],
+    "status_refresh_command": "/run:status",
+    "agent_api_enabled": false,
+    "agent_api_identity_enabled": false,
+    "a2a_config": null,
+    "agent_sdk_config": null,
+    "webapp_enabled": false
+  },
   "release_notes": "Fixed off-by-one in invoice parser"
 }
 ```
+
+The `metadata` block is top-level and additive (schema_version stays 2). All keys default to `null` when the agent has not configured the corresponding feature. The read side (`manifest_to_revision_fields`) uses `.get()` with `None` defaults on the `metadata` sub-dict, so manifests written before this block was added map all metadata columns to `NULL` — the restore side then skips those fields rather than clobbering the consumer's current value.
+
+**Fields deliberately excluded from the manifest** (never snapshotted):
+- `STATUS.md` content — per-install App Data, not bundle content.
+- `AgentAccessToken` rows — per-install/per-user JWT secrets.
+- `agent_api_token` / `agent_api_access_grant` rows — per-install secrets and per-user ACL.
+- Schedule run-state (`last_execution` / `next_execution`) — already excluded; only definitions travel.
+- Credential secret values — already excluded; only specs travel.
+- Per-install UI preferences (`ui_color_preset`, `conversation_mode_ui`, `show_on_dashboard`) — belong to the installing user, not the definition.
 
 The `content_hash` is SHA-256 over (sorted file paths + content + manifest body excluding `content_hash` itself). With the `workspace/` subtree, relative paths inside the hash simply become `workspace/...` — no special logic is required. This is the same value stored in `AgentBundleRevision.content_hash`.
 
@@ -595,6 +627,7 @@ The full-workspace bundle snapshot change (schema_version 1 → 2) required **no
 | `backend/app/alembic/versions/bcab2848714f_add_catalog_type_to_app_data_volume.py` | Adds nullable `catalog_type varchar` column to `app_data_volume`; drops `uq_app_data_user_bundle` on `(user_id, bundle_id)`; adds `uq_app_data_user_bundle_catalog` on `(user_id, bundle_id, catalog_type)`. Backfill: volumes whose paired agent has `is_publisher_install=True` → `NULL`; all other bundle-linked volumes → `"server"`; orphans with no paired agent → `"server"` |
 | `backend/app/alembic/versions/ad1f9c2e4b73_scope_agent_bundle_unique_by_install_slot.py` | Replaces `uq_agent_bundle_id_per_publisher` on `(owner_id, bundle_id)` with a new constraint on `(owner_id, bundle_id, is_publisher_install)`. The partial unique index `uq_agent_publisher_install_per_bundle` is unchanged. This allows a publisher to hold both a publisher install and a consumer install of the same bundle simultaneously |
 | `backend/app/alembic/versions/cd4ef5a6b7c8_add_schedules_to_agent_bundle_revision.py` | Adds `schedules JSON NOT NULL DEFAULT '[]'` column to `agent_bundle_revision`. Existing revisions are backfilled to `[]` (no schedules); fully backward compatible. Downgrade drops the column |
+| `backend/app/alembic/versions/d9b3e1a7c45f_agent_bundle_revision_metadata.py` | Adds 8 nullable agent-row metadata columns to `agent_bundle_revision`: `description` (Text), `example_prompts` (JSON), `status_refresh_command` (String 1024), `agent_api_enabled` (Boolean), `agent_api_identity_enabled` (Boolean), `a2a_config` (JSON), `agent_sdk_config` (JSON), `webapp_enabled` (Boolean). All nullable with no server-side backfill — existing rows read as `NULL`, which the restore side treats as "do not overwrite". `down_revision = c8a4f1e09b27`. Downgrade drops all 8 columns |
 
 ## Runtime Cross-Service Rows Created at Install Time
 

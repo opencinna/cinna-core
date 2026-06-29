@@ -38,7 +38,7 @@ Sessions can be started manually, by automated triggers (CRON, email, webhook), 
 | **Input Task** | User-submitted task that goes through refinement before agent execution; extended with short-code IDs, comments, attachments, status history, and subtask delegation |
 | **Task Trigger** | Automated rule (CRON, webhook, date) that creates tasks for an agent |
 | **Agent Bundle** | Publisher-owned, versioned packaging of an agent identified by a reverse-DNS bundle ID. Publishing an agent creates a bundle; each publish creates an immutable revision |
-| **Bundle Revision** | Immutable snapshot of a bundle's workspace content (scripts, docs, knowledge, files, prompts, SDK settings, agent schedules) taken at publish time |
+| **Bundle Revision** | Immutable snapshot of a bundle's workspace content (scripts, docs, knowledge, files, prompts, SDK settings, agent schedules, agent-row metadata: description, example prompts, status refresh command, agent API / A2A / webapp enablement flags, SDK config, and the full A2A capability contract) taken at publish time |
 | **Install** | A user's running copy of a published bundle — an `Agent` row seeded from a bundle revision with its own persistent App Data volume |
 | **App Data** | Per-user, per-bundle persistent storage volume (`/app/workspace/app-data`) that survives uninstall and reattaches on reinstall |
 | **Guest Share** | Token-based, time-limited, revocable link that gives unauthenticated (or authenticated) viewers chat-only access to a specific agent install; protected by a 4-digit security code, scoped to conversation mode, and optionally exposes a read-only environment panel |

@@ -4,8 +4,12 @@ A bundle revision on disk is a directory holding:
 
 * a **manifest** (``manifest.json`` for bundle storage, ``cinna.agent.json`` for
   git trees) — schema_version 2: prompts, SDK + model overrides,
-  ``required_credential_specs``, ``schedules``, ``plugin_specs``, ``version``,
-  ``release_notes`` and a SHA-256 ``content_hash``;
+  ``required_credential_specs``, ``schedules``, ``plugin_specs``, a ``metadata``
+  block of agent-row definitional fields (``description``, ``example_prompts``,
+  ``status_refresh_command``, ``agent_api_enabled``,
+  ``agent_api_identity_enabled``, ``a2a_config``, ``agent_sdk_config``,
+  ``webapp_enabled``), ``version``, ``release_notes`` and a SHA-256
+  ``content_hash``;
 * a ``workspace/`` subtree — a verbatim copy of the env ``app/workspace/`` minus
   the runtime / per-user / secret denylist (see
   :mod:`app.services.environments.workspace_classification`);
@@ -129,6 +133,22 @@ class RevisionFormat:
             "required_credential_specs": cred_specs,
             "schedules": schedule_specs,
             "plugin_specs": plugin_specs,
+            # Agent-row definitional metadata (additive, schema_version 2). These
+            # are plain columns read off the publisher's ``Agent`` row — they
+            # define the agent beyond its prompts/SDK and must survive a snapshot
+            # round-trip. Enablement flags (``agent_api_enabled`` /
+            # ``a2a_config.enabled``) DO travel; the per-install tokens / grants
+            # / UI prefs they gate do NOT (see plan exclusions).
+            "metadata": {
+                "description": install.description,
+                "example_prompts": install.example_prompts,
+                "status_refresh_command": install.status_refresh_command,
+                "agent_api_enabled": install.agent_api_enabled,
+                "agent_api_identity_enabled": install.agent_api_identity_enabled,
+                "a2a_config": install.a2a_config,
+                "agent_sdk_config": install.agent_sdk_config,
+                "webapp_enabled": install.webapp_enabled,
+            },
             "release_notes": release_notes,
         }
 
@@ -220,6 +240,12 @@ class RevisionFormat:
         """
         prompts = manifest.get("prompts") or {}
         sdk = manifest.get("sdk") or {}
+        # Agent-row metadata block (additive). ``.get()`` yields ``None`` when the
+        # key is absent — and these revision columns are nullable — so a snapshot
+        # that predates a field maps to a NULL column, which the restore side
+        # treats as "do not overwrite" (missing-key-tolerant). Never coerce to an
+        # empty default here: that would erase the absent-vs-present distinction.
+        metadata = manifest.get("metadata") or {}
         return {
             "workflow_prompt": prompts.get("workflow"),
             "entrypoint_prompt": prompts.get("entrypoint"),
@@ -234,6 +260,14 @@ class RevisionFormat:
             "plugin_specs": manifest.get("plugin_specs") or [],
             "version": manifest.get("version"),
             "release_notes": manifest.get("release_notes"),
+            "description": metadata.get("description"),
+            "example_prompts": metadata.get("example_prompts"),
+            "status_refresh_command": metadata.get("status_refresh_command"),
+            "agent_api_enabled": metadata.get("agent_api_enabled"),
+            "agent_api_identity_enabled": metadata.get("agent_api_identity_enabled"),
+            "a2a_config": metadata.get("a2a_config"),
+            "agent_sdk_config": metadata.get("agent_sdk_config"),
+            "webapp_enabled": metadata.get("webapp_enabled"),
         }
 
     # ── Git ignore ─────────────────────────────────────────────────

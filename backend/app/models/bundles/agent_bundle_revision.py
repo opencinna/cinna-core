@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, UTC
 
 from sqlmodel import Field, SQLModel, Column
-from sqlalchemy import JSON, Index, UniqueConstraint, Text, text
+from sqlalchemy import JSON, Index, String, UniqueConstraint, Text, text
 
 
 class AgentBundleRevision(SQLModel, table=True):
@@ -106,6 +106,29 @@ class AgentBundleRevision(SQLModel, table=True):
         default_factory=list,
         sa_column=Column(JSON, nullable=False, server_default=text("'[]'::json")),
     )
+
+    # ── Agent-row definitional metadata (schema_version 2, additive) ──
+    # Snapshot of agent-level config that defines the published agent beyond the
+    # prompts / SDK selections above. All nullable so revisions published before
+    # these columns existed (and pre-existing rows / v1 manifests) read cleanly:
+    # a NULL means "the snapshot did not carry this field" and restore must NOT
+    # clobber the consumer's current value. No server-side backfill. Tokens /
+    # grants / per-install UI prefs are deliberately excluded (see the
+    # agent-metadata-snapshot plan).
+    description: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    example_prompts: list | None = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+    status_refresh_command: str | None = Field(
+        default=None, sa_column=Column(String(1024), nullable=True)
+    )
+    agent_api_enabled: bool | None = Field(default=None)
+    agent_api_identity_enabled: bool | None = Field(default=None)
+    a2a_config: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    agent_sdk_config: dict | None = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+    webapp_enabled: bool | None = Field(default=None)
 
     # Filesystem location of the snapshot under ``BUNDLE_STORAGE_DIR``.
     snapshot_path: str = Field(max_length=1024, nullable=False)

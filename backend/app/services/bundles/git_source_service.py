@@ -1679,6 +1679,10 @@ class GitSourceService:
         install.entrypoint_prompt = revision.entrypoint_prompt
         install.refiner_prompt = revision.refiner_prompt
         install.router_trigger_prompt = revision.router_trigger_prompt
+        # Overwrite the agent-row definitional metadata from the pulled revision
+        # (publisher-authoritative), only for fields the revision carries — same
+        # missing-key-tolerant rule as catalog apply-update.
+        InstallService._apply_revision_metadata(install, revision)
         prompt_now = datetime.now(UTC)
         install.workflow_prompt_updated_at = prompt_now
         install.entrypoint_prompt_updated_at = prompt_now

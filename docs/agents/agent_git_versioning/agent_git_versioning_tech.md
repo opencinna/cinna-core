@@ -291,6 +291,8 @@ Maps the four DB prompt field names to their UI labels: `("workflow_prompt", "Wo
 
 Compares the four prompt fields enumerated by `_PROMPT_FIELDS` (`workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`, `router_trigger_prompt`) between the `Agent` row and the revision resolved by `_resolve_synced_revision(session, source, install)`. Returns `True` if any field differs, `False` when there is no synced revision baseline. Shared by `_assert_not_dirty` (pull guard) and `compute_dirty` (dirty endpoint) so they cannot disagree.
 
+**Known limitation — metadata-only edits do not light up dirty.** The 8 definitional metadata fields (`description`, `example_prompts`, `status_refresh_command`, etc.) are NOT compared here, and the workspace dirty check compares file content only. A git-versioned agent where the user edits only `description` or `example_prompts` (without changing any prompt file or workspace file) will show `dirty=false` and `prompts_dirty=false`. The values ARE captured correctly the next time the user pushes (via `build_manifest`), so the data is never lost — the indicator simply does not fire proactively for metadata-only changes. Future work could widen `_PROMPT_FIELDS` or add a dedicated metadata drift check.
+
 **`_resolve_synced_revision(session, source, install) -> AgentBundleRevision | None`**
 
 The dirty-check baseline: prefers the **latest** `AgentBundleRevision` on `source.bundle_uuid` (newest revision, since every sync appends one — using `installed_revision_id` would give the stale checkout revision for a checkout-then-push install). Falls back to `install.installed_revision_id`; returns `None` when no baseline exists. The `source` parameter is the reliable FK — `source.bundle_uuid` may differ from `install.bundle_uuid` for connected installs with no catalog bundle.
@@ -316,7 +318,7 @@ Thin raising wrapper over `_prompts_dirty(session, source, install)`; raises `Gi
 
 **`_apply_revision_to_install(session, install, revision) -> None`**
 
-Stop env (if running) → `replace_bundle_content(revision.snapshot_path, env.id)` → reset prompt-sync baselines (`*_synced_hash = None`) → write DB prompt fields from manifest → update `installed_revision_id`, `last_sync_at`, `last_update_status = "synced"` → restart env (if it was running).
+Stop env (if running) → `replace_bundle_content(revision.snapshot_path, env.id)` → reset prompt-sync baselines (`*_synced_hash = None`) → write DB prompt fields from manifest → call `InstallService._apply_revision_metadata(install, revision)` to overwrite the 8 definitional metadata fields (publisher-authoritative, missing-key-tolerant — `NULL` revision column skips that field) → update `installed_revision_id`, `last_sync_at`, `last_update_status = "synced"` → restart env (if it was running).
 
 **`_mark_source_error(session, source_id, exc) -> None`**
 
@@ -371,7 +373,10 @@ Key fields in the manifest:
 - `required_credential_specs: [...]` — metadata only; private values stripped by `PublishService._template_payload_for`
 - `schedules: [...]`
 - `plugin_specs: [...]`
+- `metadata: {description, example_prompts, status_refresh_command, agent_api_enabled, agent_api_identity_enabled, a2a_config, agent_sdk_config, webapp_enabled}` — agent-row definitional fields read directly off the publisher's `Agent` row. Enablement flags travel; per-install tokens / grants / UI prefs do NOT. All values may be `null` when the agent has not configured the corresponding feature.
 - `release_notes: str | None`
+
+Because both bundle publish and git push (`_capture_and_push`) route through `build_manifest`, both inherit the `metadata` block automatically.
 
 **`write_tree(*, env_workspace_root, dest, manifest, manifest_filename=BUNDLE_MANIFEST_FILENAME) -> str`**
 
@@ -385,7 +390,9 @@ Dispatches filename: tries `manifest.json` then `cinna.agent.json`. Validates `s
 
 **`manifest_to_revision_fields(manifest) -> dict`**
 
-Maps manifest keys to `AgentBundleRevision` constructor kwargs: `workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`, `router_trigger_prompt`, `agent_sdk_building`, `agent_sdk_conversation`, `model_override_building`, `model_override_conversation`, `required_credential_specs`, `schedules`, `plugin_specs`, `version`, `release_notes`. Does not produce `bundle_id` (FK uuid), `revision_number`, `snapshot_path`, `content_hash`, or `published_by_user_id` — those are caller-supplied.
+Maps manifest keys to `AgentBundleRevision` constructor kwargs: `workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`, `router_trigger_prompt`, `agent_sdk_building`, `agent_sdk_conversation`, `model_override_building`, `model_override_conversation`, `required_credential_specs`, `schedules`, `plugin_specs`, `version`, `release_notes`, and the 8 metadata fields: `description`, `example_prompts`, `status_refresh_command`, `agent_api_enabled`, `agent_api_identity_enabled`, `a2a_config`, `agent_sdk_config`, `webapp_enabled`. Does not produce `bundle_id` (FK uuid), `revision_number`, `snapshot_path`, `content_hash`, or `published_by_user_id` — those are caller-supplied.
+
+Missing-key-tolerant: the `metadata` sub-dict is read with `.get()` defaults — a manifest written before this block was added yields `None` for all 8 metadata kwargs, mapping to `NULL` columns on the revision row, which the restore side treats as "do not overwrite the consumer's current value".
 
 ### Git-ignore generation
 
