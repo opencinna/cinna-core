@@ -180,8 +180,9 @@ class AgentService:
         """Batched lookup of active integration flags for a set of agents.
 
         Returns a mapping ``agent_id -> {has_email_integration, has_mcp_connectors,
-        has_webhooks}``. Only *enabled/active* integrations count. Agents with no
-        matching rows are absent from the per-capability sets and default to False.
+        has_webhooks, git_versioning_enabled}``. Only *enabled/active* integrations
+        count. Agents with no matching rows are absent from the per-capability sets
+        and default to False.
 
         Single grouped query per capability keeps the agents-list endpoint off the
         N+1 path.
@@ -189,6 +190,7 @@ class AgentService:
         from app.models.email.agent_email_integration import AgentEmailIntegration
         from app.models.mcp.mcp_connector import MCPConnector
         from app.models.agents.agent_webhook import AgentWebhook
+        from app.models.bundles.agent_git_source import AgentGitSource
 
         if not agent_ids:
             return {}
@@ -217,12 +219,22 @@ class AgentService:
                 )
             ).all()
         )
+        # Git versioning is "enabled" when an AgentGitSource row exists (presence
+        # is the source of truth — connect creates it, disconnect deletes it).
+        git_ids = set(
+            session.exec(
+                select(AgentGitSource.agent_id).where(
+                    AgentGitSource.agent_id.in_(agent_ids),
+                )
+            ).all()
+        )
 
         return {
             aid: {
                 "has_email_integration": aid in email_ids,
                 "has_mcp_connectors": aid in mcp_ids,
                 "has_webhooks": aid in webhook_ids,
+                "git_versioning_enabled": aid in git_ids,
             }
             for aid in agent_ids
         }
@@ -282,6 +294,7 @@ class AgentService:
             has_email_integration=capabilities.get("has_email_integration", False),
             has_mcp_connectors=capabilities.get("has_mcp_connectors", False),
             has_webhooks=capabilities.get("has_webhooks", False),
+            git_versioning_enabled=capabilities.get("git_versioning_enabled", False),
             created_at=agent.created_at,
             updated_at=agent.updated_at,
             owner_id=agent.owner_id,

@@ -8,6 +8,7 @@ from app.api.routes import (
     agent_api,
     agent_api_public,
     agent_app_mcp_routes,
+    agent_git,
     agent_status,
     agent_webhooks,
     app_agent_routes,
@@ -86,6 +87,7 @@ api_router.include_router(utils.router)
 api_router.include_router(agent_status.router)   # Must be before agents.router — /agents/status vs /agents/{id}
 api_router.include_router(agents.router)
 api_router.include_router(installs.router)  # Bundle install actions on /agents/{id}
+api_router.include_router(agent_git.router)  # Git-backed checkout/pull/push on /agents
 api_router.include_router(bundles.router)
 api_router.include_router(catalog.router)
 api_router.include_router(agent_webhooks.router)

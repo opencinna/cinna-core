@@ -50,6 +50,18 @@ class Settings(BaseSettings):
     # link-local / private ranges unless this is True. Default false; a
     # self-hosted operator may flip it to reach private MCP servers.
     MCP_PROVIDER_ALLOW_PRIVATE_HOSTS: bool = False
+    # SSRF/egress guard for git-source operations: backend-initiated git
+    # network calls (clone / pull / push / ls-remote) reject internal /
+    # link-local / private ranges unless this is True. Independent of the MCP
+    # setting so a self-hosted operator can host git on a private LAN without
+    # also opening up MCP egress. Default false.
+    GIT_SOURCE_ALLOW_PRIVATE_HOSTS: bool = False
+    # Per-file size cap (bytes) for files captured under a git source's
+    # ``workspace/`` subtree. Enforced on checkout AND pull (inbound) before the
+    # tree is seeded, and on push (outbound) before the commit — binary-in-git
+    # hygiene + a guard against a malicious repo shipping a huge file. Default
+    # 10 MiB.
+    GIT_SOURCE_MAX_FILE_BYTES: int = 10 * 1024 * 1024
     # Redirect URI for the MCP-provider OAuth/DCR authorization-code flow
     # (Phase 5). The target AS redirects the browser back here after consent; the
     # frontend route forwards (code, state) to POST /mcp-providers/oauth/callback.

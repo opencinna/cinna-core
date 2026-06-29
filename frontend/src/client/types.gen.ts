@@ -709,7 +709,7 @@ export type AgentBundlePublic = {
     bundle_id: string;
     display_name: string;
     description: (string | null);
-    publisher_user_id: string;
+    publisher_user_id?: (string | null);
     publisher_handle?: (string | null);
     publisher_name?: (string | null);
     publisher_email?: (string | null);
@@ -776,6 +776,26 @@ export type AgentBundleUpdate = {
     default_install_mode?: (string | null);
     publisher_ai_credential_conversation_id?: (string | null);
     publisher_ai_credential_building_id?: (string | null);
+};
+
+/**
+ * Body of ``POST /agents/checkout``.
+ */
+export type AgentCheckoutRequest = {
+    repo_url: string;
+    subdir?: (string | null);
+    ref?: string;
+    ssh_key_id?: (string | null);
+    sync_direction?: string;
+    name_override?: (string | null);
+};
+
+/**
+ * Combined response for checkout: the created install + its git source.
+ */
+export type AgentCheckoutResponse = {
+    agent: AgentPublic;
+    git_source: AgentGitSourcePublic;
 };
 
 export type AgentCommentResponse = {
@@ -952,6 +972,43 @@ export type AgentEnvironmentUpdate = {
     config?: ({
     [key: string]: unknown;
 } | null);
+};
+
+/**
+ * Body of ``POST /agents/{agent_id}/git/connect``.
+ */
+export type AgentGitConnectRequest = {
+    repo_url: string;
+    subdir?: (string | null);
+    ref?: string;
+    ssh_key_id?: (string | null);
+    sync_direction?: string;
+    commit_message?: string;
+    adopt_existing?: boolean;
+};
+
+/**
+ * API response schema. Never includes SSH key material.
+ */
+export type AgentGitSourcePublic = {
+    repo_url: string;
+    subdir?: (string | null);
+    ref?: string;
+    ssh_key_id?: (string | null);
+    sync_direction?: string;
+    id: string;
+    agent_id: string;
+    owner_id: string;
+    bundle_uuid?: (string | null);
+    status: string;
+    last_synced_commit?: (string | null);
+    last_sync_at?: (string | null);
+    last_error?: (string | null);
+    created_at: string;
+    updated_at: string;
+    update_available?: boolean;
+    web_history_url?: (string | null);
+    web_tree_url?: (string | null);
 };
 
 export type AgentGuestShareCreate = {
@@ -1222,6 +1279,7 @@ export type AgentPublic = {
     has_email_integration?: boolean;
     has_mcp_connectors?: boolean;
     has_webhooks?: boolean;
+    git_versioning_enabled?: boolean;
     created_at: string;
     updated_at: string;
     owner_id: string;
@@ -1478,6 +1536,20 @@ export type AgentWebappShareUpdate = {
     allow_data_api?: (boolean | null);
     security_code?: (string | null);
     remove_security_code?: (boolean | null);
+};
+
+/**
+ * Create payload for a git-source (GitOps) webhook.
+ *
+ * A git-source webhook carries no type-specific fields — firing it simply
+ * triggers the agent's git source ``pull_update``. ``payload_template`` is
+ * accepted for parity / future use (e.g. asserting the pushed ref) but is not
+ * required.
+ */
+export type AgentWebhookCreateGitSource = {
+    name: string;
+    type?: "git_source";
+    payload_template?: (string | null);
 };
 
 /**
@@ -2209,6 +2281,23 @@ export type CLIAccountTokenPublic = {
 export type CLIAccountTokensPublic = {
     data: Array<CLIAccountTokenPublic>;
     count: number;
+};
+
+/**
+ * Where this agent's git remote is — for the CLI's sparse-checkout link.
+ *
+ * Carries NO deploy-key / private-key material: the developer authenticates to
+ * the remote with their OWN git/SSH client. ``repo_url`` / ``subdir`` / ``ref``
+ * are not secrets (the agent owner already sees them in the UI).
+ */
+export type CliGitCoordinates = {
+    vcs_enabled: boolean;
+    repo_url?: (string | null);
+    subdir?: (string | null);
+    ref?: (string | null);
+    sync_direction?: (string | null);
+    last_synced_commit?: (string | null);
+    auth_hint?: (string | null);
 };
 
 export type CLISetupTokenCreate = {
@@ -2984,6 +3073,82 @@ export type GenerateSQLRequest = {
     path: string;
     user_request: string;
     current_query?: (string | null);
+};
+
+/**
+ * One commit in the source's subdir history.
+ */
+export type GitCommit = {
+    sha: string;
+    short_sha: string;
+    author_name: string;
+    author_email: string;
+    date: string;
+    message: string;
+    commit_url?: (string | null);
+};
+
+/**
+ * Response of ``GET /agents/{agent_id}/git/commits``.
+ */
+export type GitCommitList = {
+    commits: Array<GitCommit>;
+};
+
+/**
+ * Response of ``GET /agents/{agent_id}/git/dirty``.
+ */
+export type GitDirtyStatus = {
+    dirty: boolean;
+    prompts_dirty: boolean;
+    workspace_dirty: boolean;
+    has_env: boolean;
+    last_synced_commit?: (string | null);
+};
+
+/**
+ * One changed workspace file in the commit preview.
+ */
+export type GitFileChange = {
+    path: string;
+    change_type: string;
+};
+
+/**
+ * One changed prompt field in the commit preview.
+ */
+export type GitPromptChange = {
+    field: string;
+    change_type: string;
+};
+
+/**
+ * Body of ``POST /agents/{agent_id}/git/push``.
+ */
+export type GitPushRequest = {
+    commit_message: string;
+    version?: (string | null);
+    also_publish_bundle?: boolean;
+};
+
+/**
+ * Response of ``GET /agents/{agent_id}/git/status`` — commit preview.
+ */
+export type GitStatus = {
+    dirty: boolean;
+    has_env: boolean;
+    last_synced_commit?: (string | null);
+    prompt_changes?: Array<GitPromptChange>;
+    file_changes?: Array<GitFileChange>;
+};
+
+/**
+ * Response of ``GET /agents/{agent_id}/git/check-updates``.
+ */
+export type GitUpdateStatus = {
+    update_available: boolean;
+    remote_commit?: (string | null);
+    last_synced_commit?: (string | null);
 };
 
 export type GoogleCallbackRequest = {
@@ -5859,6 +6024,69 @@ export type AgentAppMcpRoutesRemoveUserAssignmentFromAgentRouteData = {
 
 export type AgentAppMcpRoutesRemoveUserAssignmentFromAgentRouteResponse = (Message);
 
+export type AgentGitCheckoutAgentData = {
+    requestBody: AgentCheckoutRequest;
+};
+
+export type AgentGitCheckoutAgentResponse = (AgentCheckoutResponse);
+
+export type AgentGitConnectGitSourceData = {
+    agentId: string;
+    requestBody: AgentGitConnectRequest;
+};
+
+export type AgentGitConnectGitSourceResponse = (AgentGitSourcePublic);
+
+export type AgentGitDisconnectGitSourceData = {
+    agentId: string;
+};
+
+export type AgentGitDisconnectGitSourceResponse = (Message);
+
+export type AgentGitGetGitSourceData = {
+    agentId: string;
+};
+
+export type AgentGitGetGitSourceResponse = (AgentGitSourcePublic);
+
+export type AgentGitCheckGitUpdatesData = {
+    agentId: string;
+};
+
+export type AgentGitCheckGitUpdatesResponse = (GitUpdateStatus);
+
+export type AgentGitListGitCommitsData = {
+    agentId: string;
+    limit?: number;
+};
+
+export type AgentGitListGitCommitsResponse = (GitCommitList);
+
+export type AgentGitGetGitDirtyData = {
+    agentId: string;
+};
+
+export type AgentGitGetGitDirtyResponse = (GitDirtyStatus);
+
+export type AgentGitGetGitStatusData = {
+    agentId: string;
+};
+
+export type AgentGitGetGitStatusResponse = (GitStatus);
+
+export type AgentGitPullGitSourceData = {
+    agentId: string;
+};
+
+export type AgentGitPullGitSourceResponse = (AgentPublic);
+
+export type AgentGitPushGitSourceData = {
+    agentId: string;
+    requestBody: GitPushRequest;
+};
+
+export type AgentGitPushGitSourceResponse = (AgentGitSourcePublic);
+
 export type AgentHooksExecuteAgentWebhookData = {
     authorization?: (string | null);
     token?: (string | null);
@@ -6325,6 +6553,13 @@ export type AgentWebhooksCreateScriptWebhookData = {
 
 export type AgentWebhooksCreateScriptWebhookResponse = (AgentWebhookPublicWithToken);
 
+export type AgentWebhooksCreateGitSourceWebhookData = {
+    agentId: string;
+    requestBody: AgentWebhookCreateGitSource;
+};
+
+export type AgentWebhooksCreateGitSourceWebhookResponse = (AgentWebhookPublicWithToken);
+
 export type AgentWebhooksListWebhooksData = {
     agentId: string;
 };
@@ -6765,6 +7000,8 @@ export type CliSearchKnowledgeData = {
 };
 
 export type CliSearchKnowledgeResponse = (unknown);
+
+export type CliCliGitCoordinatesResponse = (CliGitCoordinates);
 
 export type CliGetSyncRuntimeData = {
     agentId: string;

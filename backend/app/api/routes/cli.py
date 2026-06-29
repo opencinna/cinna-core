@@ -25,7 +25,7 @@ from fastapi import (
 )
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.api.deps import (
     AccountCLIContextDep,
@@ -419,6 +419,67 @@ async def search_knowledge(
         topic=body.topic,
     )
     return {"results": results}
+
+
+# ── Git Versioning Discovery (CLI token auth) ────────────────────────────────
+
+
+class CliGitCoordinates(BaseModel):
+    """Where this agent's git remote is — for the CLI's sparse-checkout link.
+
+    Carries NO deploy-key / private-key material: the developer authenticates to
+    the remote with their OWN git/SSH client. ``repo_url`` / ``subdir`` / ``ref``
+    are not secrets (the agent owner already sees them in the UI).
+    """
+
+    vcs_enabled: bool
+    repo_url: str | None = None
+    subdir: str | None = None
+    ref: str | None = None
+    sync_direction: str | None = None
+    last_synced_commit: str | None = None
+    # "ssh" | "https" | None — how the USER should auth locally.
+    auth_hint: str | None = None
+
+
+def _git_auth_hint(repo_url: str) -> str:
+    """Derive how the developer should authenticate locally from the URL shape."""
+    if repo_url.startswith("git@") or repo_url.startswith("ssh://"):
+        return "ssh"
+    if repo_url.startswith("https://") or repo_url.startswith("http://"):
+        return "https"
+    return "ssh"
+
+
+@router.get("/git-coordinates", response_model=CliGitCoordinates)
+def cli_git_coordinates(
+    cli_ctx: CLIContextDep,
+    db: SessionDep,
+) -> Any:
+    """Tell the CLI whether this agent is VCS-enabled and where the remote is.
+
+    Auth: the per-agent CLI token (``cli_ctx.agent``) — already scoped to exactly
+    one agent, so token A cannot read agent B's coordinates. No deploy key, no
+    private-key material is ever returned; the developer uses their own git/SSH
+    client. Returns ``vcs_enabled=False`` (all other fields ``None``) when the
+    agent has no git source.
+    """
+    from app.models.bundles.agent_git_source import AgentGitSource
+
+    source = db.exec(
+        select(AgentGitSource).where(AgentGitSource.agent_id == cli_ctx.agent.id)
+    ).first()
+    if source is None:
+        return CliGitCoordinates(vcs_enabled=False)
+    return CliGitCoordinates(
+        vcs_enabled=True,
+        repo_url=source.repo_url,
+        subdir=source.subdir,
+        ref=source.ref,
+        sync_direction=source.sync_direction,
+        last_synced_commit=source.last_synced_commit,
+        auth_hint=_git_auth_hint(source.repo_url),
+    )
 
 
 # ── Live Sync Routes (CLI token auth) ────────────────────────────────────────

@@ -3563,8 +3563,15 @@ export const AgentBundlePublicSchema = {
             title: 'Description'
         },
         publisher_user_id: {
-            type: 'string',
-            format: 'uuid',
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Publisher User Id'
         },
         publisher_handle: {
@@ -3681,7 +3688,7 @@ export const AgentBundlePublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'bundle_id', 'display_name', 'description', 'publisher_user_id', 'latest_revision_id', 'is_listed', 'visibility', 'default_install_mode', 'created_at', 'updated_at'],
+    required: ['id', 'bundle_id', 'display_name', 'description', 'latest_revision_id', 'is_listed', 'visibility', 'default_install_mode', 'created_at', 'updated_at'],
     title: 'AgentBundlePublic',
     description: 'Response schema for ``GET /bundles/...``.'
 } as const;
@@ -4000,6 +4007,78 @@ export const AgentBundlesPublicSchema = {
     type: 'object',
     required: ['data', 'count'],
     title: 'AgentBundlesPublic'
+} as const;
+
+export const AgentCheckoutRequestSchema = {
+    properties: {
+        repo_url: {
+            type: 'string',
+            title: 'Repo Url'
+        },
+        subdir: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Subdir'
+        },
+        ref: {
+            type: 'string',
+            title: 'Ref',
+            default: 'main'
+        },
+        ssh_key_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ssh Key Id'
+        },
+        sync_direction: {
+            type: 'string',
+            title: 'Sync Direction',
+            default: 'bidirectional'
+        },
+        name_override: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name Override'
+        }
+    },
+    type: 'object',
+    required: ['repo_url'],
+    title: 'AgentCheckoutRequest',
+    description: 'Body of ``POST /agents/checkout``.'
+} as const;
+
+export const AgentCheckoutResponseSchema = {
+    properties: {
+        agent: {
+            '$ref': '#/components/schemas/AgentPublic'
+        },
+        git_source: {
+            '$ref': '#/components/schemas/AgentGitSourcePublic'
+        }
+    },
+    type: 'object',
+    required: ['agent', 'git_source'],
+    title: 'AgentCheckoutResponse',
+    description: 'Combined response for checkout: the created install + its git source.'
 } as const;
 
 export const AgentCommentResponseSchema = {
@@ -5056,6 +5135,214 @@ export const AgentEnvironmentsPublicSchema = {
     title: 'AgentEnvironmentsPublic'
 } as const;
 
+export const AgentGitConnectRequestSchema = {
+    properties: {
+        repo_url: {
+            type: 'string',
+            title: 'Repo Url'
+        },
+        subdir: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Subdir'
+        },
+        ref: {
+            type: 'string',
+            title: 'Ref',
+            default: 'main'
+        },
+        ssh_key_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ssh Key Id'
+        },
+        sync_direction: {
+            type: 'string',
+            title: 'Sync Direction',
+            default: 'bidirectional'
+        },
+        commit_message: {
+            type: 'string',
+            title: 'Commit Message',
+            default: 'Initial export from Cinna'
+        },
+        adopt_existing: {
+            type: 'boolean',
+            title: 'Adopt Existing',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['repo_url'],
+    title: 'AgentGitConnectRequest',
+    description: 'Body of ``POST /agents/{agent_id}/git/connect``.'
+} as const;
+
+export const AgentGitSourcePublicSchema = {
+    properties: {
+        repo_url: {
+            type: 'string',
+            maxLength: 2048,
+            title: 'Repo Url'
+        },
+        subdir: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1024
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Subdir'
+        },
+        ref: {
+            type: 'string',
+            maxLength: 255,
+            title: 'Ref',
+            default: 'main'
+        },
+        ssh_key_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ssh Key Id'
+        },
+        sync_direction: {
+            type: 'string',
+            maxLength: 32,
+            title: 'Sync Direction',
+            default: 'bidirectional'
+        },
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        owner_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Owner Id'
+        },
+        bundle_uuid: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Bundle Uuid'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        last_synced_commit: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Synced Commit'
+        },
+        last_sync_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Sync At'
+        },
+        last_error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Error'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        update_available: {
+            type: 'boolean',
+            title: 'Update Available',
+            default: false
+        },
+        web_history_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Web History Url'
+        },
+        web_tree_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Web Tree Url'
+        }
+    },
+    type: 'object',
+    required: ['repo_url', 'id', 'agent_id', 'owner_id', 'status', 'created_at', 'updated_at'],
+    title: 'AgentGitSourcePublic',
+    description: 'API response schema. Never includes SSH key material.'
+} as const;
+
 export const AgentGuestShareCreateSchema = {
     properties: {
         label: {
@@ -5878,6 +6165,11 @@ export const AgentPublicSchema = {
         has_webhooks: {
             type: 'boolean',
             title: 'Has Webhooks',
+            default: false
+        },
+        git_versioning_enabled: {
+            type: 'boolean',
+            title: 'Git Versioning Enabled',
             default: false
         },
         created_at: {
@@ -7311,6 +7603,44 @@ export const AgentWebappSharesPublicSchema = {
     type: 'object',
     required: ['data', 'count'],
     title: 'AgentWebappSharesPublic'
+} as const;
+
+export const AgentWebhookCreateGitSourceSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        type: {
+            type: 'string',
+            const: 'git_source',
+            title: 'Type',
+            default: 'git_source'
+        },
+        payload_template: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 10000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Payload Template'
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'AgentWebhookCreateGitSource',
+    description: `Create payload for a git-source (GitOps) webhook.
+
+A git-source webhook carries no type-specific fields — firing it simply
+triggers the agent's git source \`\`pull_update\`\`. \`\`payload_template\`\` is
+accepted for parity / future use (e.g. asserting the pushed ref) but is not
+required.`
 } as const;
 
 export const AgentWebhookCreateScriptSchema = {
@@ -10277,6 +10607,89 @@ export const CheckUpdatesResponseSchema = {
     description: 'Response of ``POST /agents/{agent_id}/check-updates``.'
 } as const;
 
+export const CliGitCoordinatesSchema = {
+    properties: {
+        vcs_enabled: {
+            type: 'boolean',
+            title: 'Vcs Enabled'
+        },
+        repo_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Repo Url'
+        },
+        subdir: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Subdir'
+        },
+        ref: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ref'
+        },
+        sync_direction: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Sync Direction'
+        },
+        last_synced_commit: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Synced Commit'
+        },
+        auth_hint: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Auth Hint'
+        }
+    },
+    type: 'object',
+    required: ['vcs_enabled'],
+    title: 'CliGitCoordinates',
+    description: `Where this agent's git remote is — for the CLI's sparse-checkout link.
+
+Carries NO deploy-key / private-key material: the developer authenticates to
+the remote with their OWN git/SSH client. \`\`repo_url\`\` / \`\`subdir\`\` / \`\`ref\`\`
+are not secrets (the agent owner already sees them in the UI).`
+} as const;
+
 export const ConfirmEmailRequestSchema = {
     properties: {
         token: {
@@ -13092,6 +13505,245 @@ export const GenerateSQLRequestSchema = {
     required: ['path', 'user_request'],
     title: 'GenerateSQLRequest',
     description: 'Request to generate SQL query from natural language'
+} as const;
+
+export const GitCommitSchema = {
+    properties: {
+        sha: {
+            type: 'string',
+            title: 'Sha'
+        },
+        short_sha: {
+            type: 'string',
+            title: 'Short Sha'
+        },
+        author_name: {
+            type: 'string',
+            title: 'Author Name'
+        },
+        author_email: {
+            type: 'string',
+            title: 'Author Email'
+        },
+        date: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Date'
+        },
+        message: {
+            type: 'string',
+            title: 'Message'
+        },
+        commit_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Commit Url'
+        }
+    },
+    type: 'object',
+    required: ['sha', 'short_sha', 'author_name', 'author_email', 'date', 'message'],
+    title: 'GitCommit',
+    description: "One commit in the source's subdir history."
+} as const;
+
+export const GitCommitListSchema = {
+    properties: {
+        commits: {
+            items: {
+                '$ref': '#/components/schemas/GitCommit'
+            },
+            type: 'array',
+            title: 'Commits'
+        }
+    },
+    type: 'object',
+    required: ['commits'],
+    title: 'GitCommitList',
+    description: 'Response of ``GET /agents/{agent_id}/git/commits``.'
+} as const;
+
+export const GitDirtyStatusSchema = {
+    properties: {
+        dirty: {
+            type: 'boolean',
+            title: 'Dirty'
+        },
+        prompts_dirty: {
+            type: 'boolean',
+            title: 'Prompts Dirty'
+        },
+        workspace_dirty: {
+            type: 'boolean',
+            title: 'Workspace Dirty'
+        },
+        has_env: {
+            type: 'boolean',
+            title: 'Has Env'
+        },
+        last_synced_commit: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Synced Commit'
+        }
+    },
+    type: 'object',
+    required: ['dirty', 'prompts_dirty', 'workspace_dirty', 'has_env'],
+    title: 'GitDirtyStatus',
+    description: 'Response of ``GET /agents/{agent_id}/git/dirty``.'
+} as const;
+
+export const GitFileChangeSchema = {
+    properties: {
+        path: {
+            type: 'string',
+            title: 'Path'
+        },
+        change_type: {
+            type: 'string',
+            title: 'Change Type'
+        }
+    },
+    type: 'object',
+    required: ['path', 'change_type'],
+    title: 'GitFileChange',
+    description: 'One changed workspace file in the commit preview.'
+} as const;
+
+export const GitPromptChangeSchema = {
+    properties: {
+        field: {
+            type: 'string',
+            title: 'Field'
+        },
+        change_type: {
+            type: 'string',
+            title: 'Change Type'
+        }
+    },
+    type: 'object',
+    required: ['field', 'change_type'],
+    title: 'GitPromptChange',
+    description: 'One changed prompt field in the commit preview.'
+} as const;
+
+export const GitPushRequestSchema = {
+    properties: {
+        commit_message: {
+            type: 'string',
+            title: 'Commit Message'
+        },
+        version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Version'
+        },
+        also_publish_bundle: {
+            type: 'boolean',
+            title: 'Also Publish Bundle',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['commit_message'],
+    title: 'GitPushRequest',
+    description: 'Body of ``POST /agents/{agent_id}/git/push``.'
+} as const;
+
+export const GitStatusSchema = {
+    properties: {
+        dirty: {
+            type: 'boolean',
+            title: 'Dirty'
+        },
+        has_env: {
+            type: 'boolean',
+            title: 'Has Env'
+        },
+        last_synced_commit: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Synced Commit'
+        },
+        prompt_changes: {
+            items: {
+                '$ref': '#/components/schemas/GitPromptChange'
+            },
+            type: 'array',
+            title: 'Prompt Changes',
+            default: []
+        },
+        file_changes: {
+            items: {
+                '$ref': '#/components/schemas/GitFileChange'
+            },
+            type: 'array',
+            title: 'File Changes',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['dirty', 'has_env'],
+    title: 'GitStatus',
+    description: 'Response of ``GET /agents/{agent_id}/git/status`` — commit preview.'
+} as const;
+
+export const GitUpdateStatusSchema = {
+    properties: {
+        update_available: {
+            type: 'boolean',
+            title: 'Update Available'
+        },
+        remote_commit: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Remote Commit'
+        },
+        last_synced_commit: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Synced Commit'
+        }
+    },
+    type: 'object',
+    required: ['update_available'],
+    title: 'GitUpdateStatus',
+    description: 'Response of ``GET /agents/{agent_id}/git/check-updates``.'
 } as const;
 
 export const GoogleCallbackRequestSchema = {

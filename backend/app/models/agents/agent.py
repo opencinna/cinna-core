@@ -264,6 +264,10 @@ class AgentPublic(SQLModel):
     has_email_integration: bool = False
     has_mcp_connectors: bool = False
     has_webhooks: bool = False
+    # Whether an AgentGitSource is attached (git versioning connected). Lets the
+    # card render its toggle from the already-loaded agent, before its own
+    # git-source query resolves.
+    git_versioning_enabled: bool = False
 
     created_at: datetime
     updated_at: datetime

@@ -207,15 +207,17 @@ class BundleService:
     def create_bundle(
         session: Session,
         bundle_id: str,
-        publisher_user_id: uuid.UUID,
+        publisher_user_id: uuid.UUID | None,
         display_name: str,
         description: str | None = None,
     ) -> AgentBundle:
         """Create a new ``AgentBundle`` row.
 
-        Used by ``PublishService`` on first publish. Callers are responsible
-        for re-using an existing bundle (looked up by ``bundle_id``) before
-        invoking this — duplicate ``bundle_id`` raises an integrity error.
+        Used by ``PublishService`` on first publish (with a real
+        ``publisher_user_id``) and by the git-source import path (with
+        ``publisher_user_id=None`` for an ownerless / shared row). Callers are
+        responsible for re-using an existing bundle (looked up by ``bundle_id``)
+        before invoking this — duplicate ``bundle_id`` raises an integrity error.
         """
         bundle = AgentBundle(
             bundle_id=bundle_id,

@@ -23,6 +23,10 @@ class AgentWebhookType:
     """Webhook type constants."""
     SESSION = "session"
     SCRIPT = "script"
+    # GitOps trigger: a git push provider (GitHub/GitLab) calls the webhook so
+    # the agent's git source pulls the latest revision. Rides the same token /
+    # log infra as the other types; carries no type-specific fields.
+    GIT_SOURCE = "git_source"
 
 
 # ============================== Database model ==============================
@@ -102,6 +106,19 @@ class AgentWebhookCreateScript(SQLModel):
     payload_template: str | None = Field(default=None, max_length=10000)
     command: str = Field(min_length=1, max_length=2000)
     command_timeout_seconds: int = Field(default=120, ge=1, le=300)
+
+
+class AgentWebhookCreateGitSource(SQLModel):
+    """Create payload for a git-source (GitOps) webhook.
+
+    A git-source webhook carries no type-specific fields — firing it simply
+    triggers the agent's git source ``pull_update``. ``payload_template`` is
+    accepted for parity / future use (e.g. asserting the pushed ref) but is not
+    required.
+    """
+    name: str = Field(min_length=1, max_length=255)
+    type: Literal["git_source"] = "git_source"
+    payload_template: str | None = Field(default=None, max_length=10000)
 
 
 # ============================== Update schema ==============================

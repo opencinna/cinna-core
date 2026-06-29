@@ -161,6 +161,15 @@ from .bundles.bundle_access_grant import (
     BundleAccessGrantsPublic,
     BundleAccessGrantCreate,
 )
+from .bundles.agent_git_source import (
+    AgentGitSource,
+    AgentGitSourceBase,
+    AgentGitSourcePublic,
+    AgentGitSourceCreate,
+    AgentGitSourceUpdate,
+    GitSyncDirection,
+    GitSourceStatus,
+)
 from .bundles.catalog import (
     CatalogEntryPublic,
     CatalogPublic,
@@ -260,6 +269,7 @@ from .agents.agent_webhook import (
     AgentWebhookType,
     AgentWebhookCreateSession,
     AgentWebhookCreateScript,
+    AgentWebhookCreateGitSource,
     AgentWebhookUpdate,
     AgentWebhookPublic,
     AgentWebhookPublicWithToken,
@@ -865,6 +875,14 @@ __all__ = [
     "BundleAccessGrantPublic",
     "BundleAccessGrantsPublic",
     "BundleAccessGrantCreate",
+    # Agent Git Sources (git-backed versioning)
+    "AgentGitSource",
+    "AgentGitSourceBase",
+    "AgentGitSourcePublic",
+    "AgentGitSourceCreate",
+    "AgentGitSourceUpdate",
+    "GitSyncDirection",
+    "GitSourceStatus",
     # Catalog & install schemas
     "CatalogEntryPublic",
     "CatalogPublic",
@@ -952,6 +970,7 @@ __all__ = [
     "AgentWebhookType",
     "AgentWebhookCreateSession",
     "AgentWebhookCreateScript",
+    "AgentWebhookCreateGitSource",
     "AgentWebhookUpdate",
     "AgentWebhookPublic",
     "AgentWebhookPublicWithToken",

@@ -25,6 +25,7 @@ import { McpConnectorsCard } from "./McpConnectorsCard"
 import { McpConnectorsCardSimple } from "./McpConnectorsCardSimple"
 import { WebappShareCard } from "./WebappShareCard"
 import { LocalDevCard } from "./LocalDevCard"
+import { GitVersioningCard } from "./GitVersioningCard"
 import { AgentWebhooksCard } from "./Webhooks/AgentWebhooksCard"
 
 interface AgentIntegrationsTabProps {
@@ -197,6 +198,15 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
 
         {/* Local Development Card */}
         <LocalDevCard agentId={agent.id} />
+
+        {/* Git Versioning Card - owner-only (connect/push/pull are developer-gated) */}
+        {isOwner && (
+          <GitVersioningCard
+            agentId={agent.id}
+            agentName={agent.name}
+            gitVersioningEnabled={agent.git_versioning_enabled ?? false}
+          />
+        )}
       </div>
     </div>
   )

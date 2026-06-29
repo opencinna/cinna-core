@@ -64,8 +64,14 @@ class AgentBundle(AgentBundleBase, table=True):
     bundle_id: str = Field(max_length=255, nullable=False)
 
     # Publisher cannot be deleted while their bundles exist (RESTRICT).
-    publisher_user_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="RESTRICT"
+    # NULL = ownerless / shared row. A catalog publish always sets this to the
+    # publisher; a git-sourced import (the checking-out user is NOT the
+    # publisher) creates the row ownerless so ONE shared bundle row backs every
+    # user's checkout of the same repo — exactly how catalog installs share one
+    # bundle across many consumers. An ownerless row stays private/unlisted and
+    # never surfaces in the public catalog.
+    publisher_user_id: uuid.UUID | None = Field(
+        default=None, foreign_key="user.id", nullable=True, ondelete="RESTRICT"
     )
 
     # Pointer to the latest published revision (NULL until first publish).
@@ -106,7 +112,7 @@ class AgentBundlePublic(SQLModel):
     bundle_id: str
     display_name: str
     description: str | None
-    publisher_user_id: uuid.UUID
+    publisher_user_id: uuid.UUID | None = None  # NULL for ownerless git imports
     publisher_handle: str | None = None  # e.g. truncated name; never email
     publisher_name: str | None = None
     publisher_email: str | None = None

@@ -82,7 +82,12 @@ def test_capability_flags_lifecycle(
     assert agent_a_id in agents_by_id, "Agent A missing from /agents/ list"
     assert agent_b_id in agents_by_id, "Agent B missing from /agents/ list"
 
-    for flag in ("has_email_integration", "has_mcp_connectors", "has_webhooks"):
+    for flag in (
+        "has_email_integration",
+        "has_mcp_connectors",
+        "has_webhooks",
+        "git_versioning_enabled",
+    ):
         assert agents_by_id[agent_a_id][flag] is False, (
             f"Agent A: expected {flag}=False at baseline, got {agents_by_id[agent_a_id][flag]}"
         )

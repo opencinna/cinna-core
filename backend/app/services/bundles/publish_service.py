@@ -47,11 +47,13 @@ from app.models.events.event import EventType
 from app.models.credentials.credential import Credential
 from app.models.credentials.link_models import AgentCredentialLink
 from app.services.bundles.bundle_service import BundleService
+from app.services.bundles.revision_format import RevisionFormat
 from app.services.credentials.credentials_service import CredentialsService
 from app.services.environments.workspace_classification import (
     PLUGIN_DERIVED_FILES,
     PLUGINS_DIRNAME,
     WORKSPACE_ROOT_REL,
+    is_nested_excluded,
     iter_bundle_toplevel,
     safe_copytree,
 )
@@ -247,11 +249,6 @@ class PublishService:
                 shutil.rmtree(tmp_dir)
             tmp_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
 
-            # Full-tree capture into the snapshot's ``workspace/`` subtree
-            # (schema_version 2). When there's no active env this leaves an
-            # empty ``workspace/`` dir (prompts-only revision).
-            PublishService._snapshot_workspace_tree(env_workspace_root, tmp_dir)
-
             # Required credential specs from the install's linked credentials.
             # Validate first so a misconfigured publisher-provided credential
             # surfaces a clean error before we touch the snapshot tree.
@@ -269,42 +266,26 @@ class PublishService:
             # _snapshot_workspace_tree.
             plugin_specs = PublishService._collect_plugin_specs(session, install)
 
-            manifest = {
-                # schema_version 2: the workspace lives under a ``workspace/``
-                # subtree (full-tree capture minus the denylist). v1 revisions
-                # used a flat allowlist layout; the consumer reader dispatches
-                # on this value / the on-disk shape.
-                "schema_version": 2,
-                "bundle_id": install.bundle_id,
-                "revision_number": revision_number,
-                "version": version,
-                "published_at": datetime.now(UTC).isoformat(),
-                "prompts": {
-                    "workflow": install.workflow_prompt,
-                    "entrypoint": install.entrypoint_prompt,
-                    "refiner": install.refiner_prompt,
-                    "router_trigger": install.router_trigger_prompt,
-                },
-                "sdk": {
-                    "building": env.agent_sdk_building if env else None,
-                    "conversation": env.agent_sdk_conversation if env else None,
-                    "model_override_building": getattr(
-                        env, "model_override_building", None
-                    ) if env else None,
-                    "model_override_conversation": getattr(
-                        env, "model_override_conversation", None
-                    ) if env else None,
-                },
-                "required_credential_specs": cred_specs,
-                "schedules": schedule_specs,
-                "plugin_specs": plugin_specs,
-                "release_notes": release_notes,
-            }
-            content_hash = PublishService._hash_tree_with_manifest(tmp_dir, manifest)
-            manifest["content_hash"] = f"sha256:{content_hash}"
-
-            # Write manifest.json into the snapshot.
-            (tmp_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+            # Build the manifest + serialize the revision tree through the
+            # single canonical (de)serializer. ``write_tree`` performs the
+            # full-tree capture into ``tmp_dir/workspace/`` (schema_version 2 —
+            # empty when there's no active env), computes the ``content_hash``,
+            # stamps it into ``manifest``, and writes ``manifest.json``.
+            manifest = RevisionFormat.build_manifest(
+                install=install,
+                env=env,
+                cred_specs=cred_specs,
+                schedule_specs=schedule_specs,
+                plugin_specs=plugin_specs,
+                revision_number=revision_number,
+                version=version,
+                release_notes=release_notes,
+            )
+            content_hash = RevisionFormat.write_tree(
+                env_workspace_root=env_workspace_root,
+                dest=tmp_dir,
+                manifest=manifest,
+            )
 
             # Atomic-ish move. shutil.move is not atomic across filesystems;
             # within the same FS root it is. Bundle storage is a single
@@ -333,27 +314,20 @@ class PublishService:
                 )
             raise
 
-        # 4. Insert revision row.
+        # 4. Insert revision row. The prompt / SDK / model-override / spec
+        # fields are deserialized from the manifest through the same canonical
+        # mapping git checkout (Phase 3) consumes, so the row and the manifest
+        # can never disagree. The remaining columns (FK uuid, revision number,
+        # snapshot path, content hash, author, raw manifest) are not derivable
+        # from the manifest body and are supplied here.
         revision = AgentBundleRevision(
             bundle_id=bundle.id,
             revision_number=revision_number,
-            version=version,
             manifest=manifest,
-            workflow_prompt=install.workflow_prompt,
-            entrypoint_prompt=install.entrypoint_prompt,
-            refiner_prompt=install.refiner_prompt,
-            router_trigger_prompt=install.router_trigger_prompt,
-            agent_sdk_building=env.agent_sdk_building if env else None,
-            agent_sdk_conversation=env.agent_sdk_conversation if env else None,
-            model_override_building=getattr(env, "model_override_building", None) if env else None,
-            model_override_conversation=getattr(env, "model_override_conversation", None) if env else None,
-            required_credential_specs=cred_specs,
-            schedules=schedule_specs,
-            plugin_specs=plugin_specs,
             snapshot_path=str(snapshot_dir),
             content_hash=content_hash,
             published_by_user_id=publisher_user_id,
-            release_notes=release_notes,
+            **RevisionFormat.manifest_to_revision_fields(manifest),
         )
         session.add(revision)
         session.commit()
@@ -549,6 +523,12 @@ class PublishService:
                     "Skipping symlink in plugins tree (never followed): %s", child
                 )
                 continue
+            # Regenerated cache junk (``__pycache__/``, ``*.pyc``/``*.pyo``)
+            # sitting directly at the plugins root — parity with the
+            # workspace-root path (is_bundle_owned_toplevel), which excludes
+            # these so they are never recreated as empty dirs in the snapshot.
+            if is_nested_excluded(child.name):
+                continue
             if child.is_file() and child.name in PLUGIN_DERIVED_FILES:
                 continue
             target = dest / child.name
@@ -593,6 +573,41 @@ class PublishService:
             default=str,
         ).encode("utf-8")
         h.update(manifest_body)
+        return h.hexdigest()
+
+    @staticmethod
+    def hash_workspace_tree(workspace_root: Path) -> str:
+        """SHA-256 over the files under a ``workspace/`` subtree only (NO manifest).
+
+        The workspace-only sibling of :meth:`_hash_tree_with_manifest`: it omits
+        the manifest body, so the digest is **stable across rebuilds** (it does
+        not move with ``revision_number`` / ``published_at`` / ``version``). Two
+        captures of byte-identical workspace files therefore hash equal — the
+        primitive the git dirty-check uses to compare the live env workspace
+        against the last synced revision snapshot.
+
+        ``workspace_root`` must point at the ``workspace/`` directory itself on
+        both sides so relative paths line up. A missing root hashes to the empty
+        digest (no files).
+        """
+        h = hashlib.sha256()
+        if not workspace_root.exists():
+            return h.hexdigest()
+        files: list[tuple[str, Path]] = []
+        for f in workspace_root.rglob("*"):
+            if f.is_symlink() or not f.is_file():
+                continue
+            rel = f.relative_to(workspace_root).as_posix()
+            files.append((rel, f))
+        files.sort(key=lambda x: x[0])
+        for rel, p in files:
+            h.update(rel.encode("utf-8"))
+            h.update(b"\0")
+            try:
+                h.update(p.read_bytes())
+            except OSError:
+                continue
+            h.update(b"\0")
         return h.hexdigest()
 
     @staticmethod

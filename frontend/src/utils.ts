@@ -96,6 +96,16 @@ export const handleError = function (
   this(errorMessage)
 }
 
+/**
+ * Best-effort error-message extraction for `useMutation` `onError` handlers that
+ * want a custom fallback. Accepts the loosely-typed React Query error (defaults
+ * to `Error`) and prefers a FastAPI `body.detail` string, then `message`.
+ */
+export const getErrorMessage = (error: unknown, fallback: string): string => {
+  const e = error as { body?: { detail?: string }; message?: string }
+  return e?.body?.detail || e?.message || fallback
+}
+
 export const getInitials = (name: string): string => {
   return name
     .split(" ")
