@@ -12,7 +12,7 @@ Version-control the durable source of an agent — scripts, internal docs, promp
 | **Sync direction** | Per-source policy: `pull` (read-from-remote only), `push` (write-to-remote only), or `bidirectional` (both) |
 | **Canonical git tree** | `cinna.agent.json` + `workspace/` subtree + `.gitignore` — byte-for-byte the schema_version-2 bundle snapshot layout, so git is a transport/interchange layer, not a separate format |
 | **Last synced commit** | SHA of the last remote commit that was imported or pushed; the idempotency pin, analogous to `Agent.installed_revision_id` |
-| **Update available** | `ls-remote HEAD != last_synced_commit`; surfaced by `GET /agents/{id}/git` (best-effort) and `GET /agents/{id}/git/check-updates` (strict) |
+| **Update available** | Whether the remote has commits that advance the agent's subdir beyond `last_synced_commit`. For repo-root installs: `ls-remote HEAD != last_synced_commit`. For subdir installs: HEAD must have advanced AND commits that actually touch `<subdir>/` must exist beyond `last_synced_commit` (verified via a tree-object hash comparison). Cheap-first: if `ls-remote HEAD == last_synced_commit` the result is always `false` with no clone. Any indeterminate outcome returns `true` conservatively. Surfaced by `GET /agents/{id}/git` (best-effort) and `GET /agents/{id}/git/check-updates` (strict) |
 | **Dirty** | The live workspace or DB prompt fields have diverged from the last synced revision. `GET /agents/{id}/git/dirty` reports both axes separately: `workspace_dirty` (file content) and `prompts_dirty` (DB prompt fields) |
 | **GitOps webhook** | A `git_source` type `AgentWebhook` whose token a git host (GitHub, GitLab, etc.) posts to; the platform responds with a pull |
 | **Ownerless bundle** | An `AgentBundle` row with `publisher_user_id = NULL` created or reused during checkout or connect; private, unlisted, and never a catalog publish |
@@ -155,9 +155,15 @@ A `bundle_id` mismatch between the remote folder and the agent is **permitted** 
 
 ### Update Check
 
-`GET /agents/{id}/git/check-updates` (owner-resolved, no developer gate). Runs `ls-remote HEAD` against the remote (cheap, no clone) and returns `{update_available, remote_commit, last_synced_commit}`. Any network or auth failure surfaces as a service error.
+`GET /agents/{id}/git/check-updates` (owner-resolved, no developer gate). Returns `{update_available, remote_commit, last_synced_commit}`. Any network or auth failure surfaces as a service error.
 
 `GET /agents/{id}/git` (owner-resolved) returns `AgentGitSourcePublic` with a best-effort `update_available` — network/auth failures silently leave it `false` rather than failing the read.
+
+Both endpoints share `_compute_update_available`, which applies subdir-scoped logic:
+
+- **No subdir (repo root):** `update_available = (ls-remote HEAD != last_synced_commit)`. Every commit touches the root, so the cheap `ls-remote` check is conclusive.
+- **With a subdir:** A cheap `ls-remote HEAD` is run first; if it equals `last_synced_commit` the result is `false` with no clone. Only when HEAD advanced AND a subdir and `last_synced_commit` baseline are both present does a heavier check follow — comparing the tree-object hash of `<subdir>/` at HEAD vs at `last_synced_commit` using `subdir_changed_between`. Equal tree hash means the subdir is unchanged, so `update_available` remains `false` even though other parts of the repository moved on.
+- **Conservative-on-indeterminate:** Any outcome that cannot be determined (server disallows fetch-by-SHA, base commit GC'd or rewritten, subdir added/removed between the two commits) is caught and returns `true` — the system never silently hides a real update. On git hosts that disallow fetch-by-reachable-SHA (some self-hosted Gitea/GitLab without `uploadpack.allowReachableSHA1InWant`), this degrades gracefully to the legacy always-`true` behavior.
 
 ### Commit History
 
@@ -287,4 +293,4 @@ Planned but not yet implemented: 3-way reconcile for manifest/prompt fields on d
 | [Agent Credentials](../agent_credentials/agent_credentials.md) | Checkout materializes credential specs from `cinna.agent.json` via `InstallService` (PBP/PBU/PBT rules apply normally). Credential values are never stored in or read from git trees — `required_credential_specs` carries metadata only |
 | [User Roles](../../application/user_roles/user_roles.md) | Checkout, connect, disconnect, pull, push, and creating a git-source webhook require the `agent-developer` role (`require_developer` dependency). Reading git source status, checking updates, listing commits, and checking dirty state are owner-gated with no developer requirement |
 | [cinna CLI Integration](../../application/cinna_cli_integration/cinna_cli_integration.md) | `GET /api/v1/cli/git-coordinates` (CLI-token / agent-scoped) exposes VCS coordinates to the local cinna CLI, enabling sparse-checkout git-linked local development. The deploy key is never included; the developer authenticates with their own credentials |
-| [Agent Management](../agent_management/agent_management.md) | `git_versioning_enabled` is a computed capability flag on `AgentPublic` (presence of an `AgentGitSource` row), batched in `compute_capability_flags` alongside `has_email_integration` / `has_mcp_connectors` / `has_webhooks` to stay off the N+1 path. It lets the card's toggle render the real state from the already-loaded agent before its own git-source query resolves |
+| [Agent Management](../../application/agent_management/agent_management.md) | `git_versioning_enabled` is a computed capability flag on `AgentPublic` (presence of an `AgentGitSource` row), batched in `compute_capability_flags` alongside `has_email_integration` / `has_mcp_connectors` / `has_webhooks` to stay off the N+1 path. It lets the card's toggle render the real state from the already-loaded agent before its own git-source query resolves |

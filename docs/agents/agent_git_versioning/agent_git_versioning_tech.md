@@ -79,7 +79,7 @@ Indexes: `ix_agent_git_source_agent_id` (unique — one git source per install);
 Adds `id`, `agent_id`, `owner_id`, `bundle_uuid`, `last_synced_commit`, `last_sync_at`, `status`, `last_error`, `created_at`, `updated_at`.
 
 ### `AgentGitSourcePublic(AgentGitSourceBase)` — API response
-Adds all identity/status fields plus `update_available: bool = False`, `web_history_url: str | None = None`, `web_tree_url: str | None = None`. SSH key material is never included. `update_available` is set by the route layer from a `ls-remote` call; the two web URLs are set by the route helper `_git_source_to_public` from `build_web_history_url` / `build_web_tree_url` (both `None` for unsupported hosts). None are stored on the row.
+Adds all identity/status fields plus `update_available: bool = False`, `web_history_url: str | None = None`, `web_tree_url: str | None = None`. SSH key material is never included. `update_available` is computed by `_compute_update_available` (see Service Layer) and applied by the route layer — not stored on the row. The two web URLs are set by the route helper `_git_source_to_public` from `build_web_history_url` / `build_web_tree_url` (both `None` for unsupported hosts). None are stored on the row.
 
 ### `AgentGitSourceCreate(AgentGitSourceBase)` — API input for checkout
 Inherits Base fields verbatim (max_length validation applies to user input).
@@ -227,11 +227,23 @@ The adopt path: links the agent to an existing remote folder **without pushing**
 
 **`get_source(session, agent_id, owner) -> tuple[AgentGitSource, bool]`**
 
-Returns `(source, update_available)`. `update_available` is computed best-effort from `ls_remote_head`; any exception silently leaves it `False` (never fails a read endpoint).
+Returns `(source, update_available)`. `update_available` is computed best-effort via `_compute_update_available`; any exception silently leaves it `False` (never fails a read endpoint).
 
 **`check_updates(session, agent_id, owner) -> dict`**
 
-Strict `ls_remote_head` — raises on network/auth failure. Returns `{update_available, remote_commit, last_synced_commit}`.
+Strict update check via `_compute_update_available` — raises on network/auth failure. Returns `{update_available, remote_commit, last_synced_commit}`.
+
+**`_compute_update_available(session, source) -> tuple[bool, str]`** (shared private helper)
+
+Routes both `get_source` and `check_updates` to a single consistent implementation so they cannot diverge (mirrors the `_prompts_dirty` sharing pattern). Returns `(update_available, remote_head_sha)`.
+
+Logic (cheap-first):
+1. `ls_remote_head` to fetch the current remote HEAD SHA. If HEAD == `last_synced_commit`, returns `(False, HEAD)` with no further work.
+2. If the source has no `subdir` (repo root), returns `(True, HEAD)` — every commit touches the root, so a HEAD advance is conclusive.
+3. If a `subdir` and `last_synced_commit` baseline are both present, calls `subdir_changed_between` in `git_operations.py`. Equal tree hash ⇒ `(False, HEAD)`; unequal or indeterminate ⇒ `(True, HEAD)`.
+4. If `last_synced_commit` is absent and HEAD advanced, returns `(True, HEAD)` conservatively.
+
+Only the error-handling wrapper differs between callers: `get_source` swallows exceptions (best-effort); `check_updates` re-raises them (strict).
 
 **`compute_dirty(session, agent_id, owner) -> dict`** (new)
 
@@ -441,6 +453,17 @@ Context manager wrapping `clone_repository`; yields `(repo_path, repo)`; removes
 **`git_log_subdir(*, repo_url, ref="main", subdir=None, ssh_key_path=None, max_count=50) -> list[dict]`** (new)
 
 Returns up to `max_count` commits touching `subdir`, newest first. Each dict: `{sha, short_sha, author_name, author_email, date (ISO-8601), message}`. Egress-guarded. Uses a bounded shallow clone (`depth=max_count`) into a temp dir, then `git log --max-count=N -- <subdir>/` with a `%x1f`/`%x1e`-delimited format for safe field splitting. Temp dir removed in `finally`. Errors map through the existing typed git errors.
+
+**`subdir_changed_between(*, repo_url, ref, subdir, base_commit, ssh_key_path=None) -> bool`** (new)
+
+Compares the tree-object hash of `<subdir>/` at the tip of `ref` against its hash at `base_commit`. Returns `True` if the subdir changed (or the outcome is indeterminate), `False` if the tree hashes match (subdir untouched). Used by `_compute_update_available` as the second-stage check for subdir-scoped installs.
+
+Implementation:
+1. `depth=1` shallow clone of `ref` into a temp dir. Egress-guarded via `assert_git_url_allowed` before the clone.
+2. `git fetch --depth=1 <base_commit>` to make the base commit reachable. A second `assert_git_url_allowed` call re-asserts the same URL before this follow-up fetch (DNS-rebind defense).
+3. `git rev-parse HEAD:<subdir>` → tree hash at tip; `git rev-parse <base_commit>:<subdir>` → tree hash at base.
+4. Equal hashes → return `False` (subdir unchanged). Unequal → return `True`.
+5. Any exception (server disallows fetch-by-reachable-SHA, base commit GC'd or rewritten, subdir missing at one revision, auth failure) → return `True` conservatively. On git hosts that disallow fetch-by-SHA (some self-hosted Gitea/GitLab without `uploadpack.allowReachableSHA1InWant`), this degrades gracefully to the legacy always-`True` behavior.
 
 ### Existing primitives (unchanged, now egress-guarded)
 

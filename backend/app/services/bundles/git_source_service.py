@@ -90,6 +90,7 @@ from app.services.knowledge.git_operations import (
     git_log_subdir,
     init_repo_with_remote,
     ls_remote_head,
+    subdir_changed_between,
 )
 from app.services.users.ssh_key_service import SSHKeyService
 
@@ -615,21 +616,75 @@ class GitSourceService:
     # ── Status / update check ────────────────────────────────────────
 
     @staticmethod
+    def _compute_update_available(
+        session: Session, source: AgentGitSource
+    ) -> tuple[bool, str]:
+        """Resolve ``(update_available, remote_head_sha)`` for one git source.
+
+        Single source of truth shared by :meth:`get_source` (best-effort) and
+        :meth:`check_updates` (strict) so the banner can never disagree between
+        the two endpoints — mirroring how :meth:`_prompts_dirty` is shared.
+
+        Two-tier, cheapest-first:
+
+        1. **Cheap path** — a single ``ls-remote`` HEAD (no clone). If HEAD has
+           not advanced past ``last_synced_commit`` → no update, no clone.
+        2. **Subdir scoping** — when HEAD *has* advanced, the answer depends on
+           whether the agent lives in a ``subdir``:
+           - No ``subdir`` (repo root) → every commit touches the root, so the
+             cheap HEAD-advanced verdict is correct. Stays clone-free.
+           - No ``last_synced_commit`` baseline → nothing to scope against; the
+             advance is the verdict (clone-free).
+           - With both a ``subdir`` and a baseline → only report an update when
+             commits beyond the baseline actually touched ``<subdir>/`` (subdir
+             tree hash differs). This is the only branch that does a (bounded)
+             clone, and only after the cheap path already showed an advance, so a
+             commit to an unrelated folder of the same repo no longer raises a
+             false "update available" banner.
+
+        The SSH key stays resolved for both the ls-remote and the subdir clone so
+        a private repo is authenticated for both calls.
+        """
+        with _resolve_ssh_key(session, source.ssh_key_id, source.owner_id) as key:
+            remote_sha = ls_remote_head(source.repo_url, source.ref, key)
+            if remote_sha == source.last_synced_commit:
+                return False, remote_sha
+
+            subdir = (source.subdir or "").strip("/")
+            if not subdir or not source.last_synced_commit:
+                # Repo root (every commit touches it) or no baseline to scope
+                # against — the cheap HEAD advance is the verdict.
+                return True, remote_sha
+
+            # HEAD advanced and a subdir is configured: only a real update when
+            # the subdir tree actually changed beyond the synced commit.
+            changed = subdir_changed_between(
+                repo_url=source.repo_url,
+                ref=source.ref,
+                subdir=subdir,
+                base_commit=source.last_synced_commit,
+                ssh_key_path=key,
+            )
+            return changed, remote_sha
+
+    @staticmethod
     def get_source(
         session: Session, agent_id: uuid.UUID, owner: User
     ) -> tuple[AgentGitSource, bool]:
         """Return ``(source, update_available)`` for the owner-resolved agent.
 
-        ``update_available`` is computed best-effort from a cheap ``ls-remote``;
-        any network / auth failure leaves it ``False`` (this is a read endpoint —
-        it never mutates the source or raises on a transient remote error).
+        ``update_available`` is computed best-effort; any network / auth / clone
+        failure leaves it ``False`` (this is a read endpoint — it never mutates
+        the source or raises on a transient remote error). When the agent lives
+        in a ``subdir`` the check is subdir-scoped (see
+        :meth:`_compute_update_available`).
         """
         source = GitSourceService._resolve_source_owned(session, agent_id, owner)
         update_available = False
         try:
-            with _resolve_ssh_key(session, source.ssh_key_id, source.owner_id) as key:
-                remote_sha = ls_remote_head(source.repo_url, source.ref, key)
-            update_available = remote_sha != source.last_synced_commit
+            update_available, _ = GitSourceService._compute_update_available(
+                session, source
+            )
         except Exception as exc:  # noqa: BLE001 — best-effort, never fail the read
             logger.info(
                 "git get_source: update check failed for agent %s: %s",
@@ -641,12 +696,18 @@ class GitSourceService:
     def check_updates(
         session: Session, agent_id: uuid.UUID, owner: User
     ) -> dict:
-        """Cheap ``ls-remote`` HEAD vs ``last_synced_commit`` (no clone)."""
+        """Strict ``update_available`` check (surfaces auth / network errors).
+
+        Cheap ``ls-remote`` HEAD vs ``last_synced_commit``, then subdir-scoped via
+        :meth:`_compute_update_available` so a commit to an unrelated folder of the
+        same repo does not report an update.
+        """
         source = GitSourceService._resolve_source_owned(session, agent_id, owner)
-        with _resolve_ssh_key(session, source.ssh_key_id, source.owner_id) as key:
-            remote_sha = ls_remote_head(source.repo_url, source.ref, key)
+        update_available, remote_sha = GitSourceService._compute_update_available(
+            session, source
+        )
         return {
-            "update_available": remote_sha != source.last_synced_commit,
+            "update_available": update_available,
             "remote_commit": remote_sha,
             "last_synced_commit": source.last_synced_commit,
         }

@@ -699,6 +699,87 @@ def git_log_subdir(
     return commits
 
 
+def subdir_changed_between(
+    *,
+    repo_url: str,
+    ref: str = "main",
+    subdir: str,
+    base_commit: str,
+    ssh_key_path: Optional[str] = None,
+) -> bool:
+    """
+    Return whether the tree at ``subdir`` differs between ``base_commit`` and the
+    current tip of ``ref`` — i.e. whether any commit newer than ``base_commit``
+    actually touched ``subdir``.
+
+    This powers the subdir-scoped "update available" check: when several agents
+    share one repo under different subdirs, a commit to *another* folder advances
+    the remote HEAD but must not mark this agent as having an update. Comparing
+    the *subdir tree object hash* at both commits answers exactly that — identical
+    tree hashes mean the subdir is byte-for-byte unchanged regardless of how many
+    unrelated commits landed in between (and is robust to rebases / force-pushes,
+    unlike a ``base..HEAD`` commit walk).
+
+    A bounded shallow clone of ``ref`` (``depth=1``) provides the tip; the
+    ``base_commit`` object is fetched on its own (``depth=1``) so the comparison
+    works no matter how far back ``base_commit`` sits in history. If
+    ``base_commit`` cannot be fetched or either side's subdir tree cannot be
+    resolved (server disallows fetch-by-SHA, history was rewritten, the subdir was
+    added/removed), the result is indeterminate and we conservatively return
+    ``True`` — never hide a real update (matches the legacy ``remote != synced``
+    verdict).
+
+    Egress-guarded (the clone and the follow-up fetch both run the guard); the
+    temp clone is removed by the context manager.
+
+    Args:
+        repo_url: Git repository URL (HTTPS or SSH).
+        ref: Branch or tag whose tip is compared against ``base_commit``.
+        subdir: Path within the repo (leading/trailing slashes are tolerated).
+        base_commit: The commit SHA to compare the subdir tree against
+            (typically ``AgentGitSource.last_synced_commit``).
+        ssh_key_path: Optional path to an SSH private key for private repos.
+
+    Returns:
+        ``True`` if the subdir tree differs (or the comparison is indeterminate),
+        ``False`` if the subdir tree is identical at both commits.
+
+    Raises:
+        EgressBlockedError: If the resolved host is blocked.
+        GitAuthenticationError / GitConnectionError / GitOperationError: On clone
+        transport / parse failures.
+    """
+    subdir = subdir.strip("/")
+
+    with clone_repository_context(
+        repo_url, branch=ref, ssh_key_path=ssh_key_path, depth=1
+    ) as (_repo_path, repo):
+        # Rebuild the SSH env for the follow-up fetch. The clone already ran the
+        # egress guard and rewrote origin to the converted (SSH/HTTPS) URL, so
+        # read it back and re-assert the guard before the next network call.
+        remote_url = repo.remotes.origin.url if repo.remotes else repo_url
+        assert_git_url_allowed(remote_url)
+        env = os.environ.copy()
+        if remote_url.startswith("git@"):
+            env["GIT_SSH_COMMAND"] = create_git_ssh_command(ssh_key_path)
+
+        try:
+            # Fetch just the base commit's snapshot (depth=1) so its subdir tree
+            # is resolvable no matter how distant it is from the tip.
+            repo.remotes.origin.fetch(base_commit, depth=1, env=env)
+            tip_tree = repo.git.rev_parse(f"HEAD:{subdir}")
+            base_tree = repo.git.rev_parse(f"{base_commit}:{subdir}")
+        except GitCommandError as exc:
+            logger.info(
+                "subdir_changed_between: indeterminate subdir diff for %s@%s "
+                "(subdir=%s, base=%s): %s — assuming changed",
+                repo_url, ref, subdir, base_commit, exc,
+            )
+            return True
+
+        return tip_tree != base_tree
+
+
 def get_current_commit_hash(repo: Repo) -> str:
     """
     Get the current commit hash of the repository.

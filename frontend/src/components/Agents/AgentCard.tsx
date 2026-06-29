@@ -12,6 +12,7 @@ import {
   Webhook,
   Waypoints,
   Package,
+  GitBranch,
 } from "lucide-react"
 import type { ComponentType, MouseEvent } from "react"
 
@@ -54,6 +55,7 @@ export function AgentCard({ agent, status }: AgentCardProps) {
     ...(agent.has_email_integration ? [{ label: "Email", icon: Mail }] : []),
     ...(agent.has_mcp_connectors ? [{ label: "MCP", icon: Unplug }] : []),
     ...(agent.has_webhooks ? [{ label: "Webhooks", icon: Webhook }] : []),
+    ...(agent.git_versioning_enabled ? [{ label: "GIT", icon: GitBranch }] : []),
     ...(a2aEnabled ? [{ label: "A2A", icon: Waypoints }] : []),
   ]
 
