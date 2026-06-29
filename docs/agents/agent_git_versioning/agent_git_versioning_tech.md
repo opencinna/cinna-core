@@ -21,9 +21,11 @@
 - `backend/app/api/routes/cli.py` — `GET /cli/git-coordinates` → `CliGitCoordinates`; auth via `CLIContextDep`
 
 ### Frontend
-- `frontend/src/components/Agents/GitVersioningCard.tsx` — the "GIT Versioning" card in the Integrations tab; manages disabled/connect-form/connected states; react-query hooks for source, dirty, status (commit preview), commits, push, pull, connect, disconnect. Takes a `gitVersioningEnabled` prop for the instant toggle state. Footer actions (Commit Agent + Refresh + icon Disconnect), Latest-commits (3) + View-history/clickable-SHA links, clickable repo name, code-chip coordinates + sync-direction icon, `CommitPreview` (git-status dialog), and the adopt-existing-folder confirm dialog. Helpers: `isExistingFolderError`, `CodeChip`, `SyncDirectionIcon`, `CommitPreview`
-- `frontend/src/components/Agents/DeployKeySelect.tsx` — deploy-key picker reusing `SshKeysService.listSshKeys` and `generateSshKey`; quick-generate reveals only the public key with deploy-key guidance
-- `frontend/src/components/Agents/AgentIntegrationsTab.tsx` — mounts `<GitVersioningCard>` in the card grid; owner-gated; passes `gitVersioningEnabled={agent.git_versioning_enabled}`
+- `frontend/src/components/Agents/GitVersioningCard.tsx` — the "GIT Versioning" card in the Integrations tab; manages disabled/connect-form/connected states; react-query hooks for source, dirty, status (commit preview), commits, push, pull, connect, disconnect. Takes a `gitVersioningEnabled` prop for the instant toggle state. Footer actions (Commit Agent + Refresh + icon Disconnect), Latest-commits (3) + View-history/clickable-SHA links, clickable repo name, icon-bearing code-chip coordinates (folder/branch) + sync-direction icon, green-check `connected` status icon, `CommitPreview` (git-status dialog), and the adopt-existing-folder confirm dialog. Helpers: `isExistingFolderError`, `CodeChip` (optional leading icon), `SyncDirectionIcon`, `CommitPreview`, `toGitSshUrl` (HTTP→SSH repo-URL normalizer)
+- `frontend/src/components/Agents/DeployKeySelect.tsx` — deploy-key picker reusing `SshKeysService.listSshKeys`; generate/import open the shared `GenerateKeyModal` / `ImportKeyModal` dialogs (auto-selecting the new key via their `onGenerated`/`onImported` callbacks)
+- `frontend/src/components/UserSettings/GenerateKeyModal.tsx`, `ImportKeyModal.tsx` — the shared SSH-key dialogs; each accepts an optional `onGenerated`/`onImported` callback so callers (the deploy-key picker) can auto-select the created key
+- `frontend/src/components/Agents/AgentIntegrationsTab.tsx` — mounts `<GitVersioningCard>` in the card grid (now positioned **before** the Webhooks / Local Dev / Email Integration cards); owner-gated; passes `gitVersioningEnabled={agent.git_versioning_enabled}`
+- `frontend/src/components/Agents/AgentCard.tsx` — agents-list card; renders a **GIT** capability badge (`GitBranch` icon) when `agent.git_versioning_enabled`
 
 ### Migrations
 - `backend/app/alembic/versions/391a6285d8ff_add_agent_git_source.py` — creates `agent_git_source` table; `down_revision = b2d1f4c6a8e3`
@@ -515,7 +517,9 @@ Functions:
 
 **Props.** `agentId`, `agentName`, and `gitVersioningEnabled` (from `agent.git_versioning_enabled`). The toggle's checked state is `effectiveConnected = sourceResolved ? connected : gitVersioningEnabled` — it shows the real status from first paint (no off→on flash); the internals load behind a "Loading git versioning…" spinner (`showInternalsSpinner`).
 
-**Connected layout.** Repo URL is a link to `web_tree_url` when present; coordinates render as `CodeChip`s (subdir, branch) plus a `SyncDirectionIcon` (icon + tooltip, replacing the text direction). "Latest commits" shows the 3 most recent with clickable `commit_url` SHAs and a "View history" link (`web_history_url`). All actions live in a `CardFooter`: left = Commit Agent + status reason + a **Refresh** icon button (`handleRefresh` invalidates git-dirty/status/source/commits); right = icon-only Disconnect. The commit dialog renders `CommitPreview` (from `getGitStatus`, fetched only while the dialog is open).
+**Connected layout.** Repo URL is a link to `web_tree_url` when present; coordinates render as `CodeChip`s — each carries a leading icon to distinguish them at a glance: a `Folder` icon on the subdir chip and a `GitBranch` icon on the branch chip — plus a `SyncDirectionIcon` (icon + tooltip, replacing the text direction). The `connected` status renders as a green `CheckCircle2` icon (tooltip "Connected") instead of a text badge; only the `error` status still renders a destructive badge (with `last_error`). "Latest commits" shows the 3 most recent with clickable `commit_url` SHAs and a "View history" link (`web_history_url`). All actions live in a `CardFooter`: left = Commit Agent + status reason + a **Refresh** icon button (`handleRefresh` invalidates git-dirty/status/source/commits); right = icon-only Disconnect. The commit dialog renders `CommitPreview` (from `getGitStatus`, fetched only while the dialog is open).
+
+**Connect form.** Fields render top-to-bottom: repo URL, a two-column row with **Branch / ref first, Subdirectory second**, then sync direction and deploy key. Sync direction and deploy key use a right-aligned row layout (`flex items-center justify-between` with a `w-[200px] shrink-0` control), mirroring the **Communication & Locale** settings card. The repo URL input normalizes a pasted HTTP(S) URL to the SSH (`git@host:owner/repo.git`) form on blur via the module-level `toGitSshUrl` helper (mirrors the backend `convert_https_to_ssh_url`); SSH URLs and unrecognized strings pass through unchanged.
 
 **Adopt flow.** `connectMutation` takes an `adoptExisting` boolean. On a connect error, `isExistingFolderError` (checks `status===409 && body.detail.code==="existing_agent_folder"`) opens an adopt confirm dialog; confirming re-runs `mutate(true)`.
 
@@ -535,12 +539,12 @@ React Query hooks:
 
 ### `DeployKeySelect.tsx`
 
-`frontend/src/components/Agents/DeployKeySelect.tsx`. Deploy-key picker used inside the connect form.
+`frontend/src/components/Agents/DeployKeySelect.tsx`. Deploy-key picker used inside the connect form, laid out as a right-aligned row (label + guidance left, `w-[200px] shrink-0` select right).
 
 - Lists the user's SSH keys via `SshKeysService.listSshKeys`.
-- Options: pick an existing key, "None (public repo)", "Generate a new key…".
-- Quick-generate: calls `SshKeysService.generateSshKey` inline; on success shows the **public key** in a copy-able block with guidance ("Add this as a Deploy key in your GitHub/GitLab repo settings and check 'Allow write access'"). Auto-selects the new key and invalidates `["sshKeys"]`.
-- Returns the chosen `ssh_key_id | null` to the connect form. Private-key material is never displayed — only the public key is shown at generate time.
+- Options: pick an existing key, "None (public repo)", "Generate a new key…", "Import an existing key…".
+- Key creation reuses the **same modal dialogs as the Settings → SSH Keys management screen** — `GenerateKeyModal` and `ImportKeyModal` (`frontend/src/components/UserSettings/`), rather than inline forms. Each modal gained an optional callback (`onGenerated` / `onImported`, both non-breaking) so the picker can auto-select the freshly created key by id. The modals own the public-key reveal, copy, and deploy-key guidance.
+- Returns the chosen `ssh_key_id | null` to the connect form. Private-key material is never displayed.
 
 ## Migrations
 

@@ -36,6 +36,21 @@ Auto-generated from OpenAPI spec. Tag: `agent-webhooks`
 
 ---
 
+## POST `/api/v1/agents/{agent_id}/webhooks/git-source`
+**Create Git Source Webhook**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Request body** (`AgentWebhookCreateGitSource`):
+  - `name`: string (required)
+  - `type`: string
+  - `payload_template`: string | null
+
+**Response:** `AgentWebhookPublicWithToken`
+
+---
+
 ## GET `/api/v1/agents/{agent_id}/webhooks`
 **List Webhooks**
 

@@ -185,12 +185,13 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
           agentApiIdentityEnabled={agent.agent_api_identity_enabled ?? false}
         />
 
-        {/* Email Integration Card — only for the publisher install (or
-            unpublished agents). Foreign installs of a published bundle
-            inherit email integration from the publisher and don't get
-            their own. */}
-        {(agent.is_publisher_install || !agent.bundle_uuid) && (
-          <EmailIntegrationCard agentId={agent.id} />
+        {/* Git Versioning Card - owner-only (connect/push/pull are developer-gated) */}
+        {isOwner && (
+          <GitVersioningCard
+            agentId={agent.id}
+            agentName={agent.name}
+            gitVersioningEnabled={agent.git_versioning_enabled ?? false}
+          />
         )}
 
         {/* Webhooks Card - owner-only (mirrors AgentSchedulesCard ownership gate) */}
@@ -199,13 +200,12 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
         {/* Local Development Card */}
         <LocalDevCard agentId={agent.id} />
 
-        {/* Git Versioning Card - owner-only (connect/push/pull are developer-gated) */}
-        {isOwner && (
-          <GitVersioningCard
-            agentId={agent.id}
-            agentName={agent.name}
-            gitVersioningEnabled={agent.git_versioning_enabled ?? false}
-          />
+        {/* Email Integration Card — only for the publisher install (or
+            unpublished agents). Foreign installs of a published bundle
+            inherit email integration from the publisher and don't get
+            their own. */}
+        {(agent.is_publisher_install || !agent.bundle_uuid) && (
+          <EmailIntegrationCard agentId={agent.id} />
         )}
       </div>
     </div>

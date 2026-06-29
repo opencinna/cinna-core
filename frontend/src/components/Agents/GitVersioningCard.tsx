@@ -5,7 +5,9 @@ import {
   ArrowDownToLine,
   ArrowDownUp,
   ArrowUpFromLine,
+  CheckCircle2,
   ExternalLink,
+  Folder,
   GitBranch,
   GitCommitHorizontal,
   Loader2,
@@ -91,10 +93,31 @@ function SyncDirectionIcon({ direction }: { direction?: string | null }) {
   )
 }
 
-// Inline "code" style chip for the subdir / branch coordinates.
-function CodeChip({ children }: { children: ReactNode }) {
+// Normalize a pasted HTTP(S) repo URL into the SSH ("git@host:owner/repo.git")
+// form git operations use with deploy keys. Mirrors the backend
+// `convert_https_to_ssh_url`. SSH URLs and anything unrecognized pass through
+// unchanged (the backend re-derives HTTPS for public/no-key clones).
+function toGitSshUrl(rawUrl: string): string {
+  const url = rawUrl.trim()
+  if (!url || url.startsWith("git@")) return url
+  const match = url.match(/^https?:\/\/([^/]+)\/(.+?)(?:\.git)?\/?$/i)
+  if (!match) return url
+  const [, host, path] = match
+  return `git@${host}:${path}.git`
+}
+
+// Inline "code" style chip for the subdir / branch coordinates. An optional
+// leading icon distinguishes a folder (subdir) from a branch (ref) at a glance.
+function CodeChip({
+  children,
+  icon: Icon,
+}: {
+  children: ReactNode
+  icon?: LucideIcon
+}) {
   return (
-    <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground">
+    <code className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground">
+      {Icon && <Icon className="h-3 w-3 text-muted-foreground" />}
       {children}
     </code>
   )
@@ -414,13 +437,23 @@ export function GitVersioningCard({
                   )}
                   {source.status === "error" ? (
                     <Badge variant="destructive">error</Badge>
+                  ) : source.status === "connected" ? (
+                    <span
+                      title="Connected"
+                      aria-label="Connected"
+                      className="inline-flex items-center text-green-600 dark:text-green-500"
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                    </span>
                   ) : (
                     <Badge variant="secondary">{source.status}</Badge>
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  {source.subdir && <CodeChip>{source.subdir}</CodeChip>}
-                  <CodeChip>{source.ref ?? "main"}</CodeChip>
+                  {source.subdir && (
+                    <CodeChip icon={Folder}>{source.subdir}</CodeChip>
+                  )}
+                  <CodeChip icon={GitBranch}>{source.ref ?? "main"}</CodeChip>
                   <SyncDirectionIcon direction={source.sync_direction} />
                 </div>
                 {source.status === "error" && source.last_error && (
@@ -820,20 +853,11 @@ function ConnectForm({
           placeholder="git@github.com:org/repo.git"
           value={repoUrl}
           onChange={(e) => setRepoUrl(e.target.value)}
+          onBlur={(e) => setRepoUrl(toGitSshUrl(e.target.value))}
           className="font-mono text-sm"
         />
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label htmlFor="git-subdir">Subdirectory (optional)</Label>
-          <Input
-            id="git-subdir"
-            placeholder="agents/my-agent"
-            value={subdir}
-            onChange={(e) => setSubdir(e.target.value)}
-            className="font-mono text-sm"
-          />
-        </div>
         <div className="space-y-2">
           <Label htmlFor="git-ref">Branch / ref</Label>
           <Input
@@ -844,11 +868,27 @@ function ConnectForm({
             className="font-mono text-sm"
           />
         </div>
+        <div className="space-y-2">
+          <Label htmlFor="git-subdir">Subdirectory (optional)</Label>
+          <Input
+            id="git-subdir"
+            placeholder="agents/my-agent"
+            value={subdir}
+            onChange={(e) => setSubdir(e.target.value)}
+            className="font-mono text-sm"
+          />
+        </div>
       </div>
-      <div className="space-y-2">
-        <Label>Sync direction</Label>
+      <div className="flex items-center justify-between gap-4">
+        <div className="space-y-0.5">
+          <Label>Sync direction</Label>
+          <p className="text-xs text-muted-foreground">
+            Connecting performs an initial export push, so choose Bidirectional
+            or Push only.
+          </p>
+        </div>
         <Select value={syncDirection} onValueChange={setSyncDirection}>
-          <SelectTrigger>
+          <SelectTrigger className="w-[200px] shrink-0">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -857,10 +897,6 @@ function ConnectForm({
             <SelectItem value="pull">Pull only</SelectItem>
           </SelectContent>
         </Select>
-        <p className="text-xs text-muted-foreground">
-          Connecting performs an initial export push, so choose Bidirectional or
-          Push only.
-        </p>
       </div>
 
       <DeployKeySelect value={sshKeyId} onChange={setSshKeyId} />

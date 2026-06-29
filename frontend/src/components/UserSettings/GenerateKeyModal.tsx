@@ -19,9 +19,15 @@ import { Copy, Check } from "lucide-react"
 interface GenerateKeyModalProps {
   open: boolean
   onClose: () => void
+  /** Called once the key has been generated (e.g. to auto-select it). */
+  onGenerated?: (key: SSHKeyPublic) => void
 }
 
-export function GenerateKeyModal({ open, onClose }: GenerateKeyModalProps) {
+export function GenerateKeyModal({
+  open,
+  onClose,
+  onGenerated,
+}: GenerateKeyModalProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const [keyName, setKeyName] = useState("")
@@ -45,6 +51,7 @@ export function GenerateKeyModal({ open, onClose }: GenerateKeyModalProps) {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["sshKeys"] })
       setGeneratedKey(data)
+      onGenerated?.(data)
       showSuccessToast("SSH key generated successfully")
     },
     onError: (error: any) => {

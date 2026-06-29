@@ -60,6 +60,13 @@ Auto-generated from OpenAPI spec. Tag: `cli`
 
 ---
 
+## GET `/api/v1/cli/git-coordinates`
+**Cli Git Coordinates**
+
+**Response:** `CliGitCoordinates`
+
+---
+
 ## GET `/api/v1/cli/agents/{agent_id}/sync-runtime`
 **Get Sync Runtime**
 

@@ -367,6 +367,11 @@ class AgentService:
             count_statement = count_statement.where(workspace_condition)
             statement = statement.where(workspace_condition)
 
+        # Deterministic order by creation date (newest agents last). Without an
+        # explicit ORDER BY, Postgres returns rows in an unstable order, which
+        # makes the agents-list cards appear to shuffle between refetches.
+        statement = statement.order_by(Agent.created_at, Agent.id)
+
         count = session.exec(count_statement).one()
         agents = session.exec(statement.offset(skip).limit(limit)).all()
 

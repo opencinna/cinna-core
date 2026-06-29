@@ -15,9 +15,10 @@ Each file below documents one API domain.
 | Agent Api | [agent_api.md](./agent_api.md) | 11 |
 | Agent Api Public | [agent_api_public.md](./agent_api_public.md) | 1 |
 | Agent App Mcp Routes | [agent_app_mcp_routes.md](./agent_app_mcp_routes.md) | 7 |
+| Agent Git | [agent_git.md](./agent_git.md) | 10 |
 | Agent Hooks | [agent_hooks.md](./agent_hooks.md) | 1 |
 | Agent Tasks | [agent_tasks.md](./agent_tasks.md) | 11 |
-| Agent Webhooks | [agent_webhooks.md](./agent_webhooks.md) | 8 |
+| Agent Webhooks | [agent_webhooks.md](./agent_webhooks.md) | 9 |
 | Agentic Teams | [agentic_teams.md](./agentic_teams.md) | 18 |
 | Agents | [agents.md](./agents.md) | 36 |
 | Ai Credentials | [ai_credentials.md](./ai_credentials.md) | 10 |
@@ -26,7 +27,7 @@ Each file below documents one API domain.
 | App Data | [app_data.md](./app_data.md) | 3 |
 | Bundles | [bundles.md](./bundles.md) | 9 |
 | Catalog | [catalog.md](./catalog.md) | 5 |
-| Cli | [cli.md](./cli.md) | 53 |
+| Cli | [cli.md](./cli.md) | 54 |
 | Credentials | [credentials.md](./credentials.md) | 19 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
 | Email Integration | [email_integration.md](./email_integration.md) | 6 |
