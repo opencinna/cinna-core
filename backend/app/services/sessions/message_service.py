@@ -1380,6 +1380,25 @@ class MessageService:
             logger.error(f"Error in process_pending_messages for session {session_id}: {e}", exc_info=True)
             await handler.on_error(e)
             raise
+        finally:
+            # Safety net: guarantee the session never stays stuck "streaming".
+            # The happy path clears interaction_status via on_complete / the
+            # terminal STREAM_* events, but a cancellation (client disconnect,
+            # interrupt) or an error that bypasses a terminal event would leave
+            # it set. Shielded so a cancel propagating through this finally
+            # can't abort the clear. Idempotent — a no-op once already cleared.
+            from app.services.sessions.session_service import SessionService
+            try:
+                await asyncio.shield(
+                    SessionService.clear_interaction_status(
+                        session_id, reason="process_pending_messages teardown"
+                    )
+                )
+            except Exception as clear_err:  # noqa: BLE001 — best-effort net
+                logger.warning(
+                    f"Defensive interaction_status clear failed for session "
+                    f"{session_id}: {clear_err}"
+                )
 
     @staticmethod
     def detect_ask_user_question_tool(streaming_events: list[dict]) -> bool:

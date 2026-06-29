@@ -54,8 +54,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Set on TOOL_USE(askuserquestion) and DONE events emitted from `question.asked`.
-# The adapter reads it from the DONE event to fire POST /question/{id}/reject
-# after the stream closes, releasing opencode's suspended tool Deferred.
+# The adapter reads it to remember the session's pending question; the NEXT
+# user message is then relayed as the answer via POST /question/{id}/reply,
+# resuming opencode's suspended tool turn (see OpenCodeAdapter).
 OPENCODE_QUESTION_REQUEST_ID_KEY = "opencode_question_request_id"
 
 
@@ -156,16 +157,20 @@ class OpenCodeEventTransformer:
         # Remap OpenCode's native `question` tool to the unified
         # `askuserquestion` tool name so the frontend renders the existing
         # AskUserQuestion widget.  DONE is emitted right after so the outer
-        # stream closes; the adapter then calls `POST /question/{id}/reject`
-        # to unblock opencode's suspended session.
+        # stream closes and the widget shows; the suspended turn is kept alive
+        # and the user's next message is relayed as the answer via
+        # `POST /question/{id}/reply` (see OpenCodeAdapter).
         if event_type == "question.asked":
             return self._handle_question_asked(properties, session_id)
 
         # -- Informational events (silently skip) --------------------------
+        # `question.replied` is the out-of-band ack that a pending question was
+        # answered via POST /question/{id}/reply; the resumed turn streams its
+        # output through the normal message.part events, so nothing to emit here.
         if event_type in (
             "message.updated", "session.updated", "session.status",
             "session.diff", "server.connected", "server.heartbeat",
-            "project.updated",
+            "project.updated", "question.replied",
         ):
             return []
 
@@ -374,12 +379,14 @@ class OpenCodeEventTransformer:
         OpenCode's `question` tool suspends the session until a client calls
         POST /question/{requestID}/reply or /reject.  We want the stream to
         end cleanly so the frontend can show the answer widget, so we emit
-        DONE right after the TOOL_USE.  The adapter is responsible for
-        calling /reject (fire-and-forget) to unblock the server-side session.
+        DONE right after the TOOL_USE.  The adapter remembers the requestID and
+        keeps the suspended turn alive; the user's next message is relayed as
+        the answer via /reply (turn resumes), and /reject is used only on the
+        interrupt / teardown path.
 
         The requestID is threaded through `metadata.opencode_question_request_id`
-        on the TOOL_USE event so the adapter can pick it up after `translate()`
-        returns.
+        on both the TOOL_USE and DONE events so the adapter can pick it up after
+        `translate()` returns.
         """
         request_id = properties.get("id", "")
         questions_raw = properties.get("questions", []) or []

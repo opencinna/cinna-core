@@ -39,7 +39,7 @@ push ◄── git commit/push ◄─────────────┤ (li
 pull ──► git pull ──► replace_bundle_content (advance last_synced_commit)
 ```
 
-A git tree is byte-for-byte a schema_version-2 bundle snapshot. Every git operation reduces to an operation the platform already performs — with git as the wire. `AgentBundleRevision` rows remain the internal runtime source of truth backing App Data keying, install counts, credential specs, and schedule materialization; git is the portable, version-history face. Every push and connect now also persists an `AgentBundleRevision`, giving the dirty check a stable baseline across rebuilds.
+A git tree is byte-for-byte a schema_version-2 bundle snapshot. Every git operation reduces to an operation the platform already performs — with git as the wire. `AgentBundleRevision` rows remain the internal runtime source of truth backing App Data keying, install counts, credential specs, and schedule materialization; git is the portable, version-history face. Every push and connect now also persists an `AgentBundleRevision`, giving the dirty check a stable baseline across rebuilds. These git-baseline revisions carry `origin="git"` and are internal — they do not appear in the bundle's Revisions tab, do not influence the publish dialog's next-version suggestion, and cannot become `bundle.latest_revision_id`. Because they draw from the same global `revision_number` counter as catalog publishes, the Revisions tab may show gaps in numbering when git operations interleave with catalog publishes; this is expected.
 
 ### Git vs. Mutagen (Local Dev Sync)
 
@@ -51,12 +51,7 @@ Git and Mutagen are **orthogonal**. Mutagen is the live runtime sync layer: it k
 <repo>/<subdir>/
 ├── cinna.agent.json   # manifest: schema_version, bundle_id, prompts, SDK per-mode,
 │                      #   model overrides, required_credential_specs (metadata only),
-│                      #   schedules, plugin_specs,
-│                      #   metadata block (description, example_prompts,
-│                      #     status_refresh_command, agent_api_enabled,
-│                      #     agent_api_identity_enabled, a2a_config,
-│                      #     agent_sdk_config, webapp_enabled),
-│                      #   version, release_notes, content_hash
+│                      #   schedules, plugin_specs, version, release_notes, content_hash
 ├── workspace/         # the BUNDLE_OWNED subtree verbatim
 │   ├── scripts/
 │   ├── docs/
@@ -195,8 +190,6 @@ Both SSH (`git@host:owner/repo.git`) and HTTPS repo URLs resolve to the same web
 - `last_synced_commit`: the SHA the comparison was made against.
 
 This endpoint is kept separate from `GET /agents/{id}/git` deliberately — the dirty check copies the entire workspace tree to a temp dir and must not slow or fail the cheap status read. The UI gates the "Commit Agent" button on `dirty=true`; the pull guard uses the same `_prompts_dirty` logic internally.
-
-**Known limitation:** the dirty check compares only the 4 prompt fields and workspace file content. A metadata-only edit — for example, updating the agent's `description` or `example_prompts` without touching any prompt or file — will NOT cause `dirty=true`. The values are still captured correctly the next time the user pushes a commit (the `metadata` block is always rebuilt fresh from the live `Agent` row by `build_manifest`). The "Commit Agent" button will therefore not enable for metadata-only changes; the user must make a file or prompt edit alongside the metadata change to trigger the push, or push via the API directly.
 
 ### Commit Status Preview (git-status Style)
 
