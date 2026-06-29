@@ -54,7 +54,10 @@ from sqlmodel import Session, select
 from app.core.config import settings
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import AgentBundle
-from app.models.bundles.agent_bundle_revision import AgentBundleRevision
+from app.models.bundles.agent_bundle_revision import (
+    AgentBundleRevision,
+    REVISION_ORIGIN_GIT,
+)
 from app.models.bundles.agent_git_source import (
     AgentGitSource,
     GitSourceStatus,
@@ -1406,6 +1409,9 @@ class GitSourceService:
         revision = AgentBundleRevision(
             bundle_id=bundle.id,
             revision_number=rev_number,
+            # Internal SSOT / dirty-check baseline — NOT a catalog publish, so it
+            # is excluded from the Revisions UI and version suggestion.
+            origin=REVISION_ORIGIN_GIT,
             manifest=manifest,
             snapshot_path=str(snapshot_dir),
             content_hash=content_hash,

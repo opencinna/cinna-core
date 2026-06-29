@@ -41,7 +41,10 @@ from sqlalchemy import func
 from app.core.config import settings
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import AgentBundle, BundleInstallMode
-from app.models.bundles.agent_bundle_revision import AgentBundleRevision
+from app.models.bundles.agent_bundle_revision import (
+    AgentBundleRevision,
+    REVISION_ORIGIN_PUBLISH,
+)
 from app.models.environments.environment import AgentEnvironment
 from app.models.events.event import EventType
 from app.models.credentials.credential import Credential
@@ -241,13 +244,12 @@ class PublishService:
                 session, install, env_workspace_root
             )
 
-            # All pre-flight validators passed — only now create the tmp dir
-            # (so a failed pre-flight never orphans an empty ``<rev>.tmp``). The
-            # intentional leave-tmp-on-snapshot-write-failure behaviour is kept:
-            # once created, a later failure leaves the partial tree for debugging.
-            if tmp_dir.exists():
-                shutil.rmtree(tmp_dir)
-            tmp_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
+            # All pre-flight validators passed. The DB-bound collectors below
+            # build the manifest body; they MUST stay on the event loop (the
+            # sync ``Session`` is not safe to touch from a worker thread). The
+            # heavy filesystem half — workspace copy + per-file hash + atomic
+            # move — is offloaded afterwards (see below), so the tmp dir is now
+            # created inside that worker thread rather than here.
 
             # Required credential specs from the install's linked credentials.
             # Validate first so a misconfigured publisher-provided credential
@@ -262,8 +264,9 @@ class PublishService:
 
             # Snapshot the publisher install's plugin links. Feeds the manifest
             # (a plugin-only change → new content_hash → pending update) and the
-            # revision row. The plugin files are already in tmp_dir/workspace via
-            # _snapshot_workspace_tree.
+            # revision row. The plugin files land in tmp_dir/workspace later,
+            # when the snapshot tree is written to disk inside
+            # ``_write_snapshot_to_disk`` (run via ``asyncio.to_thread``).
             plugin_specs = PublishService._collect_plugin_specs(session, install)
 
             # Build the manifest + serialize the revision tree through the
@@ -281,18 +284,23 @@ class PublishService:
                 version=version,
                 release_notes=release_notes,
             )
-            content_hash = RevisionFormat.write_tree(
+
+            # The snapshot copy + per-file hash + atomic move is heavy, fully
+            # synchronous filesystem I/O over a potentially large workspace
+            # tree. Running it inline on the asyncio event loop blocks EVERY
+            # other request on this worker until it finishes (chat streaming,
+            # API calls, websockets all stall). Offload it to a worker thread —
+            # the same treatment the env-lifecycle copy paths already use. It
+            # touches no DB session, so it is safe to run off-loop. ``manifest``
+            # is mutated in place (``content_hash`` stamped), visible here after
+            # the thread joins.
+            content_hash = await asyncio.to_thread(
+                PublishService._write_snapshot_to_disk,
                 env_workspace_root=env_workspace_root,
-                dest=tmp_dir,
+                tmp_dir=tmp_dir,
+                snapshot_dir=snapshot_dir,
                 manifest=manifest,
             )
-
-            # Atomic-ish move. shutil.move is not atomic across filesystems;
-            # within the same FS root it is. Bundle storage is a single
-            # configured root so we accept this.
-            if snapshot_dir.exists():
-                shutil.rmtree(snapshot_dir)
-            shutil.move(str(tmp_dir), str(snapshot_dir))
         except Exception:
             # If the failure was in pre-flight (before the tmp dir was created)
             # there is nothing to leave behind. Once the snapshot tree exists we
@@ -323,6 +331,7 @@ class PublishService:
         revision = AgentBundleRevision(
             bundle_id=bundle.id,
             revision_number=revision_number,
+            origin=REVISION_ORIGIN_PUBLISH,
             manifest=manifest,
             snapshot_path=str(snapshot_dir),
             content_hash=content_hash,
@@ -421,6 +430,48 @@ class PublishService:
                 )
 
     # ── Snapshot helpers ───────────────────────────────────────────
+
+    @staticmethod
+    def _write_snapshot_to_disk(
+        *,
+        env_workspace_root: Path | None,
+        tmp_dir: Path,
+        snapshot_dir: Path,
+        manifest: dict,
+    ) -> str:
+        """Filesystem half of a publish — runs OFF the event loop.
+
+        Pure, blocking filesystem work over a potentially large workspace
+        tree (no DB session is touched), so it is dispatched via
+        ``asyncio.to_thread`` from :meth:`_publish_locked` to avoid stalling
+        the asyncio event loop while the bundle is copied + hashed:
+
+        1. (re)create the ``<rev>.tmp`` staging dir;
+        2. ``write_tree`` captures the workspace, hashes it, and stamps the
+           ``content_hash`` into ``manifest`` (mutated in place — the caller
+           sees it after the thread joins);
+        3. atomically swap the staging dir into the final ``<rev>`` path.
+
+        ``shutil.move`` is atomic within a single filesystem root; bundle
+        storage is a single configured root so we accept that. A failure after
+        the tmp dir exists deliberately leaves the partial tree in place for
+        debugging (the caller's ``except`` logs its location). Returns the bare
+        hex ``content_hash``.
+        """
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir)
+        tmp_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
+
+        content_hash = RevisionFormat.write_tree(
+            env_workspace_root=env_workspace_root,
+            dest=tmp_dir,
+            manifest=manifest,
+        )
+
+        if snapshot_dir.exists():
+            shutil.rmtree(snapshot_dir)
+        shutil.move(str(tmp_dir), str(snapshot_dir))
+        return content_hash
 
     @staticmethod
     def _assert_workspace_readable(

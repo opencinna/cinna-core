@@ -295,7 +295,7 @@ Compares the four prompt fields enumerated by `_PROMPT_FIELDS` (`workflow_prompt
 
 **`_resolve_synced_revision(session, source, install) -> AgentBundleRevision | None`**
 
-The dirty-check baseline: prefers the **latest** `AgentBundleRevision` on `source.bundle_uuid` (newest revision, since every sync appends one — using `installed_revision_id` would give the stale checkout revision for a checkout-then-push install). Falls back to `install.installed_revision_id`; returns `None` when no baseline exists. The `source` parameter is the reliable FK — `source.bundle_uuid` may differ from `install.bundle_uuid` for connected installs with no catalog bundle.
+The dirty-check baseline: prefers the **latest** `AgentBundleRevision` on `source.bundle_uuid` (newest revision, since every sync appends one — using `installed_revision_id` would give the stale checkout revision for a checkout-then-push install). Falls back to `install.installed_revision_id`; returns `None` when no baseline exists. The `source` parameter is the reliable FK — `source.bundle_uuid` may differ from `install.bundle_uuid` for connected installs with no catalog bundle. **Not filtered by `origin`** — both `"publish"` and `"git"` revisions are eligible as the dirty-check baseline; only the Revisions UI listing is filtered.
 
 **`_assert_not_already_checked_out(session, *, user_id, bundle_id) -> None`**
 
@@ -310,7 +310,7 @@ Raises `GitSourceConflictError` (→ 409) if a consumer install (`is_publisher_i
 
 **`_persist_revision(session, *, bundle, src, manifest, published_by_user_id) -> AgentBundleRevision`**
 
-Copies `src/workspace/` into `<BUNDLE_STORAGE_DIR>/<bundle_id>/<revision_number>/workspace/` via `iter_bundle_toplevel` + `safe_copytree` (same denylist + symlink guards as publish). Writes `manifest.json`. Computes `content_hash` via `PublishService._hash_tree_with_manifest`. Creates and commits the `AgentBundleRevision` row.
+Copies `src/workspace/` into `<BUNDLE_STORAGE_DIR>/<bundle_id>/<revision_number>/workspace/` via `iter_bundle_toplevel` + `safe_copytree` (same denylist + symlink guards as publish). Writes `manifest.json`. Computes `content_hash` via `PublishService._hash_tree_with_manifest`. Creates and commits the `AgentBundleRevision` row with `origin="git"` (module constant `REVISION_ORIGIN_GIT` from `backend/app/models/bundles/agent_bundle_revision.py`). The `revision_number` comes from the same global monotonic counter as catalog publishes (`uq_revision_bundle_number` unique constraint and the `<bundle_id>/<rev>/` snapshot path both depend on it). The bundle Revisions UI (`list_revisions_with_install_counts`) filters to `origin="publish"` only, so git baselines are invisible there and do not affect the publish dialog's next-version suggestion. As a consequence, revision numbers in the Revisions UI may show gaps when git operations interleave with catalog publishes — this is expected. `bundle.latest_revision_id` is never updated by `_persist_revision`; it remains publish-set.
 
 **`_assert_not_dirty(session, source, install) -> None`**
 
@@ -566,3 +566,10 @@ React Query hooks:
 - `down_revision = 391a6285d8ff`
 - `upgrade`: `alter_column("agent_bundle", "publisher_user_id", nullable=True)` — enables ownerless git-imported bundle rows.
 - `downgrade`: `DELETE FROM agent_bundle WHERE publisher_user_id IS NULL` (removes git-imported rows), then re-imposes `nullable=False`. This is destructive — ownerless rows must be absent before downgrading.
+
+### `878bc3f6579f_add_revision_origin` (bundle migration, not git-versioning-specific)
+
+- `down_revision = d9b3e1a7c45f` (follows the `agent_bundle_revision_metadata` migration)
+- `upgrade`: adds `origin varchar(32) NOT NULL server_default 'publish'` to `agent_bundle_revision`. Existing rows (including any git baselines) are backfilled to `'publish'`; they are indistinguishable from catalog publishes and that is acceptable — the origin discriminator is new.
+- `downgrade`: drops the column.
+- See [Agent Bundles — Technical Reference](../agent_bundles/agent_bundles_tech.md) for the full migration table.

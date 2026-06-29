@@ -25,7 +25,10 @@ from app.models.bundles.agent_bundle import (
     BundleVisibility,
     BundleInstallMode,
 )
-from app.models.bundles.agent_bundle_revision import AgentBundleRevision
+from app.models.bundles.agent_bundle_revision import (
+    AgentBundleRevision,
+    REVISION_ORIGIN_PUBLISH,
+)
 from app.models.bundles.bundle_access_grant import BundleAccessGrant
 from app.models.credentials.ai_credential import AICredential
 from app.models.environments.environment import AgentEnvironment
@@ -182,7 +185,15 @@ class BundleService:
         """
         revisions_stmt = (
             select(AgentBundleRevision)
-            .where(AgentBundleRevision.bundle_id == bundle.id)
+            .where(
+                AgentBundleRevision.bundle_id == bundle.id,
+                # Only user-facing catalog publishes belong in the Revisions
+                # card. Git-versioning baselines (origin="git") are the internal
+                # dirty-check SSOT and must not appear here — nor inflate the
+                # version-suggestion the publish dialog derives from the latest
+                # listed revision.
+                AgentBundleRevision.origin == REVISION_ORIGIN_PUBLISH,
+            )
             .order_by(AgentBundleRevision.revision_number.desc())
         )
         revisions = list(session.exec(revisions_stmt).all())
@@ -384,6 +395,7 @@ class BundleService:
                 .where(
                     AgentBundleRevision.bundle_id == bundle.id,
                     AgentBundleRevision.id != revision.id,
+                    AgentBundleRevision.origin == REVISION_ORIGIN_PUBLISH,
                 )
                 .order_by(AgentBundleRevision.revision_number.desc())
                 .limit(1)

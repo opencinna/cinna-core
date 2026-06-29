@@ -39,7 +39,7 @@ push ◄── git commit/push ◄─────────────┤ (li
 pull ──► git pull ──► replace_bundle_content (advance last_synced_commit)
 ```
 
-A git tree is byte-for-byte a schema_version-2 bundle snapshot. Every git operation reduces to an operation the platform already performs — with git as the wire. `AgentBundleRevision` rows remain the internal runtime source of truth backing App Data keying, install counts, credential specs, and schedule materialization; git is the portable, version-history face. Every push and connect now also persists an `AgentBundleRevision`, giving the dirty check a stable baseline across rebuilds.
+A git tree is byte-for-byte a schema_version-2 bundle snapshot. Every git operation reduces to an operation the platform already performs — with git as the wire. `AgentBundleRevision` rows remain the internal runtime source of truth backing App Data keying, install counts, credential specs, and schedule materialization; git is the portable, version-history face. Every push and connect now also persists an `AgentBundleRevision`, giving the dirty check a stable baseline across rebuilds. These git-baseline revisions carry `origin="git"` and are internal — they do not appear in the bundle's Revisions tab, do not influence the publish dialog's next-version suggestion, and cannot become `bundle.latest_revision_id`. Because they draw from the same global `revision_number` counter as catalog publishes, the Revisions tab may show gaps in numbering when git operations interleave with catalog publishes; this is expected.
 
 ### Git vs. Mutagen (Local Dev Sync)
 

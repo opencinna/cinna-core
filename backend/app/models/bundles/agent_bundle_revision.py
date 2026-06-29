@@ -23,6 +23,20 @@ from sqlmodel import Field, SQLModel, Column
 from sqlalchemy import JSON, Index, String, UniqueConstraint, Text, text
 
 
+# Provenance of a revision row.
+#
+# ``publish`` — a user-facing catalog publish (``PublishService.publish``).
+#   These are the rows shown in the agent's **Revisions** card and the ones the
+#   publish dialog reads to suggest the next version label.
+# ``git`` — an internal SSOT / dirty-check baseline persisted by the git
+#   versioning operations (checkout / pull / push / connect). These back App
+#   Data keying, install bookkeeping, and the git dirty check, but they are NOT
+#   catalog publishes — so they are hidden from the Revisions listing and never
+#   influence the suggested next version.
+REVISION_ORIGIN_PUBLISH = "publish"
+REVISION_ORIGIN_GIT = "git"
+
+
 class AgentBundleRevision(SQLModel, table=True):
     """Database model for an immutable bundle revision."""
 
@@ -41,8 +55,25 @@ class AgentBundleRevision(SQLModel, table=True):
         foreign_key="agent_bundle.id", nullable=False, ondelete="CASCADE"
     )
 
-    # Monotonically increasing per bundle. Allocated by ``PublishService``.
+    # Monotonically increasing per bundle. Allocated globally across BOTH
+    # publish and git revisions (the ``uq_revision_bundle_number`` uniqueness +
+    # the ``<bundle>/<rev>/`` snapshot path depend on it), so publish-only
+    # numbering would gap — that is expected. Use ``origin`` to tell the two
+    # apart, not ``revision_number``.
     revision_number: int = Field(nullable=False)
+
+    # Provenance discriminator — ``REVISION_ORIGIN_PUBLISH`` (default) or
+    # ``REVISION_ORIGIN_GIT``. Lets the Revisions UI / version suggestion show
+    # only real catalog publishes while git baselines stay as the internal SSOT
+    # the dirty check compares against. Existing rows backfill to ``publish``.
+    origin: str = Field(
+        default=REVISION_ORIGIN_PUBLISH,
+        sa_column=Column(
+            String(32),
+            nullable=False,
+            server_default=text(f"'{REVISION_ORIGIN_PUBLISH}'"),
+        ),
+    )
 
     # Human-friendly version label entered by the publisher at publish
     # time (e.g. "1.0", "1.1", "2.0"). Independent from ``revision_number``,
