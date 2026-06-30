@@ -345,10 +345,8 @@ class PublishService:
         # 5. Update bundle metadata + record installed revision on publisher install.
         bundle.latest_revision_id = revision.id
         bundle.updated_at = datetime.now(UTC)
-        if display_name:
-            bundle.display_name = display_name
-        if description is not None:
-            bundle.description = description
+        bundle.display_name = display_name or install.name
+        bundle.description = description if description is not None else install.description
         session.add(bundle)
 
         install.installed_revision_id = revision.id

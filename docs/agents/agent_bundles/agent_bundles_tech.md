@@ -66,8 +66,8 @@ Deleted in Phase 3 (replaced by the single-page install):
 |--------|------|-------|
 | `id` | UUID PK | |
 | `bundle_id` | varchar(255) UNIQUE NOT NULL | Reverse-DNS string; stable identifier |
-| `display_name` | varchar(255) NOT NULL | |
-| `description` | text | |
+| `display_name` | varchar(255) NOT NULL | Refreshed from `display_name or install.name` on every publish (see `PublishService._publish_locked` step 7), not just the first — also settable via `PATCH /bundles/{uuid}` |
+| `description` | text | Refreshed from `description if description is not None else install.description` on every publish, mirroring `display_name` |
 | `publisher_user_id` | UUID FK → user ON DELETE RESTRICT | |
 | `latest_revision_id` | UUID FK → agent_bundle_revision ON DELETE SET NULL | |
 | `is_listed` | bool DEFAULT false | Shown in catalog |
@@ -265,7 +265,7 @@ Publish flow detail:
    - `_ensure_publisher_plugin_files`: hard-blocks when any declared plugin's files are absent from the publisher env workspace
 5. DB-bound collectors (`_collect_credential_specs`, `_collect_schedule_specs`) and `build_manifest` run on the event loop, then the filesystem-heavy work is handed off: `<rev>.tmp` directory created and all FS operations — `_snapshot_workspace_tree` (full `app/workspace/` tree capture into `tmp/workspace/`, schema_version 2), `manifest.json` write, `content_hash` computation, and the atomic `<rev>.tmp → <rev>` rename — are executed inside a sync helper `_write_snapshot_to_disk` dispatched via `await asyncio.to_thread(...)`. This keeps the asyncio event loop free for concurrent chat streaming, WebSocket traffic, and API requests while the snapshot runs. The sync `Session` is not passed into the thread; all DB work stays on the loop. The manifest's `prompts` block includes `router_trigger` from `install.router_trigger_prompt` alongside `workflow`, `entrypoint`, and `refiner`.
 6. `AgentBundleRevision` row inserted with `origin="publish"` (module constant `REVISION_ORIGIN_PUBLISH`), `router_trigger_prompt=install.router_trigger_prompt`, and `schedules=schedule_specs`
-7. `bundle.latest_revision_id` and `install.installed_revision_id` updated
+7. `bundle.latest_revision_id` and `install.installed_revision_id` updated. **On every publish** (not just the first) `bundle.display_name = display_name or install.name` and `bundle.description = description if description is not None else install.description` are also rewritten — a publisher who renames their agent and republishes propagates the new name to the catalog and to any new install. This never touches the `Agent.name` of existing foreign installs (the revision snapshot never carries `name`)
 8. `BUNDLE_PUBLISHED` event emitted
 9. `notify_installs()` called
 
