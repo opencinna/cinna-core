@@ -1397,7 +1397,71 @@ def test_git_status_preview(
     assert r.status_code == 404, f"Expected 404 for non-owner status, got {r.text}"
 
 
-# ── Scenario 8: CLI git-coordinates discovery endpoint ────────────────────────
+# ── Scenario 8: GET /git is remote-free; check-updates probes remote ──────────
+
+
+def test_git_source_get_is_remote_free(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    """
+    Contract regression tests for the remote-free GET /git endpoint (bug fix):
+      1. Checkout an agent (last_synced_commit=SHA_V1)
+      2. GET /git with ls_remote configured to return SHA_V2 (remote advanced):
+         - response update_available=False (endpoint is remote-free, never calls ls_remote)
+         - ls_remote_head was NOT called (assert_not_called proves no network call is made)
+      3. GET /git/check-updates with ls_remote returning SHA_V2:
+         - response update_available=True (strict remote probe returns the advanced HEAD)
+         - ls_remote_head WAS called (proves the two endpoints have distinct contracts)
+
+    This test distinguishes the two endpoints' contracts after the bug fix that made
+    GET /git release the DB connection before any git network call and removed its
+    best-effort ls_remote probe. Freshness (update_available) is now owned solely by
+    GET /git/check-updates.
+    """
+    headers = superuser_token_headers
+    bundle_id = f"io.test.git.remotefree.{random_lower_string()[:8]}"
+
+    # ── Phase 1: Checkout ─────────────────────────────────────────────────────
+    clone_dir = tmp_path / "remotefree_repo"
+    _make_agent_repo_tree(clone_dir, bundle_id=bundle_id)
+    result = _do_checkout(client, headers, clone_dir=clone_dir, sha=_SHA_V1)
+    agent_id = result["agent"]["id"]
+
+    # ── Phase 2: GET /git does NOT call ls_remote even when remote advanced ────
+    # ls_remote is wired to return SHA_V2 (remote has advanced beyond last_synced).
+    # If GET /git were to call ls_remote it would compute update_available=True.
+    # After the fix the endpoint never calls ls_remote, so update_available is
+    # always False regardless of remote state.
+    with patch(_LS_REMOTE, return_value=_SHA_V2) as mock_ls_remote:
+        r = client.get(_git_source_url(agent_id), headers=headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["update_available"] is False, (
+        "GET /agents/{id}/git is remote-free and must always return "
+        "update_available=False regardless of what ls_remote would return"
+    )
+    mock_ls_remote.assert_not_called()
+
+    # ── Phase 3: check-updates DOES call ls_remote → correct update verdict ────
+    # The same scenario (remote at SHA_V2) exercised against check-updates must
+    # return update_available=True — the strict endpoint probes the remote and
+    # surfaces the real freshness state.
+    with patch(_LS_REMOTE, return_value=_SHA_V2) as mock_check_ls:
+        r = client.get(_check_updates_url(agent_id), headers=headers)
+    assert r.status_code == 200
+    upd = r.json()
+    assert upd["update_available"] is True, (
+        "GET /agents/{id}/git/check-updates must return update_available=True "
+        "when the remote HEAD has advanced beyond last_synced_commit"
+    )
+    assert upd["remote_commit"] == _SHA_V2
+    assert upd["last_synced_commit"] == _SHA_V1
+    mock_check_ls.assert_called()
+
+
+# ── Scenario 9: CLI git-coordinates discovery endpoint ────────────────────────
 
 
 def test_cli_git_coordinates(

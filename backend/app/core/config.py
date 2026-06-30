@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     # hygiene + a guard against a malicious repo shipping a huge file. Default
     # 10 MiB.
     GIT_SOURCE_MAX_FILE_BYTES: int = 10 * 1024 * 1024
+    # Bounded network timeout (seconds) for backend-initiated git remote calls
+    # (clone / ls-remote / fetch / log / push). A hung or slow remote must fail
+    # fast rather than pin a worker (and, for the status reads, a pooled DB
+    # connection). Applied as the GitPython ``kill_after_timeout`` hard stop on
+    # the clone / ls-remote subprocesses, the HTTP low-speed-abort window
+    # (``GIT_HTTP_LOW_SPEED_LIMIT`` / ``GIT_HTTP_LOW_SPEED_TIME``), and the SSH
+    # ``ConnectTimeout`` / keepalive. Default 30s.
+    GIT_SOURCE_NETWORK_TIMEOUT_SECONDS: int = 30
     # Redirect URI for the MCP-provider OAuth/DCR authorization-code flow
     # (Phase 5). The target AS redirects the browser back here after consent; the
     # frontend route forwards (code, state) to POST /mcp-providers/oauth/callback.

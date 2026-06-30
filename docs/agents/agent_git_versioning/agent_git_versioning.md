@@ -12,7 +12,7 @@ Version-control the durable source of an agent — scripts, internal docs, promp
 | **Sync direction** | Per-source policy: `pull` (read-from-remote only), `push` (write-to-remote only), or `bidirectional` (both) |
 | **Canonical git tree** | `cinna.agent.json` + `workspace/` subtree + `.gitignore` — byte-for-byte the schema_version-2 bundle snapshot layout, so git is a transport/interchange layer, not a separate format |
 | **Last synced commit** | SHA of the last remote commit that was imported or pushed; the idempotency pin, analogous to `Agent.installed_revision_id` |
-| **Update available** | Whether the remote has commits that advance the agent's subdir beyond `last_synced_commit`. For repo-root installs: `ls-remote HEAD != last_synced_commit`. For subdir installs: HEAD must have advanced AND commits that actually touch `<subdir>/` must exist beyond `last_synced_commit` (verified via a tree-object hash comparison). Cheap-first: if `ls-remote HEAD == last_synced_commit` the result is always `false` with no clone. Any indeterminate outcome returns `true` conservatively. Surfaced by `GET /agents/{id}/git` (best-effort) and `GET /agents/{id}/git/check-updates` (strict) |
+| **Update available** | Whether the remote has commits that advance the agent's subdir beyond `last_synced_commit`. For repo-root installs: `ls-remote HEAD != last_synced_commit`. For subdir installs: HEAD must have advanced AND commits that actually touch `<subdir>/` must exist beyond `last_synced_commit` (verified via a tree-object hash comparison). Cheap-first: if `ls-remote HEAD == last_synced_commit` the result is always `false` with no clone. Any indeterminate outcome returns `true` conservatively. Surfaced exclusively by `GET /agents/{id}/git/check-updates` (strict) and the dirty check. `GET /agents/{id}/git` no longer computes this — it always returns `false` |
 | **Dirty** | The live workspace or DB prompt fields have diverged from the last synced revision. `GET /agents/{id}/git/dirty` reports both axes separately: `workspace_dirty` (file content) and `prompts_dirty` (DB prompt fields) |
 | **GitOps webhook** | A `git_source` type `AgentWebhook` whose token a git host (GitHub, GitLab, etc.) posts to; the platform responds with a pull |
 | **Ownerless bundle** | An `AgentBundle` row with `publisher_user_id = NULL` created or reused during checkout or connect; private, unlisted, and never a catalog publish |
@@ -155,11 +155,11 @@ A `bundle_id` mismatch between the remote folder and the agent is **permitted** 
 
 ### Update Check
 
-`GET /agents/{id}/git/check-updates` (owner-resolved, no developer gate). Returns `{update_available, remote_commit, last_synced_commit}`. Any network or auth failure surfaces as a service error.
+`GET /agents/{id}/git/check-updates` (owner-resolved, no developer gate). Returns `{update_available, remote_commit, last_synced_commit}`. Makes a live remote call and surfaces any network or auth failure as a service error. This is the **sole endpoint** that computes and reports `update_available`.
 
-`GET /agents/{id}/git` (owner-resolved) returns `AgentGitSourcePublic` with a best-effort `update_available` — network/auth failures silently leave it `false` rather than failing the read.
+`GET /agents/{id}/git` (owner-resolved) returns `AgentGitSourcePublic` with the stored `AgentGitSource` data only. It makes **no remote network call** and always returns `update_available: false`. Use it to read the source configuration and status; use `check-updates` when you need freshness information.
 
-Both endpoints share `_compute_update_available`, which applies subdir-scoped logic:
+`check-updates` applies subdir-scoped logic:
 
 - **No subdir (repo root):** `update_available = (ls-remote HEAD != last_synced_commit)`. Every commit touches the root, so the cheap `ls-remote` check is conclusive.
 - **With a subdir:** A cheap `ls-remote HEAD` is run first; if it equals `last_synced_commit` the result is `false` with no clone. Only when HEAD advanced AND a subdir and `last_synced_commit` baseline are both present does a heavier check follow — comparing the tree-object hash of `<subdir>/` at HEAD vs at `last_synced_commit` using `subdir_changed_between`. Equal tree hash means the subdir is unchanged, so `update_available` remains `false` even though other parts of the repository moved on.
@@ -231,7 +231,7 @@ The card has two states:
 **Connected view:**
 - The repo URL is a **clickable link** (opens `web_tree_url` — the repo tree at the branch + subdir) when the host is supported; plain text otherwise.
 - Coordinates line: **subdir and branch as inline code chips** — each with a distinguishing leading icon (folder for subdir, branch for ref) — and the **sync direction as an icon** with a hover tooltip (bidirectional / pull only / push only) rather than a text label. Status is shown as a **green check icon** when `connected` (tooltip "Connected"); the `error` state still renders a red badge with `last_error` detail.
-- **Update banner** when `update_available` → **Pull** button.
+- **Update banner** when `update_available` (driven by the `check-updates` query, not the source read) → **Pull** button.
 - **Latest commits** — the 3 most recent from `GET /agents/{id}/git/commits`: message, clickable short SHA (`commit_url`), author, relative date. A **"View history"** link (→ `web_history_url`) sits beside the section title. Both the SHA link and View history appear only when the host is supported.
 - **Card footer** holds the actions: on the left, **Commit Agent** (enabled only when `dirty=true`; clicking opens the commit dialog with the git-status preview, then `POST /agents/{id}/git/push`) with its status reason ("No local changes" / "Start the environment to commit") and a **Refresh** icon button that re-checks dirty/status/commits. On the right, an icon-only **Disconnect** button → confirm dialog → `DELETE /agents/{id}/git`. Disconnect resets the card to disabled (the cached git queries are removed, not just invalidated, so the 404 refetch can't leave stale connected state).
 
@@ -257,6 +257,16 @@ The cinna-cli local development tool (separate repo, `/Users/evgenyl/dev/ml-llm/
 If the local folder already exists but has no `.git` (Mutagen sync predated VCS enablement), the CLI warns and does nothing: "This agent is now git-versioned, but this local folder isn't a git working tree. Run `cinna disconnect` here and re-sync." No auto-conversion.
 
 The deploy key is **never** provided by this endpoint — the developer authenticates to the remote with their own git/SSH client.
+
+## Design Notes
+
+### DB Connection-Pool Safety
+
+All five read paths (`get_source`, `check_updates`, `list_commits`, `compute_dirty`, `compute_status`) release their pooled SQLAlchemy connection (`session.commit()`) before any blocking remote-git or heavy-filesystem work. The SSH key is decrypted while the DB connection is still open (via `_read_ssh_key_material`, which returns an in-memory tuple), the connection is then released, and a chmod-600 temp file (`_ssh_key_file` context manager) is created around the git call only — never while a connection is held.
+
+The four write paths (checkout, connect, pull, push) retain the connection across git I/O by design: they are low-frequency, mutating POSTs bounded by timeout guards, and their commit/rollback semantics require the connection to remain open.
+
+A `GIT_SOURCE_NETWORK_TIMEOUT_SECONDS` setting (default 30 s) is applied to all remote probes on the read paths (`ls_remote_head`, `git_log_subdir`, `subdir_changed_between`) via GitPython's `kill_after_timeout`, plus `GIT_HTTP_LOW_SPEED_LIMIT`/`GIT_HTTP_LOW_SPEED_TIME` env vars for HTTP transports and SSH `ConnectTimeout`/`ServerAliveInterval`/`ServerAliveCountMax` for SSH. Full-history clones on the write paths are not time-limited by this setting (so a healthy large clone is never killed mid-transfer).
 
 ## Security Model
 

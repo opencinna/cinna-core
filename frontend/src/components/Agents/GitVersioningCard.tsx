@@ -64,6 +64,12 @@ const DEFAULT_CONNECT_MESSAGE = "Initial export from Cinna"
 // Only the most recent commits are shown inline; full history lives on the
 // remote host (linked via "View history" when a web URL can be generated).
 const LATEST_COMMITS_COUNT = 3
+// Throttle the git status reads. The dirty/status/commits checks do real work
+// backend-side (the dirty/status reads snapshot + hash the workspace; commits
+// clones), so treat results as fresh for 30s to avoid hammering the backend
+// from per-card polling / refocus. Explicit user actions (connect / push /
+// pull / the Refresh button) invalidate these queries directly.
+const GIT_QUERY_STALE_TIME_MS = 30_000
 
 // sync_direction → icon + hover title (replaces the plain-text direction label).
 const SYNC_DIRECTION_META: Record<
@@ -200,6 +206,7 @@ export function GitVersioningCard({
     queryKey: ["git-source", agentId],
     queryFn: () => AgentGitService.getGitSource({ agentId }),
     retry: false,
+    staleTime: GIT_QUERY_STALE_TIME_MS,
   })
 
   const connected = !!source
@@ -215,7 +222,20 @@ export function GitVersioningCard({
     queryKey: ["git-dirty", agentId],
     queryFn: () => AgentGitService.getGitDirty({ agentId }),
     enabled: connected,
-    refetchOnWindowFocus: true,
+    staleTime: GIT_QUERY_STALE_TIME_MS,
+  })
+
+  // Freshness (the "remote has new commits → Pull" banner) is owned by the
+  // explicit check-updates endpoint — the plain getGitSource read is remote-free
+  // so it never blocks on / pins resources behind a slow remote. Strict endpoint:
+  // a transient network/auth failure leaves updateStatus undefined (banner hidden)
+  // rather than retrying in a loop.
+  const { data: updateStatus } = useQuery({
+    queryKey: ["git-check-updates", agentId],
+    queryFn: () => AgentGitService.checkGitUpdates({ agentId }),
+    enabled: connected,
+    retry: false,
+    staleTime: GIT_QUERY_STALE_TIME_MS,
   })
 
   const { data: commitsData, isLoading: isLoadingCommits } = useQuery({
@@ -223,6 +243,7 @@ export function GitVersioningCard({
     queryFn: () =>
       AgentGitService.listGitCommits({ agentId, limit: LATEST_COMMITS_COUNT }),
     enabled: connected,
+    staleTime: GIT_QUERY_STALE_TIME_MS,
   })
   const commits = commitsData?.commits ?? []
 
@@ -232,6 +253,7 @@ export function GitVersioningCard({
     queryKey: ["git-status", agentId],
     queryFn: () => AgentGitService.getGitStatus({ agentId }),
     enabled: connected && commitDialogOpen,
+    staleTime: GIT_QUERY_STALE_TIME_MS,
   })
 
   // ---- Mutations ----
@@ -258,6 +280,7 @@ export function GitVersioningCard({
       queryClient.invalidateQueries({ queryKey: ["git-commits", agentId] })
       queryClient.invalidateQueries({ queryKey: ["git-dirty", agentId] })
       queryClient.invalidateQueries({ queryKey: ["git-status", agentId] })
+      queryClient.invalidateQueries({ queryKey: ["git-check-updates", agentId] })
       // Refresh the agent payload so its git_versioning_enabled flag (the
       // toggle's initial state) reflects the new connection.
       queryClient.invalidateQueries({ queryKey: ["agent", agentId] })
@@ -287,6 +310,7 @@ export function GitVersioningCard({
       queryClient.invalidateQueries({ queryKey: ["git-commits", agentId] })
       queryClient.invalidateQueries({ queryKey: ["git-dirty", agentId] })
       queryClient.invalidateQueries({ queryKey: ["git-status", agentId] })
+      queryClient.invalidateQueries({ queryKey: ["git-check-updates", agentId] })
     },
     onError: (error) =>
       showErrorToast(getErrorMessage(error, "Failed to commit agent")),
@@ -300,6 +324,7 @@ export function GitVersioningCard({
       queryClient.invalidateQueries({ queryKey: ["git-commits", agentId] })
       queryClient.invalidateQueries({ queryKey: ["git-dirty", agentId] })
       queryClient.invalidateQueries({ queryKey: ["git-status", agentId] })
+      queryClient.invalidateQueries({ queryKey: ["git-check-updates", agentId] })
       queryClient.invalidateQueries({ queryKey: ["agent", agentId] })
     },
     onError: (error) =>
@@ -319,6 +344,7 @@ export function GitVersioningCard({
       queryClient.removeQueries({ queryKey: ["git-dirty", agentId] })
       queryClient.removeQueries({ queryKey: ["git-status", agentId] })
       queryClient.removeQueries({ queryKey: ["git-commits", agentId] })
+      queryClient.removeQueries({ queryKey: ["git-check-updates", agentId] })
       // Refresh the agent payload so its git_versioning_enabled flag clears.
       queryClient.invalidateQueries({ queryKey: ["agent", agentId] })
     },
@@ -362,6 +388,7 @@ export function GitVersioningCard({
     queryClient.invalidateQueries({ queryKey: ["git-status", agentId] })
     queryClient.invalidateQueries({ queryKey: ["git-source", agentId] })
     queryClient.invalidateQueries({ queryKey: ["git-commits", agentId] })
+    queryClient.invalidateQueries({ queryKey: ["git-check-updates", agentId] })
   }
 
   const handlePush = () => {
@@ -461,8 +488,9 @@ export function GitVersioningCard({
                 )}
               </div>
 
-              {/* Update banner */}
-              {source.update_available && (
+              {/* Update banner — gated on the strict check-updates result (the
+                  plain source read is remote-free and never sets this). */}
+              {updateStatus?.update_available && (
                 <div className="flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/40">
                   <p className="text-xs text-amber-800 dark:text-amber-200">
                     The remote has new commits. Pull to update this agent.

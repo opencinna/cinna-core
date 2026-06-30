@@ -619,14 +619,21 @@ class GitSourceService:
     # ── Status / update check ────────────────────────────────────────
 
     @staticmethod
-    def _compute_update_available(
-        session: Session, source: AgentGitSource
+    def _compute_update_available_remote(
+        *,
+        repo_url: str,
+        ref: str,
+        subdir: str | None,
+        last_synced_commit: str | None,
+        key_material: tuple[str, str | None] | None,
     ) -> tuple[bool, str]:
-        """Resolve ``(update_available, remote_head_sha)`` for one git source.
+        """Resolve ``(update_available, remote_head_sha)`` from the remote — no DB.
 
-        Single source of truth shared by :meth:`get_source` (best-effort) and
-        :meth:`check_updates` (strict) so the banner can never disagree between
-        the two endpoints — mirroring how :meth:`_prompts_dirty` is shared.
+        The remote-only half of the update check, called by :meth:`check_updates`
+        AFTER the DB connection has been released (it takes captured primitives +
+        in-memory SSH key material, never a ``Session`` / ORM object) so the
+        blocking ``ls-remote`` / subdir clone never runs while a pooled connection
+        and transaction are held.
 
         Two-tier, cheapest-first:
 
@@ -645,16 +652,16 @@ class GitSourceService:
              commit to an unrelated folder of the same repo no longer raises a
              false "update available" banner.
 
-        The SSH key stays resolved for both the ls-remote and the subdir clone so
-        a private repo is authenticated for both calls.
+        The temp SSH key file wraps both the ls-remote and the subdir clone so a
+        private repo is authenticated for both calls.
         """
-        with _resolve_ssh_key(session, source.ssh_key_id, source.owner_id) as key:
-            remote_sha = ls_remote_head(source.repo_url, source.ref, key)
-            if remote_sha == source.last_synced_commit:
+        with _ssh_key_file(key_material) as key:
+            remote_sha = ls_remote_head(repo_url, ref, key)
+            if remote_sha == last_synced_commit:
                 return False, remote_sha
 
-            subdir = (source.subdir or "").strip("/")
-            if not subdir or not source.last_synced_commit:
+            subdir_norm = (subdir or "").strip("/")
+            if not subdir_norm or not last_synced_commit:
                 # Repo root (every commit touches it) or no baseline to scope
                 # against — the cheap HEAD advance is the verdict.
                 return True, remote_sha
@@ -662,10 +669,10 @@ class GitSourceService:
             # HEAD advanced and a subdir is configured: only a real update when
             # the subdir tree actually changed beyond the synced commit.
             changed = subdir_changed_between(
-                repo_url=source.repo_url,
-                ref=source.ref,
-                subdir=subdir,
-                base_commit=source.last_synced_commit,
+                repo_url=repo_url,
+                ref=ref,
+                subdir=subdir_norm,
+                base_commit=last_synced_commit,
                 ssh_key_path=key,
             )
             return changed, remote_sha
@@ -676,24 +683,15 @@ class GitSourceService:
     ) -> tuple[AgentGitSource, bool]:
         """Return ``(source, update_available)`` for the owner-resolved agent.
 
-        ``update_available`` is computed best-effort; any network / auth / clone
-        failure leaves it ``False`` (this is a read endpoint — it never mutates
-        the source or raises on a transient remote error). When the agent lives
-        in a ``subdir`` the check is subdir-scoped (see
-        :meth:`_compute_update_available`).
+        **Remote-free by design.** This is the cheap plain status read; it does
+        NO network I/O and always reports ``update_available = False``. Freshness
+        is owned exclusively by the explicit ``check-updates`` endpoint (and the
+        dirty check), so the plain read never blocks on — nor pins a pooled DB
+        connection behind — a slow / hung remote. The frontend polls
+        ``check-updates`` / ``dirty`` separately for the update banner.
         """
         source = GitSourceService._resolve_source_owned(session, agent_id, owner)
-        update_available = False
-        try:
-            update_available, _ = GitSourceService._compute_update_available(
-                session, source
-            )
-        except Exception as exc:  # noqa: BLE001 — best-effort, never fail the read
-            logger.info(
-                "git get_source: update check failed for agent %s: %s",
-                agent_id, exc,
-            )
-        return source, update_available
+        return source, False
 
     @staticmethod
     def check_updates(
@@ -702,17 +700,39 @@ class GitSourceService:
         """Strict ``update_available`` check (surfaces auth / network errors).
 
         Cheap ``ls-remote`` HEAD vs ``last_synced_commit``, then subdir-scoped via
-        :meth:`_compute_update_available` so a commit to an unrelated folder of the
-        same repo does not report an update.
+        :meth:`_compute_update_available_remote` so a commit to an unrelated folder
+        of the same repo does not report an update.
+
+        Pool-safety: all DB work (owner-resolve + SSH-key decrypt + capturing the
+        repo coordinates) happens first, then the connection is released
+        (``session.commit()``) BEFORE the blocking remote git calls run — so the
+        ls-remote / subdir clone never holds a pooled connection.
         """
         source = GitSourceService._resolve_source_owned(session, agent_id, owner)
-        update_available, remote_sha = GitSourceService._compute_update_available(
-            session, source
+        key_material = _read_ssh_key_material(
+            session, source.ssh_key_id, source.owner_id
+        )
+        repo_url = source.repo_url
+        ref = source.ref
+        subdir = source.subdir
+        last_synced_commit = source.last_synced_commit
+
+        # Release the pooled DB connection before any remote git I/O.
+        session.commit()
+
+        update_available, remote_sha = (
+            GitSourceService._compute_update_available_remote(
+                repo_url=repo_url,
+                ref=ref,
+                subdir=subdir,
+                last_synced_commit=last_synced_commit,
+                key_material=key_material,
+            )
         )
         return {
             "update_available": update_available,
             "remote_commit": remote_sha,
-            "last_synced_commit": source.last_synced_commit,
+            "last_synced_commit": last_synced_commit,
         }
 
     # ── Commit history ───────────────────────────────────────────────
@@ -725,13 +745,28 @@ class GitSourceService:
 
         Strict — surfaces auth / network errors (like ``check_updates``).
         Owner-resolved (404 for a missing source / non-owner).
+
+        Pool-safety: resolve the source + decrypt the SSH key + capture the repo
+        coordinates first, release the DB connection (``session.commit()``), then
+        run the blocking ``git log`` clone — so it never holds a pooled
+        connection.
         """
         source = GitSourceService._resolve_source_owned(session, agent_id, owner)
-        with _resolve_ssh_key(session, source.ssh_key_id, source.owner_id) as key:
+        key_material = _read_ssh_key_material(
+            session, source.ssh_key_id, source.owner_id
+        )
+        repo_url = source.repo_url
+        ref = source.ref
+        subdir = source.subdir
+
+        # Release the pooled DB connection before the (cloning) git log call.
+        session.commit()
+
+        with _ssh_key_file(key_material) as key:
             commits = git_log_subdir(
-                repo_url=source.repo_url,
-                ref=source.ref,
-                subdir=source.subdir,
+                repo_url=repo_url,
+                ref=ref,
+                subdir=subdir,
                 ssh_key_path=key,
                 max_count=limit,
             )
@@ -739,7 +774,7 @@ class GitSourceService:
         # today); ``None`` otherwise so the UI renders the SHA as plain text.
         for commit in commits:
             commit["commit_url"] = build_web_commit_url(
-                source.repo_url, commit.get("sha", "")
+                repo_url, commit.get("sha", "")
             )
         return commits
 
@@ -755,6 +790,12 @@ class GitSourceService:
         workspace_dirty, has_env, last_synced_commit}``. Best-effort: with no env
         or no synced revision the relevant flags stay ``False``. Owner-resolved
         (404 for a missing source / non-owner).
+
+        Pool-safety: all DB work (owner-resolve, prompt diff, resolving the synced
+        revision's snapshot path + the env workspace path) happens first, then the
+        connection is released (``session.commit()``) BEFORE the heavy workspace
+        tree copy + hash — so the slow filesystem work never holds a pooled
+        connection.
         """
         source = GitSourceService._resolve_source_owned(session, agent_id, owner)
         install = session.get(Agent, agent_id)
@@ -762,9 +803,13 @@ class GitSourceService:
             raise GitSourceNotFoundError("Agent not found")
 
         prompts_dirty = GitSourceService._prompts_dirty(session, source, install)
+        last_synced_commit = source.last_synced_commit
 
-        workspace_dirty = False
+        # Capture the on-disk paths the workspace diff needs while still on the DB
+        # connection; the heavy copy/hash then runs after it is released.
         has_env = False
+        env_workspace_root: Path | None = None
+        synced_workspace: Path | None = None
         env = (
             session.get(AgentEnvironment, install.active_environment_id)
             if install.active_environment_id else None
@@ -778,29 +823,40 @@ class GitSourceService:
                     session, source, install
                 )
                 if synced_rev is not None and synced_rev.snapshot_path:
-                    synced_workspace = Path(synced_rev.snapshot_path) / "workspace"
-                    if synced_workspace.exists():
-                        temp_dir = Path(tempfile.mkdtemp(prefix="git_dirty_"))
-                        try:
-                            PublishService._snapshot_workspace_tree(
-                                env_workspace_root, temp_dir
-                            )
-                            live_digest = PublishService.hash_workspace_tree(
-                                temp_dir / "workspace"
-                            )
-                            synced_digest = PublishService.hash_workspace_tree(
-                                synced_workspace
-                            )
-                            workspace_dirty = live_digest != synced_digest
-                        finally:
-                            shutil.rmtree(temp_dir, ignore_errors=True)
+                    candidate = Path(synced_rev.snapshot_path) / "workspace"
+                    if candidate.exists():
+                        synced_workspace = candidate
+
+        # Release the pooled DB connection before the heavy workspace copy/hash.
+        session.commit()
+
+        workspace_dirty = False
+        if (
+            has_env
+            and env_workspace_root is not None
+            and synced_workspace is not None
+        ):
+            temp_dir = Path(tempfile.mkdtemp(prefix="git_dirty_"))
+            try:
+                PublishService._snapshot_workspace_tree(
+                    env_workspace_root, temp_dir
+                )
+                live_digest = PublishService.hash_workspace_tree(
+                    temp_dir / "workspace"
+                )
+                synced_digest = PublishService.hash_workspace_tree(
+                    synced_workspace
+                )
+                workspace_dirty = live_digest != synced_digest
+            finally:
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
         return {
             "dirty": prompts_dirty or workspace_dirty,
             "prompts_dirty": prompts_dirty,
             "workspace_dirty": workspace_dirty,
             "has_env": has_env,
-            "last_synced_commit": source.last_synced_commit,
+            "last_synced_commit": last_synced_commit,
         }
 
     @staticmethod
@@ -820,6 +876,11 @@ class GitSourceService:
         commit exactly (e.g. ``__pycache__`` never appears). Read-only — never
         pushes. Best-effort: with no env or no synced revision the relevant list
         stays empty. Owner-resolved (404 for a missing source / non-owner).
+
+        Pool-safety: the prompt diff + resolving the synced revision's snapshot
+        path + the env workspace path all happen first, then the connection is
+        released (``session.commit()``) BEFORE the heavy per-file snapshot + hash
+        diff — so the slow filesystem work never holds a pooled connection.
         """
         source = GitSourceService._resolve_source_owned(session, agent_id, owner)
         install = session.get(Agent, agent_id)
@@ -829,8 +890,9 @@ class GitSourceService:
         synced_rev = GitSourceService._resolve_synced_revision(
             session, source, install
         )
+        last_synced_commit = source.last_synced_commit
 
-        # ── Prompt changes ──────────────────────────────────────────
+        # ── Prompt changes (DB diff) ─────────────────────────────────
         prompt_changes: list[dict] = []
         if synced_rev is not None:
             for field, label in _PROMPT_FIELDS:
@@ -846,9 +908,11 @@ class GitSourceService:
                     change_type = "modified"
                 prompt_changes.append({"field": label, "change_type": change_type})
 
-        # ── Workspace file changes ──────────────────────────────────
-        file_changes: list[dict] = []
+        # Capture the on-disk paths the workspace diff needs while still on the DB
+        # connection; the heavy snapshot/hash then runs after it is released.
         has_env = False
+        env_workspace_root: Path | None = None
+        synced_workspace: Path | None = None
         env = (
             session.get(AgentEnvironment, install.active_environment_id)
             if install.active_environment_id else None
@@ -858,46 +922,58 @@ class GitSourceService:
             workspace_dir = env_workspace_root / WORKSPACE_ROOT_REL
             if workspace_dir.exists() and workspace_dir.is_dir():
                 has_env = True
-                synced_workspace = (
-                    Path(synced_rev.snapshot_path) / "workspace"
-                    if synced_rev is not None and synced_rev.snapshot_path
-                    else None
-                )
                 # Mirror compute_dirty: with no usable baseline snapshot on disk
                 # (no synced revision, no snapshot_path, or the snapshot dir is
                 # gone) skip the workspace diff entirely rather than fabricating
                 # an all-"added" preview against an empty baseline.
-                if synced_workspace is not None and synced_workspace.exists():
-                    synced_files = GitSourceService._file_hashes(synced_workspace)
-                    temp_dir = Path(tempfile.mkdtemp(prefix="git_status_"))
-                    try:
-                        PublishService._snapshot_workspace_tree(
-                            env_workspace_root, temp_dir
-                        )
-                        live_files = GitSourceService._file_hashes(
-                            temp_dir / "workspace"
-                        )
-                    finally:
-                        shutil.rmtree(temp_dir, ignore_errors=True)
-                    for path in sorted(set(live_files) | set(synced_files)):
-                        in_live = path in live_files
-                        in_synced = path in synced_files
-                        if in_live and not in_synced:
-                            change_type = "added"
-                        elif in_synced and not in_live:
-                            change_type = "deleted"
-                        elif live_files[path] != synced_files[path]:
-                            change_type = "modified"
-                        else:
-                            continue
-                        file_changes.append(
-                            {"path": path, "change_type": change_type}
-                        )
+                candidate = (
+                    Path(synced_rev.snapshot_path) / "workspace"
+                    if synced_rev is not None and synced_rev.snapshot_path
+                    else None
+                )
+                if candidate is not None and candidate.exists():
+                    synced_workspace = candidate
+
+        # Release the pooled DB connection before the heavy per-file diff.
+        session.commit()
+
+        # ── Workspace file changes ──────────────────────────────────
+        file_changes: list[dict] = []
+        if (
+            has_env
+            and env_workspace_root is not None
+            and synced_workspace is not None
+        ):
+            synced_files = GitSourceService._file_hashes(synced_workspace)
+            temp_dir = Path(tempfile.mkdtemp(prefix="git_status_"))
+            try:
+                PublishService._snapshot_workspace_tree(
+                    env_workspace_root, temp_dir
+                )
+                live_files = GitSourceService._file_hashes(
+                    temp_dir / "workspace"
+                )
+            finally:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            for path in sorted(set(live_files) | set(synced_files)):
+                in_live = path in live_files
+                in_synced = path in synced_files
+                if in_live and not in_synced:
+                    change_type = "added"
+                elif in_synced and not in_live:
+                    change_type = "deleted"
+                elif live_files[path] != synced_files[path]:
+                    change_type = "modified"
+                else:
+                    continue
+                file_changes.append(
+                    {"path": path, "change_type": change_type}
+                )
 
         return {
             "dirty": bool(prompt_changes or file_changes),
             "has_env": has_env,
-            "last_synced_commit": source.last_synced_commit,
+            "last_synced_commit": last_synced_commit,
             "prompt_changes": prompt_changes,
             "file_changes": file_changes,
         }
@@ -964,6 +1040,12 @@ class GitSourceService:
 
             revision: AgentBundleRevision
             pulled_sha: str
+            # Deliberate scope decision: unlike the polled read paths (which release
+            # the pooled connection before the remote git I/O), this write path holds
+            # it across the network work. It is a low-frequency POST that legitimately
+            # mutates the source afterwards, so the read-path split is intentionally
+            # not applied; the hold is bounded by the GIT_HTTP_LOW_SPEED_* idle guard
+            # and SSH ConnectTimeout/keepalive.
             with _resolve_ssh_key(session, source.ssh_key_id, source.owner_id) as key:
                 remote_sha = ls_remote_head(source.repo_url, source.ref, key)
                 if remote_sha == source.last_synced_commit:
@@ -1116,6 +1198,12 @@ class GitSourceService:
                 )
 
             new_sha: str
+            # Deliberate scope decision: unlike the polled read paths (which release
+            # the pooled connection before the remote git I/O), this write path holds
+            # it across the network work. It is a low-frequency POST that legitimately
+            # mutates the source afterwards, so the read-path split is intentionally
+            # not applied; the hold is bounded by the GIT_HTTP_LOW_SPEED_* idle guard
+            # and SSH ConnectTimeout/keepalive.
             with _resolve_ssh_key(session, source.ssh_key_id, source.owner_id) as key:
                 # ff precheck (do not clone/commit if the remote already advanced).
                 remote_sha = ls_remote_head(source.repo_url, source.ref, key)
@@ -1713,6 +1801,53 @@ class GitSourceService:
 # ── Module-level filesystem / git helpers ───────────────────────────────
 
 
+def _read_ssh_key_material(
+    session: Session, ssh_key_id: uuid.UUID | None, owner_id: uuid.UUID
+) -> tuple[str, str | None] | None:
+    """Decrypt the SSH key material (private key + passphrase) under the DB scope.
+
+    The DB-touching half of :func:`_resolve_ssh_key`: it decrypts the key
+    host-side via the ownership-checked
+    :meth:`SSHKeyService.get_decrypted_private_key` and returns the material
+    **in memory**. The status-read paths call this while still holding a pooled
+    DB connection, then release the connection BEFORE writing the temp key file
+    and running the (blocking, network) git call via :func:`_ssh_key_file` — so
+    no remote git I/O ever runs with a connection / transaction checked out.
+
+    Returns ``None`` when no key is configured (public repo). Raises
+    :class:`GitSourceValidationError` when the key is missing / not owned.
+    """
+    if ssh_key_id is None:
+        return None
+    result = SSHKeyService.get_decrypted_private_key(session, ssh_key_id, owner_id)
+    if result is None:
+        raise GitSourceValidationError(
+            "SSH key not found or not owned by you."
+        )
+    return result
+
+
+@contextmanager
+def _ssh_key_file(
+    key_material: tuple[str, str | None] | None,
+) -> Iterator[str | None]:
+    """Write decrypted key material to a chmod-600 temp file for the git call.
+
+    The non-DB half of :func:`_resolve_ssh_key`: it takes the in-memory material
+    from :func:`_read_ssh_key_material` and yields a chmod-600 temp key path
+    (deleted in ``finally``), or ``None`` for a public repo. The temp-key
+    lifetime wraps ONLY the git network call, never a DB query — letting the
+    status reads release their pooled connection before the blocking git I/O.
+    The key material never reaches the container.
+    """
+    if key_material is None:
+        yield None
+        return
+    private_key, passphrase = key_material
+    with create_ssh_key_file(private_key, passphrase) as key_path:
+        yield key_path
+
+
 @contextmanager
 def _resolve_ssh_key(
     session: Session, ssh_key_id: uuid.UUID | None, owner_id: uuid.UUID
@@ -1721,18 +1856,14 @@ def _resolve_ssh_key(
 
     The private key is decrypted host-side via the ownership-checked
     :meth:`SSHKeyService.get_decrypted_private_key` and never copied into the
-    container.
+    container. Convenience wrapper over :func:`_read_ssh_key_material` +
+    :func:`_ssh_key_file` for the write paths (checkout / connect / pull / push),
+    which legitimately interleave DB and git work inside one transaction. The
+    status-read paths instead call the two halves separately so they can release
+    the DB connection between the decrypt and the git call.
     """
-    if ssh_key_id is None:
-        yield None
-        return
-    result = SSHKeyService.get_decrypted_private_key(session, ssh_key_id, owner_id)
-    if result is None:
-        raise GitSourceValidationError(
-            "SSH key not found or not owned by you."
-        )
-    private_key, passphrase = result
-    with create_ssh_key_file(private_key, passphrase) as key_path:
+    key_material = _read_ssh_key_material(session, ssh_key_id, owner_id)
+    with _ssh_key_file(key_material) as key_path:
         yield key_path
 
 

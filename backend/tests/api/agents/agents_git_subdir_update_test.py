@@ -1,9 +1,12 @@
 """Integration tests: subdir-scoped update detection in git-backed agent versioning.
 
-These tests cover the bug fix in ``GitSourceService._compute_update_available``:
-a git-versioned agent connected to a repo WITH a ``subdir`` must NOT report
-``update_available=True`` when the remote HEAD advances but the new commits do
-NOT touch the agent's ``subdir/``.
+These tests cover the bug fix in
+``GitSourceService._compute_update_available_remote`` (surfaced by the
+``check-updates`` endpoint): a git-versioned agent connected to a repo WITH a
+``subdir`` must NOT report ``update_available=True`` when the remote HEAD
+advances but the new commits do NOT touch the agent's ``subdir/``. Note the
+plain ``GET /git`` read is remote-free and always reports ``False`` — freshness
+is owned solely by ``check-updates``.
 
 Before the fix, the service compared remote HEAD SHA against
 ``last_synced_commit`` — any advance triggered the banner regardless of which
@@ -39,8 +42,9 @@ API = settings.API_V1_STR
 _CLONE_CTX = "app.services.bundles.git_source_service.clone_repository_context"
 _GET_HASH = "app.services.bundles.git_source_service.get_current_commit_hash"
 _LS_REMOTE = "app.services.bundles.git_source_service.ls_remote_head"
-# New in the bug fix: subdir_changed_between is called by _compute_update_available
-# only when HEAD advanced AND a subdir + baseline are both present.
+# New in the bug fix: subdir_changed_between is called by
+# _compute_update_available_remote only when HEAD advanced AND a subdir +
+# baseline are both present.
 _SUBDIR_CHANGED = "app.services.bundles.git_source_service.subdir_changed_between"
 
 # ── Test git SHAs ─────────────────────────────────────────────────────────────
@@ -213,9 +217,11 @@ def test_subdir_scoped_update_detection(
     assert phase2["last_synced_commit"] == _SHA_V1
 
     # ── Phase 3: Remote advanced; subdir UNCHANGED → update_available=False ───
-    # This is the regression case: before the fix, any HEAD advance → True.
-    # After the fix, subdir_changed_between is called and returns False →
-    # update_available stays False.
+    # GET /git is remote-free, so it always reports False here. The subdir-scoped
+    # regression (HEAD advanced but the subdir tree is unchanged → no update) is
+    # exercised against check-updates below: before the fix any HEAD advance →
+    # True; after the fix subdir_changed_between returns False → update stays
+    # False.
     with (
         patch(_LS_REMOTE, return_value=_SHA_V2),
         patch(_SUBDIR_CHANGED, return_value=False),
@@ -223,8 +229,7 @@ def test_subdir_scoped_update_detection(
         r = client.get(_git_source_url(agent_id), headers=headers)
     assert r.status_code == 200
     assert r.json()["update_available"] is False, (
-        "Regression: a commit that does not touch the agent's subdir must NOT "
-        "set update_available=True on GET /agents/{id}/git"
+        "GET /agents/{id}/git is remote-free — always update_available=False"
     )
 
     with (
@@ -244,14 +249,21 @@ def test_subdir_scoped_update_detection(
     assert phase3["last_synced_commit"] == _SHA_V1
 
     # ── Phase 4: Remote advanced; subdir CHANGED → update_available=True ──────
-    # subdir_changed_between returns True → the banner should show.
+    # subdir_changed_between returns True → the banner should show. This is owned
+    # solely by check-updates: GET /git is remote-free (it never probes the
+    # remote and always reports update_available=False), so the subdir-changed
+    # verdict surfaces only on the explicit check-updates endpoint.
     with (
         patch(_LS_REMOTE, return_value=_SHA_V2),
         patch(_SUBDIR_CHANGED, return_value=True),
     ):
         r = client.get(_git_source_url(agent_id), headers=headers)
     assert r.status_code == 200
-    assert r.json()["update_available"] is True
+    assert r.json()["update_available"] is False, (
+        "GET /agents/{id}/git is remote-free — it must report "
+        "update_available=False regardless of remote state; freshness is owned "
+        "by check-updates."
+    )
 
     with (
         patch(_LS_REMOTE, return_value=_SHA_V2),

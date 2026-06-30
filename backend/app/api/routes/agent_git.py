@@ -346,7 +346,13 @@ def get_git_source(
     session: SessionDep,
     current_user: CurrentUser,
 ) -> AgentGitSourcePublic:
-    """Return the agent's git source (with a best-effort ``update_available``)."""
+    """Return the agent's git source — remote-free (cheap plain status read).
+
+    Does NO remote git I/O and always reports ``update_available = False``;
+    freshness is owned by ``GET /git/check-updates`` (and the dirty check), so
+    this read never blocks on — nor pins a pooled DB connection behind — a slow
+    remote. The frontend polls those endpoints for the update banner.
+    """
     try:
         source, update_available = GitSourceService.get_source(
             session, agent_id, current_user

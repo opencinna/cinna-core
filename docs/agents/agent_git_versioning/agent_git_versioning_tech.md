@@ -39,6 +39,7 @@
 |---------|---------|-------------|
 | `GIT_SOURCE_ALLOW_PRIVATE_HOSTS` | `false` | When `true`, egress guard allows git URLs resolving to private/loopback/link-local addresses (for self-hosted git on private LANs) |
 | `GIT_SOURCE_MAX_FILE_BYTES` | (configured in settings) | Maximum size (bytes) for any single workspace file accepted during checkout or pushed to the remote; `_assert_no_oversized_files` enforces this before committing or before any bundle/revision row is created |
+| `GIT_SOURCE_NETWORK_TIMEOUT_SECONDS` | `30` | Timeout applied to remote-probe operations on read paths (`ls_remote_head`, `git_log_subdir`, `subdir_changed_between`) via GitPython `kill_after_timeout`. Also sets `GIT_HTTP_LOW_SPEED_LIMIT`/`GIT_HTTP_LOW_SPEED_TIME` for HTTP transports and SSH `ConnectTimeout`/`ServerAliveInterval`/`ServerAliveCountMax`. Not applied to full-history clones on write paths |
 
 ## Database Schema
 
@@ -81,7 +82,7 @@ Indexes: `ix_agent_git_source_agent_id` (unique — one git source per install);
 Adds `id`, `agent_id`, `owner_id`, `bundle_uuid`, `last_synced_commit`, `last_sync_at`, `status`, `last_error`, `created_at`, `updated_at`.
 
 ### `AgentGitSourcePublic(AgentGitSourceBase)` — API response
-Adds all identity/status fields plus `update_available: bool = False`, `web_history_url: str | None = None`, `web_tree_url: str | None = None`. SSH key material is never included. `update_available` is computed by `_compute_update_available` (see Service Layer) and applied by the route layer — not stored on the row. The two web URLs are set by the route helper `_git_source_to_public` from `build_web_history_url` / `build_web_tree_url` (both `None` for unsupported hosts). None are stored on the row.
+Adds all identity/status fields plus `update_available: bool = False`, `web_history_url: str | None = None`, `web_tree_url: str | None = None`. SSH key material is never included. `update_available` is not stored on the row: `GET /agents/{id}/git` always returns it as `false` (remote-free); `GET /agents/{id}/git/check-updates` computes it via `_compute_update_available_remote` (see Service Layer). The two web URLs are set by the route helper `_git_source_to_public` from `build_web_history_url` / `build_web_tree_url` (both `None` for unsupported hosts). None are stored on the row.
 
 ### `AgentGitSourceCreate(AgentGitSourceBase)` — API input for checkout
 Inherits Base fields verbatim (max_length validation applies to user input).
@@ -182,7 +183,7 @@ All agent-git routes are registered on `APIRouter(prefix="/agents", tags=["agent
 | `POST` | `/agents/checkout` | `require_developer` | `AgentCheckoutRequest` | `AgentCheckoutResponse` | Creates install + git source |
 | `POST` | `/agents/{agent_id}/git/connect` | `require_developer` | `AgentGitConnectRequest` | `AgentGitSourcePublic` | Attaches git source to existing install + initial export push |
 | `DELETE` | `/agents/{agent_id}/git` | `require_developer` | — | `Message` | Deletes the `AgentGitSource` row; does not touch the remote |
-| `GET` | `/agents/{agent_id}/git` | `CurrentUser` (owner-resolved) | — | `AgentGitSourcePublic` | `update_available` computed best-effort; no error on network failure |
+| `GET` | `/agents/{agent_id}/git` | `CurrentUser` (owner-resolved) | — | `AgentGitSourcePublic` | Returns stored `AgentGitSource` instantly; no remote call; `update_available` always `false` |
 | `GET` | `/agents/{agent_id}/git/check-updates` | `CurrentUser` (owner-resolved) | — | `GitUpdateStatus` | Strict `ls-remote`; surfaces network errors |
 | `GET` | `/agents/{agent_id}/git/commits` | `CurrentUser` (owner-resolved) | `limit: int = 50` (query) | `GitCommitList` | Bounded shallow clone; `limit` clamped 1..200; subdir-scoped |
 | `GET` | `/agents/{agent_id}/git/dirty` | `CurrentUser` (owner-resolved) | — | `GitDirtyStatus` | Full workspace tree copy to temp; best-effort on env/revision sides |
@@ -229,23 +230,21 @@ The adopt path: links the agent to an existing remote folder **without pushing**
 
 **`get_source(session, agent_id, owner) -> tuple[AgentGitSource, bool]`**
 
-Returns `(source, update_available)`. `update_available` is computed best-effort via `_compute_update_available`; any exception silently leaves it `False` (never fails a read endpoint).
+Returns `(source, update_available)` where `update_available` is always `False`. Makes no remote network call: releases the DB connection (`session.commit()`), then returns the stored row immediately. The `False` value is a sentinel — callers that need freshness must call `check_updates` instead.
 
 **`check_updates(session, agent_id, owner) -> dict`**
 
-Strict update check via `_compute_update_available` — raises on network/auth failure. Returns `{update_available, remote_commit, last_synced_commit}`.
+Strict update check via `_compute_update_available_remote` — raises on network/auth failure. Releases the DB connection before the remote call (see Pool-Safety Contract below). Returns `{update_available, remote_commit, last_synced_commit}`.
 
-**`_compute_update_available(session, source) -> tuple[bool, str]`** (shared private helper)
+**`_compute_update_available_remote(repo_url, ref, subdir, last_synced_commit, key_material) -> tuple[bool, str]`** (private helper, used only by `check_updates`)
 
-Routes both `get_source` and `check_updates` to a single consistent implementation so they cannot diverge (mirrors the `_prompts_dirty` sharing pattern). Returns `(update_available, remote_head_sha)`.
+Takes captured primitives and in-memory SSH key material rather than a live `(session, source)` pair — so the DB connection is already released before this function is entered. Returns `(update_available, remote_head_sha)`.
 
 Logic (cheap-first):
 1. `ls_remote_head` to fetch the current remote HEAD SHA. If HEAD == `last_synced_commit`, returns `(False, HEAD)` with no further work.
-2. If the source has no `subdir` (repo root), returns `(True, HEAD)` — every commit touches the root, so a HEAD advance is conclusive.
+2. If no `subdir` (repo root), returns `(True, HEAD)` — every commit touches the root, so a HEAD advance is conclusive.
 3. If a `subdir` and `last_synced_commit` baseline are both present, calls `subdir_changed_between` in `git_operations.py`. Equal tree hash ⇒ `(False, HEAD)`; unequal or indeterminate ⇒ `(True, HEAD)`.
 4. If `last_synced_commit` is absent and HEAD advanced, returns `(True, HEAD)` conservatively.
-
-Only the error-handling wrapper differs between callers: `get_source` swallows exceptions (best-effort); `check_updates` re-raises them (strict).
 
 **`compute_dirty(session, agent_id, owner) -> dict`** (new)
 
@@ -332,9 +331,23 @@ Best-effort removal of a stranded revision row + on-disk snapshot, and — when 
 
 `_git_locks: dict[str, asyncio.Lock]` keyed by `str(agent_id)`. `_lock_for(agent_id)` initializes on first access. Serializes concurrent pull/push/connect on one agent, mirroring `PublishService._publish_locks`.
 
+### Pool-Safety Contract
+
+All five read endpoints release the pooled DB connection before any blocking work:
+
+1. **Read phase** (connection open): `_resolve_source_owned` fetches the source row, `_read_ssh_key_material` decrypts the SSH key (if set) into an in-memory `(private_key_bytes, passphrase)` tuple. Both require the DB.
+2. **Release** (`session.commit()`): returns the connection to the pool before any remote-git or heavy-filesystem operation starts.
+3. **Work phase** (connection released): `_ssh_key_file` context manager writes the in-memory key material to a chmod-600 temp file only for the duration of the git call, then deletes it in `finally`.
+
+The four write paths (checkout, connect, pull, push) retain the connection across git I/O by design — they are low-frequency mutating POSTs and need commit/rollback semantics around the full operation.
+
 ### Module-level helpers in `git_source_service.py`
 
-**`_resolve_ssh_key(session, ssh_key_id, owner_id)`** — context manager: decrypts the private key via `SSHKeyService.get_decrypted_private_key` (ownership-checked), writes a chmod-600 temp file via `create_ssh_key_file`, yields the path or `None`. Raises `GitSourceValidationError` if the key is not found/owned.
+**`_read_ssh_key_material(session, ssh_key_id, owner_id) -> tuple[bytes, str] | None`** — fetches and decrypts the SSH private key via `SSHKeyService.get_decrypted_private_key` (ownership-checked) while the DB connection is open, returning an in-memory `(private_key_bytes, passphrase)` tuple. Returns `None` when `ssh_key_id` is `None`. Must be called **before** `session.commit()` (the pool-release point). Raises `GitSourceValidationError` if the key is not found/owned.
+
+**`_ssh_key_file(key_material: tuple[bytes, str] | None)`** — context manager: if `key_material` is provided, writes a chmod-600 temp file via `create_ssh_key_file` and yields its path; yields `None` otherwise. Used on read paths where the DB connection is already released, so the temp file exists only around the git call.
+
+**`_resolve_ssh_key(session, ssh_key_id, owner_id)`** — context manager retained for the four WRITE paths (checkout, connect, pull, push): decrypts the private key via `SSHKeyService.get_decrypted_private_key` (ownership-checked), writes a chmod-600 temp file via `create_ssh_key_file`, yields the path or `None`. Raises `GitSourceValidationError` if the key is not found/owned. These paths still hold the DB connection across git I/O.
 
 **`_resolve_subdir(repo_path, subdir) -> Path`** — resolves `<repo>/<subdir>`, raises `GitSourceValidationError` if the path escapes the repo root (path traversal guard).
 
@@ -437,7 +450,7 @@ SSRF chokepoint for every outbound git network call. For HTTPS: delegates to `as
 
 **`ls_remote_head(git_url, ref="main", ssh_key_path=None) -> str`**
 
-Resolves the SHA a remote ref points at without cloning. Tries `refs/heads/<ref>`, then `refs/tags/<ref>`, then the raw ref string. For annotated tags, prefers the `^{}` dereferenced commit SHA over the tag object SHA (avoids spurious "update available" mismatches). Raises `GitOperationError` if the ref is not found, `GitAuthenticationError` on auth failures, `GitConnectionError` on network failures.
+Resolves the SHA a remote ref points at without cloning. Tries `refs/heads/<ref>`, then `refs/tags/<ref>`, then the raw ref string. For annotated tags, prefers the `^{}` dereferenced commit SHA over the tag object SHA (avoids spurious "update available" mismatches). Applies `GIT_SOURCE_NETWORK_TIMEOUT_SECONDS` via `kill_after_timeout` (SIGKILL on overrun). Raises `GitOperationError` if the ref is not found, `GitAuthenticationError` on auth failures, `GitConnectionError` on network failures.
 
 **`commit_all(repo, message, author_name, author_email) -> str`**
 
@@ -461,15 +474,15 @@ Context manager wrapping `clone_repository`; yields `(repo_path, repo)`; removes
 
 **`git_log_subdir(*, repo_url, ref="main", subdir=None, ssh_key_path=None, max_count=50) -> list[dict]`** (new)
 
-Returns up to `max_count` commits touching `subdir`, newest first. Each dict: `{sha, short_sha, author_name, author_email, date (ISO-8601), message}`. Egress-guarded. Uses a bounded shallow clone (`depth=max_count`) into a temp dir, then `git log --max-count=N -- <subdir>/` with a `%x1f`/`%x1e`-delimited format for safe field splitting. Temp dir removed in `finally`. Errors map through the existing typed git errors.
+Returns up to `max_count` commits touching `subdir`, newest first. Each dict: `{sha, short_sha, author_name, author_email, date (ISO-8601), message}`. Egress-guarded. Uses a bounded shallow clone (`depth=max_count`) into a temp dir, then `git log --max-count=N -- <subdir>/` with a `%x1f`/`%x1e`-delimited format for safe field splitting. Applies `GIT_SOURCE_NETWORK_TIMEOUT_SECONDS` via `kill_after_timeout` on the clone. Temp dir removed in `finally`. Errors map through the existing typed git errors.
 
 **`subdir_changed_between(*, repo_url, ref, subdir, base_commit, ssh_key_path=None) -> bool`** (new)
 
-Compares the tree-object hash of `<subdir>/` at the tip of `ref` against its hash at `base_commit`. Returns `True` if the subdir changed (or the outcome is indeterminate), `False` if the tree hashes match (subdir untouched). Used by `_compute_update_available` as the second-stage check for subdir-scoped installs.
+Compares the tree-object hash of `<subdir>/` at the tip of `ref` against its hash at `base_commit`. Returns `True` if the subdir changed (or the outcome is indeterminate), `False` if the tree hashes match (subdir untouched). Used by `_compute_update_available_remote` as the second-stage check for subdir-scoped installs.
 
 Implementation:
-1. `depth=1` shallow clone of `ref` into a temp dir. Egress-guarded via `assert_git_url_allowed` before the clone.
-2. `git fetch --depth=1 <base_commit>` to make the base commit reachable. A second `assert_git_url_allowed` call re-asserts the same URL before this follow-up fetch (DNS-rebind defense).
+1. `depth=1` shallow clone of `ref` into a temp dir. Egress-guarded via `assert_git_url_allowed` before the clone. `GIT_SOURCE_NETWORK_TIMEOUT_SECONDS` applied via `kill_after_timeout`. For SSH transports: `ConnectTimeout`, `ServerAliveInterval`, `ServerAliveCountMax` are injected via `GIT_SSH_COMMAND`. For HTTP(S) transports: `GIT_HTTP_LOW_SPEED_LIMIT`/`GIT_HTTP_LOW_SPEED_TIME` are set in the subprocess env.
+2. `git fetch --depth=1 <base_commit>` to make the base commit reachable. A second `assert_git_url_allowed` call re-asserts the same URL before this follow-up fetch (DNS-rebind defense). Same timeout settings apply.
 3. `git rev-parse HEAD:<subdir>` → tree hash at tip; `git rev-parse <base_commit>:<subdir>` → tree hash at base.
 4. Equal hashes → return `False` (subdir unchanged). Unequal → return `True`.
 5. Any exception (server disallows fetch-by-reachable-SHA, base commit GC'd or rewritten, subdir missing at one revision, auth failure) → return `True` conservatively. On git hosts that disallow fetch-by-SHA (some self-hosted Gitea/GitLab without `uploadpack.allowReachableSHA1InWant`), this degrades gracefully to the legacy always-`True` behavior.
@@ -534,8 +547,9 @@ React Query hooks:
 
 | Hook | Service call | Query key | Notes |
 |---|---|---|---|
-| source status | `AgentGitService.getGitSource` | `["git-source", agentId]` | drives connected/disabled + `update_available` + web URLs |
-| dirty | `AgentGitService.getGitDirty` | `["git-dirty", agentId]` | `refetchOnWindowFocus`; gates "Commit Agent"; `isFetching` spins Refresh |
+| source status | `AgentGitService.getGitSource` | `["git-source", agentId]` | drives connected/disabled + web URLs; `staleTime: 30 000 ms`; `update_available` always `false` (use check-updates for freshness) |
+| check-updates | `AgentGitService.checkGitUpdates` | `["git-check-updates", agentId]` | drives the update banner; `staleTime: 30 000 ms`; enabled when connected |
+| dirty | `AgentGitService.getGitDirty` | `["git-dirty", agentId]` | `refetchOnWindowFocus` disabled; `staleTime: 30 000 ms`; gates "Commit Agent"; `isFetching` spins Refresh |
 | status (preview) | `AgentGitService.getGitStatus` | `["git-status", agentId]` | enabled only while the commit dialog is open |
 | commits | `AgentGitService.listGitCommits` | `["git-commits", agentId, LATEST_COMMITS_COUNT]` | enabled when connected; limit 3 |
 | connect | `AgentGitService.connectGitSource` | — | `mutate(adoptExisting)`; invalidates git-source/commits/dirty/status + `["agent", agentId]` |

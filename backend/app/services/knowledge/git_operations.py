@@ -116,6 +116,27 @@ def create_ssh_key_file(private_key: str, passphrase: Optional[str] = None):
             logger.warning(f"Failed to remove temporary SSH key file {key_path}: {e}")
 
 
+def _git_network_timeout() -> int:
+    """Bounded timeout (seconds) for git remote calls (see settings)."""
+    return settings.GIT_SOURCE_NETWORK_TIMEOUT_SECONDS
+
+
+def _apply_network_timeout_env(env: dict) -> dict:
+    """Add the HTTP low-speed-abort window to a git subprocess env (in place).
+
+    Aborts an HTTP(S) transfer that stalls below ~1 KB/s for the timeout window,
+    so a hung remote fails fast instead of pinning the worker (and, on the
+    status-read paths, a pooled DB connection). SSH transports are bounded by
+    the ``ConnectTimeout`` / keepalive in :func:`create_git_ssh_command` and the
+    ``kill_after_timeout`` hard stop on the clone / ls-remote subprocesses.
+    Mutates and returns ``env`` for call-site convenience.
+    """
+    timeout = _git_network_timeout()
+    env["GIT_HTTP_LOW_SPEED_LIMIT"] = "1000"
+    env["GIT_HTTP_LOW_SPEED_TIME"] = str(timeout)
+    return env
+
+
 def create_git_ssh_command(ssh_key_path: Optional[str] = None) -> str:
     """
     Create a Git SSH command with optional SSH key.
@@ -127,11 +148,17 @@ def create_git_ssh_command(ssh_key_path: Optional[str] = None) -> str:
         SSH command string for Git
     """
     # Disable strict host key checking for ease of use
-    # In production, you might want to configure known_hosts properly
+    # In production, you might want to configure known_hosts properly.
+    # ConnectTimeout + keepalive bound a hung SSH remote so a stalled
+    # connect / transfer fails fast instead of blocking indefinitely.
+    timeout = _git_network_timeout()
     base_options = (
         '-o StrictHostKeyChecking=no '
         '-o UserKnownHostsFile=/dev/null '
-        '-o LogLevel=ERROR'
+        '-o LogLevel=ERROR '
+        f'-o ConnectTimeout={timeout} '
+        f'-o ServerAliveInterval={timeout} '
+        '-o ServerAliveCountMax=3'
     )
     if ssh_key_path:
         return f'ssh -i "{ssh_key_path}" {base_options}'
@@ -467,7 +494,8 @@ def clone_repository(
     destination: str,
     branch: str = "main",
     ssh_key_path: Optional[str] = None,
-    depth: Optional[int] = 1
+    depth: Optional[int] = 1,
+    kill_after_timeout: Optional[int] = None,
 ) -> Repo:
     """
     Clone a Git repository to the specified destination.
@@ -480,6 +508,13 @@ def clone_repository(
         depth: Clone depth (1 = shallow clone). Pass ``None`` for a full-history
             clone — required by ``fast_forward_push`` whose merge-base ancestry
             check needs the ref history (a shallow clone has no merge bases).
+        kill_after_timeout: Optional hard wall-clock kill (seconds) for the clone
+            subprocess. Left ``None`` (no hard kill) for full-history / write-path
+            clones, where a large-but-healthy clone may legitimately run long —
+            those stay bounded only by the progress-based ``GIT_HTTP_LOW_SPEED_*``
+            idle guard + SSH ``ConnectTimeout``. Set by the cheap, bounded status
+            reads (``git_log_subdir`` / ``subdir_changed_between``) so a hung
+            remote can't pin the worker.
 
     Returns:
         GitPython Repo object
@@ -503,14 +538,24 @@ def clone_repository(
 
         # Set up SSH command for SSH URLs (to disable strict host key checking)
         env = os.environ.copy()
+        _apply_network_timeout_env(env)
         if git_url.startswith('git@'):
             env['GIT_SSH_COMMAND'] = create_git_ssh_command(ssh_key_path)
 
         logger.info(f"Cloning repository {git_url} to {destination}")
 
         # Clone with specified depth (shallow clone by default). ``depth=None``
-        # omits the flag entirely for a full-history clone.
-        clone_kwargs = {"branch": branch, "env": env}
+        # omits the flag entirely for a full-history clone. ``kill_after_timeout``
+        # is an OPT-IN hard stop (status-read probes only) so a hung remote can't
+        # pin the worker; full-history / write-path clones leave it unset and rely
+        # on the progress-based low-speed guard so a slow-but-healthy large clone
+        # is not killed mid-transfer.
+        clone_kwargs = {
+            "branch": branch,
+            "env": env,
+        }
+        if kill_after_timeout is not None:
+            clone_kwargs["kill_after_timeout"] = kill_after_timeout
         if depth is not None:
             clone_kwargs["depth"] = depth
         repo = Repo.clone_from(
@@ -666,7 +711,11 @@ def git_log_subdir(
     pretty = unit.join(["%H", "%h", "%an", "%ae", "%aI", "%s"]) + record
 
     with clone_repository_context(
-        repo_url, branch=ref, ssh_key_path=ssh_key_path, depth=max_count
+        repo_url,
+        branch=ref,
+        ssh_key_path=ssh_key_path,
+        depth=max_count,
+        kill_after_timeout=_git_network_timeout(),
     ) as (repo_path, repo):
         try:
             log_args = ["--max-count", str(max_count), f"--pretty=format:{pretty}"]
@@ -752,7 +801,11 @@ def subdir_changed_between(
     subdir = subdir.strip("/")
 
     with clone_repository_context(
-        repo_url, branch=ref, ssh_key_path=ssh_key_path, depth=1
+        repo_url,
+        branch=ref,
+        ssh_key_path=ssh_key_path,
+        depth=1,
+        kill_after_timeout=_git_network_timeout(),
     ) as (_repo_path, repo):
         # Rebuild the SSH env for the follow-up fetch. The clone already ran the
         # egress guard and rewrote origin to the converted (SSH/HTTPS) URL, so
@@ -760,6 +813,7 @@ def subdir_changed_between(
         remote_url = repo.remotes.origin.url if repo.remotes else repo_url
         assert_git_url_allowed(remote_url)
         env = os.environ.copy()
+        _apply_network_timeout_env(env)
         if remote_url.startswith("git@"):
             env["GIT_SSH_COMMAND"] = create_git_ssh_command(ssh_key_path)
 
@@ -799,7 +853,8 @@ def clone_repository_context(
     branch: str = "main",
     ssh_key_path: Optional[str] = None,
     base_dir: Optional[str] = None,
-    depth: Optional[int] = 1
+    depth: Optional[int] = 1,
+    kill_after_timeout: Optional[int] = None,
 ):
     """
     Context manager for cloning a repository with automatic cleanup.
@@ -811,6 +866,10 @@ def clone_repository_context(
         base_dir: Base directory for temporary clone (default: system temp)
         depth: Clone depth (1 = shallow). Pass ``None`` for a full-history clone
             (required before ``fast_forward_push``).
+        kill_after_timeout: Optional hard wall-clock kill (seconds) for the clone
+            subprocess — forwarded to :func:`clone_repository`. Left ``None`` for
+            full-history / write-path clones; set by the bounded status-read
+            probes. See :func:`clone_repository` for the rationale.
 
     Yields:
         Tuple of (repo_path: str, repo: Repo)
@@ -833,6 +892,7 @@ def clone_repository_context(
             branch=branch,
             ssh_key_path=ssh_key_path,
             depth=depth,
+            kill_after_timeout=kill_after_timeout,
         )
 
         yield repo_path, repo
@@ -949,6 +1009,7 @@ def ls_remote_head(
     assert_git_url_allowed(git_url)
 
     env = os.environ.copy()
+    _apply_network_timeout_env(env)
     if git_url.startswith('git@'):
         env['GIT_SSH_COMMAND'] = create_git_ssh_command(ssh_key_path)
 
@@ -956,9 +1017,15 @@ def ls_remote_head(
         from git.cmd import Git
         g = Git()
 
+        # ``kill_after_timeout`` hard-stops a hung remote so the ls-remote (the
+        # cheap update-check probe) can't block the worker / a pooled DB
+        # connection indefinitely.
+        timeout = _git_network_timeout()
         refs = ""
         for candidate in (f'refs/heads/{ref}', f'refs/tags/{ref}', ref):
-            refs = g.ls_remote(git_url, candidate, env=env)
+            refs = g.ls_remote(
+                git_url, candidate, env=env, kill_after_timeout=timeout
+            )
             if refs:
                 break
 
