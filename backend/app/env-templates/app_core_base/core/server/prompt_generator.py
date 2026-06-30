@@ -5,6 +5,30 @@ from typing import Optional, Dict, Any, List, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Total character budget for inline personal-memory injection (App Data tier).
+# Caps how much of ``app-data/memory/*.md`` we inline into the system prompt so
+# a verbose memory area can never blow up the prompt. ~5,000 tokens (20,000
+# characters) at roughly 4 chars/token.
+PERSONAL_MEMORY_MAX_CHARS = 20000
+
+# Fixed guidance prepended to the injected memory block (both modes) so the
+# agent knows what the area is for and how to maintain it.
+_PERSONAL_MEMORY_GUIDANCE = (
+    "The user maintains personal notes for this agent in `./app-data/memory/`. "
+    "Always honor these preferences. When the user asks you to remember a personal "
+    "preference or small fact (e.g. how to address them, a default, a tone), create "
+    "or update `./app-data/memory/MEMORY.md` with your file tools. This memory is "
+    "private to this install and is NOT versioned. Keep it to personal "
+    "preferences/small facts only — never put workflow logic, scripts, or process "
+    "steps here (those belong in `docs/WORKFLOW_PROMPT.md` / `scripts/`)."
+)
+
+# Appended to the body when the memory content was truncated to fit the cap.
+_PERSONAL_MEMORY_TRUNCATION_NOTE = (
+    "_Memory truncated — keep it concise. It is for personal preferences/small "
+    "facts, not workflow logic._"
+)
+
 
 class PromptGenerator:
     """
@@ -237,6 +261,83 @@ class PromptGenerator:
         except Exception as e:
             logger.warning(f"Could not read current_user personalization: {e}")
         return {}
+
+    def _load_personal_memory(self) -> Optional[str]:
+        """Load the per-install personal memory area for inline prompt injection.
+
+        Reads ``app-data/memory/*.md`` (sorted case-insensitively by filename
+        for a deterministic order), skips empty / whitespace-only files, labels
+        each file's content with a ``### <filename>`` sub-section, and caps the
+        accumulated memory content at ``PERSONAL_MEMORY_MAX_CHARS``. File blocks
+        are added in sorted order until the next would exceed the cap; once that
+        happens we stop and append a truncation note.
+
+        Returns the inner body — the fixed guidance paragraph followed by the
+        labelled file dumps — ready to sit under a ``## Personalization / User
+        Memory`` header that the caller adds. Returns ``None`` when the dir is
+        missing or holds no non-empty ``*.md`` content at all (a true no-op:
+        no header, no guidance, zero added tokens).
+
+        Never raises — any I/O failure logs a warning and yields ``None``
+        (mirrors the other ``_load_*`` loaders), so a broken memory area can
+        never break prompt generation.
+        """
+        memory_dir = self.workspace_dir / "app-data" / "memory"
+        if not memory_dir.is_dir():
+            return None
+
+        try:
+            md_files = sorted(
+                (p for p in memory_dir.glob("*.md") if p.is_file()),
+                # Case-insensitive primary key with the exact name as a stable
+                # tie-break so case-colliding names order deterministically.
+                key=lambda p: (p.name.lower(), p.name),
+            )
+            if not md_files:
+                return None
+
+            blocks: List[str] = []
+            used = 0
+            truncated = False
+            for path in md_files:
+                try:
+                    content = path.read_text(encoding="utf-8").strip()
+                except Exception as e:
+                    logger.warning(f"Could not read personal memory file {path}: {e}")
+                    continue
+                if not content:
+                    continue
+                block = f"### {path.name}\n\n{content}"
+                if used + len(block) > PERSONAL_MEMORY_MAX_CHARS:
+                    truncated = True
+                    # If nothing has been included yet, the first/only file alone
+                    # exceeds the cap — include a truncated slice rather than
+                    # silently dropping all memory (the "always honor what is
+                    # stored here" promise). Subsequent over-budget files are
+                    # dropped whole; the truncation note flags both cases.
+                    if not blocks:
+                        blocks.append(block[:PERSONAL_MEMORY_MAX_CHARS])
+                        used += min(len(block), PERSONAL_MEMORY_MAX_CHARS)
+                    break
+                blocks.append(block)
+                used += len(block)
+
+            if not blocks:
+                return None
+
+            body_parts = [_PERSONAL_MEMORY_GUIDANCE, "\n\n".join(blocks)]
+            if truncated:
+                body_parts.append(_PERSONAL_MEMORY_TRUNCATION_NOTE)
+            body = "\n\n".join(body_parts)
+
+            logger.info(
+                f"Loaded personal memory ({len(blocks)} file(s), {used} chars"
+                f"{', truncated' if truncated else ''})"
+            )
+            return body
+        except Exception as e:
+            logger.warning(f"Could not load personal memory: {e}")
+            return None
 
     def _get_knowledge_topics(self) -> Optional[str]:
         """
@@ -511,7 +612,8 @@ class PromptGenerator:
         return (
             f"\n\n---\n\n## Environment Context\n\n"
             f"**WORKING_DIRECTORY**: `/app/workspace` (all relative paths are from here)\n\n"
-            f"**Uploaded files location**: `./app-data/uploads/` (user-uploaded files are here, access them with relative path `./app-data/uploads/filename`)\n"
+            f"**Uploaded files location**: `./app-data/uploads/` (user-uploaded files are here, access them with relative path `./app-data/uploads/filename`)\n\n"
+            f"**Personal memory location**: `./app-data/memory/` (canonical file `MEMORY.md`) — the user's private, per-install personal preferences for this agent. Honor anything stored here; create/update `MEMORY.md` with your file tools when the user asks you to remember a personal preference. Personalization only — never workflow logic.\n"
             f"\n\n### Attaching files to your reply\n\n"
             f"To attach a file you created to your reply, emit a `<cinna_attach>` tag whose body is the "
             f"**absolute container path** of the file (always rooted at `/app/workspace`):\n\n"
@@ -642,6 +744,15 @@ class PromptGenerator:
         if session_context_section:
             building_prompt += session_context_section
             logger.info("Included session context section in building mode prompt")
+
+        # Append the per-install personal memory (App Data tier), if any.
+        # True no-op when the memory area is empty — zero added tokens.
+        personal_memory = self._load_personal_memory()
+        if personal_memory:
+            building_prompt += (
+                f"\n\n---\n\n## Personalization / User Memory\n\n{personal_memory}"
+            )
+            logger.info("Included personal memory block in building mode prompt")
 
         # Return SystemPromptPreset dict
         logger.info("Generated building mode prompt with claude_code preset + BUILDING_AGENT.md + docs")
@@ -783,6 +894,16 @@ class PromptGenerator:
             logger.info(
                 f"Appended personalization block ({len(personalization_lines)} line(s))"
             )
+
+        # Append the per-install personal memory (App Data tier), if any.
+        # True no-op when the memory area is empty — zero added tokens, exactly
+        # like the Communication Style block above.
+        personal_memory = self._load_personal_memory()
+        if personal_memory:
+            conversation_prompt_parts.append(
+                f"\n\n---\n\n## Personalization / User Memory\n\n{personal_memory}"
+            )
+            logger.info("Included personal memory block in conversation mode prompt")
 
         # Combine all parts into a single system prompt string
         if conversation_prompt_parts:

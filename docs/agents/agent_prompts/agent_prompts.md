@@ -63,6 +63,18 @@ System prompt construction for agent environments. Each agent environment operat
 - **Mandatory Documentation Updates** - scripts/README.md must be updated immediately after every script creation/modification. Failure means future sessions lose script awareness
 - **Conversation Agent as Bridge** - The conversation agent executes scripts, parses outputs, rephrases results in natural language, and communicates with users. It is not just a script runner
 
+### Personal Memory Injection
+
+The agent can maintain a private per-install memory area at `./app-data/memory/`. Its `*.md` files are injected into system prompts as a `## Personalization / User Memory` block in both building and conversation modes.
+
+- **Location**: `./app-data/memory/` inside the App Data volume; canonical file is `MEMORY.md`. Additional `*.md` files are supported
+- **Who can write**: Any sender can induce a write — there is no owner gating. The agent writes with its native file tools when the user asks it to remember a preference
+- **Scope**: Personalization and small personal facts only (how to address the user, a default option, preferred tone). Workflow logic, scripts, and process steps belong in `WORKFLOW_PROMPT.md` / `scripts/`
+- **Injection**: `app-data/memory/*.md` files are read fresh on each request, sorted by filename (case-insensitive), labeled with `### <filename>` sub-headers, and accumulated under a 20,000-character cap (≈5,000 tokens). A single file that exceeds the cap is included as a truncated slice rather than dropped. An empty or missing memory area is a true no-op — zero prompt tokens added. Never raises; any I/O error logs a warning and yields no injection
+- **Privacy**: The memory area is excluded from bundle snapshots and git automatically (because `app-data/` is already in `BUNDLE_EXCLUDED_TOPLEVEL`). It is not a synced file and never round-trips to the DB — the inverse of `STATUS.md`, which is pull-cached
+- **Persistence**: Lives in the App Data volume, so it survives `apply_update`, environment rebuild, uninstall, and reinstall
+- **Rollout caveat**: `prompt_generator.py` is baked into the agent Docker image. The memory reader takes effect only after an environment **image rebuild and recreate** (same as the `conversation_style` / Communication Style block). Once the code is present, memory content propagates live — read fresh per request
+
 ### Three-Part Prompt Structure
 
 1. **User's Building Request** (to building agent) - "I want an agent that checks my time-off balance"
@@ -86,6 +98,7 @@ System prompt construction for agent environments. Each agent environment operat
   - `./app-data/storage/` — structured data (databases, JSON, CSVs)
   - `./app-data/uploads/` — user-provided files at runtime
   - `./app-data/cache/` — cached downloads and processed output
+  - `./app-data/memory/` — personal per-install memory files (`*.md`); auto-injected into system prompts; private to this install, never versioned
 - All packages installed via `uv`
 
 **Persistence rules for bundle agents**:
@@ -147,6 +160,9 @@ Building Mode:
     + docs/REFINER_PROMPT.md (dynamic)
     + credentials/README.md (dynamic)
     + knowledge/ topic names (dynamic)
+    + environment context (documents ./app-data/memory/ location)
+    + session context (if present)
+    + ## Personalization / User Memory block (app-data/memory/*.md — if non-empty)
     → SystemPromptPreset dict (preset: "claude_code", append: combined docs)
 
 Conversation Mode:
@@ -154,10 +170,12 @@ Conversation Mode:
     + scripts/README.md (available tools)
     + credentials/README.md (available credentials)
     + knowledge/ topic names
-    + environment context
+    + environment context (documents ./app-data/memory/ location)
     + session context (integration type, session ID, sender, etc.)
     + task context (short_code, title, priority, team, delegation — if session has a linked task)
     + handover instructions (from agent_handover_config.json — if any handovers configured)
+    + Communication Style (from credentials.json current_user — if set)
+    + ## Personalization / User Memory block (app-data/memory/*.md — if non-empty)
     → Plain string prompt
 
 Sync Flow (three-way reconcile + LWW):

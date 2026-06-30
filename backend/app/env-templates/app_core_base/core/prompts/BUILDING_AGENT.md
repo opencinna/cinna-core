@@ -205,6 +205,13 @@ content.
 - **`/app/workspace/app-data/cache/`** - Disposable caches your scripts may rebuild on demand
   - Treat as flushable; nothing here is guaranteed to survive a wipe
 
+- **`/app/workspace/app-data/memory/`** - The user's private personal memory for THIS install
+  - Canonical file: **`MEMORY.md`** (you may add more `*.md` files if useful)
+  - Its `*.md` contents are auto-injected into both the building and conversation system prompts, so always honor what is stored here
+  - When the user asks you to remember a personal tweak (e.g. "call me Bob", a default option, a preferred tone), create or update `MEMORY.md` with your file tools
+  - **Personalization ONLY** — small personal preferences and facts. NEVER put workflow logic, scripts, or process steps here (those belong in `docs/WORKFLOW_PROMPT.md` and `scripts/`)
+  - Private per-install and **NOT versioned** — it is never snapshotted into the bundle and never round-trips to other installs. Keep it concise (there is a size cap on what gets injected)
+
 ### Synced from the platform
 
 - **`/app/workspace/credentials/`** - Credentials and API keys shared with this agent

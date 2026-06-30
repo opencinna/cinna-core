@@ -2180,7 +2180,10 @@ class EnvironmentLifecycleManager:
         always sees ``/app/workspace/app-data`` whether or not a real volume is
         attached, matching the prompt convention agents now rely on.
         """
-        from app.services.bundles.app_data_service import AppDataService
+        from app.services.bundles.app_data_service import (
+            APP_DATA_SUBDIRS,
+            AppDataService,
+        )
 
         bundle_id = getattr(agent, "bundle_id", None)
         if not bundle_id:
@@ -2197,7 +2200,7 @@ class EnvironmentLifecycleManager:
                 agent.id,
             )
             fallback = instance_dir / "app-data"
-            for sub in ("storage", "uploads", "cache"):
+            for sub in APP_DATA_SUBDIRS:
                 (fallback / sub).mkdir(parents=True, exist_ok=True, mode=0o755)
             if settings.HOST_AGENT_ENVIRONMENTS_DIR:
                 return f"{settings.HOST_AGENT_ENVIRONMENTS_DIR}/{environment.id}/app-data"

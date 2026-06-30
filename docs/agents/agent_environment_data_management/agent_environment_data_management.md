@@ -56,8 +56,9 @@ Bundle-owned data is everything under `app/workspace/` **except** the per-user/r
 | `app-data/storage/` | AppDataVolume host path | Persistent | For structured user data (DBs, JSON, CSVs produced at runtime) |
 | `app-data/uploads/` | AppDataVolume host path | Persistent | For files the user provides at runtime |
 | `app-data/cache/` | AppDataVolume host path | Persistent | For cached downloads and processed files |
+| `app-data/memory/` | AppDataVolume host path | Persistent | Personal per-install agent memory (`*.md` files) auto-injected into system prompts; private to this install, never bundle-owned, never synced to DB |
 
-App Data is **never** touched by `replace_bundle_content`, rebuild, or apply-update. It survives uninstall and reattaches on reinstall of the same bundle.
+App Data is **never** touched by `replace_bundle_content`, rebuild, or apply-update. It survives uninstall and reattaches on reinstall of the same bundle. The `memory/` sub-directory is also excluded from bundle snapshots and git for free because `app-data/` is already in `BUNDLE_EXCLUDED_TOPLEVEL`.
 
 ### Per-Install Runtime Data (Not Bundle Content, but Env-Migration-Copied)
 
@@ -218,7 +219,8 @@ Agent Model (DB) → Environment Lifecycle Manager → Docker Adapter → Docker
 ├── app-data/                    # App Data — persistent per (user × bundle), never bundle-owned
 │   ├── storage/                 #   for structured runtime data (DBs, JSON, CSVs)
 │   ├── uploads/                 #   for files the user provides at runtime
-│   └── cache/                   #   for cached downloads, processed output
+│   ├── cache/                   #   for cached downloads, processed output
+│   └── memory/                  #   personal per-install agent memory (*.md), injected into system prompts
 ├── uploads/                     # Per-install runtime user-provided files — NOT bundle-owned;
 │                                #   preserved on apply-update; copied on env migration
 ├── credentials/                 # Credentials (synced from platform on every start)

@@ -8,7 +8,7 @@ same user (``"server"`` slot today, with future values like
 ``"marketplace"`` or ``"remote:<host>"`` planned). The backing data lives
 on disk under
 ``settings.APP_DATA_STORAGE_DIR/<user>/<bundle>[/<catalog_type>]/`` with
-three sub-directories — ``storage/``, ``uploads/``, ``cache/`` —
+four sub-directories — ``storage/``, ``uploads/``, ``cache/``, ``memory/`` —
 bind-mounted into the agent environment at ``/app/workspace/app-data``.
 
 Phase 1 contract:
@@ -52,7 +52,7 @@ ORPHAN_DIR_GRACE = timedelta(days=1)
 # the input contract.
 _VOLUME_NAME_SAFE = re.compile(r"[^a-zA-Z0-9_.-]")
 
-APP_DATA_SUBDIRS: tuple[str, ...] = ("storage", "uploads", "cache")
+APP_DATA_SUBDIRS: tuple[str, ...] = ("storage", "uploads", "cache", "memory")
 
 
 class AppDataService:
@@ -418,7 +418,7 @@ class AppDataService:
 
     @classmethod
     def _ensure_directory_tree(cls, container_path: Path) -> None:
-        """Create ``<root>/storage``, ``uploads``, ``cache`` with mode 0o755."""
+        """Create ``<root>/storage``, ``uploads``, ``cache``, ``memory`` with mode 0o755."""
         for sub in APP_DATA_SUBDIRS:
             target = container_path / sub
             target.mkdir(parents=True, exist_ok=True, mode=0o755)
