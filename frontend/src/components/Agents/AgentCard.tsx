@@ -44,12 +44,13 @@ export function AgentCard({ agent, status }: AgentCardProps) {
 
   // Capability badges summarise the agent's "purpose" on the card. When the
   // agent exposes any integration, these replace the entrypoint-prompt preview.
+  // `isBundlePublisher` is the single source for both the "Bundle" badge and the
+  // colored frame below, so the two stay in sync.
+  const isBundlePublisher = !!(agent.bundle_uuid && agent.is_publisher_install)
   const a2aEnabled =
     !!(agent.a2a_config as { enabled?: boolean } | null)?.enabled
   const capabilityBadges: { label: string; icon: ComponentType<{ className?: string }> }[] = [
-    ...(agent.bundle_uuid && agent.is_publisher_install
-      ? [{ label: "Bundle", icon: Package }]
-      : []),
+    ...(isBundlePublisher ? [{ label: "Bundle", icon: Package }] : []),
     ...(agent.agent_api_enabled ? [{ label: "API", icon: Network }] : []),
     ...(agent.webapp_enabled ? [{ label: "Web App", icon: Globe }] : []),
     ...(agent.has_email_integration ? [{ label: "Email", icon: Mail }] : []),
@@ -77,11 +78,21 @@ export function AgentCard({ agent, status }: AgentCardProps) {
     applyUpdate.mutate()
   }
 
+  // Colored frame for quick identification. Bundle publisher install (green)
+  // takes priority over Agent REST API enabled (blue). Reuses the same
+  // conditions as the "Bundle" and "API" capability badges above.
+  const frameClassName = isBundlePublisher
+    ? "border-2 border-green-500 dark:border-green-700"
+    : agent.agent_api_enabled
+      ? "border-2 border-blue-500 dark:border-blue-700"
+      : undefined
+
   return (
     <Card
       className={cn(
         "relative transition-all hover:shadow-md hover:-translate-y-0.5 h-full flex flex-col gap-0 overflow-hidden",
         (hasStatusFooter || agent.pending_update) && "pb-0",
+        frameClassName,
       )}
     >
       <Link
