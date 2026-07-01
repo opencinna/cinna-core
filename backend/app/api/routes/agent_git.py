@@ -20,6 +20,7 @@ Error mapping (the service never raises ``HTTPException``):
 * ``GitSourceConflictError`` → 409    ``GitSourceValidationError`` → 400
 * ``GitSourceNotFoundError`` → 404    ``RevisionFormatError`` → 422
 * ``GitAuthenticationError`` → 401    ``GitConnectionError`` → 400
+* ``GitBaselineUnavailableError`` → 503 (lost baseline snapshot, rebuild failed)
 * other ``GitOperationError`` → 400
 """
 import logging
@@ -39,6 +40,7 @@ from app.models.bundles.agent_git_source import (
 )
 from app.services.agents.agent_service import AgentService
 from app.services.bundles.git_source_service import (
+    GitBaselineUnavailableError,
     GitSourceConflictError,
     GitSourceExistingAgentError,
     GitSourceNotFoundError,
@@ -176,6 +178,12 @@ def _map_git_error(exc: Exception) -> HTTPException:
     """Translate a service / git exception into the right HTTP status."""
     if isinstance(exc, GitSourceNotFoundError):
         return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, GitBaselineUnavailableError):
+        # Server-side storage-integrity failure: the last-synced baseline
+        # snapshot was lost and could not be rebuilt from git. A 5xx (not a
+        # false 200 "no changes") lets the UI show an explicit "baseline check
+        # failed" state and keep the commit action blocked.
+        return HTTPException(status_code=503, detail=str(exc))
     if isinstance(exc, (GitSourceConflictError, GitNonFastForwardError)):
         return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, RevisionFormatError):
@@ -427,7 +435,11 @@ def get_git_dirty(
     """
     try:
         result = GitSourceService.compute_dirty(session, agent_id, current_user)
-    except GitSourceNotFoundError as exc:
+    except (
+        GitSourceNotFoundError,
+        GitSourceValidationError,
+        GitBaselineUnavailableError,
+    ) as exc:
         raise _map_git_error(exc)
     return GitDirtyStatus(**result)
 
@@ -448,7 +460,11 @@ def get_git_status(
     """
     try:
         result = GitSourceService.compute_status(session, agent_id, current_user)
-    except GitSourceNotFoundError as exc:
+    except (
+        GitSourceNotFoundError,
+        GitSourceValidationError,
+        GitBaselineUnavailableError,
+    ) as exc:
         raise _map_git_error(exc)
     return GitStatus(**result)
 

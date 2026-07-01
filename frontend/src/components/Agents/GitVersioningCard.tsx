@@ -2,6 +2,7 @@ import { type ReactNode, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { formatDistanceToNow } from "date-fns"
 import {
+  AlertTriangle,
   ArrowDownToLine,
   ArrowDownUp,
   ArrowUpFromLine,
@@ -218,10 +219,19 @@ export function GitVersioningCard({
   // instead of flashing "off" then flipping on.
   const effectiveConnected = sourceResolved ? connected : gitVersioningEnabled
 
-  const { data: dirty, isFetching: isDirtyFetching } = useQuery({
+  const {
+    data: dirty,
+    isFetching: isDirtyFetching,
+    isError: isDirtyError,
+    error: dirtyError,
+  } = useQuery({
     queryKey: ["git-dirty", agentId],
     queryFn: () => AgentGitService.getGitDirty({ agentId }),
     enabled: connected,
+    // The dirty check can fail loud (503) when the last-synced baseline snapshot
+    // was lost server-side and could not be rebuilt. Don't retry-loop that — surface
+    // the failure straight away so the card shows it instead of the loading state.
+    retry: false,
     staleTime: GIT_QUERY_STALE_TIME_MS,
   })
 
@@ -592,7 +602,7 @@ export function GitVersioningCard({
               <Button
                 size="sm"
                 onClick={handleOpenCommitDialog}
-                disabled={!dirty?.dirty || pushMutation.isPending}
+                disabled={!dirty?.dirty || isDirtyError || pushMutation.isPending}
               >
                 Commit Agent
               </Button>
@@ -608,7 +618,20 @@ export function GitVersioningCard({
                   className={`h-4 w-4 ${isDirtyFetching ? "animate-spin" : ""}`}
                 />
               </Button>
-              {dirty === undefined ? (
+              {isDirtyError ? (
+                <span
+                  className="flex items-center gap-1 text-xs text-destructive truncate"
+                  title={getErrorMessage(
+                    dirtyError,
+                    "The last-synced baseline could not be verified.",
+                  )}
+                >
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">
+                    Baseline check failed — re-sync (pull or commit) to rebuild it
+                  </span>
+                </span>
+              ) : dirty === undefined ? (
                 <span className="text-xs text-muted-foreground truncate">
                   Checking for changes…
                 </span>

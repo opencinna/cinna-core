@@ -87,6 +87,16 @@ Focus on backend route and service files matching patterns:
 - Example: `get_with_access_check()` that checks owner OR shared access
 - Document sharing rules in service docstrings
 
+### 5. Deployment & Persistent Storage
+
+**New On-Disk Write Paths** - Whenever a change introduces or starts relying on a directory/file path the backend writes to (a new `settings.*_DIR`, a new subdirectory under `/app/data/`, a new snapshot/cache/upload/export location, etc.), verify:
+- The path is backed by a mounted volume in `docker-compose.yml` (and any override/prod compose files it should apply to) — NOT left on the container's ephemeral writable layer, where it is silently destroyed on the next container recreation/redeploy.
+- Compare against the existing mount list (`uploads`, `app-data`, `agent-environments`) as precedent — a new path meant to persist should follow the same `HOST_*_DIR` env-var pattern (see `docker-compose.yml` backend `volumes:`/`environment:` blocks).
+- The local bind-mount default directory (e.g. `./backend/data/<name>/`) is added to `.gitignore` alongside the existing `backend/data/uploads/`/`backend/data/agents/` entries — otherwise the folder's contents get accidentally tracked once it's created on disk.
+- Treat a missing mount for data meant to survive redeploys as a **Critical** finding, not a nit — this exact gap (a bundle-snapshot directory never mounted) caused a silent false-negative in the git-versioning dirty check after every backend redeploy.
+
+**Silent-Skip on Missing File/Directory** - Flag any code path where a file/directory that *should* exist (a referenced snapshot, a row's `snapshot_path`, a resolved-but-absent baseline) is missing and the code treats that as "nothing to compare / no changes / clean" instead of raising or self-healing. A missing-but-expected artifact is a corrupt/lost-state condition, not a legitimate empty/default state — silently defaulting to a negative/clean result there is a data-integrity bug, not a UX nicety.
+
 ## Output Format
 
 Generate a review report with:
@@ -135,7 +145,8 @@ Key patterns from reference:
 2. **Read Route File** - Analyze for business logic and duplication
 3. **Read Service File** - Check for missing abstractions
 4. **Compare Patterns** - Match against reference implementation
-5. **Generate Report** - List issues and recommendations
-6. **Propose Changes** - Describe specific refactoring steps
+5. **Check New Storage Paths** - If the diff introduces or reads/writes a new on-disk path (new config dir setting, new subdirectory under existing storage roots, etc.), check `docker-compose.yml`/override/prod compose for a matching volume mount (see §5 above)
+6. **Generate Report** - List issues and recommendations
+7. **Propose Changes** - Describe specific refactoring steps
 
 Do NOT make changes automatically. Present the review report and wait for user approval before implementing.

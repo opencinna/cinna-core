@@ -11,4 +11,5 @@ src_example/
 a2a-samples-main/
 backend/data/uploads/
 backend/data/agents/
+backend/data/bundles/
 notes.txt

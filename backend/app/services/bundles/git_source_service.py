@@ -143,6 +143,21 @@ class GitSourceExistingAgentError(GitSourceConflictError):
     """
 
 
+class GitBaselineUnavailableError(GitSourceError):
+    """The last-synced baseline snapshot is lost AND could not be rebuilt (→ 5xx).
+
+    A synced ``AgentBundleRevision`` row exists but its on-disk snapshot was wiped
+    (e.g. an ephemeral ``BUNDLE_STORAGE_DIR`` cleared on a backend redeploy) and
+    re-materializing it from git also failed (remote unreachable, the pinned
+    commit was GC'd / rewritten, auth failure, bad tree). This is a server-side
+    storage-integrity failure — deliberately distinct from the user-actionable
+    :class:`GitSourceValidationError` (400) so the dirty / status checks fail loud
+    with a "baseline check failed" signal instead of silently reporting a clean,
+    non-dirty workspace. Never raised when NO baseline was ever synced (that case
+    stays legitimately non-dirty).
+    """
+
+
 # ── Per-agent locks (mirror PublishService._publish_locks) ──────────────
 
 _git_locks: dict[str, asyncio.Lock] = {}
@@ -810,6 +825,7 @@ class GitSourceService:
         has_env = False
         env_workspace_root: Path | None = None
         synced_workspace: Path | None = None
+        rematerialize_ctx: dict | None = None
         env = (
             session.get(AgentEnvironment, install.active_environment_id)
             if install.active_environment_id else None
@@ -826,9 +842,35 @@ class GitSourceService:
                     candidate = Path(synced_rev.snapshot_path) / "workspace"
                     if candidate.exists():
                         synced_workspace = candidate
+                    else:
+                        # Baseline row exists but its on-disk snapshot was wiped
+                        # (e.g. ephemeral BUNDLE_STORAGE_DIR after a redeploy).
+                        # This is a lost-baseline condition, NOT a clean workspace.
+                        # Capture what a git re-materialization needs while the DB
+                        # connection is still open (SSH key decrypt), then rebuild
+                        # it AFTER the connection is released.
+                        rematerialize_ctx = {
+                            "repo_url": source.repo_url,
+                            "ref": source.ref,
+                            "subdir": source.subdir,
+                            "last_synced_commit": source.last_synced_commit,
+                            "snapshot_dir": Path(synced_rev.snapshot_path),
+                            "key_material": _read_ssh_key_material(
+                                session, source.ssh_key_id, source.owner_id
+                            ),
+                        }
 
         # Release the pooled DB connection before the heavy workspace copy/hash.
         session.commit()
+
+        # A synced baseline row existed but its snapshot was gone: rebuild it from
+        # git now (self-healing) and compare against the fresh copy. If the rebuild
+        # itself fails, this raises GitBaselineUnavailableError so the caller fails
+        # loud instead of falsely reporting a clean workspace.
+        if rematerialize_ctx is not None:
+            synced_workspace = GitSourceService._rematerialize_baseline_snapshot(
+                **rematerialize_ctx
+            )
 
         workspace_dirty = False
         if (
@@ -913,6 +955,7 @@ class GitSourceService:
         has_env = False
         env_workspace_root: Path | None = None
         synced_workspace: Path | None = None
+        rematerialize_ctx: dict | None = None
         env = (
             session.get(AgentEnvironment, install.active_environment_id)
             if install.active_environment_id else None
@@ -922,20 +965,37 @@ class GitSourceService:
             workspace_dir = env_workspace_root / WORKSPACE_ROOT_REL
             if workspace_dir.exists() and workspace_dir.is_dir():
                 has_env = True
-                # Mirror compute_dirty: with no usable baseline snapshot on disk
-                # (no synced revision, no snapshot_path, or the snapshot dir is
-                # gone) skip the workspace diff entirely rather than fabricating
-                # an all-"added" preview against an empty baseline.
-                candidate = (
-                    Path(synced_rev.snapshot_path) / "workspace"
-                    if synced_rev is not None and synced_rev.snapshot_path
-                    else None
-                )
-                if candidate is not None and candidate.exists():
-                    synced_workspace = candidate
+                # Mirror compute_dirty. A missing baseline snapshot on disk splits
+                # two ways: genuinely no baseline (no synced revision / no
+                # snapshot_path) → skip the diff (legitimately non-dirty); a synced
+                # revision row whose snapshot dir was wiped → re-materialize it from
+                # git (self-healing) rather than fabricating an all-"added" preview
+                # against an empty baseline.
+                if synced_rev is not None and synced_rev.snapshot_path:
+                    candidate = Path(synced_rev.snapshot_path) / "workspace"
+                    if candidate.exists():
+                        synced_workspace = candidate
+                    else:
+                        rematerialize_ctx = {
+                            "repo_url": source.repo_url,
+                            "ref": source.ref,
+                            "subdir": source.subdir,
+                            "last_synced_commit": source.last_synced_commit,
+                            "snapshot_dir": Path(synced_rev.snapshot_path),
+                            "key_material": _read_ssh_key_material(
+                                session, source.ssh_key_id, source.owner_id
+                            ),
+                        }
 
         # Release the pooled DB connection before the heavy per-file diff.
         session.commit()
+
+        # Lost-baseline recovery (mirrors compute_dirty): rebuild the wiped
+        # snapshot from git, or fail loud via GitBaselineUnavailableError.
+        if rematerialize_ctx is not None:
+            synced_workspace = GitSourceService._rematerialize_baseline_snapshot(
+                **rematerialize_ctx
+            )
 
         # ── Workspace file changes ──────────────────────────────────
         file_changes: list[dict] = []
@@ -1686,6 +1746,123 @@ class GitSourceService:
         if install.installed_revision_id is not None:
             return session.get(AgentBundleRevision, install.installed_revision_id)
         return None
+
+    @staticmethod
+    def _rematerialize_baseline_snapshot(
+        *,
+        repo_url: str,
+        ref: str,
+        subdir: str | None,
+        last_synced_commit: str | None,
+        snapshot_dir: Path,
+        key_material: tuple[str, str | None] | None,
+    ) -> Path:
+        """Re-clone the last-synced baseline tree into ``snapshot_dir``; return its ``workspace/``.
+
+        Recovery path for a lost on-disk baseline: a synced
+        ``AgentBundleRevision`` row exists but its ``snapshot_path`` was wiped
+        (e.g. an ephemeral ``BUNDLE_STORAGE_DIR`` after a backend redeploy). Clones
+        the remote at ``last_synced_commit`` (full history so the pinned commit is
+        reachable), validates the tree, and persists it back to the expected
+        ``snapshot_dir`` opportunistically so subsequent checks hit disk. Reuses
+        the same ``clone_repository_context`` helper the pull / push paths use, so
+        the egress / SSRF guard runs on the network call as everywhere else.
+
+        NO DB access — the caller decrypts the SSH key material and releases the
+        pooled connection first (pool-safety, mirroring the other read paths).
+
+        Raises :class:`GitBaselineUnavailableError` when the baseline cannot be
+        reproduced (no pin recorded, remote unreachable, commit GC'd / rewritten,
+        auth failure, malformed tree). The caller MUST NOT collapse back to a
+        clean / non-dirty result on this error.
+        """
+        if not last_synced_commit:
+            raise GitBaselineUnavailableError(
+                "The last-synced baseline snapshot is missing and no commit is "
+                "recorded to rebuild it from. Pull or commit to restore the "
+                "baseline."
+            )
+        # A peer re-materialization (or a pull / push) may have restored the
+        # baseline between the caller's stale existence check and now — reuse it
+        # and skip a redundant clone.
+        workspace = snapshot_dir / "workspace"
+        if workspace.exists():
+            return workspace
+
+        # Concurrency: compute_dirty / compute_status are SYNC handlers that
+        # FastAPI runs in a threadpool, so two dirty checks for the same
+        # lost-baseline agent can reach here at once. The per-agent ``_git_locks``
+        # pull / push use are ``asyncio.Lock``s and cannot be acquired from this
+        # synchronous path, so instead of serializing we make publication atomic:
+        # build into a private temp sibling on the SAME filesystem, then swap it
+        # into place with ``os.replace`` (``Path.replace``). The destination is
+        # only ever created by an atomic rename onto a MISSING dir; a rename onto
+        # an already-published (non-empty) dir fails, so a peer that already won
+        # is simply kept. This removes the in-place ``rmtree`` + rewrite whose race
+        # against a concurrent baseline hash is the exact bug class this fix
+        # targets — no reader ever observes a half-written baseline.
+        #
+        # ``subdir`` is read from the current ``source`` row (fixed at checkout),
+        # not from the synced revision — matching how pull / push resolve it.
+        tmp_snapshot = snapshot_dir.parent / (
+            f".rematerialize-{snapshot_dir.name}-{uuid.uuid4().hex}"
+        )
+        try:
+            with _ssh_key_file(key_material) as key:
+                # Full-history clone (``depth=None``) so the pinned commit is
+                # reachable. No ``kill_after_timeout``: like the pull / push
+                # write-path clones, this relies on the progress-based low-speed
+                # guard so a slow-but-healthy large clone is not hard-killed and
+                # mis-surfaced as a false 503.
+                with clone_repository_context(
+                    repo_url,
+                    branch=ref,
+                    ssh_key_path=key,
+                    depth=None,
+                ) as (repo_path, repo):
+                    repo.git.checkout(last_synced_commit)
+                    src = _resolve_subdir(repo_path, subdir)
+                    manifest = _read_and_validate_tree(src)
+                    _persist_clone_as_snapshot(src, tmp_snapshot, manifest)
+            try:
+                tmp_snapshot.replace(snapshot_dir)
+            except OSError:
+                # os.replace only succeeds onto a MISSING or EMPTY destination; it
+                # raises ENOTEMPTY onto a non-empty one. Two shapes land here:
+                #   1. Peer win — a concurrent re-materialization already published
+                #      a complete baseline (snapshot_dir has workspace/). Keep it.
+                #   2. Stale partial — snapshot_dir exists but its workspace/ is
+                #      gone, yet it still holds manifest.json (the headline trigger
+                #      for this whole path), so it is non-empty and the rename
+                #      failed. Blindly keeping it would wedge the agent in a
+                #      permanent 503; instead move the stale dir aside atomically,
+                #      then rename the freshly-built rebuild into the now-missing
+                #      slot. Each rename stays atomic (same parent); the only new
+                #      window is a brief "dest missing" between them, during which a
+                #      concurrent reader simply re-enters re-materialization into
+                #      its own private temp — never observing a half-written tree.
+                if (snapshot_dir / "workspace").exists():
+                    shutil.rmtree(tmp_snapshot, ignore_errors=True)
+                else:
+                    aside = snapshot_dir.parent / (
+                        f".stale-{snapshot_dir.name}-{uuid.uuid4().hex}"
+                    )
+                    snapshot_dir.replace(aside)
+                    tmp_snapshot.replace(snapshot_dir)
+                    shutil.rmtree(aside, ignore_errors=True)
+        except Exception as exc:  # noqa: BLE001 — any failure here = lost baseline
+            shutil.rmtree(tmp_snapshot, ignore_errors=True)
+            raise GitBaselineUnavailableError(
+                "Failed to re-materialize the last-synced baseline snapshot from "
+                f"git (baseline check failed): {exc}"
+            ) from exc
+
+        if not workspace.exists():
+            raise GitBaselineUnavailableError(
+                "Re-materialized baseline is missing its 'workspace/' subtree "
+                "(baseline check failed)."
+            )
+        return workspace
 
     @staticmethod
     def _prompts_dirty(
